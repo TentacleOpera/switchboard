@@ -224,12 +224,22 @@
         viewportEl.style.transform = `translate(${zoomState[tab].panX}px, ${zoomState[tab].panY}px) scale(${zoomState[tab].scale})`;
     }
 
-    function setSpacePanActive(on) {
-        document.body.classList.toggle('space-pan-active', !!on);
+    // Pan mode has two independent drivers: a sticky toggle (the ✥ Pan button)
+    // and a momentary hold (Space, seen by the parent or forwarded from a focused
+    // preview iframe). The capture layer is active when EITHER is engaged.
+    // Keeping them separate stops the iframe's blur→"space up" message — which
+    // fires when the user clicks the parent Pan button and blurs the iframe —
+    // from instantly cancelling the toggle that same click just turned on.
+    let _panToggle = false;
+    let _spaceHeld = false;
+    function refreshPanActive() {
+        document.body.classList.toggle('space-pan-active', _panToggle || _spaceHeld);
         document.querySelectorAll('.zoom-btn[data-action="pan"]').forEach(btn => {
-            btn.classList.toggle('active', !!on);
+            btn.classList.toggle('active', _panToggle);
         });
     }
+    function setPanToggle(on) { _panToggle = !!on; refreshPanActive(); }
+    function setSpaceHeld(on) { _spaceHeld = !!on; refreshPanActive(); }
 
     function getContentDims(viewportEl) {
         const el = viewportEl ? viewportEl.firstElementChild : null;
@@ -382,7 +392,7 @@
             } else if (action === 'zoom-out') {
                 zoomAt(tab, container, viewportEl, zoomState[tab].scale / 1.25, rect.width / 2, rect.height / 2);
             } else if (action === 'pan') {
-                setSpacePanActive(!document.body.classList.contains('space-pan-active'));
+                setPanToggle(!_panToggle);
             } else if (action === 'reset') {
                 zoomState[tab].scale = 1;
                 const dims = getContentDims(viewportEl);
@@ -438,15 +448,15 @@
         if (e.code !== 'Space' || e.repeat) return;
         const t = e.target;
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
-        setSpacePanActive(true);
+        setSpaceHeld(true);
         e.preventDefault(); // stop the page from scrolling on Space
     });
     window.addEventListener('keyup', (e) => {
         if (e.code !== 'Space') return;
-        setSpacePanActive(false);
+        setSpaceHeld(false);
     });
     window.addEventListener('blur', () => {
-        setSpacePanActive(false);
+        setSpaceHeld(false);
     });
 
     // Sidebar Collapsing
@@ -1400,7 +1410,10 @@
             const iframe = document.getElementById('html-preview-frame');
             const iframeWrapper = document.getElementById('html-preview-wrapper');
             const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
-            if (iframeViewport) { iframeViewport.style.width = ''; iframeViewport.style.height = ''; }
+            // Back to fill-the-container until sbContentDims reports the new page's
+            // natural size; leaving it empty would collapse the absolutely-positioned
+            // viewport to shrink-to-fit (near-zero) between loads.
+            if (iframeViewport) { iframeViewport.style.width = '100%'; iframeViewport.style.height = '100%'; }
 
             if (msg.iframeSrc) {
                 if (iframeWrapper) iframeWrapper.style.display = 'flex';
@@ -1467,7 +1480,8 @@
             const iframe = document.getElementById('stitch-html-preview-frame');
             const iframeWrapper = document.getElementById('stitch-html-preview-wrapper');
             const stitchViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
-            if (stitchViewport) { stitchViewport.style.width = ''; stitchViewport.style.height = ''; }
+            // See the HTML-preview reset above: fill until natural dims arrive.
+            if (stitchViewport) { stitchViewport.style.width = '100%'; stitchViewport.style.height = '100%'; }
 
             if (msg.iframeSrc) {
                 if (iframeWrapper) iframeWrapper.style.display = 'flex';
@@ -3635,7 +3649,7 @@
                 const stitchFrame = document.getElementById('stitch-html-preview-frame');
                 if ((htmlFrame && event.source === htmlFrame.contentWindow) ||
                     (stitchFrame && event.source === stitchFrame.contentWindow)) {
-                    setSpacePanActive(!!event.data.on);
+                    setSpaceHeld(!!event.data.on);
                 }
                 break;
             }
@@ -3643,24 +3657,35 @@
             case 'sbContentDims': {
                 // Route based on event.source — both HTML and Stitch HTML iframes inject
                 // the same _INSPECTOR_SCRIPT, so both will send sbContentDims.
+                //
+                // Cap the reported dims: sizing the viewport resizes the iframe, which
+                // re-fires the iframe's resize/ResizeObserver reporter. Pages built from
+                // `100vh` sections (common in Stitch output) then feed back and grow the
+                // canvas without bound. Capping the viewport halts the iframe growth, so
+                // the loop stabilizes instead of hanging the webview.
+                const MAX_PREVIEW_DIM = 30000;
                 const htmlFrame = document.getElementById('html-preview-frame');
                 const stitchFrame = document.getElementById('stitch-html-preview-frame');
                 if (htmlFrame && event.source === htmlFrame.contentWindow) {
                     const wrapper = document.getElementById('html-preview-wrapper');
                     const vp = wrapper ? wrapper.querySelector('.zoomable-viewport') : null;
                     if (vp && event.data.w && event.data.h) {
-                        vp.style.width = event.data.w + 'px';
-                        vp.style.height = event.data.h + 'px';
-                        _htmlContentDims = { w: event.data.w, h: event.data.h };
+                        const w = Math.min(event.data.w, MAX_PREVIEW_DIM);
+                        const h = Math.min(event.data.h, MAX_PREVIEW_DIM);
+                        vp.style.width = w + 'px';
+                        vp.style.height = h + 'px';
+                        _htmlContentDims = { w, h };
                         fitToContainer('html', wrapper, vp);
                     }
                 } else if (stitchFrame && event.source === stitchFrame.contentWindow) {
                     const wrapper = document.getElementById('stitch-html-preview-wrapper');
                     const vp = wrapper ? wrapper.querySelector('.zoomable-viewport') : null;
                     if (vp && event.data.w && event.data.h) {
-                        vp.style.width = event.data.w + 'px';
-                        vp.style.height = event.data.h + 'px';
-                        _stitchHtmlContentDims = { w: event.data.w, h: event.data.h };
+                        const w = Math.min(event.data.w, MAX_PREVIEW_DIM);
+                        const h = Math.min(event.data.h, MAX_PREVIEW_DIM);
+                        vp.style.width = w + 'px';
+                        vp.style.height = h + 'px';
+                        _stitchHtmlContentDims = { w, h };
                         fitToContainer('stitchHtml', wrapper, vp);
                     }
                 }

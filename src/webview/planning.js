@@ -216,6 +216,212 @@
     let folderModalScope = 'local';
     let lastResearchFolderByRoot = {};
 
+    // Ported from design.js zoom/pan engine — keep in sync
+    const zoomState = {
+        planningHtml: { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0, panSource: null }
+    };
+
+    let _planningContentDims = null;
+    let _planningHtmlLoadListener = null;
+
+    const ZOOM_MIN = 0.1;
+    const ZOOM_MAX = 40.0;
+
+    function resetZoom(tab) {
+        zoomState[tab] = { scale: 1, panX: 0, panY: 0, isPanning: false, startX: 0, startY: 0, panSource: null };
+    }
+
+    function applyZoom(tab, viewportEl) {
+        if (!viewportEl) return;
+        viewportEl.style.transform = `translate(${zoomState[tab].panX}px, ${zoomState[tab].panY}px) scale(${zoomState[tab].scale})`;
+    }
+
+    // Pan mode has two independent drivers: a sticky toggle (the ✥ Pan button)
+    // and a momentary hold (Space, seen by the parent or forwarded from a focused
+    // preview iframe). The capture layer is active when EITHER is engaged.
+    // Keeping them separate stops the iframe's blur→"space up" message — which
+    // fires when the user clicks the parent Pan button and blurs the iframe —
+    // from instantly cancelling the toggle that same click just turned on.
+    let _panToggle = false;
+    let _spaceHeld = false;
+    function refreshPanActive() {
+        document.body.classList.toggle('space-pan-active', _panToggle || _spaceHeld);
+        document.querySelectorAll('.zoom-btn[data-action="pan"]').forEach(btn => {
+            btn.classList.toggle('active', _panToggle);
+        });
+    }
+    function setPanToggle(on) { _panToggle = !!on; refreshPanActive(); }
+    function setSpaceHeld(on) { _spaceHeld = !!on; refreshPanActive(); }
+
+    function getContentDims(viewportEl) {
+        const el = viewportEl ? viewportEl.firstElementChild : null;
+        if (!el) return null;
+        if (el.tagName === 'IFRAME') {
+            const planningWrapper = viewportEl.closest('#planning-html-preview-wrapper');
+            if (planningWrapper && _planningContentDims) return _planningContentDims;
+        }
+        const w = el.tagName === 'IMG' ? (el.naturalWidth || el.offsetWidth) : el.offsetWidth;
+        const h = el.tagName === 'IMG' ? (el.naturalHeight || el.offsetHeight) : el.offsetHeight;
+        return (w && h) ? { w, h } : null;
+    }
+
+    // Content that fits on an axis is locked centered; content larger than the
+    // container clamps so it always covers the canvas — it can never be zoomed
+    // or panned out of view.
+    function clampPan(tab, containerRect, contentWidth, contentHeight) {
+        const s = zoomState[tab].scale;
+        const scaledW = contentWidth * s;
+        const scaledH = contentHeight * s;
+        if (scaledW <= containerRect.width) {
+            zoomState[tab].panX = (containerRect.width - scaledW) / 2;
+        } else {
+            zoomState[tab].panX = Math.max(containerRect.width - scaledW, Math.min(0, zoomState[tab].panX));
+        }
+        if (scaledH <= containerRect.height) {
+            zoomState[tab].panY = (containerRect.height - scaledH) / 2;
+        } else {
+            zoomState[tab].panY = Math.max(containerRect.height - scaledH, Math.min(0, zoomState[tab].panY));
+        }
+    }
+
+    function fitToContainer(tab, containerEl, viewportEl, retriesLeft = 5) {
+        if (!containerEl || !viewportEl) return;
+        const containerRect = containerEl.getBoundingClientRect();
+        if (!containerRect.width || !containerRect.height) {
+            if (retriesLeft > 0) {
+                requestAnimationFrame(() => fitToContainer(tab, containerEl, viewportEl, retriesLeft - 1));
+            }
+            return;
+        }
+        const contentEl = viewportEl.firstElementChild;
+        if (!contentEl) return;
+        let contentW, contentH;
+        if (contentEl.tagName === 'IMG') {
+            contentW = contentEl.naturalWidth || contentEl.offsetWidth;
+            contentH = contentEl.naturalHeight || contentEl.offsetHeight;
+        } else {
+            contentW = contentEl.offsetWidth;
+            contentH = contentEl.offsetHeight;
+        }
+        if (!contentW || !contentH) return;
+        const fitScale = Math.min(containerRect.width / contentW, containerRect.height / contentH, 1);
+        zoomState[tab].scale = fitScale;
+        zoomState[tab].panX = (containerRect.width - contentW * fitScale) / 2;
+        zoomState[tab].panY = (containerRect.height - contentH * fitScale) / 2;
+        applyZoom(tab, viewportEl);
+    }
+
+    function zoomAt(tab, container, viewportEl, newScale, cx, cy) {
+        const oldScale = zoomState[tab].scale;
+        const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, newScale));
+        if (!oldScale || clamped === oldScale) {
+            zoomState[tab].scale = clamped || 1;
+            applyZoom(tab, viewportEl);
+            return;
+        }
+        const k = clamped / oldScale;
+        zoomState[tab].panX = cx - (cx - zoomState[tab].panX) * k;
+        zoomState[tab].panY = cy - (cy - zoomState[tab].panY) * k;
+        zoomState[tab].scale = clamped;
+        const dims = getContentDims(viewportEl);
+        if (dims) clampPan(tab, container.getBoundingClientRect(), dims.w, dims.h);
+        applyZoom(tab, viewportEl);
+    }
+
+    function initZoomListeners(containerId, viewportSelector, tab) {
+        const container = document.getElementById(containerId);
+        if (!container) return;
+
+        // Plain scroll zooms at the cursor; trackpad pinch arrives as ctrl+wheel
+        // with small deltas, so it gets a stronger multiplier. When pan mode is
+        // active, wheel drags the canvas instead.
+        container.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const rect = container.getBoundingClientRect();
+            const viewportEl = container.querySelector(viewportSelector);
+            if (document.body.classList.contains('space-pan-active') && !(e.ctrlKey || e.metaKey)) {
+                // Pan mode: translate wheel deltas into pan offsets.
+                zoomState[tab].panX -= e.deltaX;
+                zoomState[tab].panY -= e.deltaY;
+                const dims = getContentDims(viewportEl);
+                if (dims) clampPan(tab, rect, dims.w, dims.h);
+                applyZoom(tab, viewportEl);
+            } else {
+                // Zoom mode: original behavior.
+                const factor = Math.exp(-e.deltaY * ((e.ctrlKey || e.metaKey) ? 0.01 : 0.002));
+                zoomAt(tab, container, viewportEl,
+                    zoomState[tab].scale * factor,
+                    e.clientX - rect.left, e.clientY - rect.top);
+            }
+        }, { passive: false });
+
+        container.addEventListener('mousedown', (e) => {
+            if (e.button !== 0 || e.target.closest('.zoom-toolbar')) return;
+            // Without this, grabbing an <img> starts a native drag and the pan dies.
+            e.preventDefault();
+            zoomState[tab].isPanning = true;
+            zoomState[tab].panSource = containerId;
+            zoomState[tab].startX = e.clientX - zoomState[tab].panX;
+            zoomState[tab].startY = e.clientY - zoomState[tab].panY;
+            container.classList.add('panning');
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            // panSource guard: two containers share each tab's state; without it the
+            // hidden container's handler clamps against a 0×0 rect and wrecks the pan.
+            if (!zoomState[tab].isPanning || zoomState[tab].panSource !== containerId) return;
+            zoomState[tab].panX = e.clientX - zoomState[tab].startX;
+            zoomState[tab].panY = e.clientY - zoomState[tab].startY;
+
+            const viewportEl = container.querySelector(viewportSelector);
+            const dims = getContentDims(viewportEl);
+            if (dims) clampPan(tab, container.getBoundingClientRect(), dims.w, dims.h);
+            applyZoom(tab, viewportEl);
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (!zoomState[tab].isPanning || zoomState[tab].panSource !== containerId) return;
+            zoomState[tab].isPanning = false;
+            zoomState[tab].panSource = null;
+            container.classList.remove('panning');
+        });
+
+        container.addEventListener('dblclick', (e) => {
+            if (e.target.closest('.zoom-toolbar')) return;
+            fitToContainer(tab, container, container.querySelector(viewportSelector));
+        });
+
+        container.addEventListener('click', (e) => {
+            const btn = e.target.closest('.zoom-btn');
+            if (!btn) return;
+            const action = btn.dataset.action;
+            const viewportEl = container.querySelector(viewportSelector);
+            const rect = container.getBoundingClientRect();
+            if (action === 'zoom-in') {
+                zoomAt(tab, container, viewportEl, zoomState[tab].scale * 1.25, rect.width / 2, rect.height / 2);
+            } else if (action === 'zoom-out') {
+                zoomAt(tab, container, viewportEl, zoomState[tab].scale / 1.25, rect.width / 2, rect.height / 2);
+            } else if (action === 'pan') {
+                setPanToggle(!_panToggle);
+            } else if (action === 'reset') {
+                zoomState[tab].scale = 1;
+                const dims = getContentDims(viewportEl);
+                if (dims) {
+                    clampPan(tab, rect, dims.w, dims.h);
+                } else {
+                    zoomState[tab].panX = 0;
+                    zoomState[tab].panY = 0;
+                }
+                applyZoom(tab, viewportEl);
+            } else if (action === 'fit') {
+                fitToContainer(tab, container, viewportEl);
+            }
+        });
+    }
+
+    // Initialize Zoom for Planning HTML Preview
+    initZoomListeners('planning-html-preview-wrapper', '.zoomable-viewport', 'planningHtml');
+
     function persistResearchState() {
         if (!researchWorkspaceRoot) return;
         const rState = {
@@ -3857,6 +4063,17 @@
             const previewWrapper = document.getElementById('planning-html-preview-wrapper');
             const iframe = document.getElementById('planning-html-frame');
             const statusEl = document.getElementById('status-planning-html');
+            const viewport = previewWrapper ? previewWrapper.querySelector('.zoomable-viewport') : null;
+
+            // Reset zoom/pan state for the new file. Back to fill-the-container
+            // until sbContentDims reports the page's natural size; leaving the old
+            // explicit dims would make the next preview start at the wrong scale.
+            resetZoom('planningHtml');
+            _planningContentDims = null;
+            if (viewport) {
+                viewport.style.width = '100%';
+                viewport.style.height = '100%';
+            }
 
             if (initialState) initialState.style.display = 'none';
             if (loadingState) loadingState.style.display = 'none';
@@ -3871,6 +4088,7 @@
                     iframe.removeAttribute('srcdoc');
                     iframe.src = isAutoRefreshed ? iframeSrc + '?t=' + Date.now() : iframeSrc;
                 }
+                if (viewport) applyZoom('planningHtml', viewport);
                 if (statusEl) { statusEl.textContent = isAutoRefreshed ? 'Auto-refreshed' : ''; statusEl.style.color = 'var(--accent-teal)'; }
             } else if (htmlContent) {
                 if (previewWrapper) previewWrapper.style.display = 'flex';
@@ -3879,11 +4097,30 @@
                     iframe.removeAttribute('src');
                     iframe.srcdoc = injectBaseTag(htmlContent, webviewUri);
                 }
+                if (viewport) applyZoom('planningHtml', viewport);
                 if (statusEl) { statusEl.textContent = isAutoRefreshed ? 'Auto-refreshed' : ''; statusEl.style.color = 'var(--accent-teal)'; }
             } else {
                 if (previewWrapper) previewWrapper.style.display = 'none';
                 if (initialState) initialState.style.display = 'flex';
             }
+
+            // One-shot load fallback: sbContentDims will report natural dims and
+            // call fitToContainer, but if that message is delayed (or cross-origin
+            // quirks prevent it) use the iframe's current rendered dims to avoid a
+            // collapsed/near-zero canvas. Remove any stale listener so rapid file
+            // switches don't accumulate callbacks on the reused iframe element.
+            if (iframe && (iframeSrc || htmlContent)) {
+                if (_planningHtmlLoadListener) {
+                    iframe.removeEventListener('load', _planningHtmlLoadListener);
+                }
+                _planningHtmlLoadListener = () => {
+                    const wrapper = document.getElementById('planning-html-preview-wrapper');
+                    const viewportEl = wrapper ? wrapper.querySelector('.zoomable-viewport') : null;
+                    fitToContainer('planningHtml', wrapper, viewportEl);
+                };
+                iframe.addEventListener('load', _planningHtmlLoadListener, { once: true });
+            }
+
             // Inspect Mode reset on (auto-)refresh: clear selection state and hide
             // the popup, but preserve the textarea draft (same rule as the Design
             // panel's Stitch HTML / HTML Previews tabs). The toggle's .active class
@@ -5121,6 +5358,40 @@
                     phTextarea.focus();
                 }
 
+                break;
+            }
+            case 'sbSpacePan': {
+                // Gate on the active iframe so a blur from a hidden iframe doesn't
+                // kill pan mode in the visible one. Mirrors sbInspectState routing
+                // and design.js sbSpacePan (design.js:3645-3654).
+                const planningHtmlFrame = document.getElementById('planning-html-frame');
+                if (state.activeSource === 'planning-html-folder' &&
+                    planningHtmlFrame && event.source === planningHtmlFrame.contentWindow) {
+                    setSpaceHeld(!!msg.on); // two-driver model — do NOT toggle body class directly
+                }
+                break;
+            }
+            case 'sbContentDims': {
+                // Cap reported dims: sizing the viewport resizes the iframe, which re-fires
+                // the iframe's resize/ResizeObserver reporter. Pages built from 100vh
+                // sections then feed back and grow the canvas without bound. Capping halts
+                // the loop. Mirrors design.js sbContentDims (design.js:3657-3689).
+                const MAX_PREVIEW_DIM = 30000;
+                const planningHtmlFrame = document.getElementById('planning-html-frame');
+                if (state.activeSource !== 'planning-html-folder' ||
+                    !planningHtmlFrame || event.source !== planningHtmlFrame.contentWindow) {
+                    break;
+                }
+                const wrapper = document.getElementById('planning-html-preview-wrapper');
+                const vp = wrapper ? wrapper.querySelector('.zoomable-viewport') : null;
+                if (vp && msg.w && msg.h) {
+                    const w = Math.min(msg.w, MAX_PREVIEW_DIM);
+                    const h = Math.min(msg.h, MAX_PREVIEW_DIM);
+                    vp.style.width  = w + 'px';
+                    vp.style.height = h + 'px';
+                    _planningContentDims = { w, h };
+                    fitToContainer('planningHtml', wrapper, vp); // initial view = whole page
+                }
                 break;
             }
             case 'sbInspectState': {

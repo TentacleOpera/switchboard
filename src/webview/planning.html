@@ -2105,6 +2105,35 @@
             transform-origin: top left;
             will-change: transform;
         }
+
+        /* The Planning HTML iframe viewport is sized to the previewed page's natural
+           pixel dims (via sbContentDims). As a flex child of the centered .zoomable-container
+           it would be shrunk on the main axis and centered (negative origin) on the cross
+           axis — both break the transform-based fit/pan math, which assumes a fixed-size
+           box anchored at the container's top-left. Take it out of flex flow so the
+           reported dims are honored and the top-left origin holds. In the default
+           100%×100% state this is a no-op. */
+        #planning-html-preview-wrapper > .zoomable-viewport {
+            position: absolute;
+            top: 0;
+            left: 0;
+            flex-shrink: 0;
+        }
+
+        /* Transparent layer above the iframe so pan/zoom mouse events reach the
+           container instead of disappearing into the iframe document. Hidden by
+           default; shown only while Space is held or Pan mode is on. */
+        .zoom-event-layer {
+            position: absolute;
+            inset: 0;
+            z-index: 5;
+            cursor: grab;
+            display: none;
+        }
+        body.space-pan-active .zoom-event-layer {
+            display: block;
+        }
+
         /* Image preview viewports must fill the container so flex centering is a no-op
            and fitToContainer's top-left-origin pan math holds. */
         #image-preview-container .zoomable-viewport {
@@ -2155,6 +2184,12 @@
             border-color: var(--accent-teal-dim);
             color: var(--accent-teal);
             background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+        }
+        .zoom-btn.active {
+            background: var(--accent-teal-dim);
+            border-color: var(--accent-teal);
+            color: var(--accent-teal);
+            font-weight: 600;
         }
 
         /* ── Cyber Panel Theme: Neon Glow Effects ── */
@@ -3773,10 +3808,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             </div>
                             <div class="zoom-event-layer"></div>
                             <div class="zoom-toolbar">
-                                <button class="zoom-btn" data-action="zoom-in" title="Zoom In">+</button>
-                                <button class="zoom-btn" data-action="zoom-out" title="Zoom Out">−</button>
-                                <button class="zoom-btn" data-action="reset" title="Reset Zoom">⟲</button>
-                                <button class="zoom-btn" data-action="fit" title="Fit to View">⤢</button>
+                                <button class="zoom-btn" data-action="pan" title="Pan mode — drag to move the canvas">✥</button>
+                                <button class="zoom-btn" data-action="zoom-in" title="Zoom In (hold Space + Scroll)">+</button>
+                                <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (hold Space + Scroll)">−</button>
+                                <button class="zoom-btn" data-action="reset" title="Actual size (100%)">⟲</button>
+                                <button class="zoom-btn" data-action="fit" title="Fit whole page to view (Double-click)">⤢</button>
                             </div>
                         </div>
                     </div>

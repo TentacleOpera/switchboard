@@ -313,6 +313,18 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    /**
+     * Seam bundle accessor for migrated _handleMessage arms. Lazily builds the
+     * vscode-backed bundle when the provider is driven before `_initTaskViewerService`
+     * ran. The test-seam harness injects a headless bundle by assigning `_hostSeams`.
+     */
+    private _seams(): HostSeams {
+        if (!this._hostSeams) {
+            this._hostSeams = createVscodeHostSeams(this._getWorkspaceRoot() || '', this._context.secrets);
+        }
+        return this._hostSeams;
+    }
+
     private _hostSeams?: HostSeams;
     private _broadcaster?: BroadcastHub;
     private _messageListener?: (message: any) => Promise<any>;
@@ -817,7 +829,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     public async exportPromptSettings(): Promise<boolean> {
         const workspaceRoot = this._getWorkspaceRoot();
         if (!workspaceRoot) {
-            vscode.window.showWarningMessage('No workspace selected.');
+            this._seams().ui.showWarningMessage('No workspace selected.');
             return false;
         }
 
@@ -895,10 +907,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             await fs.promises.writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf8');
             await fs.promises.rename(tmpPath, targetPath);
 
-            vscode.window.showInformationMessage('Prompt settings exported to .switchboard/settings.json');
+            this._seams().ui.showInformationMessage('Prompt settings exported to .switchboard/settings.json');
             return true;
         } catch (error: any) {
-            vscode.window.showErrorMessage(`Failed to export prompt settings: ${error.message || error}`);
+            this._seams().ui.showErrorMessage(`Failed to export prompt settings: ${error.message || error}`);
             return false;
         }
     }
@@ -906,7 +918,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     public async importPromptSettings(): Promise<boolean> {
         const workspaceRoot = this._getWorkspaceRoot();
         if (!workspaceRoot) {
-            vscode.window.showWarningMessage('No workspace selected.');
+            this._seams().ui.showWarningMessage('No workspace selected.');
             return false;
         }
 
@@ -914,7 +926,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         try {
             await fs.promises.access(settingsPath);
         } catch {
-            vscode.window.showWarningMessage('No settings file found at .switchboard/settings.json');
+            this._seams().ui.showWarningMessage('No settings file found at .switchboard/settings.json');
             return false;
         }
 
@@ -938,13 +950,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }
             }
 
-            await vscode.commands.executeCommand('switchboard.refreshUI');
+            await this._seams().commands.executeCommand('switchboard.refreshUI');
             this._kanbanProvider?.postMessage({ type: 'reloadRoleConfigs' });
 
-            vscode.window.showInformationMessage('Prompt settings imported from .switchboard/settings.json');
+            this._seams().ui.showInformationMessage('Prompt settings imported from .switchboard/settings.json');
             return true;
         } catch (error: any) {
-            vscode.window.showErrorMessage(`Failed to import prompt settings: ${error.message || error}`);
+            this._seams().ui.showErrorMessage(`Failed to import prompt settings: ${error.message || error}`);
             return false;
         }
     }
@@ -1519,7 +1531,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
 
             this.notifyStateChanged();
-            void vscode.commands.executeCommand('switchboard.refreshUI');
+            void this._seams().commands.executeCommand('switchboard.refreshUI');
         } catch (e) {
             console.error('[TaskViewerProvider] copyDbSettingsToGlobal failed:', e);
         }
@@ -2057,7 +2069,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         const consentKey = `switchboard.pollutionCleanupConsent.${resolvedRoot}`;
                         const alreadyConsented = this._context.globalState.get<boolean>(consentKey, false);
                         if (!alreadyConsented) {
-                            const answer = await vscode.window.showWarningMessage(
+                            const answer = await this._seams().ui.showWarningMessage(
                                 `Switchboard: Child workspace "${root}" has a stray .switchboard/kanban.db with active plans. Remove it?`,
                                 'Remove', 'Keep'
                             );
@@ -3545,7 +3557,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (configuredPlans.length === 0) {
                     const hasOrphans = await KanbanDatabase.dbFileHasPlans(defaultPath);
                     if (hasOrphans) {
-                        const action = await vscode.window.showWarningMessage(
+                        const action = await this._seams().ui.showWarningMessage(
                             'Current database is empty but plans were found in the local database. Migrate data?',
                             'Migrate Data', 'Ignore'
                         );
@@ -3555,7 +3567,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 await KanbanDatabase.invalidateWorkspace(effectiveWorkspaceRoot);
                                 this._showTemporaryNotification('Plans migrated successfully.');
                             } else {
-                                vscode.window.showErrorMessage(`Migration failed: ${result.skipped}`);
+                                this._seams().ui.showErrorMessage(`Migration failed: ${result.skipped}`);
                             }
                         }
                     }
@@ -3977,11 +3989,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         if (!targetAgent) {
-            vscode.window.showErrorMessage(`No agent assigned to role '${role}'. Please assign a terminal first.`);
+            this._seams().ui.showErrorMessage(`No agent assigned to role '${role}'. Please assign a terminal first.`);
             return false;
         }
         if (!this._isValidAgentName(targetAgent)) { return false; }
-        vscode.commands.executeCommand('switchboard.focusTerminalByName', targetAgent);
+        this._seams().commands.executeCommand('switchboard.focusTerminalByName', targetAgent);
         const success = await this._dispatchExecuteMessage(resolvedWorkspaceRoot, targetAgent, prompt, {});
 
         // Advance the rotation cursor ONLY after successful dispatch
@@ -3997,7 +4009,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // 1. Persist so a *cold* open restores straight to Memo via _sendInitialState.
         await this._context.workspaceState.update(TaskViewerProvider.ACTIVE_SUB_TAB_STATE_KEY, 'memo');
         // 2. Reveal the sidebar (resolves the view if not yet created).
-        await vscode.commands.executeCommand('switchboard-view.focus');
+        await this._seams().commands.executeCommand('switchboard-view.focus');
         // 3. If the view is already live, switch immediately (initialState won't re-fire).
         this.postMessage({ type: 'openMemoTab' });
         // 4. Cold-open safety net: re-assert Memo once the webview has had a moment to mount.
@@ -4218,7 +4230,7 @@ Each plan file must include:
         const prompt = await this._kanbanProvider.generateUnifiedPrompt(role, validPlans, resolvedWorkspaceRoot, { instruction: options.instruction });
         const messagePayload = this._appendAdditionalInstructions(prompt, undefined, options.additionalInstructions);
 
-        await vscode.env.clipboard.writeText(messagePayload);
+        await this._seams().clipboard.writeText(messagePayload);
 
         const workflowName = this._workflowNameForDispatchRole(role, options.instruction);
         const db = await this._getKanbanDb(resolvedWorkspaceRoot);
@@ -4350,7 +4362,7 @@ Each plan file must include:
                 resolvedWorkspaceRoot
             );
         }
-        await vscode.commands.executeCommand('switchboard.refreshUI');
+        await this._seams().commands.executeCommand('switchboard.refreshUI');
     }
 
     /**
@@ -4547,11 +4559,11 @@ Each plan file must include:
     private async _ensureAcceptanceTesterDispatchEligible(workspaceRoot?: string): Promise<boolean> {
         const visibleAgents = await this.getVisibleAgents(workspaceRoot);
         if (visibleAgents.tester === false) {
-            vscode.window.showErrorMessage('Acceptance Tester is currently disabled in Setup.');
+            this._seams().ui.showErrorMessage('Acceptance Tester is currently disabled in Setup.');
             return false;
         }
         if (!this._isAcceptanceTesterDesignDocConfigured()) {
-            vscode.window.showErrorMessage('Acceptance Tester requires a Planning Feature to be enabled and attached in Setup.');
+            this._seams().ui.showErrorMessage('Acceptance Tester requires a Planning Feature to be enabled and attached in Setup.');
             return false;
         }
         return true;
@@ -4576,7 +4588,7 @@ Each plan file must include:
                 sourceColumn
             );
         }
-        await vscode.commands.executeCommand('switchboard.refreshUI', resolvedWorkspaceRoot);
+        await this._seams().commands.executeCommand('switchboard.refreshUI', resolvedWorkspaceRoot);
     }
 
     public async copyMergePrompt(sessionIds: string[], workspaceRoot?: string): Promise<void> {
@@ -4589,8 +4601,8 @@ Each plan file must include:
             return;
         }
         const prompt = await this._kanbanProvider.generateUnifiedPrompt('reviewer', validPlans, resolvedWorkspaceRoot);
-        await vscode.env.clipboard.writeText(prompt);
-        vscode.window.showInformationMessage(`Merge prompt copied for ${validPlans.length} plans.`);
+        await this._seams().clipboard.writeText(prompt);
+        this._seams().ui.showInformationMessage(`Merge prompt copied for ${validPlans.length} plans.`);
     }
 
     /**
@@ -4643,7 +4655,7 @@ Each plan file must include:
             const targetAgent = String(targetTerminalOverride || '').trim()
                 || await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath);
             if (!targetAgent || !this._isValidAgentName(targetAgent)) {
-                vscode.window.showErrorMessage(`No agent assigned to role '${role}' for feature '${g.feature.topic || 'Untitled'}'. Cannot dispatch batch.`);
+                this._seams().ui.showErrorMessage(`No agent assigned to role '${role}' for feature '${g.feature.topic || 'Untitled'}'. Cannot dispatch batch.`);
                 return false;
             }
             groups.push({ label: g.feature.topic || 'Untitled', plans: groupPlans, worktreePath, targetAgent });
@@ -4657,7 +4669,7 @@ Each plan file must include:
             const targetAgent = String(targetTerminalOverride || '').trim()
                 || await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath);
             if (!targetAgent || !this._isValidAgentName(targetAgent)) {
-                vscode.window.showErrorMessage(`No agent assigned to role '${role}' for loose plans. Cannot dispatch batch.`);
+                this._seams().ui.showErrorMessage(`No agent assigned to role '${role}' for loose plans. Cannot dispatch batch.`);
                 return false;
             }
             groups.push({ label: 'Loose plans', plans: loose, worktreePath, targetAgent });
@@ -4707,7 +4719,7 @@ Each plan file must include:
 
             // Send the prompt to the resolved terminal
             try {
-                vscode.commands.executeCommand('switchboard.focusTerminalByName', group.targetAgent);
+                this._seams().commands.executeCommand('switchboard.focusTerminalByName', group.targetAgent);
                 const sent = await this._dispatchExecuteMessage(resolvedWorkspaceRoot, group.targetAgent, finalPrompt, {
                     batch: true,
                     sessionIds: group.plans.map(p => p.sessionId || p.planId || '').filter(Boolean)
@@ -4734,7 +4746,7 @@ Each plan file must include:
                 const unsent = unsentLabels && unsentLabels.length > 0
                     ? ` Not advanced (re-dispatch): ${unsentLabels.join(', ')}.`
                     : ' Remaining groups not advanced.';
-                vscode.window.showErrorMessage(`Failed to dispatch '${group.label}' to '${group.targetAgent}'.${unsent}`);
+                this._seams().ui.showErrorMessage(`Failed to dispatch '${group.label}' to '${group.targetAgent}'.${unsent}`);
                 return false;
             }
 
@@ -4747,13 +4759,13 @@ Each plan file must include:
                     accurateCodingEnabled: coderUsesIde ? false : this._isAccurateCodingEnabled()
                 });
                 if (coderUsesIde) {
-                    await vscode.env.clipboard.writeText(coderPrompt);
-                    const choice = await vscode.window.showInformationMessage(
+                    await this._seams().clipboard.writeText(coderPrompt);
+                    const choice = await this._seams().ui.showInformationMessage(
                         `Pair Programming: Routine tasks ready for ${group.label}. Copy Coder prompt?`,
                         'Copy Coder Prompt'
                     );
                     if (choice === 'Copy Coder Prompt') {
-                        await vscode.env.clipboard.writeText(coderPrompt);
+                        await this._seams().clipboard.writeText(coderPrompt);
                     }
                 } else {
                     await this.dispatchToCoderTerminal(coderPrompt, group.worktreePath);
@@ -4795,7 +4807,7 @@ Each plan file must include:
     public async handleKanbanCompletePlan(sessionId: string, workspaceRoot?: string): Promise<boolean> {
         const success = await this._handleCompletePlan(sessionId, workspaceRoot);
         if (success) {
-            await vscode.commands.executeCommand('switchboard.refreshUI');
+            await this._seams().commands.executeCommand('switchboard.refreshUI');
         }
         return success;
     }
@@ -5456,7 +5468,7 @@ Each plan file must include:
             throw new Error('Control plane provider is not available.');
         }
         await this._kanbanProvider.setExplicitControlPlaneRoot(controlPlaneRoot, workspaceRoot);
-        await vscode.commands.executeCommand('switchboard.refreshControlPlaneRuntime');
+        await this._seams().commands.executeCommand('switchboard.refreshControlPlaneRuntime');
         return this._kanbanProvider.getControlPlaneSelectionStatus(workspaceRoot);
     }
 
@@ -5465,7 +5477,7 @@ Each plan file must include:
             throw new Error('Control plane provider is not available.');
         }
         await this._kanbanProvider.setExplicitControlPlaneRoot(null, workspaceRoot);
-        await vscode.commands.executeCommand('switchboard.refreshControlPlaneRuntime');
+        await this._seams().commands.executeCommand('switchboard.refreshControlPlaneRuntime');
         return this._kanbanProvider.getControlPlaneSelectionStatus(workspaceRoot);
     }
 
@@ -5474,7 +5486,7 @@ Each plan file must include:
             throw new Error('Control plane provider is not available.');
         }
         await this._kanbanProvider.clearControlPlaneCache(workspaceRoot);
-        await vscode.commands.executeCommand('switchboard.refreshControlPlaneRuntime');
+        await this._seams().commands.executeCommand('switchboard.refreshControlPlaneRuntime');
         return this._kanbanProvider.getControlPlaneSelectionStatus(workspaceRoot);
     }
 
@@ -6200,7 +6212,7 @@ Each plan file must include:
 
             await this._kanbanProvider?.initializeIntegrationAutoPull();
             await this._kanbanProvider?.applyLiveSyncConfig(resolvedRoot);
-            await vscode.commands.executeCommand('switchboard.refreshUI');
+            await this._seams().commands.executeCommand('switchboard.refreshUI');
 
             return { success: true, projectName };
         } catch (error) {
@@ -6660,7 +6672,7 @@ Each plan file must include:
         if (!resolvedRoot) return;
         const agentName = await this._getAgentNameForRole('planner', resolvedRoot);
         if (!agentName) {
-            vscode.window.showWarningMessage('No planner agent found. Set one up in the Setup panel.');
+            this._seams().ui.showWarningMessage('No planner agent found. Set one up in the Setup panel.');
             throw new Error('No planner agent configured');
         }
         const prompt = `Please review the following ${data.provider} ticket and action it. Assess the request, investigate the relevant code, and either implement the change or report back with findings:\n\nTitle: ${data.title}\nDescription: ${data.description}\n\nTicket ID: ${data.id}`;
@@ -6986,7 +6998,7 @@ Each plan file must include:
             console.warn(`[TaskViewerProvider] Kanban DB unavailable: ${initError}`);
             if (this._lastKanbanDbWarnings.get(resolvedRoot) !== initError) {
                 this._lastKanbanDbWarnings.set(resolvedRoot, initError);
-                vscode.window.showWarningMessage(
+                this._seams().ui.showWarningMessage(
                     `Kanban DB initialization failed: ${initError}. DB-backed views may appear empty until the database is repaired or reset.`
                 );
             }
@@ -7962,7 +7974,7 @@ Each plan file must include:
             this._showTemporaryNotification(message);
             return;
         }
-        vscode.window.showWarningMessage(message);
+        this._seams().ui.showWarningMessage(message);
     }
 
     private async _stopAutobanForExhaustion(message: string): Promise<void> {
@@ -8142,7 +8154,7 @@ Each plan file must include:
     private async _createAutobanTerminal(role: string, requestedName?: string, cwd?: string, skipStatePoolUpdate: boolean = false, reveal: boolean = true): Promise<{ role: string; name: string } | undefined> {
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) {
-            vscode.window.showErrorMessage('No workspace folder found. Cannot create an autoban terminal.');
+            this._seams().ui.showErrorMessage('No workspace folder found. Cannot create an autoban terminal.');
             return;
         }
 
@@ -8150,7 +8162,7 @@ Each plan file must include:
         const customAgents = await this.getCustomAgents(workspaceRoot);
         const customAgentRoles = customAgents.map(a => a.role);
         if (!this._autobanPoolRoles(customAgentRoles).includes(normalizedRole)) {
-            vscode.window.showErrorMessage(`Unsupported autoban pool role '${role}'.`);
+            this._seams().ui.showErrorMessage(`Unsupported autoban pool role '${role}'.`);
             return;
         }
 
@@ -8161,7 +8173,7 @@ Each plan file must include:
         const livePrimaryRoleTerminals = await this._getAliveAutobanTerminalNames(normalizedRole, workspaceRoot, false);
         const poolSize = configuredPool.length > 0 ? configuredPool.length : livePrimaryRoleTerminals.length;
         if (poolSize >= MAX_AUTOBAN_TERMINALS_PER_ROLE) {
-            vscode.window.showWarningMessage(`${roleLabel} already has ${MAX_AUTOBAN_TERMINALS_PER_ROLE} autoban terminals.`);
+            this._seams().ui.showWarningMessage(`${roleLabel} already has ${MAX_AUTOBAN_TERMINALS_PER_ROLE} autoban terminals.`);
             return;
         }
 
@@ -8459,7 +8471,7 @@ Each plan file must include:
     public async startOrchestratorFromKanban(workspaceRoot?: string): Promise<void> {
         const root = this._resolveWorkspaceRoot(workspaceRoot);
         if (!root) {
-            vscode.window.showErrorMessage('No workspace folder found. Cannot start the orchestrator.');
+            this._seams().ui.showErrorMessage('No workspace folder found. Cannot start the orchestrator.');
             return;
         }
 
@@ -9021,7 +9033,7 @@ Each plan file must include:
                     .map(([name]) => name);
 
                 if (!isManual && worktreeTerminalsForRole.length >= MAX_AUTOBAN_TERMINALS_PER_ROLE) {
-                    vscode.window.showWarningMessage(`Could not open ${agentName} terminal for ${path.basename(resolvedPath)}: worktree role terminal limit reached`);
+                    this._seams().ui.showWarningMessage(`Could not open ${agentName} terminal for ${path.basename(resolvedPath)}: worktree role terminal limit reached`);
                     continue;
                 }
             }
@@ -9196,12 +9208,12 @@ Each plan file must include:
     public async dispatchToCoderTerminal(prompt: string, worktreePath?: string): Promise<void> {
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) {
-            vscode.window.showWarningMessage('Pair Program: no workspace root found.');
+            this._seams().ui.showWarningMessage('Pair Program: no workspace root found.');
             return;
         }
         const coderAgent = await this._resolveAgentTerminalForPlan('coder', workspaceRoot, worktreePath);
         if (!coderAgent) {
-            vscode.window.showWarningMessage('Pair Program: no Coder terminal found. Please register a Coder terminal first.');
+            this._seams().ui.showWarningMessage('Pair Program: no Coder terminal found. Please register a Coder terminal first.');
             return;
         }
         await this._dispatchExecuteMessage(workspaceRoot, coderAgent, prompt, {
@@ -9403,7 +9415,7 @@ Each plan file must include:
         await Promise.all([
             this._postSidebarConfigurationState(resolvedRoot),
             this.postSetupPanelState(resolvedRoot),
-            vscode.commands.executeCommand('switchboard.refreshUI')
+            this._seams().commands.executeCommand('switchboard.refreshUI')
         ]);
         this._postSharedWebviewMessage({ type: 'saveStartupCommandsResult', success: true });
     }
@@ -9443,7 +9455,7 @@ Each plan file must include:
                     const warningKey = `${normalizedPlanIngestionFolder || ''}::${validationError}`;
                     if (this._lastPlanIngestionValidationWarning !== warningKey) {
                         this._lastPlanIngestionValidationWarning = warningKey;
-                        vscode.window.showWarningMessage(validationError);
+                        this._seams().ui.showWarningMessage(validationError);
                     }
                 } else {
                     this._lastPlanIngestionValidationWarning = null;
@@ -9814,7 +9826,7 @@ Each plan file must include:
         const wsRoot = this._resolveWorkspaceRoot(targetWorkspaceRoot) || this._getWorkspaceRoot();
         if (!wsRoot) {
             if (targetWorkspaceRoot) {
-                vscode.window.showErrorMessage(`Workspace root not found: ${targetWorkspaceRoot}`);
+                this._seams().ui.showErrorMessage(`Workspace root not found: ${targetWorkspaceRoot}`);
             }
             return;
         }
@@ -9831,12 +9843,12 @@ Each plan file must include:
 
         const migResult = await KanbanDatabase.migrateIfNeeded(oldResolvedLocal, localPath);
         if (migResult.skipped === 'target_has_data') {
-            const choice = await vscode.window.showWarningMessage(
+            const choice = await this._seams().ui.showWarningMessage(
                 'Both local and cloud databases contain plans.',
                 'Open Reconciliation', 'Switch Anyway'
             );
             if (choice === 'Open Reconciliation') {
-                vscode.commands.executeCommand('switchboard.reconcileKanbanDbs');
+                this._seams().commands.executeCommand('switchboard.reconcileKanbanDbs');
                 return;
             }
         } else if (migResult.migrated) {
@@ -9851,19 +9863,19 @@ Each plan file must include:
 
     public async handleSetCustomDbPath(customPath: string, targetWorkspaceRoot?: string): Promise<void> {
         if (!customPath || !customPath.trim()) {
-            vscode.window.showErrorMessage('Custom database path cannot be empty.');
+            this._seams().ui.showErrorMessage('Custom database path cannot be empty.');
             return;
         }
 
         const validation = KanbanDatabase.validatePath(customPath);
         if (!validation.valid) {
-            vscode.window.showErrorMessage(`❌ Invalid path: ${validation.error}`);
+            this._seams().ui.showErrorMessage(`❌ Invalid path: ${validation.error}`);
             return;
         }
 
         const wsRoot = this._resolveWorkspaceRoot(targetWorkspaceRoot) || this._getWorkspaceRoot();
         if (!wsRoot) {
-            vscode.window.showErrorMessage(targetWorkspaceRoot ? `Workspace root not found: ${targetWorkspaceRoot}` : 'No workspace root found.');
+            this._seams().ui.showErrorMessage(targetWorkspaceRoot ? `Workspace root not found: ${targetWorkspaceRoot}` : 'No workspace root found.');
             return;
         }
 
@@ -9874,12 +9886,12 @@ Each plan file must include:
 
         const migResult = await KanbanDatabase.migrateIfNeeded(oldResolvedPath, newResolvedPath);
         if (migResult.skipped === 'target_has_data') {
-            const migChoice = await vscode.window.showWarningMessage(
+            const migChoice = await this._seams().ui.showWarningMessage(
                 'Both the current and target databases contain plans. Automatic migration skipped.',
                 'Open Reconciliation', 'Continue Anyway'
             );
             if (migChoice === 'Open Reconciliation') {
-                vscode.commands.executeCommand('switchboard.reconcileKanbanDbs');
+                this._seams().commands.executeCommand('switchboard.reconcileKanbanDbs');
                 return;
             }
         } else if (migResult.migrated) {
@@ -9926,7 +9938,7 @@ Each plan file must include:
                 if (process.platform === 'darwin') {
                     presetPath = path.join(homedir, 'Library', 'Mobile Documents', 'com~apple~CloudDocs', 'Switchboard', 'kanban.db');
                 } else {
-                    vscode.window.showWarningMessage('iCloud Drive preset is only available on macOS.');
+                    this._seams().ui.showWarningMessage('iCloud Drive preset is only available on macOS.');
                 }
                 break;
             default:
@@ -9949,7 +9961,7 @@ Each plan file must include:
                     errorMsg = `Cloud storage preset "${preset}" not found.`;
                     break;
             }
-            vscode.window.showErrorMessage(errorMsg);
+            this._seams().ui.showErrorMessage(errorMsg);
             return;
         }
 
@@ -9962,7 +9974,7 @@ Each plan file must include:
                 const msgSuffix = isMac
                     ? `Please create a folder named "${folderName}" in the location opened by Finder, then click Continue.`
                     : `Please create the folder manually at:\n${parentDir}`;
-                const choice = await vscode.window.showWarningMessage(
+                const choice = await this._seams().ui.showWarningMessage(
                     `The "${folderName}" folder does not exist in your cloud storage. ` +
                     `This extension cannot create it automatically due to OS restrictions. ` +
                     msgSuffix,
@@ -9978,9 +9990,9 @@ Each plan file must include:
                         }
                     }
                     if (fs.existsSync(openDir)) {
-                        await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(openDir));
+                        await this._seams().commands.executeCommand('revealFileInOS', vscode.Uri.file(openDir));
                     }
-                    const retryChoice = await vscode.window.showInformationMessage(
+                    const retryChoice = await this._seams().ui.showInformationMessage(
                         `Create the "${folderName}" folder in the My Drive folder then click Continue.`,
                         'Continue', 'Cancel'
                     );
@@ -9988,7 +10000,7 @@ Each plan file must include:
                         return;
                     }
                     if (!fs.existsSync(parentDir)) {
-                        vscode.window.showErrorMessage(
+                        this._seams().ui.showErrorMessage(
                             `Folder "${folderName}" still not found. Please create it and try again.`
                         );
                         return;
@@ -9997,7 +10009,7 @@ Each plan file must include:
                     return;
                 }
             } else {
-                const choice = await vscode.window.showWarningMessage(
+                const choice = await this._seams().ui.showWarningMessage(
                     `Directory not found at ${parentDir}. Create it?`,
                     'Create Directory', 'Cancel'
                 );
@@ -10005,7 +10017,7 @@ Each plan file must include:
                     try {
                         fs.mkdirSync(parentDir, { recursive: true });
                     } catch (error) {
-                        vscode.window.showErrorMessage(`Failed to create directory: ${error instanceof Error ? error.message : String(error)}`);
+                        this._seams().ui.showErrorMessage(`Failed to create directory: ${error instanceof Error ? error.message : String(error)}`);
                         return;
                     }
                 } else {
@@ -10022,12 +10034,12 @@ Each plan file must include:
             const oldResolvedPath = this._resolveDbPathSetting(oldDbPath, wsRoot);
             const migResult = await KanbanDatabase.migrateIfNeeded(oldResolvedPath, presetPath);
             if (migResult.skipped === 'target_has_data') {
-                const migChoice = await vscode.window.showWarningMessage(
+                const migChoice = await this._seams().ui.showWarningMessage(
                     'Both the current and target databases contain plans. Automatic migration skipped.',
                     'Open Reconciliation', 'Continue Anyway'
                 );
                 if (migChoice === 'Open Reconciliation') {
-                    vscode.commands.executeCommand('switchboard.reconcileKanbanDbs');
+                    this._seams().commands.executeCommand('switchboard.reconcileKanbanDbs');
                     return;
                 }
             } else if (migResult.migrated) {
@@ -10046,13 +10058,13 @@ Each plan file must include:
 
     public async handleResetDatabase(targetWorkspaceRoot?: string): Promise<void> {
         const resolvedRoot = this._resolveWorkspaceRoot(targetWorkspaceRoot) || this._getWorkspaceRoot();
-        const resetConfirm = await vscode.window.showWarningMessage(
+        const resetConfirm = await this._seams().ui.showWarningMessage(
             'Reset the kanban database? All plan metadata will be permanently deleted.',
             { modal: true },
             'Reset Database'
         );
         if (resetConfirm === 'Reset Database') {
-            vscode.commands.executeCommand('switchboard.resetKanbanDb', resolvedRoot);
+            this._seams().commands.executeCommand('switchboard.resetKanbanDb', resolvedRoot);
         }
     }
 
@@ -10183,7 +10195,7 @@ Each plan file must include:
                 this._orchestrationFailedWakes++;
                 console.warn(`[Autoban] Orchestration wake not delivered (terminal down) — failure ${this._orchestrationFailedWakes}/${ORCHESTRATION_MAX_FAILED_WAKES}.`);
                 if (this._orchestrationFailedWakes >= ORCHESTRATION_MAX_FAILED_WAKES) {
-                    vscode.window.showWarningMessage(`Orchestration stopped: orchestrator terminal unreachable after ${ORCHESTRATION_MAX_FAILED_WAKES} wake attempts.`);
+                    this._seams().ui.showWarningMessage(`Orchestration stopped: orchestrator terminal unreachable after ${ORCHESTRATION_MAX_FAILED_WAKES} wake attempts.`);
                     this._autobanState = normalizeAutobanConfigState({
                         ...this._autobanState,
                         enabled: false,
@@ -10468,7 +10480,7 @@ Each plan file must include:
         const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedWorkspaceRoot) { return false; }
         if (!this._kanbanProvider) {
-            vscode.window.showErrorMessage('Kanban provider unavailable. Cannot evaluate plan complexity for batch dispatch.');
+            this._seams().ui.showErrorMessage('Kanban provider unavailable. Cannot evaluate plan complexity for batch dispatch.');
             return false;
         }
 
@@ -10659,28 +10671,28 @@ Each plan file must include:
                         } catch { /* non-blocking */ }
                         break;
                     case 'runSetup':
-                        vscode.commands.executeCommand('switchboard.setup');
+                        this._seams().commands.executeCommand('switchboard.setup');
                         break;
                     case 'runSetupIDEs':
-                        vscode.commands.executeCommand('switchboard.setupIDEs');
+                        this._seams().commands.executeCommand('switchboard.setupIDEs');
                         break;
                     case 'dispatchProjectManager':
                         await this._handleDispatchProjectManager();
                         break;
                     case 'openKanban':
-                        vscode.commands.executeCommand('switchboard.openKanban', data.tab);
+                        this._seams().commands.executeCommand('switchboard.openKanban', data.tab);
                         break;
                     case 'openPlanningPanel':
-                        vscode.commands.executeCommand('switchboard.openPlanningPanel');
+                        this._seams().commands.executeCommand('switchboard.openPlanningPanel');
                         break;
                     case 'openDesignPanel':
-                        vscode.commands.executeCommand('switchboard.openDesignPanel');
+                        this._seams().commands.executeCommand('switchboard.openDesignPanel');
                         break;
                     case 'openSetupPanel':
-                        vscode.commands.executeCommand('switchboard.openSetupPanel', data.section);
+                        this._seams().commands.executeCommand('switchboard.openSetupPanel', data.section);
                         break;
                     case 'openProjectPanel':
-                        vscode.commands.executeCommand('switchboard.openProjectPanel');
+                        this._seams().commands.executeCommand('switchboard.openProjectPanel');
                         break;
                     case 'linearLoadProject': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
@@ -10823,7 +10835,7 @@ Each plan file must include:
                             let renderedDescriptionHtml = '';
                             const descriptionMd = (issue.description || '').trim() || 'No description provided.';
                             try {
-                                renderedDescriptionHtml = await vscode.commands.executeCommand<string>('markdown.api.render', descriptionMd) || '';
+                                renderedDescriptionHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', descriptionMd) || '';
                             } catch {
                                 // Fallback handled natively by the frontend if renderedDescriptionHtml is empty
                                 renderedDescriptionHtml = '';
@@ -11211,7 +11223,7 @@ Each plan file must include:
                             let renderedDescriptionHtml = '';
                             const descriptionMd = (details.task.markdownDescription || details.task.description || '').trim() || 'No description provided.';
                             try {
-                                renderedDescriptionHtml = await vscode.commands.executeCommand<string>('markdown.api.render', descriptionMd) || '';
+                                renderedDescriptionHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', descriptionMd) || '';
                             } catch {
                                 // Fallback handled natively by the frontend if renderedDescriptionHtml is empty
                                 renderedDescriptionHtml = '';
@@ -11355,10 +11367,10 @@ Each plan file must include:
                     case 'copyTextToClipboard': {
                         const text = String(data.text || '');
                         if (!text.trim()) {
-                            vscode.window.showWarningMessage('Nothing to copy to the clipboard.');
+                            this._seams().ui.showWarningMessage('Nothing to copy to the clipboard.');
                             break;
                         }
-                        await vscode.env.clipboard.writeText(text);
+                        await this._seams().clipboard.writeText(text);
                         this._showTemporaryNotification(typeof data.message === 'string' && data.message.trim()
                             ? data.message
                             : 'Copied to clipboard.');
@@ -11371,7 +11383,7 @@ Each plan file must include:
                         break;
                     case 'showWarning':
                         if (typeof data.message === 'string' && data.message.length > 0) {
-                            vscode.window.showWarningMessage(data.message);
+                            this._seams().ui.showWarningMessage(data.message);
                         }
                         break;
                     case 'initializeProtocols':
@@ -11382,21 +11394,14 @@ Each plan file must include:
                         break;
                     case 'scaffoldMultiRepo': {
                         try {
-                            const result = await vscode.window.withProgress(
+                            const result = await MultiRepoScaffoldingService.scaffold(
                                 {
-                                    location: vscode.ProgressLocation.Notification,
-                                    cancellable: false,
-                                    title: 'Scaffolding Multi-Repo Control Plane...'
+                                    parentDir: typeof data.parentDir === 'string' ? data.parentDir : '',
+                                    workspaceName: typeof data.workspaceName === 'string' ? data.workspaceName : '',
+                                    repoUrls: Array.isArray(data.repoUrls) ? data.repoUrls.map((value: unknown) => String(value)) : [],
+                                    pat: typeof data.pat === 'string' ? data.pat : ''
                                 },
-                                () => MultiRepoScaffoldingService.scaffold(
-                                    {
-                                        parentDir: typeof data.parentDir === 'string' ? data.parentDir : '',
-                                        workspaceName: typeof data.workspaceName === 'string' ? data.workspaceName : '',
-                                        repoUrls: Array.isArray(data.repoUrls) ? data.repoUrls.map((value: unknown) => String(value)) : [],
-                                        pat: typeof data.pat === 'string' ? data.pat : ''
-                                    },
-                                    this._extensionUri.fsPath
-                                )
+                                this._extensionUri.fsPath
                             );
                             this.postMessage({ type: 'multiRepoScaffoldResult', result });
                         } catch (error) {
@@ -11413,24 +11418,24 @@ Each plan file must include:
                     }
                     case 'openExternalUrl':
                         if (data.url && typeof data.url === 'string' && data.url.startsWith('https://')) {
-                            vscode.env.openExternal(vscode.Uri.parse(data.url));
+                            this._seams().ui.openExternal(data.url);
                         } else if (data.url) {
                             console.warn(`[TaskViewerProvider] Blocked openExternalUrl with disallowed scheme: ${data.url}`);
                         }
                         break;
                     case 'openDocs': {
-                        const readmePath = vscode.Uri.joinPath(this._context.extensionUri, 'README.md');
+                        const readmePath = path.join(this._extensionUri.fsPath, 'README.md');
                         try {
-                            await vscode.workspace.fs.stat(readmePath);
-                            vscode.commands.executeCommand('markdown.showPreview', readmePath);
+                            await fs.promises.stat(readmePath);
+                            this._seams().commands.executeCommand('markdown.showPreview', readmePath);
                         } catch {
-                            vscode.window.showErrorMessage('Plugin README.md not found.');
+                            this._seams().ui.showErrorMessage('Plugin README.md not found.');
                         }
                         break;
                     }
                     case 'toggleSilentSetup':
                         if (data.value !== undefined) {
-                            vscode.commands.executeCommand('switchboard.toggleSilent', data.value);
+                            this._seams().commands.executeCommand('switchboard.toggleSilent', data.value);
                         }
                         break;
 
@@ -11444,10 +11449,10 @@ Each plan file must include:
                         if (data.terminalName) {
                             const focused = await this._focusTerminalByName(data.terminalName);
                             if (!focused) {
-                                await vscode.commands.executeCommand('switchboard.focusTerminalByName', data.terminalName);
+                                await this._seams().commands.executeCommand('switchboard.focusTerminalByName', data.terminalName);
                             }
                         } else if (data.pid) {
-                            await vscode.commands.executeCommand('switchboard.focusTerminal', data.pid);
+                            await this._seams().commands.executeCommand('switchboard.focusTerminal', data.pid);
                         }
                         break;
                     case 'closeTerminal':
@@ -11483,14 +11488,14 @@ Each plan file must include:
                         break;
                     case 'createAgentGrid':
                         try {
-                            await vscode.commands.executeCommand('switchboard.createAgentGrid');
+                            await this._seams().commands.executeCommand('switchboard.createAgentGrid');
                             this.postMessage({ type: 'createAgentGridResult', success: true });
                         } catch (e) {
                             this.postMessage({ type: 'createAgentGridResult', success: false });
                         }
                         break;
                     case 'createAgentGridEditor':
-                        await vscode.commands.executeCommand('switchboard.createAgentGridEditor');
+                        await this._seams().commands.executeCommand('switchboard.createAgentGridEditor');
                         break;
                     case 'closeChatAgent':
                         if (data.agentName) {
@@ -11609,28 +11614,30 @@ Each plan file must include:
                         if (!wsRoot || !data.url) { break; }
 
                         const service = this._getNotionService(wsRoot);
-                        await vscode.window.withProgress(
-                            { location: vscode.ProgressLocation.Notification, title: 'Fetching Notion page...', cancellable: false },
-                            async () => {
-                                const result = await service.fetchAndCache(data.url);
-                                if (result.success) {
-                                    this._notionContentCache.delete(wsRoot);
-                                    const config = await service.loadConfig();
-                                    this.postMessage({
-                                        type: 'notionFetchState',
-                                        syncedAt: config?.lastFetchAt,
-                                        pageTitle: config?.pageTitle,
-                                        pageUrl: config?.pageUrl,
-                                        charCount: result.charCount
-                                    });
-                                } else {
-                                    this.postMessage({
-                                        type: 'notionFetchState',
-                                        error: result.error || 'Fetch failed'
-                                    });
-                                }
+                        try {
+                            const result = await service.fetchAndCache(data.url);
+                            if (result.success) {
+                                this._notionContentCache.delete(wsRoot);
+                                const config = await service.loadConfig();
+                                this.postMessage({
+                                    type: 'notionFetchState',
+                                    syncedAt: config?.lastFetchAt,
+                                    pageTitle: config?.pageTitle,
+                                    pageUrl: config?.pageUrl,
+                                    charCount: result.charCount
+                                });
+                            } else {
+                                this.postMessage({
+                                    type: 'notionFetchState',
+                                    error: result.error || 'Fetch failed'
+                                });
                             }
-                        );
+                        } catch (err) {
+                            this.postMessage({
+                                type: 'notionFetchState',
+                                error: err instanceof Error ? err.message : String(err)
+                            });
+                        }
                         break;
                     }
 
@@ -11783,11 +11790,11 @@ Each plan file must include:
                             if (!sendSucceeded) {
                                 // Failure fallback: copy so the user can paste manually
                                 // (the failure message below promises this).
-                                await vscode.env.clipboard.writeText(prompt);
+                                await this._seams().clipboard.writeText(prompt);
                             }
                         } else {
                             // Copy Prompt owns the clipboard.
-                            await vscode.env.clipboard.writeText(prompt);
+                            await this._seams().clipboard.writeText(prompt);
                         }
 
                         if (sendSucceeded) {
@@ -11903,9 +11910,9 @@ Each plan file must include:
                         break;
                     }
                     case 'editDbPath': {
-                        const dbConfig = vscode.workspace.getConfiguration('switchboard');
-                        const currentDbPath = dbConfig.get<string>('kanban.dbPath', '');
-                        const dbResult = await vscode.window.showInputBox({
+                        const dbConfig = this._seams().pathConfig;
+                        const currentDbPath = dbConfig.getConfigStringWithDefault('kanban.dbPath', '');
+                        const dbResult = await this._seams().ui.showInputBox({
                             prompt: 'Enter path for kanban database (supports ~ for home dir)',
                             value: currentDbPath || '',
                             placeHolder: '~/Google Drive/Switchboard/kanban.db',
@@ -11914,7 +11921,7 @@ Each plan file must include:
                             const trimmedPath = dbResult.trim();
                             const validation = KanbanDatabase.validatePath(trimmedPath);
                             if (!validation.valid && trimmedPath !== '') {
-                                vscode.window.showErrorMessage(`❌ Invalid path: ${validation.error}`);
+                                this._seams().ui.showErrorMessage(`❌ Invalid path: ${validation.error}`);
                                 return;
                             }
                             const wsRoot = this._getWorkspaceRoot();
@@ -11924,12 +11931,12 @@ Each plan file must include:
 
                                 const migResult = await KanbanDatabase.migrateIfNeeded(oldResolvedPath, newResolvedPath);
                                 if (migResult.skipped === 'target_has_data') {
-                                    const choice = await vscode.window.showWarningMessage(
+                                    const choice = await this._seams().ui.showWarningMessage(
                                         'Both the current and target databases contain plans. Automatic migration skipped.',
                                         'Open Reconciliation', 'Continue Anyway'
                                     );
                                     if (choice === 'Open Reconciliation') {
-                                        vscode.commands.executeCommand('switchboard.reconcileKanbanDbs');
+                                        this._seams().commands.executeCommand('switchboard.reconcileKanbanDbs');
                                         return;
                                     }
                                 } else if (migResult.migrated) {
@@ -11938,7 +11945,7 @@ Each plan file must include:
 
                                 await KanbanDatabase.invalidateWorkspace(wsRoot);
                             }
-                            await dbConfig.update('kanban.dbPath', trimmedPath || undefined, vscode.ConfigurationTarget.Workspace);
+                            await dbConfig.updateConfigWorkspace('kanban.dbPath', trimmedPath || undefined);
                             this.postMessage({ type: 'dbPathUpdated', path: trimmedPath || '.switchboard/kanban.db' });
                             void this._refreshSessionStatus();
                             this._showTemporaryNotification('✅ Database path updated successfully.');
@@ -11957,14 +11964,14 @@ Each plan file must include:
                                     const effectiveRoot = this._kanbanProvider?.resolveEffectiveWorkspaceRoot(wsRoot) || wsRoot;
                                     const error = this._lastKanbanDbWarnings.get(effectiveRoot) || 'Unknown initialization error';
                                     this.postMessage({ type: 'dbConnectionResult', success: false, error });
-                                    vscode.window.showErrorMessage(`❌ Database connection failed: ${error}`);
+                                    this._seams().ui.showErrorMessage(`❌ Database connection failed: ${error}`);
                                 }
                             } else {
                                 throw new Error('No active workspace root found.');
                             }
                         } catch (dbErr: any) {
                             this.postMessage({ type: 'dbConnectionResult', success: false, error: dbErr.message });
-                            vscode.window.showErrorMessage(`⚠️ Database test error: ${dbErr.message}`);
+                            this._seams().ui.showErrorMessage(`⚠️ Database test error: ${dbErr.message}`);
                         }
                         break;
                     }
@@ -11977,8 +11984,8 @@ Each plan file must include:
                         break;
                     }
                     case 'queryArchives': {
-                        const archConfig = vscode.workspace.getConfiguration('switchboard');
-                        const archivePath = archConfig.get<string>('archive.dbPath', '');
+                        const archConfig = this._seams().pathConfig;
+                        const archivePath = archConfig.getConfigStringWithDefault('archive.dbPath', '');
                         const archiveConfigured = !!archivePath;
 
                         let duckdbInstalled = false;
@@ -12022,10 +12029,10 @@ What would you like to find?`;
                         }
 
                         // Resolve terminal: registered terminals first (exact → suffix-aware → case-insensitive),
-                        // then fall back to open VS Code terminals.
+                        // then fall back to the HostTerminal seam so the arm can run headlessly.
                         // NOTE: Do NOT use _attemptDirectTerminalPush here — it has clearBeforePrompt
                         // side effects that would double-clear when input is '/clear'.
-                        let terminal: vscode.Terminal | undefined;
+                        let terminal: any;
                         if (this._registeredTerminals) {
                             terminal = this._registeredTerminals.get(name);
                             if (!terminal) {
@@ -12042,12 +12049,10 @@ What would you like to find?`;
                             }
                         }
                         if (!terminal) {
-                            const openTerminals = vscode.window.terminals || [];
-                            const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(name));
-                            terminal = openTerminals.find(t => {
-                                const tName = this._normalizeAgentKey(t.name);
-                                return tName === strippedTarget;
-                            });
+                            const backend = this._seams().terminal;
+                            terminal = backend.findByName(name) ||
+                                backend.findByName(this._suffixedName(name)) ||
+                                backend.findByNameContains(this._normalizeAgentKey(this._stripIdeSuffix(name)));
                         }
 
                         if (!terminal) {
@@ -12055,29 +12060,27 @@ What would you like to find?`;
                             break;
                         }
 
-                        await sendRobustText(terminal, input, paced);
+                        // Host-agnostic terminals use the TerminalHandle interface. When a real
+                        // VS Code: terminal is captured via _registeredTerminals, sendRobustText
+                        // can still manage clipboard/chunking; otherwise send directly via the seam.
+                        if ('processId' in terminal) {
+                            await sendRobustText(terminal, input, paced);
+                        } else {
+                            terminal.sendText(input, true);
+                        }
                         console.log(`[TaskViewer] sendToTerminal: sent to '${name}' (paced: ${paced}, len: ${input.length})`);
                         break;
                     }
                 }
             } catch (error) {
                 const errorMessage = error instanceof Error ? error.message : String(error);
-                vscode.window.showErrorMessage(`Error: ${errorMessage}`);
+                this._seams().ui.showErrorMessage(`Error: ${errorMessage}`);
             }
         });
     }
 
     private _showTemporaryNotification(message: string, durationMs: number = 1000): void {
-        void vscode.window.withProgress(
-            {
-                location: vscode.ProgressLocation.Notification,
-                title: message,
-                cancellable: false
-            },
-            async () => {
-                await new Promise(resolve => setTimeout(resolve, durationMs));
-            }
-        );
+        this._seams().ui.showTemporaryNotification(message, durationMs);
     }
 
     private _setupStateWatcher() {
@@ -13681,7 +13684,7 @@ What would you like to find?`;
 
         const entry = this._planRegistry.entries[planId];
         if (!entry) {
-            vscode.window.showErrorMessage('Plan not found in registry.');
+            this._seams().ui.showErrorMessage('Plan not found in registry.');
             return false;
         }
         const allowedRestoreStatuses = ['archived', 'orphan', 'completed'];
@@ -13697,11 +13700,11 @@ What would you like to find?`;
                     }
                 }
                 if (!isCompletedInDb) {
-                    vscode.window.showErrorMessage(`Plan cannot be restored from status "${entry.status}".`);
+                    this._seams().ui.showErrorMessage(`Plan cannot be restored from status "${entry.status}".`);
                     return false;
                 }
             } else {
-                vscode.window.showErrorMessage(`Plan cannot be restored from status "${entry.status}".`);
+                this._seams().ui.showErrorMessage(`Plan cannot be restored from status "${entry.status}".`);
                 return false;
             }
         }
@@ -13715,7 +13718,7 @@ What would you like to find?`;
         if (entry.sourceType === 'brain' && entry.brainSourcePath) {
             const resolvedBrain = path.resolve(entry.brainSourcePath);
             if (!fs.existsSync(resolvedBrain)) {
-                vscode.window.showWarningMessage(`Cannot restore: brain file no longer exists at ${entry.brainSourcePath}`);
+                this._seams().ui.showWarningMessage(`Cannot restore: brain file no longer exists at ${entry.brainSourcePath}`);
                 return false;
             }
         }
@@ -16091,9 +16094,9 @@ What would you like to find?`;
     private async _handleViewPlan(sessionId: string, workspaceRoot?: string) {
         try {
             const { planFileAbsolute } = await this._resolvePlanContextForSession(sessionId, workspaceRoot);
-            await vscode.commands.executeCommand('switchboard.openPlan', vscode.Uri.file(planFileAbsolute));
+            await this._seams().commands.executeCommand('switchboard.openPlan', vscode.Uri.file(planFileAbsolute));
         } catch (e) {
-            vscode.window.showErrorMessage(`Failed to open plan: ${e}`);
+            this._seams().ui.showErrorMessage(`Failed to open plan: ${e}`);
         }
     }
 
@@ -16177,7 +16180,7 @@ What would you like to find?`;
                 accurateCodingEnabled: false
             });
 
-            await vscode.env.clipboard.writeText(textToCopy);
+            await this._seams().clipboard.writeText(textToCopy);
 
             // Send copyPlanLinkResult IMMEDIATELY — include both planId and sessionId
             // so the frontend can reliably find the button via data-plan-id (primary) or data-session (fallback)
@@ -16225,14 +16228,14 @@ What would you like to find?`;
                             console.log(`[TaskViewerProvider] _handleCopyPlanLink: card advanced to ${targetColumn} for ${sessionId} via workflow '${workflowName}'`);
                         } else {
                             console.warn(`[TaskViewerProvider] _handleCopyPlanLink: column advance failed for ${sessionId} — copy succeeded but card remains in place`);
-                            vscode.window.showWarningMessage('Prompt copied but card could not be advanced. Try refreshing the board.');
+                            this._seams().ui.showWarningMessage('Prompt copied but card could not be advanced. Try refreshing the board.');
                         }
                     } else {
                         await this._updateSessionRunSheet(sessionId, workflowName);
                     }
                 } catch (updateError) {
                     console.error(`[TaskViewerProvider] Failed to auto-advance card after copy for ${sessionId}:`, updateError);
-                    vscode.window.showWarningMessage('Prompt copied but card advance errored. Try refreshing the board.');
+                    this._seams().ui.showWarningMessage('Prompt copied but card advance errored. Try refreshing the board.');
                 }
             }
 
@@ -16246,7 +16249,7 @@ What would you like to find?`;
                 planId: planId || '',
                 sessionId: sessionId || '',
             });
-            vscode.window.showErrorMessage(`Failed to copy plan link: ${errorMessage}`);
+            this._seams().ui.showErrorMessage(`Failed to copy plan link: ${errorMessage}`);
             return false;
         }
     }
@@ -16373,7 +16376,7 @@ What would you like to find?`;
             await this._syncFilesAndRefreshRunSheets();
             return true;
         } catch (e) {
-            vscode.window.showErrorMessage(`Failed to mark plan complete: ${e}`);
+            this._seams().ui.showErrorMessage(`Failed to mark plan complete: ${e}`);
             return false;
         }
     }
@@ -16386,7 +16389,7 @@ What would you like to find?`;
         try {
             const resolvedPath = path.resolve(brainSourcePath);
             if (!this._isConfiguredPlanSourcePath(resolvedPath)) {
-                vscode.window.showErrorMessage('Plan path is outside the configured plan-source directories.');
+                this._seams().ui.showErrorMessage('Plan path is outside the configured plan-source directories.');
                 return;
             }
 
@@ -16437,7 +16440,7 @@ What would you like to find?`;
             });
             this._showTemporaryNotification(`Claimed plan: ${topic}`);
         } catch (e) {
-            vscode.window.showErrorMessage(`Failed to claim plan: ${e}`);
+            this._seams().ui.showErrorMessage(`Failed to claim plan: ${e}`);
         }
     }
 
@@ -16492,7 +16495,7 @@ What would you like to find?`;
     public async handleImportUnclaimedPlans(): Promise<void> {
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) {
-            vscode.window.showWarningMessage('Select a workspace in the kanban board first.');
+            this._seams().ui.showWarningMessage('Select a workspace in the kanban board first.');
             return;
         }
         await this._activateWorkspaceContext(workspaceRoot);
@@ -16787,7 +16790,7 @@ What would you like to find?`;
             }
             if (!mirrorPath && !brainSourcePath) {
                 console.error('[TaskViewerProvider] _handleDeletePlan: no deletable path resolved for local plan');
-                vscode.window.showErrorMessage('Could not locate the plan file to delete. The plan may have already been removed or the runsheet is corrupted.');
+                this._seams().ui.showErrorMessage('Could not locate the plan file to delete. The plan may have already been removed or the runsheet is corrupted.');
                 return false;
             }
 
@@ -17461,7 +17464,7 @@ What would you like to find?`;
             // Fallback: try matching by name in VS Code terminals
             const found = vscode.window.terminals.find(t => t.name === terminalName || t.name === this._stripIdeSuffix(terminalName));
             if (!found) {
-                vscode.window.showWarningMessage(`Terminal '${terminalName}' not found. Please open the terminal in VS Code and try again.`);
+                this._seams().ui.showWarningMessage(`Terminal '${terminalName}' not found. Please open the terminal in VS Code and try again.`);
                 return;
             }
             found.sendText(enrichedCommand, false);
@@ -17942,7 +17945,7 @@ What would you like to find?`;
         });
         if (pushed) return true;
 
-        vscode.window.showWarningMessage(`Could not deliver prompt to '${targetAgent}'. The terminal is not running in VS Code.`);
+        this._seams().ui.showWarningMessage(`Could not deliver prompt to '${targetAgent}'. The terminal is not running in VS Code.`);
         return false;
     }
 
@@ -18164,7 +18167,7 @@ What would you like to find?`;
 
         if (!planFileRelative) {
             clearDispatchLock();
-            vscode.window.showErrorMessage(`Plan not found in database for session: ${sessionId}`);
+            this._seams().ui.showErrorMessage(`Plan not found in database for session: ${sessionId}`);
             return false;
         }
 
@@ -18174,7 +18177,7 @@ What would you like to find?`;
         if (role === 'jules_monitor' || role === 'mcp_monitor') {
             clearDispatchLock();
             const displayName = role === 'jules_monitor' ? "Jules Monitor" : TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME;
-            vscode.window.showWarningMessage(`The '${displayName}' terminal is monitor-only and cannot receive agent actions.`);
+            this._seams().ui.showWarningMessage(`The '${displayName}' terminal is monitor-only and cannot receive agent actions.`);
             this.postMessage({ type: 'actionTriggered', role, success: false });
             return false;
         }
@@ -18200,7 +18203,7 @@ What would you like to find?`;
                     this._julesSyncInFlight = false;
                     const msg = err?.message || String(err);
                     this.postMessage({ type: 'airlock_syncError', message: msg });
-                    vscode.window.showWarningMessage(`Auto-sync failed — Jules send cancelled: ${msg}`);
+                    this._seams().ui.showWarningMessage(`Auto-sync failed — Jules send cancelled: ${msg}`);
                     clearDispatchLock();
                     this.postMessage({ type: 'actionTriggered', role: 'jules', success: false });
                     return false;
@@ -18212,7 +18215,7 @@ What would you like to find?`;
             const pushGuard = await this._isPlanFilePushedToRemote(resolvedWorkspaceRoot, planFileAbsolute);
             if (!pushGuard.ok) {
                 clearDispatchLock();
-                vscode.window.showWarningMessage(pushGuard.message);
+                this._seams().ui.showWarningMessage(pushGuard.message);
                 this.postMessage({ type: 'actionTriggered', role: 'jules', success: false });
                 return false;
             }
@@ -18248,7 +18251,7 @@ What would you like to find?`;
 
         if (!targetAgent) {
             clearDispatchLock();
-            vscode.window.showErrorMessage(`No agent assigned to role '${role}'. Please assign a terminal first.`);
+            this._seams().ui.showErrorMessage(`No agent assigned to role '${role}'. Please assign a terminal first.`);
             return false;
         }
 
@@ -18262,7 +18265,7 @@ What would you like to find?`;
 
 
         // Focus the terminal for immediate feedback
-        vscode.commands.executeCommand('switchboard.focusTerminalByName', targetAgent);
+        this._seams().commands.executeCommand('switchboard.focusTerminalByName', targetAgent);
 
         let messagePayload = '';
         const messageMetadata: any = {};
@@ -18296,7 +18299,7 @@ What would you like to find?`;
             : [];
         if (dispatchPlans.length === 0) {
             clearDispatchLock();
-            vscode.window.showErrorMessage(`Plan file could not be resolved for session: ${sessionId}`);
+            this._seams().ui.showErrorMessage(`Plan file could not be resolved for session: ${sessionId}`);
             return false;
         }
         if (options?.workingDirectory && dispatchPlans[0]) {
@@ -18350,7 +18353,7 @@ What would you like to find?`;
             messagePayload = await this._kanbanProvider.generateUnifiedPrompt(role, dispatchPlans, effectiveWorkspaceRoot);
         } else {
             clearDispatchLock();
-            vscode.window.showErrorMessage(`Unknown role: ${role}`);
+            this._seams().ui.showErrorMessage(`Unknown role: ${role}`);
             return false;
         }
 
@@ -18429,7 +18432,7 @@ What would you like to find?`;
                 targetAgent,
                 error: String(e)
             }, requestId);
-            vscode.window.showErrorMessage(`Failed to send message: ${e}`);
+            this._seams().ui.showErrorMessage(`Failed to send message: ${e}`);
             return false;
         }
     }
@@ -18455,7 +18458,7 @@ What would you like to find?`;
         try {
             targetAgent = await this._getAgentNameForRole('analyst');
             if (!targetAgent) {
-                vscode.window.showErrorMessage("No agent assigned to role 'analyst'. Please assign a terminal first.");
+                this._seams().ui.showErrorMessage("No agent assigned to role 'analyst'. Please assign a terminal first.");
                 postAnalystResult(false);
                 await this._logEvent('dispatch', {
                     event: 'analyst_dispatch_failed',
@@ -18469,7 +18472,7 @@ What would you like to find?`;
             // F-04 SECURITY: Validate agent name
             if (!this._isValidAgentName(targetAgent)) {
                 console.error(`[TaskViewerProvider] Rejected invalid agent name for analyst dispatch: ${targetAgent}`);
-                vscode.window.showErrorMessage(`Invalid analyst agent name configured: ${targetAgent}`);
+                this._seams().ui.showErrorMessage(`Invalid analyst agent name configured: ${targetAgent}`);
                 postAnalystResult(false);
                 await this._logEvent('dispatch', {
                     event: 'analyst_dispatch_failed',
@@ -18484,7 +18487,7 @@ What would you like to find?`;
             // Focus the terminal for immediate feedback
             const focused = await this._focusTerminalByName(targetAgent);
             if (!focused) {
-                await vscode.commands.executeCommand('switchboard.focusTerminalByName', targetAgent);
+                await this._seams().commands.executeCommand('switchboard.focusTerminalByName', targetAgent);
             }
 
             // Resolve live terminal object
@@ -18519,7 +18522,7 @@ What would you like to find?`;
             }
 
             if (!terminal) {
-                vscode.window.showErrorMessage('Analyst terminal is not open.');
+                this._seams().ui.showErrorMessage('Analyst terminal is not open.');
                 postAnalystResult(false);
                 await this._logEvent('dispatch', {
                     event: 'analyst_dispatch_failed',
@@ -18549,7 +18552,7 @@ What would you like to find?`;
                 messageId,
                 error: String(e)
             });
-            vscode.window.showErrorMessage(`Failed to send analyst message: ${e}`);
+            this._seams().ui.showErrorMessage(`Failed to send analyst message: ${e}`);
             return false;
         }
     }
@@ -18638,7 +18641,7 @@ What would you like to find?`;
         ].join('\n');
     }
     private async _openPlanInReviewPanel(planFileAbsolute: string, _topic: string): Promise<void> {
-        await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(planFileAbsolute));
+        await this._seams().commands.executeCommand('vscode.open', vscode.Uri.file(planFileAbsolute));
     }
 
     public async createDraftPlanTicket(): Promise<void> {
@@ -18675,7 +18678,7 @@ What would you like to find?`;
             this._kanbanProvider?.postMessage?.({ type: 'planCreated' });
         } catch (err: any) {
             const msg = err?.message || String(err);
-            vscode.window.showErrorMessage(`Plan creation failed: ${msg}`);
+            this._seams().ui.showErrorMessage(`Plan creation failed: ${msg}`);
         }
     }
 
@@ -18852,11 +18855,11 @@ What would you like to find?`;
         }
 
         if (!text || !text.trim()) {
-            vscode.window.showWarningMessage('Clipboard is empty. Copy a Markdown plan first.');
+            this._seams().ui.showWarningMessage('Clipboard is empty. Copy a Markdown plan first.');
             return;
         }
         if (text.length > 200_000) {
-            vscode.window.showWarningMessage('Clipboard content is too large (>200 KB). Aborting import.');
+            this._seams().ui.showWarningMessage('Clipboard content is too large (>200 KB). Aborting import.');
             return;
         }
 
@@ -18887,7 +18890,7 @@ What would you like to find?`;
             }
 
             if (warningMessage) {
-                vscode.window.showWarningMessage(warningMessage);
+                this._seams().ui.showWarningMessage(warningMessage);
             }
 
             try {
@@ -18896,7 +18899,7 @@ What would you like to find?`;
                 this._showTemporaryNotification(`Imported plan: ${title}`);
             } catch (err: any) {
                 const msg = err?.message || String(err);
-                vscode.window.showErrorMessage(`Clipboard import failed: ${msg}`);
+                this._seams().ui.showErrorMessage(`Clipboard import failed: ${msg}`);
             }
             return;
         }
@@ -18931,11 +18934,11 @@ What would you like to find?`;
         }
 
         if (!text || !text.trim()) {
-            vscode.window.showWarningMessage('Clipboard is empty. Copy a Markdown plan first.');
+            this._seams().ui.showWarningMessage('Clipboard is empty. Copy a Markdown plan first.');
             return { overwritten: 0, created: 0, errors: 0 };
         }
         if (text.length > 200_000) {
-            vscode.window.showWarningMessage('Clipboard content is too large (>200 KB). Aborting import.');
+            this._seams().ui.showWarningMessage('Clipboard content is too large (>200 KB). Aborting import.');
             return { overwritten: 0, created: 0, errors: 0 };
         }
 
@@ -19004,13 +19007,13 @@ What would you like to find?`;
         }
 
         if (plans.length === 0) {
-            vscode.window.showWarningMessage('No valid plans found in clipboard content.');
+            this._seams().ui.showWarningMessage('No valid plans found in clipboard content.');
             return { overwritten: 0, created: 0, errors: 0 };
         }
 
         const workspaceRoot = workspaceRootOverride || this._resolveWorkspaceRoot();
         if (!workspaceRoot) {
-            vscode.window.showErrorMessage('No workspace folder found.');
+            this._seams().ui.showErrorMessage('No workspace folder found.');
             return { overwritten: 0, created: 0, errors: 1 };
         }
 
@@ -19044,7 +19047,7 @@ What would you like to find?`;
         }
 
         if (errors > 0) {
-            vscode.window.showErrorMessage(`Failed to import ${errors} plan(s). Check output panel for details.`);
+            this._seams().ui.showErrorMessage(`Failed to import ${errors} plan(s). Check output panel for details.`);
         }
 
         return { overwritten, created, errors };
@@ -19140,13 +19143,13 @@ What would you like to find?`;
         }
 
         if (plans.length === 0) {
-            vscode.window.showWarningMessage('No valid plans found in clipboard content.');
+            this._seams().ui.showWarningMessage('No valid plans found in clipboard content.');
             return;
         }
 
         // Confirmation dialog for bulk imports (>5 plans)
         if (plans.length > 5) {
-            const proceed = await vscode.window.showWarningMessage(
+            const proceed = await this._seams().ui.showWarningMessage(
                 `Found ${plans.length} plans in clipboard. Import all?`,
                 { modal: true },
                 'Yes',
@@ -19183,7 +19186,7 @@ What would you like to find?`;
         }
 
         if (failedPlans.length > 0) {
-            vscode.window.showErrorMessage(`Failed to import ${failedPlans.length} plan(s). Check output panel for details.`);
+            this._seams().ui.showErrorMessage(`Failed to import ${failedPlans.length} plan(s). Check output panel for details.`);
             console.error('Plan import failures:', failedPlans);
         }
     }
@@ -19449,7 +19452,7 @@ What would you like to find?`;
     private async _handleInitializeProtocols() {
         try {
             this.postMessage({ type: 'onboardingProgress', step: 'initializing' });
-            await vscode.commands.executeCommand('switchboard.setup');
+            await this._seams().commands.executeCommand('switchboard.setup');
             this.postMessage({ type: 'onboardingProgress', step: 'initialized' });
         } catch (e) {
             console.error('[TaskViewerProvider] initializeProtocols failed:', e);
@@ -20189,7 +20192,7 @@ What would you like to find?`;
             const urls = this._parseUrls(output);
 
             if (sessionIds.length === 0 || urls.length === 0) {
-                vscode.window.showWarningMessage('Jules remote session started, but session details could not be fully parsed from CLI output.');
+                this._seams().ui.showWarningMessage('Jules remote session started, but session details could not be fully parsed from CLI output.');
             }
 
             const sessionId = sessionIds[0] || 'unknown';
@@ -20236,7 +20239,7 @@ What would you like to find?`;
 
             const detail = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, ' ').trim();
             const shortDetail = detail.length > 220 ? `${detail.slice(0, 220)}...` : detail;
-            vscode.window.showWarningMessage(`Jules remote start failed: ${shortDetail || 'unknown error'}.`);
+            this._seams().ui.showWarningMessage(`Jules remote start failed: ${shortDetail || 'unknown error'}.`);
             this.postMessage({ type: 'actionTriggered', role: 'jules', success: false });
         }
     }
@@ -20663,7 +20666,7 @@ What would you like to find?`;
         } catch (err: any) {
             const msg = err?.message || String(err);
             this.postMessage({ type: 'airlock_exportError', message: msg });
-            vscode.window.showErrorMessage(`NotebookLM export failed: ${msg}`);
+            this._seams().ui.showErrorMessage(`NotebookLM export failed: ${msg}`);
         }
     }
 
@@ -20738,7 +20741,7 @@ What would you like to find?`;
         } catch (err: any) {
             const msg = err?.message || String(err);
             this.postMessage({ type: 'airlock_coderError', message: msg });
-            vscode.window.showErrorMessage(`NotebookLM send to coder failed: ${msg}`);
+            this._seams().ui.showErrorMessage(`NotebookLM send to coder failed: ${msg}`);
         }
     }
 
@@ -20749,7 +20752,7 @@ What would you like to find?`;
         } catch (err: any) {
             const msg = err?.message || String(err);
             this.postMessage({ type: 'airlock_syncError', message: msg });
-            vscode.window.showErrorMessage(`NotebookLM sync failed: ${msg}`);
+            this._seams().ui.showErrorMessage(`NotebookLM sync failed: ${msg}`);
         }
     }
 
@@ -20803,12 +20806,12 @@ What would you like to find?`;
     private async _handleAirlockOpenFolder(): Promise<void> {
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) {
-            vscode.window.showWarningMessage('NotebookLM: No workspace open.');
+            this._seams().ui.showWarningMessage('NotebookLM: No workspace open.');
             return;
         }
         const airlockDir = path.join(workspaceRoot, '.switchboard', 'NotebookLM');
         if (!fs.existsSync(airlockDir)) {
-            vscode.window.showWarningMessage('NotebookLM: Folder does not exist yet. Click BUNDLE CODE first.');
+            this._seams().ui.showWarningMessage('NotebookLM: Folder does not exist yet. Click BUNDLE CODE first.');
             return;
         }
         // Target a file inside the folder so the OS explorer focuses INSIDE the directory
@@ -20816,7 +20819,7 @@ What would you like to find?`;
         const firstFile = files.find((f: string) => fs.statSync(path.join(airlockDir, f)).isFile());
         const uri = firstFile ? vscode.Uri.file(path.join(airlockDir, firstFile)) : vscode.Uri.file(airlockDir);
 
-        await vscode.commands.executeCommand('revealFileInOS', uri);
+        await this._seams().commands.executeCommand('revealFileInOS', uri);
     }
 
 
@@ -22599,7 +22602,7 @@ What would you like to find?`;
 
         terminal.show();
         try {
-            await vscode.commands.executeCommand('workbench.action.terminal.moveToTerminalPanel');
+            await this._seams().commands.executeCommand('workbench.action.terminal.moveToTerminalPanel');
         } catch { /* ignore */ }
 
         // Register in state
@@ -22649,7 +22652,7 @@ What would you like to find?`;
             return tName === strippedTarget && t.exitStatus === undefined;
         });
         if (!terminal) {
-            vscode.window.showWarningMessage('No Comms Monitor terminal running. Start the terminal first.');
+            this._seams().ui.showWarningMessage('No Comms Monitor terminal running. Start the terminal first.');
             return;
         }
         const cfg = await GlobalIntegrationConfigService.getMcpMonitorConfig();
@@ -22775,7 +22778,7 @@ What would you like to find?`;
     private async _handleDispatchProjectManager(): Promise<void> {
         const workspaceRoot = this._getWorkspaceRoot();
         if (!workspaceRoot) {
-            vscode.window.showErrorMessage('No workspace root open.');
+            this._seams().ui.showErrorMessage('No workspace root open.');
             return;
         }
 
@@ -22783,7 +22786,7 @@ What would you like to find?`;
         const port = this.getLocalApiServerPort();
         const serverAlive = !!this._localApiServer && this._localApiServer.isListening();
         if (!serverAlive || port === 0) {
-            vscode.window.showErrorMessage(
+            this._seams().ui.showErrorMessage(
                 'Switchboard API server is not running. Open the Switchboard panel and try again.'
             );
             return;
@@ -22831,20 +22834,20 @@ What would you like to find?`;
             await withTerminalSendLock(sendLockKey, async () => {
                 await sendRobustText(terminal!, prompt, true);
             });
-            vscode.window.showInformationMessage(
+            this._seams().ui.showInformationMessage(
                 'Manage prompt sent to Project Manager terminal.'
             );
         } else {
             // Fallback path: copy to clipboard (same pattern as Guided Setup).
             try {
-                await vscode.env.clipboard.writeText(prompt);
-                vscode.window.showInformationMessage(
+                await this._seams().clipboard.writeText(prompt);
+                this._seams().ui.showInformationMessage(
                     'No Project Manager terminal registered — manage prompt copied. ' +
                     'Paste it into your agent chat (Cmd/Ctrl+V), or register a PM terminal ' +
                     'in the Kanban agents tab.'
                 );
             } catch (err: any) {
-                vscode.window.showErrorMessage(
+                this._seams().ui.showErrorMessage(
                     `Couldn't copy to clipboard: ${err?.message || err}`
                 );
             }
@@ -22897,7 +22900,7 @@ Execution rules (from SKILL.md §6 Targeted pass):
         workspaceRoot: string
     ): Promise<void> {
         if (plans.length === 0) {
-            vscode.window.showWarningMessage('No dispatchable plans in the selection.');
+            this._seams().ui.showWarningMessage('No dispatchable plans in the selection.');
             return;
         }
 
@@ -22905,7 +22908,7 @@ Execution rules (from SKILL.md §6 Targeted pass):
         const port = this.getLocalApiServerPort();
         const serverAlive = !!this._localApiServer && this._localApiServer.isListening();
         if (!serverAlive || port === 0) {
-            vscode.window.showErrorMessage(
+            this._seams().ui.showErrorMessage(
                 'Switchboard API server is not running. Open the Switchboard panel and try again.'
             );
             return;

@@ -41,10 +41,10 @@ type ControlPlaneTaskViewerProvider = TaskViewerProvider & {
 export class SetupPanelProvider implements vscode.Disposable {
 
     public async handleServiceVerb(verb: string, payload: any): Promise<any> {
-        if (!this._setupService) {
+        if (!this._setupService && !this._hostSeams) {
             this._initSetupService();
         }
-        if (!this._setupService) {
+        if (!this._setupService && !this._hostSeams) {
             throw new Error('SetupService unavailable — no workspace root resolved');
         }
         if (!SETUP_VERBS.has(verb)) {
@@ -66,6 +66,11 @@ export class SetupPanelProvider implements vscode.Disposable {
 
 
     private _initSetupService(): void {
+        // If a headless test harness has already injected seams, do not re-derive
+        // a workspace root through vscode.workspace.workspaceFolders.
+        if (this._hostSeams) {
+            return;
+        }
         const workspaceRoot = this._getCurrentWorkspaceRoot() || '';
         if (!workspaceRoot) {
             this._hostSeams = undefined;
@@ -96,7 +101,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                 }
             },
             refreshUI: async () => {
-                await vscode.commands.executeCommand('switchboard.refreshUI');
+                await this._seams().commands.executeCommand('switchboard.refreshUI');
             }
         };
         if (this._setupService) {
@@ -108,6 +113,18 @@ export class SetupPanelProvider implements vscode.Disposable {
 
     public setApiServer(server: any): void {
         this._broadcaster?.setApiServer(server);
+    }
+
+    /**
+     * Seam bundle accessor for migrated _handleMessage arms. Lazily builds the
+     * vscode-backed bundle when the provider is driven before `_initSetupService`
+     * ran. The test-seam harness injects a headless bundle by assigning `_hostSeams`.
+     */
+    private _seams(): HostSeams {
+        if (!this._hostSeams) {
+            this._hostSeams = createVscodeHostSeams(this._getCurrentWorkspaceRoot() || '');
+        }
+        return this._hostSeams;
     }
 
     private _hostSeams?: HostSeams;
@@ -211,18 +228,20 @@ export class SetupPanelProvider implements vscode.Disposable {
             return kanbanRoot;
         }
 
+        // Headless test harness injects a seam bundle; prefer it over vscode.
+        const seamRoots = this._hostSeams?.workspace.getWorkspaceRoots();
+        if (seamRoots && seamRoots.length > 0) {
+            return seamRoots[0];
+        }
+
         // Fallback to first workspace folder (handles early initialization)
         return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || null;
     }
 
-    private async _handleMessage(message: any): Promise<void> {
-        if (!this._panel) {
-            return;
-        }
-
+    private async _handleMessage(message: any): Promise<any> {
         if (!this._taskViewerProvider) {
             console.warn('[SetupPanelProvider] TaskViewerProvider not attached.');
-            return;
+            return { success: false, error: 'TaskViewerProvider not attached' };
         }
 
         try {
@@ -286,7 +305,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this.postMessage({ type: 'controlPlaneOverrideResult', action: 'set', ...result });
                     if (result.success) {
                         await this._taskViewerProvider.postSetupPanelState();
-                        await vscode.commands.executeCommand('switchboard.refreshUI');
+                        await this._seams().commands.executeCommand('switchboard.refreshUI');
                     }
                     break;
                 }
@@ -297,14 +316,13 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this.postMessage({ type: 'controlPlaneOverrideResult', action: 'reset', ...result });
                     if (result.success) {
                         await this._taskViewerProvider.postSetupPanelState();
-                        await vscode.commands.executeCommand('switchboard.refreshUI');
+                        await this._seams().commands.executeCommand('switchboard.refreshUI');
                     }
                     break;
                 }
                 case 'clearControlPlaneCache': {
-                    const confirmation = await vscode.window.showWarningMessage(
+                    const confirmation = await this._seams().ui.showModalWarningMessage(
                         'Clear trusted Control Plane auto-detect decisions for this workspace?',
-                        { modal: true },
                         'Clear Cache'
                     );
                     if (confirmation !== 'Clear Cache') {
@@ -322,14 +340,14 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this.postMessage({ type: 'controlPlaneOverrideResult', action: 'clear-cache', ...result });
                     if (result.success) {
                         await this._taskViewerProvider.postSetupPanelState();
-                        await vscode.commands.executeCommand('switchboard.refreshUI');
+                        await this._seams().commands.executeCommand('switchboard.refreshUI');
                     }
                     break;
                 }
                 case 'detectControlPlaneCandidate': {
                     const workspaceRoot = this._getCurrentWorkspaceRoot();
                     if (!workspaceRoot) {
-                        vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
+                        this._seams().ui.showWarningMessage('Please select a workspace in the kanban board first.');
                         return;
                     }
                     const candidate = await ControlPlaneMigrationService.detectCandidateParent(workspaceRoot);
@@ -344,22 +362,15 @@ export class SetupPanelProvider implements vscode.Disposable {
                 case 'executeControlPlaneMigration': {
                     const workspaceRoot = this._getCurrentWorkspaceRoot();
                     if (!workspaceRoot) {
-                        vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
+                        this._seams().ui.showWarningMessage('Please select a workspace in the kanban board first.');
                         return;
                     }
-                    const result = await vscode.window.withProgress(
-                        {
-                            location: vscode.ProgressLocation.Notification,
-                            cancellable: false,
-                            title: 'Migrating Control Plane...'
-                        },
-                        () => ControlPlaneMigrationService.executeMigration(String(message.parentDir || ''), {
-                            currentWorkspaceRoot: workspaceRoot,
-                            extensionPath: this._extensionUri.fsPath,
-                            generateWorkspaceFile: message.generateWorkspaceFile !== false,
-                            cleanupConfirmed: Array.isArray(message.cleanupConfirmed) ? message.cleanupConfirmed : []
-                        })
-                    );
+                    const result = await ControlPlaneMigrationService.executeMigration(String(message.parentDir || ''), {
+                        currentWorkspaceRoot: workspaceRoot,
+                        extensionPath: this._extensionUri.fsPath,
+                        generateWorkspaceFile: message.generateWorkspaceFile !== false,
+                        cleanupConfirmed: Array.isArray(message.cleanupConfirmed) ? message.cleanupConfirmed : []
+                    });
 
                     // LAZY CHANGE: Ensure DB exists after migration
                     if (result.success && workspaceRoot) {
@@ -379,21 +390,14 @@ export class SetupPanelProvider implements vscode.Disposable {
                 case 'executeControlPlaneFreshSetup': {
                     const workspaceRoot = this._getCurrentWorkspaceRoot();
                     if (!workspaceRoot) {
-                        vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
+                        this._seams().ui.showWarningMessage('Please select a workspace in the kanban board first.');
                         return;
                     }
-                    const result = await vscode.window.withProgress(
-                        {
-                            location: vscode.ProgressLocation.Notification,
-                            cancellable: false,
-                            title: 'Setting up Control Plane...'
-                        },
-                        () => ControlPlaneMigrationService.executeFreshSetup(String(message.parentDir || ''), {
-                            currentWorkspaceRoot: workspaceRoot,
-                            extensionPath: this._extensionUri.fsPath,
-                            generateWorkspaceFile: message.generateWorkspaceFile !== false
-                        })
-                    );
+                    const result = await ControlPlaneMigrationService.executeFreshSetup(String(message.parentDir || ''), {
+                        currentWorkspaceRoot: workspaceRoot,
+                        extensionPath: this._extensionUri.fsPath,
+                        generateWorkspaceFile: message.generateWorkspaceFile !== false
+                    });
 
                     // LAZY CHANGE: Ensure DB exists after fresh setup
                     if (result.success && workspaceRoot) {
@@ -413,25 +417,25 @@ export class SetupPanelProvider implements vscode.Disposable {
                 case 'setBoardStateExport': {
                     const workspaceRoot = this._getCurrentWorkspaceRoot();
                     if (workspaceRoot) {
-                        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(workspaceRoot));
+                        const pathConfig = this._seams().pathConfig;
                         const value = typeof message.value === 'string' ? message.value : 'none';
-                        await config.update('boardStateExport', value, vscode.ConfigurationTarget.WorkspaceFolder);
+                        await pathConfig.updateConfigWorkspace('boardStateExport', value);
                     }
                     break;
                 }
                 case 'setBoardStateExportRemoteUrl': {
                     const workspaceRoot = this._getCurrentWorkspaceRoot();
                     if (workspaceRoot) {
-                        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(workspaceRoot));
+                        const pathConfig = this._seams().pathConfig;
                         const value = typeof message.value === 'string' ? message.value : '';
-                        await config.update('boardStateExport.remoteUrl', value, vscode.ConfigurationTarget.WorkspaceFolder);
+                        await pathConfig.updateConfigWorkspace('boardStateExport.remoteUrl', value);
                     }
                     break;
                 }
                 case 'initControlPlaneGit': {
                     const workspaceRoot = this._getCurrentWorkspaceRoot();
                     if (!workspaceRoot) {
-                        vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
+                        this._seams().ui.showWarningMessage('Please select a workspace in the kanban board first.');
                         return;
                     }
                     // Resolve the control-plane root
@@ -447,33 +451,26 @@ export class SetupPanelProvider implements vscode.Disposable {
                         ...result
                     });
                     if (result.success) {
-                        vscode.window.showInformationMessage(
+                        this._seams().ui.showInformationMessage(
                             result.alreadyInitialized
                                 ? 'Control plane git repo already initialized.'
                                 : 'Control plane git repo initialized successfully.'
                         );
                     } else {
-                        vscode.window.showWarningMessage(`Control plane git init failed: ${result.error || 'unknown error'}`);
+                        this._seams().ui.showWarningMessage(`Control plane git init failed: ${result.error || 'unknown error'}`);
                     }
                     break;
                 }
                 case 'scaffoldMultiRepo': {
                     try {
-                        const result = await vscode.window.withProgress(
+                        const result = await MultiRepoScaffoldingService.scaffold(
                             {
-                                location: vscode.ProgressLocation.Notification,
-                                cancellable: false,
-                                title: 'Scaffolding Multi-Repo Control Plane...'
+                                parentDir: typeof message.parentDir === 'string' ? message.parentDir : '',
+                                workspaceName: typeof message.workspaceName === 'string' ? message.workspaceName : '',
+                                repoUrls: Array.isArray(message.repoUrls) ? message.repoUrls.map((value: unknown) => String(value)) : [],
+                                pat: typeof message.pat === 'string' ? message.pat : ''
                             },
-                            () => MultiRepoScaffoldingService.scaffold(
-                                {
-                                    parentDir: typeof message.parentDir === 'string' ? message.parentDir : '',
-                                    workspaceName: typeof message.workspaceName === 'string' ? message.workspaceName : '',
-                                    repoUrls: Array.isArray(message.repoUrls) ? message.repoUrls.map((value: unknown) => String(value)) : [],
-                                    pat: typeof message.pat === 'string' ? message.pat : ''
-                                },
-                                this._extensionUri.fsPath
-                            )
+                            this._extensionUri.fsPath
                         );
                         this.postMessage({ type: 'multiRepoScaffoldResult', result });
                     } catch (error) {
@@ -495,7 +492,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     );
                     this.postMessage({ type: 'clickupApplyResult', ...result });
                     await this._taskViewerProvider.postSetupPanelState();
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
                 }
                 case 'saveClickUpMappings': {
@@ -504,7 +501,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     );
                     this.postMessage({ type: 'clickupMappingsSaved', ...result });
                     await this._taskViewerProvider.postSetupPanelState();
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
                 }
                 case 'saveClickUpAutomation': {
@@ -513,7 +510,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     );
                     this.postMessage({ type: 'clickupAutomationSaved', ...result });
                     await this._taskViewerProvider.postSetupPanelState();
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
                 }
                 case 'applyLinearConfig': {
@@ -524,7 +521,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         );
                         this.postMessage({ type: 'linearApplyResult', ...result });
                         await this._taskViewerProvider.postSetupPanelState();
-                        await vscode.commands.executeCommand('switchboard.refreshUI');
+                        await this._seams().commands.executeCommand('switchboard.refreshUI');
                     } catch (error) {
                         const errorMessage = error instanceof Error ? error.message : String(error);
                         this.postMessage({
@@ -541,7 +538,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     );
                     this.postMessage({ type: 'linearAutomationSaved', ...result });
                     await this._taskViewerProvider.postSetupPanelState();
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
                 }
                 case 'linearBrowseProjects': {
@@ -559,7 +556,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                             label: p.name,
                             picked: false
                         }));
-                        const selected = await vscode.window.showQuickPick(
+                        const selected = await this._seams().ui.showQuickPick(
                             projectOptions,
                             {
                                 placeHolder: 'Select projects',
@@ -592,7 +589,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     );
                     this.postMessage({ type: 'triagePipelineResult', provider, ...result });
                     await this._taskViewerProvider.postSetupPanelState();
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
                 }
                 case 'applyNotionConfig': {
@@ -601,7 +598,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     );
                     this.postMessage({ type: 'notionApplyResult', ...result });
                     await this._taskViewerProvider.postSetupPanelState();
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
                 }
                 case 'configureNotionBackup': {
@@ -634,7 +631,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 }
                 case 'runSetup':
-                    await vscode.commands.executeCommand('switchboard.setup');
+                    await this._seams().commands.executeCommand('switchboard.setup');
                     this.postMessage({ type: 'setupComplete' });
                     break;
 
@@ -642,14 +639,14 @@ export class SetupPanelProvider implements vscode.Disposable {
                     await this._openDocs();
                     break;
                 case 'openKanban':
-                    await vscode.commands.executeCommand('switchboard.openKanban');
+                    await this._seams().commands.executeCommand('switchboard.openKanban');
                     break;
                 case 'saveStartupCommands':
                     if (this._setupService) {
                         await this._setupService.saveStartupCommands(message);
                     } else {
                         await this._taskViewerProvider.handleSaveStartupCommands(message);
-                        await vscode.commands.executeCommand('switchboard.refreshUI');
+                        await this._seams().commands.executeCommand('switchboard.refreshUI');
                     }
                     break;
                 case 'getStartupCommands': {
@@ -725,32 +722,32 @@ export class SetupPanelProvider implements vscode.Disposable {
                     });
                     break;
                 case 'getPersistPanelsSetting': {
-                    const config = vscode.workspace.getConfiguration('switchboard');
-                    const enabled = config.get<boolean>('persistPanels', false);
+                    const pathConfig = this._seams().pathConfig;
+                    const enabled = pathConfig.getConfigBoolean('persistPanels', false);
                     this.postMessage({ type: 'persistPanelsSetting', enabled });
                     break;
                 }
                 case 'setExcludeReviewedBacklogSetting':
                     await this._taskViewerProvider.handleSetExcludeReviewedBacklogSetting(message.enabled);
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
                 case 'setPersistPanelsSetting': {
-                    const config = vscode.workspace.getConfiguration('switchboard');
+                    const pathConfig = this._seams().pathConfig;
                     const enabled = message.enabled === true;
-                    await config.update('persistPanels', enabled, vscode.ConfigurationTarget.Global);
+                    await pathConfig.updateConfigGlobal('persistPanels', enabled);
                     this.postMessage({ type: 'persistPanelsSetting', enabled });
                     break;
                 }
                 case 'getProtocolTarget': {
-                    const config = vscode.workspace.getConfiguration('switchboard');
-                    const value = config.get<string>('protocol.target', 'both');
+                    const pathConfig = this._seams().pathConfig;
+                    const value = pathConfig.getConfigStringWithDefault('protocol.target', 'both');
                     this.postMessage({ type: 'protocolTarget', value });
                     break;
                 }
                 case 'setProtocolTarget': {
                     const value = ['agents', 'claude', 'both'].includes(message.value) ? message.value : 'both';
-                    const config = vscode.workspace.getConfiguration('switchboard');
-                    await config.update('protocol.target', value, vscode.ConfigurationTarget.Workspace);
+                    const pathConfig = this._seams().pathConfig;
+                    await pathConfig.updateConfigWorkspace('protocol.target', value);
                     this.postMessage({ type: 'protocolTarget', value });
                     break;
                 }
@@ -763,7 +760,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 case 'setStatusShowTerminalsSetting':
                     await this._taskViewerProvider.handleSetStatusShowTerminalsSetting(message.enabled);
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
                 case 'getStatusShowKanbanSetting':
                     this.postMessage({
@@ -773,7 +770,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 case 'setStatusShowKanbanSetting':
                     await this._taskViewerProvider.handleSetStatusShowKanbanSetting(message.enabled);
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
                 case 'getStatusShowArtifactsSetting':
                     this.postMessage({
@@ -783,7 +780,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 case 'setStatusShowArtifactsSetting':
                     await this._taskViewerProvider.handleSetStatusShowArtifactsSetting(message.enabled);
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
                 case 'getStatusShowDesignSetting':
                     this.postMessage({
@@ -793,7 +790,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 case 'setStatusShowDesignSetting':
                     await this._taskViewerProvider.handleSetStatusShowDesignSetting(message.enabled);
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
                 case 'getStatusShowProjectSetting':
                     this.postMessage({
@@ -803,7 +800,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 case 'setStatusShowProjectSetting':
                     await this._taskViewerProvider.handleSetStatusShowProjectSetting(message.enabled);
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
                 case 'getStatusShowMemoSetting':
                     this.postMessage({
@@ -813,26 +810,25 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 case 'setStatusShowMemoSetting':
                     await this._taskViewerProvider.handleSetStatusShowMemoSetting(message.enabled);
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
                 case 'getMemoHotkey': {
-                    const config = vscode.workspace.getConfiguration('switchboard');
-                    const hotkey = config.get<string>('memo.hotkey', 'cmd+shift+alt+m');
+                    const pathConfig = this._seams().pathConfig;
+                    const hotkey = pathConfig.getConfigStringWithDefault('memo.hotkey', 'cmd+shift+alt+m');
                     this.postMessage({ type: 'memoHotkey', value: hotkey });
                     break;
                 }
                 case 'saveMemoHotkey': {
-                    const config = vscode.workspace.getConfiguration('switchboard');
-                    await config.update('memo.hotkey', message.value, vscode.ConfigurationTarget.Global);
+                    const pathConfig = this._seams().pathConfig;
+                    await pathConfig.updateConfigGlobal('memo.hotkey', message.value);
                     this.postMessage({ type: 'memoHotkeySaved' });
                     break;
                 }
                 case 'openKeybindings':
-                    await vscode.commands.executeCommand('workbench.action.openGlobalKeybindings');
+                    await this._seams().commands.executeCommand('workbench.action.openGlobalKeybindings');
                     break;
                 case 'getThemeSetting': {
-                    const currentTheme = vscode.workspace.getConfiguration('switchboard')
-                        .get<string>('theme.name', 'afterburner');
+                    const currentTheme = this._seams().pathConfig.getConfigStringWithDefault('theme.name', 'afterburner');
                     this.postMessage({ type: 'switchboardThemeNameSetting', theme: currentTheme });
                     break;
                 }
@@ -845,7 +841,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                 case 'setCyberAnimationDisabledSetting':
                     await this._taskViewerProvider.handleSetCyberAnimationDisabledSetting(message.enabled);
                     await this._taskViewerProvider.postSetupPanelState();
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
                 case 'getCyberScanlinesDisabledSetting':
                     this.postMessage({
@@ -856,7 +852,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                 case 'setCyberScanlinesDisabledSetting':
                     await this._taskViewerProvider.handleSetCyberScanlinesDisabledSetting(message.enabled);
                     await this._taskViewerProvider.postSetupPanelState();
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
                 case 'getColourKanbanIconsSetting':
                     this.postMessage({
@@ -871,7 +867,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         enabled: message.enabled
                     });
                     await this._taskViewerProvider.postSetupPanelState();
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
                 case 'getUltracodeAnimationSetting':
                     this.postMessage({
@@ -882,7 +878,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                 case 'setUltracodeAnimationSetting':
                     await this._taskViewerProvider.handleSetUltracodeAnimationSetting(message.enabled);
                     await this._taskViewerProvider.postSetupPanelState();
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
 
                 case 'getDesignSystemDocSetting': {
@@ -906,11 +902,11 @@ export class SetupPanelProvider implements vscode.Disposable {
                 }
                 case 'updateGitIgnoreConfig':
                     await this._taskViewerProvider.handleSaveGitIgnoreConfig(message);
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
                 case 'saveDefaultPromptOverrides':
                     await this._taskViewerProvider.handleSaveDefaultPromptOverrides(message);
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
 
                 case 'updateKanbanStructure':
@@ -919,7 +915,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                 case 'restoreKanbanDefaults':
                     await this._taskViewerProvider.handleRestoreKanbanDefaults();
                     await this._taskViewerProvider.postSetupPanelState();
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
                 case 'savePlanningSources': {
                     const sources = {
@@ -929,15 +925,10 @@ export class SetupPanelProvider implements vscode.Disposable {
                         'local-folder': message.localFolder === true
                     };
                     // NOTE: intentionally folder-scoped — this setting is per-project, not shared across workspaces
-                    const folderUri = this._getWorkspaceFolderUri(this._getCurrentWorkspaceRoot() ?? undefined);
-                    const config = vscode.workspace.getConfiguration('switchboard', folderUri);
-                    await config.update(
-                        'planning.enabledSources',
-                        sources,
-                        folderUri ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace
-                    );
+                    const pathConfig = this._seams().pathConfig;
+                    await pathConfig.updateConfigWorkspace('planning.enabledSources', sources);
                     this.postMessage({ type: 'planningSourcesSaved', success: true });
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
                 }
                 case 'getDefaultPromptPreviews': {
@@ -979,9 +970,8 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 case 'getPlanningSources': {
                     // NOTE: intentionally folder-scoped — this setting is per-project, not shared across workspaces
-                    const folderUri = this._getWorkspaceFolderUri(this._getCurrentWorkspaceRoot() ?? undefined);
-                    const config = vscode.workspace.getConfiguration('switchboard', folderUri);
-                    const enabledSources = config.get<any>('planning.enabledSources', {
+                    const pathConfig = this._seams().pathConfig;
+                    const enabledSources = pathConfig.getConfigJson('planning.enabledSources', {
                         clickup: true,
                         linear: true,
                         notion: true,
@@ -1054,8 +1044,8 @@ export class SetupPanelProvider implements vscode.Disposable {
                         type: 'workspaceMappingEnabled',
                         enabled
                     });
-                    await vscode.commands.executeCommand('switchboard.mappingsChanged');
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.mappingsChanged');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
                 }
                 case 'saveWorkspaceMappings': {
@@ -1132,8 +1122,8 @@ export class SetupPanelProvider implements vscode.Disposable {
 
  
                     this.postMessage({ type: 'workspaceMappingStatus', ok: true });
-                    await vscode.commands.executeCommand('switchboard.mappingsChanged');
-                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    await this._seams().commands.executeCommand('switchboard.mappingsChanged');
+                    await this._seams().commands.executeCommand('switchboard.refreshUI');
                     break;
                 }
                 case 'initializeWorkspaceDatabase': {
@@ -1215,8 +1205,8 @@ export class SetupPanelProvider implements vscode.Disposable {
 
 
                         this.postMessage({ type: 'workspaceMappingInitResult', ok: true, dbPath: derivedDbPath });
-                        await vscode.commands.executeCommand('switchboard.mappingsChanged');
-                        await vscode.commands.executeCommand('switchboard.refreshUI');
+                        await this._seams().commands.executeCommand('switchboard.mappingsChanged');
+                        await this._seams().commands.executeCommand('switchboard.refreshUI');
                     } catch (error) {
                         const errorMessage = error instanceof Error ? error.message : String(error);
                         this.postMessage({ type: 'workspaceMappingInitResult', ok: false, error: errorMessage });
@@ -1224,7 +1214,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 }
                 case 'browseWorkspaceMappingDbPath': {
-                    const fileUri = await vscode.window.showOpenDialog({
+                    const fileUri = await this._seams().ui.showOpenDialog({
                         canSelectFiles: true,
                         canSelectFolders: false,
                         canSelectMany: false,
@@ -1234,14 +1224,14 @@ export class SetupPanelProvider implements vscode.Disposable {
                     if (fileUri?.[0]) {
                         this.postMessage({
                             type: 'workspaceMappingDbPathSelected',
-                            path: fileUri[0].fsPath,
+                            path: fileUri[0],
                             mappingId: message.mappingId
                         });
                     }
                     break;
                 }
                 case 'browseWorkspaceMappingFolder': {
-                    const folderUri = await vscode.window.showOpenDialog({
+                    const folderUri = await this._seams().ui.showOpenDialog({
                         canSelectFiles: false,
                         canSelectFolders: true,
                         canSelectMany: false,
@@ -1250,7 +1240,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     if (folderUri?.[0]) {
                         this.postMessage({
                             type: 'workspaceMappingFolderSelected',
-                            path: folderUri[0].fsPath,
+                            path: folderUri[0],
                             mappingId: message.mappingId
                         });
                     }
@@ -1258,14 +1248,14 @@ export class SetupPanelProvider implements vscode.Disposable {
                 }
 
                 case 'browseParentFolder': {
-                    const parentUri = await vscode.window.showOpenDialog({
+                    const parentUri = await this._seams().ui.showOpenDialog({
                         canSelectFiles: false,
                         canSelectFolders: true,
                         canSelectMany: false,
                         title: 'Select parent workspace folder (where .switchboard/ lives)'
                     });
                     if (parentUri?.[0]) {
-                        const selectedPath = parentUri[0].fsPath;
+                        const selectedPath = parentUri[0];
                         const existingDbPath = path.join(selectedPath, '.switchboard', 'kanban.db');
                         const existingDbDetected = fs.existsSync(existingDbPath);
                         this.postMessage({
@@ -1279,7 +1269,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                 }
                 case 'browseTicketsFolder': {
                     const provider = message.provider;
-                    const folderUri = await vscode.window.showOpenDialog({
+                    const folderUri = await this._seams().ui.showOpenDialog({
                         canSelectFolders: true,
                         canSelectFiles: false,
                         canSelectMany: false,
@@ -1289,7 +1279,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         this.postMessage({
                             type: 'browseTicketsFolderResult',
                             provider,
-                            path: folderUri[0].fsPath
+                            path: folderUri[0]
                         });
                     }
                     break;
@@ -1412,7 +1402,7 @@ export class SetupPanelProvider implements vscode.Disposable {
             }
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            vscode.window.showErrorMessage(`Setup panel error: ${errorMessage}`);
+            this._seams().ui.showErrorMessage(`Setup panel error: ${errorMessage}`);
         }
     }
 
@@ -1424,9 +1414,8 @@ export class SetupPanelProvider implements vscode.Disposable {
 
         const dbPath = await this._taskViewerProvider?.handleGetDbPath(workspaceRoot);
         // NOTE: intentionally folder-scoped — controlPlaneRoot is per-project, not shared across workspaces
-        const folderUri = this._getWorkspaceFolderUri(dbPath?.workspaceRoot || workspaceRoot);
-        const config = vscode.workspace.getConfiguration('switchboard', folderUri);
-        const explicitControlPlaneRoot = String(config.get<string>('kanban.controlPlaneRoot', '') || '').trim();
+        const pathConfig = this._seams().pathConfig;
+        const explicitControlPlaneRoot = pathConfig.getConfigString('kanban.controlPlaneRoot');
         return {
             success: true,
             workspaceRoot: dbPath?.workspaceRoot || workspaceRoot || '',
@@ -1456,13 +1445,8 @@ export class SetupPanelProvider implements vscode.Disposable {
 
         const normalizedRoot = await this._validateControlPlaneRoot(controlPlaneRoot);
         // NOTE: intentionally folder-scoped — controlPlaneRoot is per-project, not shared across workspaces
-        const folderUri = this._getWorkspaceFolderUri(workspaceRoot);
-        const config = vscode.workspace.getConfiguration('switchboard', folderUri);
-        await config.update(
-            'kanban.controlPlaneRoot',
-            normalizedRoot,
-            folderUri ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace
-        );
+        const pathConfig = this._seams().pathConfig;
+        await pathConfig.updateConfigWorkspace('kanban.controlPlaneRoot', normalizedRoot);
 
         return {
             success: true,
@@ -1487,13 +1471,8 @@ export class SetupPanelProvider implements vscode.Disposable {
             };
         }
 
-        const folderUri = this._getWorkspaceFolderUri(workspaceRoot);
-        const config = vscode.workspace.getConfiguration('switchboard', folderUri);
-        await config.update(
-            'kanban.controlPlaneRoot',
-            '',
-            folderUri ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace
-        );
+        const pathConfig = this._seams().pathConfig;
+        await pathConfig.updateConfigWorkspace('kanban.controlPlaneRoot', '');
 
         return {
             success: true,
@@ -1517,7 +1496,7 @@ export class SetupPanelProvider implements vscode.Disposable {
         }
 
         try {
-            await vscode.commands.executeCommand('switchboard.clearControlPlaneCache');
+            await this._seams().commands.executeCommand('switchboard.clearControlPlaneCache');
             return {
                 success: true,
                 message: 'Cleared cached Control Plane decisions.'
@@ -1558,7 +1537,7 @@ export class SetupPanelProvider implements vscode.Disposable {
         const manualPath = vscode.Uri.joinPath(this._extensionUri, 'docs', 'switchboard_user_manual.md');
         try {
             await vscode.workspace.fs.stat(manualPath);
-            await vscode.commands.executeCommand('markdown.showPreview', manualPath);
+            await this._seams().commands.executeCommand('markdown.showPreview', manualPath);
             return;
         } catch {
             // Manual not found — fall back to README.md
@@ -1567,9 +1546,9 @@ export class SetupPanelProvider implements vscode.Disposable {
         const readmePath = vscode.Uri.joinPath(this._extensionUri, 'README.md');
         try {
             await vscode.workspace.fs.stat(readmePath);
-            await vscode.commands.executeCommand('markdown.showPreview', readmePath);
+            await this._seams().commands.executeCommand('markdown.showPreview', readmePath);
         } catch {
-            vscode.window.showErrorMessage('Plugin documentation not found.');
+            this._seams().ui.showErrorMessage('Plugin documentation not found.');
         }
     }
 
@@ -2065,7 +2044,7 @@ export class SetupPanelProvider implements vscode.Disposable {
      */
     private async _configReferencesLegacyAgent(workspaceRoot: string): Promise<boolean> {
         try {
-            const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(workspaceRoot));
+            const pathConfig = this._seams().pathConfig;
             const plannerWorkflowPath = config.get<string>('planner.workflowPath', '');
             if (plannerWorkflowPath && plannerWorkflowPath.includes('.agent/')) {
                 return true;

@@ -2016,6 +2016,20 @@
             width: 100%;
             height: 100%;
         }
+        /* The HTML/Stitch iframe viewports are sized to the previewed page's natural
+           pixel dims (via sbContentDims). As flex children of the centered
+           .zoomable-container they would be shrunk on the main axis and centered
+           (negative origin) on the cross axis — both break the transform-based
+           fit/pan math, which assumes a fixed-size box anchored at the container's
+           top-left. Take them out of flex flow so the reported dims are honored and
+           the top-left origin holds. In the default 100%×100% state this is a no-op. */
+        #html-preview-wrapper > .zoomable-viewport,
+        #stitch-html-preview-wrapper > .zoomable-viewport {
+            position: absolute;
+            top: 0;
+            left: 0;
+            flex-shrink: 0;
+        }
 
         /* Transparent layer above iframe previews so pan/zoom mouse events
            reach the container instead of disappearing into the iframe document.

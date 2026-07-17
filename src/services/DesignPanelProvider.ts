@@ -1375,15 +1375,13 @@ setTimeout(reportDims, 0);
         deviceType: string; status: string; statusMessage: string;
         summary?: string; suggestionsJson?: string;
     }, workspaceRoot: string): Promise<any> {
-        const fileUri = vscode.Uri.file(
-            path.join(this._getImageCacheDir(workspaceRoot, cached.projectId), `${path.basename(cached.id)}.png`)
-        );
+        const filePath = path.join(this._getImageCacheDir(workspaceRoot, cached.projectId), `${path.basename(cached.id)}.png`);
         let imageUrl = '';
         let imagePath = '';
         try {
-            await vscode.workspace.fs.stat(fileUri);
-            imageUrl = this._panel?.webview.asWebviewUri(fileUri).toString() || '';
-            imagePath = fileUri.fsPath;
+            await fs.promises.stat(filePath);
+            imageUrl = this._panel?.webview.asWebviewUri(vscode.Uri.file(filePath)).toString() || '';
+            imagePath = filePath;
         } catch {}
         let suggestions: Array<{ label: string; prompt: string }> = [];
         if (cached.suggestionsJson) {
@@ -1430,7 +1428,7 @@ setTimeout(reportDims, 0);
         if (!workspaceRoot) return '';
         const htmlPath = path.join(this._getImageCacheDir(workspaceRoot, projectId), `${path.basename(screenId)}.html`);
         try {
-            await vscode.workspace.fs.stat(vscode.Uri.file(htmlPath));
+            await fs.promises.stat(htmlPath);
             return htmlPath;
         } catch {
             return '';
@@ -1442,13 +1440,13 @@ setTimeout(reportDims, 0);
         // status — the last good render beats a blank card whenever the backend
         // temporarily serves no screenshot URL for a screen.
         const cacheDir = workspaceRoot ? this._getImageCacheDir(workspaceRoot, screen.projectId) : '';
-        const fileUri = cacheDir
-            ? vscode.Uri.file(path.join(cacheDir, `${path.basename(screen.id)}.png`))
+        const filePath = cacheDir
+            ? path.join(cacheDir, `${path.basename(screen.id)}.png`)
             : undefined;
-        if (fileUri) {
+        if (filePath) {
             try {
-                await vscode.workspace.fs.stat(fileUri);
-                const uri = this._panel?.webview.asWebviewUri(fileUri).toString() || '';
+                await fs.promises.stat(filePath);
+                const uri = this._panel?.webview.asWebviewUri(vscode.Uri.file(filePath)).toString() || '';
                 if (uri) return uri;
             } catch { /* not cached yet */ }
         }
@@ -1466,11 +1464,11 @@ setTimeout(reportDims, 0);
             ? cdnUrl.replace(/=[wsh]\d+(?:-[wsh]\d+)?$/, '') + '=w1200'
             : cdnUrl;
 
-        if (!fileUri || !cacheDir) return hiResUrl;
+        if (!filePath || !cacheDir) return hiResUrl;
 
         // Not cached yet — download in background, return CDN URL immediately so the
         // gallery renders now without waiting for the download to finish
-        this._downloadToCache(hiResUrl, cacheDir, fileUri).catch(err =>
+        this._downloadToCache(hiResUrl, cacheDir, filePath).catch(err =>
             console.error('Stitch image cache download failed:', err)
         );
 
@@ -1484,16 +1482,16 @@ setTimeout(reportDims, 0);
     // double-downloading or returning before the first write lands.
     private _cacheDownloadsInFlight = new Map<string, Promise<void>>();
 
-    private _downloadToCache(url: string, cacheDir: string, fileUri: vscode.Uri): Promise<void> {
-        const key = fileUri.fsPath;
+    private _downloadToCache(url: string, cacheDir: string, filePath: string): Promise<void> {
+        const key = filePath;
         const existing = this._cacheDownloadsInFlight.get(key);
         if (existing) return existing;
         const download = (async () => {
-            await vscode.workspace.fs.createDirectory(vscode.Uri.file(cacheDir));
+            await fs.promises.mkdir(cacheDir, { recursive: true });
             const res = await this._fetchWithTimeout(url, 60000);
             if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
             const buffer = Buffer.from(await res.arrayBuffer());
-            await vscode.workspace.fs.writeFile(fileUri, buffer);
+            await fs.promises.writeFile(filePath, buffer);
         })();
         this._cacheDownloadsInFlight.set(key, download.finally(() => this._cacheDownloadsInFlight.delete(key)));
         return this._cacheDownloadsInFlight.get(key)!;
@@ -1518,7 +1516,7 @@ setTimeout(reportDims, 0);
                 const cacheDir = this._getImageCacheDir(workspaceRoot, screen.projectId);
                 // Sequential on purpose — this is a background sweep, not a hot path.
                 await this._downloadToCache(htmlUrl, cacheDir,
-                    vscode.Uri.file(path.join(cacheDir, `${path.basename(screen.id)}.html`)));
+                    path.join(cacheDir, `${path.basename(screen.id)}.html`));
             } catch (err) {
                 console.error(`Stitch HTML cache backfill failed for screen ${screen?.id}:`, err);
             }
@@ -1531,7 +1529,7 @@ setTimeout(reportDims, 0);
         if (workspaceRoot) {
             const candidate = path.join(this._getImageCacheDir(workspaceRoot, screen.projectId), `${path.basename(screen.id)}.png`);
             try {
-                await vscode.workspace.fs.stat(vscode.Uri.file(candidate));
+                await fs.promises.stat(candidate);
                 imagePath = candidate;
             } catch {}
         }
@@ -1545,7 +1543,7 @@ setTimeout(reportDims, 0);
             // the format. The signed URL expires, so grab it while we have it.
             const cacheDir = this._getImageCacheDir(workspaceRoot, screen.projectId);
             this._downloadToCache(htmlUrl, cacheDir,
-                vscode.Uri.file(path.join(cacheDir, `${path.basename(screen.id)}.html`))
+                path.join(cacheDir, `${path.basename(screen.id)}.html`)
             ).catch(err => console.error('Stitch HTML cache download failed:', err));
         }
         return {
@@ -1686,15 +1684,15 @@ setTimeout(reportDims, 0);
     }
 
     private _getDesignSystemDocName(): string | null {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const designSystemDocLink = config.get<string>('planner.designSystemDocLink');
+        const pathConfig = this._seams().pathConfig;
+        const designSystemDocLink = pathConfig.getConfigString('planner.designSystemDocLink');
         if (!designSystemDocLink) return null;
         return path.basename(designSystemDocLink, '.md');
     }
 
     private async _sendActiveDesignDocState(): Promise<void> {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const dsEnabled = config.get<boolean>('planner.designSystemDocEnabled', false);
+        const pathConfig = this._seams().pathConfig;
+        const dsEnabled = pathConfig.getConfigBoolean('planner.designSystemDocEnabled', false);
         const dsDocName = dsEnabled ? this._getDesignSystemDocName() : null;
         this.postMessage({
             type: 'activeDesignDocUpdated',
@@ -2051,7 +2049,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
         switch (message.type) {
             case 'renderMarkdownLive': {
                 try {
-                    const html = await vscode.commands.executeCommand<string>('markdown.api.render', message.content || '');
+                    const html = await this._seams().commands.executeCommand<string>('markdown.api.render', message.content || '');
                     this.postMessage({
                         type: 'markdownLiveRendered',
                         requestId: message.requestId,
@@ -2091,10 +2089,10 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     valid: hasKey,
                     apiKey: authInfo.apiKey
                 });
-                const themeConfig = vscode.workspace.getConfiguration('switchboard');
-                this.postMessage({ type: 'switchboardThemeChanged', theme: themeConfig.get<string>('theme.name', 'afterburner') });
-                this.postMessage({ type: 'cyberAnimationSetting', disabled: themeConfig.get<boolean>('theme.disableCyberAnimation', false) });
-                this.postMessage({ type: 'cyberScanlinesSetting', disabled: themeConfig.get<boolean>('theme.disableCyberScanlines', false) });
+                const pathConfig = this._seams().pathConfig;
+                this.postMessage({ type: 'switchboardThemeChanged', theme: pathConfig.getConfigStringWithDefault('theme.name', 'afterburner') });
+                this.postMessage({ type: 'cyberAnimationSetting', disabled: pathConfig.getConfigBoolean('theme.disableCyberAnimation', false) });
+                this.postMessage({ type: 'cyberScanlinesSetting', disabled: pathConfig.getConfigBoolean('theme.disableCyberScanlines', false) });
                 await this._sendHtmlDocsReady();
                 await this._sendClaudeDocsReady();
                 await this._sendDesignDocsReady();
@@ -2166,18 +2164,18 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         this.postMessage({ type: 'activeContextSet', success: false, error: 'Document not found' });
                         break;
                     }
-                    const config = vscode.workspace.getConfiguration('switchboard');
-                    await config.update(
-                        'planner.designSystemDocLink', docPath, vscode.ConfigurationTarget.Workspace
+                    const pathConfig = this._seams().pathConfig;
+                    await pathConfig.updateConfigWorkspace(
+                        'planner.designSystemDocLink', docPath
                     );
-                    await config.update(
-                        'planner.designSystemDocLink', undefined, vscode.ConfigurationTarget.Global
+                    await pathConfig.updateConfigGlobal(
+                        'planner.designSystemDocLink', undefined
                     );
-                    await config.update(
-                        'planner.designSystemDocEnabled', true, vscode.ConfigurationTarget.Global
+                    await pathConfig.updateConfigGlobal(
+                        'planner.designSystemDocEnabled', true
                     );
-                    await config.update(
-                        'planner.designSystemDocEnabled', undefined, vscode.ConfigurationTarget.Workspace
+                    await pathConfig.updateConfigWorkspace(
+                        'planner.designSystemDocEnabled', undefined
                     );
                     this._activeDesignSystemDocSourceId = message.sourceId;
                     this._activeDesignSystemDocId = message.docId;
@@ -2192,18 +2190,18 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
 
             case 'disableDesignDoc': {
                 try {
-                    const config = vscode.workspace.getConfiguration('switchboard');
-                    await config.update(
-                        'planner.designSystemDocEnabled', false, vscode.ConfigurationTarget.Global
+                    const pathConfig = this._seams().pathConfig;
+                    await pathConfig.updateConfigGlobal(
+                        'planner.designSystemDocEnabled', false
                     );
-                    await config.update(
-                        'planner.designSystemDocEnabled', undefined, vscode.ConfigurationTarget.Workspace
+                    await pathConfig.updateConfigWorkspace(
+                        'planner.designSystemDocEnabled', undefined
                     );
-                    await config.update(
-                        'planner.designSystemDocLink', undefined, vscode.ConfigurationTarget.Workspace
+                    await pathConfig.updateConfigWorkspace(
+                        'planner.designSystemDocLink', undefined
                     );
-                    await config.update(
-                        'planner.designSystemDocLink', undefined, vscode.ConfigurationTarget.Global
+                    await pathConfig.updateConfigGlobal(
+                        'planner.designSystemDocLink', undefined
                     );
                     this._activeDesignSystemDocSourceId = null;
                     this._activeDesignSystemDocId = null;
@@ -2364,7 +2362,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     await this._taskViewerProvider.sendPromptToAgentTerminal('coder', prompt, message.workspaceRoot || undefined);
                     showTemporaryNotification('Sent element tweak prompt to agent terminal.');
                 } else {
-                    await vscode.env.clipboard.writeText(prompt);
+                    await this._seams().clipboard.writeText(prompt);
                     showTemporaryNotification('Agent terminal unavailable — copied tweak prompt to clipboard instead.');
                 }
                 break;
@@ -2385,7 +2383,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     await this._taskViewerProvider.sendPromptToAgentTerminal('coder', prompt, message.workspaceRoot || undefined);
                     showTemporaryNotification('Sent element tweak prompt to agent terminal.');
                 } else {
-                    await vscode.env.clipboard.writeText(prompt);
+                    await this._seams().clipboard.writeText(prompt);
                     showTemporaryNotification('Agent terminal unavailable — copied tweak prompt to clipboard instead.');
                 }
                 break;
@@ -2394,7 +2392,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             case 'copyClaudeImportPrompt': {
                 const prompt = String(message.prompt || '');
                 if (!prompt) break;
-                await vscode.env.clipboard.writeText(prompt);
+                await this._seams().clipboard.writeText(prompt);
                 showTemporaryNotification('Copied Claude import prompt to clipboard.');
                 break;
             }
@@ -2406,7 +2404,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     await this._taskViewerProvider.sendPromptToAgentTerminal('claude_import', prompt, message.workspaceRoot || undefined);
                     showTemporaryNotification('Sent Claude import prompt to agent terminal.');
                 } else {
-                    await vscode.env.clipboard.writeText(prompt);
+                    await this._seams().clipboard.writeText(prompt);
                     showTemporaryNotification('Agent terminal unavailable — copied Claude import prompt to clipboard instead.');
                 }
                 break;
@@ -2416,7 +2414,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 if (message.error) { showTemporaryNotification(String(message.error)); break; }
                 const prompt = String(message.prompt || '');
                 if (!prompt) break;
-                await vscode.env.clipboard.writeText(prompt);
+                await this._seams().clipboard.writeText(prompt);
                 showTemporaryNotification('Copied Claude artifact upload prompt to clipboard.');
                 break;
             }
@@ -2430,7 +2428,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     showTemporaryNotification('Sent artifact upload prompt to Claude.');
                 } else {
                     // No agent terminal wired up — fall back to clipboard so the button still does something.
-                    await vscode.env.clipboard.writeText(prompt);
+                    await this._seams().clipboard.writeText(prompt);
                     showTemporaryNotification('Agent terminal unavailable — copied artifact upload prompt to clipboard instead.');
                 }
                 break;
@@ -2446,7 +2444,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     ? path.resolve(message.sourceFolder, linkRelativePath)
                     : linkRelativePath;
                 const linkRef = linkPath;
-                vscode.env.clipboard.writeText(linkRef);
+                this._seams().clipboard.writeText(linkRef);
                 showTemporaryNotification(`Copied document path to clipboard: ${linkRef}`);
                 break;
             }
@@ -2469,9 +2467,9 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     await fs.promises.access(fullPath, fs.constants.R_OK);
                     const entry = await this._getOrCreateHtmlServer(path.resolve(serveFolder));
                     const url = this._buildLocalhostUrl(entry, path.resolve(serveFolder), fullPath);
-                    await vscode.env.openExternal(vscode.Uri.parse(url));
+                    await this._seams().ui.openExternal(url);
                 } catch (err: any) {
-                    vscode.window.showErrorMessage('Failed to serve HTML file: ' + err.message);
+                    this._seams().ui.showErrorMessage('Failed to serve HTML file: ' + err.message);
                 }
                 break;
 
@@ -2514,7 +2512,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     });
                     showTemporaryNotification('Stitch Authentication settings saved successfully.');
                 } catch (err: any) {
-                    vscode.window.showErrorMessage('Failed to save settings: ' + err.message);
+                    this._seams().ui.showErrorMessage('Failed to save settings: ' + err.message);
                 }
                 break;
 
@@ -2735,10 +2733,10 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         this.postMessage({ type: 'stitchApiKeyStatus', configured: false, workspaceRoot });
                         return;
                     }
-                    const config = vscode.workspace.getConfiguration('switchboard');
-                    const defaultProjectId = config.get<string>('stitch.defaultProjectId') || '';
-                    const defaultModelId = config.get<string>('stitch.defaultModelId') || 'GEMINI_3_FLASH';
-                    const defaultCreativeRange = config.get<string>('stitch.defaultCreativeRange') || 'EXPLORE';
+                    const pathConfig = this._seams().pathConfig;
+                    const defaultProjectId = pathConfig.getConfigString('stitch.defaultProjectId');
+                    const defaultModelId = pathConfig.getConfigStringWithDefault('stitch.defaultModelId', 'GEMINI_3_FLASH');
+                    const defaultCreativeRange = pathConfig.getConfigStringWithDefault('stitch.defaultCreativeRange', 'EXPLORE');
 
                     const db = KanbanDatabase.forWorkspace(workspaceRoot);
                     const dbProjects = await db.getStitchProjects();
@@ -2906,11 +2904,9 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
 
                         const cacheDir = this._getImageCacheDir(workspaceRoot, projectId);
                         for (const s of cached) {
-                            const fileUri = vscode.Uri.file(
-                                path.join(cacheDir, `${path.basename(s.id)}.png`)
-                            );
+                            const filePath = path.join(cacheDir, `${path.basename(s.id)}.png`);
                             try {
-                                await vscode.workspace.fs.delete(fileUri);
+                                await fs.promises.unlink(filePath);
                             } catch {
                                 // ignore if not exist
                             }
@@ -3074,7 +3070,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         const screens = await projectInstance.screens();
 
                         const outputDir = this._getStitchOutputDir(workspaceRoot);
-                        await vscode.workspace.fs.createDirectory(vscode.Uri.file(outputDir));
+                        await fs.promises.mkdir(outputDir, { recursive: true });
 
                         let designMd = `# Design Handoff - Project ${message.projectId}\n\n`;
                         designMd += `Sync timestamp (on-demand): ${new Date().toISOString()}\n\n`;
@@ -3118,9 +3114,9 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                             designMd += `> Design systems could not be fetched for this project.\n\n`;
                         }
 
-                        await vscode.workspace.fs.writeFile(vscode.Uri.file(manifestPath), Buffer.from(designMd, 'utf8'));
+                        await fs.promises.writeFile(manifestPath, Buffer.from(designMd, 'utf8'));
                     }
-                    await vscode.window.showTextDocument(vscode.Uri.file(manifestPath), { preview: false });
+                    await this._seams().editor.showTextDocument(manifestPath, { preview: false });
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
                 }
@@ -3146,7 +3142,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         }
                         outputDir = resolvedDest;
                     }
-                    await vscode.workspace.fs.createDirectory(vscode.Uri.file(outputDir));
+                    await fs.promises.mkdir(outputDir, { recursive: true });
 
                     const tokens: any = {};
                     if (designSystems && designSystems.length > 0) {
@@ -3160,11 +3156,11 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     }
 
                     const targetPath = path.join(outputDir, 'design-tokens.json');
-                    await vscode.workspace.fs.writeFile(vscode.Uri.file(targetPath), Buffer.from(JSON.stringify(tokens, null, 2), 'utf8'));
+                    await fs.promises.writeFile(targetPath, Buffer.from(JSON.stringify(tokens, null, 2), 'utf8'));
 
                     showTemporaryNotification(`Downloaded design tokens to ${path.basename(outputDir)}/design-tokens.json`);
                 } catch (err: any) {
-                    vscode.window.showErrorMessage('Download failed: ' + err.message);
+                    this._seams().ui.showErrorMessage('Download failed: ' + err.message);
                 }
                 break;
 
@@ -3493,7 +3489,8 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             }
             case 'stitchPickAttachFiles': {
                 try {
-                    const result = await vscode.window.showOpenDialog({
+                    const result = await this._seams().ui.showOpenDialog({
+                        canSelectFiles: true,
                         canSelectMany: true,
                         openLabel: 'Attach reference files',
                         filters: {
@@ -3501,8 +3498,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         }
                     });
                     if (!result || result.length === 0) break;
-                    const files = result.map(uri => {
-                        const filePath = uri.fsPath;
+                    const files = result.map(filePath => {
                         const ext = path.extname(filePath).toLowerCase().replace('.', '');
                         const name = path.basename(filePath);
                         const type = ['png', 'jpg', 'jpeg', 'webp'].includes(ext) ? 'image'
@@ -3512,7 +3508,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     });
                     this.postMessage({ type: 'stitchAttachedFilesPicked', files });
                 } catch (err: any) {
-                    vscode.window.showErrorMessage('Failed to pick files: ' + err.message);
+                    this._seams().ui.showErrorMessage('Failed to pick files: ' + err.message);
                 }
                 break;
             }
@@ -3677,7 +3673,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                             try {
                                 const dir = this._getImageCacheDir(workspaceRoot, updated.projectId || screen.projectId);
                                 await this._downloadToCache(formatted.htmlUrl, dir,
-                                    vscode.Uri.file(path.join(dir, `${path.basename(updated.id)}.html`)));
+                                    path.join(dir, `${path.basename(updated.id)}.html`));
                                 formatted.htmlPath = path.join(dir, `${path.basename(updated.id)}.html`);
                             } catch (e) {
                                 console.error('Stitch edit HTML re-cache failed:', e);
@@ -3735,7 +3731,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                                 try {
                                     const dir = this._getImageCacheDir(workspaceRoot, v.projectId || screen.projectId);
                                     const target = path.join(dir, `${path.basename(v.id)}.html`);
-                                    await this._downloadToCache(f.htmlUrl, dir, vscode.Uri.file(target));
+                                    await this._downloadToCache(f.htmlUrl, dir, target);
                                     f.htmlPath = target;
                                 } catch (e) {
                                     console.error('Stitch variant HTML cache failed:', e);
@@ -3781,22 +3777,21 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         outputDir = resolvedDest;
                     }
                     
-                    await vscode.workspace.fs.createDirectory(vscode.Uri.file(outputDir));
+                    await fs.promises.mkdir(outputDir, { recursive: true });
 
                     const targetPath = path.join(outputDir, safeFilename);
 
                     if (message.url.startsWith('file://')) {
-                        const fileUri = vscode.Uri.parse(message.url);
-                        const buffer = Buffer.from(await vscode.workspace.fs.readFile(fileUri));
-                        await vscode.workspace.fs.writeFile(vscode.Uri.file(targetPath), buffer);
+                        const buffer = Buffer.from(await fs.promises.readFile(new URL(message.url)));
+                        await fs.promises.writeFile(targetPath, buffer);
                     } else {
                         const res = await fetch(message.url);
                         if (isPng) {
                             const buffer = Buffer.from(await res.arrayBuffer());
-                            await vscode.workspace.fs.writeFile(vscode.Uri.file(targetPath), buffer);
+                            await fs.promises.writeFile(targetPath, buffer);
                         } else {
                             const text = await res.text();
-                            await vscode.workspace.fs.writeFile(vscode.Uri.file(targetPath), Buffer.from(text, 'utf8'));
+                            await fs.promises.writeFile(targetPath, Buffer.from(text, 'utf8'));
                         }
                     }
 
@@ -3810,7 +3805,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         path: targetPath
                     });
                 } catch (err: any) {
-                    vscode.window.showErrorMessage('Download failed: ' + err.message);
+                    this._seams().ui.showErrorMessage('Download failed: ' + err.message);
                     // A live preview may be waiting on this download — let it recover
                     // (show the placeholder + reload) instead of spinning forever.
                     this.postMessage({ type: 'stitchHtmlPreviewError', screenId: message.screenId, error: err.message || String(err) });
@@ -3882,8 +3877,8 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
 
     private _startExternalFilePoll(): void {
         if (this._externalFilePollTimer) return;
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const ms = config.get<number>('design.externalFilePollMs', 4000);
+        const pathConfig = this._seams().pathConfig;
+        const ms = pathConfig.getConfigNumber('design.externalFilePollMs', 4000);
         if (ms <= 0) return;
         this._externalFilePollTimer = setInterval(() => this._pollTick(), ms);
     }
@@ -4248,10 +4243,10 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             if (!fs.existsSync(resolvedFolder)) {
                 throw new Error('Folder does not exist');
             }
-            await vscode.env.clipboard.writeText(resolvedFolder);
+            await this._seams().clipboard.writeText(resolvedFolder);
             showTemporaryNotification(`Folder path copied to clipboard: ${resolvedFolder}`);
         } catch (err) {
-            vscode.window.showErrorMessage(`Failed to link to folder: ${String(err)}`);
+            this._seams().ui.showErrorMessage(`Failed to link to folder: ${String(err)}`);
         }
     }
 }

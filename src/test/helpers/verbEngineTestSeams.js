@@ -71,6 +71,8 @@ function createHeadlessTestSeams(opts = {}) {
         disposedWatchers: [],
         openedDocuments: [],
         terminalSends: [],
+        openedExternals: [],
+        pickedItems: [],
     };
 
     const seams = {
@@ -81,8 +83,15 @@ function createHeadlessTestSeams(opts = {}) {
                 opts.config && key in opts.config ? opts.config[key] : dflt,
             getConfigBoolean: (key, dflt) =>
                 opts.config && key in opts.config ? !!opts.config[key] : dflt,
+            getConfigNumber: (key, dflt) =>
+                opts.config && key in opts.config ? Number(opts.config[key]) : dflt,
+            getConfigJson: (key, dflt) =>
+                opts.config && key in opts.config ? opts.config[key] : dflt,
             updateConfigGlobal: async (key, value) => {
-                recorders.configWrites.push({ key, value });
+                recorders.configWrites.push({ scope: 'global', key, value });
+            },
+            updateConfigWorkspace: async (key, value) => {
+                recorders.configWrites.push({ scope: 'workspace', key, value });
             },
         },
         terminal: {
@@ -96,6 +105,7 @@ function createHeadlessTestSeams(opts = {}) {
                 return handle;
             },
             findByName: () => null,
+            findByNameContains: () => null,
             sendInput: (name, text) => {
                 recorders.terminalSends.push({ name, text });
                 return true;
@@ -133,6 +143,23 @@ function createHeadlessTestSeams(opts = {}) {
             },
             showTemporaryNotification: (message) => {
                 recorders.notifications.push(message);
+            },
+            showInputBox: async (options) => {
+                recorders.pickedItems.push({ kind: 'inputBox', options });
+                return opts.inputBoxResult;
+            },
+            showQuickPick: async (items, options) => {
+                recorders.pickedItems.push({ kind: 'quickPick', items, options });
+                if (opts.quickPickResult !== undefined) return opts.quickPickResult;
+                if (options && options.canPickMany) return [];
+                return undefined;
+            },
+            showOpenDialog: async (options) => {
+                recorders.pickedItems.push({ kind: 'openDialog', options });
+                return opts.showOpenDialogResult;
+            },
+            openExternal: async (url) => {
+                recorders.openedExternals.push(url);
             },
             pickFolder: async () => opts.pickFolderResult,
             pickFiles: async () => opts.pickFilesResult,
