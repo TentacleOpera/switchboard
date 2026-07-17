@@ -6900,9 +6900,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
         if (!validation.ok) {
             throw new Error(`Invalid payload for Kanban verb '${verb}': ${validation.error}`);
         }
-        // VS Code is the host here; _handleMessage runs in-process. Command verbs
-        // return the route layer's {success:true} ack (most _handleMessage impls are
-        // void); read verbs emit their result over the WS hub (see plan).
+        // VS Code is the host here; _handleMessage runs in-process. All 144 arms
+        // RETURN their result ({success, ...data}); the HTTP rail serializes it as
+        // the response body (reads are readable over HTTP, not push-only) and the
+        // webview push stays additive.
         // `type` is set LAST so a payload `type` field can never override the
         // allowlist-checked verb, regardless of caller.
         // Genuine service methods (selectPlan, openPlanByPath, refresh, etc.) are
