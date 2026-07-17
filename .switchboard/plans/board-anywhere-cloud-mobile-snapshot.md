@@ -1,5 +1,7 @@
 # Cloud/Mobile Board: Self-Contained board.html in the Board-State Export
 
+> **Standalone plan (2026-07-17).** Formerly a subtask of the *Board Anywhere* feature, which was dissolved: its Browser Board half folded into the *Standalone Headless Switchboard* feature (B2/B4), and this snapshot survives on its own. It is independent of that effort — a different code path (`BoardSnapshotPublisher` → `switchboard/board` git branch) delivering a read-only board view with the machine off entirely, which the live browser cockpit cannot.
+
 ## Goal
 
 Give users a visual board anywhere — phone, tablet, cloud agent chat — with zero dependency on the local machine being reachable, by publishing a rendered, self-contained `board.html` alongside `board.json`/`board.md` on the `switchboard/board` orphan branch, plus an agent recipe for rendering the board as an HTML artifact in Claude (web/desktop/mobile).

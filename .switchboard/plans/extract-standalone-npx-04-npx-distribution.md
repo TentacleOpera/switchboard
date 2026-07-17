@@ -63,8 +63,14 @@ Package the standalone service for `npx switchboard`: the `bin` entry + launcher
 - Browser opens before token-exchange endpoint ready → launcher gates browser-open on `/health`, which subsumes readiness.
 
 ### Security
-- One-time token: 32 bytes entropy, single-use, short TTL; stripped from URL immediately after exchange.
-- `npx` supply-chain posture: `files` allowlist keeps the tarball minimal; no postinstall scripts of our own; lockfile-pinned CI.
+
+*(Browser-facing auth model consolidated from the retired Board Anywhere · Browser Board plan — research-confirmed 2026-07-17. Applies to any browser-reachable origin: the headless daemon here and the extension-hosted board alike.)*
+
+- **Host-header allowlist — the primary DNS-rebinding defense.** Reject any browser-facing request whose `Host` is not an exact match for `127.0.0.1:<port>` / `localhost:<port>` (no wildcards), on both the HTTP request and the WebSocket `Upgrade`. A per-request `remoteAddress === 127.0.0.1` check is **not** a defense — DNS rebinding routes an attacker page's request to loopback, so the connection genuinely originates from 127.0.0.1 (confirmed by 2025–2026 VS Code extension CVEs: Live Server / Live Preview). The attacker controls the resolved IP, not the `Host` string the browser sends.
+- **One-time token → cookie hand-off (Jupyter pattern):** 32-byte single-use token, short TTL, delivered once via `?token=` on first load, **immediately exchanged for an `HttpOnly; SameSite=Strict` cookie and invalidated**. All subsequent fetch + WS calls use the cookie. Add `Cache-Control: no-store` on the bootstrap response and `Referrer-Policy: no-referrer` on the served page so the token can't leak via history/referrer/logs.
+- **Origin check + no CORS wildcard:** validate `Origin` on state-changing verbs and the WS handshake; since page and API are same-origin, no cross-origin CORS grant is needed (drop any `Access-Control-Allow-Origin: *`). CORS governs response *readability*, not whether a request executes — necessary hygiene, not a rebinding fix.
+- **WebSocket:** the browser WS API can't set custom headers — authenticate via the same-origin cookie and validate `Origin` during the HTTP `Upgrade` (fail with 401, not mid-protocol). PNA/LNA is a partial, Chromium-only browser backstop — bonus, never load-bearing.
+- **`npx` supply-chain posture:** `files` allowlist keeps the tarball minimal; no postinstall scripts of our own; lockfile-pinned CI.
 
 ### Side Effects
 - Second webpack target must not alter the extension target's output (compare VSIX contents pre/post as a release-checklist item).
@@ -75,7 +81,7 @@ Package the standalone service for `npx switchboard`: the `bin` entry + launcher
 - npm registry publish access for the `switchboard` package name (verify availability/ownership early — rename fallback if squatted).
 
 ## Dependencies
-- **Session dependencies:** A1, A2a, A2b, B1, B2, B3 (plan IDs above); smoke-matrix legs overlap B3.
+- **Session dependencies (MVP):** A1, A2a, A2b, B1, B2 (plan IDs above). **Fleet tier only:** the separately-backlogged terminal-fleet plan `341ac949` (its smoke legs overlap it).
 - Parent architecture reference: `.switchboard/plans/extract-standalone-npx-browser-service.md`.
 
 ## Adversarial Synthesis
