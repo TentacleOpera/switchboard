@@ -39,6 +39,17 @@ Emergent collaboration (implicit, through the shared plan + columns + comments) 
 3. **Design attribution:** stamp each state/content/comment change with its originating platform/agent.
 4. **Decide the coordination surface:** columns-as-handoff vs. an explicit per-role assignment field.
 
+## Prior art & integration targets
+
+The industry is building exactly this coordination layer — which validates the direction and gives concrete integration surfaces rather than only competitors:
+
+- **Notion Developer Platform — External Agents API** (May 2026). Notion's version of this: third-party agents (Claude, Codex, Cursor, Devin, etc.) join a workspace as first-class collaborators via webhook triggers + REST/MCP + per-resource permissions, running in Notion Workers or the vendor's cloud. It is the **hub/integration/cloud** realization — agents integrate *into Notion* to act on *Notion content*. Switchboard's differentiator is the inverse: **local + open + repo-centric**, no integration required. Two concrete ties:
+  - **Switchboard-as-external-agent:** register a Switchboard-orchestrated pipeline *as* a Notion external agent, so a Notion-native team assigns work in Notion and Switchboard executes it locally on the repo and reports back. This is the neutral-broker role — the collaboration feature reaching users who live in Notion.
+  - **Webhooks over polling:** the External Agents API is webhook-driven. Where an exposed endpoint is acceptable, Notion webhooks could replace the remote poll loop for lower latency (keep polling as the no-host default; see the remote-boards "you are the remote part" model).
+- **Linear agent SDK / AgentSession** and **ClickUp** offer analogous (if narrower) agent-participant models — same integration-required shape.
+
+The lesson for this plan: design the coordination surface so Switchboard can both **drive** external-platform agents and **appear as** one, rather than assuming Switchboard is always the top-level orchestrator.
+
 ## Edge-Case & Dependency Audit
 - **Concurrency is the crux** — the whole feature stands on the conflict model. Ship content-pull with a *pluggable* conflict interface so this plan can add locking without a rewrite.
 - **Rate limits multiply** with more active agents/providers — reuse the per-provider pacing.
