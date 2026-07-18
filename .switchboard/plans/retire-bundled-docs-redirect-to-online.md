@@ -24,9 +24,13 @@ Pairs with the README-rewrite plan (`_openDocs`'s README fallback and the online
 **Tags:** docs, cleanup, frontend, backend
 **Complexity:** 3
 
+## Non-Goals / Hard Constraints
+
+- **DO NOT delete or modify `.agents/rules/how_to_plan.md`, and DO NOT touch the reference to it in implementation.html (L3309–3310).** That prompt tells the *planner agent* to read the internal planning framework — it is not a user tutorial and is explicitly out of scope. Only the two user-facing docs named in "Delete" below are removed. If discovery surfaces other `how_to_plan.md` references, leave every one of them untouched.
+
 ## User Review Required
 
-Confirm the `how_to_plan.md` reference in **implementation.html L3309–3310** is **out of scope**. That prompt tells the *planner agent* to read `.agents/rules/how_to_plan.md` (the internal planning framework) — it is not a user tutorial, and `how_to_plan.md` is not being deleted. Default: leave it untouched.
+None — the scope is fixed above. (Only the two bundled user-facing docs are deleted; `how_to_plan.md` and all planning-framework references stay.)
 
 ## Proposed Changes
 
