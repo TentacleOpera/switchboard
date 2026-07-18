@@ -90,12 +90,27 @@ Two product decisions are baked into this plan as defaults; flag them for confir
 **Files: setup/remote settings (`SetupPanelProvider.ts` / kanban remote config), `src/webview/setup.html`**
 - Add "Poll content from remote" toggle beside "Poll comments from remote"; persist in the Kanban DB like the other remote flags. No `settings.json`.
 
-### Phase 5 — Tests + docs
+### Phase 5 — Tests
 - Unit: ClickUp/Notion `fetchStateDeltas` populate `updatedAt` (+ ClickUp `description`); Notion `fetchDescription` renders body; seed-on-first-poll pulls nothing; echo guard no-ops an own-push round-trip (esp. lossy Notion); last-write-wins on genuine divergence. Extend `src/test/integrations/notion/*` and add a ClickUp equivalent.
-- Docs (switchboard-site, separate repo/branch): `integrations/remote-boards.md` currently calls Notion "Full two-way" and lists only "Poll comments from remote" — update the provider table and options to reflect content-pull, and note last-write-wins.
+
+### Phase 6 — Docs (REQUIRED — do not skip; cross-repo)
+
+**This lands in the `switchboard-site` repo, on the same branch name.** Edit `src/pages/docs/integrations/remote-boards.md` — the coder must make these exact edits as part of this change:
+
+1. **Provider table (`## Choosing a provider`, ~L21–25).** The "Full two-way" claims were only ever true for *state + comments* — content was push-only. Make them accurate now that content pulls back:
+   - **Linear** row — after "mirror, dispatch, comments, and push", add that **plan content now syncs both ways** (remote body edits pull back, last-write-wins).
+   - **Notion** row — same addition: content is now bidirectional, not just state + comments.
+   - **ClickUp** row — it currently says "Two-way for card state"; extend to note **content also syncs both ways** now (it still lacks the comment bus — keep that caveat).
+2. **Options section (`### Options`, ~L38–43).** Add a new bullet beside "Poll comments from remote":
+   - **Poll content from remote** — ingest remote edits to a plan's body and write them to the local plan file (last-write-wins; off by default until seeded to "now" on first enable).
+3. **Add a one-line conflict note** under the options: content sync is **last-write-wins by timestamp** — whichever side edited more recently wins; concurrent edits are assumed rare.
+4. **DO NOT change L58** ("Switchboard is the source of truth: remote edits to the **context page** are overwritten"). That's the Project Context page (PRDs/constitution/dev docs), which stays push-only — it is a *different* thing from plan content. Leave it exactly as is.
+
+Match the final toggle name and default to whatever Phase 4 actually ships, so the doc matches the UI.
 
 ## Definition of Done
 - Editing an existing plan's body in Notion or ClickUp updates the local plan file within one poll cycle, on par with Linear.
 - Enabling the feature on an existing remote does not retroactively overwrite local plans (seed-on-first-poll verified).
 - No pull↔push loop on any provider, including Notion's lossy round-trip.
 - Linear behaviour unchanged; all existing remote tests green.
+- **`switchboard-site` `remote-boards.md` updated per Phase 6** (provider table + "Poll content from remote" option + last-write-wins note; context-page line untouched), committed on the same branch.
