@@ -34,7 +34,7 @@ None blocking. Builds on the existing `_pollDescriptions` machinery and the per-
 
 Two product decisions are baked into this plan as defaults; flag them for confirmation:
 
-1. **Conflict resolution = last-write-wins by timestamp**, no merge dialog. The owner has stated conflicts are expected to be rare and acceptable. The existing hash check already prevents *no-op* clobbers; a genuine divergence resolves in favour of whichever side changed more recently (remote pull overwrites local only when the remote's `updatedAt`/`last_edited_time` is newer than the per-issue cursor). No 3-way UI in this plan.
+1. **Conflict resolution = last-write-wins by timestamp**, no merge dialog. The owner has stated conflicts are expected to be rare and acceptable. The existing hash check already prevents *no-op* clobbers; a genuine divergence resolves in favour of whichever side changed more recently (remote pull overwrites local only when the remote's `updatedAt`/`last_edited_time` is newer than the per-issue cursor). No 3-way UI in this plan. **Forward-compatibility:** implement the resolution as a *pluggable strategy* (last-write-wins now) rather than hard-coded — the follow-on `cross-platform-agent-collaboration` plan will add locking/turn-taking, and shouldn't require ripping this out. Concurrent edits are rare for one remote human but become the *normal* case once multiple agents collaborate on one plan.
 2. **Gating:** content-pull rides the existing **Full** remote mode plus a new **"Poll content from remote"** toggle (parallel to the existing "Poll comments from remote"), default **on** for new setups. Alternative: no toggle, always-on in Full mode. Recommend the toggle for symmetry and an escape hatch.
 
 ## Complexity Audit
