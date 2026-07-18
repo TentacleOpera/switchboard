@@ -83,6 +83,7 @@ Two product decisions are baked into this plan as defaults; flag them for confir
 **Files: `src/services/remote/NotionRemoteProvider.ts`, `src/services/RemoteControlService.ts`, `src/services/KanbanProvider.ts`**
 - Set `updatedAt` on Notion state deltas from `row.last_edited_time` (already read for `nextCursor`).
 - Add `fetchDescription(remoteId)` using the existing `fetchPageTitle` + `fetchBlocksRecursive` + `convertBlocksToMarkdown` path (the same one `importRemotePlan` uses at ~L415–417), returning `{ body, updatedAt }`.
+- **Preferred, if available:** evaluate Notion's **Markdown API** (Developer Platform, 2026 — read/write pages as markdown directly) in place of the block-fetch + `convertBlocksToMarkdown` round-trip. Reading the body as markdown natively is cleaner and likely sidesteps the lossy block round-trip that drives the ping-pong risk below. Weigh availability/token cost against the existing block path before committing.
 - On `pushContent`, register the pushed content's sha256 in the loop-prevention registry (extend the `onDescriptionPulled` mechanism, or add a sibling `onContentPushed`) so the pull comparison in `_pollDescriptions` uses the pushed hash and doesn't ping-pong on lossy re-render.
 
 ### Phase 4 — Setting + UI
