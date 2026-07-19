@@ -48,8 +48,6 @@ switchboard/**
 
 # Dev utilities (not extension runtime)
 docs/**
-!docs/how_to_use_switchboard.md
-!docs/switchboard_user_manual.md
 old skills/**
 old\ skills/**
 

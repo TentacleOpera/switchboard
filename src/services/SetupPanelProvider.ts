@@ -1538,22 +1538,8 @@ export class SetupPanelProvider implements vscode.Disposable {
     }
 
     private async _openDocs(): Promise<void> {
-        const manualPath = vscode.Uri.joinPath(this._extensionUri, 'docs', 'switchboard_user_manual.md');
-        try {
-            await vscode.workspace.fs.stat(manualPath);
-            await this._seams().commands.executeCommand('markdown.showPreview', manualPath);
-            return;
-        } catch {
-            // Manual not found — fall back to README.md
-        }
-
-        const readmePath = vscode.Uri.joinPath(this._extensionUri, 'README.md');
-        try {
-            await vscode.workspace.fs.stat(readmePath);
-            await this._seams().commands.executeCommand('markdown.showPreview', readmePath);
-        } catch {
-            this._seams().ui.showErrorMessage('Plugin documentation not found.');
-        }
+        const docsUrl = 'https://tentacleopera.github.io/switchboard-site/docs/getting-started/installation';
+        await this._seams().ui.openExternal(docsUrl);
     }
 
     private async _getHtml(webview: vscode.Webview): Promise<string> {

@@ -11423,13 +11423,8 @@ Each plan file must include:
                         }
                         break;
                     case 'openDocs': {
-                        const readmePath = path.join(this._extensionUri.fsPath, 'README.md');
-                        try {
-                            await fs.promises.stat(readmePath);
-                            this._seams().commands.executeCommand('markdown.showPreview', readmePath);
-                        } catch {
-                            this._seams().ui.showErrorMessage('Plugin README.md not found.');
-                        }
+                        const docsUrl = 'https://tentacleopera.github.io/switchboard-site/docs/getting-started/installation';
+                        this._seams().ui.openExternal(docsUrl);
                         break;
                     }
                     case 'toggleSilentSetup':

@@ -3488,7 +3488,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         }
 
         document.getElementById('btn-copy-tutorial-prompt')?.addEventListener('click', () => {
-            const prompt = 'Please read the Switchboard Comprehensive User Manual at docs/switchboard_user_manual.md (located at the extension root) — specifically sections 2 (Installation & First-Time Setup), 3 (Agent Roles & Configuration), and 5 (Planning Tools & Workflows) — and guide me through my Switchboard setup options. Present the setup steps as a numbered list and ask which one I\'d like help with first.';
+            const prompt = 'Read the Switchboard docs at https://tentacleopera.github.io/switchboard-site/docs/getting-started/ (Installation, Agents, Planning) and walk me through setup as a numbered list; ask which step I want help with first.';
             const btn = document.getElementById('btn-copy-tutorial-prompt');
             navigator.clipboard.writeText(prompt).then(() => {
                 if (btn) {
