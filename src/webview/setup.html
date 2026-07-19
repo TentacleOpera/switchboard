@@ -1473,6 +1473,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <span>Poll comments from remote</span>
                     </label>
 
+                    <!-- Content polling toggle — pulls remote body edits back into the local plan file -->
+                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+                        <input type="checkbox" id="remote-content">
+                        <span>Poll content from remote</span>
+                    </label>
+
                     <!-- Push toggle — grayed out if provider lacks push capability -->
                     <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;" id="remote-push-label">
                         <input type="checkbox" id="remote-push">
@@ -5486,6 +5492,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
                 const comments = document.getElementById('remote-comments');
                 if (comments) comments.checked = config.comments !== false;
+                const content = document.getElementById('remote-content');
+                if (content) content.checked = config.content !== false;
                 const push = document.getElementById('remote-push');
                 if (push) push.checked = config.push === true;
             }
@@ -5508,6 +5516,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 mode: modeFull && modeFull.checked ? 'full' : 'ingest',
                 push: document.getElementById('remote-push')?.checked === true,
                 comments: document.getElementById('remote-comments')?.checked !== false,
+                content: document.getElementById('remote-content')?.checked !== false,
             };
         }
 

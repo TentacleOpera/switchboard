@@ -67,3 +67,11 @@ switchboard-site (art + markup). This plan is tracked on the switchboard board.
 - Hero shows the real board screenshot.
 - `pixel-interchange-animation.md` closed as superseded.
 - Site build stays green.
+
+---
+
+## Completion Report (2026-07-19)
+
+Implemented the Act 5 WOTW radio-tower animated pixel SVG (`switchboard-site/public/assets/remote-control-detailed.svg`): 1280×440, transparent bg, lattice tower with legible pixel-font WOTW call-sign plate, staggered broadcast rings pulsing warm, the on-model UFO drifting in on a 6s master loop, a short-out (beacon stutter + sparks, sign goes dark) at 42%, then the switch — burst flash and the broadcast snapping back in cyan `#00f2fe` — before easing back to warm for a seamless loop; `prefers-reduced-motion` freezes on the post-switch cyan frame. Wired it into Act 5 in `src/pages/index.astro`, replacing the placeholder div. Act 4 (Artifacts) and the hero board shot are **blocked on user-captured screenshots** — no real captures exist anywhere in either repo; I scaffolded both slots with exact drop-in comments (`assets/docs-shots/artifacts-panel.png`, `assets/docs-shots/board-hero.png`) so they're one-line swaps once captured. Closed `pixel-interchange-animation.md` with a SUPERSEDED banner. Verified the SVG via xmllint + rendered preview (one ring-geometry asymmetry and a glow-merge issue caught and fixed); build/tests skipped per dispatch directives. Per the plan's User Review note: the animation awaits your visual approval.
+
+**Revision (2026-07-19):** per user feedback, the tower base is now a solid radio-station building — dark facade with the WOTW call-sign plate mounted on it, a centre door, and two lit windows that run warm on the carrier, go dark in the short-out, and glow cyan after the switch — replacing the open lattice base and floating sign.

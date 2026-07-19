@@ -49,3 +49,7 @@ Make every `DesignPanelProvider` verb host-agnostic: all ~62 arms run on injecte
 - Provider tests pass unchanged. All 62 arms pass under the test-seam bundle (no `vscode` reachable). Ratchet: 62/62, 0 shims.
 ### Manual / behavioral
 - Sample `POST /design/verb/<name>` calls return results in-body and match the webview path's effects.
+
+## Review Findings
+
+Reviewer pass 2026-07-17. Files changed by review: none in `DesignPanelProvider.ts` (comment fixes were in the sibling providers). **Verdict: PARTIAL.** The return-in-body contract — this subtask's core criterion — is only partly met (`analyze-verb-migration2`: return=50, break=65 across 68 arms); ~18 arms still `break` without returning their result, so those verbs remain unreadable over HTTP. Genuinely done and green under `parity:check`/`push-routing:check`: the generic allowlist+schema dispatcher, `DESIGN_VERB_SCHEMAS`, and shim deletion (`designService` = 0 refs). Remaining risks: (1) ~18 arms not yet return-in-body; (2) one residual `vscode.Uri.file` inside the HTML-preview arm (`asWebviewUri`, webview-bound) — so the completion report's "0 vscode refs in switch" is inaccurate; (3) the headless test exercises ~13 of 68 arms and predates this commit, leaving "all 62 arms under the test-seam bundle" unproven.

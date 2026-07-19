@@ -1,6 +1,8 @@
 import * as path from 'path';
 import type { KanbanDatabase, KanbanPlanRecord } from './KanbanDatabase';
 import type { RemoteProvider, RemoteStateDelta } from './remote/RemoteProvider';
+import type { ContentConflictResolver } from './remote/ContentConflictResolver';
+import { LastWriteWinsResolver } from './remote/ContentConflictResolver';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 
@@ -52,6 +54,8 @@ export interface RemoteConfig {
     push: boolean;
     /** Whether comment polling is active. */
     comments: boolean;
+    /** Whether plan-content polling is active (pull remote body edits back into the local plan file). */
+    content: boolean;
 }
 
 export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
@@ -61,7 +65,8 @@ export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
     pingFrequencySeconds: 60,
     mode: 'ingest',
     push: false,
-    comments: true
+    comments: true,
+    content: true
 };
 
 /**
@@ -106,6 +111,12 @@ interface RemoteControlDeps {
     setDescriptionCursor?: (kind: RemoteProviderKind, issueId: string, timestamp: string) => Promise<void>;
     /** Called after a description is pulled and written to disk. Registers the content hash for loop prevention. */
     onDescriptionPulled?: (issueId: string, contentHash: string) => void;
+    /**
+     * Conflict resolver for content-pull: decides whether a remote body should overwrite
+     * the local plan file. Defaults to `LastWriteWinsResolver` when not injected. The seam
+     * exists so a follow-on plan can swap in a locking/turn-taking resolver.
+     */
+    contentConflictResolver?: ContentConflictResolver;
     /** Resolve the workspace root for file path operations (plan files). */
     getWorkspaceRoot?: () => string;
     log?: (msg: string) => void;
@@ -190,6 +201,7 @@ export class RemoteControlService {
                 mode: parsed.mode === 'full' ? 'full' : 'ingest',
                 push: parsed.push === true,
                 comments: parsed.comments !== false, // default true
+                content: parsed.content !== false, // default true
             };
         } catch {
             return { ...DEFAULT_REMOTE_CONFIG };
@@ -207,6 +219,7 @@ export class RemoteControlService {
             mode: config.mode === 'full' ? 'full' : 'ingest',
             push: config.push === true,
             comments: config.comments !== false,
+            content: config.content !== false,
         };
         await db.setConfig(REMOTE_CONFIG_KEY, JSON.stringify(normalized));
         if (this._active) {
@@ -588,8 +601,27 @@ export class RemoteControlService {
      * advances after successful processing. Skips cards already refreshed by
      * `_applyStateMirror` in the same poll cycle (column+description changed together).
      *
-     * Only Linear is supported — Notion description pull is deferred. The provider's
-     * `fetchStateDeltas` must populate `description` and `updatedAt` on the deltas.
+     * Provider-agnostic. Two ways the body reaches the poller:
+     *  - Inline: `d.description` is populated on the delta row (Linear, ClickUp).
+     *  - Lazy:   `provider.fetchDescription(remoteId)` is called only for rows past
+     *            their cursor AND not `selfEdited` (Notion — body via the Markdown API).
+     *
+     * Echo guards (per provider):
+     *  - Linear:  byte-hash guard (`newHash === existingHash`) no-ops an own-push round-trip
+     *             (Linear descriptions round-trip byte-identically).
+     *  - Notion:  `d.selfEdited === true` (last_edited_by === botId) → advance cursor, write
+     *             nothing. Lossy markdown round-trip is irrelevant because the bot's own push
+     *             is invisible to the puller.
+     *  - ClickUp: cursor-advance-on-push (ContinuousSyncService calls `_onDescriptionSynced`
+     *             with the actual post-push `date_updated`). The byte guard is unreliable
+     *             here (ClickUp normalizes markdown on write), so the cursor advance is the
+     *             primary mitigation; a residual one-time reformat is accepted.
+     *
+     * First-enable safety: when the raw `remote.descriptionCursor.${kind}` key is absent
+     * (null/empty), baseline every current row's cursor to its `updatedAt` (or "now") and
+     * pull nothing this cycle. This prevents a mass-overwrite of local plans the first time
+     * content-polling turns on for an existing remote. The raw-key null-check (not the
+     * parsed-JSON default) is what distinguishes "never set" from "set but empty map".
      */
     private async _pollDescriptions(
         db: KanbanDatabase,
@@ -598,10 +630,35 @@ export class RemoteControlService {
         refreshedThisCycle: Set<string>
     ): Promise<void> {
         if (!this._deps.getDescriptionCursors || !this._deps.setDescriptionCursor) { return; }
-        if (provider.kind !== 'linear') { return; } // Linear-only for now
+
+        const config = await this.getConfig();
+        if (!config.content) { return; } // content polling gated by config
 
         const key = `remote.descriptionCursor.${provider.kind}`;
+
+        // Seed-on-first-poll: distinguish "no key" from "empty map" via the raw config value.
+        // _getDescriptionCursors returns {} for both; only the raw read tells them apart.
+        const rawCursorBlob = await db.getConfig(key);
+        if (!rawCursorBlob) {
+            // First-enable: baseline every tracked card's cursor to its current updatedAt (or
+            // "now" when the provider didn't supply one) and pull nothing this cycle.
+            const stateCursor = await db.getConfig(stateCursorKey(provider.kind));
+            const { deltas } = stateCursor
+                ? await provider.fetchStateDeltas(stateCursor)
+                : { deltas: [], nextCursor: '' };
+            const seed: Record<string, string> = {};
+            const nowIso = new Date().toISOString();
+            for (const d of deltas) {
+                if (!d.remoteId) { continue; }
+                seed[d.remoteId] = d.updatedAt || nowIso;
+            }
+            await db.setConfig(key, JSON.stringify(seed));
+            this._log(`First-enable: seeded ${Object.keys(seed).length} description cursor(s) for ${provider.kind}; no pulls this cycle.`);
+            return;
+        }
+
         const cursors = await this._deps.getDescriptionCursors(provider.kind);
+        const resolver = this._deps.contentConflictResolver || new LastWriteWinsResolver();
 
         // Re-fetch state deltas to get description data (same query, includes description).
         // The state cursor is used as the "since" timestamp — this is acceptable because
@@ -613,7 +670,7 @@ export class RemoteControlService {
         let cursorsChanged = false;
 
         for (const d of deltas) {
-            if (!d.description && !d.updatedAt) { continue; }
+            if (!d.description && !d.updatedAt && !provider.fetchDescription) { continue; }
             if (refreshedThisCycle.has(d.remoteId)) { continue; } // already refreshed by state mirror
 
             const plan = byRemoteId.get(d.remoteId);
@@ -622,14 +679,41 @@ export class RemoteControlService {
             const cursor = cursors[d.remoteId] || '';
             if (!d.updatedAt || d.updatedAt <= cursor) { continue; } // already synced
 
-            const pulledBody = d.description || '';
+            // Notion semantic echo guard: the bot's own push set last_edited_by = botId.
+            // Advance the cursor without writing — the markdown round-trip is irrelevant.
+            if (d.selfEdited === true) {
+                cursors[d.remoteId] = d.updatedAt;
+                cursorsChanged = true;
+                continue;
+            }
+
+            // Resolve the pulled body: inline (Linear/ClickUp) or lazy (Notion Markdown API).
+            let pulledBody = d.description || '';
+            let pulledUpdatedAt = d.updatedAt;
+            if (!pulledBody && provider.fetchDescription) {
+                try {
+                    const fetched = await provider.fetchDescription(d.remoteId);
+                    if (!fetched || !fetched.body || !fetched.body.trim()) {
+                        // Empty/missing body — never clobber, but advance cursor so we don't
+                        // re-fetch every poll. The empty-body guard below also covers this.
+                        cursors[d.remoteId] = d.updatedAt;
+                        cursorsChanged = true;
+                        continue;
+                    }
+                    pulledBody = fetched.body;
+                    if (fetched.updatedAt) { pulledUpdatedAt = fetched.updatedAt; }
+                } catch (e) {
+                    this._log(`fetchDescription failed for ${d.remoteId}: ${e instanceof Error ? e.message : String(e)} — cursor NOT advanced.`);
+                    continue;
+                }
+            }
+
             if (!pulledBody.trim()) { continue; } // never clobber with empty
 
             // Large description guard (matches maxContentSizeBytes in LiveSyncTypes)
             if (pulledBody.length > 102400) { continue; }
 
-            // Reconstruct full file content: preserve existing H1 title + pulled body.
-            // Linear description doesn't include the H1 — it was stripped before push.
+            // Conflict-resolver seam: decide whether the remote body should overwrite local.
             const workspaceRoot = this._deps.getWorkspaceRoot?.() || '';
             const planPath = path.isAbsolute(plan.planFile)
                 ? plan.planFile
@@ -637,17 +721,28 @@ export class RemoteControlService {
             let existingContent = '';
             try { existingContent = await fs.promises.readFile(planPath, 'utf8'); } catch { /* ok */ }
 
-            // Extract existing H1 title line
+            if (!resolver.shouldPull(pulledUpdatedAt, cursor, pulledBody, existingContent)) {
+                // Resolver says skip — advance cursor, write nothing.
+                cursors[d.remoteId] = pulledUpdatedAt;
+                cursorsChanged = true;
+                continue;
+            }
+
+            // Reconstruct full file content: preserve existing H1 title + pulled body.
+            // Linear/ClickUp descriptions don't include the H1 — it was stripped before push.
             const h1Match = existingContent.match(/^# .+\n?/);
             const h1Line = h1Match ? h1Match[0] : `# ${plan.topic || 'Untitled'}\n`;
             const newContent = h1Line + '\n' + pulledBody;
 
-            // Hash-based conflict check: if local content already matches what we'd write, skip
+            // Hash-based conflict check: if local content already matches what we'd write, skip.
+            // This is the Linear echo guard (byte-identical round-trip). For ClickUp it's a
+            // second line behind cursor-advance-on-push; for Notion the selfEdited guard
+            // already handled the echo case above.
             const newHash = crypto.createHash('sha256').update(newContent).digest('hex');
             const existingHash = crypto.createHash('sha256').update(existingContent).digest('hex');
             if (newHash === existingHash) {
                 // Already in sync — just advance cursor
-                cursors[d.remoteId] = d.updatedAt;
+                cursors[d.remoteId] = pulledUpdatedAt;
                 cursorsChanged = true;
                 continue;
             }
@@ -659,7 +754,7 @@ export class RemoteControlService {
             }
             try {
                 await fs.promises.writeFile(planPath, newContent, 'utf8');
-                cursors[d.remoteId] = d.updatedAt;
+                cursors[d.remoteId] = pulledUpdatedAt;
                 cursorsChanged = true;
                 this._log(`Pulled description for ${d.remoteId} → ${plan.planFile}.`);
             } catch (e) {

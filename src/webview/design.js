@@ -326,6 +326,9 @@
         // with small deltas, so it gets a stronger multiplier. When pan mode is
         // active, wheel drags the canvas instead.
         container.addEventListener('wheel', (e) => {
+            // Let the Inspect-mode tweak popup scroll its own content instead of
+            // hijacking the wheel to zoom the canvas underneath it.
+            if (e.target.closest('[id$="-tweak-popup"]')) return;
             e.preventDefault();
             const rect = container.getBoundingClientRect();
             const viewportEl = container.querySelector(viewportSelector);
@@ -346,7 +349,10 @@
         }, { passive: false });
 
         container.addEventListener('mousedown', (e) => {
-            if (e.button !== 0 || e.target.closest('.zoom-toolbar')) return;
+            // Exclude the toolbar and the Inspect-mode tweak popup: a mousedown
+            // here would preventDefault the popup textarea's caret/selection and
+            // start a phantom canvas pan.
+            if (e.button !== 0 || e.target.closest('.zoom-toolbar, [id$="-tweak-popup"]')) return;
             // Without this, grabbing an <img> starts a native drag and the pan dies.
             e.preventDefault();
             zoomState[tab].isPanning = true;
@@ -377,7 +383,7 @@
         });
 
         container.addEventListener('dblclick', (e) => {
-            if (e.target.closest('.zoom-toolbar')) return;
+            if (e.target.closest('.zoom-toolbar, [id$="-tweak-popup"]')) return;
             fitToContainer(tab, container, container.querySelector(viewportSelector));
         });
 

@@ -289,9 +289,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (!validation.ok) {
             throw new Error(`Invalid payload for TaskViewer verb '${verb}': ${validation.error}`);
         }
-        // VS Code is the host here; _handleMessage runs in-process. Command verbs
-        // return the route layer's {success:true} ack (most _handleMessage impls are
-        // void); read verbs emit their result over the WS hub (see plan).
+        // VS Code is the host here; _handleMessage runs in-process.
+        // TODO(verb-engine·5): the return-in-body contract is NOT yet applied to
+        // this provider's arms. Read verbs still push their result over the WS hub
+        // and `break`, so an HTTP caller receives only the route layer's
+        // {success:true} ack with no data — the "write-only reads" anti-pattern the
+        // A2b design record set out to eliminate. Migrate each arm to `return` its
+        // result (push kept additive) per a2b-verb-engine-05-taskviewer-provider.md.
         // `type` is set LAST so a payload `type` field can never override the
         // allowlist-checked verb, regardless of caller.
         return this._handleMessage({ ...(payload ?? {}), type: verb });

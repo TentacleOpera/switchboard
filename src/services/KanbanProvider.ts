@@ -46,6 +46,7 @@ import type { RemoteProvider } from './remote/RemoteProvider';
 import { LinearRemoteProvider } from './remote/LinearRemoteProvider';
 import { NotionRemoteProvider } from './remote/NotionRemoteProvider';
 import { ClickUpRemoteProvider } from './remote/ClickUpRemoteProvider';
+import { LastWriteWinsResolver } from './remote/ContentConflictResolver';
 import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { NotionFetchService } from './NotionFetchService';
 import { NotionBackupService } from './NotionBackupService';
@@ -786,8 +787,10 @@ export class KanbanProvider implements vscode.Disposable {
             (root) => this._getKanbanDb(root),
             // Unified push provider resolver — resolves the provider from the plan's remote IDs.
             (root, plan) => this._getPushProviderForPlan(root, plan),
-            // On successful Linear push, persist the description cursor for bidirectional sync.
-            (issueId, ts) => { void this._setDescriptionCursor('linear', issueId, ts); }
+            // On successful push, persist the description cursor for bidirectional sync.
+            // Kind-routed so ClickUp cursor-advance-on-push lands under the clickup key
+            // (Linear and Notion have their own echo guards; ClickUp needs this one).
+            (kind, issueId, ts) => { void this._setDescriptionCursor(kind, issueId, ts); }
         );
         this._disposables.push(this._continuousSync);
 
@@ -2115,12 +2118,15 @@ export class KanbanProvider implements vscode.Disposable {
             onComment: async (plan, body) => {
                 await this._remoteDispatchComment(resolved, plan, body);
             },
-            // Description sync deps (Linear bidirectional description sync)
+            // Description sync deps (bidirectional description sync — Linear/Notion/ClickUp)
             getDescriptionCursors: (kind) => this._getDescriptionCursors(kind),
             setDescriptionCursor: (kind, issueId, ts) => this._setDescriptionCursor(kind, issueId, ts),
             onDescriptionPulled: (issueId, hash) => {
                 this._continuousSync?.markExternallyWritten(issueId, hash);
             },
+            // Conflict-resolver seam: default last-write-wins. A follow-on plan can swap
+            // this for a locking/turn-taking resolver without touching _pollDescriptions.
+            contentConflictResolver: new LastWriteWinsResolver(),
             getWorkspaceRoot: () => resolved,
             log: (m) => this._outputChannel?.appendLine(m)
         });

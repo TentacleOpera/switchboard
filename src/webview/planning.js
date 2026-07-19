@@ -359,7 +359,10 @@
         }, { passive: false });
 
         container.addEventListener('mousedown', (e) => {
-            if (e.button !== 0 || e.target.closest('.zoom-toolbar')) return;
+            // Exclude the toolbar and the Inspect-mode tweak popup: a mousedown
+            // here would preventDefault the popup textarea's caret/selection and
+            // start a phantom canvas pan.
+            if (e.button !== 0 || e.target.closest('.zoom-toolbar, [id$="-tweak-popup"]')) return;
             // Without this, grabbing an <img> starts a native drag and the pan dies.
             e.preventDefault();
             zoomState[tab].isPanning = true;
@@ -390,7 +393,7 @@
         });
 
         container.addEventListener('dblclick', (e) => {
-            if (e.target.closest('.zoom-toolbar')) return;
+            if (e.target.closest('.zoom-toolbar, [id$="-tweak-popup"]')) return;
             fitToContainer(tab, container, container.querySelector(viewportSelector));
         });
 

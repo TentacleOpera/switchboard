@@ -29,8 +29,16 @@ export interface RemoteStateDelta {
     isFeatureCandidate?: boolean;
     /** ISO timestamp of the remote item's last update. Linear: issue.updatedAt. Notion: page.last_edited_time. */
     updatedAt?: string;
-    /** Remote item body/description. Linear: issue.description. Notion: undefined (deferred). */
+    /** Remote item body/description. Linear: issue.description. Notion: undefined (deferred — fetched lazily via fetchDescription). */
     description?: string;
+    /**
+     * Notion echo guard: true when the page's `last_edited_by` is the Switchboard
+     * integration bot itself (i.e. the change was our own outbound push). When true,
+     * `_pollDescriptions` advances the cursor without writing — the bot's own push
+     * is invisible to the puller regardless of markdown round-trip lossiness.
+     * Linear/ClickUp leave this undefined (they use the byte-hash guard + cursor-advance-on-push).
+     */
+    selfEdited?: boolean;
 }
 
 /** A single inbound comment from the remote agent. */
@@ -161,6 +169,18 @@ export interface RemoteProvider {
      * Pull-only providers log and return (no-op stub).
      */
     pushContent(remoteId: string, markdown: string): Promise<void>;
+
+    /**
+     * Lazily fetch the remote item's body/description for content-pull. Only
+     * providers whose `fetchStateDeltas` does NOT populate `description` inline
+     * implement this (Notion — body must be assembled via the Markdown API, not
+     * a single field on the delta row). `_pollDescriptions` calls this only for
+     * rows whose `updatedAt` is past their per-issue cursor AND `selfEdited` is
+     * not true, so the extra API call fires only when a real inbound edit is
+     * suspected. Returns `{ body, updatedAt }` or null if the body can't be
+     * fetched (deleted, truncated, permission error).
+     */
+    fetchDescription?(remoteId: string): Promise<{ body: string; updatedAt: string } | null>;
 
     /**
      * Push the project-level context bundle (Dev Docs + PRDs + constitution) to the

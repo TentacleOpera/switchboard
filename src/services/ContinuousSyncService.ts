@@ -8,6 +8,7 @@ import type { ClickUpSyncService } from './ClickUpSyncService';
 import type { LinearSyncService } from './LinearSyncService';
 import type { KanbanDatabase } from './KanbanDatabase';
 import type { RemoteProvider } from './remote/RemoteProvider';
+import type { RemoteProviderKind } from './RemoteControlService';
 import type { LiveSyncState, LiveSyncConfig, LiveSyncStatus } from '../models/LiveSyncTypes';
 import { DEFAULT_LIVE_SYNC_CONFIG } from '../models/LiveSyncTypes';
 
@@ -54,7 +55,7 @@ export class ContinuousSyncService implements vscode.Disposable {
     private readonly _getLinearService: (workspaceRoot: string) => LinearSyncService,
     private readonly _getKanbanDb: (workspaceRoot: string) => KanbanDatabase,
     private readonly _getPushProvider?: (workspaceRoot: string, plan: import('./KanbanDatabase').KanbanPlanRecord) => RemoteProvider | null,
-    private readonly _onDescriptionSynced?: (issueId: string, timestamp: string) => void
+    private readonly _onDescriptionSynced?: (kind: RemoteProviderKind, issueId: string, timestamp: string) => void
   ) {}
 
   /**
@@ -886,6 +887,16 @@ export class ContinuousSyncService implements vscode.Disposable {
       console.warn(`[ContinuousSync] ClickUp sync failed for ${plan.planFile}: ${result.error}`);
       throw new Error(result.error);
     }
+    // Cursor-advance-on-push (ClickUp echo mitigation): ClickUp's markdownDescription
+    // does NOT round-trip byte-identically (normalizes whitespace/spacing on write), so
+    // the byte-hash guard in _pollDescriptions will mismatch after every push and fire
+    // a spurious pull. Advancing the description cursor to the authoritative post-push
+    // `date_updated` makes the next poll's `d.updatedAt <= cursor` check skip the echo.
+    // Use the actual server timestamp (not local clock) — ClickUp's clock may skew by
+    // seconds. Residual risk: sub-second skew → one spurious reformat (not a ping-pong).
+    if (this._onDescriptionSynced && result.dateUpdated) {
+      this._onDescriptionSynced('clickup', plan.clickupTaskId, result.dateUpdated);
+    }
     // Update rate limit tracker from response headers (if available)
     // ClickUp returns X-RateLimit-Remaining and X-RateLimit-Reset
     return { skipped: false };
@@ -929,7 +940,7 @@ export class ContinuousSyncService implements vscode.Disposable {
     }
     // Persist description cursor on successful push (for bidirectional description sync).
     if (this._onDescriptionSynced) {
-      this._onDescriptionSynced(plan.linearIssueId, new Date().toISOString());
+      this._onDescriptionSynced('linear', plan.linearIssueId, new Date().toISOString());
     }
     return { skipped: false };
   }
@@ -997,15 +1008,42 @@ export class ContinuousSyncService implements vscode.Disposable {
 
     try {
       await provider.pushContent(remoteId, content);
-      // Persist description cursor on successful Linear push.
+      // Cursor-advance-on-push: prevents the next poll from treating our own push as an
+      // inbound edit. Linear: local clock is fine (byte-hash guard also covers it).
+      // ClickUp: needs the authoritative post-push `date_updated` because the byte-hash
+      // guard is unreliable (ClickUp normalizes markdown on write) — re-fetch the task
+      // to get it. Notion: no cursor advance here — the `selfEdited` semantic guard
+      // (last_edited_by === botId) handles the echo on the pull side.
       if (provider.kind === 'linear' && this._onDescriptionSynced) {
-        this._onDescriptionSynced(remoteId, new Date().toISOString());
+        this._onDescriptionSynced('linear', remoteId, new Date().toISOString());
+      } else if (provider.kind === 'clickup' && this._onDescriptionSynced) {
+        const postPushTs = await this._fetchClickUpDateUpdated(workspaceRoot, remoteId);
+        if (postPushTs) {
+          this._onDescriptionSynced('clickup', remoteId, postPushTs);
+        }
       }
       return { skipped: false };
     } catch (e) {
       console.warn(`[ContinuousSync] Remote sync failed for ${plan.planFile}: ${e instanceof Error ? e.message : String(e)}`);
       throw e;
     }
+  }
+
+  /**
+   * Re-fetch a ClickUp task to read its authoritative `date_updated` after a push.
+   * Used by `_syncToRemote` for cursor-advance-on-push (ClickUp echo mitigation).
+   * One extra GET per push (not per poll), per the remote-content-pull plan.
+   * Returns '' on any failure — the caller falls back to "no advance" (one spurious
+   * pull accepted, not a ping-pong).
+   */
+  private async _fetchClickUpDateUpdated(workspaceRoot: string, taskId: string): Promise<string> {
+    try {
+      const clickup = this._getClickUpService(workspaceRoot);
+      return await clickup.getTaskDateUpdated(taskId);
+    } catch (e) {
+      console.warn(`[ContinuousSync] _fetchClickUpDateUpdated failed for ${taskId}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    return '';
   }
 
   private async _checkIdlePlans(workspaceRoot: string): Promise<void> {

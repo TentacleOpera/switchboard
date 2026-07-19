@@ -92,12 +92,26 @@ export class NotionRemoteProvider implements RemoteProvider {
         const setup = await this._ensureSetup();
         if (!setup?.plansDatabaseId) { return { deltas: [], nextCursor: sinceCursor }; }
 
+        // Resolve the bot id (drives selfEdited echo guard for content-pull). Hoisted from
+        // fetchCommentDeltas so the state stream can also use it. Fail SAFE: if it can't be
+        // resolved, selfEdited is left undefined (the byte-hash guard + cursor-advance still
+        // defend against echoes, just less precisely for Notion's lossy markdown round-trip).
+        const botId = setup.botId || this._botId || (await this._deps.notion.getBotId()) || '';
+        if (botId) { this._botId = botId; }
+
         const rows = await this._queryDelta(setup.plansDatabaseId, 'last_edited_time', sinceCursor);
         const deltas: RemoteStateDelta[] = [];
         let nextCursor = sinceCursor;
         for (const row of rows) {
             const remoteId = String(row.id || '');
             const stateKey = String(row.properties?.['Kanban Column']?.select?.name || '').trim();
+            const lastEditedTime = String(row.last_edited_time || '');
+            // selfEdited echo guard: Notion API returns `last_edited_by` directly on
+            // database-query page objects (research-confirmed — no extra call). When the
+            // bot's own push bumped last_edited_time, last_edited_by.id === botId → skip
+            // the pull (advance cursor, write nothing) regardless of markdown round-trip.
+            const lastEditedById = String(row.last_edited_by?.id || '');
+            const selfEdited = !!(botId && lastEditedById && lastEditedById === botId);
             if (remoteId && stateKey) {
                 // Feature structure — read Is Feature checkbox + Feature relation (added by
                 // NotionBackupService._ensureFeatureProperties). If the properties don't
@@ -110,10 +124,11 @@ export class NotionRemoteProvider implements RemoteProvider {
                     stateKey,
                     parentRemoteId,
                     isFeatureCandidate: row.properties?.['Is Feature']?.checkbox === true,
+                    updatedAt: lastEditedTime || undefined,
+                    selfEdited,
                 });
             }
-            const ts = String(row.last_edited_time || '');
-            if (ts && ts > nextCursor) { nextCursor = ts; }
+            if (lastEditedTime && lastEditedTime > nextCursor) { nextCursor = lastEditedTime; }
         }
         return { deltas, nextCursor };
     }
@@ -159,6 +174,50 @@ export class NotionRemoteProvider implements RemoteProvider {
         // populates the select from the real board columns, so this is a direct mapping.
         const name = String(stateKey || '').trim();
         return name || undefined;
+    }
+
+    /**
+     * Lazy body fetch for content-pull — called by `_pollDescriptions` only for rows
+     * past their per-issue cursor AND not `selfEdited`. Uses the Notion Markdown API
+     * (`GET /v1/pages/{id}/markdown`) — a single call returning the page body as
+     * Enhanced Markdown, replacing the block-fetch + convertBlocksToMarkdown round-trip.
+     * Falls back to block-fetch when the Markdown API is unavailable for this workspace
+     * (e.g. integration lacks content capabilities) or when the response is truncated
+     * (>20K blocks) — the `selfEdited` guard works either way.
+     */
+    public async fetchDescription(remoteId: string): Promise<{ body: string; updatedAt: string } | null> {
+        try {
+            // Primary: Markdown API.
+            const { markdown, truncated, lastEditedTime } = await this._deps.notion.fetchPageMarkdown(remoteId);
+            if (truncated) {
+                // Pages >20K blocks return truncated — fall back to block-fetch for completeness.
+                this._log(`fetchDescription: ${remoteId} truncated via Markdown API — falling back to block-fetch.`);
+                return await this._fetchDescriptionViaBlocks(remoteId);
+            }
+            if (!markdown || !markdown.trim()) {
+                // Empty body — return null so the caller advances the cursor without clobbering.
+                return null;
+            }
+            return { body: markdown, updatedAt: lastEditedTime || '' };
+        } catch (e) {
+            // Markdown API unavailable for this workspace/page — fall back to block-fetch.
+            this._log(`fetchDescription: Markdown API failed for ${remoteId} (${e instanceof Error ? e.message : String(e)}) — falling back to block-fetch.`);
+            return await this._fetchDescriptionViaBlocks(remoteId);
+        }
+    }
+
+    /** Block-fetch fallback for fetchDescription (the importRemotePlan path). */
+    private async _fetchDescriptionViaBlocks(remoteId: string): Promise<{ body: string; updatedAt: string } | null> {
+        try {
+            const blocks = await this._deps.notion.fetchBlocksRecursive(remoteId);
+            const markdown = this._deps.notion.convertBlocksToMarkdown(blocks);
+            if (!markdown || !markdown.trim()) { return null; }
+            // Block-fetch doesn't return last_edited_time; caller uses the delta's updatedAt.
+            return { body: markdown, updatedAt: '' };
+        } catch (e) {
+            this._log(`fetchDescription block-fetch fallback failed for ${remoteId}: ${e instanceof Error ? e.message : String(e)}`);
+            return null;
+        }
     }
 
     public async refreshLocalPlanFromRemote(remoteId: string): Promise<void> {
@@ -398,11 +457,24 @@ export class NotionRemoteProvider implements RemoteProvider {
     }
 
     public async pushContent(remoteId: string, markdown: string): Promise<void> {
-        // Delegate to NotionFetchService.updatePageContent — it handles size guarding
-        // (1MB limit), block deletion, and chunked re-append as paragraph blocks.
-        const result = await this._deps.notion.updatePageContent(remoteId, markdown);
-        if (!result.success) {
-            throw new Error(`Notion pushContent failed for ${remoteId}: ${result.error || 'unknown error'}`);
+        // Primary: Notion Markdown API (`PATCH /v1/pages/{id}/markdown`) — a direct
+        // markdown write replacing the block-append path. The `selfEdited` semantic
+        // guard on the pull side (last_edited_by === botId) handles the echo regardless
+        // of whether the markdown round-trip is lossy (Notion-flavored markdown may
+        // normalize), so no special hash registration is needed here.
+        try {
+            const result = await this._deps.notion.updatePageMarkdown(remoteId, markdown);
+            if (result.success) { return; }
+            // Markdown API unavailable for this workspace/page (e.g. integration lacks
+            // content capabilities) — fall back to the block-append path.
+            this._log(`pushContent: Markdown API failed for ${remoteId} (${result.error}) — falling back to block-append.`);
+        } catch (e) {
+            this._log(`pushContent: Markdown API threw for ${remoteId} (${e instanceof Error ? e.message : String(e)}) — falling back to block-append.`);
+        }
+        // Fallback: block-append via the existing updatePageContent path.
+        const fallback = await this._deps.notion.updatePageContent(remoteId, markdown);
+        if (!fallback.success) {
+            throw new Error(`Notion pushContent failed for ${remoteId}: ${fallback.error || 'unknown error'}`);
         }
     }
 

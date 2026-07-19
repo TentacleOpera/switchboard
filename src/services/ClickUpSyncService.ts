@@ -2781,7 +2781,24 @@ export class ClickUpSyncService {
    * Used by ContinuousSyncService for live updates.
    * Does NOT change task status, list, or custom fields.
    */
-  async syncPlanContent(taskId: string, markdownContent: string, signal?: AbortSignal): Promise<{ success: boolean; error?: string }> {
+  /**
+   * Lightweight task fetch returning only the authoritative `date_updated` (ISO).
+   * Used by ContinuousSyncService for cursor-advance-on-push after a ClickUp content
+   * push — one extra GET per push (not per poll), per the remote-content-pull plan.
+   */
+  async getTaskDateUpdated(taskId: string): Promise<string> {
+    try {
+      const result = await this.httpRequest('GET', `/task/${taskId}`);
+      if (result.status !== 200) { return ''; }
+      const raw = result.data?.date_updated;
+      if (raw !== undefined && raw !== null && !isNaN(Number(raw))) {
+        return new Date(Number(raw)).toISOString();
+      }
+    } catch { /* fall through to empty */ }
+    return '';
+  }
+
+  async syncPlanContent(taskId: string, markdownContent: string, signal?: AbortSignal): Promise<{ success: boolean; error?: string; dateUpdated?: string }> {
     try {
       const config = await this.loadConfig();
       if (!config?.setupComplete) {
@@ -2798,7 +2815,18 @@ export class ClickUpSyncService {
       }, 10000, signal);
 
       if (response.status === 200) {
-        return { success: true };
+        // ClickUp v2 PUT /task/{id} returns the full updated task object, including
+        // `date_updated` (Unix epoch ms). Return it so the caller can advance the
+        // description cursor to the authoritative post-push timestamp — avoiding a
+        // timing-skew echo pull that `new Date().toISOString()` would risk (ClickUp's
+        // clock may differ from local by seconds). When the field is absent/invalid,
+        // fall back to nothing; the caller can decide to use the local clock.
+        const rawDateUpdated = response.data?.date_updated;
+        let dateUpdatedIso = '';
+        if (rawDateUpdated !== undefined && rawDateUpdated !== null && !isNaN(Number(rawDateUpdated))) {
+          dateUpdatedIso = new Date(Number(rawDateUpdated)).toISOString();
+        }
+        return { success: true, dateUpdated: dateUpdatedIso || undefined };
       } else {
         return { success: false, error: `ClickUp API error: ${response.status}` };
       }

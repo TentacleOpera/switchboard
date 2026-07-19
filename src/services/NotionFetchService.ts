@@ -307,6 +307,60 @@ export class NotionFetchService {
     return titleProp?.title?.[0]?.plain_text || result.data?.title?.[0]?.plain_text || 'Untitled';
   }
 
+  // ── Markdown API (Enhanced Markdown read/write) ─────────────
+  //
+  // Notion's Markdown API (GA per the API reference — "Working with Markdown Content")
+  // reads/writes page bodies as "Enhanced Markdown" in a single call, replacing the
+  // block-fetch + convertBlocksToMarkdown round-trip. Used by the bidirectional
+  // content-pull path for Notion: fetchDescription (GET) and pushContent (PATCH).
+  // Pages >20K blocks return `truncated: true` + `unknown_block_ids` — callers handle.
+
+  /**
+   * Fetch a page's body as Enhanced Markdown via `GET /v1/pages/{id}/markdown`.
+   * Returns the markdown string, or '' on any failure (caller guards empty writes).
+   * When `truncated: true` is present in the response, the body is still returned
+   * (partial) — the caller decides whether to log/skip or fall back to block-fetch.
+   */
+  async fetchPageMarkdown(pageId: string): Promise<{ markdown: string; truncated: boolean; lastEditedTime: string }> {
+    const result = await this.httpRequest('GET', `/pages/${pageId}/markdown`, undefined, 15000);
+    if (result.status !== 200) {
+      throw new Error(`Notion markdown fetch failed (HTTP ${result.status}): ${JSON.stringify(result.data)?.slice(0, 200)}`);
+    }
+    // The markdown endpoint returns the page body as a markdown string. The response
+    // shape per Notion API: { markdown: string, truncated?: boolean, unknown_block_ids?: string[] }.
+    // Some responses return the markdown directly as the data root.
+    const data = result.data;
+    const markdown = typeof data === 'string'
+      ? data
+      : String(data?.markdown || data?.content || '');
+    const truncated = data?.truncated === true || (Array.isArray(data?.unknown_block_ids) && data.unknown_block_ids.length > 0);
+    const lastEditedTime = String(data?.last_edited_time || '');
+    return { markdown, truncated, lastEditedTime };
+  }
+
+  /**
+   * Overwrite a page's body with Enhanced Markdown via `PATCH /v1/pages/{id}/markdown`.
+   * Replaces the block-append push path with a direct markdown write. Returns success
+   * + the post-write `last_edited_time` when the API exposes it (used for cursor advance,
+   * though the `selfEdited` echo guard makes it unnecessary on the pull side).
+   */
+  async updatePageMarkdown(pageId: string, markdown: string): Promise<{ success: boolean; error?: string; lastEditedTime?: string }> {
+    try {
+      const MAX_CONTENT_SIZE = 1024 * 1024; // 1MB
+      if (Buffer.byteLength(markdown, 'utf8') > MAX_CONTENT_SIZE) {
+        return { success: false, error: 'Content exceeds 1MB size limit for sync' };
+      }
+      const result = await this.httpRequest('PATCH', `/pages/${pageId}/markdown`, { markdown }, 15000);
+      if (result.status < 200 || result.status >= 300) {
+        return { success: false, error: `Notion markdown update failed (HTTP ${result.status}): ${JSON.stringify(result.data)?.slice(0, 200)}` };
+      }
+      const lastEditedTime = String(result.data?.last_edited_time || '');
+      return { success: true, lastEditedTime: lastEditedTime || undefined };
+    } catch (err: any) {
+      return { success: false, error: String(err) };
+    }
+  }
+
   // ── Block Fetching ──────────────────────────────────────────
 
   /**
