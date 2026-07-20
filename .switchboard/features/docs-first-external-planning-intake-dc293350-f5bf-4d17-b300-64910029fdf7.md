@@ -17,9 +17,11 @@ Make an already-possible workflow discoverable: point an agent at your docs, hav
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Merge the Dev Docs tab into the Docs tab](../plans/merge-dev-docs-into-docs-tab.md) — **CODER CODED**
-- [ ] [Build the Create Plans tab](../plans/create-plans-tab-docs-only-agent-intake.md) — **CODER CODED**
-- [ ] [Delete the project-context auto-bundle feature](../plans/delete-project-context-auto-bundle.md) — **CODER CODED**
-- [ ] [Remove the NotebookLM export](../plans/remove-notebooklm-export.md) — **CODER CODED**
+- [ ] [Merge the Dev Docs tab into the Docs tab](../plans/merge-dev-docs-into-docs-tab.md) — **CODE REVIEWED**
+- [ ] [Build the Create Plans tab](../plans/create-plans-tab-docs-only-agent-intake.md) — **CODE REVIEWED**
+- [ ] [Delete the project-context auto-bundle feature](../plans/delete-project-context-auto-bundle.md) — **CODE REVIEWED**
+- [ ] [Remove the NotebookLM export](../plans/remove-notebooklm-export.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+## Review Findings
 
+Feature-level review found the dispatch's "implementation complete" claim wrong: the working tree at review start did not compile (three independent breaks from the half-done auto-bundle deletion) and the flagship Create Plans tab was entirely absent, with only the NotebookLM removal and the frontend half of the Dev Docs merge landed; a concurrent session was also still writing to `PlanningPanelProvider.ts` mid-review and was waited out, then its duplicate `draftImproveLocalDoc` handler reconciled into one. All four subtasks were completed in-place during review — Dev Docs backend deleted, Feature A fully removed (Feature B PRD-injection preserved), Create Plans built end-to-end (tab, handlers, jszip docs bundler, projectName paste-back threading) — and the catalog/allowlist regenerated. Verification: every subtask plan's grep passes, catalog drift check clean, `node --check` on planning.js passes; compile and tests were skipped per dispatch flags, so `npm run build` plus a manual pass over the Docs tab buttons, Remote tab, and the zip→prompt→paste-back loop is the outstanding validation. Files changed: `PlanningPanelProvider.ts`, `SetupPanelProvider.ts`, `TaskViewerProvider.ts`, `extension.ts`, `ContextBundler.ts`, four `remote/*` files, `setup.html`, `planning.html`, `planning.js`, `package.json`(+lock), regenerated `protocol-catalog.json`/`verbAllowlist.ts`.

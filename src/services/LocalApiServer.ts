@@ -2220,9 +2220,28 @@ export class LocalApiServer {
                 return;
             }
             const wsId = await this._wsId(db);
-            const ok = field === 'project'
-                ? await db.updatePlanProjectByPlanFile(record.planFile, wsId, value)
-                : await db.updateComplexityByPlanFile(record.planFile, wsId, value);
+            if (field === 'project') {
+                // Invariant-aware variant so a direct subtask project change is rejected
+                // with 400 (the subtask's project is governed by its feature). The auth
+                // check above already ran, so the reject is post-auth — no planId-exists
+                // info leak to an unauthenticated caller. Feature-target changes cascade
+                // to subtasks inside updatePlanProjectByPlanFileInvariant.
+                const result = await db.updatePlanProjectByPlanFileInvariant(record.planFile, wsId, value);
+                if (!result.ok) {
+                    if (result.reason === 'subtask_project_governed_by_feature') {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: 'A subtask\'s project is governed by its feature; set the feature\'s project instead.' }));
+                        return;
+                    }
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Failed to set project for plan.' }));
+                    return;
+                }
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, cascadedSubtasks: result.cascadedSubtasks }));
+                return;
+            }
+            const ok = await db.updateComplexityByPlanFile(record.planFile, wsId, value);
             res.writeHead(ok ? 200 : 500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: ok }));
         } catch (err) {

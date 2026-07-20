@@ -186,3 +186,9 @@ _(None. All claims verified by reading the actual source: the three project-set 
 ---
 
 **Recommendation:** Complexity 5 (mixed — routine propagate/cascade writes plus two moderate, well-scoped risks: the two-sink guard installation and the guard-vs-propagate ordering). **Send to Coder.**
+
+---
+
+## Completion Summary
+
+Implemented the subtask-project inheritance invariant across both project-set sinks, the feature-attach paths, and an idempotent startup reconcile. Files changed: `src/services/KanbanDatabase.ts` (added `_enforceProjectInvariantOnRows` helper, `setProjectForPlansInvariant`, `updatePlanProjectByPlanFileInvariant`, `reconcileSubtaskProjectInheritance`; rewrote `setProjectForPlans` and `updatePlanProjectByPlanFile` as back-compat boolean wrappers; wired the reconcile into `_initialize` after migrations), `src/services/KanbanProvider.ts` (propagate-on-attach in `assignPlansToFeature` and `createFeatureFromPlanIds` via `bypassSubtaskGuard:true`; webview `assignSelectedToProject` now uses the invariant variant and surfaces a toast on reject; detach comment in `_removeSubtaskFromFeature`), and `src/services/LocalApiServer.ts` (`_handlePlanFieldUpdate` project branch uses the invariant variant and emits 400 on subtask-reject). The cascade UPDATE has no status filter (invariant holds for all subtasks); the reconcile uses `IS NOT` for NULL-safe comparison and runs every startup, not version-gated. No issues encountered; verification was read-back only per session directives (SKIP COMPILATION, SKIP TESTS).

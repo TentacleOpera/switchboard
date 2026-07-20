@@ -3,8 +3,7 @@ import type { KanbanDatabase, KanbanPlanRecord } from '../KanbanDatabase';
 import type { NotionFetchService } from '../NotionFetchService';
 import type {
     RemoteProvider, RemoteStateDelta, RemoteCommentDelta,
-    RemoteProviderCapabilities, ProjectContextBundle, ProjectContextPushResult,
-    ArchiveResult
+    RemoteProviderCapabilities, ArchiveResult
 } from './RemoteProvider';
 import { loadNotionRemoteSetup, saveNotionRemoteSetup, type NotionRemoteSetup } from './notionRemoteConfig';
 import { importRemoteMarkdownPlan } from './importRemotePlan';
@@ -40,7 +39,7 @@ const LIMITER_MS = 350;       // Notion ~3 req/sec
 
 export class NotionRemoteProvider implements RemoteProvider {
     public readonly kind = 'notion' as const;
-    public readonly capabilities: RemoteProviderCapabilities = { pull: true, push: true, projectContextPush: true, archive: true };
+    public readonly capabilities: RemoteProviderCapabilities = { pull: true, push: true, archive: true };
     private _deps: NotionRemoteProviderDeps;
     private _setup: NotionRemoteSetup | null = null;
     private _botId = '';

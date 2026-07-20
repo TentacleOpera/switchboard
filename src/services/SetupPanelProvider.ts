@@ -1391,23 +1391,6 @@ export class SetupPanelProvider implements vscode.Disposable {
                     });
                     break;
                 }
-                case 'getProjectContextSyncStatus': {
-                    const payload = await this._kanbanProvider?.projectContextGetStatus(message.workspaceRoot);
-                    if (payload) { this.postMessage(payload); }
-                    break;
-                }
-                case 'setProjectContextSyncEnabled': {
-                    const payload = await this._kanbanProvider?.projectContextSetEnabled(message.workspaceRoot, message.enabled === true);
-                    if (payload) { this.postMessage(payload); }
-                    break;
-                }
-                case 'projectContextSyncNow': {
-                    this.postMessage({ type: 'projectContextSyncRunning' });
-                    const payload = await this._kanbanProvider?.projectContextSyncNow(message.workspaceRoot, { auto: false });
-                    if (payload) { this.postMessage(payload); }
-                    else { this.postMessage({ type: 'projectContextSyncStatus', state: null, error: 'No workspace resolved' }); }
-                    break;
-                }
                 case 'getAgentDirCleanupState': {
                     const state = await this._getAgentDirCleanupState();
                     this.postMessage({ type: 'agentDirCleanupState', ...state });

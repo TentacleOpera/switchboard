@@ -2646,31 +2646,75 @@ export class KanbanDatabase {
      * → project_id null + keep the denormalized `project` string (matches the
      * existing insertFileDerivedPlan COALESCE behavior). Returns false on 0 rows
      * (race with delete) so the caller can defer.
+     *
+     * Back-compat boolean wrapper around `updatePlanProjectByPlanFileInvariant`.
+     * Returns true only on a successful write; false on not-found, DB error, OR
+     * subtask-reject (the subtask's project is governed by its feature). The API
+     * caller uses `updatePlanProjectByPlanFileInvariant` directly to distinguish
+     * reject from not-found and emit a 400.
      */
     public async updatePlanProjectByPlanFile(
         planFile: string,
         workspaceId: string,
         projectName: string
     ): Promise<boolean> {
+        const result = await this.updatePlanProjectByPlanFileInvariant(planFile, workspaceId, projectName);
+        return result.ok === true;
+    }
+
+    /**
+     * Invariant-aware variant of `updatePlanProjectByPlanFile`. Enforces:
+     *   plan.feature_id != '' ⟹ plan.project == feature.project && plan.project_id == feature.project_id.
+     *
+     * Single-row (keyed by plan_file). Classification:
+     *   - is_feature === 1 → write the feature's project, then cascade to ALL its subtasks.
+     *   - feature_id != '' && !bypassSubtaskGuard → REJECT (reason: subtask_project_governed_by_feature).
+     *   - feature_id != '' && bypassSubtaskGuard → write directly (feature-attach propagate path).
+     *   - otherwise (loose plan) → write directly.
+     *
+     * Returns `{ ok: true }` on a successful write (with cascadedSubtasks populated when
+     * the target was a feature), or `{ ok: false, reason }` on not-found / reject / DB error.
+     */
+    public async updatePlanProjectByPlanFileInvariant(
+        planFile: string,
+        workspaceId: string,
+        projectName: string,
+        opts?: { bypassSubtaskGuard?: boolean }
+    ): Promise<{
+        ok: boolean;
+        reason?: 'not_found' | 'subtask_project_governed_by_feature' | 'db_error';
+        rejectedPlanId?: string;
+        cascadedSubtasks: string[];
+    }> {
         const normalized = this._ensureRelativePlanFile(planFile);
-        const projectId = await this.resolveProjectId(projectName, workspaceId);
+        if (!(await this.ensureReady()) || !this._db) return { ok: false, reason: 'db_error', cascadedSubtasks: [] };
+        const bypass = !!opts?.bypassSubtaskGuard;
+        const row = await this.getPlanByPlanFile(normalized, workspaceId);
+        if (!row) {
+            console.warn(`[KanbanDatabase] updatePlanProjectByPlanFileInvariant: no row for planFile=${normalized}`);
+            return { ok: false, reason: 'not_found', cascadedSubtasks: [] };
+        }
+        if (row.featureId && row.featureId !== '' && !bypass) {
+            return { ok: false, reason: 'subtask_project_governed_by_feature', rejectedPlanId: row.planId, cascadedSubtasks: [] };
+        }
+        let projectId: number | null = null;
+        if (projectName && projectName !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
+            projectId = await this.resolveProjectId(projectName, workspaceId);
+        }
+        const effectiveProject = (projectName && projectName !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) ? projectName : '';
         const now = new Date().toISOString();
-        if (!(await this.ensureReady()) || !this._db) return false;
         try {
-            this._db.run(
-                'UPDATE plans SET project = ?, project_id = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
-                [projectName || '', projectId, now, normalized, workspaceId]
+            const { rejectedSubtasks, cascadedSubtasks } = await this._enforceProjectInvariantOnRows(
+                [row], effectiveProject, projectId, bypass, now
             );
-            const affected = this._db.getRowsModified();
-            await this._persist();
-            if (affected === 0) {
-                console.warn(`[KanbanDatabase] updatePlanProjectByPlanFile: 0 rows affected for planFile=${normalized} (race with delete?)`);
-                return false;
+            if (rejectedSubtasks.length > 0) {
+                return { ok: false, reason: 'subtask_project_governed_by_feature', rejectedPlanId: rejectedSubtasks[0], cascadedSubtasks: [] };
             }
-            return true;
+            await this._persist();
+            return { ok: true, cascadedSubtasks };
         } catch (error) {
-            console.error('[KanbanDatabase] updatePlanProjectByPlanFile failed:', error);
-            return false;
+            console.error('[KanbanDatabase] updatePlanProjectByPlanFileInvariant failed:', error);
+            return { ok: false, reason: 'db_error', cascadedSubtasks: [] };
         }
     }
 
@@ -3474,39 +3518,128 @@ export class KanbanDatabase {
         }
     }
 
+    /**
+     * Shared guard + cascade for the subtask-project invariant. For each target row:
+     *   - is_feature === 1 → write the feature's project, then cascade to ALL its
+     *     subtasks (one UPDATE keyed by feature_id, no status filter — the invariant
+     *     holds for completed/archived subtasks too).
+     *   - feature_id != '' && !bypassSubtaskGuard → REJECT (collect planId, do NOT write).
+     *     The subtask's project is governed by its feature; the caller must set the
+     *     feature's project instead.
+     *   - feature_id != '' && bypassSubtaskGuard → write directly. This is the
+     *     feature-attach propagate path (assignPlansToFeature / createFeatureFromPlanIds),
+     *     which intentionally bypasses the guard to stamp the feature's project onto a
+     *     just-linked subtask.
+     *   - otherwise (loose plan) → write directly.
+     *
+     * Does NOT call _persist per-row; the caller does a single _persist at the end so the
+     * whole batch is one debounced flush. Returns the per-row classification so callers
+     * (webview/API) can surface a 400/toast on reject.
+     */
+    private async _enforceProjectInvariantOnRows(
+        rows: KanbanPlanRecord[],
+        projectName: string,
+        projectId: number | null,
+        bypassSubtaskGuard: boolean,
+        now: string
+    ): Promise<{ rejectedSubtasks: string[]; cascadedSubtasks: string[] }> {
+        const rejected: string[] = [];
+        const cascaded: string[] = [];
+        if (!this._db) return { rejectedSubtasks: rejected, cascadedSubtasks: cascaded };
+        for (const row of rows) {
+            if (row.isFeature === 1) {
+                // Write the feature's own project.
+                this._db.run(
+                    'UPDATE plans SET project_id = ?, project = ?, updated_at = ? WHERE plan_id = ?',
+                    [projectId, projectName || '', now, row.planId]
+                );
+                // Cascade: every subtask of this feature inherits the feature's project.
+                // One UPDATE — the feature row we just wrote is the source of truth, not
+                // getSubtasksByFeatureId (which would race with concurrent subtask edits).
+                // No status filter: the invariant holds for all subtasks regardless of
+                // status (a completed subtask with a divergent project is still wrong, and
+                // the startup reconcile repairs the same set).
+                this._db.run(
+                    `UPDATE plans SET project_id = ?, project = ?, updated_at = ?
+                     WHERE feature_id = ? AND feature_id != ''`,
+                    [projectId, projectName || '', now, row.planId]
+                );
+                // Collect cascaded subtask planIds for caller reporting (matches the UPDATE above).
+                const subStmt = this._db.prepare(
+                    `SELECT plan_id FROM plans WHERE feature_id = ? AND feature_id != ''`,
+                    [row.planId]
+                );
+                try { while (subStmt.step()) cascaded.push(String(subStmt.getAsObject().plan_id)); } finally { subStmt.free(); }
+            } else if (row.featureId && row.featureId !== '' && !bypassSubtaskGuard) {
+                rejected.push(row.planId);
+            } else {
+                this._db.run(
+                    'UPDATE plans SET project_id = ?, project = ?, updated_at = ? WHERE plan_id = ?',
+                    [projectId, projectName || '', now, row.planId]
+                );
+            }
+        }
+        return { rejectedSubtasks: rejected, cascadedSubtasks: cascaded };
+    }
+
+    /**
+     * Invariant-aware variant of `setProjectForPlans`. Enforces:
+     *   plan.feature_id != '' ⟹ plan.project == feature.project && plan.project_id == feature.project_id.
+     *
+     * Keyed by plan_id/session_id (matches the original UPDATE predicate). Returns a
+     * structured result so the webview `assignSelectedToProject` handler can surface a
+     * toast on reject and the API can emit a 400. `bypassSubtaskGuard: true` is used by
+     * the feature-attach propagate path (assignPlansToFeature / createFeatureFromPlanIds)
+     * to stamp a feature's project onto a just-linked subtask without tripping the guard.
+     */
+    public async setProjectForPlansInvariant(
+        workspaceId: string,
+        planIds: string[],
+        projectName: string | null,
+        opts?: { bypassSubtaskGuard?: boolean }
+    ): Promise<{ ok: boolean; rejectedSubtasks: string[]; cascadedSubtasks: string[] }> {
+        if (!(await this.ensureReady()) || !this._db) return { ok: false, rejectedSubtasks: [], cascadedSubtasks: [] };
+        if (planIds.length === 0) return { ok: true, rejectedSubtasks: [], cascadedSubtasks: [] };
+        const bypass = !!opts?.bypassSubtaskGuard;
+        let projectId: number | null = null;
+        const effectiveProject = (projectName && projectName !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) ? projectName : '';
+        if (projectName && projectName !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
+            projectId = await this.resolveProjectId(projectName, workspaceId);
+        }
+        const now = new Date().toISOString();
+        try {
+            const placeholders = planIds.map(() => '?').join(', ');
+            const stmt = this._db.prepare(
+                `SELECT ${PLAN_COLUMNS} FROM plans WHERE workspace_id = ? AND (plan_id IN (${placeholders}) OR session_id IN (${placeholders}))`,
+                [workspaceId, ...planIds, ...planIds]
+            );
+            const rows = this._readRows(stmt);
+            const { rejectedSubtasks, cascadedSubtasks } = await this._enforceProjectInvariantOnRows(
+                rows, effectiveProject, projectId, bypass, now
+            );
+            await this._persist();
+            return { ok: true, rejectedSubtasks, cascadedSubtasks };
+        } catch (error) {
+            console.error(`[KanbanDatabase] setProjectForPlansInvariant failed:`, error);
+            return { ok: false, rejectedSubtasks: [], cascadedSubtasks: [] };
+        }
+    }
+
+    /**
+     * Back-compat boolean wrapper around `setProjectForPlansInvariant`. Returns true only
+     * when the write succeeded with zero rejections. The import path (TaskViewerProvider
+     * plan-import-with-project) and plan-create path (assignPlansToProject → here) target
+     * NEW plans with no feature_id, so the guard is a no-op there. The webview
+     * `assignSelectedToProject` handler uses the invariant variant directly to surface
+     * a toast on reject.
+     */
     public async setProjectForPlans(
         workspaceId: string,
         planIds: string[],
         projectName: string | null
     ): Promise<boolean> {
-        if (!(await this.ensureReady()) || !this._db) return false;
-        if (planIds.length === 0) return true;
-
-        let projectId: number | null = null;
-        if (projectName && projectName !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
-            const stmt = this._db.prepare(
-                'SELECT id FROM projects WHERE name = ? AND workspace_id = ?',
-                [projectName, workspaceId]
-            );
-            if (stmt.step()) {
-                projectId = Number(stmt.getAsObject().id);
-            }
-            stmt.free();
-        }
-
-        const now = new Date().toISOString();
-        const placeholders = planIds.map(() => '?').join(', ');
-        const query = `UPDATE plans SET project_id = ?, project = ?, updated_at = ? WHERE workspace_id = ? AND (plan_id IN (${placeholders}) OR session_id IN (${placeholders}))`;
-        const params: unknown[] = [projectId, projectName || '', now, workspaceId, ...planIds, ...planIds];
-
-        try {
-            this._db.run(query, params);
-            await this._persist();
-            return true;
-        } catch (error) {
-            console.error(`[KanbanDatabase] Failed to set project for plans:`, error);
-            return false;
-        }
+        const result = await this.setProjectForPlansInvariant(workspaceId, planIds, projectName);
+        return result.ok && result.rejectedSubtasks.length === 0;
     }
 
     public async getWorktrees(): Promise<WorktreeRow[]> {
@@ -3904,6 +4037,49 @@ export class KanbanDatabase {
      * and settle BEFORE the first board read on activation so no reader observes a double-home.
      * Returns the count of cold duplicates removed.
      */
+    /**
+     * Idempotent startup reconcile for the subtask-project invariant:
+     *   plan.feature_id != '' ⟹ plan.project == feature.project && plan.project_id == feature.project_id.
+     *
+     * Repairs any subtask whose project/project_id has drifted from its feature's. Runs
+     * EVERY startup (NOT a V-numbered migration) so future drift from bugs, direct DB
+     * edits, or stale sql.js snapshot flushes is always repaired before the first board
+     * read. A V-numbered migration would repair legacy rows once and leave future drift
+     * unrepaired; this invariant is a live correctness check, not a column migration.
+     *
+     * Uses `IS NOT` for NULL-safe comparison (SQLite `!=` treats NULL as not-equal, but
+     * `IS NOT` is explicit and matches the V38 backfill's intent). Returns the count of
+     * repaired rows; logs when nonzero.
+     */
+    public async reconcileSubtaskProjectInheritance(): Promise<number> {
+        if (!(await this.ensureReady()) || !this._db) return 0;
+        try {
+            const now = new Date().toISOString();
+            this._db.run(
+                `UPDATE plans
+                 SET project = (SELECT f.project FROM plans f WHERE f.plan_id = plans.feature_id),
+                     project_id = (SELECT f.project_id FROM plans f WHERE f.plan_id = plans.feature_id),
+                     updated_at = ?
+                 WHERE feature_id IS NOT NULL AND feature_id != ''
+                   AND EXISTS (
+                       SELECT 1 FROM plans f
+                       WHERE f.plan_id = plans.feature_id
+                         AND (f.project IS NOT plans.project OR f.project_id IS NOT plans.project_id)
+                   )`,
+                [now]
+            );
+            const repaired = this._db.getRowsModified();
+            if (repaired > 0) {
+                console.log(`[KanbanDatabase] reconcileSubtaskProjectInheritance: repaired ${repaired} subtask row(s)`);
+                await this._persist();
+            }
+            return repaired;
+        } catch (e) {
+            console.warn('[KanbanDatabase] reconcileSubtaskProjectInheritance failed:', e);
+            return 0;
+        }
+    }
+
     public async reconcileHotCold(): Promise<number> {
         if (!(await this.ensureReady()) || !this._db) return 0;
         // Open cold when the archive file exists even if no instance is cached yet
@@ -6145,6 +6321,17 @@ export class KanbanDatabase {
                 wsId = crypto.createHash('sha256').update(this._workspaceRoot).digest('hex').slice(0, 16);
             }
             await this._runConfigMigrations();
+
+            // Subtask-project invariant reconcile: runs EVERY startup (NOT version-gated)
+            // so any drift (a bug, a direct DB edit, a stale sql.js snapshot flush) is
+            // repaired before the first board read. Idempotent — 0 rows on a clean DB.
+            // Slot is after all V-numbered migrations (column schema current) and after
+            // _runConfigMigrations, but before the first board read.
+            try {
+                await this.reconcileSubtaskProjectInheritance();
+            } catch (e) {
+                console.warn('[KanbanDatabase] startup reconcileSubtaskProjectInheritance failed:', e);
+            }
 
             return true;
         } catch (error) {

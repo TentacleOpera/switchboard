@@ -1515,27 +1515,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <span id="copy-linear-agent-skill-status" style="font-size:11px; color:var(--text-secondary); margin-left:8px;"></span>
                     </div>
 
-                    <!-- Project-context sync: Dev Docs + PRDs + constitution → Notion context
-                         page + Linear project docs, so the remote agent plans from real context. -->
-                    <div style="margin-top:6px; margin-bottom:12px; padding-top:10px; border-top:1px solid var(--border-color, rgba(127,127,127,0.2));">
-                        <div class="section-label" style="font-size:11px; margin-bottom:6px;">Project Context Sync</div>
-                        <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
-                            Mirrors this workspace's <strong>Dev Docs + project PRDs + constitution</strong> to the
-                            remote — a "Switchboard Project Context" page in Notion and a project document in
-                            Linear — so the remote planning agent works from real context instead of the card
-                            text alone. Switchboard is the source of truth; remote edits are overwritten.
-                        </div>
-                        <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
-                            <input type="checkbox" id="remote-context-auto">
-                            <span>Auto-sync after saving a Dev Doc, PRD, or the constitution</span>
-                        </label>
-                        <div style="display:flex; align-items:center; gap:10px;">
-                            <button id="btn-context-sync-now" class="action-btn">Sync Context Now</button>
-                            <span id="remote-context-status" style="font-size:10px; color:var(--text-secondary);"></span>
-                        </div>
-                        <div id="remote-context-last-result" style="margin-top:6px; font-size:10px; color:var(--text-secondary);"></div>
-                    </div>
-
                     <!-- Notion-only one-time setup: creates the plans + comments databases,
                          backs up the selected boards, and matches the column select to the board. -->
                     <div id="remote-notion-setup" style="display:none; margin-top:6px; margin-bottom:10px; padding-top:10px; border-top:1px solid var(--border-color, rgba(127,127,127,0.2));">
@@ -2084,7 +2063,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const wsSel = document.getElementById('remote-workspace');
                     const remoteWs = (wsSel && wsSel.value) || undefined;
                     vscode.postMessage({ type: 'getRemoteConfig', workspaceRoot: remoteWs });
-                    vscode.postMessage({ type: 'getProjectContextSyncStatus', workspaceRoot: remoteWs });
                     vscode.postMessage({ type: 'getRemoteHealth', workspaceRoot: remoteWs });
                 }
             };
@@ -5305,28 +5283,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         if (status) { status.textContent = message.error; }
                     }
                     break;
-                case 'projectContextSyncRunning': {
-                    const statusEl = document.getElementById('remote-context-status');
-                    if (statusEl) statusEl.textContent = 'Syncing…';
-                    break;
-                }
-                case 'projectContextSyncStatus': {
-                    const auto = document.getElementById('remote-context-auto');
-                    const statusEl = document.getElementById('remote-context-status');
-                    const lastEl = document.getElementById('remote-context-last-result');
-                    if (!message.state) {
-                        if (statusEl) statusEl.textContent = message.error || '';
-                        break;
-                    }
-                    if (auto) auto.checked = message.state.enabled === true;
-                    if (statusEl) {
-                        statusEl.textContent = message.state.lastSyncAt
-                            ? `Last sync: ${new Date(message.state.lastSyncAt).toLocaleString()}`
-                            : 'Never synced';
-                    }
-                    if (lastEl) lastEl.textContent = message.state.lastResult || '';
-                    break;
-                }
                 default:
                     break;
             }
@@ -5532,29 +5488,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         document.getElementById('remote-fields')?.addEventListener('change', (e) => {
             if (e.target.id === 'remote-workspace') {
                 vscode.postMessage({ type: 'getRemoteConfig', workspaceRoot: e.target.value });
-                vscode.postMessage({ type: 'getProjectContextSyncStatus', workspaceRoot: e.target.value });
-                return;
-            }
-            if (e.target.id === 'remote-context-auto') {
-                const wsSel = document.getElementById('remote-workspace');
-                vscode.postMessage({
-                    type: 'setProjectContextSyncEnabled',
-                    enabled: e.target.checked === true,
-                    workspaceRoot: (wsSel && wsSel.value) || undefined
-                });
                 return;
             }
             if (e.target.id === 'remote-provider') {
                 applyRemoteProviderUi();
             }
             remoteAutosave();
-        });
-
-        document.getElementById('btn-context-sync-now')?.addEventListener('click', () => {
-            const wsSel = document.getElementById('remote-workspace');
-            const statusEl = document.getElementById('remote-context-status');
-            if (statusEl) statusEl.textContent = 'Syncing…';
-            vscode.postMessage({ type: 'projectContextSyncNow', workspaceRoot: (wsSel && wsSel.value) || undefined });
         });
 
         document.getElementById('btn-copy-linear-agent-skill')?.addEventListener('click', () => {

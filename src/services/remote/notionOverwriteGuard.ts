@@ -8,7 +8,6 @@
  * irreversible data-loss path and must not depend on agent/skill compliance.
  *
  * The guard is a cross-cutting utility consumed by ALL Notion body writes:
- *   - `pushProjectContext` (NotionRemoteProvider)
  *   - `updatePageContent` (NotionFetchService — sync-to-source)
  *   - future `pushContent` and `/improve-remote-plan` write-back paths
  *

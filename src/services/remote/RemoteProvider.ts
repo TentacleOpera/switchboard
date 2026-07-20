@@ -67,41 +67,8 @@ export interface RemoteProviderCapabilities {
     pull: boolean;
     /** Provider can push state + content (Linear, ClickUp, Notion-after-2/3). */
     push: boolean;
-    /** Provider can receive the project-level context bundle (Dev Docs + PRDs + constitution). */
-    projectContextPush: boolean;
     /** Provider can archive a card (Linear issueArchive / Notion page archive). */
     archive: boolean;
-}
-
-/** One project-context document (a dev doc, a project PRD, the constitution, or the root README). */
-export interface ProjectContextDocument {
-    kind: 'devdoc' | 'prd' | 'constitution' | 'readme';
-    /** Display title — dev-doc H1, project name for PRDs, 'Workspace Constitution'. */
-    title: string;
-    /** Raw markdown body. */
-    markdown: string;
-}
-
-/** The assembled project-level context pushed outward. Switchboard is the source of truth. */
-export interface ProjectContextBundle {
-    /** Workspace display name (basename of the workspace root). */
-    workspaceLabel: string;
-    /** Board keys from remote.config ('' = base board) — Linear resolves project docs from these. */
-    boards: string[];
-    documents: ProjectContextDocument[];
-    /** Single combined markdown rendering of all documents (providers may use this or the parts). */
-    combinedMarkdown: string;
-    /** ISO timestamp of this sync run (for staleness banners in the pushed doc). */
-    syncedAt: string;
-}
-
-/** Outcome of a project-context push against one provider. */
-export interface ProjectContextPushResult {
-    ok: boolean;
-    /** true → provider isn't configured for this workspace; not an error. */
-    skipped?: boolean;
-    /** Human-readable outcome: 'replaced', 'appended', or an error/skip reason. */
-    detail?: string;
 }
 
 /** Outcome of archiving a single remote card. */
@@ -181,16 +148,6 @@ export interface RemoteProvider {
      * fetched (deleted, truncated, permission error).
      */
     fetchDescription?(remoteId: string): Promise<{ body: string; updatedAt: string } | null>;
-
-    /**
-     * Push the project-level context bundle (Dev Docs + PRDs + constitution) to the
-     * provider's project surface — Notion: the Switchboard context page beside the
-     * plans DB; Linear: a "Switchboard Project Context" document on the matching
-     * project(s). Notion writes MUST obey the overwrite guard: append-by-default,
-     * full replace only after a verified no-inline-children check, and abort (never
-     * destructive-write) when the check can't be made.
-     */
-    pushProjectContext(bundle: ProjectContextBundle): Promise<ProjectContextPushResult>;
 
     /**
      * Archive a remote card (Linear issueArchive / Notion page archive). Called

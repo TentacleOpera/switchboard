@@ -954,8 +954,8 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(initiatePlanDisposable);
 
-    const importFromClipboardDisposable = registerSwitchboardCommand('switchboard.importPlanFromClipboard', async (markdownText?: string) => {
-        await taskViewerProvider?.importPlanFromClipboard(markdownText);
+    const importFromClipboardDisposable = registerSwitchboardCommand('switchboard.importPlanFromClipboard', async (markdownText?: string, options?: { projectName?: string }) => {
+        await taskViewerProvider?.importPlanFromClipboard(markdownText, options);
     });
     context.subscriptions.push(importFromClipboardDisposable);
 

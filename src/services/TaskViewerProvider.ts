@@ -18771,7 +18771,7 @@ What would you like to find?`;
         return result.trim();
     }
 
-    public async importPlanFromClipboard(markdownText?: string): Promise<void> {
+    public async importPlanFromClipboard(markdownText?: string, options?: { projectName?: string }): Promise<void> {
         // LAZY CHANGE: Ensure DB exists before import
         try {
             const workspaceRoot = this._getWorkspaceRoot();
@@ -18838,7 +18838,7 @@ What would you like to find?`;
             }
 
             try {
-                await this._createInitiatedPlan(title, text, false, { skipBrainPromotion: true });
+                await this._createInitiatedPlan(title, text, false, { skipBrainPromotion: true, projectName: options?.projectName });
                 await this._syncFilesAndRefreshRunSheets();
                 this._showTemporaryNotification(`Imported plan: ${title}`);
             } catch (err: any) {
@@ -18851,10 +18851,10 @@ What would you like to find?`;
         // Multi-plan import (note: uses H1-only title extraction; individual plans
         // without H1 headers receive numbered default titles — see single-plan path
         // above for H1→H2→H3 fallback, which is intentionally not applied here)
-        await this._importMultiplePlansFromClipboard(text);
+        await this._importMultiplePlansFromClipboard(text, options);
     }
 
-    private async _importMultiplePlansFromClipboard(text: string): Promise<void> {
+    private async _importMultiplePlansFromClipboard(text: string, options?: { projectName?: string }): Promise<void> {
         // Build split + marker-test regexes from the centralized constant
         const separatorSource = TaskViewerProvider.CLIPBOARD_SEPARATOR_REGEX.source;
         const splitRegex = new RegExp(`(${separatorSource})`, 'gm');
@@ -18917,7 +18917,7 @@ What would you like to find?`;
 
         for (const plan of plans) {
             try {
-                await this._createInitiatedPlan(plan.title, plan.content, false, { skipBrainPromotion: true });
+                await this._createInitiatedPlan(plan.title, plan.content, false, { skipBrainPromotion: true, projectName: options?.projectName });
                 importedTitles.push(plan.title);
             } catch (err: any) {
                 const msg = err?.message || String(err);

@@ -7207,7 +7207,22 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     const workspaceId = await this._readWorkspaceId(workspaceRoot);
                     if (workspaceId) {
                         const db = this._getKanbanDb(workspaceRoot);
-                        await db.setProjectForPlans(workspaceId, msg.planIds, msg.projectName);
+                        // Use the invariant variant so a direct subtask project change is
+                        // rejected (the subtask's project is governed by its feature) and
+                        // surfaced as a toast. The webview fire-and-forgets this message,
+                        // so the host pushes the toast directly on reject. Feature-target
+                        // changes cascade to subtasks inside setProjectForPlansInvariant.
+                        const result = await db.setProjectForPlansInvariant(workspaceId, msg.planIds, msg.projectName);
+                        if (!result.ok) {
+                            return { success: false, error: 'Failed to set project for plans.' };
+                        }
+                        if (result.rejectedSubtasks.length > 0) {
+                            const message = result.rejectedSubtasks.length === 1
+                                ? `A subtask's project is governed by its feature; set the feature's project instead.`
+                                : `${result.rejectedSubtasks.length} subtasks' projects are governed by their feature; set the feature's project instead.`;
+                            void this._seams().ui.showWarningMessage(message);
+                            return { success: false, error: message };
+                        }
                         await this._refreshBoard(workspaceRoot);
                         return { success: true };
                     }
@@ -11080,6 +11095,11 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
             return { success: false, error: 'Subtask not found.' };
         }
         const featureId = subtask.featureId;
+        // On detach, the plan becomes a loose plan in whatever project it was in — no
+        // project change. The invariant (subtask.project == feature.project) no longer
+        // applies because the plan is no longer a subtask (feature_id is cleared below).
+        // Re-assigning it to a feature on a different project later will propagate that
+        // feature's project onto it via assignPlansToFeature's bypass write.
         await db.updateFeatureStatus(subtask.planId, 0, '');
         // A subtask removed from its feature gets any legacy subtask-bound worktree
         // abandoned (discarded, not merged) — it's no longer part of the feature's
@@ -11434,6 +11454,24 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
                 console.warn(`[KanbanProvider] createFeatureFromPlanIds: updateFeatureStatus failed for subtask ${st.planId}`);
             }
         }
+        // Propagate the feature's resolved project onto every subtask (invariant: a
+        // subtask's project always inherits its feature's). bypassSubtaskGuard:true marks
+        // this as the sanctioned feature-attach propagate path so the guard in
+        // setProjectForPlansInvariant does not reject it. NOTE: this method DERIVES the
+        // feature's project FROM the subtasks (featureProject above), then this propagate
+        // forces ALL subtasks to that chosen project — so if the source subtasks disagreed
+        // (pre-fix divergent state), the divergent ones are normalized to the feature's
+        // final project. That direction flip (subtasks→feature, then feature→subtasks) is
+        // the correct post-fix behavior: one feature = one project. splitFeature routes
+        // through here, so splits inherit the propagate too (no double-handle needed).
+        if (subtasks.length > 0) {
+            await db.setProjectForPlansInvariant(
+                workspaceId,
+                subtasks.map((st: any) => st.planId),
+                featureProject || null,
+                { bypassSubtaskGuard: true }
+            );
+        }
         await this._regenerateFeatureFile(workspaceRoot, effectiveFeaturePlanId, db);
         // Re-assert is_feature=1 as the FINAL DB write before refresh — defensive hardening
         // so any intermediate file-watcher/scan event that might touch the record leaves
@@ -11503,6 +11541,19 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
             if (!subtask || subtask.isFeature) { skipped.push(pid); continue; }
             if (subtask.featureId && subtask.featureId !== feature.planId) { skipped.push(pid); continue; }
             await db.updateFeatureStatus(subtask.planId, 0, feature.planId);
+            // Propagate the feature's project onto the just-attached subtask (invariant:
+            // a subtask's project always inherits its feature's). bypassSubtaskGuard:true
+            // marks this as the sanctioned feature-attach propagate path so the guard in
+            // setProjectForPlansInvariant does not reject it. `feature.project` is already
+            // in scope (resolveFeatureIdentifier fetched the row above) — reuse it; do not
+            // re-fetch. `''`/null is a valid feature project (projects are optional) — the
+            // propagate writes `''`/NULL onto the subtask, which is correct per the invariant.
+            await db.setProjectForPlansInvariant(
+                workspaceId,
+                [subtask.planId],
+                feature.project || null,
+                { bypassSubtaskGuard: true }
+            );
             assigned.push(subtask.planId);
             assignedRecords.push(subtask);
         }

@@ -41,7 +41,24 @@ import { GovernanceFileKey } from './constitutionUtils';
 import { getProjectPrdPath, sanitizeProjectSlug } from './prdUtils';
 import { PlanAutoFetchService } from './PlanAutoFetchService';
 import { classifyHttpError } from './errorMessages';
+import { bundleDocsContext, DocsBundleSource } from './ContextBundler';
 
+// The Create Plans planning prompt — behaviour-only by design (user flows and
+// logic, not code). Shipped as HOW-TO-PLAN.md in the docs zip and copied (with
+// a source-specific first line) for the link/platform sources.
+const CREATE_PLANS_CORE_PROMPT = `You are helping plan a change to a product. You have its docs — read them and
+write a plan that describes DESIRED BEHAVIOUR:
+- What should the product do? What is the user flow, start to finish?
+- What are the expected outcomes and the edge cases, in user terms?
+- What is explicitly out of scope?
+
+Do NOT write code, choose libraries, or design implementation. Stay at the level
+of user flows and logic — how it should work, not how it is built. Defining the
+base logic and the user experience is the point; turning it into code happens
+later, inside the tool this plan goes back into.
+
+Return the plan as markdown with a short title, a Goal, the flows/expected
+behaviour, and edge cases. It will be pasted directly onto a planning board.`;
 
 
 export interface PlanningPanelAdapterFactories {
@@ -159,13 +176,6 @@ export class PlanningPanelProvider {
     private _antigravityWatchers: HostWatchHandle[] = [];
     private _activeDocWatcher: HostWatchHandle | undefined;
     private _activeDocWatchDebounce: NodeJS.Timeout | undefined;
-    // Dedicated watcher for the currently-selected Dev Doc / root README so
-    // external edits (git pull, another window, an agent writing the file back)
-    // re-emit `devDocContent` instead of leaving the tab on a stale buffer.
-    private _activeDevDocWatcher: HostWatchHandle | undefined;
-    private _activeDevDocWatchDebounce: NodeJS.Timeout | undefined;
-    private _activeDevDocPath: string | undefined;      // resolved on-disk path being watched (staleness guard)
-    private _devDocWatcherGeneration: number = 0;
     private _kanbanPlansWatchers: HostWatchHandle[] = [];
     private _kanbanPlansWatchDebounce: NodeJS.Timeout | undefined;
     private _featureDocsWatchers: HostWatchHandle[] = [];
@@ -1123,7 +1133,6 @@ export class PlanningPanelProvider {
     }
 
 
-
     /**
      * Debounced local-docs refresh, used by file watchers. The Antigravity brain
      * directory churns continuously (the agent writes plans, logs, knowledge and
@@ -1626,70 +1635,6 @@ Start by checking which documents exist, then present the menu.`;
         }
     }
 
-    /**
-     * Watch the currently-selected Dev Doc (or root README) for EXTERNAL changes.
-     * The Dev Docs tab reads content only on explicit selection (`readDevDoc`), so
-     * without this a `git pull`, another window, or an agent writing the file back
-     * (the Draft/Improve hand-off) leaves the tab on a stale buffer — and a Save
-     * would then clobber the newer on-disk version. On an external edit we re-read
-     * and re-post `devDocContent`: in view mode the preview live-refreshes; in edit
-     * mode it arms `externalChangePending.devdocs` so a later exit reloads instead
-     * of silently stomping. Panel-initiated writes are suppressed via
-     * `_lastPanelWriteTimestamp` (mirrors `_setupActiveDocWatcher`).
-     */
-    private _setupActiveDevDocWatcher(diskPath: string | null, emitPath: string, isProject: boolean): void {
-        if (this._activeDevDocWatchDebounce) {
-            clearTimeout(this._activeDevDocWatchDebounce);
-            this._activeDevDocWatchDebounce = undefined;
-        }
-        if (this._activeDevDocWatcher) {
-            try { this._activeDevDocWatcher.dispose(); } catch (err) { console.warn('[PlanningPanel] Error disposing dev-doc watcher:', err); }
-            const idx = this._disposables.indexOf(this._activeDevDocWatcher);
-            if (idx !== -1) { this._disposables.splice(idx, 1); }
-            this._activeDevDocWatcher = undefined;
-        }
-
-        this._devDocWatcherGeneration++;
-        const gen = this._devDocWatcherGeneration;
-        this._activeDevDocPath = diskPath || undefined;
-
-        if (!diskPath || !fs.existsSync(diskPath)) { return; }
-
-        try {
-            this._activeDevDocWatcher = this._seams().watcher.watchFile(diskPath, (event, changedPath) => {
-                if (gen !== this._devDocWatcherGeneration) { return; }               // stale watcher
-                if (diskPath !== this._activeDevDocPath) { return; }                 // selection moved on
-                if (Date.now() - this._lastPanelWriteTimestamp < 1000) { return; }   // our own write/delete
-                if (this._activeDevDocWatchDebounce) { clearTimeout(this._activeDevDocWatchDebounce); }
-                if (event === 'delete') {
-                    this._activeDevDocPath = undefined; // stop reacting to the now-gone file
-                    const devDocsPanel = isProject ? this._projectPanel : this._panel;
-                    this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocDeletedExternally', path: emitPath });
-                    return;
-                }
-                this._activeDevDocWatchDebounce = setTimeout(async () => {
-                    if (gen !== this._devDocWatcherGeneration || diskPath !== this._activeDevDocPath) { return; }
-                    if (Date.now() - this._lastPanelWriteTimestamp < 1000) { return; }
-                    await this._reemitDevDocContent(diskPath, emitPath, isProject);
-                }, 300);
-            });
-
-            this._disposables.push(this._activeDevDocWatcher);
-        } catch (err) {
-            console.error('[PlanningPanel] Failed to create dev-doc watcher:', err);
-        }
-    }
-
-    /** Re-read a Dev Doc changed on disk and re-post its content to the tab. */
-    private async _reemitDevDocContent(diskPath: string, emitPath: string, isProject: boolean): Promise<void> {
-        const devDocsPanel = isProject ? this._projectPanel : this._panel;
-        if (!devDocsPanel) { return; }
-        let content = '';
-        try { content = await fs.promises.readFile(diskPath, 'utf8'); } catch { return; } // gone — leave the last view
-        let renderedHtml = '';
-        try { renderedHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', content) ?? ''; } catch { renderedHtml = ''; }
-        this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocContent', path: emitPath, content, renderedHtml });
-    }
 
     private async _handleFetchKanbanPlanPreview(filePath: string, requestId: number): Promise<void> {
         const allRoots = Array.from(this._getAllowedRoots());
@@ -2645,145 +2590,6 @@ Start by checking which documents exist, then present the menu.`;
                 break;
             }
 
-            // ── Dev Docs (project-context authoring surface) ────────────────
-            case 'loadDevDocs': {
-                const docs = await this._listDevDocs(allRoots);
-                const devDocsPanel = isProject ? this._projectPanel : this._panel;
-                this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocsList', docs });
-                break;
-            }
-            case 'readDevDoc': {
-                const devDocsPanel = isProject ? this._projectPanel : this._panel;
-                const safePath = this._resolveDevDocPath(allRoots, msg.path);
-                if (!safePath) {
-                    this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocContent', path: msg.path, content: '', renderedHtml: '', error: 'Invalid dev doc path' });
-                    break;
-                }
-                let content = '';
-                try { content = await fs.promises.readFile(safePath, 'utf8'); } catch { /* treat as empty */ }
-                let renderedHtml = '';
-                try {
-                    renderedHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', content) ?? '';
-                } catch { renderedHtml = ''; }
-                this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocContent', path: msg.path, content, renderedHtml });
-                // Watch this file for external edits so the tab never holds a stale buffer.
-                this._setupActiveDevDocWatcher(safePath, typeof msg.path === 'string' ? msg.path : safePath, isProject);
-                break;
-            }
-            case 'saveDevDoc': {
-                const devDocsPanel = isProject ? this._projectPanel : this._panel;
-                const safePath = this._resolveDevDocPath(allRoots, msg.path);
-                if (!safePath || typeof msg.content !== 'string') {
-                    this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocSaved', path: msg.path, ok: false, error: 'Invalid dev doc path' });
-                    break;
-                }
-                let ok = false;
-                let error = '';
-                try {
-                    await fs.promises.mkdir(path.dirname(safePath), { recursive: true });
-                    await fs.promises.writeFile(safePath, msg.content, 'utf8');
-                    this._lastPanelWriteTimestamp = Date.now(); // suppress our own dev-doc watcher fire
-                    ok = true;
-                } catch (err) {
-                    error = err instanceof Error ? err.message : String(err);
-                }
-                this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocSaved', path: msg.path, ok, error });
-                if (ok) { this._onProjectContextContentChanged(msg.workspaceRoot); }
-                break;
-            }
-            case 'createDevDoc': {
-                const devDocsPanel = isProject ? this._projectPanel : this._panel;
-                // Native input box (no modal). Multi-root: pick a workspace first.
-                let root = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (!root && allRoots.length > 1) {
-                    const items = buildWorkspaceItems(allRoots).map(it => ({ label: it.label, root: it.workspaceRoot }));
-                    const picked = await this._seams().ui.showQuickPick(items.map(i => ({ label: i.label, description: i.root })), { placeHolder: 'Select a workspace for the new dev doc' }) as { label: string; description?: string } | undefined;
-                    if (!picked) { break; } // user cancelled
-                    root = items.find(i => i.label === picked.label)?.root || undefined;
-                }
-                if (!root && allRoots.length === 1) { root = allRoots[0]; }
-                if (!root) {
-                    this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocCreated', ok: false, error: 'No workspace selected' });
-                    break;
-                }
-                const name = await this._seams().ui.showInputBox({
-                    prompt: 'New dev doc name',
-                    placeHolder: 'e.g. Architecture Overview',
-                    validateInput: (value) => {
-                        if (!value || !value.trim()) { return 'Name is required'; }
-                        const sanitized = value.trim().replace(/[\\/:]/g, '').replace(/\.\./g, '');
-                        if (!sanitized) { return 'Invalid name'; }
-                        return undefined;
-                    }
-                });
-                if (!name) { break; } // user cancelled
-                const slug = sanitizeProjectSlug(name);
-                const docPath = path.join(root, this._devDocsFolderRelative(root), `${slug}.md`);
-                try {
-                    await fs.promises.mkdir(path.dirname(docPath), { recursive: true });
-                    if (!fs.existsSync(docPath)) {
-                        await fs.promises.writeFile(docPath, `# ${name}\n\n`, 'utf8');
-                    }
-                    this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocCreated', ok: true, path: docPath });
-                } catch (err) {
-                    this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocCreated', ok: false, error: err instanceof Error ? err.message : String(err) });
-                }
-                break;
-            }
-            case 'importDevDocFromClipboard': {
-                const devDocsPanel = isProject ? this._projectPanel : this._panel;
-                const targetRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || (allRoots.length === 1 ? allRoots[0] : '');
-                if (!targetRoot) {
-                    this._pushTo(devDocsPanel, 'devDocs', { type: 'importDevDocResult', error: 'No workspace selected' });
-                    break;
-                }
-                await this._importDevDocFromClipboard(targetRoot, this._devDocsFolder(targetRoot));
-                break;
-            }
-            case 'draftImproveDevDoc': {
-                const safePath = this._resolveDevDocPath(allRoots, msg.path);
-                if (!safePath) {
-                    this._seams().ui.showTemporaryNotification('Dev doc: invalid path — prompt not copied');
-                    break;
-                }
-                const title = typeof msg.title === 'string' ? msg.title : path.basename(safePath, '.md');
-                const sourceType = typeof msg.sourceType === 'string' && msg.sourceType === 'readme' ? 'README' : 'Docs';
-                const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot)
-                    || allRoots.find(r => safePath === path.resolve(r, path.basename(safePath)) || safePath.startsWith(path.resolve(r) + path.sep))
-                    || path.dirname(safePath);
-                let currentContent = '';
-                try { currentContent = await fs.promises.readFile(safePath, 'utf8'); } catch { /* treat as empty → Draft */ }
-                const hasContent = !!(msg.hasContent === true) && !!(currentContent && currentContent.trim());
-                let prompt: string;
-                if (hasContent && currentContent.length > 200_000) {
-                    // Truncated Improve — don't inline a huge payload; point the agent at the file.
-                    prompt = `You are improving an existing developer document for the project at ${wsRoot}.\n\n## Document\n- **Title:** ${title}\n- **Type:** ${sourceType}\n- **File path (read the current doc here, and write the improved doc back here):** ${safePath}\n\nThe current content is large (>200 KB) and is not inlined here. Read the file at the path above, then fill gaps, correct anything out of date, and improve clarity and structure without discarding accurate existing material. Write the improved markdown back to the file path, preserving any YAML frontmatter. Report back with a summary of what you changed.`;
-                } else if (hasContent) {
-                    prompt = `You are improving an existing developer document for the project at ${wsRoot}.\n\n## Document\n- **Title:** ${title}\n- **Type:** ${sourceType}\n- **File path (write the improved doc back here):** ${safePath}\n\n## Current content\n${currentContent}\n\nRead the current content above and the relevant parts of the codebase. Fill gaps, correct anything out of date, and improve clarity and structure without discarding accurate existing material. Write the improved markdown back to the file path, preserving any YAML frontmatter. Report back with a summary of what you changed.`;
-                } else {
-                    prompt = `You are writing a developer document for the project at ${wsRoot}.\n\n## Document\n- **Title:** ${title}\n- **Type:** ${sourceType}\n- **File path (write the finished doc here):** ${safePath}\n\nThe file is currently empty (or contains only a title heading). Research the codebase as needed to write an accurate, useful developer doc for this topic. Write the finished markdown directly to the file path above. Report back with a short summary of what you covered.`;
-                }
-                await this._seams().clipboard.writeText(prompt);
-                this._seams().ui.showTemporaryNotification('Dev doc prompt copied to clipboard');
-                break;
-            }
-            case 'deleteDevDoc': {
-                const devDocsPanel = isProject ? this._projectPanel : this._panel;
-                const safePath = this._resolveDevDocPath(allRoots, msg.path);
-                if (!safePath) {
-                    this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocDeleted', path: msg.path, ok: false, error: 'Invalid dev doc path' });
-                    break;
-                }
-                try {
-                    await fs.promises.unlink(safePath);
-                    this._lastPanelWriteTimestamp = Date.now(); // suppress our own dev-doc delete-watcher fire
-                    this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocDeleted', path: msg.path, ok: true });
-                    this._onProjectContextContentChanged(msg.workspaceRoot);
-                } catch (err) {
-                    this._pushTo(devDocsPanel, 'devDocs', { type: 'devDocDeleted', path: msg.path, ok: false, error: err instanceof Error ? err.message : String(err) });
-                }
-                break;
-            }
             case 'setupTicketsWatcher': {
                 const root = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (root) { this._setupTicketsViewWatcher(root); }
@@ -3330,6 +3136,123 @@ Start by checking which documents exist, then present the menu.`;
                 await this._handleImportPlansFromClipboard(workspaceRoot);
                 break;
             }
+
+            // ── Create Plans tab (docs-first external planning intake) ──────
+            case 'createPlansInit': {
+                const cpRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
+                let hasDocs = false;
+                try { hasDocs = cpRoot ? (await this._collectDocsBundleSources(cpRoot)).length > 0 : false; } catch { hasDocs = false; }
+                this.postMessageToWebview({
+                    type: 'createPlansState',
+                    hasDocs,
+                    publicUrl: this._stateStore.getPanelState<string>('createPlans.publicUrl') || '',
+                    platform: this._stateStore.getPanelState<string>('createPlans.platform') || 'Notion',
+                    platformRef: this._stateStore.getPanelState<string>('createPlans.platformRef') || ''
+                });
+                break;
+            }
+            case 'createPlansCopyPrompt': {
+                // One prompt, adapted only by a single source-specific first line.
+                let header = '';
+                if (msg.source === 'platform') {
+                    const platform = ['Notion', 'ClickUp', 'Linear'].includes(msg.platform) ? msg.platform : 'Notion';
+                    const reference = typeof msg.reference === 'string' ? msg.reference.trim() : '';
+                    if (!reference) {
+                        this._seams().ui.showTemporaryNotification('Enter the platform reference first');
+                        break;
+                    }
+                    await this._stateStore.setPanelState('createPlans.platform', platform);
+                    await this._stateStore.setPanelState('createPlans.platformRef', reference);
+                    header = `The docs live in ${platform} at ${reference}. Use the ${platform} MCP to read them.\n\n`;
+                } else {
+                    const url = typeof msg.url === 'string' ? msg.url.trim() : '';
+                    if (!url) {
+                        this._seams().ui.showTemporaryNotification('Enter the public docs URL first');
+                        break;
+                    }
+                    await this._stateStore.setPanelState('createPlans.publicUrl', url);
+                    header = `The docs are published at ${url}. Read them there.\n\n`;
+                }
+                await this._seams().clipboard.writeText(header + CREATE_PLANS_CORE_PROMPT);
+                this._seams().ui.showTemporaryNotification('Planning prompt copied to clipboard');
+                break;
+            }
+            case 'createPlansDownloadZip': {
+                const cpRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
+                if (!cpRoot) {
+                    this._seams().ui.showTemporaryNotification('No workspace open');
+                    break;
+                }
+                try {
+                    const sources = await this._collectDocsBundleSources(cpRoot);
+                    if (sources.length === 0) {
+                        // Never an empty zip — point the user at writing a first doc.
+                        this.postMessageToWebview({ type: 'createPlansState', hasDocs: false });
+                        this._seams().ui.showTemporaryNotification('No docs yet — write a PRD or constitution in the Docs tab first');
+                        break;
+                    }
+                    const howToPlan = `# How to plan from these docs\n\n${CREATE_PLANS_CORE_PROMPT}\n\nThe docs are the other markdown files in this zip — see MANIFEST.md for the list.`;
+                    const { zipPath, fileCount } = await bundleDocsContext(cpRoot, { sources, howToPlanMarkdown: howToPlan });
+                    this._seams().ui.showTemporaryNotification(`Docs zip created (${fileCount} doc${fileCount === 1 ? '' : 's'})`);
+                    try { await this._seams().commands.executeCommand('revealFileInOS', vscode.Uri.file(zipPath)); } catch { /* reveal is best-effort */ }
+                } catch (err) {
+                    this._seams().ui.showErrorMessage(`Docs zip failed: ${err instanceof Error ? err.message : String(err)}`);
+                }
+                break;
+            }
+            case 'createPlansPasteBack': {
+                const markdown = typeof msg.markdown === 'string' ? msg.markdown : '';
+                if (!markdown.trim()) {
+                    this.postMessageToWebview({ type: 'createPlansPasteBackResult', ok: false, error: 'Paste a markdown plan first.' });
+                    break;
+                }
+                if (markdown.length > 200_000) {
+                    this.postMessageToWebview({ type: 'createPlansPasteBackResult', ok: false, error: 'Plan is too large (>200 KB).' });
+                    break;
+                }
+                // Pin to the board's active project when one is set; on any failure
+                // to read the filter the plan lands unassigned (never invent a project).
+                let cpProject: string | null = null;
+                try { cpProject = this._kanbanProvider?.getProjectFilter() || null; } catch { cpProject = null; }
+                try {
+                    await this._seams().commands.executeCommand(
+                        'switchboard.importPlanFromClipboard',
+                        markdown,
+                        cpProject ? { projectName: cpProject } : undefined
+                    );
+                    this.postMessageToWebview({ type: 'createPlansPasteBackResult', ok: true, projectName: cpProject });
+                } catch (err) {
+                    this.postMessageToWebview({ type: 'createPlansPasteBackResult', ok: false, error: err instanceof Error ? err.message : String(err) });
+                }
+                break;
+            }
+            case 'createPlansImproveSource': {
+                // Optional handoff: copy a docs-improvement prompt for a configured
+                // Docs-tab folder. Reads no code; the tab works without it.
+                const cpFolders: string[] = [];
+                for (const root of this._getWorkspaceRoots()) {
+                    for (const p of this._getLocalFolderService(root).getFolderPaths()) {
+                        if (!cpFolders.includes(p)) { cpFolders.push(p); }
+                    }
+                }
+                if (cpFolders.length === 0) {
+                    this._seams().ui.showTemporaryNotification('Add a docs folder via Manage Folders first.');
+                    break;
+                }
+                let target = cpFolders[0];
+                if (cpFolders.length > 1) {
+                    const picked = await this._seams().ui.showQuickPick(
+                        cpFolders.map(p => ({ label: path.basename(p), description: p })),
+                        { placeHolder: 'Which docs folder should the agent improve?' }
+                    ) as { label: string; description?: string } | undefined;
+                    if (!picked?.description) { break; }
+                    target = picked.description;
+                }
+                const improvePrompt = `You are improving the planning docs in this folder: ${target}\n\nRead every markdown document in that folder. Rewrite and reorganise them so they work as a clear behavioural source for planning: what the product should do, the user flows start to finish, expected outcomes, and edge cases in user terms, plus what is out of scope. Fill gaps you can infer, flag gaps you cannot, and move implementation detail out of the way — the docs describe how the product behaves, not how it is built. Write the improved markdown back to the same files (or add a new file in the same folder where a topic deserves its own doc). Do not read or describe source code. Report back with a summary of what you changed.`;
+                await this._seams().clipboard.writeText(improvePrompt);
+                this._seams().ui.showTemporaryNotification('Docs-improvement prompt copied to clipboard');
+                break;
+            }
             case 'importResearchDoc': {
                 const targetRoot = msg.workspaceRoot && allRoots.includes(msg.workspaceRoot) ? msg.workspaceRoot : workspaceRoot;
                 await this._handleImportResearchDoc(targetRoot, msg.docTitle, msg.folderPath);
@@ -3346,6 +3269,46 @@ Start by checking which documents exist, then present the menu.`;
             }
             case 'createLocalDoc': {
                 await this._handleCreateLocalDoc(workspaceRoot, msg.folderPath);
+                break;
+            }
+
+            case 'draftImproveLocalDoc': {
+                // Draft/Improve prompt for a local-folder doc selected in the Docs tab.
+                // Webview-supplied path — accept only files inside a configured local
+                // docs folder (the Docs tab's local-doc trust boundary; configured
+                // folders may live outside the workspace roots, so a root check is
+                // both too loose and too tight).
+                const rawPath = typeof msg.path === 'string' && msg.path.endsWith('.md') ? path.resolve(msg.path) : '';
+                let owningRoot: string | undefined;
+                if (rawPath) {
+                    for (const root of allRoots) {
+                        const inside = this._getLocalFolderService(root).getFolderPaths().some(f => {
+                            const base = path.resolve(f);
+                            return rawPath === base || rawPath.startsWith(base + path.sep);
+                        });
+                        if (inside) { owningRoot = root; break; }
+                    }
+                }
+                const safePath = owningRoot ? rawPath : null;
+                if (!safePath) {
+                    this._seams().ui.showTemporaryNotification('Local doc: invalid path — prompt not copied');
+                    break;
+                }
+                const title = typeof msg.title === 'string' && msg.title ? msg.title : path.basename(safePath, '.md');
+                const wsRoot = owningRoot;
+                let currentContent = '';
+                try { currentContent = await fs.promises.readFile(safePath, 'utf8'); } catch { /* treat as empty → Draft */ }
+                const hasContent = !!(msg.hasContent === true) && !!(currentContent && currentContent.trim());
+                let prompt: string;
+                if (hasContent && currentContent.length > 200_000) {
+                    prompt = `You are improving an existing document for the project at ${wsRoot}.\n\n## Document\n- **Title:** ${title}\n- **File path (read the current doc here, and write the improved doc back here):** ${safePath}\n\nThe current content is large (>200 KB) and is not inlined here. Read the file at the path above, then fill gaps, correct anything out of date, and improve clarity and structure without discarding accurate existing material. Write the improved markdown back to the file path, preserving any YAML frontmatter. Report back with a summary of what you changed.`;
+                } else if (hasContent) {
+                    prompt = `You are improving an existing document for the project at ${wsRoot}.\n\n## Document\n- **Title:** ${title}\n- **File path (write the improved doc back here):** ${safePath}\n\n## Current content\n${currentContent}\n\nRead the current content above and the relevant parts of the codebase. Fill gaps, correct anything out of date, and improve clarity and structure without discarding accurate existing material. Write the improved markdown back to the file path, preserving any YAML frontmatter. Report back with a summary of what you changed.`;
+                } else {
+                    prompt = `You are writing a document for the project at ${wsRoot}.\n\n## Document\n- **Title:** ${title}\n- **File path (write the finished doc here):** ${safePath}\n\nThe file is currently empty (or contains only a title heading). Research the codebase as needed to write an accurate, useful document for this topic. Write the finished markdown directly to the file path above. Report back with a short summary of what you covered.`;
+                }
+                await this._seams().clipboard.writeText(prompt);
+                this._seams().ui.showTemporaryNotification('Doc prompt copied to clipboard');
                 break;
             }
 
@@ -4290,7 +4253,6 @@ Start by checking which documents exist, then present the menu.`;
                     });
                     // Only the constitution participates in project-context sync
                     // (CLAUDE.md/AGENTS.md are local agent governance, not remote context).
-                    if (key === 'constitution') { this._onProjectContextContentChanged(wsRoot); }
                     await this._handleMessage({ type: 'loadConstitutionFiles', requestId: Date.now() }, true);
                 } catch (err) {
                     this._postToBothPanels({
@@ -4394,7 +4356,6 @@ Start by checking which documents exist, then present the menu.`;
                         ok,
                         path: filePath
                     });
-                    if (ok) { this._onProjectContextContentChanged(wsRoot); }
                 }
                 break;
             }
@@ -7628,7 +7589,6 @@ Read the current content above. Determine what's missing. Produce a complete fea
     }
 
 
-
     private async _handleLinkToDocument(
         workspaceRoot: string,
         sourceId: string,
@@ -7721,6 +7681,30 @@ Read the current content above. Determine what's missing. Produce a complete fea
         folderPath: string
     ): Promise<void> {
         try {
+            if (!folderPath) {
+                // No active local folder — quick-pick among the configured folders
+                // (all roots); with none configured, point at Manage Folders.
+                const candidates: string[] = [];
+                for (const root of this._getWorkspaceRoots()) {
+                    for (const p of this._getLocalFolderService(root).getFolderPaths()) {
+                        if (!candidates.includes(p)) { candidates.push(p); }
+                    }
+                }
+                if (candidates.length === 0) {
+                    this._seams().ui.showTemporaryNotification('Add a folder via Manage Folders first.');
+                    return;
+                }
+                if (candidates.length === 1) {
+                    folderPath = candidates[0];
+                } else {
+                    const picked = await this._seams().ui.showQuickPick(
+                        candidates.map(p => ({ label: path.basename(p), description: p })),
+                        { placeHolder: 'Select a folder for the new doc' }
+                    ) as { label: string; description?: string } | undefined;
+                    if (!picked?.description) { return; } // user cancelled
+                    folderPath = picked.description;
+                }
+            }
             const docName = await this._seams().ui.showInputBox({
                 prompt: 'New document name',
                 placeHolder: 'e.g. my-plan.md',
@@ -7803,6 +7787,69 @@ Read the current content above. Determine what's missing. Produce a complete fea
         } catch (err) {
             this._seams().ui.showErrorMessage(`Failed to create document: ${String(err)}`);
         }
+    }
+
+    /**
+     * Enumerate the managed doc set for the Create Plans zip: constitution files,
+     * every project PRD, the root README, and the curated Docs-tab folders.
+     * Paths only — the bundler applies the docs-only (.md/.txt) allowlist.
+     */
+    private async _collectDocsBundleSources(workspaceRoot: string): Promise<DocsBundleSource[]> {
+        const sources: DocsBundleSource[] = [];
+        const seen = new Set<string>();
+        const add = (zipDir: string, absPath: string) => {
+            const key = path.resolve(absPath);
+            if (!seen.has(key) && fs.existsSync(key)) {
+                seen.add(key);
+                sources.push({ zipDir, absPath: key });
+            }
+        };
+
+        // Constitution files (the configured list for this root).
+        try {
+            for (const rel of this._getConstitutionPathList(workspaceRoot)) {
+                add('constitution', path.resolve(workspaceRoot, rel));
+            }
+        } catch { /* no constitution — fine */ }
+
+        // Every project PRD: .switchboard/projects/<slug>/prd.md
+        try {
+            const projectsDir = path.join(workspaceRoot, '.switchboard', 'projects');
+            for (const slug of await fs.promises.readdir(projectsDir)) {
+                add(path.posix.join('prds', slug), path.join(projectsDir, slug, 'prd.md'));
+            }
+        } catch { /* no projects dir — fine */ }
+
+        // Root README (any case variant).
+        try {
+            const rootEntries = await fs.promises.readdir(workspaceRoot);
+            const readme = rootEntries.find(e => e.toLowerCase() === 'readme.md');
+            if (readme) { add('.', path.join(workspaceRoot, readme)); }
+        } catch { /* root unreadable — fine */ }
+
+        // Curated Docs-tab folders (recursive, bounded depth).
+        const walk = async (dir: string, zipDir: string, depth: number): Promise<void> => {
+            if (depth > 4) { return; }
+            let entries: fs.Dirent[] = [];
+            try { entries = await fs.promises.readdir(dir, { withFileTypes: true }) as unknown as fs.Dirent[]; } catch { return; }
+            for (const entry of entries) {
+                if (entry.name.startsWith('.') || entry.name === 'node_modules') { continue; }
+                const full = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                    await walk(full, path.posix.join(zipDir, entry.name), depth + 1);
+                } else {
+                    add(zipDir, full);
+                }
+            }
+        };
+        try {
+            for (const folder of this._getLocalFolderService(workspaceRoot).getFolderPaths()) {
+                await walk(folder, path.posix.join('docs', path.basename(folder)), 0);
+            }
+        } catch { /* no local folders — fine */ }
+
+        // Docs-only filter here too so hasDocs isn't fooled by non-doc files.
+        return sources.filter(s => ['.md', '.txt'].includes(path.extname(s.absPath).toLowerCase()));
     }
 
     private async _handleResolveDuplicate(
@@ -8159,7 +8206,6 @@ Read the current content above. Determine what's missing. Produce a complete fea
     }
 
 
-
     private async _sendOnlineDocsReady(): Promise<void> {
         const availableSources = this._researchImportService.getAvailableSources();
         console.log('[PlanningPanel] Available sources before filtering:', availableSources);
@@ -8252,7 +8298,6 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 this._lastPreviewContentByPath.delete(key);
             }
         }
-
 
 
         // Handle planning-html-folder: iframe-based HTML preview with localhost server
@@ -9166,174 +9211,6 @@ Read the current content above. Determine what's missing. Produce a complete fea
         }
     }
 
-    /**
-     * Clipboard import for Dev Docs — shared logic extracted from `_handleImportResearchDoc`
-     * but writing directly to the configured dev docs folder (not the local-folder service).
-     * Reads clipboard → 200 KB cap → H1-derived title → write `<dir>/<slug>.md`.
-     */
-    private async _importDevDocFromClipboard(workspaceRoot: string, targetDir: string): Promise<void> {
-        const panel = this._projectPanel ?? this._panel;
-        if (this._importInProgress) {
-            this._pushTo(panel, 'planning', { type: 'importDevDocResult', error: 'Import already in progress' });
-            return;
-        }
-        this._importInProgress = true;
-        try {
-            const content = await this._seams().clipboard.readText();
-            if (!content || !content.trim()) {
-                this._pushTo(panel, 'planning', { type: 'importDevDocResult', error: 'Clipboard is empty. Copy markdown first.' });
-                return;
-            }
-            if (content.length > 200_000) {
-                this._pushTo(panel, 'planning', { type: 'importDevDocResult', error: 'Clipboard content is too large (>200 KB). Aborting import.' });
-                return;
-            }
-            let title = '';
-            const h1Match = content.match(/^#\s+(.+)$/m);
-            if (h1Match) {
-                title = h1Match[1].trim();
-            } else {
-                const timestamp = new Date().toISOString().split('.')[0].replace(/:/g, '-');
-                title = `Imported Doc ${timestamp}`;
-            }
-            let contentToWrite = content;
-            const bodyWithoutFrontMatter = content.replace(/^---\n[\s\S]*?\n---\n*/, '');
-            if (!/^#\s+/m.test(bodyWithoutFrontMatter.slice(0, 1000))) {
-                contentToWrite = `# ${title}\n\n${bodyWithoutFrontMatter}`;
-            }
-            const slug = sanitizeProjectSlug(title) || `imported-${Date.now()}`;
-            await fs.promises.mkdir(targetDir, { recursive: true });
-            const docPath = path.join(targetDir, `${slug}.md`);
-            await fs.promises.writeFile(docPath, contentToWrite, 'utf8');
-            this._lastPanelWriteTimestamp = Date.now();
-            this._pushTo(panel, 'planning', { type: 'importDevDocResult', success: true, docTitle: title, savedPath: docPath });
-            this._onProjectContextContentChanged(workspaceRoot);
-        } catch (err) {
-            this._pushTo(panel, 'planning', { type: 'importDevDocResult', error: String(err) });
-        } finally {
-            this._importInProgress = false;
-        }
-    }
-
-    // ── Dev Docs (project-context authoring surface) ────────────────────
-    // Developer docs live per-workspace in the configured `switchboard.devDocsFolder`
-    // (default root `docs/`), beside the PRD and constitution. The root `README.md`
-    // is also surfaced as a first-class editable entry. Together those form the
-    // project context synced to Notion/Linear.
-
-    /**
-     * Resolve the configured dev docs folder for a workspace root, absolute.
-     * Guards against absolute/escape configs — falls back to root `docs/`.
-     */
-    private _devDocsFolder(root: string): string {
-        const cfg = this._seams().pathConfig.getConfigStringWithDefault('devDocsFolder', 'docs') || 'docs';
-        const p = path.resolve(root, cfg);
-        // Must be strictly INSIDE root. Bare startsWith(root) lets a sibling
-        // like `<root>-evil` (via `../<root>-evil`) pass — and this dir feeds
-        // the webview-trust boundary in _resolveDevDocPath. Require the separator.
-        const rootResolved = path.resolve(root);
-        return p.startsWith(rootResolved + path.sep) ? p : path.resolve(root, 'docs');
-    }
-
-    /** Relative form (for path.join with a slug). */
-    private _devDocsFolderRelative(root: string): string {
-        const abs = this._devDocsFolder(root);
-        const rel = path.relative(path.resolve(root), abs);
-        return rel || 'docs';
-    }
-
-    /** Enumerate every workspace's dev docs + root README. Title = first `# ` heading, else filename. */
-    private async _listDevDocs(allRoots: string[]): Promise<Array<{
-        path: string; fileName: string; title: string; workspaceRoot: string; workspaceLabel: string; sourceType: string;
-    }>> {
-        const docs: Array<{ path: string; fileName: string; title: string; workspaceRoot: string; workspaceLabel: string; sourceType: string }> = [];
-        const items = buildWorkspaceItems(allRoots);
-        for (const item of items) {
-            const dir = this._devDocsFolder(item.workspaceRoot);
-            let entries: string[] = [];
-            try { entries = await fs.promises.readdir(dir); } catch { /* dir missing — skip */ }
-            for (const entry of entries.sort()) {
-                if (!entry.endsWith('.md')) { continue; }
-                const filePath = path.join(dir, entry);
-                let title = entry.replace(/\.md$/, '');
-                try {
-                    const head = (await fs.promises.readFile(filePath, 'utf8')).slice(0, 2000);
-                    const match = head.match(/^#\s+(.+)$/m);
-                    if (match) { title = match[1].trim(); }
-                } catch { /* keep filename title */ }
-                docs.push({
-                    path: filePath,
-                    fileName: entry,
-                    title,
-                    workspaceRoot: item.workspaceRoot,
-                    workspaceLabel: item.label,
-                    sourceType: 'docs',
-                });
-            }
-            // Surface root README.md (case-insensitive) as a first-class editable entry.
-            try {
-                const rootEntries = await fs.promises.readdir(item.workspaceRoot);
-                const readmeName = rootEntries.find((e: string) => e.toLowerCase() === 'readme.md');
-                if (readmeName) {
-                    const readmePath = path.join(item.workspaceRoot, readmeName);
-                    let title = 'README';
-                    try {
-                        const head = (await fs.promises.readFile(readmePath, 'utf8')).slice(0, 2000);
-                        const match = head.match(/^#\s+(.+)$/m);
-                        if (match) { title = match[1].trim(); }
-                    } catch { /* keep default title */ }
-                    docs.push({
-                        path: readmePath,
-                        fileName: readmeName,
-                        title,
-                        workspaceRoot: item.workspaceRoot,
-                        workspaceLabel: item.label,
-                        sourceType: 'readme',
-                    });
-                }
-            } catch { /* root unreadable — skip */ }
-        }
-        return docs;
-    }
-
-    /**
-     * Accept a webview-supplied dev-doc path only when it resolves inside some
-     * workspace's configured dev docs folder OR is exactly that workspace's root
-     * README.md (any case variant, direct child of root). The webview is untrusted input.
-     */
-    private _resolveDevDocPath(allRoots: string[], candidate: unknown): string | null {
-        if (typeof candidate !== 'string' || !candidate.endsWith('.md')) { return null; }
-        const resolved = path.resolve(candidate);
-        for (const root of allRoots) {
-            const devDocsDir = path.resolve(root, this._devDocsFolderRelative(root));
-            if (resolved === devDocsDir || resolved.startsWith(devDocsDir + path.sep)) { return resolved; }
-            // Root README allowance: direct child of root, basename lowercased 'readme.md'.
-            const parent = path.dirname(resolved);
-            const base = path.basename(resolved);
-            if (parent === path.resolve(root) && base.toLowerCase() === 'readme.md') { return resolved; }
-        }
-        return null;
-    }
-
-    /**
-     * Called after any project-context content write (dev doc, PRD, constitution).
-     * Debounced auto-push: projectContextSyncNow({auto:true}) respects the user's
-     * enabled flag and the coarse content-hash gate, so this is cheap to fire on
-     * every save. The refreshed status lands in the Remote tab if it's open.
-     */
-    private _projectContextSyncDebounce: NodeJS.Timeout | undefined;
-    private _onProjectContextContentChanged(workspaceRoot?: string): void {
-        const root = this._resolveWorkspaceRoot(workspaceRoot);
-        if (!root || !this._kanbanProvider) { return; }
-        if (this._projectContextSyncDebounce) { clearTimeout(this._projectContextSyncDebounce); }
-        this._projectContextSyncDebounce = setTimeout(() => {
-            this._projectContextSyncDebounce = undefined;
-            void this._kanbanProvider?.projectContextSyncNow(root, { auto: true })
-                .then(payload => { if (payload) { this.postMessageToProjectWebview(payload); } })
-                .catch(err => console.warn('[PlanningPanel] project-context auto-sync failed:', err));
-        }, 5000);
-    }
-
     // Retained as a no-op safety call — dispose() still invokes it. The periodic
     // sync timer / cancellation source are never started after the sync-mode
     // dropdown removal, so this simply clears already-undefined values. Kept
@@ -9347,7 +9224,6 @@ Read the current content above. Determine what's missing. Produce a complete fea
         this._syncCancellationSource?.abort();
         this._syncCancellationSource = undefined;
     }
-
 
 
     /**
@@ -9682,14 +9558,6 @@ Read the current content above. Determine what's missing. Produce a complete fea
         if (this._activeDocWatcher) {
             try { this._activeDocWatcher.dispose(); } catch (e) {}
             this._activeDocWatcher = undefined;
-        }
-        if (this._activeDevDocWatchDebounce) {
-            clearTimeout(this._activeDevDocWatchDebounce);
-            this._activeDevDocWatchDebounce = undefined;
-        }
-        if (this._activeDevDocWatcher) {
-            try { this._activeDevDocWatcher.dispose(); } catch (e) {}
-            this._activeDevDocWatcher = undefined;
         }
         for (const watcher of this._antigravityWatchers) {
             try { watcher.dispose(); } catch (e) {}

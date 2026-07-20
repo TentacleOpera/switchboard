@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import type { ClickUpSyncService } from '../ClickUpSyncService';
 import type { KanbanDatabase, KanbanPlanRecord } from '../KanbanDatabase';
-import type { RemoteProvider, RemoteStateDelta, RemoteCommentDelta, RemoteProviderCapabilities, ProjectContextBundle, ProjectContextPushResult, ArchiveResult } from './RemoteProvider';
+import type { RemoteProvider, RemoteStateDelta, RemoteCommentDelta, RemoteProviderCapabilities, ArchiveResult } from './RemoteProvider';
 import { importRemoteMarkdownPlan } from './importRemotePlan';
 
 /**
@@ -20,7 +20,7 @@ interface ClickUpRemoteProviderDeps {
 
 export class ClickUpRemoteProvider implements RemoteProvider {
     public readonly kind = 'clickup' as const;
-    public readonly capabilities: RemoteProviderCapabilities = { pull: true, push: true, projectContextPush: false, archive: false };
+    public readonly capabilities: RemoteProviderCapabilities = { pull: true, push: true, archive: false };
     private _clickup: ClickUpSyncService;
     private _deps: ClickUpRemoteProviderDeps;
     private _listIdToColumn: Record<string, string> = {};
@@ -200,12 +200,6 @@ export class ClickUpRemoteProvider implements RemoteProvider {
         if (!result.success) {
             throw new Error(`ClickUp pushContent failed for ${remoteId}: ${result.error || 'unknown error'}`);
         }
-    }
-
-    // ── Project-context / archive ────────────────────────────────────
-
-    public async pushProjectContext(_bundle: ProjectContextBundle): Promise<ProjectContextPushResult> {
-        return { ok: true, skipped: true, detail: 'ClickUp project-context push is not supported' };
     }
 
     public async archiveCard(_remoteId: string): Promise<ArchiveResult> {
