@@ -97,3 +97,7 @@ Key risks: (1) `pointer-events: auto` at rest makes dimmed buttons clickable —
 
 ## Routing
 **Complexity 2 → Send to Intern.** Single-file CSS change, no JS, no backend. One behavior-change note (pointer-events at rest) that the dimmed opacity resolves.
+
+## Review Findings
+
+Reviewed the committed implementation (commit 32bc8ab) against this plan. The `.ticket-node .card-actions` rules (planning.html:2925-2944) now set `max-height: none; margin-top: 4px; pointer-events: auto; opacity: 0.55` at rest with `transition: opacity 0.15s ease` only — no `max-height`/`margin-top` animation. Hover/selected/focus-within rules set only `opacity: 1`. Card height is now constant regardless of hover state — the plan's goal is met. The `pointer-events: auto` at rest behavior change is exactly as the plan's Complexity Audit flagged and accepted at `0.55` opacity (dimmed but clearly visible). `:focus-within` is retained in the brighten rule so keyboard users still get full-opacity feedback when Tabbing to a button. No CRITICAL/MAJOR findings, no NITs. Verification: CSS-only change, no JS/backend touched — no regression analysis needed beyond confirming the ruleset matches the plan. Remaining risk: none — at narrow sidebar widths the `flex-wrap: wrap` may make the always-on row taller (pre-existing behavior, not a regression; card height is still constant at any given width).

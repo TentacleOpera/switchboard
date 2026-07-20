@@ -16,11 +16,11 @@ The Tickets tab in planning.html is overloaded: the top control strip horizontal
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Tickets tab: move Refetch into a "More" menu (keep Refresh primary)](../plans/tickets-merge-refresh-refetch.md) — **CODER CODED**
-- [ ] [Tickets tab: remove the Refine button from ticket cards](../plans/tickets-remove-refine-button.md) — **CODER CODED**
-- [ ] [Tickets tab: stop sidebar cards resizing on hover](../plans/tickets-sidebar-cards-no-hover-resize.md) — **CODER CODED**
-- [ ] [Tickets tab: move the search input to the top of the sidebar](../plans/tickets-search-move-to-sidebar-top.md) — **CODER CODED**
-- [ ] [Tickets tab: de-overload the ticket preview meta bar](../plans/tickets-preview-meta-bar-deoverload.md) — **CODER CODED**
+- [ ] [Tickets tab: move Refetch into a "More" menu (keep Refresh primary)](../plans/tickets-merge-refresh-refetch.md) — **CODE REVIEWED**
+- [ ] [Tickets tab: remove the Refine button from ticket cards](../plans/tickets-remove-refine-button.md) — **CODE REVIEWED**
+- [ ] [Tickets tab: stop sidebar cards resizing on hover](../plans/tickets-sidebar-cards-no-hover-resize.md) — **CODE REVIEWED**
+- [ ] [Tickets tab: move the search input to the top of the sidebar](../plans/tickets-search-move-to-sidebar-top.md) — **CODE REVIEWED**
+- [ ] [Tickets tab: de-overload the ticket preview meta bar](../plans/tickets-preview-meta-bar-deoverload.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
