@@ -2285,6 +2285,104 @@
         }
     }
 
+    // ===== Reusable multi-instance overflow menu ("⋯ More" popover) =====
+    // Scoped by [data-overflow-menu] / [data-overflow-trigger] / [data-overflow-popover]
+    // data attributes — supports N independent instances on the page (ticket preview
+    // meta bar + Tickets top control strip). The popover is position:fixed so it escapes
+    // any ancestor overflow:auto / overflow-x:auto. Initialized once at load.
+    function _positionOverflowPopover(popover, trigger) {
+        const rect = trigger.getBoundingClientRect();
+        popover.style.top = (rect.bottom + 2) + 'px';
+        popover.style.left = rect.left + 'px';
+        // Defer clamping to next frame so the popover's size is measurable.
+        requestAnimationFrame(() => {
+            const pRect = popover.getBoundingClientRect();
+            if (pRect.right > window.innerWidth - 4) {
+                popover.style.left = Math.max(4, window.innerWidth - pRect.width - 4) + 'px';
+            }
+            if (pRect.bottom > window.innerHeight - 4) {
+                // Flip above the trigger if it would overflow the viewport bottom.
+                popover.style.top = Math.max(4, rect.top - pRect.height - 2) + 'px';
+            }
+        });
+    }
+
+    function _closeAllOverflowPopovers(except) {
+        document.querySelectorAll('[data-overflow-popover][data-open="true"]').forEach(p => {
+            if (p !== except) p.removeAttribute('data-open');
+        });
+    }
+
+    function _recomputeOverflowTriggerVisibility(menu) {
+        if (!menu) return;
+        const popover = menu.querySelector('[data-overflow-popover]');
+        if (!popover) return;
+        const items = Array.from(popover.querySelectorAll('.overflow-menu-item, .strip-btn'));
+        const anyVisible = items.some(el => {
+            if (el.disabled) return false;
+            const cs = window.getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+            return true;
+        });
+        menu.setAttribute('data-empty', anyVisible ? 'false' : 'true');
+    }
+
+    // Recompute every overflow-menu trigger's visibility on the page. Called after
+    // any gating update that toggles item display/disabled (e.g. _toggleSubtaskMetaButtons,
+    // Attachments/Diagram show/hide).
+    function _recomputeAllOverflowTriggers() {
+        document.querySelectorAll('[data-overflow-menu]').forEach(_recomputeOverflowTriggerVisibility);
+    }
+
+    let _overflowMenusInitialized = false;
+    function initOverflowMenus() {
+        if (_overflowMenusInitialized) return;
+        _overflowMenusInitialized = true;
+
+        document.addEventListener('click', (e) => {
+            const trigger = e.target.closest('[data-overflow-trigger]');
+            if (trigger) {
+                e.stopPropagation();
+                const menu = trigger.closest('[data-overflow-menu]');
+                const popover = menu && menu.querySelector('[data-overflow-popover]');
+                if (!popover) return;
+                const willOpen = popover.getAttribute('data-open') !== 'true';
+                _closeAllOverflowPopovers(willOpen ? popover : null);
+                if (willOpen) {
+                    _positionOverflowPopover(popover, trigger);
+                    popover.setAttribute('data-open', 'true');
+                } else {
+                    popover.removeAttribute('data-open');
+                }
+                return;
+            }
+            // Outside click — close all open popovers.
+            if (!e.target.closest('[data-overflow-menu]')) {
+                _closeAllOverflowPopovers(null);
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape') return;
+            const openPopovers = document.querySelectorAll('[data-overflow-popover][data-open="true"]');
+            if (openPopovers.length) {
+                openPopovers.forEach(p => p.removeAttribute('data-open'));
+            }
+        });
+
+        // Reposition open popovers on scroll/resize (capture so we catch scroll inside
+        // any scrollable ancestor, e.g. the top strip's overflow-x:auto).
+        const repositionOpen = () => {
+            document.querySelectorAll('[data-overflow-popover][data-open="true"]').forEach(p => {
+                const menu = p.closest('[data-overflow-menu]');
+                const trigger = menu && menu.querySelector('[data-overflow-trigger]');
+                if (trigger) _positionOverflowPopover(p, trigger);
+            });
+        };
+        window.addEventListener('scroll', repositionOpen, true);
+        window.addEventListener('resize', repositionOpen);
+    }
+
     function getTicketsTabElements() {
         return {
             listView: document.getElementById('tree-pane-tickets'),
@@ -2296,6 +2394,8 @@
             clickUpStatusFilter: document.getElementById('tickets-status-filter'),
             refreshButton: document.getElementById('tickets-refresh'),
             refetchButton: document.getElementById('tickets-refetch'),
+            ticketsMoreTrigger: document.querySelector('#controls-strip-tickets [data-overflow-trigger]'),
+            previewMoreTrigger: document.querySelector('#tickets-preview-meta-bar [data-overflow-trigger]'),
             emptyState: document.getElementById('tickets-empty-state'),
             issuesContainer: document.getElementById('tickets-issues-container'),
             loadMoreButton: document.getElementById('tickets-load-more'),
@@ -9299,6 +9399,9 @@ Return ONLY the drafted prompt with no additional commentary.`;
             ticketsAgentApiBtn, ticketsAgentApiModal, btnCloseTicketsAgentApiModal, btnCloseTicketsAgentApiModalAction
         } = getTicketsTabElements();
 
+        // Wire the reusable overflow-menu component (multi-instance: top-strip + meta-bar).
+        initOverflowMenus();
+
         // Custom update call to populate dropdown if integrations already fetched
         updateTicketsWorkspacePicker();
 
@@ -9955,34 +10058,6 @@ Instructions:
                 const provider = moveTicketBtn.dataset.provider;
                 e.stopPropagation();
                 showMoveTicketModal(provider, id);
-                return;
-            }
-            const refineBtn = e.target.closest('[data-refine-ticket-id]');
-            if (refineBtn) {
-                const id = refineBtn.dataset.refineTicketId;
-                const provider = refineBtn.dataset.provider;
-                let title = '';
-                let description = '';
-                if (provider === 'linear') {
-                    const issue = linearProjectIssues.find(i => i.id === id)
-                        || (_drillDownSubtasks && _drillDownSubtasks.find(s => s.id === id));
-                    title = issue?.title || issue?.identifier || '';
-                    description = issue?.description || '';
-                } else {
-                    const task = clickUpProjectIssues.find(t => t.id === id)
-                        || (_drillDownSubtasks && _drillDownSubtasks.find(s => s.id === id));
-                    title = task?.title || task?.identifier || '';
-                    description = task?.markdownDescription || task?.description || '';
-                }
-                vscode.postMessage({
-                    type: 'copyRefinePrompt',
-                    provider,
-                    id,
-                    title,
-                    description,
-                    workspaceRoot: ticketsWorkspaceRoot
-                });
-                flashCopyBtn(refineBtn);
                 return;
             }
             const openTicketBtn = e.target.closest('[data-open-ticket-url]');
@@ -10801,7 +10876,6 @@ Instructions:
             <div class="card-actions">
                 <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(task.id)}" data-provider="clickup" title="Add to kanban">To kanban</button>
                 <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(task.id)}" data-provider="clickup" title="Link to ticket">Link</button>
-                <button type="button" class="card-icon-btn" data-refine-ticket-id="${escapeAttr(task.id)}" data-provider="clickup">Refine</button>
                 <button type="button" class="card-icon-btn" data-move-ticket-id="${escapeAttr(task.id)}" data-provider="clickup">Move</button>
                 ${openBtn}
             </div>
@@ -10830,7 +10904,6 @@ Instructions:
             <div class="card-actions">
                 <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(issue.id)}" data-provider="linear" title="Add to kanban">To kanban</button>
                 <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(issue.id)}" data-provider="linear" title="Link to ticket">Link</button>
-                <button type="button" class="card-icon-btn" data-refine-ticket-id="${escapeAttr(issue.id)}" data-provider="linear">Refine</button>
                 <button type="button" class="card-icon-btn" data-move-ticket-id="${escapeAttr(issue.id)}" data-provider="linear">Move</button>
                 ${openBtn}
             </div>
@@ -10983,6 +11056,11 @@ Instructions:
             if (btnConvertSubtask) btnConvertSubtask.style.display = '';
             if (btnToParent) btnToParent.style.display = 'none';
         }
+        // Recompute the meta-bar "⋯ More" trigger visibility: if every item inside
+        // the popover is now hidden (e.g. minimal-capability provider), hide the
+        // trigger too. Items live inside the popover DOM but keep their ids, so the
+        // gating toggles above still resolve them by getElementById.
+        _recomputeAllOverflowTriggers();
     }
 
     // Resolves the external URL for a ticket so the "Open" action works for every
@@ -11103,6 +11181,7 @@ Instructions:
             if (_lastTicketsDetailContentHtml !== '') { detailContent.innerHTML = ''; _lastTicketsDetailContentHtml = ''; }
             if (previewMetaBar) previewMetaBar.style.display = 'none';
             if (commentInputArea) commentInputArea.style.display = 'none';
+            _closeAllOverflowPopovers(null);
             const tagsButton = document.getElementById('tickets-tags');
             if (tagsButton) tagsButton.disabled = true;
             renderTicketTags([], 'linear');
@@ -11126,6 +11205,8 @@ Instructions:
             if (btnDiagramPrompt) {
                 btnDiagramPrompt.style.display = '';
             }
+            // Recompute "⋯ More" trigger visibility after Attachments/Diagram gating.
+            _recomputeAllOverflowTriggers();
         }
 
         if (subtasksNav) {
@@ -11665,6 +11746,7 @@ Instructions:
             if (_lastTicketsClickUpDetailContentHtml !== '') { detailContent.innerHTML = ''; _lastTicketsClickUpDetailContentHtml = ''; }
             if (previewMetaBar) previewMetaBar.style.display = 'none';
             if (commentInputArea) commentInputArea.style.display = 'none';
+            _closeAllOverflowPopovers(null);
             const tagsButton = document.getElementById('tickets-tags');
             if (tagsButton) tagsButton.disabled = true;
             renderTicketTags([], 'clickup');
@@ -11688,6 +11770,8 @@ Instructions:
             if (btnDiagramPrompt) {
                 btnDiagramPrompt.style.display = '';
             }
+            // Recompute "⋯ More" trigger visibility after Attachments/Diagram gating.
+            _recomputeAllOverflowTriggers();
         }
 
         if (subtasksNav) {
@@ -12048,6 +12132,7 @@ Instructions:
         if (elements.subtasksNav) { elements.subtasksNav.innerHTML = ''; elements.subtasksNav.style.display = 'none'; }
         if (elements.previewMetaBar) elements.previewMetaBar.style.display = 'none';
         if (elements.commentInputArea) elements.commentInputArea.style.display = 'none';
+        _closeAllOverflowPopovers(null);
         
     }
 

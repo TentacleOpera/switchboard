@@ -65,6 +65,8 @@
         stitchSelectedElement: null,
         htmlActiveFilePath: null,
         htmlSelectedElement: null,
+        htmlSelectedFiles: new Map(),
+        htmlCanvasInFlight: false,
     };
 
     function populateWorkspaceDropdown(selectElOrId, workspaceItems, selectedValue, includeAllOption = true) {
@@ -153,6 +155,13 @@
             }
         });
 
+        // Clear HTML multi-select when leaving the HTML Previews tab — ghost
+        // selections (enabled Make Canvas button, invisible selection) are the
+        // failure mode this prevents.
+        if (tabName !== 'html-preview') {
+            clearHtmlSelection();
+        }
+
         // Trigger updates if needed
         if (tabName === 'stitch') {
             // Defensive: ensure clean UI when no project is selected
@@ -184,12 +193,6 @@
         // server-side readdir every time the tab is activated (mirrors planning.js).
         if (tabName === 'html-preview' || tabName === 'images' || tabName === 'briefs') {
             vscode.postMessage({ type: 'refreshDocsForTab', tab: tabName });
-        }
-
-        // Canvas tab entry: ensure the current canvas is loaded once.
-        if (tabName === 'canvas' && !canvasState._loaded) {
-            canvasState._loaded = true;
-            canvasLoad(canvasState.name || 'Default');
         }
 
         vscode.postMessage({ type: 'activeTabChanged', tab: tabName });
@@ -1021,6 +1024,10 @@
             const ext = d.name.substring(d.name.lastIndexOf('.')).toLowerCase();
             return ['.html', '.htm'].includes(ext);
         });
+        // Universe of selectable files — used to reconcile selection state.
+        // Search-filtered files are still "present" (just hidden), so reconcile
+        // against the pre-search set, not the filtered view.
+        const selectableDocNodes = docNodes;
 
         const search = String(state.htmlDocsSearch || '').trim().toLowerCase();
         if (search) {
@@ -1029,10 +1036,52 @@
 
         if (docNodes.length === 0 && (search || !folderPaths || folderPaths.length === 0)) {
             docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No matching HTML preview files found.</div>';
+            reconcileHtmlSelection(selectableDocNodes, sourceId);
             return;
         }
 
         renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, (doc) => createHtmlDocCard(doc, sourceId), 'html-previews');
+        reconcileHtmlSelection(selectableDocNodes, sourceId);
+    }
+
+    function reconcileHtmlSelection(selectableDocNodes, sourceId) {
+        const presentKeys = new Set(selectableDocNodes.map(d => `${sourceId}::${d.id}`));
+        let changed = false;
+        for (const key of Array.from(state.htmlSelectedFiles.keys())) {
+            if (!presentKeys.has(key)) {
+                state.htmlSelectedFiles.delete(key);
+                changed = true;
+            }
+        }
+        // Re-check boxes for still-present selections (renderDocCard already sets
+        // checked state at create time, but re-renders via search/filter recreate
+        // nodes, so this is a defensive pass for any cached nodes).
+        const pane = document.getElementById('tree-pane-html');
+        if (pane) {
+            pane.querySelectorAll('.tree-node[data-selectable="html"]').forEach(node => {
+                const cb = node.querySelector('.card-checkbox');
+                if (!cb) return;
+                const key = `${node.dataset.sourceId || ''}::${node.dataset.nodeId || ''}`;
+                cb.checked = state.htmlSelectedFiles.has(key);
+            });
+        }
+        updateHtmlSelectionCount();
+    }
+
+    function updateHtmlSelectionCount() {
+        const count = state.htmlSelectedFiles.size;
+        const countEl = document.getElementById('html-selection-count');
+        if (countEl) countEl.textContent = `${count} selected`;
+        const enabled = count >= 2 && !state.htmlCanvasInFlight;
+        const sendBtn = document.getElementById('btn-make-canvas-send');
+        const copyBtn = document.getElementById('btn-make-canvas-copy');
+        if (sendBtn) sendBtn.disabled = !enabled;
+        if (copyBtn) copyBtn.disabled = !enabled;
+    }
+
+    function clearHtmlSelection() {
+        state.htmlSelectedFiles.clear();
+        updateHtmlSelectionCount();
     }
 
     function createHtmlDocCard(doc, sourceId) {
@@ -1044,6 +1093,7 @@
             nodeMetadata: doc.metadata,
             actions: ['Serve & Open', 'Link Doc'],
             isSelected: state.activeSource === sourceId && state.activeDocId === doc.id,
+            selectable: true,
             clickHandler: () => {
                 loadDocumentPreview(sourceId, doc.id, doc.name);
             }
@@ -1193,7 +1243,7 @@
         });
     }
 
-    function renderDocCard({ title, subtitle, sourceId, nodeId, nodeMetadata, actions, isSelected, clickHandler }) {
+    function renderDocCard({ title, subtitle, sourceId, nodeId, nodeMetadata, actions, isSelected, clickHandler, selectable = false }) {
         const wrapper = document.createElement('div');
         wrapper.className = 'tree-node';
         if (isSelected) {
@@ -1204,10 +1254,42 @@
         wrapper.dataset.docId = nodeId || '';
         wrapper.dataset.kind = 'document';
         wrapper.dataset.name = title;
+        wrapper.dataset.selectable = selectable ? 'html' : '';
         if (nodeMetadata) {
             if (nodeMetadata.root) wrapper.dataset.root = nodeMetadata.root;
             if (nodeMetadata.sourceFolder) wrapper.dataset.sourceFolder = nodeMetadata.sourceFolder;
             if (nodeMetadata.absolutePath) wrapper.dataset.absolutePath = nodeMetadata.absolutePath;
+        }
+
+        if (selectable) {
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'card-checkbox';
+            checkbox.title = 'Select for Make Canvas';
+            const selKey = `${sourceId || ''}::${nodeId || ''}`;
+            if (state.htmlSelectedFiles.has(selKey)) {
+                checkbox.checked = true;
+            }
+            checkbox.addEventListener('change', (e) => {
+                e.stopPropagation();
+                const key = `${sourceId || ''}::${nodeId || ''}`;
+                const absolutePath = nodeMetadata?.absolutePath || '';
+                const folder = absolutePath ? absolutePath.replace(/[\\/][^\\/]+$/, '') : (nodeMetadata?.sourceFolder || '');
+                if (checkbox.checked) {
+                    state.htmlSelectedFiles.set(key, {
+                        sourceId: sourceId || '',
+                        nodeId: nodeId || '',
+                        absolutePath,
+                        name: title,
+                        folder
+                    });
+                } else {
+                    state.htmlSelectedFiles.delete(key);
+                }
+                updateHtmlSelectionCount();
+            });
+            checkbox.addEventListener('click', (e) => { e.stopPropagation(); });
+            wrapper.appendChild(checkbox);
         }
 
         const cardText = document.createElement('div');
@@ -3236,92 +3318,6 @@
         }
 
         switch (msg.type) {
-            case 'canvas/loaded': {
-                const name = msg.name || 'Default';
-                canvasState.name = name;
-                const c = msg.canvas || { frames: [], zoom: 1, pan: { x: 0, y: 0 } };
-                canvasState.frames = (c.frames || []).map(f => ({
-                    id: 'f_' + Math.random().toString(36).slice(2, 10),
-                    filePath: f.filePath, label: f.label, iframeSrc: f.iframeSrc || null,
-                    x: f.x || 0, y: f.y || 0, w: f.w || CANVAS_FRAME_DEFAULT_W, h: f.h || CANVAS_FRAME_DEFAULT_H
-                }));
-                canvasState.zoom = c.zoom || 1;
-                canvasState.panX = (c.pan && c.pan.x) || 0;
-                canvasState.panY = (c.pan && c.pan.y) || 0;
-                if (Array.isArray(msg.names)) canvasState.names = msg.names;
-                canvasPopulateNameSelect();
-                canvasRenderFrames();
-                canvasApplyTransform();
-                canvasSetMode(canvasState.mode);
-                break;
-            }
-            case 'canvas/framesAdded': {
-                // msg.frames: [{ filePath, label, iframeSrc }]
-                const added = msg.frames || [];
-                let nAdded = 0, nSkipped = 0;
-                for (const a of added) {
-                    const before = canvasState.frames.length;
-                    const f = canvasAddFrame(a.filePath, a.label, a.iframeSrc);
-                    if (f) nAdded++; else nSkipped++;
-                }
-                const statusEl = document.getElementById('status-canvas');
-                if (statusEl && (nAdded || nSkipped)) {
-                    statusEl.textContent = `${nAdded} added${nSkipped ? `, ${nSkipped} already present` : ''}`;
-                }
-                if (nAdded) canvasFit();
-                break;
-            }
-            case 'canvas/frameRefresh': {
-                // auto-refresh a single frame by filePath
-                canvasRefreshFrame(msg.filePath);
-                break;
-            }
-            case 'canvas/stitchDocsReady': {
-                // bulk-add: msg.docs = [{ screenId, name, file, sourceFolder, absolutePath, iframeSrc }]
-                const docs = msg.docs || [];
-                const frames = docs.map(d => ({
-                    filePath: d.absolutePath, label: d.name, iframeSrc: d.iframeSrc
-                }));
-                let nAdded = 0, nSkipped = 0;
-                for (const fr of frames) {
-                    const f = canvasAddFrame(fr.filePath, fr.label, fr.iframeSrc);
-                    if (f) nAdded++; else nSkipped++;
-                }
-                const statusEl = document.getElementById('status-canvas');
-                if (statusEl) statusEl.textContent = `${nAdded} added${nSkipped ? `, ${nSkipped} already present` : ''}`;
-                if (nAdded) canvasFit();
-                canvasState._stitchBulkPending = null;
-                break;
-            }
-            case 'canvas/pathCopied': {
-                const statusEl = document.getElementById('status-canvas');
-                if (statusEl) statusEl.textContent = 'Path copied';
-                break;
-            }
-            case 'canvas/flattened': {
-                // export subtask: provider sends flattened HTML content + filePath.
-                // Stash the path so the Upload-to-Claude-Artifacts buttons can
-                // build the upload prompt from it (mirrors the HTML Previews tab,
-                // which builds the prompt from state.activeDocName/activeDocSourceFolder).
-                if (msg.filePath) {
-                    canvasState.lastFlattenedPath = msg.filePath;
-                    const statusEl = document.getElementById('status-canvas');
-                    if (statusEl) statusEl.textContent = 'Flattened HTML saved — use ⇗ to upload to Claude Artifacts';
-                    const uploadBtn = document.getElementById('canvas-btn-upload-artifact');
-                    if (uploadBtn) uploadBtn.style.display = 'inline-block';
-                    const copyUploadBtn = document.getElementById('canvas-btn-copy-artifact-prompt');
-                    if (copyUploadBtn) copyUploadBtn.style.display = 'inline-block';
-                }
-                if (msg.uploadPrompt) {
-                    // feed into the existing Upload-to-Claude-Artifacts path
-                    const txt = msg.uploadPrompt;
-                    // copy to clipboard + surface, mirroring copyClaudeImportPrompt
-                    navigator.clipboard?.writeText(txt);
-                    const statusEl = document.getElementById('status-canvas');
-                    if (statusEl) statusEl.textContent = 'Flatten prompt copied';
-                }
-                break;
-            }
             case 'workspaceItemsUpdated': {
                 _workspaceItems = msg.items || [];
                 _registeredDropdowns.forEach(d => {
@@ -3704,35 +3700,6 @@
                 }
                 const truncatedText = text.length > 200 ? text.substring(0, 200) + '...' : text;
 
-                // Canvas per-frame Inspect Mode: resolve the source frame by matching
-                // event.source to a canvas frame iframe. The inspector script runs
-                // INSIDE the iframe and uses the iframe's own coordinate space, so no
-                // parent-side nested-transform mapping is needed — the only routing
-                // question is "which frame did this come from?", answered here.
-                if (canvasState.mode === 'inspect') {
-                    const frameId = canvasFindFrameBySource(event.source);
-                    if (frameId) {
-                        canvasState.activeFrameId = frameId;
-                        canvasState._selectedElement = { selector, tag, id, classes, text: truncatedText, outerHTML };
-                        const frame = canvasState.frames.find(f => f.id === frameId);
-                        const labelEl = document.getElementById('canvas-tweak-frame-label');
-                        if (labelEl && frame) labelEl.textContent = 'Frame: ' + frame.label;
-                        const breadcrumbEl = document.getElementById('canvas-tweak-header-breadcrumb');
-                        if (breadcrumbEl) {
-                            var classStr = classes.length > 0 ? '.' + classes.slice(0, 2).join('.') : '';
-                            breadcrumbEl.textContent = tag + (id ? '#' + id : '') + classStr;
-                            breadcrumbEl.title = selector;
-                        }
-                        const preEl = document.getElementById('canvas-tweak-snippet-pre');
-                        if (preEl) preEl.textContent = outerHTML;
-                        const popup = document.getElementById('canvas-tweak-popup');
-                        if (popup) popup.style.display = 'flex';
-                        const textarea = document.getElementById('canvas-tweak-input');
-                        if (textarea) textarea.focus();
-                        break;
-                    }
-                }
-
                 // Route to the correct tab based on activeSource + the iframe that
                 // emitted the message. The shared _INSPECTOR_SCRIPT posts the same
                 // `stitchElementSelected` type from every preview iframe, so the
@@ -4099,8 +4066,6 @@
                 state.stitchProjects = msg.projects || [];
                 populateStitchProjects(state.stitchProjects, msg.defaultProjectId);
                 populateStitchHtmlProjectSelect(state.stitchProjects);
-                // Also populate the Canvas "Add Stitch project" dropdown.
-                canvasPopulateStitchSelect(state.stitchProjects);
                 if (!persistedState.stitchModelId && msg.defaultModelId) {
                     state.stitchModelId = msg.defaultModelId;
                     if (stitchModelSelect) stitchModelSelect.value = state.stitchModelId;
@@ -5110,6 +5075,63 @@
         state.htmlSelectedElement = null;
     });
 
+    // ── Make Canvas: flatten selected HTML files into one inline board ──
+    function composeCanvasFromFilesPrompt() {
+        const files = Array.from(state.htmlSelectedFiles.values());
+        if (files.length < 2) return '';
+        const first = files[0];
+        const firstStem = (first.name || 'canvas').replace(/\.[^.]+$/, '');
+        const targetPath = `${first.folder}/${firstStem}-canvas.html`;
+        const fileList = files.map((f, i) => `${i + 1}. ${f.absolutePath}`).join('\n');
+        return [
+            'Flatten multiple HTML files into ONE self-contained inline board.',
+            '',
+            'Selected files (in order):',
+            fileList,
+            '',
+            'Target output path: ' + targetPath,
+            '',
+            'Requirements (all mandatory):',
+            '1. Read each listed HTML file and extract its rendered screen (body content + scoped styles).',
+            '2. Compose ONE self-contained HTML document containing every screen. All CSS must be inlined. All local assets (<img>, fonts, CSS url(), <link rel=stylesheet href="./...">) must be embedded as data: URIs.',
+            '3. NO <iframe> elements anywhere. NO external or relative references — every <link rel=stylesheet href="https://..."> and remote <script src="https://..."> must be either inlined (fetch and embed) or stripped. Claude Artifacts CSP blocks remote refs, so leaving any remote ref breaks the upload.',
+            '4. Lay the screens out on a board (grid or sections), one caption per screen (the source filename), and leave clearly-marked slots for commentary (scope-notes, before/after spec tables) between/around screens.',
+            '5. Reference shape: daily-diary-designs.artifact.html — same structure: zero iframes, screens inline, commentary woven in. Match that pattern.',
+            '6. Write the result to the target output path so it appears in the HTML Previews list on refresh.',
+            '',
+            'The output must be a single inline doc that zooms, supports Inspect-Mode element edits, and publishes to Claude Artifacts without modification. Do not create a plan file — write the HTML file directly.'
+        ].join('\n');
+    }
+
+    document.getElementById('btn-make-canvas-send')?.addEventListener('click', () => {
+        if (state.htmlCanvasInFlight) return;
+        const prompt = composeCanvasFromFilesPrompt();
+        if (!prompt) return;
+        state.htmlCanvasInFlight = true;
+        updateHtmlSelectionCount();
+        vscode.postMessage({
+            type: 'sendHtmlTweakPrompt',
+            prompt,
+            workspaceRoot: state.designWorkspaceRootFilter
+        });
+        // Release guard on next tick — the transport is fire-and-forget; the
+        // agent writes the file asynchronously and the watcher refreshes the list.
+        setTimeout(() => {
+            state.htmlCanvasInFlight = false;
+            updateHtmlSelectionCount();
+        }, 1500);
+    });
+
+    document.getElementById('btn-make-canvas-copy')?.addEventListener('click', () => {
+        if (state.htmlCanvasInFlight) return;
+        const prompt = composeCanvasFromFilesPrompt();
+        if (!prompt) return;
+        vscode.postMessage({
+            type: 'copyHtmlTweakPrompt',
+            prompt
+        });
+    });
+
     document.getElementById('stitch-html-btn-edit')?.addEventListener('click', () => {
         if (state.stitchBusy) return;
         const screenId = activeStitchHtmlScreenId();
@@ -5760,620 +5782,6 @@
     // Notify backend ready
     vscode.postMessage({ type: 'ready' });
 
-    // ── Canvas Module (Design panel Canvas tab) ──
-    // Foundation: pan/zoom surface + free-drag frames + JSON-sidecar persistence.
-    // Extended by: bulk-add Stitch project, per-frame Inspect Mode, Export/Flatten,
-    // and performance hardening (virtualisation, frame cap, single server).
-    const canvasState = {
-        name: 'Default',
-        frames: [],          // [{ id, filePath, label, iframeSrc, x, y, w, h }]
-        zoom: 1,
-        panX: 0,
-        panY: 0,
-        mode: 'none',        // 'none' | 'pan' | 'drag' | 'inspect'
-        activeFrameId: null,
-        names: ['Default'],
-        _drag: null,         // { frameId, offsetX, offsetY }
-        _pan: null,          // { startX, startY, origPanX, origPanY }
-        _loaded: false,
-        _stitchBulkPending: null, // projectId awaiting canvas/stitchDocsReady
-        lastFlattenedPath: null,  // path of the last flattened HTML (for Upload-to-Claude-Artifacts)
-    };
-
-    const CANVAS_FRAME_DEFAULT_W = 480;
-    const CANVAS_FRAME_DEFAULT_H = 320;
-    const CANVAS_FRAME_OFFSET = 40;
-    const CANVAS_FRAME_CAP = 40; // performance subtask: surfaced, never silent truncate
-
-    function canvasViewport() { return document.getElementById('canvas-viewport'); }
-    function canvasPlane() { return document.getElementById('canvas-plane'); }
-    function canvasCaptureLayer() { return document.getElementById('canvas-capture-layer'); }
-    function canvasEmptyState() { return document.getElementById('canvas-empty-state'); }
-
-    function canvasApplyTransform() {
-        const plane = canvasPlane();
-        if (!plane) return;
-        plane.style.transform = `translate(${canvasState.panX}px, ${canvasState.panY}px) scale(${canvasState.zoom})`;
-    }
-
-    function canvasBounds() {
-        if (!canvasState.frames.length) return null;
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const f of canvasState.frames) {
-            minX = Math.min(minX, f.x);
-            minY = Math.min(minY, f.y);
-            maxX = Math.max(maxX, f.x + f.w);
-            maxY = Math.max(maxY, f.y + f.h);
-        }
-        return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
-    }
-
-    function canvasFit() {
-        const vp = canvasViewport();
-        if (!vp) return;
-        const rect = vp.getBoundingClientRect();
-        const b = canvasBounds();
-        if (!b || !b.w || !b.h) {
-            canvasState.zoom = 1; canvasState.panX = 0; canvasState.panY = 0;
-            canvasApplyTransform();
-            return;
-        }
-        const pad = 60;
-        const scale = Math.min((rect.width - pad * 2) / b.w, (rect.height - pad * 2) / b.h, 1);
-        canvasState.zoom = scale;
-        canvasState.panX = (rect.width - b.w * scale) / 2 - b.x * scale;
-        canvasState.panY = (rect.height - b.h * scale) / 2 - b.y * scale;
-        canvasApplyTransform();
-        canvasSaveDebounced();
-    }
-
-    function canvasZoomAt(newScale, cx, cy) {
-        const clamped = Math.max(0.05, Math.min(8, newScale));
-        const oldScale = canvasState.zoom;
-        if (clamped === oldScale) { canvasApplyTransform(); return; }
-        const k = clamped / oldScale;
-        canvasState.panX = cx - (cx - canvasState.panX) * k;
-        canvasState.panY = cy - (cy - canvasState.panY) * k;
-        canvasState.zoom = clamped;
-        canvasApplyTransform();
-        canvasSaveDebounced();
-    }
-
-    function canvasBuildFrameEl(f) {
-        const el = document.createElement('div');
-        el.className = 'canvas-frame';
-        el.dataset.frameId = f.id;
-        el.style.cssText = `position:absolute; left:${f.x}px; top:${f.y}px; width:${f.w}px; height:${f.h}px; box-sizing:border-box; border:1px solid var(--border-color,#333); background:var(--panel-bg,#1a1a1a); border-radius:4px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 2px 8px rgba(0,0,0,0.4);`;
-        const header = document.createElement('div');
-        header.className = 'canvas-frame-header';
-        header.dataset.frameId = f.id;
-        header.style.cssText = `display:flex; align-items:center; gap:6px; padding:4px 8px; background:var(--panel-bg2,#141414); border-bottom:1px solid var(--border-color,#333); font-size:11px; color:var(--text-secondary); cursor:grab; user-select:none; flex-shrink:0;`;
-        header.title = 'Drag to move';
-        const label = document.createElement('span');
-        label.textContent = f.label;
-        label.style.cssText = 'flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
-        const linkBtn = document.createElement('button');
-        linkBtn.textContent = 'Link';
-        linkBtn.title = 'Copy file path';
-        linkBtn.style.cssText = 'background:none; border:none; color:var(--accent-teal,#00f0ff); cursor:pointer; font-size:10px; padding:0;';
-        linkBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            vscode.postMessage({ type: 'canvasCopyPath', filePath: f.filePath });
-        });
-        const closeBtn = document.createElement('button');
-        closeBtn.textContent = '✕';
-        closeBtn.title = 'Remove frame';
-        closeBtn.style.cssText = 'background:none; border:none; color:var(--text-secondary); cursor:pointer; font-size:11px; padding:0;';
-        closeBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            canvasRemoveFrame(f.id);
-        });
-        header.appendChild(label);
-        header.appendChild(linkBtn);
-        header.appendChild(closeBtn);
-        const body = document.createElement('div');
-        body.className = 'canvas-frame-body';
-        body.style.cssText = 'flex:1; position:relative; overflow:hidden;';
-        const iframe = document.createElement('iframe');
-        iframe.className = 'canvas-frame-iframe';
-        iframe.dataset.frameId = f.id;
-        iframe.dataset.iframeSrc = f.iframeSrc || '';
-        iframe.dataset.mounted = f.iframeSrc ? '1' : '0';
-        iframe.sandbox = 'allow-scripts allow-same-origin';
-        iframe.style.cssText = 'border:none; width:100%; height:100%; display:block; background:#fff;';
-        if (f.iframeSrc) {
-            iframe.src = f.iframeSrc;
-        } else {
-            iframe.srcdoc = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-family:sans-serif;font-size:12px;">Source not found</div>';
-        }
-        body.appendChild(iframe);
-        // Poster: shown when the frame is virtualised out (off-screen) so the
-        // iframe can be unmounted to free memory/CPU on a busy canvas.
-        const poster = document.createElement('div');
-        poster.className = 'canvas-frame-poster';
-        poster.style.cssText = 'display:none; position:absolute; inset:0; background:var(--panel-bg2,#141414); color:var(--text-secondary); align-items:center; justify-content:center; font-size:12px; font-family:sans-serif; text-align:center; padding:12px; box-sizing:border-box;';
-        poster.textContent = f.label + ' (off-screen — scroll to load)';
-        body.appendChild(poster);
-        el.appendChild(header);
-        el.appendChild(body);
-        return el;
-    }
-
-    // Viewport virtualisation: unmount iframes that are far outside the viewport
-    // (freeing memory/CPU on a 20+ frame canvas); remount on scroll-back. The
-    // IntersectionObserver root margin keeps near-viewport frames mounted so fast
-    // panning doesn't thrash. The frame's layout (x/y/w/h) is preserved by the
-    // outer .canvas-frame element — only the iframe document is swapped.
-    let _canvasObserver = null;
-    function canvasObserveFrames() {
-        const vp = canvasViewport();
-        const plane = canvasPlane();
-        if (!vp || !plane) return;
-        // Drop stale observations from the previous render (detached frame elements)
-        // before re-observing the current set — bounded memory across re-renders.
-        if (_canvasObserver) { _canvasObserver.disconnect(); }
-        _canvasObserver = new IntersectionObserver((entries) => {
-                for (const entry of entries) {
-                    const frame = entry.target;
-                    const iframe = frame.querySelector('.canvas-frame-iframe');
-                    const poster = frame.querySelector('.canvas-frame-poster');
-                    if (!iframe || !poster) continue;
-                    const src = iframe.dataset.iframeSrc;
-                    if (!src) continue;
-                    const mounted = iframe.dataset.mounted === '1';
-                    if (entry.isIntersecting) {
-                        if (!mounted) {
-                            iframe.src = src;
-                            iframe.dataset.mounted = '1';
-                            poster.style.display = 'none';
-                            iframe.style.display = 'block';
-                        }
-                    } else {
-                        if (mounted) {
-                            iframe.src = 'about:blank';
-                            iframe.dataset.mounted = '0';
-                            poster.style.display = 'flex';
-                            iframe.style.display = 'none';
-                        }
-                    }
-                }
-            }, { root: vp, rootMargin: '400px 400px 400px 400px', threshold: 0 });
-        // (Re)observe all current frame elements.
-        plane.querySelectorAll('.canvas-frame').forEach(el => _canvasObserver.observe(el));
-    }
-
-    function canvasRenderFrames() {
-        const plane = canvasPlane();
-        if (!plane) return;
-        plane.querySelectorAll('.canvas-frame').forEach(el => el.remove());
-        const empty = canvasEmptyState();
-        if (empty) empty.style.display = canvasState.frames.length ? 'none' : 'block';
-        // Frame cap: surface, never silently truncate.
-        const statusEl = document.getElementById('status-canvas');
-        if (canvasState.frames.length > CANVAS_FRAME_CAP && statusEl) {
-            statusEl.textContent = `showing ${CANVAS_FRAME_CAP} of ${canvasState.frames.length}`;
-        } else if (statusEl) {
-            statusEl.textContent = canvasState.frames.length ? `${canvasState.frames.length} frame(s)` : '';
-        }
-        const visible = canvasState.frames.slice(0, CANVAS_FRAME_CAP);
-        for (const f of visible) {
-            plane.appendChild(canvasBuildFrameEl(f));
-        }
-        // (Re)observe frames for viewport virtualisation.
-        canvasObserveFrames();
-    }
-
-    function canvasNextOffset() {
-        // Grid-pack new frames so they don't stack/overlap. Columns of
-        // (defaultW + gap), rows of (defaultH + gap); 8 columns wide.
-        const n = canvasState.frames.length;
-        const cols = 8;
-        const col = n % cols;
-        const row = Math.floor(n / cols);
-        return {
-            x: 80 + col * (CANVAS_FRAME_DEFAULT_W + CANVAS_FRAME_OFFSET),
-            y: 80 + row * (CANVAS_FRAME_DEFAULT_H + CANVAS_FRAME_OFFSET)
-        };
-    }
-
-    function canvasAddFrame(filePath, label, iframeSrc, opts) {
-        opts = opts || {};
-        if (canvasState.frames.some(f => f.filePath === filePath)) return null;
-        if (canvasState.frames.length >= CANVAS_FRAME_CAP) {
-            const statusEl = document.getElementById('status-canvas');
-            if (statusEl) statusEl.textContent = `frame cap reached (${CANVAS_FRAME_CAP}) — "showing ${CANVAS_FRAME_CAP} of ${canvasState.frames.length + 1}"`;
-        }
-        const off = opts.pos || canvasNextOffset();
-        const frame = {
-            id: 'f_' + Math.random().toString(36).slice(2, 10),
-            filePath,
-            label: label || (filePath || '').split(/[\\/]/).pop(),
-            iframeSrc: iframeSrc || null,
-            x: off.x, y: off.y,
-            w: opts.w || CANVAS_FRAME_DEFAULT_W,
-            h: opts.h || CANVAS_FRAME_DEFAULT_H,
-        };
-        canvasState.frames.push(frame);
-        canvasRenderFrames();
-        canvasSave();
-        return frame;
-    }
-
-    function canvasRemoveFrame(id) {
-        canvasState.frames = canvasState.frames.filter(f => f.id !== id);
-        canvasRenderFrames();
-        canvasSave();
-    }
-
-    function canvasRefreshFrame(filePath) {
-        // auto-refresh: nudge the iframe to re-fetch by reassigning src.
-        const f = canvasState.frames.find(fr => fr.filePath === filePath);
-        if (!f) return;
-        const plane = canvasPlane();
-        const iframe = plane && plane.querySelector(`.canvas-frame-iframe[data-frame-id="${f.id}"]`);
-        if (iframe && f.iframeSrc) {
-            const cur = iframe.src;
-            iframe.src = 'about:blank';
-            setTimeout(() => { iframe.src = cur; }, 30);
-        }
-    }
-
-    function canvasSave() {
-        vscode.postMessage({
-            type: 'canvas/save',
-            name: canvasState.name,
-            canvas: {
-                frames: canvasState.frames.map(f => ({
-                    filePath: f.filePath, label: f.label, x: f.x, y: f.y, w: f.w, h: f.h
-                })),
-                zoom: canvasState.zoom, pan: { x: canvasState.panX, y: canvasState.panY }
-            }
-        });
-    }
-
-    // Debounced save for high-frequency view changes (wheel zoom/pan, button
-    // zoom) — persists zoom/pan without hammering disk on every wheel tick.
-    let _canvasSaveTimer = null;
-    function canvasSaveDebounced() {
-        if (_canvasSaveTimer) clearTimeout(_canvasSaveTimer);
-        _canvasSaveTimer = setTimeout(() => { _canvasSaveTimer = null; canvasSave(); }, 400);
-    }
-
-    function canvasLoad(name) {
-        canvasState.name = name || 'Default';
-        vscode.postMessage({ type: 'canvas/load', name: canvasState.name });
-    }
-
-    function canvasSetMode(mode) {
-        const prev = canvasState.mode;
-        canvasState.mode = mode;
-        const layer = canvasCaptureLayer();
-        // capture layer up for pan/drag so iframes don't swallow gestures;
-        // down for 'none' (frames interactive) and 'inspect' (inspect handles its own capture).
-        if (layer) layer.style.display = (mode === 'pan' || mode === 'drag') ? 'block' : 'none';
-        const cursor = mode === 'pan' ? 'grab' : (mode === 'inspect' ? 'crosshair' : 'default');
-        if (layer) layer.style.cursor = cursor;
-        document.getElementById('canvas-btn-pan')?.classList.toggle('active', mode === 'pan');
-        document.getElementById('canvas-btn-drag')?.classList.toggle('active', mode === 'drag');
-        document.getElementById('canvas-btn-inspect')?.classList.toggle('active', mode === 'inspect');
-        // toggle .canvas-frame pointer-events: in drag mode frames are non-interactive
-        // (header drag works through the capture layer via delegation); in none/inspect
-        // frames are interactive.
-        canvasPlane()?.querySelectorAll('.canvas-frame').forEach(el => {
-            el.style.pointerEvents = (mode === 'none' || mode === 'inspect') ? 'auto' : 'none';
-        });
-        // Inspect Mode: toggle the per-iframe inspector script in every frame.
-        // The script handles its own hover/click INSIDE the iframe (no parent-side
-        // coordinate mapping needed); selection messages are routed back by matching
-        // event.source to the frame iframe (see stitchElementSelected handler).
-        const turningOn = (mode === 'inspect');
-        const turningOff = (prev === 'inspect' && mode !== 'inspect');
-        if (turningOn || turningOff) {
-            canvasPlane()?.querySelectorAll('.canvas-frame-iframe').forEach(iframe => {
-                try { iframe.contentWindow?.postMessage({ type: 'sbInspectToggle', on: turningOn }, '*'); } catch {}
-            });
-            if (turningOff) {
-                const popup = document.getElementById('canvas-tweak-popup');
-                if (popup) popup.style.display = 'none';
-                canvasState.activeFrameId = null;
-                canvasState._selectedElement = null;
-            }
-        }
-    }
-
-    function canvasFindFrameBySource(source) {
-        if (!source) return null;
-        const plane = canvasPlane();
-        if (!plane) return null;
-        const iframes = plane.querySelectorAll('.canvas-frame-iframe');
-        for (const iframe of iframes) {
-            try { if (iframe.contentWindow === source) return iframe.dataset.frameId; } catch {}
-        }
-        return null;
-    }
-
-    function canvasComposeTweakPrompt() {
-        const el = canvasState._selectedElement;
-        const frame = canvasState.frames.find(f => f.id === canvasState.activeFrameId);
-        const filePath = frame ? frame.filePath : '';
-        const inputEl = document.getElementById('canvas-tweak-input');
-        const instruction = inputEl ? inputEl.value.trim() : '';
-        if (!el || !filePath || !instruction) return '';
-        return [
-            'Tweak an HTML file in place.',
-            '',
-            'File: ' + filePath,
-            '',
-            'Target element (CSS selector: ' + el.selector + '):',
-            '```html',
-            el.outerHTML,
-            '```',
-            '',
-            'Requested change: ' + instruction,
-            '',
-            'The snippet above is serialized from the live DOM — whitespace, entity encoding, attribute quoting, and boolean-attribute forms may differ from the file bytes, and if the page builds DOM at runtime the element may not appear verbatim in the source. Locate the target by the selector and the element\'s structure/text, not by exact-string search.',
-            '',
-            'Edit the file directly. Keep the change scoped to this element unless it forces adjacent updates (e.g. shared CSS). Do not create a plan file — this is a direct edit.'
-        ].join('\n');
-    }
-
-    function canvasPopulateNameSelect() {
-        const sel = document.getElementById('canvas-name-select');
-        if (!sel) return;
-        const cur = canvasState.name || 'Default';
-        sel.innerHTML = '';
-        for (const n of canvasState.names) {
-            const opt = document.createElement('option');
-            opt.value = n; opt.textContent = n;
-            sel.appendChild(opt);
-        }
-        sel.value = canvasState.names.includes(cur) ? cur : canvasState.names[0];
-    }
-
-    function canvasPopulateStitchSelect(projects) {
-        const sel = document.getElementById('canvas-add-stitch-select');
-        if (!sel) return;
-        sel.innerHTML = '';
-        const placeholder = document.createElement('option');
-        placeholder.value = ''; placeholder.textContent = 'Select project…';
-        sel.appendChild(placeholder);
-        for (const p of (projects || [])) {
-            const opt = document.createElement('option');
-            opt.value = p.id; opt.textContent = p.name || p.id;
-            sel.appendChild(opt);
-        }
-    }
-
-    function canvasInitListeners() {
-        const vp = canvasViewport();
-        if (!vp) return;
-        const plane = canvasPlane();
-        const layer = canvasCaptureLayer();
-
-        // wheel: ctrl/cmd = zoom at cursor; plain = pan
-        vp.addEventListener('wheel', (e) => {
-            if (e.target.closest('.zoom-toolbar')) return;
-            e.preventDefault();
-            const rect = vp.getBoundingClientRect();
-            if (e.ctrlKey || e.metaKey) {
-                const factor = Math.exp(-e.deltaY * 0.01);
-                canvasZoomAt(canvasState.zoom * factor, e.clientX - rect.left, e.clientY - rect.top);
-            } else {
-                canvasState.panX -= e.deltaX;
-                canvasState.panY -= e.deltaY;
-                canvasApplyTransform();
-                canvasSaveDebounced();
-            }
-        }, { passive: false });
-
-        // capture layer pan (pan mode)
-        if (layer) {
-            layer.addEventListener('mousedown', (e) => {
-                if (e.button !== 0 || canvasState.mode !== 'pan') return;
-                canvasState._pan = { startX: e.clientX, startY: e.clientY, origPanX: canvasState.panX, origPanY: canvasState.panY };
-                layer.style.cursor = 'grabbing';
-            });
-        }
-
-        // frame header drag (delegated on the plane; works in drag or none mode)
-        if (plane) {
-            plane.addEventListener('mousedown', (e) => {
-                const header = e.target.closest('.canvas-frame-header');
-                if (!header || e.button !== 0) return;
-                if (canvasState.mode !== 'drag' && canvasState.mode !== 'none') return;
-                e.preventDefault();
-                const id = header.dataset.frameId;
-                const f = canvasState.frames.find(fr => fr.id === id);
-                if (!f) return;
-                const rect = vp.getBoundingClientRect();
-                const px = (e.clientX - rect.left - canvasState.panX) / canvasState.zoom;
-                const py = (e.clientY - rect.top - canvasState.panY) / canvasState.zoom;
-                canvasState._drag = { frameId: id, offsetX: px - f.x, offsetY: py - f.y };
-                header.style.cursor = 'grabbing';
-            });
-        }
-
-        window.addEventListener('mousemove', (e) => {
-            if (canvasState._pan) {
-                canvasState.panX = canvasState._pan.origPanX + (e.clientX - canvasState._pan.startX);
-                canvasState.panY = canvasState._pan.origPanY + (e.clientY - canvasState._pan.startY);
-                canvasApplyTransform();
-            }
-            if (canvasState._drag) {
-                const f = canvasState.frames.find(fr => fr.id === canvasState._drag.frameId);
-                if (!f || !plane) return;
-                const rect = vp.getBoundingClientRect();
-                const px = (e.clientX - rect.left - canvasState.panX) / canvasState.zoom;
-                const py = (e.clientY - rect.top - canvasState.panY) / canvasState.zoom;
-                f.x = Math.round(px - canvasState._drag.offsetX);
-                f.y = Math.round(py - canvasState._drag.offsetY);
-                const el = plane.querySelector(`.canvas-frame[data-frame-id="${f.id}"]`);
-                if (el) { el.style.left = f.x + 'px'; el.style.top = f.y + 'px'; }
-            }
-        });
-
-        window.addEventListener('mouseup', () => {
-            if (canvasState._pan) {
-                canvasState._pan = null;
-                if (layer) layer.style.cursor = canvasState.mode === 'pan' ? 'grab' : 'default';
-                canvasSave();
-            }
-            if (canvasState._drag) {
-                const header = plane && plane.querySelector(`.canvas-frame-header[data-frame-id="${canvasState._drag.frameId}"]`);
-                if (header) header.style.cursor = 'grab';
-                canvasState._drag = null;
-                canvasSave();
-            }
-        });
-
-        // toolbar buttons
-        vp.addEventListener('click', (e) => {
-            const btn = e.target.closest('.zoom-btn');
-            if (!btn) return;
-            const action = btn.dataset.action;
-            const rect = vp.getBoundingClientRect();
-            if (action === 'zoom-in') canvasZoomAt(canvasState.zoom * 1.25, rect.width / 2, rect.height / 2);
-            else if (action === 'zoom-out') canvasZoomAt(canvasState.zoom / 1.25, rect.width / 2, rect.height / 2);
-            else if (action === 'reset') { canvasState.zoom = 1; canvasState.panX = 0; canvasState.panY = 0; canvasApplyTransform(); canvasSaveDebounced(); }
-            else if (action === 'fit') canvasFit();
-            else if (action === 'pan') canvasSetMode(canvasState.mode === 'pan' ? 'none' : 'pan');
-            else if (action === 'drag') canvasSetMode(canvasState.mode === 'drag' ? 'none' : 'drag');
-            else if (action === 'inspect') canvasSetMode(canvasState.mode === 'inspect' ? 'none' : 'inspect');
-        });
-
-        // Add Files
-        document.getElementById('btn-canvas-add-files')?.addEventListener('click', () => {
-            vscode.postMessage({ type: 'canvas/addFiles' });
-        });
-
-        // New canvas
-        document.getElementById('btn-canvas-new')?.addEventListener('click', () => {
-            const name = prompt('Canvas name:', 'Canvas ' + (canvasState.names.length + 1));
-            if (!name) return;
-            if (canvasState.names.includes(name)) { canvasLoad(name); return; }
-            canvasState.names.push(name);
-            canvasState.frames = [];
-            canvasState.zoom = 1; canvasState.panX = 0; canvasState.panY = 0;
-            canvasState.name = name;
-            canvasRenderFrames();
-            canvasApplyTransform();
-            canvasPopulateNameSelect();
-            document.getElementById('canvas-name-select').value = name;
-            canvasSave();
-        });
-
-        // canvas name picker
-        document.getElementById('canvas-name-select')?.addEventListener('change', (e) => {
-            canvasLoad(e.target.value);
-        });
-
-        // Add Stitch project ▾
-        document.getElementById('btn-canvas-add-stitch')?.addEventListener('click', () => {
-            const sel = document.getElementById('canvas-add-stitch-select');
-            if (!sel) return;
-            const shown = sel.style.display !== 'none';
-            sel.style.display = shown ? 'none' : 'block';
-            if (!shown) {
-                vscode.postMessage({ type: 'stitchListProjects', workspaceRoot: state.stitchWorkspaceRoot });
-            }
-        });
-        document.getElementById('canvas-add-stitch-select')?.addEventListener('change', (e) => {
-            const pid = e.target.value;
-            e.target.value = '';
-            e.target.style.display = 'none';
-            if (!pid) return;
-            canvasState._stitchBulkPending = pid;
-            vscode.postMessage({ type: 'canvas/addStitchProject', projectId: pid, workspaceRoot: state.stitchWorkspaceRoot });
-        });
-
-        // Export / Flatten: toolbar ⤓ button → deterministic data: iframe flatten.
-        document.getElementById('canvas-btn-flatten')?.addEventListener('click', () => {
-            const statusEl = document.getElementById('status-canvas');
-            if (statusEl) statusEl.textContent = 'Flattening…';
-            vscode.postMessage({ type: 'canvas/flatten', name: canvasState.name });
-        });
-
-        // Agent-flatten escape hatch: ✦ copies a prompt an agent can merge into
-        // one cohesive self-contained HTML (for heavily-scripted screens the
-        // sandboxed data: iframes limit). Reuses the existing Copy-Prompt plumbing.
-        document.getElementById('canvas-btn-flatten-agent')?.addEventListener('click', () => {
-            vscode.postMessage({ type: 'canvas/copyFlattenPrompt', name: canvasState.name });
-        });
-
-        // Upload the flattened HTML to claude.ai Artifacts — feeds the existing
-        // Upload-to-Claude-Artifacts prompt path (same CLAUDE_ARTIFACT_UPLOAD_PROMPT
-        // template + sendClaudeArtifactPrompt/copyClaudeArtifactPrompt messages the
-        // HTML Previews tab uses), pointed at the last flattened file. The buttons
-        // are hidden until a flatten completes (see canvas/flattened handler).
-        function canvasArtifactUploadPrompt() {
-            const p = canvasState.lastFlattenedPath;
-            if (!p) return { error: 'Flatten the canvas first (⤓).' };
-            const filename = p.split(/[\\/]/).pop();
-            const folder = p.slice(0, -(filename.length + 1));
-            return { prompt: CLAUDE_ARTIFACT_UPLOAD_PROMPT({ folder, filename }) };
-        }
-        document.getElementById('canvas-btn-upload-artifact')?.addEventListener('click', () => {
-            const { prompt, error } = canvasArtifactUploadPrompt();
-            vscode.postMessage({
-                type: 'sendClaudeArtifactPrompt', prompt, error,
-                workspaceRoot: state.designWorkspaceRootFilter || undefined
-            });
-        });
-        document.getElementById('canvas-btn-copy-artifact-prompt')?.addEventListener('click', () => {
-            const { prompt, error } = canvasArtifactUploadPrompt();
-            vscode.postMessage({ type: 'copyClaudeArtifactPrompt', prompt, error });
-        });
-
-        // Per-frame Inspect Mode tweak popup wiring (mirrors html-tweak-popup).
-        document.getElementById('canvas-tweak-btn-close')?.addEventListener('click', () => {
-            const popup = document.getElementById('canvas-tweak-popup');
-            if (popup) popup.style.display = 'none';
-            const input = document.getElementById('canvas-tweak-input');
-            if (input) input.value = '';
-            canvasState._selectedElement = null;
-        });
-        document.getElementById('canvas-tweak-btn-send')?.addEventListener('click', () => {
-            const statusEl = document.getElementById('canvas-tweak-status');
-            if (statusEl) statusEl.style.display = 'none';
-            const inputEl = document.getElementById('canvas-tweak-input');
-            const instruction = inputEl ? inputEl.value.trim() : '';
-            if (!instruction) {
-                if (statusEl) { statusEl.textContent = 'Please describe the change first.'; statusEl.style.display = 'block'; }
-                return;
-            }
-            const prompt = canvasComposeTweakPrompt();
-            if (!prompt) return;
-            vscode.postMessage({ type: 'sendHtmlTweakPrompt', prompt, workspaceRoot: state.designWorkspaceRootFilter });
-            inputEl.value = '';
-            const popup = document.getElementById('canvas-tweak-popup');
-            if (popup) popup.style.display = 'none';
-            canvasState._selectedElement = null;
-        });
-        document.getElementById('canvas-tweak-btn-copy')?.addEventListener('click', () => {
-            const statusEl = document.getElementById('canvas-tweak-status');
-            if (statusEl) statusEl.style.display = 'none';
-            const inputEl = document.getElementById('canvas-tweak-input');
-            const instruction = inputEl ? inputEl.value.trim() : '';
-            if (!instruction) {
-                if (statusEl) { statusEl.textContent = 'Please describe the change first.'; statusEl.style.display = 'block'; }
-                return;
-            }
-            const prompt = canvasComposeTweakPrompt();
-            if (!prompt) return;
-            vscode.postMessage({ type: 'copyHtmlTweakPrompt', prompt });
-            const popup = document.getElementById('canvas-tweak-popup');
-            if (popup) popup.style.display = 'none';
-        });
-    }
-
-    function canvasInit() {
-        canvasInitListeners();
-        canvasSetMode('none');
-        // Canvas loads lazily on first tab visit (see switchTab canvas entry
-        // handler) — don't preload it on every Design panel open.
-    }
-
-    canvasInit();
 
     applySidebarState();
 

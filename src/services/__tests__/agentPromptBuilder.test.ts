@@ -331,7 +331,11 @@ suite('agentPromptBuilder', () => {
 
         test('coder feature-mode prompt keeps execution-coded directive (regression)', () => {
             const prompt = buildKanbanBatchPrompt('coder', makeFeaturePlans(), { featureMode: true, featureTopic: 'Test Feature', subtaskCount: 2 });
-            assert.ok(prompt.includes('implementing the feature'), 'Coder feature-mode prompt should still contain "implementing the feature"');
+            // The coder feature path (agentPromptBuilder.ts:1371-1421) bypasses featureDirectiveBlock
+            // and emits featureExecutionBlock ("EXECUTION MODE") + featureSubagentBlock ("Handle the
+            // subtasks yourself") instead. Assert the strings the path actually emits — NOT
+            // "implementing the feature", which lives only in featureDirectiveBlock (unused here).
+            assert.ok(prompt.includes('EXECUTION MODE'), 'Coder feature-mode prompt should contain the "EXECUTION MODE" featureExecutionBlock');
             assert.ok(prompt.includes('Handle the subtasks yourself'), 'Coder feature-mode prompt should still contain "Handle the subtasks yourself"');
             assert.ok(!prompt.includes('planning the feature'), 'Coder feature-mode prompt must NOT contain planner-coded "planning the feature"');
             assert.ok(!prompt.includes('Process the subtask plan files yourself'), 'Coder feature-mode prompt must NOT contain planner-coded "Process the subtask plan files yourself"');

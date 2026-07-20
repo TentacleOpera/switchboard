@@ -1960,6 +1960,26 @@
             background: rgba(10, 10, 10, 0.70);
             border-color: var(--border-color);
         }
+
+        /* Tickets sidebar search row: full-width search input at the top of the
+           ticket sidebar (moved out of the top control strip). The wrapper row
+           is a direct child of #tree-pane-tickets so the existing collapse rule
+           (which hides all non-toggle-row children) already hides it when the
+           sidebar is collapsed; the explicit rule below is belt-and-suspenders
+           for any JS-set inline display on the input itself. */
+        #tree-pane-tickets .sidebar-search-row {
+            margin: 0 0 8px 0;
+        }
+        #tree-pane-tickets .sidebar-search-input {
+            flex: 1 1 auto;
+            width: 100%;
+            max-width: none;
+            margin: 0;
+        }
+        .content-row.collapsed #tree-pane-tickets .sidebar-search-input,
+        .content-row.collapsed #tree-pane-tickets .sidebar-search-row {
+            display: none !important;
+        }
         #kanban-content-row { display: flex; gap: 0; height: 100%; overflow: hidden; }
         #kanban-list-pane { flex: 1; overflow-y: auto; }
         .kanban-preview-pane { overflow-y: auto; padding: 12px; border-left: 1px solid var(--border-color, rgba(255,255,255,0.08)); background: var(--panel-bg, #000000); }
@@ -2902,29 +2922,27 @@
             color: var(--accent-teal, #00ffcc);
         }
 
-        /* Card action row is collapsed at rest so the list reads as clean
-           title/status/assignee cards; it reveals on hover, selection, or
-           keyboard focus (focus-within keeps it reachable via Tab). */
+        /* Card action row always occupies its space so card height is stable
+           regardless of hover — no layout shift while scanning the list. At rest
+           the row is dimmed (opacity 0.55) and brightens on hover/selection.
+           pointer-events stay auto so the buttons are clickable at rest. */
         .ticket-node .card-actions {
             display: flex;
             gap: 4px;
-            margin-top: 0;
+            margin-top: 4px;
             flex-wrap: wrap;
             justify-content: flex-start;
-            max-height: 0;
-            overflow: hidden;
-            opacity: 0;
-            pointer-events: none;
-            transition: max-height 0.15s ease, opacity 0.15s ease, margin-top 0.15s ease;
+            max-height: none;
+            overflow: visible;
+            opacity: 0.55;
+            pointer-events: auto;
+            transition: opacity 0.15s ease;
         }
 
         .ticket-node:hover .card-actions,
         .ticket-node.selected .card-actions,
         .ticket-node:focus-within .card-actions {
-            max-height: 80px;
-            margin-top: 4px;
             opacity: 1;
-            pointer-events: auto;
         }
 
         .ticket-node .card-actions .card-icon-btn {
@@ -3358,6 +3376,47 @@
            on its own, away from the everyday edit/assign/comment buttons. */
         #btn-delete-ticket {
             margin-left: auto;
+        }
+
+        /* Reusable multi-instance overflow menu ("⋯ More" popover).
+           Used by the ticket preview meta bar and the Tickets top control strip.
+           Scoped by [data-overflow-menu] / [data-overflow-trigger] / [data-overflow-popover]
+           data attributes so N independent instances can coexist without id collisions.
+           The popover is position:fixed so it escapes any ancestor overflow:auto / overflow-x:auto
+           (the top strip is overflow-x:auto; the meta bar is flex-wrap:wrap with no overflow). */
+        .overflow-menu {
+            position: relative;
+            display: inline-flex;
+        }
+        .overflow-menu-trigger {
+            /* inherits strip-btn styling */
+        }
+        .overflow-menu-popover {
+            position: fixed;
+            z-index: 10000;
+            display: none;
+            flex-direction: column;
+            gap: 2px;
+            padding: 4px;
+            background: var(--panel-bg, var(--panel-bg2, #1a1a2e));
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            min-width: 160px;
+            max-width: 280px;
+        }
+        .overflow-menu-popover[data-open="true"] {
+            display: flex;
+        }
+        .overflow-menu-item {
+            width: 100%;
+            justify-content: flex-start;
+            text-align: left;
+            white-space: nowrap;
+        }
+        .overflow-menu-trigger[hidden],
+        .overflow-menu[data-empty="true"] {
+            display: none !important;
         }
         .kanban-meta-group {
             display: flex;
@@ -3895,11 +3954,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <select id="tickets-project-picker" class="planning-select" style="display:none" title="Filter by Linear project"></select>
                     <select id="tickets-state-filter" class="planning-select" style="display:none" title="Filter by Linear state"></select>
                     <select id="tickets-status-filter" class="planning-select" style="display:none" title="Filter by ClickUp status"></select>
-                    <input id="tickets-search" type="text" class="sidebar-search-input" placeholder="Search tickets..." />
                     <button id="tickets-refresh" class="strip-btn" title="Refresh recent changes">Refresh</button>
-                    <button id="tickets-refetch" class="strip-btn" title="Re-fetch from source and save local copies">Refetch</button>
-                    <button id="tickets-sync-all" class="strip-btn" title="Push all local ticket changes back to the integration">Sync changes</button>
-                    <button id="tickets-agent-api" class="strip-btn" title="What agents can do with this ticket source without the MCP">Agent API</button>
+                    <div class="overflow-menu" data-overflow-menu>
+                        <button type="button" class="strip-btn overflow-menu-trigger" data-overflow-trigger title="More actions">⋯ More</button>
+                        <div class="overflow-menu-popover" data-overflow-popover>
+                            <button id="tickets-refetch" class="strip-btn overflow-menu-item" title="Re-fetch from source and save local copies">Full re-fetch (recover from sync drift)</button>
+                            <button id="tickets-sync-all" class="strip-btn overflow-menu-item" title="Push all local ticket changes back to the integration">Sync changes</button>
+                            <button id="tickets-agent-api" class="strip-btn overflow-menu-item" title="What agents can do with this ticket source without the MCP">Agent API</button>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div class="content-row">
@@ -3909,6 +3972,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <button id="tickets-link-all" class="strip-btn" title="Copy all ticket file paths to clipboard">Link all</button>
                         <button id="tickets-import-all-kanban" class="strip-btn" title="Add all tickets to the Kanban board" style="display:none">Kanban all</button>
                         <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                    </div>
+                    <div class="sidebar-search-row">
+                        <input id="tickets-search" type="text" class="sidebar-search-input" placeholder="Search tickets..." />
                     </div>
                     <div id="tickets-empty-state" class="empty-state">No tickets loaded.</div>
                     <div id="tickets-issues-container"></div>
@@ -3922,14 +3988,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             <button id="btn-save-ticket-edit" class="strip-btn" style="display:none; background: var(--accent-teal); color: black;">Save</button>
                             <button id="btn-cancel-ticket-edit" class="strip-btn" style="display:none;">Cancel</button>
                             <button id="btn-push-ticket" class="strip-btn">Push</button>
-                            <button id="btn-assign-ticket" class="strip-btn" title="Assign members">Assign</button>
-                            <button id="tickets-tags" class="strip-btn" title="Edit tags">Tags</button>
                             <button id="btn-comment-ticket" class="strip-btn">Comment</button>
-                            <button id="btn-view-attachments" class="strip-btn" style="display:none;">Attachments</button>
-                            <button id="btn-diagram-prompt" class="strip-btn" style="display:none;" title="Copy a diagram prompt for this ticket">Diagram</button>
-                            <button id="btn-add-subtask" class="strip-btn" title="Create a subtask under this ticket">+ Subtask</button>
-                            <button id="btn-convert-subtask" class="strip-btn" title="Convert this ticket to a subtask of another ticket">To subtask</button>
-                            <button id="btn-to-parent-task" class="strip-btn" title="Navigate to the parent task" style="display:none;">To parent task</button>
+                            <div class="overflow-menu" data-overflow-menu>
+                                <button type="button" class="strip-btn overflow-menu-trigger" data-overflow-trigger title="More actions">⋯ More</button>
+                                <div class="overflow-menu-popover" data-overflow-popover>
+                                    <button id="btn-assign-ticket" class="strip-btn overflow-menu-item" title="Assign members">Assign</button>
+                                    <button id="tickets-tags" class="strip-btn overflow-menu-item" title="Edit tags">Tags</button>
+                                    <button id="btn-view-attachments" class="strip-btn overflow-menu-item" style="display:none;">Attachments</button>
+                                    <button id="btn-diagram-prompt" class="strip-btn overflow-menu-item" style="display:none;" title="Copy a diagram prompt for this ticket">Diagram</button>
+                                    <button id="btn-add-subtask" class="strip-btn overflow-menu-item" title="Create a subtask under this ticket">+ Subtask</button>
+                                    <button id="btn-convert-subtask" class="strip-btn overflow-menu-item" title="Convert this ticket to a subtask of another ticket">To subtask</button>
+                                    <button id="btn-to-parent-task" class="strip-btn overflow-menu-item" title="Navigate to the parent task" style="display:none;">To parent task</button>
+                                </div>
+                            </div>
                             <button id="btn-delete-ticket" class="strip-btn" title="Delete this ticket">Delete</button>
                         </div>
 

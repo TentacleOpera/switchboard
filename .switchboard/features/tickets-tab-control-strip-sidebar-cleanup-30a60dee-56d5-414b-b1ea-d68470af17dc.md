@@ -16,11 +16,11 @@ The Tickets tab in planning.html is overloaded: the top control strip horizontal
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Tickets tab: move Refetch into a "More" menu (keep Refresh primary)](../plans/tickets-merge-refresh-refetch.md) — **PLAN REVIEWED**
-- [ ] [Tickets tab: remove the Refine button from ticket cards](../plans/tickets-remove-refine-button.md) — **PLAN REVIEWED**
-- [ ] [Tickets tab: stop sidebar cards resizing on hover](../plans/tickets-sidebar-cards-no-hover-resize.md) — **PLAN REVIEWED**
-- [ ] [Tickets tab: move the search input to the top of the sidebar](../plans/tickets-search-move-to-sidebar-top.md) — **PLAN REVIEWED**
-- [ ] [Tickets tab: de-overload the ticket preview meta bar](../plans/tickets-preview-meta-bar-deoverload.md) — **PLAN REVIEWED**
+- [ ] [Tickets tab: move Refetch into a "More" menu (keep Refresh primary)](../plans/tickets-merge-refresh-refetch.md) — **CODER CODED**
+- [ ] [Tickets tab: remove the Refine button from ticket cards](../plans/tickets-remove-refine-button.md) — **CODER CODED**
+- [ ] [Tickets tab: stop sidebar cards resizing on hover](../plans/tickets-sidebar-cards-no-hover-resize.md) — **CODER CODED**
+- [ ] [Tickets tab: move the search input to the top of the sidebar](../plans/tickets-search-move-to-sidebar-top.md) — **CODER CODED**
+- [ ] [Tickets tab: de-overload the ticket preview meta bar](../plans/tickets-preview-meta-bar-deoverload.md) — **CODER CODED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -30,4 +30,8 @@ The Tickets tab in planning.html is overloaded: the top control strip horizontal
 - The remaining subtasks (*Move search to sidebar*) are independent and can land in any order.
 - *Move search to sidebar* and *De-overload the meta bar* both serve the top-level "overloaded strips" goal but touch different regions (top strip vs. preview meta bar) with no overlap.
 - All work is confined to `src/webview/planning.html` + `src/webview/planning.js` (plus minor backend cleanup in the Refine plan). No provider message-protocol changes; all existing per-provider/state gating must be preserved.
+
+## Completion Summary
+
+Implemented all five subtasks. Built a reusable multi-instance overflow-menu component (`[data-overflow-menu]`/`[data-overflow-trigger]`/`[data-overflow-popover]`, `position:fixed` popover with outside-click/Escape close, viewport-edge clamping, scroll/resize repositioning) in `src/webview/planning.html` (CSS) + `src/webview/planning.js` (`initOverflowMenus`, `_positionOverflowPopover`, `_closeAllOverflowPopovers`, `_recomputeAllOverflowTriggers`), then used it for both the preview meta-bar "⋯ More" (Assign/Tags/Attachments/Diagram/+Subtask/To subtask/To parent) and the top-strip "⋯ More" (Full re-fetch/Sync changes/Agent API). Primary inline meta-bar actions are now Edit/Save/Cancel/Push/Comment with Delete pinned far-right; Refresh stays primary on the top strip. Per-provider/state gating preserved — `_toggleSubtaskMetaButtons` and the Attachments/Diagram branches now call `_recomputeAllOverflowTriggers` so the "⋯ More" trigger hides when every item under it is hidden, and `_closeAllOverflowPopovers` runs when the meta bar is hidden. Removed the Refine button from both card renderers + its `data-refine-ticket-id` click-delegation branch, the `copyRefinePrompt` handler in `PlanningPanelProvider.ts`, the `refine_ticket` skill registration in `ClaudeCodeMirrorService.ts` (kept `refine_feature`), and `git rm`'d `.agents/skills/refine_ticket.md`. Sidebar card action row is now always-on with opacity-only dim/brighten (no height change on hover). Moved `#tickets-search` (same id/classes) into a full-width `sidebar-search-row` at the top of `#tree-pane-tickets` with a collapse rule. Files changed: `src/webview/planning.html`, `src/webview/planning.js`, `src/services/PlanningPanelProvider.ts`, `src/services/ClaudeCodeMirrorService.ts`, `.agents/skills/refine_ticket.md` (deleted). No issues encountered; `verbAllowlist.ts` and `KanbanProvider.ts` comments left as auto-generated/stale per plan (harmless, self-cleans on next `catalog:generate`).
 

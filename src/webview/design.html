@@ -1865,6 +1865,15 @@
             flex-direction: column;
             gap: 2px;
         }
+        .tree-node .card-checkbox {
+            flex: 0 0 auto;
+            align-self: flex-start;
+            margin-top: 2px;
+            cursor: pointer;
+        }
+        .tree-node:not([data-selectable="html"]) .card-checkbox {
+            display: none;
+        }
 
         details.planning-card summary.planning-card-header {
             border-bottom: none;
@@ -3636,7 +3645,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         <button class="shared-tab-btn" data-tab="html-preview">HTML PREVIEWS</button>
         <button class="shared-tab-btn" data-tab="images">IMAGES</button>
         <button class="shared-tab-btn" data-tab="design">DESIGN SYSTEM</button>
-        <button class="shared-tab-btn" data-tab="canvas">CANVAS</button>
     </div>
     <div class="container">
         <!-- Briefs Tab -->
@@ -3883,6 +3891,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <span id="status-html" style="margin-left: 0; font-size: 12px; color: var(--text-secondary);">No folder configured</span>
                 <button id="btn-copy-design-html-artifact-prompt" class="strip-btn" title="Copy a prompt to publish the selected HTML file to claude.ai as an Artifact">Copy upload prompt</button>
                 <button id="btn-send-design-html-artifact-prompt" class="strip-btn stitch-btn-primary" title="Send the artifact upload prompt to Claude">⇨ Upload to Claude Artifacts</button>
+                <button id="btn-make-canvas-copy" class="strip-btn" title="Copy a prompt to flatten the selected HTML files into one inline board" disabled>Make Canvas — Copy Prompt</button>
+                <button id="btn-make-canvas-send" class="strip-btn stitch-btn-primary" title="Send the make-canvas prompt to the agent" disabled>⇨ Make Canvas</button>
+                <span id="html-selection-count" style="font-size: 12px; color: var(--text-secondary);">0 selected</span>
             </div>
             <div class="content-row">
                 <div id="tree-pane-html">
@@ -4280,70 +4291,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             </div>
         </div>
 
-        <!-- Canvas Tab — pan/zoom surface holding many HTML screens at once.
-             Foundation: tab + surface + free-drag frames + persistence.
-             Later subtasks add: bulk-add Stitch project, per-frame Inspect,
-             Export/Flatten, performance hardening. -->
-        <div id="canvas-content" class="shared-tab-content">
-            <div class="controls-strip" id="controls-strip-canvas">
-                <select id="canvas-name-select" class="workspace-filter-select" title="Named canvas">
-                    <option value="Default">Default</option>
-                </select>
-                <button id="btn-canvas-new" class="strip-btn" title="New named canvas">+ New</button>
-                <button id="btn-canvas-add-files" class="strip-btn" title="Add individual HTML files as frames">Add Files</button>
-                <button id="btn-canvas-add-stitch" class="strip-btn" title="Add every screen from a Stitch project">Add Stitch Project ▾</button>
-                <select id="canvas-add-stitch-select" class="workspace-filter-select" style="display:none; max-width: 200px;"></select>
-                <div style="flex: 1;"></div>
-                <span id="status-canvas" style="font-size: 12px; color: var(--text-secondary); margin-left: 8px;"></span>
-            </div>
-            <div id="canvas-viewport" class="zoomable-container" style="flex: 1; overflow: hidden; position: relative; background: var(--panel-bg2, #141414);">
-                <!-- The plane is the transformed surface; frames are absolutely positioned
-                     children in canvas-plane coordinates. -->
-                <div id="canvas-plane" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform-origin: 0 0;">
-                    <div id="canvas-empty-state" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: var(--text-secondary); font-size: 13px; text-align: center; pointer-events: none;">
-                        <div style="font-size: 36px; opacity: 0.4; margin-bottom: 8px;">🖼️</div>
-                        <div>Add HTML files or a Stitch project to populate the canvas.</div>
-                    </div>
-                </div>
-                <!-- Capture layer: shown in Pan/Drag/Inspect modes to route gestures
-                     correctly (iframes swallow pointer events). Hidden in none mode
-                     so frames are interactive. -->
-                <div id="canvas-capture-layer" style="display: none; position: absolute; inset: 0; z-index: 50;"></div>
-                <div class="zoom-toolbar">
-                    <button class="zoom-btn" data-action="pan" id="canvas-btn-pan" title="Pan mode — drag to move the canvas">✥</button>
-                    <button class="zoom-btn" data-action="drag" id="canvas-btn-drag" title="Drag mode — drag frames by their header">⇄</button>
-                    <button class="zoom-btn" data-action="inspect" id="canvas-btn-inspect" title="Inspect mode — click an element in a frame to edit it">◉</button>
-                    <button class="zoom-btn" data-action="zoom-in" title="Zoom In">+</button>
-                    <button class="zoom-btn" data-action="zoom-out" title="Zoom Out">−</button>
-                    <button class="zoom-btn" data-action="reset" title="Reset view — 100%">⟲</button>
-                    <button class="zoom-btn" data-action="fit" title="Fit all frames to view">⤢</button>
-                    <button class="zoom-btn" data-action="flatten" id="canvas-btn-flatten" title="Export / Flatten to a single self-contained HTML">⤓</button>
-                    <button class="zoom-btn" id="canvas-btn-flatten-agent" title="Copy an agent-flatten prompt (escape hatch for heavily-scripted screens)">✦</button>
-                    <button class="zoom-btn" id="canvas-btn-upload-artifact" style="display:none;" title="Upload the flattened HTML to claude.ai as an Artifact">⇗</button>
-                    <button class="zoom-btn" id="canvas-btn-copy-artifact-prompt" style="display:none;" title="Copy the Claude Artifacts upload prompt">ⓒ</button>
-                </div>
-                <!-- Per-frame Inspect Mode tweak popup (mirrors html-tweak-popup). -->
-                <div id="canvas-tweak-popup" style="display: none; position: absolute; top: 12px; right: 12px; z-index: 60; width: 340px; max-height: calc(100% - 24px); background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); flex-direction: column; overflow: hidden; font-size: 12px; font-family: var(--font-family);">
-                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border-color); font-weight: 600;">
-                        <span id="canvas-tweak-header-breadcrumb" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; font-family: monospace;"></span>
-                        <span id="canvas-tweak-btn-close" style="cursor: pointer; padding: 2px 6px; font-size: 14px;">✕</span>
-                    </div>
-                    <div style="padding: 12px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto;">
-                        <div id="canvas-tweak-frame-label" style="font-size: 10px; color: var(--text-secondary);"></div>
-                        <details>
-                            <summary style="cursor: pointer; outline: none; margin-bottom: 4px; font-size: 11px; color: var(--text-secondary);">Selected HTML snippet</summary>
-                            <pre id="canvas-tweak-snippet-pre" style="margin: 0; padding: 6px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 3px; font-size: 10px; font-family: monospace; white-space: pre-wrap; word-break: break-all; overflow-x: auto; max-height: 150px;"></pre>
-                        </details>
-                        <textarea id="canvas-tweak-input" class="stitch-input" style="width: 100%; height: 80px; box-sizing: border-box; resize: vertical;" placeholder="Describe the change to this element, e.g. 'make it dark blue'..."></textarea>
-                        <div id="canvas-tweak-status" style="display: none; font-size: 11px; color: var(--accent-red); margin-bottom: 4px;"></div>
-                        <div style="display: flex; gap: 8px;">
-                            <button id="canvas-tweak-btn-send" class="preview-overlay-btn primary" style="flex: 1;">Send to Agent</button>
-                            <button id="canvas-tweak-btn-copy" class="preview-overlay-btn" style="flex: 1;">Copy Prompt</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
     </div>
     <script nonce="{{NONCE}}" src="{{SHARED_UTILS_URI}}"></script>
     <script nonce="{{NONCE}}" src="{{MARKDOWN_EDITOR_URI}}"></script>

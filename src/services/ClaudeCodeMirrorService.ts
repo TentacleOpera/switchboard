@@ -147,7 +147,6 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
         source: 'skills/worktree-cleanup', name: 'worktree-cleanup', invocation: 'no-model', allowedTools: 'Bash',
         descriptionFallback: 'Mark a worktree merged and clean it up (kind-aware) via LocalApiServer'
     },
-    { source: 'skills/refine_ticket.md', name: 'refine-ticket', invocation: 'no-model' },
     { source: 'skills/refine_feature.md', name: 'refine-feature', invocation: 'no-model' },
 
     // Model-invocable procedure skills — an agent loads these by description and
