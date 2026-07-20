@@ -1,6 +1,6 @@
 'use strict';
 
-// Sync test: verifies all FIVE plan-writing prompt surfaces carry the same
+// Sync test: verifies all NINE plan-writing prompt surfaces carry the same
 // Plan Sizing (auto-split) signals and that the old reactive-only "Feature
 // Grouping:" header is gone from the chat base instructions. Guards against
 // drift across:
@@ -9,10 +9,18 @@
 //   3. .agents/workflows/switchboard-memo.md
 //   4. _buildMemoPlannerPrompt          (src/services/TaskViewerProvider.ts)
 //   5. .agents/workflows/switchboard-remote.md
+//   6. AGENTS.md                         (always-on protocol file)
+//   7. CLAUDE.md                         (always-on protocol file, managed block)
+//   8. .agents/skills/deep-planning/SKILL.md   (authoring skill — Phase 0 body)
+//   9. .agents/skills/improve-plan/SKILL.md    (authoring skill — ## Steps body)
 //
 // Also guards the memo step-4/step-5 split-timing invariant: splitting must
 // happen in step 4 (before any plan file is written), never in step 5 (which
 // would orphan plan files inside the "no memos lost on failure" workflow).
+//
+// Skill assertions are section-scoped (Phase 0 for deep-planning, ## Steps
+// body for improve-plan) so a green test cannot coexist with a rule buried
+// in a section the agent never executes.
 
 const assert = require('assert');
 const fs = require('fs');
@@ -25,12 +33,20 @@ function run() {
     const cloudWorkflowPath = path.join(root, '.agents', 'workflows', 'switchboard-cloud.md');
     const memoWorkflowPath = path.join(root, '.agents', 'workflows', 'switchboard-memo.md');
     const remoteWorkflowPath = path.join(root, '.agents', 'workflows', 'switchboard-remote.md');
+    const agentsMdPath = path.join(root, 'AGENTS.md');
+    const claudeMdPath = path.join(root, 'CLAUDE.md');
+    const deepPlanningSkillPath = path.join(root, '.agents', 'skills', 'deep-planning', 'SKILL.md');
+    const improvePlanSkillPath = path.join(root, '.agents', 'skills', 'improve-plan', 'SKILL.md');
 
     const promptBuilderSource = fs.readFileSync(promptBuilderPath, 'utf8');
     const taskViewerSource = fs.readFileSync(taskViewerPath, 'utf8');
     const cloudWorkflow = fs.readFileSync(cloudWorkflowPath, 'utf8');
     const memoWorkflow = fs.readFileSync(memoWorkflowPath, 'utf8');
     const remoteWorkflow = fs.readFileSync(remoteWorkflowPath, 'utf8');
+    const agentsMd = fs.readFileSync(agentsMdPath, 'utf8');
+    const claudeMd = fs.readFileSync(claudeMdPath, 'utf8');
+    const deepPlanningSkill = fs.readFileSync(deepPlanningSkillPath, 'utf8');
+    const improvePlanSkill = fs.readFileSync(improvePlanSkillPath, 'utf8');
 
     // --- Shared splitting-signal anchors (must appear in every surface) ---
     const DISTINCT_DELIVERABLES = '3+ distinct deliverables';
@@ -70,6 +86,17 @@ function run() {
     assert.ok(
         chatBase.includes('If the user explicitly asks for a single plan, respect that and write one.'),
         'DEFAULT_CHAT_BASE_INSTRUCTIONS must include the single-plan carve-out.'
+    );
+    // Step 1b: conditional-on-initiator gate wording. The feature-creation
+    // gate must branch on who initiated grouping — user-asked = auto-create,
+    // agent-proposed = offer-and-wait. Guards against the double-confirm bug.
+    assert.ok(
+        /User already asked for grouping or a feature/.test(chatBase),
+        'DEFAULT_CHAT_BASE_INSTRUCTIONS step 5 must include the conditional-on-initiator gate (user-asked → auto-create).'
+    );
+    assert.ok(
+        /You are proposing grouping the user did not request/.test(chatBase),
+        'DEFAULT_CHAT_BASE_INSTRUCTIONS step 5 must include the conditional-on-initiator gate (agent-proposed → offer-and-wait).'
     );
 
     // ============================================================
@@ -188,7 +215,114 @@ function run() {
         'switchboard-remote.md must contain the new "## Plan Sizing & Feature Grouping" section header.'
     );
 
-    console.log('prompt split-guidance sync test passed (5 surfaces in sync)');
+    // ============================================================
+    // 6. AGENTS.md  (always-on protocol file — file-wide includes)
+    // ============================================================
+
+    assert.ok(
+        agentsMd.includes('Plan Sizing — split before drafting'),
+        'AGENTS.md must include the "Plan Sizing — split before drafting" directive in the Plan Authoring protocol section.'
+    );
+    assert.ok(
+        agentsMd.includes(DISTINCT_DELIVERABLES),
+        'AGENTS.md must include the "3+ distinct deliverables" splitting signal.'
+    );
+    assert.ok(
+        agentsMd.includes(SHIPPABLE_PHASES),
+        'AGENTS.md must include the "2+ independently-shippable phases" splitting signal.'
+    );
+    assert.ok(
+        agentsMd.includes('If the user explicitly asks for a single plan, respect that and write one.'),
+        'AGENTS.md must include the single-plan carve-out.'
+    );
+
+    // ============================================================
+    // 7. CLAUDE.md  (always-on protocol file — managed block mirror)
+    // ============================================================
+
+    assert.ok(
+        claudeMd.includes('Plan Sizing — split before drafting'),
+        'CLAUDE.md managed block must include the "Plan Sizing — split before drafting" directive (mirrored from AGENTS.md).'
+    );
+    assert.ok(
+        claudeMd.includes(DISTINCT_DELIVERABLES),
+        'CLAUDE.md must include the "3+ distinct deliverables" splitting signal.'
+    );
+    assert.ok(
+        claudeMd.includes(SHIPPABLE_PHASES),
+        'CLAUDE.md must include the "2+ independently-shippable phases" splitting signal.'
+    );
+    assert.ok(
+        claudeMd.includes('If the user explicitly asks for a single plan, respect that and write one.'),
+        'CLAUDE.md must include the single-plan carve-out.'
+    );
+
+    // ============================================================
+    // 8. deep-planning/SKILL.md  (section-scoped to Phase 0 body)
+    // ============================================================
+    // The signals must appear inside the executable Phase 0 section, not
+    // just anywhere in the file — otherwise a green test can coexist with
+    // a rule the agent never reaches.
+
+    const deepPlanningPhase0Match = deepPlanningSkill.match(
+        /### Phase 0: Planning Proposal([\s\S]*?)(?=### Phase 1)/
+    );
+    assert.ok(
+        deepPlanningPhase0Match,
+        'deep-planning/SKILL.md must have a Phase 0 section bounded by "### Phase 0: Planning Proposal" and "### Phase 1".'
+    );
+    const deepPlanningPhase0 = deepPlanningPhase0Match[1];
+    assert.ok(
+        deepPlanningPhase0.includes(DISTINCT_DELIVERABLES),
+        'deep-planning/SKILL.md Phase 0 must include the "3+ distinct deliverables" splitting signal.'
+    );
+    assert.ok(
+        deepPlanningPhase0.includes(SHIPPABLE_PHASES),
+        'deep-planning/SKILL.md Phase 0 must include the "2+ independently-shippable phases" splitting signal.'
+    );
+    assert.ok(
+        deepPlanningPhase0.includes('If the user explicitly asks for a single plan, respect that and write one.'),
+        'deep-planning/SKILL.md Phase 0 must include the single-plan carve-out.'
+    );
+
+    // ============================================================
+    // 9. improve-plan/SKILL.md  (section-scoped to ## Steps body)
+    // ============================================================
+    // improve-plan carries the flag-and-recommend variant (it cannot write
+    // new plan files mid-improve), so we assert the signals + the
+    // flag-and-recommend framing inside the ## Steps body — NOT the
+    // auto-split framing. Also must NOT name the retired switchboard-split.
+
+    const improvePlanStepsMatch = improvePlanSkill.match(
+        /## Steps([\s\S]*?)(?=\n## )/
+    );
+    assert.ok(
+        improvePlanStepsMatch,
+        'improve-plan/SKILL.md must have a ## Steps section bounded by the next ## heading.'
+    );
+    const improvePlanSteps = improvePlanStepsMatch[1];
+    assert.ok(
+        improvePlanSteps.includes(DISTINCT_DELIVERABLES),
+        'improve-plan/SKILL.md ## Steps must include the "3+ distinct deliverables" splitting signal.'
+    );
+    assert.ok(
+        improvePlanSteps.includes(SHIPPABLE_PHASES),
+        'improve-plan/SKILL.md ## Steps must include the "2+ independently-shippable phases" splitting signal.'
+    );
+    assert.ok(
+        /recommend splitting/.test(improvePlanSteps),
+        'improve-plan/SKILL.md ## Steps must include the flag-and-recommend framing ("recommend splitting").'
+    );
+    assert.ok(
+        /do not silently strengthen/.test(improvePlanSteps),
+        'improve-plan/SKILL.md ## Steps must include the "do not silently strengthen a mega-plan" framing.'
+    );
+    assert.ok(
+        !/switchboard-split/.test(improvePlanSteps),
+        'improve-plan/SKILL.md ## Steps must NOT name the retired switchboard-split workflow.'
+    );
+
+    console.log('prompt split-guidance sync test passed (9 surfaces in sync)');
 }
 
 try {

@@ -29,7 +29,10 @@ When the user references plans, columns, or board state (e.g. "plans in the Crea
    - **2+ independently-shippable phases:** the work has sequential stages where each could be shipped on its own (e.g. "migrate framework" then "build new pages" then "set up deploy pipeline").
    When splitting: write each as a separate plan file with its own Goal, Metadata, and Verification Plan. Do NOT write one mega-plan covering all deliverables/phases — each plan must be independently codeable. If the user explicitly asks for a single plan, respect that and write one.
 4. **Plan:** Draft the implementation plan(s). If you split, write each plan file now, in this step.
-5. **Gate:** Present the plan(s) to the user. If you wrote 3+ plans, notify the user and offer to group them: "I've split this into [N] plans covering [topic] — want me to create a feature to group them?" Only create the feature if the user confirms. When the user says yes, invoke the `create-feature-from-plans` skill — it handles the mechanics (plan ID resolution, `create-feature.js` execution, verification, and narrative section writing). Do NOT write feature files by hand or reverse-engineer the creation script. If the extension is not running, the skill will fall back to the `create-feature` remote path automatically.
+5. **Gate:** Present the plan(s) to the user. If you wrote 3+ plans, group them into a feature — the gate depends on who initiated grouping:
+   - **User already asked for grouping or a feature** (e.g. "split these into plans and create a feature", "group these into a feature"): the original ask IS the confirmation. Invoke the `create-feature-from-plans` skill now — do NOT ask a second time.
+   - **You are proposing grouping the user did not request:** offer it: "I've split this into [N] plans covering [topic] — want me to create a feature to group them?" Only create the feature if the user confirms. When the user says yes, invoke the `create-feature-from-plans` skill.
+   The `create-feature-from-plans` skill handles the mechanics (plan ID resolution, `create-feature.js` execution, verification, and narrative section writing). Do NOT write feature files by hand or reverse-engineer the creation script. If the extension is not running, the skill will fall back to the `create-feature` remote path automatically.
 
 ## Feature Relationships (frontmatter carrier)
 

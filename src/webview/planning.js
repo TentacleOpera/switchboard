@@ -7042,6 +7042,7 @@
                         _subtaskParent = null;
                         const modalTitle = document.getElementById('create-ticket-modal-title');
                         if (modalTitle) modalTitle.textContent = 'Create New Ticket';
+                        _pendingDrillDownParentId = parentId;   // drill in when details arrive
                         loadClickUpTaskDetails(parentId);
                     } else {
                         loadClickUpProject(true);
@@ -7071,6 +7072,7 @@
                         _subtaskParent = null;
                         const modalTitle = document.getElementById('create-ticket-modal-title');
                         if (modalTitle) modalTitle.textContent = 'Create New Ticket';
+                        _pendingDrillDownParentId = parentId;   // drill in when details arrive
                         loadLinearTaskDetails(parentId);
                     } else {
                         loadLinearProject(true);
@@ -9823,7 +9825,18 @@ Instructions:
             const nav = document.getElementById('tickets-subtasks-nav');
             nav?.querySelectorAll('.subtask-nav-item').forEach(i => i.classList.remove('selected'));
             item.classList.add('selected');
+            // Enter sidebar drill-down on the parent so the sidebar reflects the
+            // subtask list we just opened a member of. The parent is the ticket
+            // currently shown in the detail pane (the inline nav only renders for
+            // it). Read it BEFORE swapping selected*Issue to the subtask below.
             if (provider === 'linear') {
+                const parent = selectedLinearIssue;
+                const parentId = parent?.issue?.id;
+                if (parentId && (!_isDrillDownActive('linear') || _sidebarDrillDownParentId !== parentId)) {
+                    _resetSidebarDrillDown();
+                    _pendingDrillDownParentId = parentId;
+                    _maybeEnterDrillDown('linear', parentId);
+                }
                 if (linearIssueDetailCache.has(subtaskId)) {
                     selectedLinearIssue = linearIssueDetailCache.get(subtaskId);
                     renderTicketsLinearPanel();
@@ -9831,6 +9844,13 @@ Instructions:
                     loadLinearTaskDetails(subtaskId);
                 }
             } else if (provider === 'clickup') {
+                const parent = selectedClickUpIssue;
+                const parentId = parent?.task?.id;
+                if (parentId && (!_isDrillDownActive('clickup') || _sidebarDrillDownParentId !== parentId)) {
+                    _resetSidebarDrillDown();
+                    _pendingDrillDownParentId = parentId;
+                    _maybeEnterDrillDown('clickup', parentId);
+                }
                 if (clickUpTaskDetailCache.has(subtaskId)) {
                     selectedClickUpIssue = clickUpTaskDetailCache.get(subtaskId);
                     renderTicketsClickUpPanel();

@@ -113,3 +113,7 @@ Key risks: (1) over-swinging the planner wording so it loses the "treat the set 
 
 ## Recommendation
 Complexity 3 → **Send to Intern**.
+
+## Completion Report
+
+Implemented the role-aware FEATURE MODE directive per the Proposed Changes. `resolveFeatureOrchestrationDirective` now takes a trailing `role?: string` parameter; for `role === 'planner'` it bypasses `buildFeatureSubagentClause` and emits a fixed planner-coded directive ("planning the feature" + "Process the subtask plan files yourself"), keeping the "single delivery unit" and "Before starting…" framing. The call site at `:1041` passes the in-scope `role`. Coder/lead/reviewer/tester/custom-agent paths unchanged (default `undefined` → original execution-coded wording). Deleted the dead `FEATURE_ORCHESTRATION_DIRECTIVE` export (confirmed unused at runtime via repo grep — only doc/plan prose references remain). Added a regression suite in `agentPromptBuilder.test.ts` covering planner planning-coded wording, coder execution-coded wording (regression), and the `featureNoSubagentsEnabled` bypass case. Files changed: `src/services/agentPromptBuilder.ts`, `src/services/__tests__/agentPromptBuilder.test.ts`. No issues encountered. Compile/tests skipped per session directive.

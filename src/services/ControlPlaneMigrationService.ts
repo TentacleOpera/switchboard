@@ -1031,7 +1031,16 @@ export class ControlPlaneMigrationService {
     // even if they exist in the source. Matches the blocklist used in extension.ts activation.
     private static readonly AGENT_COPY_BLOCKLIST = new Set([
         'personas/switchboard_operator.md',
+        // The bundle-membership ledger is generated at runtime into each workspace's
+        // .agents/, never bundled — exclude it so the seed/copy paths never ship it
+        // and the prune path never lists it as a bundle file.
+        '.switchboard-bundled.json',
     ]);
+
+    // On-disk ledger of which files the bundle last shipped into .agents/. Drives
+    // the .agents retirement prune (mirrors the .claude ledger at
+    // ClaudeCodeMirrorService:486-508). Written atomically; safe-default-on-missing.
+    private static readonly BUNDLE_LEDGER_FILE = '.switchboard-bundled.json';
 
     private static async _copyDirectoryRecursive(
         sourceDir: string,
@@ -1122,6 +1131,154 @@ export class ControlPlaneMigrationService {
     public static async hashFile(filePath: string): Promise<string> {
         const content = await fs.promises.readFile(filePath);
         return crypto.createHash('sha256').update(content).digest('hex');
+    }
+
+    /**
+     * Prune bundle-tracked files that have been retired from the bundle, then
+     * (re)write the bundle-membership ledger atomically. Mirrors the .claude
+     * retirement ledger (ClaudeCodeMirrorService:486-508) but applied to .agents/,
+     * which — unlike .claude — is also a legitimate user-editing surface. The
+     * discriminator is the ledger: ONLY paths the ledger previously recorded as
+     * bundle-shipped are ever deleted. User-authored files (never in the ledger)
+     * are never touched.
+     *
+     * Safety invariants (see plan fix-skill-propagation-content-hash-reconcile §1):
+     *   - Missing or malformed ledger → delete NOTHING (first-run guard). The
+     *     ledger is still (re)written so the NEXT run can gate deletes.
+     *   - Path-traversal guard: every resolved path must lie under <root>/.agents/.
+     *   - Never delete a directory; only files. Empty dirs are left (matches .claude).
+     *   - The ledger file itself is never deleted (excluded from the candidate set).
+     *   - Atomic ledger write (temp + rename) so a crash never leaves a partial
+     *     discriminator — either the old or the new ledger persists, never a half.
+     *
+     * `currentBundlePaths` are posix-style relative paths under .agents/ that the
+     * bundle shipped this run (skills + workflows, blocklist already excluded by
+     * the caller's crawl scope). Returns drift counts for the activation log.
+     */
+    public static async pruneRetiredBundleFiles(
+        workspaceRoot: string,
+        currentBundlePaths: Set<string>,
+        extensionVersion: string | undefined,
+    ): Promise<{ pruned: string[]; missing: number; extra: number }> {
+        const agentsDir = path.resolve(workspaceRoot, '.agents');
+        const ledgerPath = path.join(agentsDir, this.BUNDLE_LEDGER_FILE);
+        const pruned: string[] = [];
+        let missing = 0;
+        let extra = 0;
+
+        // 1. Read prior ledger. Missing/malformed → previousFiles stays null → no deletes.
+        let previousFiles: string[] | null = null;
+        try {
+            if (fs.existsSync(ledgerPath)) {
+                const parsed = JSON.parse(fs.readFileSync(ledgerPath, 'utf8'));
+                if (parsed && Array.isArray(parsed.files) && parsed.files.every((f: unknown) => typeof f === 'string')) {
+                    previousFiles = parsed.files as string[];
+                } else {
+                    console.warn('[ControlPlaneMigrationService] Bundle ledger malformed (files[] missing or not all strings); skipping prune, rewriting ledger.');
+                }
+            }
+        } catch (e) {
+            console.warn('[ControlPlaneMigrationService] Bundle ledger read failed; skipping prune, rewriting ledger:', e);
+        }
+
+        // 2. Prune: delete ledger-tracked files no longer in the current bundle.
+        if (previousFiles) {
+            // Defensive desync check (plan §3): a to-be-deleted file whose content
+            // hash matches a CURRENT bundle file signals a ledger/bundle desync (the
+            // file was moved/renamed in the bundle, not retired) — not a user file.
+            // Logged as a warning; the delete still proceeds (the ledger is the
+            // contract). Built lazily so the common zero-prune path does no hashing.
+            let currentBundleHashes: Set<string> | null = null;
+            for (const rel of previousFiles) {
+                if (currentBundlePaths.has(rel)) continue;
+                // Resolve via posix-split so ledger entries (posix) map to native paths.
+                const abs = path.resolve(agentsDir, ...rel.split('/'));
+                // Path-traversal guard: must resolve strictly under agentsDir.
+                if (abs !== agentsDir && !abs.startsWith(agentsDir + path.sep)) continue;
+                if (abs === ledgerPath) continue; // never delete the ledger itself
+                try {
+                    const st = fs.statSync(abs);
+                    if (!st.isFile()) continue; // never delete a directory
+                    // Lazy hash set — only built when a real prune candidate exists.
+                    if (currentBundleHashes === null) {
+                        currentBundleHashes = new Set<string>();
+                        for (const brel of currentBundlePaths) {
+                            try {
+                                const babs = path.resolve(agentsDir, ...brel.split('/'));
+                                if (fs.existsSync(babs) && fs.statSync(babs).isFile()) {
+                                    currentBundleHashes.add(crypto.createHash('sha256').update(fs.readFileSync(babs)).digest('hex'));
+                                }
+                            } catch {
+                                // hash failure for a bundle file — non-fatal, just skip it
+                            }
+                        }
+                    }
+                    try {
+                        const fileHash = crypto.createHash('sha256').update(fs.readFileSync(abs)).digest('hex');
+                        if (currentBundleHashes.has(fileHash)) {
+                            console.warn(`[Switchboard] Prune target .agents/${rel} content-hashes a current bundle file — ledger/bundle desync (rename not retirement?). Deleting per ledger contract.`);
+                        }
+                    } catch {
+                        // hash failure — non-fatal, proceed with delete
+                    }
+                    fs.unlinkSync(abs);
+                    pruned.push(rel);
+                    console.warn(`[Switchboard] Pruned retired bundle file: .agents/${rel}`);
+                } catch {
+                    // File absent or unlink failed — non-fatal.
+                }
+            }
+        }
+
+        // 3. Drift counts (diagnostic, never throws).
+        // missing = bundle files not present on disk (seed should have copied them).
+        for (const rel of currentBundlePaths) {
+            const abs = path.resolve(agentsDir, ...rel.split('/'));
+            if (!fs.existsSync(abs)) missing += 1;
+        }
+        // extra = workspace .agents/{skills,workflows} files that are neither in
+        // the bundle nor the ledger. Includes user-authored files (expected) and
+        // any stranded retiree the ledger missed. Scoped to skills/ + workflows/
+        // to match the seed crawl scope (the ledger tracks only those surfaces);
+        // personas/, rules/, scripts/ are out of scope for this reconcile. Only
+        // meaningful when a prior ledger exists (otherwise every workspace file
+        // is "extra" by definition).
+        if (previousFiles) {
+            const known = new Set<string>([...currentBundlePaths, ...previousFiles, this.BUNDLE_LEDGER_FILE]);
+            const scopes = ['skills', 'workflows'];
+            for (const scope of scopes) {
+                let walked: string[] = [];
+                try {
+                    walked = await this._listFilesRecursive(path.join(agentsDir, scope));
+                } catch {
+                    walked = [];
+                }
+                for (const abs of walked) {
+                    const rel = path.relative(agentsDir, abs).split(path.sep).join('/');
+                    if (!known.has(rel)) extra += 1;
+                }
+            }
+        }
+
+        // 4. Atomic ledger write: temp + rename. Always (re)write so the next run
+        //    gates deletes against the current bundle set, even on the first run
+        //    (where no prune happened — the ledger is seeded for run #2 onward).
+        try {
+            fs.mkdirSync(agentsDir, { recursive: true });
+            const manifest = {
+                generator: 'SwitchboardControlPlane',
+                version: extensionVersion ?? 'unknown',
+                generatedAt: new Date().toISOString(),
+                files: Array.from(currentBundlePaths).sort(),
+            };
+            const tmpPath = ledgerPath + '.tmp';
+            fs.writeFileSync(tmpPath, JSON.stringify(manifest, null, 2), 'utf8');
+            fs.renameSync(tmpPath, ledgerPath);
+        } catch (e) {
+            console.warn('[ControlPlaneMigrationService] Bundle ledger write failed:', e);
+        }
+
+        return { pruned, missing, extra };
     }
 
     private static _isSafeParentDir(parentDir: string): boolean {

@@ -131,6 +131,13 @@ export class DesignPanelProvider implements vscode.Disposable {
     private _imagesFolderWatchers: HostWatchHandle[] = [];
     private _briefsFolderWatchers: HostWatchHandle[] = [];
     private _stitchHtmlFolderWatchers: HostWatchHandle[] = [];
+    // Native fs.watch fallbacks for out-of-workspace folders where VS Code's
+    // createFileSystemWatcher silently drops events (macOS fsevents, Linux
+    // inotify, Windows ReadDirectoryChangesW). Parallel to the HostWatchHandle
+    // arrays above; disposed in disposeWatchers().
+    private _htmlFolderNativeWatchers: fs.FSWatcher[] = [];
+    private _claudeFolderNativeWatchers: fs.FSWatcher[] = [];
+    private _stitchHtmlFolderNativeWatchers: fs.FSWatcher[] = [];
     private _saveTextDocListener?: vscode.Disposable;
     private _htmlDocsDebounce?: NodeJS.Timeout;
     private _claudeDocsDebounce?: NodeJS.Timeout;
@@ -735,6 +742,12 @@ setTimeout(reportDims, 0);
         this._briefsFolderWatchers = [];
         this._stitchHtmlFolderWatchers.forEach(w => w.dispose());
         this._stitchHtmlFolderWatchers = [];
+        for (const w of this._htmlFolderNativeWatchers) { try { w.close(); } catch {} }
+        this._htmlFolderNativeWatchers = [];
+        for (const w of this._claudeFolderNativeWatchers) { try { w.close(); } catch {} }
+        this._claudeFolderNativeWatchers = [];
+        for (const w of this._stitchHtmlFolderNativeWatchers) { try { w.close(); } catch {} }
+        this._stitchHtmlFolderNativeWatchers = [];
     }
 
     private _getHtml(webview: vscode.Webview): string {
@@ -831,9 +844,61 @@ setTimeout(reportDims, 0);
         }));
     }
 
+    /**
+     * Native fs.watch fallback for folders that sit OUTSIDE any VS Code workspace
+     * root. VS Code's `createFileSystemWatcher` (used by `hostSeams.watchFolder`)
+     * is officially supported for out-of-workspace paths but is unreliable across
+     * platforms — macOS fsevents drops events under load, Linux inotify exhausts
+     * `max_user_watches`, Windows ReadDirectoryChangesW fails on trailing-slash
+     * drive roots (VS Code Issue #162498). For in-workspace folders the primary
+     * `createFileSystemWatcher` handle is reliable, so the native fallback is
+     * skipped to avoid double-firing.
+     *
+     * `fs.watch({ recursive: true })` is only supported on macOS and Windows; on
+     * Linux it throws, so we log a warning and skip (parity with the existing
+     * `TaskViewerProvider` / `GlobalPlanWatcherService` fallbacks). The existing
+     * 300ms debounce in `_autoRefreshHtmlPreview` absorbs fs.watch's macOS
+     * double-fire — no separate dedup map is needed here (the TaskViewerProvider
+     * 4s TTL map is a cross-watcher suppressor, which is moot here because the
+     * native fallback only runs when the VS Code watcher is silent).
+     */
+    private _setupNativeFolderWatchFallback(
+        folderPath: string,
+        watchersArray: fs.FSWatcher[],
+        onFile: (filePath: string) => void
+    ): void {
+        const roots = this._getWorkspaceRoots();
+        const insideWorkspace = roots.some(r => folderPath === r || folderPath.startsWith(r + path.sep));
+        if (insideWorkspace) return;
+
+        if (process.platform === 'linux') {
+            console.warn(
+                `[DesignPanelProvider] fs.watch recursive fallback unavailable on Linux for '${folderPath}' — out-of-workspace external writes may not refresh`
+            );
+            return;
+        }
+
+        try {
+            const watcher = fs.watch(folderPath, { recursive: true }, (_eventType, filename) => {
+                if (!filename) return;
+                const fullPath = path.join(folderPath, filename.toString());
+                try {
+                    onFile(fullPath);
+                } catch (e) {
+                    console.error('[DesignPanelProvider] native folder watch callback failed:', e);
+                }
+            });
+            watchersArray.push(watcher);
+        } catch (e) {
+            console.error(`[DesignPanelProvider] fs.watch fallback failed for '${folderPath}':`, e);
+        }
+    }
+
     private _setupHtmlFolderWatchers(): void {
         this._htmlFolderWatchers.forEach(w => w.dispose());
         this._htmlFolderWatchers = [];
+        for (const w of this._htmlFolderNativeWatchers) { try { w.close(); } catch {} }
+        this._htmlFolderNativeWatchers = [];
         const roots = this._getWorkspaceRoots();
         for (const root of roots) {
             try {
@@ -848,6 +913,10 @@ setTimeout(reportDims, 0);
                             }
                         });
                         this._htmlFolderWatchers.push(watcher);
+                        this._setupNativeFolderWatchFallback(p, this._htmlFolderNativeWatchers, (filePath) => {
+                            this._sendHtmlDocsReady();
+                            this._autoRefreshHtmlPreview(filePath);
+                        });
                     }
                 }
             } catch {}
@@ -857,6 +926,8 @@ setTimeout(reportDims, 0);
     private async _setupStitchHtmlFolderWatchers(): Promise<void> {
         this._stitchHtmlFolderWatchers.forEach(w => w.dispose());
         this._stitchHtmlFolderWatchers = [];
+        for (const w of this._stitchHtmlFolderNativeWatchers) { try { w.close(); } catch {} }
+        this._stitchHtmlFolderNativeWatchers = [];
         const projectId = this._activeStitchHtmlProjectId;
         const workspaceRoot = this._activeStitchHtmlWorkspaceRoot;
         if (!projectId || !workspaceRoot) return;
@@ -882,12 +953,21 @@ setTimeout(reportDims, 0);
                 }
             });
             this._stitchHtmlFolderWatchers.push(watcher);
+            this._setupNativeFolderWatchFallback(cacheDir, this._stitchHtmlFolderNativeWatchers, (filePath) => {
+                // Same race-guard as the primary watcher — a callback from a
+                // just-discarded project must not refresh the new view.
+                if (this._activeStitchHtmlProjectId !== projectId || this._activeStitchHtmlWorkspaceRoot !== workspaceRoot) return;
+                void this._sendStitchHtmlDocsReady(workspaceRoot, projectId);
+                this._autoRefreshHtmlPreview(filePath);
+            });
         } catch {}
     }
 
     private _setupClaudeFolderWatchers(): void {
         this._claudeFolderWatchers.forEach(w => w.dispose());
         this._claudeFolderWatchers = [];
+        for (const w of this._claudeFolderNativeWatchers) { try { w.close(); } catch {} }
+        this._claudeFolderNativeWatchers = [];
         const roots = this._getWorkspaceRoots();
         for (const root of roots) {
             try {
@@ -904,6 +984,10 @@ setTimeout(reportDims, 0);
                             }
                         });
                         this._claudeFolderWatchers.push(watcher);
+                        this._setupNativeFolderWatchFallback(p, this._claudeFolderNativeWatchers, (filePath) => {
+                            this._sendClaudeDocsReady();
+                            this._autoRefreshHtmlPreview(filePath);
+                        });
                     }
                 }
             } catch {}
@@ -1875,7 +1959,7 @@ setTimeout(reportDims, 0);
 <title>Switchboard Canvas</title>
 <style>
   html, body { margin: 0; padding: 0; background: #141414; color: #ddd; font-family: -apple-system, system-ui, sans-serif; }
-  .sb-canvas-surface { position: relative; width: ${outerW}px; height: ${outerH}px; transform-origin: 0 0; transform: translate(${pan.x}px, ${pan.y}px) scale(${zoom}); }
+  .sb-canvas-surface { position: relative; width: ${outerW}px; height: ${outerH}px; transform-origin: 0 0; }
   .sb-canvas-toolbar { position: sticky; top: 0; z-index: 10; padding: 8px 12px; background: #1a1a1a; border-bottom: 1px solid #333; font-size: 12px; }
 </style>
 </head>
@@ -2354,7 +2438,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             }
             case 'canvas/addFiles': {
                 const root = this._getWorkspaceRoot() || '';
-                const picked = await this._seams().window.showOpenDialog({
+                const picked = await this._seams().ui.showOpenDialog({
                     canSelectMany: true,
                     canSelectFiles: true,
                     canSelectFolders: false,
@@ -4505,22 +4589,44 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
         this._disposables.push(this._saveTextDocListener);
     }
 
+    /**
+     * Normalize a preview path for comparison: resolve, normalize separators/
+     * trailing slashes, resolve symlinks via realpathSync (falls back to the
+     * normalized path on transient ENOENT during mid-write), and lowercase on
+     * darwin (case-insensitive filesystem). VS Code Issue #162498 documents
+     * that trailing-slash / symlink / case differences cause RelativePattern
+     * matching and exact-string compares to silently fail.
+     */
+    private _normalizePreviewPath(p: string): string {
+        let normalized = path.normalize(p);
+        try {
+            normalized = fs.realpathSync(normalized);
+        } catch {
+            // Mid-write ENOENT or transient stat failure — keep the normalized
+            // path; the comparison may miss this fire but the next one succeeds.
+        }
+        if (process.platform === 'darwin') {
+            normalized = normalized.toLowerCase();
+        }
+        return normalized;
+    }
+
     private _autoRefreshHtmlPreview(changedFsPath: string): void {
-        const changedPath = path.resolve(changedFsPath);
+        const changedPath = this._normalizePreviewPath(path.resolve(changedFsPath));
 
         const checkAndRefresh = (active: typeof this._activeHtmlPreview, target?: string) => {
             if (!active) return;
             const relativePath = active.docId.includes(':')
                 ? active.docId.substring(active.docId.indexOf(':') + 1)
                 : active.docId;
-            const activePath = path.resolve(active.sourceFolder, relativePath);
+            const activePath = this._normalizePreviewPath(path.resolve(active.sourceFolder, relativePath));
 
             if (changedPath !== activePath) return;
 
             if (this._autoRefreshDebounce) clearTimeout(this._autoRefreshDebounce);
             this._autoRefreshDebounce = setTimeout(() => {
                 this._autoRefreshDebounce = undefined;
-                
+
                 const current = target === 'claude' ? this._activeClaudePreview
                     : target === 'stitch-html' ? this._activeStitchHtmlPreview
                     : this._activeHtmlPreview;
@@ -4529,7 +4635,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const currentRel = current.docId.includes(':')
                     ? current.docId.substring(current.docId.indexOf(':') + 1)
                     : current.docId;
-                const currentPath = path.resolve(current.sourceFolder, currentRel);
+                const currentPath = this._normalizePreviewPath(path.resolve(current.sourceFolder, currentRel));
                 if (currentPath !== activePath) return;
 
                 this._buildAndSendPreview({

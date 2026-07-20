@@ -157,6 +157,13 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
         source: 'skills/group-into-features', name: 'group-into-features', invocation: 'no-user', allowedTools: 'Bash',
         descriptionFallback: 'Group loose Switchboard plans into features — scan pre-coding columns, cluster by capability, propose all groupings for one approval, then create features via create-feature.js'
     },
+    // rearrange-feature — structure-only counterpart to improve-feature (content)
+    // and group-into-features (composition): re-slice a feature's subtasks
+    // (split/move/merge/reorder) without re-authoring their content.
+    {
+        source: 'skills/rearrange-feature', name: 'rearrange-feature', invocation: 'no-user', allowedTools: 'Bash',
+        descriptionFallback: 'Restructure a feature\'s subtasks — split one subtask into several, move scope between subtasks, merge, or reorder — WITHOUT rewriting their content. Structure-only; the missing counterpart to improve-feature (content) and group-into-features (composition).'
+    },
     // Orchestration HTTP surface — read endpoints + request channel for fleet agents
     // working inside orchestration worktrees. Model-invocable.
     {

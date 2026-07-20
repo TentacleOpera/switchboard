@@ -527,3 +527,42 @@ Complexity 5 → **Send to Coder** (with the User Review Required block resolved
 first). The fix itself is small, but the diagnose-first step and the
 out-of-workspace fallback (if needed) require judgment and reproduction
 discipline — not an Intern task.
+
+## Completion Summary
+
+**Implemented Branch A (out-of-workspace `fs.watch` fallback) + Branch B (path
+normalization) in `switchboard/src/services/DesignPanelProvider.ts`.**
+
+- **Branch A:** Added `_setupNativeFolderWatchFallback()` helper that adds a
+  native `fs.watch(folder, { recursive: true })` handle ONLY for folders outside
+  any VS Code workspace root (in-workspace folders keep the reliable
+  `createFileSystemWatcher` primary, avoiding double-fire). Linux is skipped
+  with a logged warning (`{ recursive: true }` unsupported). Wired into all
+  three setup methods (`_setupHtmlFolderWatchers`, `_setupClaudeFolderWatchers`,
+  `_setupStitchHtmlFolderWatchers`) with per-type `onFile` callbacks replicating
+  the primary watcher's `_sendXDocsReady()` + `_autoRefreshHtmlPreview()` logic
+  (stitch includes the same project-switch race-guard). Three parallel native
+  watcher arrays (`_htmlFolderNativeWatchers`, `_claudeFolderNativeWatchers`,
+  `_stitchHtmlFolderNativeWatchers`) are disposed in `disposeWatchers()` AND
+  cleared on re-entry at the top of each setup method (red-team fix for a
+  handle-leak on workspace folder add/remove).
+- **Branch B:** Added `_normalizePreviewPath()` helper using `path.normalize` +
+  `fs.realpathSync` (try/catch fallback for mid-write ENOENT) + darwin
+  lowercasing. Applied to `changedPath`, `activePath`, and `currentPath` in
+  `_autoRefreshHtmlPreview` so trailing-slash/symlink/case differences no longer
+  cause silent comparison failures (VS Code Issue #162498).
+- **Deviation from plan:** Skipped the separate 4s TTL dedup map proposed in
+  Branch A. Rationale: the TaskViewerProvider 4s TTL map is a *cross-watcher*
+  suppressor (prevents native re-processing when the VS Code watcher already
+  fired). Here the native fallback only runs for out-of-workspace folders where
+  the VS Code watcher is silent, so cross-watcher dedup is moot. fs.watch's
+  macOS double-fire is already absorbed by the existing 300ms debounce in
+  `_autoRefreshHtmlPreview`. Adding a 4s delay would harm UX (refresh delayed
+  4s).
+- **Files changed:** `switchboard/src/services/DesignPanelProvider.ts` only.
+- **Issues encountered:** Plan line numbers were stale (referenced L4154/L4164
+  for `_registerSaveTextDocListener`/`_autoRefreshHtmlPreview`; actual L4498/
+  L4508) — re-located via grep before editing. Red-team review caught a native
+  watcher re-entry leak (fixed). No compilation/tests run per session directives
+  (SKIP COMPILATION, SKIP TESTS); verification is manual reproduction per the
+  plan's Manual Verification section.

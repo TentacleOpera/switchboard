@@ -697,17 +697,6 @@ export const CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE = (name: string) =>
     `SUBAGENT POLICY: You are authorized to use the "${name}" subagent for this task. Do not spawn or invoke any other subagents.`;
 export const WORKTREES_PER_PLAN_DIRECTIVE = 'Where possible, process each plan as an isolated unit using your native subagent or orchestration capabilities, creating a dedicated git worktree per plan to prevent file conflicts between concurrent tasks.';
 
-export const FEATURE_ORCHESTRATION_DIRECTIVE = (featureTopic: string, count: number, worktreesEnabled: boolean = false) =>
-    `FEATURE MODE: You are implementing the feature "${featureTopic}" which consists of ${count} subtask(s).\n` +
-    (worktreesEnabled
-        ? `Use your native subagent or orchestration capabilities to handle each subtask. ` +
-          `If your tool supports worktree-per-plan isolation, activate it now. ` +
-          `If you do not support subagents, handle each subtask sequentially in the order listed below. `
-        : `Handle the subtasks yourself in a sensible order — do NOT create git worktrees or spawn subagents for this dispatch. `) +
-    `All subtasks are part of a single delivery unit — do not treat them as independent tickets.\n` +
-    `Before starting, briefly tell the user how you are handling these subtasks (e.g. order, grouping, and any review/verification pass you plan to run).`;
-
-
 /**
  * Context bundle for `resolveFeatureOrchestrationDirective`. The per-subtask/high-low
  * variants were removed; the base directive is the sole path. This interface is retained
@@ -762,10 +751,24 @@ export function resolveFeatureOrchestrationDirective(
     worktreesEnabled: boolean = false,
     _context?: FeatureOrchestrationDirectiveContext,
     policy?: string,
-    customSubagentName?: string
+    customSubagentName?: string,
+    role?: string
 ): string {
     if (mode !== undefined && !['none', 'per-feature'].includes(mode)) {
         console.warn(`[agentPromptBuilder] Unknown feature_worktree_mode "${mode}" — falling back to base orchestration directive.`);
+    }
+    // Planner role: improve-feature / improve-plan restructure plan files; they do NOT ship
+    // product code and never spawn subagents. Bypass buildFeatureSubagentClause (whose
+    // execution-coded verbs — "Handle the subtasks yourself", "Handle all subtasks yourself",
+    // "Use your native subagent…" — would contradict the planner's job and mis-route agents
+    // into writing product code) and emit a fixed planner-coded subtask clause inline. The
+    // subagent-policy levers (featureUseSubagentsEnabled / featureNoSubagentsEnabled /
+    // featureCustomSubagentName) are meaningless for planners and intentionally ignored.
+    if (role === 'planner') {
+        return `FEATURE MODE: You are planning the feature "${featureTopic}" which consists of ${subtaskCount} subtask(s).\n` +
+            `Process the subtask plan files yourself in a sensible order — do NOT create git worktrees or spawn subagents for this dispatch. ` +
+            `All subtasks are part of a single delivery unit — do not treat them as independent tickets.\n` +
+            `Before starting, briefly tell the user how you are handling these subtasks (e.g. order, grouping, and any review/verification pass you plan to run).`;
     }
     const subagentAndWorktreePart = buildFeatureSubagentClause(policy, customSubagentName, worktreesEnabled);
     return `FEATURE MODE: You are implementing the feature "${featureTopic}" which consists of ${subtaskCount} subtask(s).\n` +
@@ -866,7 +869,10 @@ Process:
    - **2+ independently-shippable phases:** the work has sequential stages where each could be shipped on its own (e.g. "migrate framework" then "build new pages" then "set up deploy pipeline").
    When splitting: write each as a separate plan file with its own Goal, Metadata, and Verification Plan. Do NOT write one mega-plan covering all deliverables/phases — each plan must be independently codeable. If the user explicitly asks for a single plan, respect that and write one.
 4. **Plan:** Draft the implementation plan(s). If you split, write each plan file now, in this step.
-5. **Gate:** Present the plan(s) to the user. If you wrote 3+ plans, notify the user and offer to group them: "I've split this into [N] plans covering [topic] — want me to create a feature to group them?" Only create the feature if the user confirms. When the user says yes, invoke the \`create-feature-from-plans\` skill — it handles the mechanics (plan ID resolution, \`create-feature.js\` execution, verification, and narrative section writing). Do NOT write feature files by hand or reverse-engineer the creation script. If the extension is not running, the skill will fall back to the \`create-feature\` remote path automatically.`;
+5. **Gate:** Present the plan(s) to the user. If you wrote 3+ plans, group them into a feature — the gate depends on who initiated grouping:
+   - **User already asked for grouping or a feature** (e.g. "split these into plans and create a feature", "group these into a feature"): the original ask IS the confirmation. Invoke the \`create-feature-from-plans\` skill now — do NOT ask a second time.
+   - **You are proposing grouping the user did not request:** offer it: "I've split this into [N] plans covering [topic] — want me to create a feature to group them?" Only create the feature if the user confirms. When the user says yes, invoke the \`create-feature-from-plans\` skill.
+   The \`create-feature-from-plans\` skill handles the mechanics (plan ID resolution, \`create-feature.js\` execution, verification, and narrative section writing). Do NOT write feature files by hand or reverse-engineer the creation script. If the extension is not running, the skill will fall back to the \`create-feature\` remote path automatically.`;
 
 export function PROJECT_LINE_DIRECTIVE(project: string): string {
     return `PROJECT PIN: The user had the project "${project}" active when they copied this prompt. Write this line into each plan file's metadata section (alongside **Complexity:** and **Tags:**):\n**Project:** ${project}\nThis pins the plan to that project at creation, regardless of what project is active when the file is imported. Omit the line only if no project name is given above. (Authoring only — this sets a NEW plan's project; to move an existing plan to another project, use the Switchboard board or API, not this line.)`;
@@ -1042,7 +1048,8 @@ export function buildKanbanBatchPrompt(
             useWorktreesPerPlanEnabled,
             undefined,
             featureSubagentPolicy,
-            options.featureCustomSubagentName
+            options.featureCustomSubagentName,
+            role
         );
         featureDirectiveBlock = directive;
         if (options?.featurePromptTemplate) {

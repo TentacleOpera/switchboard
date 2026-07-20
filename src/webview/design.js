@@ -3299,10 +3299,18 @@
                 break;
             }
             case 'canvas/flattened': {
-                // export subtask: provider sends flattened HTML content + filePath
+                // export subtask: provider sends flattened HTML content + filePath.
+                // Stash the path so the Upload-to-Claude-Artifacts buttons can
+                // build the upload prompt from it (mirrors the HTML Previews tab,
+                // which builds the prompt from state.activeDocName/activeDocSourceFolder).
                 if (msg.filePath) {
+                    canvasState.lastFlattenedPath = msg.filePath;
                     const statusEl = document.getElementById('status-canvas');
-                    if (statusEl) statusEl.textContent = 'Flattened HTML saved';
+                    if (statusEl) statusEl.textContent = 'Flattened HTML saved — use ⇗ to upload to Claude Artifacts';
+                    const uploadBtn = document.getElementById('canvas-btn-upload-artifact');
+                    if (uploadBtn) uploadBtn.style.display = 'inline-block';
+                    const copyUploadBtn = document.getElementById('canvas-btn-copy-artifact-prompt');
+                    if (copyUploadBtn) copyUploadBtn.style.display = 'inline-block';
                 }
                 if (msg.uploadPrompt) {
                     // feed into the existing Upload-to-Claude-Artifacts path
@@ -5769,6 +5777,7 @@
         _pan: null,          // { startX, startY, origPanX, origPanY }
         _loaded: false,
         _stitchBulkPending: null, // projectId awaiting canvas/stitchDocsReady
+        lastFlattenedPath: null,  // path of the last flattened HTML (for Upload-to-Claude-Artifacts)
     };
 
     const CANVAS_FRAME_DEFAULT_W = 480;
@@ -5815,6 +5824,7 @@
         canvasState.panX = (rect.width - b.w * scale) / 2 - b.x * scale;
         canvasState.panY = (rect.height - b.h * scale) / 2 - b.y * scale;
         canvasApplyTransform();
+        canvasSaveDebounced();
     }
 
     function canvasZoomAt(newScale, cx, cy) {
@@ -5826,6 +5836,7 @@
         canvasState.panY = cy - (cy - canvasState.panY) * k;
         canvasState.zoom = clamped;
         canvasApplyTransform();
+        canvasSaveDebounced();
     }
 
     function canvasBuildFrameEl(f) {
@@ -5953,9 +5964,16 @@
     }
 
     function canvasNextOffset() {
+        // Grid-pack new frames so they don't stack/overlap. Columns of
+        // (defaultW + gap), rows of (defaultH + gap); 8 columns wide.
         const n = canvasState.frames.length;
-        const offset = CANVAS_FRAME_OFFSET * (n % 8);
-        return { x: 80 + offset, y: 80 + offset };
+        const cols = 8;
+        const col = n % cols;
+        const row = Math.floor(n / cols);
+        return {
+            x: 80 + col * (CANVAS_FRAME_DEFAULT_W + CANVAS_FRAME_OFFSET),
+            y: 80 + row * (CANVAS_FRAME_DEFAULT_H + CANVAS_FRAME_OFFSET)
+        };
     }
 
     function canvasAddFrame(filePath, label, iframeSrc, opts) {
@@ -6011,6 +6029,14 @@
                 zoom: canvasState.zoom, pan: { x: canvasState.panX, y: canvasState.panY }
             }
         });
+    }
+
+    // Debounced save for high-frequency view changes (wheel zoom/pan, button
+    // zoom) — persists zoom/pan without hammering disk on every wheel tick.
+    let _canvasSaveTimer = null;
+    function canvasSaveDebounced() {
+        if (_canvasSaveTimer) clearTimeout(_canvasSaveTimer);
+        _canvasSaveTimer = setTimeout(() => { _canvasSaveTimer = null; canvasSave(); }, 400);
     }
 
     function canvasLoad(name) {
@@ -6136,6 +6162,7 @@
                 canvasState.panX -= e.deltaX;
                 canvasState.panY -= e.deltaY;
                 canvasApplyTransform();
+                canvasSaveDebounced();
             }
         }, { passive: false });
 
@@ -6207,7 +6234,7 @@
             const rect = vp.getBoundingClientRect();
             if (action === 'zoom-in') canvasZoomAt(canvasState.zoom * 1.25, rect.width / 2, rect.height / 2);
             else if (action === 'zoom-out') canvasZoomAt(canvasState.zoom / 1.25, rect.width / 2, rect.height / 2);
-            else if (action === 'reset') { canvasState.zoom = 1; canvasState.panX = 0; canvasState.panY = 0; canvasApplyTransform(); }
+            else if (action === 'reset') { canvasState.zoom = 1; canvasState.panX = 0; canvasState.panY = 0; canvasApplyTransform(); canvasSaveDebounced(); }
             else if (action === 'fit') canvasFit();
             else if (action === 'pan') canvasSetMode(canvasState.mode === 'pan' ? 'none' : 'pan');
             else if (action === 'drag') canvasSetMode(canvasState.mode === 'drag' ? 'none' : 'drag');
@@ -6266,6 +6293,37 @@
             vscode.postMessage({ type: 'canvas/flatten', name: canvasState.name });
         });
 
+        // Agent-flatten escape hatch: ✦ copies a prompt an agent can merge into
+        // one cohesive self-contained HTML (for heavily-scripted screens the
+        // sandboxed data: iframes limit). Reuses the existing Copy-Prompt plumbing.
+        document.getElementById('canvas-btn-flatten-agent')?.addEventListener('click', () => {
+            vscode.postMessage({ type: 'canvas/copyFlattenPrompt', name: canvasState.name });
+        });
+
+        // Upload the flattened HTML to claude.ai Artifacts — feeds the existing
+        // Upload-to-Claude-Artifacts prompt path (same CLAUDE_ARTIFACT_UPLOAD_PROMPT
+        // template + sendClaudeArtifactPrompt/copyClaudeArtifactPrompt messages the
+        // HTML Previews tab uses), pointed at the last flattened file. The buttons
+        // are hidden until a flatten completes (see canvas/flattened handler).
+        function canvasArtifactUploadPrompt() {
+            const p = canvasState.lastFlattenedPath;
+            if (!p) return { error: 'Flatten the canvas first (⤓).' };
+            const filename = p.split(/[\\/]/).pop();
+            const folder = p.slice(0, -(filename.length + 1));
+            return { prompt: CLAUDE_ARTIFACT_UPLOAD_PROMPT({ folder, filename }) };
+        }
+        document.getElementById('canvas-btn-upload-artifact')?.addEventListener('click', () => {
+            const { prompt, error } = canvasArtifactUploadPrompt();
+            vscode.postMessage({
+                type: 'sendClaudeArtifactPrompt', prompt, error,
+                workspaceRoot: state.designWorkspaceRootFilter || undefined
+            });
+        });
+        document.getElementById('canvas-btn-copy-artifact-prompt')?.addEventListener('click', () => {
+            const { prompt, error } = canvasArtifactUploadPrompt();
+            vscode.postMessage({ type: 'copyClaudeArtifactPrompt', prompt, error });
+        });
+
         // Per-frame Inspect Mode tweak popup wiring (mirrors html-tweak-popup).
         document.getElementById('canvas-tweak-btn-close')?.addEventListener('click', () => {
             const popup = document.getElementById('canvas-tweak-popup');
@@ -6311,7 +6369,8 @@
     function canvasInit() {
         canvasInitListeners();
         canvasSetMode('none');
-        canvasLoad('Default');
+        // Canvas loads lazily on first tab visit (see switchTab canvas entry
+        // handler) — don't preload it on every Design panel open.
     }
 
     canvasInit();

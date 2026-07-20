@@ -326,9 +326,13 @@ async function refreshWorkspaceControlPlane(
 
     // 2. Content-hash skill seed loop (per-file fault tolerance).
     let agentsChanged = false;
+    // Hoisted so the bundle-reconcile step (4) can reuse the crawl results
+    // without a second walk — the plan's "no extra I/O" requirement.
+    let skillFiles: string[] = [];
+    let workflowFiles: string[] = [];
     try {
         const bundledSkillsUri = vscode.Uri.joinPath(context.extensionUri, '.agents', 'skills');
-        const skillFiles = await crawlDirectory(bundledSkillsUri);
+        skillFiles = await crawlDirectory(bundledSkillsUri);
         for (const relativePath of skillFiles) {
             const srcUri = vscode.Uri.joinPath(bundledSkillsUri, relativePath);
             const destUri = vscode.Uri.joinPath(vscode.Uri.file(root), '.agents', 'skills', relativePath);
@@ -373,7 +377,7 @@ async function refreshWorkspaceControlPlane(
     // mirror against freshly delivered door sources.
     try {
         const bundledWorkflowsUri = vscode.Uri.joinPath(context.extensionUri, '.agents', 'workflows');
-        const workflowFiles = await crawlDirectory(bundledWorkflowsUri);
+        workflowFiles = await crawlDirectory(bundledWorkflowsUri);
         for (const relativePath of workflowFiles) {
             const srcUri = vscode.Uri.joinPath(bundledWorkflowsUri, relativePath);
             const destUri = vscode.Uri.joinPath(vscode.Uri.file(root), '.agents', 'workflows', relativePath);
@@ -424,6 +428,33 @@ async function refreshWorkspaceControlPlane(
         } catch (err) {
             console.error(`[Switchboard] Protocol-file migration failed for ${root}, continuing:`, err);
         }
+    }
+
+    // 4. Bundle-membership reconcile: prune .agents files retired from the bundle
+    //    since the last activation, then atomically (re)write the ledger. The seed
+    //    loops above only add/overwrite — they never delete, so without this step
+    //    a skill removed from the bundle strands in every workspace's .agents/
+    //    forever (the original "deletions reach nobody, ever" failure). The ledger
+    //    is the sole discriminator: ONLY paths it previously recorded as
+    //    bundle-shipped are ever deleted; user-authored files are never touched.
+    //    First-run (no ledger) → deletes nothing, seeds the ledger for next time.
+    try {
+        const currentBundlePaths = new Set<string>();
+        for (const rel of skillFiles) currentBundlePaths.add('skills/' + rel.split(path.sep).join('/'));
+        for (const rel of workflowFiles) currentBundlePaths.add('workflows/' + rel.split(path.sep).join('/'));
+        // Exclude blocklist entries defensively (the seed crawl scope is skills/
+        // and workflows/ only, so personas/* never appears here, but guard anyway).
+        const version = getExtensionVersion(context.extensionUri.fsPath);
+        const drift = await ControlPlaneMigrationService.pruneRetiredBundleFiles(root, currentBundlePaths, version);
+        const line = `[Switchboard] .agents drift: ${drift.missing} bundle file(s) missing, ${drift.extra} workspace file(s) not in bundle, ${drift.pruned.length} retired file(s) pruned.`;
+        if (drift.pruned.length > 0 || drift.missing > 0) {
+            console.warn(line);
+            outputChannel?.appendLine(line);
+        } else {
+            console.log(line);
+        }
+    } catch (err) {
+        console.error(`[Switchboard] .agents bundle reconcile failed for ${root}, continuing:`, err);
     }
 }
 

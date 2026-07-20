@@ -319,4 +319,28 @@ suite('agentPromptBuilder', () => {
             assert.ok(!prompt.includes('improve-plan.md'), 'Should NOT include improve-plan.md when workflowFilePathEnabled is false');
         });
     });
+
+    suite('feature-mode directive role wording', () => {
+        test('planner feature-mode prompt uses planning-coded directive verbs', () => {
+            const prompt = buildKanbanBatchPrompt('planner', makeFeaturePlans(), { featureMode: true, featureTopic: 'Test Feature', subtaskCount: 2 });
+            assert.ok(prompt.includes('planning the feature'), 'Planner feature-mode prompt should use "planning the feature"');
+            assert.ok(prompt.includes('Process the subtask plan files yourself'), 'Planner feature-mode prompt should use "Process the subtask plan files yourself"');
+            assert.ok(!prompt.includes('implementing the feature'), 'Planner feature-mode prompt must NOT contain execution-coded "implementing the feature"');
+            assert.ok(!prompt.includes('Handle the subtasks yourself'), 'Planner feature-mode prompt must NOT contain execution-coded "Handle the subtasks yourself"');
+        });
+
+        test('coder feature-mode prompt keeps execution-coded directive (regression)', () => {
+            const prompt = buildKanbanBatchPrompt('coder', makeFeaturePlans(), { featureMode: true, featureTopic: 'Test Feature', subtaskCount: 2 });
+            assert.ok(prompt.includes('implementing the feature'), 'Coder feature-mode prompt should still contain "implementing the feature"');
+            assert.ok(prompt.includes('Handle the subtasks yourself'), 'Coder feature-mode prompt should still contain "Handle the subtasks yourself"');
+            assert.ok(!prompt.includes('planning the feature'), 'Coder feature-mode prompt must NOT contain planner-coded "planning the feature"');
+            assert.ok(!prompt.includes('Process the subtask plan files yourself'), 'Coder feature-mode prompt must NOT contain planner-coded "Process the subtask plan files yourself"');
+        });
+
+        test('planner feature-mode with featureNoSubagentsEnabled bypasses noSubagents clause', () => {
+            const prompt = buildKanbanBatchPrompt('planner', makeFeaturePlans(), { featureMode: true, featureTopic: 'Test Feature', subtaskCount: 2, featureNoSubagentsEnabled: true });
+            assert.ok(!prompt.includes('Handle all subtasks yourself'), 'Planner feature-mode prompt must NOT contain the noSubagents clause "Handle all subtasks yourself"');
+            assert.ok(prompt.includes('Process the subtask plan files yourself'), 'Planner feature-mode prompt should use the fixed planner-coded subtask clause regardless of subagent policy');
+        });
+    });
 });

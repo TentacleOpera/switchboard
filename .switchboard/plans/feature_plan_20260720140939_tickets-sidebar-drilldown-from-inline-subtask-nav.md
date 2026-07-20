@@ -389,3 +389,7 @@ the change is JS-only and exercised by loading the extension webview.
 7. **Back header.** After drill-down via inline nav, click the "back to all
    tickets" header in the sidebar → top-level list restored, parent restored
    as selected (existing `planning.js:9902`–`9916` path, must still work).
+
+## Completion Summary
+
+Implemented the sidebar drill-down coupling for both the inline subtask nav and the add-subtask flow in `src/webview/planning.js`. The inline `tickets-subtasks-nav` click handler now reads the currently-selected parent before swapping to the subtask, enters drill-down via `_resetSidebarDrillDown()` → `_pendingDrillDownParentId = parentId` → `_maybeEnterDrillDown(provider, parentId)` with a same-parent short-circuit guard to avoid flicker. The `clickupTaskCreated` and `linearIssueCreated` handlers now set `_pendingDrillDownParentId = parentId` before calling `load*TaskDetails(parentId)` so the existing `*TaskDetailsLoaded` → `_maybeEnterDrillDown` path activates drill-down once the refreshed parent details arrive. No issues encountered; the load-bearing invariants (reset-then-set ordering, `detailsFetched` ⇔ `subtasks.length > 0`, intentional null-parent no-op) were preserved as documented. Single-file change, no backend/host/contract edits.

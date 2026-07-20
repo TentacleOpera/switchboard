@@ -28,3 +28,7 @@ Depends on **canvas-foundation-tab-panzoom-frames** (frame rendering, `canvas/ad
 
 ## Definition of Done
 - One action adds all of a Stitch project's screens as canvas frames, correctly labelled, de-duped against what's already there, count surfaced.
+
+## Review Findings
+
+Reviewed commit `ad17f99` against this plan. The `canvas/addStitchProject` handler (`DesignPanelProvider.ts:2378`) reuses `_resolveStitchProjectName` + `_getImageCacheDir` + `KanbanDatabase.getStitchScreensForProject` to enumerate screens and resolve labels, posts `canvas/stitchDocsReady`, and the webview de-dupes by `filePath` via `canvasAddFrame` (returns null on duplicate) and surfaces an "N added, M already present" count — matches the plan. **MAJOR (fixed via foundation):** the bulk-add reused `canvasNextOffset`, which placed frames on a 40px diagonal cascade — every screen in a project stacked nearly on top of the previous one instead of being grid-packed as the plan requires; the foundation-plan fix (8-column grid-pack in `canvasNextOffset`) resolves this for bulk-add too. No issues found in the de-dupe, labelling, or count-surfacing logic. Files changed (via foundation fix): `src/webview/design.js`. Validation: `node --check src/webview/design.js` passes. **Remaining risk:** `canvasSave` is called once per frame during a bulk-add (N rapid disk writes for an N-screen project) — functionally correct but could be debounced for large projects.

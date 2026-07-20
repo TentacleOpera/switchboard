@@ -4318,6 +4318,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <button class="zoom-btn" data-action="reset" title="Reset view — 100%">⟲</button>
                     <button class="zoom-btn" data-action="fit" title="Fit all frames to view">⤢</button>
                     <button class="zoom-btn" data-action="flatten" id="canvas-btn-flatten" title="Export / Flatten to a single self-contained HTML">⤓</button>
+                    <button class="zoom-btn" id="canvas-btn-flatten-agent" title="Copy an agent-flatten prompt (escape hatch for heavily-scripted screens)">✦</button>
+                    <button class="zoom-btn" id="canvas-btn-upload-artifact" style="display:none;" title="Upload the flattened HTML to claude.ai as an Artifact">⇗</button>
+                    <button class="zoom-btn" id="canvas-btn-copy-artifact-prompt" style="display:none;" title="Copy the Claude Artifacts upload prompt">ⓒ</button>
                 </div>
                 <!-- Per-frame Inspect Mode tweak popup (mirrors html-tweak-popup). -->
                 <div id="canvas-tweak-popup" style="display: none; position: absolute; top: 12px; right: 12px; z-index: 60; width: 340px; max-height: calc(100% - 24px); background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); flex-direction: column; overflow: hidden; font-size: 12px; font-family: var(--font-family);">
