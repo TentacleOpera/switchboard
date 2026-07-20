@@ -42,6 +42,12 @@ Before conducting any analysis, propose a planning approach to the user for appr
 - If rejected: Clarify requirements and propose new plan
 - If clarifying questions were posed: wait for answers before proceeding to Phase 1. Incorporate answers into the refined planning approach.
 
+**Plan Sizing — split before drafting.** Before drafting any plan in Phase 4, assess whether the work is one plan or multiple. Auto-split into separate plan files when EITHER signal is present:
+- **3+ distinct deliverables:** the work produces 3+ independent outputs (e.g. 3+ pages, 3+ components that don't share a root cause, 3+ API endpoints in different domains, 3+ unrelated bug fixes).
+- **2+ independently-shippable phases:** the work has sequential stages where each could be shipped on its own (e.g. "migrate framework" then "build new pages" then "set up deploy pipeline").
+
+When splitting: write each as a separate plan file with its own Goal, Metadata, and Verification Plan. Do NOT write one mega-plan covering all deliverables/phases — each plan must be independently codeable. If the user explicitly asks for a single plan, respect that and write one. If you wrote 3+ plans, group them into a feature via the `create-feature-from-plans` skill — if the user already asked for grouping or a feature, treat the original ask as confirmation and create it without a second confirm; if you are proposing grouping the user did not request, offer it and wait for confirmation.
+
 ### Phase 1: Codebase Exploration (Internal Analysis)
 **Before starting**: Check system date/time for any time-sensitive web research later.
 
