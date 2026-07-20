@@ -5423,7 +5423,11 @@
             case 'sbWheel': {
                 // Forwarded wheel from the iframe so plain scroll navigates the
                 // canvas with Pan mode OFF. Mirrors design.js:sbWheel.
-                if (document.body.classList.contains('space-pan-active')) break;
+                // While Inspect is active the capture layer is force-hidden, so
+                // forwarded wheel is the ONLY pan channel — don't drop it even when
+                // Pan mode / Space is engaged, or inspect+pan cannot coexist.
+                if (document.body.classList.contains('space-pan-active') &&
+                    !document.body.classList.contains('inspect-active')) break;
                 const planningHtmlFrame = document.getElementById('planning-html-frame');
                 if (state.activeSource !== 'planning-html-folder' ||
                     !planningHtmlFrame || event.source !== planningHtmlFrame.contentWindow) {

@@ -1234,6 +1234,44 @@
           color: var(--accent-red);
         }
 
+        /* Secondary button — ported from implementation.html so .secondary-btn
+           references in this file (EXPORT AS SKILL, Validate, CANCEL) are styled
+           instead of falling back to the user-agent default. Uses the same CSS
+           variables already declared in :root / body.theme-claudify above. */
+        .secondary-btn {
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 8px;
+            font-size: 10px;
+            font-family: var(--font-mono);
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: none;
+            border-radius: 2px;
+        }
+
+        .secondary-btn:hover {
+            background: color-mix(in srgb, var(--border-bright) 10%, transparent);
+            border-color: var(--border-bright);
+            color: var(--text-primary);
+        }
+
+        .secondary-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+            color: var(--vscode-disabledForeground, var(--text-secondary));
+            border-color: var(--border-color);
+            box-shadow: none;
+        }
+
+        .secondary-btn.dispatching {
+            opacity: 0.7;
+            cursor: wait;
+        }
+
         .hidden { display: none !important; }
 
         /* Inline Custom Agent Form */

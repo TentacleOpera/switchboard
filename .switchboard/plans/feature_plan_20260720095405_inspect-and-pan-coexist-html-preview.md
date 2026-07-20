@@ -90,3 +90,9 @@ The inspector already forwards Space and (per the navigation work) can forward w
 5. **Refresh safety:** with Inspect on, save the source file (auto-refresh). **Expect:** inspect resets cleanly and the capture layer is not left permanently hidden; normal pan works afterward.
 6. **Element selection still posts the tweak popup** (`stitchElementSelected` → popup) while pan is on.
 7. **Repeat 2–5 in Planning → HTML preview** and **Design → Stitch HTML**.
+
+## Review Findings
+
+Reviewed against plan: one MAJOR bug found and FIXED. `body.inspect-active .zoom-event-layer { display:none !important }` correctly suppresses the capture layer, and the `inspect-active` class is toggled (gated behind active-iframe routing) and cleared on every refresh path, in parity across both webviews. MAJOR: the companion `sbWheel` guard bailed on `space-pan-active` alone, so with Inspect ON + Pan ✥ ON (or Space held) the layer was hidden AND forwarded wheel was dropped — zero pan channels, the exact lose-lose this subtask exists to eliminate. Fix: guard tightened to `space-pan-active && !inspect-active` in both webviews (design.js:3726, planning.js:5429), restoring wheel-pan-while-inspecting in every pan state without reintroducing double-pan. Files changed: src/webview/design.js, src/webview/planning.js. Remaining risk (deferred NITs, plan-flagged for User Review): the ✥ toggle still reads "active" during inspect though drag does nothing; `inspect-active` is a global body class that relies on preview-ready to clear on tab switch. Verification: static 6-state pointer-matrix trace (compile/tests skipped per dispatch).
+
+Review pass complete: MAJOR sbWheel guard bug fixed. This edit signals kanban completion.

@@ -39,6 +39,12 @@ export function cleanupTerminalSendLock(key: string): void {
     _terminalSendLocks.delete(key);
 }
 
+// Per-terminal background send queue: serializes non-focus-stealing
+// `sendText`-based background deliveries (e.g. Comms Monitor poll ticks and
+// auth checks) so concurrent sends to the same terminal cannot interleave
+// their chunks. WeakMap keys die with the Terminal instance.
+const _backgroundSendQueues = new WeakMap<vscode.Terminal, Promise<void>>();
+
 
 // Named timing constants for clipboard paste operations
 const PRE_PASTE_SETTLE_MS = 200;
@@ -126,8 +132,16 @@ export async function sendRobustText(
     text: string,
     paced: boolean = true,
     log?: (msg: string) => void,
-    options?: { acquireFocus?: boolean }
+    options?: { acquireFocus?: boolean; background?: boolean }
 ): Promise<void> {
+    // Background mode: deliver via terminal.sendText wrapped in Bracketed Paste
+    // Mode without ever calling terminal.show() or workbench.action.terminal.paste,
+    // so keyboard focus is never stolen from the user. Queued per-terminal to
+    // prevent chunk interleaving between concurrent background sends.
+    if (options?.background) {
+        return _sendRobustTextBackground(terminal, text, log);
+    }
+
     const CHUNK_SIZE = 500;
     const CHUNK_DELAY = 50; // ms between chunks
     const NEWLINE_DELAY = paced ? (isRemoteTerminal() ? 600 : 300) : 100; // was 1000 / 100 — adaptive delay before submission
@@ -186,4 +200,60 @@ export async function sendRobustText(
         terminal.sendText('', true);
     }
     _log(`sendRobustText complete for '${terminal.name}' (${text.length} chars).`);
+}
+
+/**
+ * Background (non-focus-stealing) delivery path for `sendRobustText`.
+ *
+ * Wraps the payload in Bracketed Paste Mode ANSI escape sequences
+ * (`\x1b[200~` ... `\x1b[201~`) and streams it via `terminal.sendText` in
+ * 256-byte chunks with 30 ms pacing, then sends a single Enter to submit.
+ *
+ * `terminal.sendText` writes directly to the terminal's stdin without
+ * revealing or focusing the terminal, so the user's keyboard focus is
+ * preserved. The Bracketed Paste wrapper tells raw-mode TUIs (Claude CLI /
+ * prompt-toolkit) to treat the block as an atomic paste, preserving
+ * newlines and preventing premature submission.
+ *
+ * A per-terminal promise queue (`_backgroundSendQueues`) serializes
+ * concurrent background sends so their chunks cannot interleave.
+ */
+async function _sendRobustTextBackground(
+    terminal: vscode.Terminal,
+    text: string,
+    log?: (msg: string) => void
+): Promise<void> {
+    const _log = (msg: string) => { log?.(msg); console.log(`[sendRobustText background] ${msg}`); };
+    const CHUNK_SIZE = 256;
+    const CHUNK_DELAY_MS = 30;
+    const SUBMIT_DELAY_MS = 100; // small settle before Enter
+
+    const previous = _backgroundSendQueues.get(terminal) || Promise.resolve();
+    const next = previous.then(async () => {
+        _log(`Starting background send (${text.length} chars) to '${terminal.name}'`);
+
+        // Begin Bracketed Paste Mode
+        terminal.sendText('\x1b[200~', false);
+
+        // Stream the payload in small chunks to avoid PTY/stdin saturation
+        for (let i = 0; i < text.length; i += CHUNK_SIZE) {
+            const chunk = text.substring(i, i + CHUNK_SIZE);
+            terminal.sendText(chunk, false);
+            if (i + CHUNK_SIZE < text.length) {
+                await new Promise(r => setTimeout(r, CHUNK_DELAY_MS));
+            }
+        }
+
+        // End Bracketed Paste Mode
+        terminal.sendText('\x1b[201~', false);
+
+        // Wait briefly for the terminal to process the paste block, then submit
+        await new Promise(r => setTimeout(r, SUBMIT_DELAY_MS));
+        terminal.sendText('', true);
+
+        _log(`Background send complete for '${terminal.name}'`);
+    }).then(() => {}, () => {}); // swallow errors so the queue always advances
+
+    _backgroundSendQueues.set(terminal, next);
+    return next;
 }

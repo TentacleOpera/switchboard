@@ -73,6 +73,13 @@ export class SetupPanelProvider implements vscode.Disposable {
         // If a headless test harness has already injected seams, do not re-derive
         // a workspace root through vscode.workspace.workspaceFolders.
         if (this._hostSeams) {
+            // Seams already derived (prior verb call or test-harness injection).
+            // Do NOT re-derive workspace root, but DO re-point the broadcaster
+            // at the current panel webview — otherwise a tab close/reopen cycle
+            // leaves the broadcaster pointing at a dead webview and every
+            // postMessage() silently drops. Mirrors KanbanProvider's
+            // _initKanbanService(), which has no early-return and always re-points.
+            this._broadcaster?.setWebview(this._panel?.webview);
             return;
         }
         const workspaceRoot = this._getCurrentWorkspaceRoot() || '';
@@ -196,8 +203,18 @@ export class SetupPanelProvider implements vscode.Disposable {
             this._disposables
         );
 
+        // Re-point the broadcaster at the freshly-created webview on every open.
+        // _initSetupService() is a no-op re-derivation when _hostSeams is already
+        // set (verb-fired case), but its early-return branch re-points the
+        // broadcaster's webview ref — fixing the stale-broadcaster bug where a
+        // verb call followed by tab close/reopen left the broadcaster pointing at
+        // a dead webview. When no workspace root resolves, _broadcaster stays
+        // undefined and postMessage() falls back to direct panel delivery.
+        this._initSetupService();
+
         this._panel.onDidDispose(() => {
             this._panel = undefined;
+            this._broadcaster?.setWebview(null);
         }, null, this._disposables);
     }
 

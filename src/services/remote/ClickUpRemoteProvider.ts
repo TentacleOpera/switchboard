@@ -86,7 +86,18 @@ export class ClickUpRemoteProvider implements RemoteProvider {
                     : '';
                 const description = task.markdownDescription || '';
 
-                if (remoteId && stateKey) {
+                // Skip tasks that have a ClickUp parent (subtasks). ClickUp feature
+                // structure is strictly outbound: subtasks are projected out on
+                // export but never re-imported as deltas. Emitting them here would
+                // either orphan-duplicate them (subtasks don't carry the feature's
+                // project, so they fail the match index and get re-imported as new
+                // `clickup-import` plans) or, in the narrower matched case, dispatch
+                // their column agent independently of the feature cascade. The
+                // parent feature task (parentId null) still flows through. The
+                // `nextCursor` update below MUST still run for skipped subtasks so
+                // the state cursor advances past a poll where only a subtask changed
+                // (otherwise a re-processing loop). Guard is on the push only.
+                if (remoteId && stateKey && !task.parentId) {
                     deltas.push({
                         remoteId,
                         stateKey,
@@ -137,6 +148,11 @@ export class ClickUpRemoteProvider implements RemoteProvider {
             if (!workspaceId || !plansDir) { return null; }
             const { task } = await this._clickup.getTaskDetails(remoteId);
             if (!task) { return null; }
+            // Defense-in-depth: never import a parented ClickUp task (a subtask)
+            // as a standalone plan. The load-bearing fix is the delta filter in
+            // fetchStateDeltas; this guard only fires if some future caller
+            // invokes importRemotePlan directly, bypassing _pollState.
+            if (task.parentId) { return null; }
             const rec = await importRemoteMarkdownPlan({
                 db: this._deps.db,
                 workspaceId,

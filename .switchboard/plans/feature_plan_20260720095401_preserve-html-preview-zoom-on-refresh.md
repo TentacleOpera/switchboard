@@ -102,3 +102,9 @@ Same treatment for the `planningHtml` tab:
 4. **Dimension change on save:** add a tall section to the file and save. **Expect:** zoom preserved; the page cannot be panned off-canvas (clamp still holds — scroll to the far edge and confirm no empty gutter).
 5. **Repeat 2–4 in Planning → HTML preview** and **Design → Stitch HTML** tab.
 6. **Regression:** confirm first load of a brand-new file still fits correctly and never shows a collapsed/near-zero canvas across several rapid file switches.
+
+## Review Findings
+
+Reviewed against plan: PASS, no code changes. `_fitPending` one-shot gates the fresh-load fit; auto-refresh preserves `zoomState` (resetZoom skipped) while still sizing the viewport and re-clamping preserved pan via the `else` branch (design.js:3762, planning.js:5461) — the "viewport must keep sizing on refresh" risk is respected. Gate applied in parity across html/stitchHtml/planningHtml. Planning has two `_fitPending.planningHtml` consumers (iframe `load` at 4162 + `sbContentDims` at 5456); the one-shot flag makes them mutually exclusive — no double-fit (loser runs an idempotent clampPan). Remaining risk: none material. Verification: static trace only (compile/tests skipped per dispatch).
+
+Review pass complete: no fixes required for this subtask. Files changed by this subtask: none. This edit signals kanban completion.

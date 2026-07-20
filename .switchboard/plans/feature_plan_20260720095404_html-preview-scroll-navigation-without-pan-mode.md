@@ -120,3 +120,9 @@ Add the mirror `sbWheel` case in planning's message switch (next to its `sbConte
 5. **Pan mode ON still works:** toggle ✥ on, drag and wheel. **Expect:** unchanged pan-drag behaviour, no doubled/‌jumpy panning.
 6. **Space-hold still works:** hold Space and drag. **Expect:** momentary pan as before; no double-apply with the forwarded wheel.
 7. **Repeat 2–5 in Planning → HTML preview** and **Design → Stitch HTML**.
+
+## Review Findings
+
+Reviewed against plan: PASS with one shared fix (see below). Iframe wheel forwarder added to shared `_INSPECTOR_SCRIPT` (DesignPanelProvider.ts, try/catch, `{passive:false, capture:true}`, `preventDefault`); parent `sbWheel` + `applyWheelToTab` added to both webviews, routed by `event.source === frame.contentWindow`. The `if (space-pan-active) break` guard this subtask introduced was correct in isolation but collided with the inspect+pan subtask's layer suppression — it has been tightened to `space-pan-active && !inspect-active` (design.js:3726, planning.js:5429) so forwarded wheel is not dropped while the capture layer is force-hidden during inspect. Files changed: src/webview/design.js, src/webview/planning.js (guard). Remaining risk (NITs, deferred): `deltaMode` forwarded but unused (Chromium webview is always pixel-mode); forwarded-wheel zoom anchors at container center vs the container handler's cursor anchor. Verification: static state-matrix trace, no double-pan in any state (compile/tests skipped per dispatch).
+
+Review pass complete: shared `sbWheel` guard tightened. This edit signals kanban completion.

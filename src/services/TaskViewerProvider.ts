@@ -22291,7 +22291,7 @@ What would you like to find?`;
         try {
             const prompt = this._buildMcpMonitorPrompt(cfg, { dueSources });
             if (prompt) {
-                await sendRobustText(terminal, prompt, true);
+                await sendRobustText(terminal, prompt, true, undefined, { background: true });
                 this._mcpMonitorLastSendAt = Date.now();
                 // Persist sourceLastCheckAt for the sent sources only (successful send).
                 const nowIso = new Date().toISOString();
@@ -22642,7 +22642,7 @@ What would you like to find?`;
         const sources = (cfg.sources || []).filter(s => s !== 'custom');
         const sourceList = sources.length > 0 ? sources.join(', ') : 'no sources configured';
         const prompt = `Diagnostic check: confirm you can access the following MCP sources and report their status (connected / unauthorized / not configured): ${sourceList}. Do NOT take any actions — this is a read-only connectivity check.`;
-        await sendRobustText(terminal, normalizeNewlines(prompt), true);
+        await sendRobustText(terminal, normalizeNewlines(prompt), true, undefined, { background: true });
     }
 
     /**

@@ -3719,7 +3719,12 @@
                 // container wheel listener never sees events fired over the iframe).
                 // When the capture layer IS up (Space/pan), it handles wheel directly
                 // and the iframe's wheel won't fire — guard explicitly to be safe.
-                if (document.body.classList.contains('space-pan-active')) break;
+                // BUT while Inspect is active the layer is force-hidden
+                // (body.inspect-active .zoom-event-layer { display:none !important }),
+                // so forwarded wheel is the ONLY pan channel — do not drop it even
+                // when Pan mode / Space is engaged, or inspect+pan cannot coexist.
+                if (document.body.classList.contains('space-pan-active') &&
+                    !document.body.classList.contains('inspect-active')) break;
                 const htmlFrame = document.getElementById('html-preview-frame');
                 const stitchFrame = document.getElementById('stitch-html-preview-frame');
                 const d = event.data;

@@ -384,3 +384,7 @@ verification is manual.
 ---
 
 **Recommendation:** Complexity 2 → Send to Intern.
+
+## Completion Summary
+
+Implemented all three changes in `src/services/SetupPanelProvider.ts`: (1) the `_initSetupService()` early-return branch now calls `this._broadcaster?.setWebview(this._panel?.webview)` before returning so the broadcaster always re-points to the current webview; (2) `open()` calls `this._initSetupService()` after `onDidReceiveMessage` registration and before `onDidDispose` registration, exercising the re-point on every panel creation; (3) the `onDidDispose` callback now calls `this._broadcaster?.setWebview(null)` after nulling `_panel`, so messages between dispose and reopen queue in the broadcaster's pending buffer instead of dropping to a dead webview. No issues encountered; the fix mirrors the proven KanbanProvider pattern and `BroadcastHub.setWebview` accepts `null|undefined` by design. Compilation and automated tests skipped per session directive.

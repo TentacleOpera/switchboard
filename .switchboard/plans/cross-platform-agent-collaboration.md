@@ -70,7 +70,7 @@ Emergent collaboration (implicit, through the shared plan + columns + comments) 
 
 ## Dependencies
 
-- `remote-content-pull-all-providers` — hard dependency; shared bidirectional plan body is the prerequisite. This plan is explicitly phase 2.
+- `remote-content-pull-all-providers` — hard dependency; shared bidirectional plan body is the prerequisite. This plan is explicitly phase 2. **Status (2026-07-20): content-pull is in and has been reviewed — this dependency is satisfied and no longer blocks.** Before resuming from the backlog, verify whether it shipped a pluggable `ContentConflictResolver` seam (vs. last-write-wins inline); if there is no seam, this plan's first task is to add the seam, not just a second resolver.
 - The dependency plan's `ContentConflictResolver` seam + `LastWriteWinsResolver` implementation must be landed before this plan's second resolver work begins.
 
 ## Uncertain Assumptions

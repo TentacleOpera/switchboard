@@ -95,3 +95,9 @@ Clarify the Reset button tooltip on every `.zoom-toolbar` (the HTML preview one 
 4. **Tooltip:** hover ⟲. **Expect:** "Reset view — 100% size".
 5. **Distinct from Fit:** confirm ⤢ Fit still fits the whole page and behaves differently from ⟲ Reset.
 6. **Repeat 2–4 in Planning → HTML preview** and **Design → Stitch HTML**.
+
+## Review Findings
+
+Reviewed against plan: PASS, no code changes. Reset branch sets scale=1, `panX` center-if-fits-else-left-pin, `panY=0`, then `clampPan` (design.js:437, planning.js:444). Verified: on a tall page `clampPan` leaves `panY=0` (top-anchored, deterministic); on a small page `clampPan` centers vertically and the tooltip is the neutral "Reset view — 100% size" (not the misleading "back to top") — the exact lie the plan pre-empted. `getContentDims`-null fallback preserved; all four `.zoom-toolbar` tooltips updated in parity. Remaining risk: none. Verification: static trace only (compile/tests skipped per dispatch).
+
+Review pass complete: no fixes required for this subtask. Files changed by this subtask: none. This edit signals kanban completion.

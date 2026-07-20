@@ -96,3 +96,9 @@ Leave the image `fitToContainer('images'/'design', ...)` calls ([design.js:1551]
 4. **Fit-whole-page still works:** click the ⤢ Fit button (and double-click the canvas). **Expect:** the entire page shrinks to fully fit — the on-demand "see everything" is intact.
 5. **Images unaffected:** open the Images tab and a large image. **Expect:** whole image fits (unchanged contain behaviour).
 6. **Repeat 2–4 in Planning → HTML preview** and **Design → Stitch HTML**.
+
+## Review Findings
+
+Reviewed against plan: PASS, no code changes. `mode` param added to `fitToContainer` (design.js:286, planning.js:294) and correctly forwarded through the rAF retry recursion (the flagged regression risk); all 6 call sites audited — image/dblclick/Fit stay `'contain'`, both iframe-preview `sbContentDims` sites pass `'width'` (design.js:3760/3778, planning.js:5457), planning's `load` fallback also `'width'` (4166). Width mode anchors `panY=0` (top) and centers `panX` when narrow, per plan. Remaining risk: none material — `_fitPending.images/.design` are declared-but-unused dead keys (cosmetic NIT). Verification: static trace only (compile/tests skipped per dispatch).
+
+Review pass complete: no fixes required for this subtask; the one feature-level MAJOR fix landed in the inspect+pan subtask (shared `sbWheel` guard). Files changed by this subtask: none. This edit signals kanban completion.
