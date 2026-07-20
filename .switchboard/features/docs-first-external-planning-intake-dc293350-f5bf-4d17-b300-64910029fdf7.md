@@ -21,6 +21,5 @@ Make an already-possible workflow discoverable: point an agent at your docs, hav
 - [ ] [Build the Create Plans tab](../plans/create-plans-tab-docs-only-agent-intake.md) — **PLAN REVIEWED**
 - [ ] [Delete the project-context auto-bundle feature](../plans/delete-project-context-auto-bundle.md) — **PLAN REVIEWED**
 - [ ] [Remove the NotebookLM export](../plans/remove-notebooklm-export.md) — **PLAN REVIEWED**
-- [ ] [Update switchboard-site docs for the Docs-tab / Create Plans / NotebookLM changes](../plans/update-switchboard-site-docs.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
 

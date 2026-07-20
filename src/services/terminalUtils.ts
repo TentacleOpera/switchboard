@@ -229,7 +229,12 @@ async function _sendRobustTextBackground(
     const SUBMIT_DELAY_MS = 100; // small settle before Enter
 
     const previous = _backgroundSendQueues.get(terminal) || Promise.resolve();
-    const next = previous.then(async () => {
+    // The WORK promise propagates errors to the caller so they can skip
+    // dependent state updates (e.g. sourceLastCheckAt) on failure. The TAIL
+    // promise swallows errors so the per-terminal queue always advances even
+    // if a send rejects (e.g. terminal closed mid-chunk). Storing the tail in
+    // the WeakMap decouples queue liveness from caller error visibility.
+    const work = previous.then(async () => {
         _log(`Starting background send (${text.length} chars) to '${terminal.name}'`);
 
         // Begin Bracketed Paste Mode
@@ -248,12 +253,13 @@ async function _sendRobustTextBackground(
         terminal.sendText('\x1b[201~', false);
 
         // Wait briefly for the terminal to process the paste block, then submit
+        // with a bare Enter (empty text + addNewLine = newline only).
         await new Promise(r => setTimeout(r, SUBMIT_DELAY_MS));
         terminal.sendText('', true);
 
         _log(`Background send complete for '${terminal.name}'`);
-    }).then(() => {}, () => {}); // swallow errors so the queue always advances
-
-    _backgroundSendQueues.set(terminal, next);
-    return next;
+    });
+    const tail = work.then(() => {}, () => {}); // swallow so the queue always advances
+    _backgroundSendQueues.set(terminal, tail);
+    return work;
 }
