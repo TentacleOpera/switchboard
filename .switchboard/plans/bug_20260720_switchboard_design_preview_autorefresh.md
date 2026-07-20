@@ -566,3 +566,29 @@ normalization) in `switchboard/src/services/DesignPanelProvider.ts`.**
   watcher re-entry leak (fixed). No compilation/tests run per session directives
   (SKIP COMPILATION, SKIP TESTS); verification is manual reproduction per the
   plan's Manual Verification section.
+
+## Review Findings
+
+**Reviewer pass (2026-07-20, in-place).** Assessed the Branch A + Branch B
+implementation in `src/services/DesignPanelProvider.ts` (commit `6ce3948`) against
+the plan's acceptance criteria and ran an advanced regression audit (caller/consumer
+trace, double-trigger, race, orphan-reference, full execution path).
+
+- **Files changed (this review):** `src/services/DesignPanelProvider.ts` — added an
+  `fs.watch` 'error' listener inside `_setupNativeFolderWatchFallback` (6 lines).
+- **Validation:** TypeScript parse check passes (no project compilation per session
+  directive; no tests per session directive). Manual reproduction per the plan's
+  Manual Verification section is the remaining gate.
+- **Fixes applied:** 1 MAJOR — `fs.watch` handle had no 'error' listener; an
+  unhandled 'error' event (folder deletion, macOS fsevents hiccup, ENOSPC) would
+  throw per Node's EventEmitter default and risk crashing the extension host.
+  Added `watcher.on('error', …)` logger. The 3 prior `fs.watch` sites in
+  `TaskViewerProvider`/`GlobalPlanWatcherService` share this gap (codebase
+  convention) — out of scope for this plan; flagged for a codebase-wide pass.
+- **Remaining risks:** (1) Native fallback `onFile` does not gate on delete events
+  like the primary watcher — harmless (readFile ENOENT → silent fail via
+  `requestId === -1`), NIT, deferred. (2) Stitch native fallback is always inert
+  because `_getImageCacheDir` returns `<workspaceRoot>/.switchboard/stitch/…`
+  (always in-workspace → `insideWorkspace` true → early return); dead code in
+  practice but defensively correct, NIT. (3) Linux out-of-workspace remains
+  uncovered by design (`{ recursive: true }` unsupported) — documented in plan.

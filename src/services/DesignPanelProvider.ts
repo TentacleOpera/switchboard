@@ -888,6 +888,12 @@ setTimeout(reportDims, 0);
                     console.error('[DesignPanelProvider] native folder watch callback failed:', e);
                 }
             });
+            // fs.watch emits 'error' on folder deletion / fsevents hiccups / ENOSPC.
+            // With no listener, Node's EventEmitter default is to throw → uncaught
+            // exception in the extension host. Attach a no-op logger to contain it.
+            watcher.on('error', (err) => {
+                console.error(`[DesignPanelProvider] fs.watch error for '${folderPath}':`, err);
+            });
             watchersArray.push(watcher);
         } catch (e) {
             console.error(`[DesignPanelProvider] fs.watch fallback failed for '${folderPath}':`, e);
