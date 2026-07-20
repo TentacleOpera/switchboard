@@ -39,7 +39,6 @@ import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import { InsightManager } from './InsightManager';
 import { GovernanceFileKey } from './constitutionUtils';
 import { getProjectPrdPath, sanitizeProjectSlug } from './prdUtils';
-import { bundleWorkspaceContext } from './ContextBundler';
 import { PlanAutoFetchService } from './PlanAutoFetchService';
 import { classifyHttpError } from './errorMessages';
 
@@ -2645,25 +2644,6 @@ Start by checking which documents exist, then present the menu.`;
                 }
                 break;
             }
-            case 'notebookDefaultRoot': {
-                // Restore the NotebookLM tab's persisted workspace. The 'notebook.root'
-                // key predates the tab's move from planning.html — same store, so a
-                // selection made before the move survives it.
-                const restoredRoot = this._stateStore.getPanelState<string>('notebook.root');
-                const allowedRoots = buildWorkspaceItems(allRoots).map(item => item.workspaceRoot);
-                const kanbanRoot = this._kanbanProvider?.getCurrentWorkspaceRoot() || null;
-                let defaultRoot: string | undefined;
-                if (restoredRoot && allowedRoots.includes(restoredRoot)) {
-                    defaultRoot = restoredRoot;
-                } else if (kanbanRoot && allowedRoots.includes(kanbanRoot)) {
-                    defaultRoot = kanbanRoot;
-                } else {
-                    defaultRoot = allowedRoots[0] || allRoots[0];
-                }
-                const nbPanel = isProject ? this._projectPanel : this._panel;
-                this._pushTo(nbPanel, 'notebook', { type: 'notebookDefaultRoot', root: defaultRoot || '' });
-                break;
-            }
 
             // ── Dev Docs (project-context authoring surface) ────────────────
             case 'loadDevDocs': {
@@ -3350,37 +3330,9 @@ Start by checking which documents exist, then present the menu.`;
                 await this._handleImportPlansFromClipboard(workspaceRoot);
                 break;
             }
-            case 'importNotebookLMPlans': {
-                const targetRoot = msg.workspaceRoot && allRoots.includes(msg.workspaceRoot) ? msg.workspaceRoot : workspaceRoot;
-                const result = await this._seams().commands.executeCommand('switchboard.importNotebookLMPlans', targetRoot) as { overwritten: number; created: number; errors: number } | undefined;
-                const nbTarget = isProject ? this._projectPanel : this._panel;
-                this._pushTo(nbTarget, 'notebook', { type: 'importNotebookLMPlansResult', overwritten: result?.overwritten ?? 0, created: result?.created ?? 0, errors: result?.errors ?? 0 });
-                break;
-            }
             case 'importResearchDoc': {
                 const targetRoot = msg.workspaceRoot && allRoots.includes(msg.workspaceRoot) ? msg.workspaceRoot : workspaceRoot;
                 await this._handleImportResearchDoc(targetRoot, msg.docTitle, msg.folderPath);
-                break;
-            }
-            case 'airlock_export': {
-                const targetRoot = msg.workspaceRoot && allRoots.includes(msg.workspaceRoot) ? msg.workspaceRoot : workspaceRoot;
-                const result = await this._handleAirlockExport(targetRoot);
-                const airlockTarget = isProject ? this._projectPanel : this._panel;
-                this._pushTo(airlockTarget, 'notebook', { type: 'airlock_exportComplete', ...result });
-                break;
-            }
-            case 'airlock_openNotebookLM': {
-                await this._seams().ui.openExternal('https://notebooklm.google.com');
-                break;
-            }
-            case 'airlock_openAIStudio': {
-                await this._seams().ui.openExternal('https://aistudio.google.com');
-                break;
-            }
-            case 'airlock_openFolder': {
-                const targetRoot = msg.workspaceRoot && allRoots.includes(msg.workspaceRoot) ? msg.workspaceRoot : workspaceRoot;
-                const folderPath = path.join(targetRoot, '.switchboard', 'NotebookLM');
-                await this._seams().commands.executeCommand('revealFileInOS', folderPath);
                 break;
             }
 
@@ -9380,36 +9332,6 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 .then(payload => { if (payload) { this.postMessageToProjectWebview(payload); } })
                 .catch(err => console.warn('[PlanningPanel] project-context auto-sync failed:', err));
         }, 5000);
-    }
-
-    private async _handleAirlockExport(workspaceRoot: string): Promise<{ success: boolean; message: string }> {
-        try {
-            const integrationDir = path.join(workspaceRoot, '.switchboard', 'NotebookLM');
-            if (!fs.existsSync(integrationDir)) {
-                fs.mkdirSync(integrationDir, { recursive: true });
-            }
-
-            // Bundle the workspace into NotebookLM-compatible .docx parts.
-            const { outputDir, timestamp } = await bundleWorkspaceContext(workspaceRoot);
-
-            // Ship the planning guide alongside the bundle so NotebookLM answers
-            // are grounded in how this project writes plans.
-            const howToPlanPath = path.join(outputDir, `${timestamp}-how_to_plan.md`);
-            let howToPlanContent = '# How to Plan\n\nRefer to the project guidelines for planning.';
-            try {
-                howToPlanContent = await fs.promises.readFile(path.join(workspaceRoot, '.agents', 'rules', 'how_to_plan.md'), 'utf8');
-            } catch {
-                try {
-                    // Backward-compatible fallback: a user who kept their old .agent/ folder.
-                    howToPlanContent = await fs.promises.readFile(path.join(workspaceRoot, '.agent', 'rules', 'how_to_plan.md'), 'utf8');
-                } catch { /* keep the default stub */ }
-            }
-            await fs.promises.writeFile(howToPlanPath, howToPlanContent, 'utf8');
-
-            return { success: true, message: `Bundle complete → ${path.basename(outputDir)}. Upload the folder contents to NotebookLM.` };
-        } catch (err) {
-            return { success: false, message: `NotebookLM export failed: ${err instanceof Error ? err.message : String(err)}` };
-        }
     }
 
     // Retained as a no-op safety call — dispose() still invokes it. The periodic

@@ -22,7 +22,6 @@ import { OversightPassService } from './OversightPassService';
 import type { SetupPanelProvider } from './SetupPanelProvider';
 import { sendRobustText, getAntigravityHash, pasteTextViaClipboard, withTerminalSendLock } from './terminalUtils';
 import { PipelineOrchestrator } from './PipelineOrchestrator';
-import { bundleWorkspaceContext } from './ContextBundler';
 import {
     CustomAgentConfig,
     CustomAgentAddons,
@@ -451,7 +450,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     // Persisted workspace blacklist: stable-path keys of brain plans present during setup.
     // Blacklisted plans are never auto-registered and never shown in the run sheet dropdown.
     private _brainPlanBlacklist = new Set<string>();
-    private _gitCommitDisposable?: vscode.Disposable;
     private _pidCache = new WeakMap<vscode.Terminal, { pid: number; timestamp: number }>();
     private readonly PID_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
     private _terminalOpenDisposable?: vscode.Disposable;
@@ -602,7 +600,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._setupPlanWatcher();
         this._setupMemoWatcher();
         this._setupSessionWatcher();
-        this._setupGitCommitWatcher();
         // Heavy init (ownership registry, brain watcher, file sync) deferred to _runDeferredConstructorInit(),
         // called from resolveWebviewView() or other entry points. See _runDeferredConstructorInit().
         this._julesStatusPollTimer = setInterval(() => {
@@ -11872,9 +11869,6 @@ Each plan file must include:
                             this._pipeline.setInterval(data.intervalSeconds);
                         }
                         break;
-                    case 'airlock_export':
-                        this._handleAirlockExport();
-                        break;
                     case 'airlock_sendToCoder':
                         if (data.text) {
                             this._handleAirlockSendToCoder(data.text);
@@ -11882,12 +11876,6 @@ Each plan file must include:
                         break;
                     case 'airlock_syncRepo':
                         this._handleAirlockSyncRepo();
-                        break;
-                    case 'airlock_openNotebookLM':
-                        this._handleAirlockOpenNotebookLM();
-                        break;
-                    case 'airlock_openFolder':
-                        this._handleAirlockOpenFolder();
                         break;
                     case 'kanban_workflowEvent':
                         if (data.workflow) {
@@ -12102,44 +12090,6 @@ What would you like to find?`;
             }
             this.refresh();
         }, 200);
-    }
-
-    private _setupGitCommitWatcher() {
-        try {
-            const gitExtension = vscode.extensions.getExtension('vscode.git');
-            if (!gitExtension) return;
-
-            const git = gitExtension.isActive ? gitExtension.exports : undefined;
-            if (!git) {
-                // Extension not yet active; wait for it
-                Promise.resolve(gitExtension.activate()).then(api => {
-                    this._listenToGitCommits(api);
-                }).catch(() => { /* non-fatal */ });
-                return;
-            }
-            this._listenToGitCommits(git);
-        } catch { /* non-fatal */ }
-    }
-
-    private _listenToGitCommits(gitApi: any) {
-        try {
-            const api = gitApi.getAPI ? gitApi.getAPI(1) : gitApi;
-            if (!api || !api.repositories) return;
-
-            for (const repo of api.repositories) {
-                if (repo.state && repo.state.onDidChange) {
-                    let lastHead = repo.state.HEAD?.commit;
-                    this._gitCommitDisposable = repo.state.onDidChange(() => {
-                        const currentHead = repo.state.HEAD?.commit;
-                        if (currentHead && currentHead !== lastHead) {
-                            lastHead = currentHead;
-                            // Silently re-export on commit
-                            this._handleAirlockExport().catch(() => { /* silent */ });
-                        }
-                    });
-                }
-            }
-        } catch { /* non-fatal */ }
     }
 
     private _setupPlanWatcher() {
@@ -18904,188 +18854,6 @@ What would you like to find?`;
         await this._importMultiplePlansFromClipboard(text);
     }
 
-    public async importNotebookLMPlans(workspaceRootOverride?: string): Promise<{ overwritten: number; created: number; errors: number }> {
-        // LAZY CHANGE: Ensure DB exists before import
-        try {
-            const workspaceRoot = workspaceRootOverride || this._getWorkspaceRoot();
-            if (workspaceRoot) {
-                const db = await this._getKanbanDb(workspaceRoot);
-                if (db) {
-                    await db.createIfMissing();
-                }
-            }
-        } catch (e) {
-            console.error('[Import] DB creation failed:', e);
-        }
-
-        let text: string;
-        const html = await this._readClipboardHtml();
-        if (html) {
-            const converted = this._convertHtmlToMarkdown(html);
-            text = converted || (await vscode.env.clipboard.readText());
-        } else {
-            text = await vscode.env.clipboard.readText();
-        }
-
-        if (!text || !text.trim()) {
-            this._seams().ui.showWarningMessage('Clipboard is empty. Copy a Markdown plan first.');
-            return { overwritten: 0, created: 0, errors: 0 };
-        }
-        if (text.length > 200_000) {
-            this._seams().ui.showWarningMessage('Clipboard content is too large (>200 KB). Aborting import.');
-            return { overwritten: 0, created: 0, errors: 0 };
-        }
-
-        // Check for multi-plan markers: --- PLAN ---
-        const multiPlanDetect = new RegExp(TaskViewerProvider.CLIPBOARD_SEPARATOR_REGEX.source, 'gm');
-        const hasMultiPlanMarkers = multiPlanDetect.test(text);
-
-        let plans: Array<{ title: string; content: string }>;
-        if (!hasMultiPlanMarkers) {
-            const h1Match = text.match(/^#\s+(.+)$/m);
-            const h2Match = !h1Match ? text.match(/^##\s+(.+)$/m) : null;
-            const h3Match = !h1Match && !h2Match ? text.match(/^###\s+(.+)$/m) : null;
-
-            let title: string;
-            if (h1Match) {
-                title = h1Match[1].trim();
-            } else if (h2Match) {
-                title = h2Match[1].trim();
-            } else if (h3Match) {
-                title = h3Match[1].trim();
-            } else {
-                title = 'Imported Plan';
-            }
-
-            plans = [{ title, content: text }];
-        } else {
-            // Extract plan segments (same logic as _importMultiplePlansFromClipboard)
-            const separatorSource = TaskViewerProvider.CLIPBOARD_SEPARATOR_REGEX.source;
-            const splitRegex = new RegExp(`(${separatorSource})`, 'gm');
-            const parts = text.split(splitRegex).filter(p => p.trim());
-            const markerTest = new RegExp(separatorSource, 'm');
-
-            const extractedPlans: Array<{ title: string; content: string }> = [];
-            let currentPlan: { marker?: string; lines: string[] } | null = null;
-
-            for (const part of parts) {
-                if (markerTest.test(part)) {
-                    if (currentPlan && currentPlan.lines.length > 0) {
-                        const content = currentPlan.lines.join('\n').trim();
-                        if (content) {
-                            const h1Match = content.match(/^#\s+(.+)$/m);
-                            const title = h1Match ? h1Match[1].trim() : `Imported Plan ${extractedPlans.length + 1}`;
-                            extractedPlans.push({ title, content });
-                        }
-                    }
-                    currentPlan = { marker: part, lines: [] };
-                } else {
-                    if (currentPlan) {
-                        currentPlan.lines.push(part);
-                    } else {
-                        currentPlan = { lines: [part] };
-                    }
-                }
-            }
-
-            if (currentPlan && currentPlan.lines.length > 0) {
-                const content = currentPlan.lines.join('\n').trim();
-                if (content) {
-                    const h1Match = content.match(/^#\s+(.+)$/m);
-                    const title = h1Match ? h1Match[1].trim() : `Imported Plan ${extractedPlans.length + 1}`;
-                    extractedPlans.push({ title, content });
-                }
-            }
-
-            plans = extractedPlans;
-        }
-
-        if (plans.length === 0) {
-            this._seams().ui.showWarningMessage('No valid plans found in clipboard content.');
-            return { overwritten: 0, created: 0, errors: 0 };
-        }
-
-        const workspaceRoot = workspaceRootOverride || this._resolveWorkspaceRoot();
-        if (!workspaceRoot) {
-            this._seams().ui.showErrorMessage('No workspace folder found.');
-            return { overwritten: 0, created: 0, errors: 1 };
-        }
-
-        let overwritten = 0;
-        let created = 0;
-        let errors = 0;
-
-        for (const plan of plans) {
-            try {
-                const existing = await this._findExistingPlanInNewColumn(plan.title, workspaceRoot);
-                if (existing) {
-                    await this._overwriteExistingPlan(existing, plan.content, workspaceRoot);
-                    overwritten++;
-                } else {
-                    await this._createInitiatedPlan(plan.title, plan.content, false, { skipBrainPromotion: true, workspaceRoot });
-                    created++;
-                }
-            } catch (err: any) {
-                const msg = err?.message || String(err);
-                console.error(`[NotebookLM Import] Failed to import plan "${plan.title}":`, msg);
-                errors++;
-            }
-        }
-
-        if (overwritten > 0 || created > 0) {
-            await this._syncFilesAndRefreshRunSheets();
-            const summary: string[] = [];
-            if (overwritten > 0) summary.push(`${overwritten} overwritten`);
-            if (created > 0) summary.push(`${created} created`);
-            this._showTemporaryNotification(`NotebookLM import: ${summary.join(', ')}`);
-        }
-
-        if (errors > 0) {
-            this._seams().ui.showErrorMessage(`Failed to import ${errors} plan(s). Check output panel for details.`);
-        }
-
-        return { overwritten, created, errors };
-    }
-
-    private async _findExistingPlanInNewColumn(title: string, workspaceRoot: string): Promise<KanbanPlanRecord | null> {
-        const normalizedTitle = title.toLowerCase().replace(/\s+/g, ' ').trim();
-        const workspaceId = await this._getWorkspaceIdForRoot(workspaceRoot);
-        const db = await this._getKanbanDb(workspaceRoot);
-        if (!db || !workspaceId) return null;
-        // Try SQL lookup first (handles case-insensitive match but not whitespace collapse)
-        const sqlResult = await db.getPlanByTopicAndColumn(normalizedTitle, 'CREATED', workspaceId);
-        if (sqlResult) return sqlResult;
-        // Fallback: in-memory scan with full whitespace normalization for DB-side topics
-        const createdPlans = await db.getPlansByColumn(workspaceId, 'CREATED');
-        for (const plan of createdPlans) {
-            const dbNormalized = plan.topic.toLowerCase().replace(/\s+/g, ' ').trim();
-            if (dbNormalized === normalizedTitle) return plan;
-        }
-        return null;
-    }
-
-    private async _overwriteExistingPlan(record: KanbanPlanRecord, newContent: string, workspaceRootOverride?: string): Promise<void> {
-        const workspaceRoot = workspaceRootOverride || this._resolveWorkspaceRoot();
-        if (!workspaceRoot) {
-            throw new Error('No workspace folder found.');
-        }
-        const planFileAbsolute = path.join(workspaceRoot, record.planFile);
-        const stablePath = this._normalizePendingPlanPath(planFileAbsolute);
-        this._pendingPlanCreations.add(stablePath);
-        this._planCreationInFlight.add(stablePath);
-        GlobalPlanWatcherService.registerPendingCreation(planFileAbsolute);
-        try {
-            await fs.promises.writeFile(planFileAbsolute, newContent, 'utf8');
-            const db = await this._getKanbanDb(workspaceRoot);
-            if (db) {
-                await db.updateLastActionByPlanFile(record.planFile, record.workspaceId, 'notebooklm_overwrite');
-            }
-        } finally {
-            this._planCreationInFlight.delete(stablePath);
-            setTimeout(() => this._pendingPlanCreations.delete(stablePath), 2000);
-        }
-    }
-
     private async _importMultiplePlansFromClipboard(text: string): Promise<void> {
         // Build split + marker-test regexes from the centralized constant
         const separatorSource = TaskViewerProvider.CLIPBOARD_SEPARATOR_REGEX.source;
@@ -20592,67 +20360,6 @@ What would you like to find?`;
 
     // ── Web AI Airlock ──────────────────────────────────────────────────
 
-    private async _handleAirlockExport(): Promise<void> {
-        const workspaceRoot = this._resolveStateWorkspaceRoot();
-        if (!workspaceRoot) {
-            this.postMessage({ type: 'airlock_exportError', message: 'No workspace open' });
-            return;
-        }
-
-        try {
-            // 1. Scaffold airlock directory
-            const baseAirlockDir = path.join(workspaceRoot, '.switchboard', 'NotebookLM');
-            await fs.promises.mkdir(baseAirlockDir, { recursive: true });
-
-            // 2. Run the bundler (writes timestamped bundle to .switchboard/NotebookLM/)
-            const { outputDir: airlockDir, timestamp } = await bundleWorkspaceContext(workspaceRoot);
-
-            // 3. Write timestamped how_to_plan.md
-            const howToPlanPath = path.join(airlockDir, `${timestamp}-how_to_plan.md`);
-            const rulePath = path.join(workspaceRoot, '.agents', 'rules', 'how_to_plan.md');
-            let howToPlanContent: string;
-            try {
-                howToPlanContent = await fs.promises.readFile(rulePath, 'utf8');
-            } catch (e) {
-                // Backward-compatible fallback: a user who kept their old .agent/ folder.
-                try {
-                    const legacyRulePath = path.join(workspaceRoot, '.agent', 'rules', 'how_to_plan.md');
-                    howToPlanContent = await fs.promises.readFile(legacyRulePath, 'utf8');
-                } catch {
-                    // Fallback if the file is missing
-                    howToPlanContent = '# How to Plan\n\nRefer to the project guidelines for planning.';
-                }
-            }
-            await fs.promises.writeFile(howToPlanPath, howToPlanContent, 'utf8');
-
-            // 4. Export list of plans in NEW column for sprint planning
-            const kanbanDb = await this._getKanbanDb(workspaceRoot);
-            if (kanbanDb) {
-                const workspaceId = await this._getOrCreateWorkspaceId(workspaceRoot);
-                if (workspaceId) {
-                    const allPlans = await kanbanDb.getBoard(workspaceId);
-                    const newColumnPlans = allPlans.filter(p => p.kanbanColumn === 'CREATED');
-
-                    if (newColumnPlans.length > 0) {
-                        const plansList = newColumnPlans.map((p, idx) =>
-                            `${idx + 1}. **${p.topic}** (${p.complexity || 'unspecified'})\n   - Session: ${p.sessionId}\n   - Created: ${new Date(p.createdAt).toLocaleDateString()}`
-                        ).join('\n\n');
-
-                        const plansListPath = path.join(airlockDir, `${timestamp}-new_column_plans.md`);
-                        const plansContent = `# Plans in NEW Column\n\nTotal: ${newColumnPlans.length} plans\n\n${plansList}`;
-                        await fs.promises.writeFile(plansListPath, plansContent, 'utf8');
-                    }
-                }
-            }
-
-            this.postMessage({ type: 'airlock_exportComplete' });
-        } catch (err: any) {
-            const msg = err?.message || String(err);
-            this.postMessage({ type: 'airlock_exportError', message: msg });
-            this._seams().ui.showErrorMessage(`NotebookLM export failed: ${msg}`);
-        }
-    }
-
     private static readonly MAX_AIRLOCK_TEXT_BYTES = 2 * 1024 * 1024; // 2MB
 
     private async _handleKanbanWorkflowEvent(workflow: string, sessionId?: string): Promise<void> {
@@ -20782,29 +20489,6 @@ What would you like to find?`;
         await repo.push();
     }
 
-    private async _handleAirlockOpenNotebookLM(): Promise<void> {
-        await vscode.env.openExternal(vscode.Uri.parse('https://notebooklm.google.com/'));
-    }
-
-    private async _handleAirlockOpenFolder(): Promise<void> {
-        const workspaceRoot = this._resolveWorkspaceRoot();
-        if (!workspaceRoot) {
-            this._seams().ui.showWarningMessage('NotebookLM: No workspace open.');
-            return;
-        }
-        const airlockDir = path.join(workspaceRoot, '.switchboard', 'NotebookLM');
-        if (!fs.existsSync(airlockDir)) {
-            this._seams().ui.showWarningMessage('NotebookLM: Folder does not exist yet. Click BUNDLE CODE first.');
-            return;
-        }
-        // Target a file inside the folder so the OS explorer focuses INSIDE the directory
-        const files = fs.readdirSync(airlockDir);
-        const firstFile = files.find((f: string) => fs.statSync(path.join(airlockDir, f)).isFile());
-        const uri = firstFile ? vscode.Uri.file(path.join(airlockDir, firstFile)) : vscode.Uri.file(airlockDir);
-
-        await this._seams().commands.executeCommand('revealFileInOS', uri);
-    }
-
 
 
 
@@ -20841,7 +20525,6 @@ What would you like to find?`;
         try { this._stagingWatcher?.close(); } catch { }
         this._brainFsWatchers.forEach(w => { try { w.close(); } catch {} });
         this._disposeConfiguredPlanWatcher();
-        this._gitCommitDisposable?.dispose();
         this._terminalOpenDisposable?.dispose();
         this._pidCache = new WeakMap();
         if (this._julesStatusPollTimer) {

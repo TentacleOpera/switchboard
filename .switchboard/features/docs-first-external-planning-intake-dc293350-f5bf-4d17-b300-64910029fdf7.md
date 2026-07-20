@@ -17,9 +17,9 @@ Make an already-possible workflow discoverable: point an agent at your docs, hav
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Merge the Dev Docs tab into the Docs tab](../plans/merge-dev-docs-into-docs-tab.md) — **PLAN REVIEWED**
-- [ ] [Build the Create Plans tab](../plans/create-plans-tab-docs-only-agent-intake.md) — **PLAN REVIEWED**
-- [ ] [Delete the project-context auto-bundle feature](../plans/delete-project-context-auto-bundle.md) — **PLAN REVIEWED**
-- [ ] [Remove the NotebookLM export](../plans/remove-notebooklm-export.md) — **PLAN REVIEWED**
+- [ ] [Merge the Dev Docs tab into the Docs tab](../plans/merge-dev-docs-into-docs-tab.md) — **CODER CODED**
+- [ ] [Build the Create Plans tab](../plans/create-plans-tab-docs-only-agent-intake.md) — **CODER CODED**
+- [ ] [Delete the project-context auto-bundle feature](../plans/delete-project-context-auto-bundle.md) — **CODER CODED**
+- [ ] [Remove the NotebookLM export](../plans/remove-notebooklm-export.md) — **CODER CODED**
 <!-- END SUBTASKS -->
 

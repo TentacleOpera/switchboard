@@ -959,11 +959,6 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(importFromClipboardDisposable);
 
-    const importNotebookLMPlansDisposable = registerSwitchboardCommand('switchboard.importNotebookLMPlans', async (workspaceRoot?: string) => {
-        return await taskViewerProvider?.importNotebookLMPlans(workspaceRoot);
-    });
-    context.subscriptions.push(importNotebookLMPlansDisposable);
-
     const selectSessionDisposable = registerSwitchboardCommand('switchboard.selectSession', (sessionId: string) => {
         if (typeof sessionId === 'string' && sessionId.trim()) {
             taskViewerProvider.selectSession(sessionId);

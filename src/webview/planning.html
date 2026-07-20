@@ -505,8 +505,6 @@
             font-family: var(--font-mono);
         }
 
-        /* NotebookLM tab moved to project.html (Project panel). */
-
         /* Planning Cards */
         .planning-card {
             border: var(--card-border);
@@ -3585,80 +3583,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
   background: color-mix(in srgb, #ffffff 5%, transparent);
 }
 
-        /* Dev Docs & NotebookLM styles */
-        #devdocs-list-pane {
-            width: 240px;
-            flex-shrink: 0;
-            border-right: 1px solid var(--border-color);
-            display: flex;
-            flex-direction: column;
-            overflow-y: auto;
-            background: var(--panel-bg);
-        }
-        .content-row.collapsed #devdocs-list-pane {
-            width: 0;
-            border-right: none;
-            overflow: hidden;
-        }
-        .content-row.collapsed #devdocs-list-pane > *:not(.sidebar-toggle-row) {
-            display: none;
-        }
-        #notebook-content.active {
-            display: block;
-            overflow-y: auto;
-        }
-        #notebook-content { padding: 16px; }
-        #notebook-content .planning-card { max-width: 720px; }
-        body.theme-claudify #notebook-content {
-            background-color: #171717;
-            background-image:
-                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
-            background-size: 32px 32px, 32px 32px;
-        }
-        #devdocs-preview-pane {
-            flex: 1;
-            padding: 16px 20px;
-            overflow-y: auto;
-            background: var(--panel-bg);
-            color: var(--text-primary);
-            position: relative;
-            display: flex;
-            flex-direction: column;
-        }
-        #devdocs-preview-content {
-            font-size: 13px;
-            line-height: 1.6;
-        }
-        #devdocs-preview-content h1 { font-size: 1.6em; margin-top: 0; color: var(--accent-teal); border-bottom: 1px solid var(--border-dim); padding-bottom: 6px; }
-        #devdocs-preview-content h2 { font-size: 1.3em; margin-top: 20px; color: var(--text-primary); }
-        #devdocs-preview-content h3 { font-size: 1.1em; margin-top: 16px; }
-        #devdocs-preview-content p { margin: 0 0 12px 0; }
-        #devdocs-preview-content code { font-family: var(--font-mono); font-size: 11px; background: rgba(255,255,255,0.05); padding: 2px 4px; border-radius: 3px; }
-        #devdocs-preview-content pre { background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); padding: 12px; border-radius: 4px; overflow-x: auto; margin: 0 0 16px; }
-        #devdocs-preview-content pre code { background: none; padding: 0; }
-        #devdocs-preview-content blockquote { border-left: 3px solid var(--accent-teal); margin: 0 0 16px 0; padding-left: 12px; color: var(--text-secondary); }
-        #devdocs-preview-content ul, #devdocs-preview-content ol { margin: 0 0 16px 0; padding-left: 20px; }
-        #devdocs-preview-content li { margin-bottom: 4px; }
-        #devdocs-preview-content a { color: var(--accent-teal); text-decoration: none; }
-        #devdocs-preview-content a:hover { text-decoration: underline; }
-        .cyber-theme-enabled #devdocs-preview-pane {
-            background-color: rgba(0, 0, 0, 0.4);
-            border-left: 1px solid rgba(0, 240, 255, 0.15);
-        }
-        .cyber-theme-enabled #devdocs-preview-content h1 {
-            color: var(--accent-neon);
-            text-shadow: 0 0 8px rgba(217, 119, 87, 0.3);
-            border-bottom: 1px solid rgba(217, 119, 87, 0.25);
-        }
-        body.theme-claudify #devdocs-preview-pane {
-            background-color: #171717;
-            color: #e0e0e0;
-        }
-        body.theme-claudify #devdocs-preview-content h1 {
-            color: #d97757;
-            border-bottom: 1px solid #333;
-        }
         /* Toast notification */
         .toast-notification {
             position: fixed;
@@ -3701,8 +3625,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         <button class="shared-tab-btn" data-tab="html">HTML</button>
         <button class="shared-tab-btn" data-tab="tickets" id="tickets-tab-btn">TICKETS</button>
         <button class="shared-tab-btn" data-tab="research">RESEARCH</button>
-        <button class="shared-tab-btn" data-tab="devdocs">DEV DOCS</button>
-        <button class="shared-tab-btn" data-tab="notebook">NOTEBOOKLM</button>
     </div>
     <div class="container">
         <!-- Unified Docs Tab: breadcrumb on top, then sidebar + content -->
@@ -3726,6 +3648,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <button id="btn-push-doc" class="strip-btn" disabled title="Push local changes to the online source">Push</button>
                 <button id="btn-set-prd" class="strip-btn strip-btn--primary" disabled title="No projects in this workspace yet — create one on the Kanban board first (+ Add Project).">Save as PRD</button>
                 <button id="btn-set-constitution" class="strip-btn strip-btn--primary" title="Copy the open document into this workspace's Constitution. If one already exists you can keep, append, or replace it.">Save as Constitution</button>
+                <button id="btn-create-doc" class="strip-btn" title="Create a new markdown doc in a configured folder">+ New Doc</button>
+                <button id="btn-agent-doc" class="strip-btn" disabled title="Copy a Draft/Improve prompt to clipboard">Draft with agent</button>
                 <button id="btn-sync-to-online" class="strip-btn" disabled>Copy to Online…</button>
                 <input type="text" id="docs-search" class="sidebar-search-input" placeholder="Search docs..." />
                 <span id="status" style="margin-left: 0; display: none;"></span>
@@ -3756,8 +3680,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </div>
             </div>
         </div>
-        <!-- The NotebookLM tab moved to project.html (Project panel) — it is the
-             dev-docs on-ramp and now sits beside the Dev Docs tab it feeds. -->
         <!-- HTML Tab — stakeholder HTML previews, independent from Design panel's HTML Previews -->
         <div id="html-content" class="shared-tab-content">
             <div class="controls-strip" id="controls-strip-planning-html">
@@ -3980,89 +3902,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </div>
             </div>
         </div>
-        </div>
-
-        <!-- Dev Docs tab -->
-        <div id="devdocs-content" class="shared-tab-content">
-            <div class="controls-strip">
-                <select id="devdocs-workspace-filter" class="workspace-filter-select" style="margin-right: 12px;">
-                    <option value="">All Workspaces</option>
-                </select>
-                <select id="devdocs-source-filter" class="workspace-filter-select" style="margin-right: 12px;">
-                    <option value="docs">Docs</option>
-                    <option value="readme">README</option>
-                </select>
-                <button id="btn-create-devdoc" class="strip-btn" title="Create a new developer doc">+ New Doc</button>
-                <button id="btn-import-devdoc" class="strip-btn" disabled title="Import markdown from clipboard">Import</button>
-                <button id="btn-agent-devdoc" class="strip-btn" disabled title="Copy a Draft/Improve prompt to clipboard">Draft with agent</button>
-                <button id="btn-edit-devdocs" class="strip-btn" disabled>Edit</button>
-                <button id="btn-save-devdocs" class="strip-btn" style="display:none;">Save</button>
-                <button id="btn-cancel-devdocs" class="strip-btn" style="display:none;">Cancel</button>
-                <button id="btn-delete-devdocs" class="strip-btn" style="display:none; color: #ff6b6b;">Delete</button>
-                <span id="devdocs-status" style="font-size:11px; color:var(--text-secondary);"></span>
-            </div>
-            <div class="content-row">
-                <div id="devdocs-list-pane">
-                    <div class="sidebar-toggle-row">
-                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
-                    </div>
-                    <div class="empty-state">Loading docs...</div>
-                </div>
-                <div class="preview-panel-wrapper">
-                    <div class="cyber-scanlines"></div>
-                    <div id="devdocs-preview-pane" class="constitution-preview-pane">
-                        <div id="devdocs-preview-content">
-                            <div class="empty-state">Select a dev doc to view it</div>
-                        </div>
-                        <textarea id="devdocs-editor" class="markdown-editor"></textarea>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- NotebookLM tab -->
-        <div id="notebook-content" class="shared-tab-content">
-            <div class="planning-card">
-                <div class="planning-card-header">NOTEBOOKLM INTEGRATION</div>
-                <div class="planning-card-description">NotebookLM integration allows you to upload all your code into NotebookLM to access unlimited Gemini quota for planning features and diagnosing bugs.</div>
-
-                <div id="webai-status" class="planning-status"></div>
-
-                <div class="planning-card-section" style="margin-bottom: 16px;">
-                    <div class="planning-card-description" style="margin-bottom: 4px;">Workspace</div>
-                    <select id="notebook-workspace-filter" class="planning-input" style="width: 100%;">
-                    </select>
-                </div>
-
-                <div class="planning-card-section">
-                    <div class="planning-card-section-title">1. BUNDLE CODE</div>
-                    <div class="planning-card-description">Package code into docx files for NotebookLM compatibility.</div>
-                    <button id="btn-bundle-code" class="planning-button">BUNDLE CODE</button>
-                </div>
-
-                <div class="planning-card-section">
-                    <div class="planning-card-section-title">2. UPLOAD TO NOTEBOOKLM</div>
-                    <div class="planning-card-description">Create new Notebook and upload all files in the integration folder as sources.</div>
-                    <div class="planning-controls">
-                        <button id="btn-open-notebooklm" class="planning-button">OPEN NOTEBOOKLM</button>
-                        <button id="btn-open-airlock-folder" class="planning-button secondary">OPEN FOLDER</button>
-                    </div>
-                </div>
-
-                <div class="planning-card-section">
-                    <div class="planning-card-section-title">3. COPY SPRINT PLANNING PROMPT</div>
-                    <div class="planning-card-description">Generate a prompt for NotebookLM to write expanded plans for every plan in the NEW Kanban column. Copy the output and use Step 4 below to import.</div>
-                    <button id="btn-copy-sprint-prompt" class="planning-button secondary">COPY SPRINT PROMPT</button>
-                </div>
-
-                <div class="planning-card-section">
-                    <div class="planning-card-section-title">4. IMPORT PLANS</div>
-                    <div class="planning-card-description">
-                        Paste your expanded plans from NotebookLM. Plans matching titles in the NEW column will overwrite the originals; others will be created as new plans.
-                    </div>
-                    <button id="btn-import-notebooklm-plans" class="planning-button secondary">IMPORT PLANS</button>
-                </div>
-            </div>
         </div>
     </div>
     <div class="comment-popup" id="kanban-comment-popup">
