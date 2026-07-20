@@ -167,3 +167,19 @@ render with the design-system look in both themes, while the EXPORT AS SKILL
 button's inline `padding`/`height` styles keep its compact size via specificity.
 No issues encountered. Per task instructions, compilation and automated tests
 were skipped.
+
+## Review Findings
+
+In-place reviewer pass confirmed the implementation is a verbatim, correctly-
+scoped CSS port (`src/webview/kanban.html` lines 1237–1273, committed in
+`cf8846b`) — no markup or JS changes, no CRITICAL/MAJOR findings. Two NITs:
+`.secondary-btn.dispatching` (line 1270) is dead CSS (no JS in this file adds
+that class; faithful copy from `implementation.html`), and the `.is-cyan`
+modifier was intentionally not ported (no references here). All CSS variables
+resolve in both `:root` and `body.theme-claudify`; inline `padding`/`height` on
+EXPORT AS SKILL and the Feature Validate button correctly override the rule via
+specificity, preserving their compact sizes. Sibling Validate / CANCEL buttons
+now render with the design-system look as the plan intended. Verification:
+compilation and tests skipped per prompt; `git show cf8846b` confirms the diff
+is isolated to the planned 38-line CSS block. Remaining risk: visual-only —
+none functional.
