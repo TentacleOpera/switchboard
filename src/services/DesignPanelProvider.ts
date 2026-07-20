@@ -404,6 +404,24 @@ window.addEventListener('blur', function() {
     window.parent.postMessage({ type: 'sbSpacePan', on: false }, '*');
 });
 
+// ── Wheel forwarding so the parent can pan/zoom the transformed canvas even
+//    when the capture layer is hidden (Pan mode off). The iframe is rendered at
+//    natural size and swallows wheel events; forward them up so plain scroll
+//    navigates the preview without forcing Pan mode on. Ctrl/Cmd+wheel still
+//    zooms (matched on the parent side). preventDefault stops a preview page
+//    that happens to be internally scrollable from also trying to scroll. ──
+window.addEventListener('wheel', function(e) {
+    try {
+        e.preventDefault();
+        window.parent.postMessage({
+            type: 'sbWheel',
+            deltaX: e.deltaX, deltaY: e.deltaY,
+            deltaMode: e.deltaMode,
+            ctrlKey: e.ctrlKey, metaKey: e.metaKey
+        }, '*');
+    } catch (err) {}
+}, { passive: false, capture: true });
+
 // ── Natural content-size reporter (drives real Fit/Reset + panning) ──
 function reportDims() {
     var d = document.documentElement;

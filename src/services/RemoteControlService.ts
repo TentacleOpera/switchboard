@@ -645,7 +645,7 @@ export class RemoteControlService {
             const stateCursor = await db.getConfig(stateCursorKey(provider.kind));
             const { deltas } = stateCursor
                 ? await provider.fetchStateDeltas(stateCursor)
-                : { deltas: [], nextCursor: '' };
+                : { deltas: [] };
             const seed: Record<string, string> = {};
             const nowIso = new Date().toISOString();
             for (const d of deltas) {

@@ -17,8 +17,8 @@ Land together or in order: **README rewrite first**, **retire second**. The reti
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Retire the bundled user manual/guide; redirect docs affordances to the online site](../plans/retire-bundled-docs-redirect-to-online.md) — **INTERN CODED**
-- [ ] [Rewrite README to match the online docs](../plans/rewrite-readme-match-online-docs.md) — **INTERN CODED**
+- [ ] [Retire the bundled user manual/guide; redirect docs affordances to the online site](../plans/retire-bundled-docs-redirect-to-online.md) — **CODE REVIEWED**
+- [ ] [Rewrite README to match the online docs](../plans/rewrite-readme-match-online-docs.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ---
@@ -26,4 +26,8 @@ Land together or in order: **README rewrite first**, **retire second**. The reti
 ## Completion Report
 
 Both subtasks landed together. **README rewrite:** replaced the ~402-line manual-style `README.md` with a 44-line landing page mirroring the online site's voice (hero pitch "Run the whole build 0 to 1. Concept to shipped.", the 0→1 arc, four site-named differentiators), a prominent canonical docs link, a trimmed install block (Releases page + VSIX + CLI, versioned direct link dropped), and no bundled-manual links. **Retire bundled docs:** deleted `docs/switchboard_user_manual.md` and `docs/how_to_use_switchboard.md`, repointed `SetupPanelProvider._openDocs()`, the `TaskViewerProvider` `openDocs` case, and the setup.html COPY TUTORIAL PROMPT string to `https://tentacleopera.github.io/switchboard-site/docs/`, and removed the two dead `.vscodeignore` re-includes. Files changed: `README.md`, `.vscodeignore`, `src/services/SetupPanelProvider.ts`, `src/services/TaskViewerProvider.ts`, `src/webview/setup.html`, plus the two deleted docs. One deviation from the plan's snippet: the `openExternal` seam is typed `(url: string)` and parses the Uri internally, so both providers pass the URL string directly rather than the plan's `vscode.Uri.parse(...)` (avoids a type mismatch); `how_to_plan.md` and its `implementation.html` reference were left untouched as required.
+
+## Review Findings
+
+Feature-level review pass complete. **CRITICAL fix applied in review:** the two subtasks' plan-scoped DoDs were met, but the feature's "single source of truth" goal was violated by four live agent-instruction blocks in `.agents/workflows/switchboard.md` and `.claude/skills/switchboard/SKILL.md` (Guided Setup steps + Hard Rule 11) that still told agents to read the deleted `docs/switchboard_user_manual.md` and `docs/how_to_use_switchboard.md`; both blocks in both files were repointed to existing online docs pages. Files changed in review: `.agents/workflows/switchboard.md`, `.claude/skills/switchboard/SKILL.md`, plus the two plan files and this feature file. Verification: `grep -rn "switchboard_user_manual\|how_to_use_switchboard" src/ .vscodeignore .agents/workflows/ .claude/skills/` → zero hits; online docs URL present in all repointed locations; `how_to_plan.md` and its `implementation.html:3312` reference unchanged. **Remaining risks:** (1) README differentiator-name wording (`README.md:18-21`) uses paraphrases not the site's exact H3 names — deferred to user approval per the README plan's `User Review Required` gate; (2) a separate plan `switchboard-docs-4-content-reference.md` cites the deleted manual as its content source and is now broken at execution time — out of this feature's scope.
 

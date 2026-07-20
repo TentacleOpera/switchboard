@@ -2133,6 +2133,12 @@
         body.space-pan-active .zoom-event-layer {
             display: block;
         }
+        /* While Inspect Mode is active the iframe must receive hover/click, so the
+           pan capture layer is never shown even if Pan mode / Space is engaged.
+           Panning during inspect is done via forwarded wheel (see sbWheel). */
+        body.inspect-active .zoom-event-layer {
+            display: none !important;
+        }
 
         /* Image preview viewports must fill the container so flex centering is a no-op
            and fitToContainer's top-left-origin pan math holds. */
@@ -3811,7 +3817,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                 <button class="zoom-btn" data-action="pan" title="Pan mode — drag to move the canvas">✥</button>
                                 <button class="zoom-btn" data-action="zoom-in" title="Zoom In (hold Space + Scroll)">+</button>
                                 <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (hold Space + Scroll)">−</button>
-                                <button class="zoom-btn" data-action="reset" title="Actual size (100%)">⟲</button>
+                                <button class="zoom-btn" data-action="reset" title="Reset view — 100% size">⟲</button>
                                 <button class="zoom-btn" data-action="fit" title="Fit whole page to view (Double-click)">⤢</button>
                             </div>
                         </div>

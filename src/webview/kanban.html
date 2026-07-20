@@ -7946,8 +7946,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     workspaceRoot: selectedWorkspaceRoot,
                     project: selectedProject
                 });
-            } else if (selectedProject !== (activeProjectFilter ?? '')) {
-                // Same workspace, different project filter
+            } else {
+                // Same workspace, post the project filter change unconditionally.
+                // The backend write is idempotent, and the previous no-op guard
+                // (selectedProject !== activeProjectFilter) swallowed the user's
+                // real click when the webview-local replica was desynced from the
+                // authoritative DB config. Re-selecting the already-displayed
+                // option fires no `change` event at all (browser behavior), so
+                // unconditional posting is safe.
                 postKanbanMessage({
                     type: 'setProjectFilter',
                     project: selectedProject

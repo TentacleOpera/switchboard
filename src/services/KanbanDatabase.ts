@@ -1944,16 +1944,17 @@ export class KanbanDatabase {
         // (getBoardFilteredByProject filters Unassigned on project_id IS NULL;
         // getPlansByColumn filters on project='').
         //
-        // Re-import safety (load-bearing): this is only non-clobbering because
-        // UPSERT_PLAN_SQL's ON CONFLICT clause binds
-        //   project    = COALESCE(NULLIF(excluded.project, ''), plans.project),
-        //   project_id = COALESCE(excluded.project_id, plans.project_id)
-        // so the empty/null excluded value for a dropped pin falls through to
-        // the existing DB value. Re-importing a teammate's stale
-        // `**Project:** Switchboard` file after you corrected the card to
-        // unassigned (or to a real project "Foo") does NOT clobber the
-        // correction. Do NOT tidy these COALESCE clauses without re-reading
-        // this invariant.
+        // Re-import safety (load-bearing): the file-derived upsert
+        // (insertFileDerivedPlan) hard-enforces ingest-only pins — its ON CONFLICT
+        // clause binds `project = plans.project, project_id = plans.project_id`
+        // (self-assignment, a deliberate no-op on conflict), so a file-derived
+        // re-import can NEVER move a card between projects, regardless of what the
+        // caller passes. The watcher's update branch also passes the existing
+        // plan.project (not metadata.project), so caller and DB layer agree.
+        // `UPSERT_PLAN_SQL` (Notion restore / manifest ingest) is DB-sourced and
+        // legitimately carries project — it is left untouched; only the file-derived
+        // path is hardened. Do NOT tidy the self-assignment clause without
+        // re-reading this invariant.
         //
         // `record.projectId ??` trusts a caller-supplied id without
         // re-validation. On the file-watcher path (insertFileDerivedPlan) it
@@ -2120,9 +2121,13 @@ export class KanbanDatabase {
         // Single choke point for project assignment on INSERT. Encodes the
         // precedence: explicit pin (record.project) > active project at row-creation
         // time (kanban.activeProjectFilter, fresh INSERT only) > unassigned. Also
-        // resolves project_id from the stamped name, auto-creating the projects row
-        // on miss so the board's project_id JOIN does not drop the plan to
-        // Unassigned. See _resolveProjectForInsert.
+        // resolves project_id from the stamped name. Resolve-only: unknown /
+        // placeholder / workspace-name pins drop to unassigned — the projects row is
+        // never auto-created on miss (only the user creates projects, via addProject).
+        // The ON CONFLICT clause below hard-enforces ingest-only pins: project and
+        // project_id are self-assigned on conflict (project = plans.project), so no
+        // file-derived re-import can ever move a card between projects regardless of
+        // what the caller passes. See _resolveProjectForInsert.
         const { project: resolvedProject, projectId: resolvedProjectId } =
             await this._resolveProjectForInsert(record, isExisting);
 
@@ -2147,8 +2152,8 @@ export class KanbanDatabase {
                 topic = excluded.topic,
                 complexity = excluded.complexity,
                 tags = excluded.tags,
-                project = COALESCE(NULLIF(excluded.project, ''), plans.project),
-                project_id = COALESCE(excluded.project_id, plans.project_id),
+                project = plans.project,
+                project_id = plans.project_id,
                 updated_at = excluded.updated_at,
                 is_feature = CASE WHEN excluded.is_feature > 0 THEN excluded.is_feature ELSE plans.is_feature END
         `;

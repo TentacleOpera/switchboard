@@ -1,28 +1,24 @@
-# Create Plans — docs-only planning intake for external agents
+# Create Plans — point an agent at your docs and get a plan back
 
 ## Goal
 
-Give Switchboard a single, obvious place to **hand an external AI agent the project's intent — docs, PRDs, constitution — and get back a plan describing desired behavior**, then bring that plan onto the board. Deliver the project's docs two ways (a public link, or a private zip), ship the agent a clear instruction to plan at the level of *behavior and flows, not code*, and accept the pasted-back plan as a card. Because the dev docs are the *source* for this, also help the user improve and lay them out logically for planning before packaging. Remove the existing NotebookLM export, which bundles the whole repo (including code) and pulls agents in the wrong direction.
+Give Switchboard a single, obvious place that surfaces a workflow it already supports but nobody discovers: **point an agent at your project's docs, have it write a high-level plan (user flows and logic — not code), and paste that plan back onto the board.** The agent can be an external web chat *or* a local agent on the user's machine — anything that isn't Switchboard's own code planner. The tab adds no new power; it makes an invisible capability obvious and guides users to hash out the *what* and the *how-it-should-behave* before the code planner turns it into an implementation. Let the user point the agent at wherever their docs already live — a generated zip, a public link (GitHub Pages / public repo branch / any URL), or a platform reference (Notion / ClickUp / Linear, read via that platform's MCP). Remove the existing NotebookLM export, which bundles the whole repo (including code) and pulls agents toward implementation.
 
 ### Problem & background
 
-Today there is no clean path for "let an outside agent help me decide what to build." The pieces that exist point the wrong way:
+**This is a discoverability problem first.** The workflow already works — you can hand your docs to any agent today and paste the resulting plan onto the board — but nothing surfaces it, so it goes unused. Switchboard's own author forgot the capability existed for *months* in his own open-source repo. That is the problem being solved. The pieces that do exist point the wrong way:
 
-- **The NotebookLM export bundles the entire git repo — code and all.** Handing an agent the codebase makes it reason about *implementation*: files, functions, how things are wired. That is the opposite of what you want from an external planning partner, whose value is thinking about *what the product should do* unencumbered by how it's currently built.
-- **The planning intake (paste a plan onto the board) is buried and uninstructed.** Nothing tells the outside agent what a Switchboard plan should contain or that it should stay at the behavior level, so pasted plans are inconsistent and often drift into premature implementation detail.
-- **There is no "front door" for this at all** — least of all for a brand-new workspace with no plans yet, which is exactly when "help me draft my first plans" is most useful.
+- **The NotebookLM export bundles the entire git repo — code and all.** Handing an agent the codebase makes it reason about *implementation*: files, functions, how things are wired. That is the opposite of what a planning partner is for, whose value is thinking about *what the product should do* unencumbered by how it's currently built.
+- **The paste-a-plan intake is buried and uninstructed.** Nothing tells the agent that a Switchboard plan should stay at the level of flows and logic, so pasted plans are inconsistent and drift into premature implementation detail.
+- **There is no front door for "let an agent help me plan from my docs" at all** — least of all for a brand-new workspace with no plans yet, which is exactly when "help me draft my first plans" is most useful.
 
-### Root cause / the principle this fixes
+### The principle this fixes
 
-Switchboard has been treating "context for agents" as "give them everything, including code." The correct division of labour is:
-
-> **External agents receive docs, not code, and plan at the level of behavior. Code-level planning is Switchboard's internal job.**
-
-An outside agent (any web chat, or one you upload a zip to) should read your *intent* and produce a plan describing **how the system should behave** — the flows, the expected outcomes, the edge cases in user terms. Turning that behavior plan into code is what Switchboard's own deep-planning and coding fleet already do, *after* the plan is on the board. This feature draws that line explicitly and builds the intake around it.
+Plans should start as **high-level user flows and logic**, then become code — not the other way round. Going straight to code skips the important work of defining the base logic and the user experience. An agent handed your docs should produce a plan describing **how the product should behave** — the flows, the expected outcomes, the edge cases in user terms. Switchboard's own deep-planning and coding fleet turn that behaviour plan into code afterwards, once it is on the board. How detailed the agent can be is entirely a function of how good the docs are — **that is the user's responsibility, and Switchboard makes no attempt to model or grade it.** There is deliberately no notion of "intent docs" vs "dev docs," no toggle, and no requirement that the agent see code: docs are docs, and the user decides how detailed theirs are.
 
 ## Metadata
 
-**Complexity:** 5
+**Complexity:** 4
 **Tags:** frontend, backend, ux, feature, docs
 
 _(No project named and no PROJECT PIN directive present — this plan lands unassigned and can be reassigned on the board.)_
@@ -30,177 +26,181 @@ _(No project named and no PROJECT PIN directive present — this plan lands unas
 ## User Review Required
 
 Yes — this deletes a shipped export and introduces a new tab. Confirm before dispatch:
-1. **Remove the NotebookLM export** entirely (it bundles code; it conflicts with the docs-only principle).
-2. **Docs-only scope** is correct — the bundle contains constitution + PRDs + README + dev docs, and **never** source code, even as an option. Dev docs are the current-behaviour source, not the code.
-3. **Dev-docs toggle defaults ON when present** — including current-behaviour docs (change mode) is the default; the user can switch to intent-only (vision mode). Confirm default-on is right.
-4. **Public link is bring-your-own-URL** — Switchboard does not host. You publish your docs (GitHub Pages or anywhere); the tab holds the URL and the planning instructions to hand an agent. (If you'd rather Switchboard help set up hosting, that's a separate, larger piece.)
+1. **Remove the NotebookLM export** entirely (it bundles code; it conflicts with the docs-not-code principle).
+2. **Doc delivery is a source picker** — a generated zip, a public link, or a platform reference — and **never** source code, even as an option.
+3. **No dev-docs toggle, no folder roles, no "current behaviour vs vision" modes.** Docs are undifferentiated; there is one prompt. (This removes the apparatus a prior version of this plan carried; the merge plan's folder-role addition is cut with it.)
+4. **Public link and platform reference are bring-your-own** — Switchboard stores the reference the user provides and hands it to the agent via the prompt. It does not host, and it does not fetch. The zip is the only thing Switchboard actually produces.
 5. **Workspace-first, project-optional** — the tab works with zero projects; a project only *narrows* the bundle and *pins* the result when one is active.
 
-## The core principle (spine of the feature)
+## Complexity Audit
 
-Everything below serves one rule: **the agent sees docs and returns behavior.** Concretely:
+### Routine
+- New `Create Plans` tab markup in `planning.html` — a single new `shared-tab-btn` + content pane following the existing tab pattern (tab strip at lines 3694–3699), taking the slot the deleted NOTEBOOKLM tab vacates. UI-only.
+- "Copy planning prompt" clipboard button — reuses the existing `clipboard.writeText` + `showTemporaryNotification` pattern already used by `draftImproveDevDoc` (PlanningPanelProvider.ts:2786–2787).
+- "Download docs zip" — a new docs-scoped bundler that reuses the traversal/chunking shape of `ContextBundler.bundleWorkspaceContext` but constrains the source set to docs.
+- Paste-back field — reuses the existing `switchboard.importPlanFromClipboard` command (extension.ts:957) and `_createInitiatedPlan` (TaskViewerProvider.ts:19177).
+- Remembered public docs URL + platform reference — per-workspace config keys, same store pattern as `notebook.root`.
+- Removing the NotebookLM docs page on `switchboard-site` and repointing its `prev`/`next` neighbours — prose + frontmatter edits.
 
-- The bundle contains **only docs** — never source files, ever. Two kinds:
-  - **Intent docs** — constitution, PRDs, README: what the product *should* do and the principles it follows.
-  - **Current-behaviour docs (dev docs)** — the developer documentation that describes how the system *actually works today*, in prose. These are the source: they are the docs-level stand-in for the code, and the reason "docs not code" works at all — the agent can understand current behaviour without ever seeing an implementation file.
-- **Dev docs are toggleable, for a behavioural reason, not a size one.** Including them anchors the agent to the existing system (it plans a *change*); excluding them frees the agent to plan *from intent* (greenfield or a deliberate rethink). The toggle is "plan against current behaviour" vs "plan from vision."
-- **Because dev docs are the source, Switchboard helps improve them — and this is the only place code is read.** An internal, code-aware agent lays the dev docs out logically for planning (documenting how the system actually behaves); the external agent then plans from the resulting docs. Code-knowledge is distilled into docs once, internally, so the external side stays code-free without being uninformed. This reuses the existing "Draft/Improve with agent" doc handoff, pointed at dev docs with purpose-specific wording.
-- The instructions handed to the agent say, in plain terms: *describe what the product should do; do not write code, do not design implementation* — and adapt to whether current-behaviour docs were included.
-- What comes back is a **behavior plan** — goals, flows, expected outcomes, edge cases in user language — which lands on the board and is later turned into code by Switchboard's existing internal planning.
+### Complex / Risky
+- **Full removal of the NotebookLM export across seven surfaces.** A partial removal leaves dangling verb-allowlist entries that compile fine but point at deleted handlers (see Proposed Changes → `protocol-catalog.json`). Requires symbol-by-symbol deletion, not a broad grep.
+- **Paste-back project pinning wiring.** The existing `importPlanFromClipboard` → `_createInitiatedPlan` call passes NO `projectName` (TaskViewerProvider.ts:18891). The mechanism exists (`_createInitiatedPlan` honours `options.projectName` → `db.assignPlansToProject`, lines 19244–19255) but the wiring does not. The coder must thread `kanban.activeProjectFilter` through.
+- **Docs-only bundler invariant.** The zip bundler must refuse source files by design; a future "include this one .ts file" request would erode the principle. Needs a code-level invariant comment at the bundler's entry point. (This applies only to the zip source — the public-link and platform-reference sources are pointers the user controls.)
 
-## Flows (the heart of the plan)
+## Edge-Case & Dependency Audit
 
-### Flow 0 — Create or improve the source (required when there are no docs; otherwise optional)
+**Race Conditions**
+- The optional "Improve my docs" handoff writes back to a Docs-tab managed folder while the Docs tab's active-doc watcher (`_setupActiveDevDocWatcher` → its post-merge equivalent) is armed. The watcher already suppresses panel-initiated writes and reloads on external edits — the agent's write is an external edit, so the Docs tab live-reloads. No new race.
+- Paste-back while a plan-file creation is already in flight: `_createInitiatedPlan` uses `_pendingPlanCreations` / `_planCreationInFlight` guards and `GlobalPlanWatcherService.registerPendingCreation` — the existing paste path already handles this. No new logic needed.
 
-The feature cannot produce a useful plan without a source, so this is the entry point whenever docs are thin or absent. Packaging is **gated** until a source exists.
+**Security**
+- The public-link and platform-reference paths are bring-your-own; Switchboard does not fetch them, so there is no SSRF surface — the reference is handed to the external agent via the clipboard prompt, not requested by Switchboard.
+- The private zip is uploaded by the user to a vendor of their choice; the tab's wording must not overclaim privacy. The zip contains only docs. Confirm the docs-scoped bundler excludes `.env`, secret files, and anything outside the curated doc set even if a doc folder happens to contain them (extension allowlist `.md` + `.txt`).
 
-1. User opens **Create Plans**. If there is no usable source, *Create the source* is the only enabled action.
-2. Switchboard hands off (existing Draft/Improve pattern) to a **code-aware local agent**:
-   - **Code exists, docs don't →** *generate* initial dev docs from the code: document how the system currently behaves and lay it out logically as a planning source. This is the real cold-start bootstrap for an existing project.
-   - **Docs already exist →** *improve* them: fill gaps, structure by capability/flow, so the source is clean for planning.
-3. The agent writes the dev docs back to the **same Docs-tab-managed folder they already live in** (the repo's docs folder) — Create Plans has no store of its own. This is the only step that reads code.
-4. With a source in place, packaging (Flow B/C) unlocks. When good docs already exist, this whole step is optional.
+**Side Effects**
+- Removing the NotebookLM export orphans the persisted `notebook.root` webview-state key and the `.switchboard/NotebookLM/` output folder. The folder is disposable output (leave it in place); the state key is harmless (ignored). A one-time cleanup on panel load is cheap but optional.
+- Users who relied on the NotebookLM DOCX bundle for non-planning purposes lose it. The plan's thesis is that docs-not-code is the correct replacement; release notes must say so.
 
-### Flow A — Cold start (no projects, no plans) — the primary case
+**Dependencies & Conflicts**
+- **`merge-dev-docs-into-docs-tab.md` — soft coupling only, NOT a hard dependency.** This plan reuses the consolidated Docs tab (single docs model) as the source of the doc set it bundles, and reuses that tab's Draft-with-agent handoff for the optional "improve my docs" button (`draftImproveLocalDoc` post-merge, `draftImproveDevDoc` pre-merge — the optional button doesn't block on the exact name). It also takes the `planning.html` tab slot the NotebookLM tab vacates. **There is no accessor contract and no strict sequencing** — the two plans can ship in either order. If both are in flight, whoever lands second reconciles the `planning.html` tab strip and the switchboard-site prev/next chain.
+- **`redistribute-project-html-tabs.md` — interaction dissolved.** That plan wanted to move NotebookLM out of `project.html`. Its premise is outdated: `project.html` has 6 tabs (lines 1214–1219) and NotebookLM lives in `planning.html` (line 3699). This plan *deletes* NotebookLM entirely and puts Create Plans in the vacated `planning.html` slot. Net: `planning.html` 6→6, `project.html` untouched.
+- **`project-html-dev-docs-tab-and-ia.md` — moot.** That older plan moved NotebookLM INTO `project.html`; the current code shows it back in `planning.html`, so the move was reverted. This plan removes NotebookLM outright.
+- **`cross-platform-agent-collaboration.md` — supersedes its near-term rationale.** This plan delivers the simple "an agent helps produce a plan" version; the collaboration plan's live co-authoring scope remains separate and should be shelved unless live co-authoring is genuinely wanted.
 
-Two sub-cases, because the source has to come from somewhere — the tab never hands over an empty pack:
+## The source picker (the one real mechanism)
 
-- **Existing codebase, no docs (the common one):** the tab's first action is *Create the source* (Flow 0) — a code-aware agent generates initial dev docs from the code. Now there is a real source → package → hand to an external agent → paste the behaviour plan back (unassigned).
-- **Greenfield, no code and no docs:** there is genuinely nothing to plan from yet. The tab says so and points the user to write a first intent doc (a PRD or constitution — Switchboard's existing builders help). Once even a short intent doc exists, packaging unlocks.
+The tab's only real choice is **where the docs are**; Switchboard hands the agent the right pointer plus the planning instructions. Three sources:
 
-The headline scenario is the first: bootstrapping a project's first plans by turning its code into docs, then having an external agent plan behaviour from those docs.
+1. **Generated zip** — Switchboard bundles the managed doc set (constitution + PRDs + README + curated Docs-tab folders) into a markdown zip that also carries `HOW-TO-PLAN.md`. This is the fallback for when docs aren't hosted anywhere. **Docs-only by design** — it never invokes `git ls-files` and never includes source code.
+2. **Public link** — the user pastes a URL where their docs are published (GitHub Pages, a public repo branch, any fetchable location). Switchboard remembers it. The copied prompt points the agent at the URL.
+3. **Platform reference** — the docs live in Notion / ClickUp / Linear. The copied prompt tells the agent to read them via that platform's **MCP**, given the reference the user provides (a page URL / list ID / doc link). Switchboard stores the reference; it does not fetch.
 
-### Flow B — Public docs link
+The intent is to make it trivial for the agent to find the best location; Switchboard is agnostic about where docs live and only ever *produces* the zip.
 
-1. User has published their docs (e.g. GitHub Pages). They paste that URL into the tab once; Switchboard remembers it.
-2. User clicks **Copy planning prompt** — the clipboard now holds a ready-to-paste instruction that (a) points the agent at the docs URL and (b) tells it to produce a behavior plan, not code, in Switchboard's expected shape.
-3. User pastes into any web agent that can read a URL. The agent returns a behavior plan.
-4. User pastes it back (Flow D).
+## The generated prompt (product copy — behaviour, not code)
 
-### Flow C — Private docs zip
-
-1. User clicks **Download docs zip**.
-2. Switchboard produces a zip containing the intent docs **plus a `HOW-TO-PLAN.md`** carrying the same behavior-plan instructions — so the pack is self-describing.
-3. User uploads the zip to a private agent (Claude Project, ChatGPT, Gemini, NotebookLM). The agent reads it and returns a behavior plan.
-4. User pastes it back (Flow D).
-
-### Flow D — Paste the plan back
-
-1. User pastes the agent's plan into the tab and confirms.
-2. A plan card is created on the board from the pasted markdown.
-3. **Pinning:** if a project is currently active, the card is pinned to it; if not, it lands **unassigned** (never pin the workspace name, never invent a project).
-4. The user can then run Switchboard's normal internal flow (improve/deep-plan → code) on that card.
-
-### Flow E — Project active (narrowing)
-
-When a project is selected, the bundle additionally includes that project's PRD and linked docs, and paste-back pins to that project. Everything else is identical. Projects are a refinement, never a requirement.
-
-## Expected behavior of the Create Plans tab
-
-- Lives in the Project panel (`project.html`) alongside the artifacts it draws on (PRDS, CONSTITUTION) and the board it feeds (KANBAN PLANS).
-- Renders and fully functions **with no projects and no plans**.
-- Presents the loop's actions in order: **(optional) Improve dev docs → Package → Take to an agent → Paste back.**
-  - Improve dev docs: **Improve the source with an agent** — offered when dev docs exist (or to seed them when they don't). Reuses the existing Draft/Improve-with-agent handoff, with wording tailored to "lay these out as a clear behavioural source for planning." This is the code-aware, internal step; it is optional and can be skipped.
-  - Package: **Copy public link + prompt** (if a URL is set) and **Download docs zip**.
-  - A single **"Include current behaviour (dev docs)"** toggle, default **on**, shown only when the workspace has dev docs. It changes both what goes in the pack and which prompt variant is copied. No other toggles — one meaningful choice, kept clear.
-  - The planning prompt is one click to clipboard; the zip is one click to download.
-  - Paste back: a paste field that turns pasted markdown into a card.
-- **Packaging requires a source.** With no usable docs, the package actions (link/zip) are disabled and the tab's active call-to-action is *Create the source* — generate dev docs from code, or (greenfield) seed a first intent doc. The tab is never a dead end because there is always a next step, but that step is *creating the source*, not downloading an empty pack.
-- Never offers an "include code" option. The docs-only boundary is not user-configurable — the only scope toggle is intent-only vs intent-plus-current-behaviour, and both are docs.
-
-## What goes in the bundle
-
-**Always included (intent):**
-- Constitution (workspace-level).
-- PRDs (all, or the active project's when a project is selected).
-- README.
-- Any other curated docs the Docs tab manages.
-- `HOW-TO-PLAN.md` — the agent instructions (zip only; the public path carries these via the copied prompt).
-
-**Included by default when present, toggleable (current behaviour):**
-- **Dev docs** — the repo's developer documentation (post-merge, this is the developer-docs folder among the Docs-tab managed folders). These describe how the system behaves today and are the primary source for planning a *change*. Default **on** when dev docs exist; the toggle only appears when there are dev docs to include. Turning it off gives the agent intent-only (vision mode).
-
-**Explicitly excluded (never, not even as an option):**
-- All source code, build output, config, binaries. The bundle is docs, not implementation. Dev docs *describe* the code's behaviour; they are not the code.
-
-## The agent instruction (product copy — behavior, not code)
-
-Shipped as `HOW-TO-PLAN.md` in the zip and as the copyable prompt for the public link. The wording adapts to the dev-docs toggle (final copy to be reviewed).
+Shipped as `HOW-TO-PLAN.md` inside the zip, and as the copyable prompt for the public-link and platform sources. **One prompt**, adapted only by a single source-specific line that tells the agent *where and how* to read the docs.
 
 **Shared core:**
 ```
-You are helping plan a change to a product. You have been given its docs —
-not its code, and that is deliberate.
-
-Write a plan that describes DESIRED BEHAVIOUR:
+You are helping plan a change to a product. You have its docs — read them and
+write a plan that describes DESIRED BEHAVIOUR:
 - What should the product do? What is the user flow, start to finish?
 - What are the expected outcomes and the edge cases, in user terms?
 - What is explicitly out of scope?
 
-Do NOT write code, choose libraries, or design implementation. Stay at the
-level of behaviour and flows — how it should work, not how it is built.
+Do NOT write code, choose libraries, or design implementation. Stay at the level
+of user flows and logic — how it should work, not how it is built. Defining the
+base logic and the user experience is the point; turning it into code happens
+later, inside the tool this plan goes back into.
 
 Return the plan as markdown with a short title, a Goal, the flows/expected
 behaviour, and edge cases. It will be pasted directly onto a planning board.
 ```
 
-**When dev docs ARE included (change mode) — add:**
-```
-Some of these docs describe how the product currently behaves. Use them to
-ground your plan in the existing behaviour, and describe the CHANGE in
-behaviour — what becomes different, and what stays the same.
-```
+**Source-specific line prepended:**
+- **Zip:** (no prepend needed — `HOW-TO-PLAN.md` ships inside the zip alongside the docs).
+- **Public link:** `The docs are published at <URL>. Read them there.`
+- **Platform:** `The docs live in <Notion|ClickUp|Linear> at <reference>. Use the <platform> MCP to read them.`
 
-**When dev docs are NOT included (vision mode) — add:**
-```
-You have the product's intent and principles but not a description of how it
-currently works. Plan the desired behaviour from first principles; do not
-speculate about the current implementation.
-```
+## Flows
+
+### Flow A — Pick a source, hand off
+1. User opens **Create Plans** and picks a doc source (zip / public link / platform reference).
+2. For a link or platform, the user provides/confirms the reference once (Switchboard remembers it). For the zip, nothing is needed.
+3. User clicks **Copy planning prompt** (link/platform) or **Download docs zip** (zip). The clipboard / zip carries the behaviour-only instruction.
+4. User pastes into any agent — an external web chat or a local agent on their machine. The agent returns a behaviour plan.
+
+### Flow B — Paste the plan back
+1. User pastes the agent's plan into the tab and confirms.
+2. A plan card is created on the board from the pasted markdown.
+3. **Pinning:** if a project is currently active, the card is pinned to it; if not, it lands **unassigned** (never pin the workspace name, never invent a project).
+4. The user then runs Switchboard's normal internal flow (improve/deep-plan → code) on that card.
+
+### Flow C — Project active (narrowing)
+When a project is selected, the zip/pointer additionally scopes to that project's PRD and linked docs, and paste-back pins to that project. Everything else is identical. Projects are a refinement, never a requirement.
+
+### Cold start / thin docs (optional helper, not a gate)
+- If there are no docs to point at, the tab says so and points the user at the existing PRD / constitution builders to write a first doc. It does not produce an empty pack.
+- An **optional** "Improve my docs with an agent" button reuses the Docs tab's Draft-with-agent handoff to help flesh out thin docs. It is plain doc editing — **optional, never gated, and not a code-reading step.** The old "Flow 0: generate dev docs from code and auto-tag the folder" is removed; nothing here reads code.
+
+## Expected behavior of the Create Plans tab
+
+- Lives in the planning (artifacts) webview (`planning.html`), in the slot the deleted NOTEBOOKLM tab vacates — next to the Docs tab that holds its source material. The board it feeds (in `project.html`) is reached via the paste-back backend path, not UI adjacency.
+- Renders and fully functions **with no projects and no plans**.
+- Presents the loop in order: **pick a source → package / point → take to an agent → paste back**, with the optional "improve my docs" helper available but skippable.
+- The planning prompt is one click to clipboard; the zip is one click to download.
+- **Never offers an "include code" option.** The docs-not-code boundary is not user-configurable.
 
 ## Removing the NotebookLM export
 
 - Remove the whole-repo NotebookLM bundling feature and its entry points from the UI.
 - **Rationale:** it bundles code, which is exactly what this feature establishes agents should not receive.
-- **Existing users / on-disk output:** the export only ever wrote generated files under `.switchboard/NotebookLM/`. Stop generating; leave any existing folder in place (it's disposable output, not user data) and mention the removal in release notes. No migration of user data is required because none is stored there.
+- **Existing users / on-disk output:** the export only ever wrote generated files under `.switchboard/NotebookLM/`. Stop generating; leave any existing folder in place (disposable output) and mention the removal in release notes. No user data is stored there.
 - Update the published docs site to drop the NotebookLM page and repoint its prev/next neighbours.
 
-## Edge cases (behavioural)
+### Seven surfaces
+- **`src/services/ContextBundler.ts`:** delete `bundleWorkspaceContext` (or leave the function but remove all call sites — prefer delete, since the new docs bundler is separate).
+- **`src/services/PlanningPanelProvider.ts`:** delete `_handleAirlockExport` (line 9385) and the message cases `airlock_export` (3367), `airlock_openNotebookLM` (3372), `airlock_openAIStudio` (3376 — keep only if AI Studio is used elsewhere; check), `airlock_openFolder` (3380), `importNotebookLMPlans` (3353), `notebookDefaultRoot` (2648). Remove the `bundleWorkspaceContext` import.
+- **`src/extension.ts`:** delete the `switchboard.importNotebookLMPlans` command registration (lines 962–965).
+- **`src/services/TaskViewerProvider.ts`:** delete `importNotebookLMPlans` (line 18907) and any private helpers it alone uses.
+- **`src/webview/planning.html` + `planning.js`:** delete the NOTEBOOKLM tab button (planning.html:3699) and its content pane + JS handlers (planning.js: 2701, 4924, 5022, 5086, 12502, 12538).
+- **`protocol-catalog.json` + `src/generated/verbAllowlist.ts`:** remove the NotebookLM verb entries (15 matches in protocol-catalog.json) and **add** the new `createPlansCopyPrompt` / `createPlansDownloadZip` / `createPlansPasteBack` / `createPlansImproveSource` verbs. **Edit `protocol-catalog.json`, then regenerate via `npm run catalog:generate` — do not hand-edit the generated file.**
+- **`switchboard-site/src/pages/docs/artifacts/notebooklm.md`:** delete the page and repoint the `prev`/`next` frontmatter chain on its neighbours before the Astro build, or DocsLayout renders dead links.
 
-- **No usable source (no docs, no README):** packaging is unavailable — there is nothing meaningful to hand an agent. The tab surfaces *Create the source* instead: generate dev docs from code if a codebase exists, otherwise prompt for a first intent doc. No empty or README-only pack is ever produced.
-- **No projects:** default and expected; bundle is workspace-level, paste-back is unassigned.
-- **Public URL not set:** the "Copy public link + prompt" action is unavailable/greyed with a hint to paste a docs URL; the zip path still works.
-- **Very large docs:** keep the zip sensible; if the doc set is large, that is acceptable for a private upload (unlike code, docs are bounded). No code means the pack stays small in normal cases.
-- **Pasted content isn't a real plan:** create the card from whatever was pasted (matching existing paste-to-board behaviour); the user edits or reruns. Do not silently reject.
-- **Stale docs:** out of scope to detect; the plan's quality tracks the docs' freshness, which the Docs tab's authoring tools keep current.
-- **Privacy framing:** "private" means not published to the public web; the zip still goes to whatever AI vendor the user uploads it to. The tab's wording should not overclaim privacy.
+## Proposed Changes
 
-## Implementation notes (intentionally light)
+### `src/webview/planning.html` (+ `planning.js`)
+- **Context:** The tab lives in the planning webview, next to the Docs tab — NOT in `project.html`. This plan deletes the NOTEBOOKLM tab from `planning.html` (line 3699); Create Plans takes that slot (net tab count 6→6).
+- **Logic:** Add `<button class="shared-tab-btn" data-tab="create-plans">CREATE PLANS</button>` where the NOTEBOOKLM button was. Add a `<div id="create-plans-content" class="shared-tab-content">` pane rendering: (1) a **source picker** (segmented control / radios: Zip · Public link · Platform), (2) a public-URL field (shown for Public link) and a platform + reference field (shown for Platform), (3) **Copy planning prompt** (link/platform) and **Download docs zip** (zip) buttons, (4) a paste-back textarea + "Create plan card" button, (5) an optional "Improve my docs with an agent" button.
+- **Implementation:** Reuse the existing `shared-tab-btn` / `shared-tab-content` CSS and tab-switch JS. The buttons post `createPlansCopyPrompt` / `createPlansDownloadZip` / `createPlansPasteBack` / `createPlansImproveSource`; the source choice and reference are sent with the copy/zip messages.
+- **Edge Cases:** With no usable source (no docs and no reference), the package actions are `disabled` and the tab points the user to write a first doc. With no public URL set, the link source's Copy button is greyed with a hint. The tab never produces an empty zip.
 
-- A docs-scoped packaging capability is the only genuinely new backend piece: gather the intent-doc set and emit (a) a markdown zip and (b) the `HOW-TO-PLAN.md`. Reuse the existing bundling/traversal machinery where it helps, but constrain the source set to docs — do **not** reuse the whole-repo file listing.
-- **Single source of truth — no second home for docs.** Create Plans neither stores nor copies docs; it reads, improves, and packages the *same* doc set the Docs tab manages (repo docs folder + PRDs + constitution). The generate/improve step writes back into that managed folder. The zip is a transient export regenerated on demand — not a canonical location, and not user-edited. So no doc ever lives in two places, consistent with the merge plan's whole-point of one docs model.
-- Paste-back reuses the existing "create a plan card from markdown" path; the only addition is the pin-if-project-active rule.
-- The public-link store is a single remembered URL per workspace.
-- Keep the tab's logic thin — its job is to make the three-step loop obvious, not to add cleverness.
+### `src/services/PlanningPanelProvider.ts`
+- **Context:** Serves both `project.html` and `planning.html` through the same `_handleMessage` router; replies route via `isProject ? _projectPanel : _panel`. The existing `draftImproveDevDoc` handler (lines 2763–2788) builds a clipboard prompt — the shape the "improve my docs" button reuses.
+- **Logic — new handlers:**
+  - `createPlansCopyPrompt`: assemble the behaviour-only instruction (product copy above), prepend the source-specific line for the chosen source (public URL or platform reference), write to clipboard.
+  - `createPlansDownloadZip`: call the new docs-scoped bundler (below), write `HOW-TO-PLAN.md` into the zip, return the zip path for download.
+  - `createPlansPasteBack`: read the pasted markdown, resolve `kanban.activeProjectFilter` (best-effort via `_kanbanProvider?.getProjectFilter()`), call `_createInitiatedPlan(title, text, false, { skipBrainPromotion: true, projectName: activeProject || undefined })`. **This is the wiring `importPlanFromClipboard` does NOT do today** (TaskViewerProvider.ts:18891 passes no `projectName`).
+  - `createPlansImproveSource` (optional): reuse the `draftImproveDevDoc`/`draftImproveLocalDoc` prompt-building shape, wording tailored to "lay these docs out as a clear behavioural source for planning." Targets a Docs-tab managed folder the user selects. Optional, not gated.
+- **Implementation:** Prefer extending `importPlanFromClipboard` to accept an optional `projectName` so there is one paste-to-board path, rather than calling `_createInitiatedPlan` directly.
+- **Edge Cases:** Pasted content with no H1/H2/H3 falls back to "Imported Plan" (existing behaviour). Pasted content >200 KB is rejected (existing guard). Project-filter read fails → paste-back lands unassigned (never invent a project). Remembered public URL and platform reference are per-workspace config keys (store pattern like `notebook.root`).
 
-## Verification plan (flow-based)
+### `src/services/ContextBundler.ts` (new docs-scoped bundler)
+- **Context:** The existing `bundleWorkspaceContext` (line 64) bundles the whole git repo into DOCX parts — what the NotebookLM export uses and this plan removes. The new bundler is docs-only.
+- **Logic:** Add `bundleDocsContext(workspaceRoot, { activeProject? }): Promise<{ zipPath: string }>`. Source set = constitution + PRDs (all, or the active project's) + README + curated Docs-tab folders. **Never** invoke `git ls-files`; enumerate only the curated doc set, filtered to `.md` + `.txt`. Emit a markdown zip + `HOW-TO-PLAN.md`.
+- **Implementation:** Reuse the chunking/manifest shape of `bundleWorkspaceContext` but constrain the source set at the entry point. Add an invariant comment at the top: `// DOCS-ONLY BY DESIGN. Do not add a code-inclusion option — see plan create-plans-tab-docs-only-agent-intake.md.`
+- **Edge Cases:** A doc folder that happens to contain a `.env` or source file is excluded by the `.md`/`.txt` allowlist. Large docs are acceptable (bounded, no code).
 
-Verify by walking the flows, not by inspecting internals:
+### NotebookLM removal — seven surfaces
+See the itemised list under **Removing the NotebookLM export → Seven surfaces** above. Delete symbol-by-symbol; a partial removal leaves dangling verb-allowlist entries that compile but point at deleted handlers.
 
-1. **Cold start (existing code, no docs):** fresh board, repo present, no docs → open Create Plans → packaging is gated; *Create the source* is the only action → run it → dev docs generated from code land on disk → packaging unlocks → Download docs zip → confirm it contains the generated dev docs + `HOW-TO-PLAN.md` and **no code** → paste a sample plan back → card appears unassigned.
-2. **Dev-docs toggle:** with dev docs present, toggle defaults on → zip includes them and the copied prompt is the change-mode variant. Toggle off → dev docs omitted and the prompt is the vision-mode variant. With no dev docs, the toggle is absent.
-3. **Improve the source:** invoke "Improve the source with an agent" → the handoff prompt instructs a code-aware agent to document current behaviour and lay the dev docs out logically → improved docs land on disk → the next package picks them up. Confirm this is the only step that reads code, and that the external pack still contains no code afterwards.
-2. **Public link:** set a docs URL → Copy planning prompt → confirm the clipboard references the URL and instructs behaviour-only planning.
-3. **Private zip → real agent:** upload the zip to an agent, confirm it can produce a behaviour plan from docs alone.
-4. **Paste back with project active:** select a project → paste a plan → card is pinned to that project.
-5. **NotebookLM gone:** the export action is absent from the UI; the docs site no longer references it; no broken links.
-6. **No dead ends:** with no docs, no URL, no projects, the tab offers a clear path to *create the source* (generate from code, or seed an intent doc) — not an empty zip. Greenfield with no code → it asks for a first intent doc rather than producing a pack.
+### `switchboard-site` docs
+- Add a `create-plans.md` page describing the new tab, the source picker (zip / public link / platform-via-MCP), and the docs-not-code / behaviour-first principle.
+- Repoint the prev/next chain: this page replaces `notebooklm.md` in the Artifacts sequence. Reconcile with the merge plan's `research.md`/`notebooklm.md` edits against the pages actually present at build time.
+- Release notes: call out the NotebookLM removal explicitly and point users to Create Plans as the replacement for "get context to an agent for planning."
+
+## Verification Plan
+
+> Per session directive: **no compilation, no automated tests** in this verification plan. Verify by walking the flows manually in the running extension.
+
+### Flow-based verification (manual)
+1. **Source picker — zip:** open Create Plans, pick Zip → Download docs zip → confirm it contains the managed docs + `HOW-TO-PLAN.md` and **no code** → paste a sample plan back → card appears unassigned.
+2. **Source picker — public link:** pick Public link, set a docs URL → Copy planning prompt → confirm the clipboard references the URL and instructs behaviour-only planning.
+3. **Source picker — platform:** pick Platform, choose Notion/ClickUp/Linear and provide a reference → Copy planning prompt → confirm the clipboard tells the agent to read the docs via that platform's MCP at the reference, and still instructs behaviour-only planning.
+4. **One prompt, no modes:** confirm there is a single prompt with only the source line varying — no dev-docs toggle, no change/vision variants, no folder-role UI anywhere.
+5. **Paste back with project active:** select a project → paste a plan → card is pinned to that project. **Confirm the `projectName` threading is wired** (the existing `importPlanFromClipboard` does not pass it today).
+6. **Optional improve helper:** invoke "Improve my docs with an agent" → confirm it copies a doc-improvement prompt for a selected Docs-tab folder → confirm it is optional and reads no code; the tab still functions without ever using it.
+7. **NotebookLM gone:** the export action is absent from the UI; the docs site no longer references it; no broken links. **Grep `protocol-catalog.json` and `src/generated/verbAllowlist.ts`** for any remaining NotebookLM verb entries — a dangling entry compiles fine but points at a deleted handler.
+8. **No dead ends:** with no docs, no URL, no reference, no projects, the tab points the user to write a first doc (PRD/constitution) — not an empty zip.
 
 ## Relationship to other plans
 
-- **`merge-dev-docs-into-docs-tab.md` (docs-tab consolidation) — complement; sequence this AFTER it.** Not superseded. This plan builds on the consolidated Docs tab (single docs model, managed folders, the Draft/Improve handoff) and reuses that handoff for the "improve the source" step. It also *completes* the merge plan: the merge plan deletes the project-context auto-bundle and names GitHub Pages as the replacement, but the auto-bundle's real purpose was context for remote agents — which the public link + private zip here actually deliver. The two plans delete **different** things (merge → auto-bundle; this → NotebookLM export), so there is no conflict. Ship the merge first, then this.
-- **`cross-platform-agent-collaboration.md` (collaboration) — supersedes its near-term rationale, not its full scope.** If the goal is "external agents help produce plans," this plan delivers it with none of the collaboration plan's coordination machinery (turn-tokens, bidirectional content-pull, attribution, per-column ownership). It does **not** provide concurrent, multi-agent, cross-platform co-authoring of a *live* plan — that is the collaboration plan's actual target. This is the simple, shippable version of the same intent; the collaboration plan should be shelved unless live co-authoring is a genuine, wanted capability.
+- **`merge-dev-docs-into-docs-tab.md` — soft coupling, not a hard dependency; ship in either order.** This plan reads the consolidated Docs tab's doc set and reuses its Draft-with-agent handoff for the optional improve button, and takes the `planning.html` tab slot NotebookLM vacates. The earlier "merge must ship first so the folder-role accessor exists" dependency is **gone** — the folder role and its accessor were cut from both plans. The two plans delete different things (merge → auto-bundle + Dev Docs tab; this → NotebookLM export), so there is no conflict; whoever lands second reconciles the tab strip and the site prev/next chain.
+- **`redistribute-project-html-tabs.md` — interaction dissolved** (see Dependencies).
+- **`project-html-dev-docs-tab-and-ia.md` — moot** (see Dependencies).
+- **`cross-platform-agent-collaboration.md` — supersedes its near-term rationale, not its full scope.** This delivers the simple, shippable "an agent helps produce a plan" version with none of the collaboration plan's coordination machinery (turn-tokens, bidirectional content-pull, attribution). It does NOT provide concurrent multi-agent co-authoring of a *live* plan — that is the collaboration plan's target, which should be shelved unless genuinely wanted.
 
 ## Recommendation
 
-Complexity 5 → send to Coder once the four review points are confirmed. The work is mostly a new, thin UI flow plus one docs-scoped packaging step and the removal of the NotebookLM export; the behavioural boundary (docs-only, behaviour-not-code) is the thing to hold firm on.
+Complexity 4 → **Send to Coder** once the five review points are confirmed. The work is a thin new UI tab (a source picker + prompt/zip + paste-back), one docs-scoped packaging step, and the removal of the NotebookLM export across seven named surfaces. The behavioural boundary — docs not code, behaviour not implementation, one prompt with no modes — is the thing to hold firm on; it is also what keeps the feature small, which is the point, because this is fundamentally a discovery fix.

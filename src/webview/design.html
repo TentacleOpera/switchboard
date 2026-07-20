@@ -2045,6 +2045,12 @@
         body.space-pan-active .zoom-event-layer {
             display: block;
         }
+        /* While Inspect Mode is active the iframe must receive hover/click, so the
+           pan capture layer is never shown even if Pan mode / Space is engaged.
+           Panning during inspect is done via forwarded wheel (see sbWheel). */
+        body.inspect-active .zoom-event-layer {
+            display: none !important;
+        }
         /* Floating zoom toolbar */
         .zoom-toolbar {
             position: absolute;
@@ -3725,7 +3731,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                     <div class="zoom-toolbar">
                                         <button class="zoom-btn" data-action="zoom-in" title="Zoom In (Scroll)">+</button>
                                         <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (Scroll)">−</button>
-                                        <button class="zoom-btn" data-action="reset" title="Reset Zoom (100%)">⟲</button>
+                                        <button class="zoom-btn" data-action="reset" title="Reset view — 100% size">⟲</button>
                                         <button class="zoom-btn" data-action="fit" title="Fit to View (Double-click)">⤢</button>
                                     </div>
                                 </div>
@@ -3866,7 +3872,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                 <button class="zoom-btn" data-action="pan" title="Pan mode — drag or scroll to move the canvas">✥</button>
                                 <button class="zoom-btn" data-action="zoom-in" title="Zoom In (hold Space + Scroll)">+</button>
                                 <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (hold Space + Scroll)">−</button>
-                                <button class="zoom-btn" data-action="reset" title="Actual size (100%)">⟲</button>
+                                <button class="zoom-btn" data-action="reset" title="Reset view — 100% size">⟲</button>
                                 <button class="zoom-btn" data-action="fit" title="Fit whole page to view (Double-click)">⤢</button>
                             </div>
                         </div>
@@ -3937,7 +3943,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                 <button class="zoom-btn" data-action="pan" title="Pan mode — drag or scroll to move the canvas">✥</button>
                                 <button class="zoom-btn" data-action="zoom-in" title="Zoom In (hold Space + Scroll)">+</button>
                                 <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (hold Space + Scroll)">−</button>
-                                <button class="zoom-btn" data-action="reset" title="Actual size (100%)">⟲</button>
+                                <button class="zoom-btn" data-action="reset" title="Reset view — 100% size">⟲</button>
                                 <button class="zoom-btn" data-action="fit" title="Fit whole page to view (Double-click)">⤢</button>
                             </div>
                         </div>
@@ -3983,7 +3989,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             <div class="zoom-toolbar">
                                 <button class="zoom-btn" data-action="zoom-in" title="Zoom In (Scroll)">+</button>
                                 <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (Scroll)">−</button>
-                                <button class="zoom-btn" data-action="reset" title="Reset Zoom (100%)">⟲</button>
+                                <button class="zoom-btn" data-action="reset" title="Reset view — 100% size">⟲</button>
                                 <button class="zoom-btn" data-action="fit" title="Fit to View (Double-click)">⤢</button>
                             </div>
                         </div>

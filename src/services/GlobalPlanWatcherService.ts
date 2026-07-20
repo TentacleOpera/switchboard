@@ -936,23 +936,20 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 this._outputChannel?.appendLine(`[GlobalPlanWatcher] Imported new plan: ${relativePath} in ${workspaceId}`);
             } else {
                 // Existing plan - update metadata.
-                // Project assignment: only honor an explicit frontmatter project override.
-                // The auto-assign-to-active-project behavior is intentionally FIRST-IMPORT ONLY
-                // (the !plan branch above). Re-stamping on every save causes plans to jump
-                // between projects when the user clicks through the board dropdown while
-                // agents are writing to plan files. If the plan has no project and no
-                // frontmatter override, leave it empty — insertFileDerivedPlan's COALESCE
-                // preserves the existing DB value, and the user can assign manually.
-                let resolvedProject = plan.project;
-                if (metadata.project) {
-                    resolvedProject = metadata.project;
-                }
+                // Pins are ingest-only: a `**Project:**` pin resolves ONCE, at first
+                // import (the !plan branch above), and never again. After first import
+                // the board (and its API) is the sole authority over a card's project —
+                // a file save must never move a card between projects. The file-derived
+                // upsert's ON CONFLICT clause (insertFileDerivedPlan) hard-enforces this
+                // (project = plans.project on conflict), so even if a caller passed a
+                // pin-derived project here the DB row would be untouched; we also do not
+                // pass it, so the watcher and the DB layer agree.
                 const updatedRecord: KanbanPlanRecord = {
                     ...plan,
                     topic: metadata.topic,
                     complexity: metadata.complexity,
                     tags: metadata.tags,
-                    project: resolvedProject,
+                    project: plan.project,
                     updatedAt: fileMtime
                 };
                 if (relativePath.startsWith('.switchboard/features/')) {

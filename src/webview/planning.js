@@ -223,6 +223,9 @@
 
     let _planningContentDims = null;
     let _planningHtmlLoadListener = null;
+    // One-shot: fit only on a fresh file load, never on auto-refresh or
+    // ResizeObserver re-reports. Keeps the user's manual zoom across saves.
+    const _fitPending = { planningHtml: false };
 
     const ZOOM_MIN = 0.1;
     const ZOOM_MAX = 40.0;
@@ -284,12 +287,16 @@
         }
     }
 
-    function fitToContainer(tab, containerEl, viewportEl, retriesLeft = 5) {
+    // `mode` controls the initial-fit anchor: 'contain' (default) fits the whole
+    // page; 'width' fits the page width and anchors at the top so a tall HTML
+    // preview opens readable instead of shrunk to fit its full height. See
+    // design.js:fitToContainer for the full rationale.
+    function fitToContainer(tab, containerEl, viewportEl, retriesLeft = 5, mode = 'contain') {
         if (!containerEl || !viewportEl) return;
         const containerRect = containerEl.getBoundingClientRect();
         if (!containerRect.width || !containerRect.height) {
             if (retriesLeft > 0) {
-                requestAnimationFrame(() => fitToContainer(tab, containerEl, viewportEl, retriesLeft - 1));
+                requestAnimationFrame(() => fitToContainer(tab, containerEl, viewportEl, retriesLeft - 1, mode));
             }
             return;
         }
@@ -304,11 +311,36 @@
             contentH = contentEl.offsetHeight;
         }
         if (!contentW || !contentH) return;
-        const fitScale = Math.min(containerRect.width / contentW, containerRect.height / contentH, 1);
+        let fitScale, panY;
+        if (mode === 'width') {
+            fitScale = Math.min(containerRect.width / contentW, 1);
+            panY = 0;
+        } else {
+            fitScale = Math.min(containerRect.width / contentW, containerRect.height / contentH, 1);
+            panY = (containerRect.height - contentH * fitScale) / 2;
+        }
         zoomState[tab].scale = fitScale;
         zoomState[tab].panX = (containerRect.width - contentW * fitScale) / 2;
-        zoomState[tab].panY = (containerRect.height - contentH * fitScale) / 2;
+        zoomState[tab].panY = panY;
         applyZoom(tab, viewportEl);
+    }
+
+    // Shared wheel→pan/zoom pipeline used by both the container wheel handler
+    // (Pan mode on / Space held) and the forwarded `sbWheel` message from the
+    // iframe (Pan mode off). Mirrors design.js:applyWheelToTab.
+    function applyWheelToTab(tab, container, viewportEl, deltaX, deltaY, ctrlKey, metaKey) {
+        if (!container || !viewportEl) return;
+        const rect = container.getBoundingClientRect();
+        if (ctrlKey || metaKey) {
+            const factor = Math.exp(-deltaY * 0.01);
+            zoomAt(tab, container, viewportEl, zoomState[tab].scale * factor, rect.width / 2, rect.height / 2);
+        } else {
+            zoomState[tab].panX -= deltaX;
+            zoomState[tab].panY -= deltaY;
+            const dims = getContentDims(viewportEl);
+            if (dims) clampPan(tab, rect, dims.w, dims.h);
+            applyZoom(tab, viewportEl);
+        }
     }
 
     function zoomAt(tab, container, viewportEl, newScale, cx, cy) {
@@ -413,6 +445,9 @@
                 zoomState[tab].scale = 1;
                 const dims = getContentDims(viewportEl);
                 if (dims) {
+                    const scaledW = dims.w; // scale === 1
+                    zoomState[tab].panX = scaledW <= rect.width ? (rect.width - scaledW) / 2 : 0;
+                    zoomState[tab].panY = 0;
                     clampPan(tab, rect, dims.w, dims.h);
                 } else {
                     zoomState[tab].panX = 0;
@@ -4071,10 +4106,15 @@
             const statusEl = document.getElementById('status-planning-html');
             const viewport = previewWrapper ? previewWrapper.querySelector('.zoomable-viewport') : null;
 
-            // Reset zoom/pan state for the new file. Back to fill-the-container
-            // until sbContentDims reports the page's natural size; leaving the old
-            // explicit dims would make the next preview start at the wrong scale.
-            resetZoom('planningHtml');
+            // Reset zoom/pan state for a fresh file load. On auto-refresh (same file
+            // saved again) preserve the user's zoom/pan and skip the auto-fit so the
+            // view doesn't snap back. Back to fill-the-container until sbContentDims
+            // reports the page's natural size; leaving the old explicit dims would
+            // make the next preview start at the wrong scale.
+            if (!isAutoRefreshed) {
+                resetZoom('planningHtml');
+                _fitPending.planningHtml = true;
+            }
             _planningContentDims = null;
             if (viewport) {
                 viewport.style.width = '100%';
@@ -4120,9 +4160,11 @@
                     iframe.removeEventListener('load', _planningHtmlLoadListener);
                 }
                 _planningHtmlLoadListener = () => {
+                    if (!_fitPending.planningHtml) return;
                     const wrapper = document.getElementById('planning-html-preview-wrapper');
                     const viewportEl = wrapper ? wrapper.querySelector('.zoomable-viewport') : null;
-                    fitToContainer('planningHtml', wrapper, viewportEl);
+                    fitToContainer('planningHtml', wrapper, viewportEl, 5, 'width');
+                    _fitPending.planningHtml = false;
                 };
                 iframe.addEventListener('load', _planningHtmlLoadListener, { once: true });
             }
@@ -4135,6 +4177,7 @@
             state.htmlActiveFilePath = msg.filePath || null;
             const planningInspectBtn = document.getElementById('planning-html-btn-inspect');
             if (planningInspectBtn) planningInspectBtn.classList.remove('active');
+            document.body.classList.remove('inspect-active');
             const planningTweakPopup = document.getElementById('planning-html-tweak-popup');
             if (planningTweakPopup) planningTweakPopup.style.display = 'none';
             state.htmlSelectedElement = null;
@@ -5377,6 +5420,20 @@
                 }
                 break;
             }
+            case 'sbWheel': {
+                // Forwarded wheel from the iframe so plain scroll navigates the
+                // canvas with Pan mode OFF. Mirrors design.js:sbWheel.
+                if (document.body.classList.contains('space-pan-active')) break;
+                const planningHtmlFrame = document.getElementById('planning-html-frame');
+                if (state.activeSource !== 'planning-html-folder' ||
+                    !planningHtmlFrame || event.source !== planningHtmlFrame.contentWindow) {
+                    break;
+                }
+                const wrapper = document.getElementById('planning-html-preview-wrapper');
+                const vp = wrapper ? wrapper.querySelector('.zoomable-viewport') : null;
+                applyWheelToTab('planningHtml', wrapper, vp, msg.deltaX, msg.deltaY, msg.ctrlKey, msg.metaKey);
+                break;
+            }
             case 'sbContentDims': {
                 // Cap reported dims: sizing the viewport resizes the iframe, which re-fires
                 // the iframe's resize/ResizeObserver reporter. Pages built from 100vh
@@ -5396,7 +5453,14 @@
                     vp.style.width  = w + 'px';
                     vp.style.height = h + 'px';
                     _planningContentDims = { w, h };
-                    fitToContainer('planningHtml', wrapper, vp); // initial view = whole page
+                    if (_fitPending.planningHtml) {
+                        fitToContainer('planningHtml', wrapper, vp, 5, 'width'); // initial view = fit to width, top-anchored
+                        _fitPending.planningHtml = false;
+                    } else {
+                        // preserve the user's zoom; just keep it in-bounds for the new dims
+                        clampPan('planningHtml', wrapper.getBoundingClientRect(), w, h);
+                        applyZoom('planningHtml', vp);
+                    }
                 }
                 break;
             }
@@ -5413,6 +5477,10 @@
                         phBtn.classList.remove('active');
                     }
                 }
+                // Inspect and pan share pointer events; when inspecting, never let the
+                // opaque capture layer cover the iframe or hover/select dies. Panning
+                // during inspect routes through the forwarded wheel (see sbWheel).
+                document.body.classList.toggle('inspect-active', !!msg.on);
                 break;
             }
             case 'saveOnlineDocFileResult': {

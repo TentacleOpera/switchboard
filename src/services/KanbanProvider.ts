@@ -217,7 +217,6 @@ export class KanbanProvider implements vscode.Disposable {
     private _repoScopeFilter: string | null = null;
     private _projectFilter: string | null = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
     private _projectFilterNeedsValidation: boolean = false;
-    private _projectFilterSaveTimeout: NodeJS.Timeout | null = null;
     private _allWorkspaceProjectsCache: Record<string, string[]> | null = null;
     // Global Override flags (plan 02). Live ONLY in the kanban.db config table
     // (workspace tier) — never scope-resolved, never in globalState.
@@ -380,26 +379,15 @@ export class KanbanProvider implements vscode.Disposable {
             // Phase 1 Workstream A: mark this workspace as active so the idle-eviction
             // sweep exempts it (the board the user is looking at stays resident).
             KanbanDatabase.setActiveWorkspaceRoot(this._currentWorkspaceRoot);
-            const resolvedRoot = path.resolve(this._currentWorkspaceRoot);
-            const persistedFilter = this._context.workspaceState.get<string | null>(`kanban.projectFilter.${resolvedRoot}`, null);
-            if (persistedFilter !== null) {
-                this._projectFilter = persistedFilter;
-                this._projectFilterNeedsValidation = true;
-                // Sync the restored project filter to the DB config so the plan watcher
-                // sees it immediately (before the first _refreshBoardImpl runs). The DB
-                // config can diverge from workspaceState after a workspace switch that
-                // called setProjectFilter(UNASSIGNED) — that writes '' to the DB config
-                // but the debounced workspaceState write may not have fired, or a later
-                // reload restores a non-empty filter from workspaceState while the DB
-                // config stays empty. _refreshBoardImpl also syncs this, but the watcher
-                // can import a plan before the first refresh completes.
-                const activeName = (persistedFilter && persistedFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER)
-                    ? persistedFilter
-                    : '';
-                void this._getKanbanDb(this._currentWorkspaceRoot)
-                    .setConfig('kanban.activeProjectFilter', activeName)
-                    .catch(e => console.warn('[KanbanProvider] constructor: failed to sync restored project filter to DB config:', e));
-            }
+            // The active-project filter lives in ONE store: the per-workspace DB
+            // config row `kanban.activeProjectFilter`. It survives restarts by
+            // itself — nothing about it ever needs restoring from workspaceState.
+            // Do NOT seed `_projectFilter` synchronously here: `getConfigSync`
+            // returns null while the DB is still loading at activation, and an
+            // async seed races the first refresh. Correctness comes from
+            // `_refreshBoardImpl`, which reads the DB config into `_projectFilter`
+            // at its top (after dbReady) so display and the importer stamp share
+            // one source. The constructor therefore does not touch the key at all.
             void this._reconcileStaleWorktreeMode(this._currentWorkspaceRoot)
                 .catch(e => console.warn('[KanbanProvider] constructor: failed to reconcile stale worktree mode:', e));
         }
@@ -1327,7 +1315,6 @@ export class KanbanProvider implements vscode.Disposable {
             });
             this._nativeFsWatchers = undefined;
         }
-        if (this._projectFilterSaveTimeout) clearTimeout(this._projectFilterSaveTimeout);
         this._stopRootRecovery();
         this._integrationAutoPull.dispose();
         this._remoteControls.forEach(rc => rc.dispose());
@@ -3278,6 +3265,27 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             console.log(`[KanbanProvider] _refreshBoardImpl: workspaceId=${workspaceId}, dbReady=${dbReady}`);
 
             if (workspaceId && dbReady) {
+                // Read the authoritative active-project filter from the DB config at
+                // the top of every refresh. The DB config is the single source of
+                // truth — the dropdown is its only user-intent writer — so display
+                // (`_projectFilter`) and the importer stamp
+                // (`_resolveProjectForInsert` precedence #2) derive from one value.
+                // This closes the startup seed window: even though the constructor
+                // cannot synchronously seed `_projectFilter` (getConfigSync returns
+                // null while the DB is loading), the first refresh reads the same
+                // value the watcher reads, so "visible == stamped" holds by
+                // construction. Refreshes READ, never WRITE, the DB config.
+                try {
+                    const storedFilter = await db.getConfig('kanban.activeProjectFilter');
+                    if (storedFilter && storedFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
+                        this._projectFilter = storedFilter;
+                        this._projectFilterNeedsValidation = true;
+                    } else {
+                        this._projectFilter = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
+                    }
+                } catch (e) {
+                    console.warn('[KanbanProvider] _refreshBoardImpl: failed to read active project from DB config:', e);
+                }
                 if (this._projectFilterNeedsValidation) {
                     // Validate the restored in-memory project filter against the projects
                     // table. A restored filter naming a project missing from getProjects()
@@ -3306,20 +3314,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 }
                 const projectFilter = this._projectFilter;
                 const repoScope = this._repoScopeFilter;
-
-                // Sync the in-memory project filter to the DB config on every refresh so
-                // the DB layer (_resolveProjectForInsert, used by both insertFileDerivedPlan
-                // and upsertPlans) reads the currently-displayed project when stamping
-                // newly-created plans. Without this, the DB config can diverge from
-                // workspaceState after a reload (the constructor restores _projectFilter
-                // from workspaceState but does NOT write it back to the DB config), leaving
-                // the config stale/empty while the board shows a project selected — every
-                // new plan then lands with project='' and project_id=NULL.
-                const activeProjectName = (projectFilter && projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER)
-                    ? projectFilter
-                    : '';
-                void db.setConfig('kanban.activeProjectFilter', activeProjectName)
-                    .catch(e => console.warn('[KanbanProvider] _refreshBoardImpl: failed to sync active project to DB config:', e));
 
                 const dbRows = (projectFilter !== null || repoScope)
                     ? await db.getBoardFilteredByProject(workspaceId, projectFilter, repoScope)
@@ -6343,15 +6337,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
     public async setProjectFilter(filter: string | null): Promise<void> {
         this._projectFilter = filter;
         if (this._currentWorkspaceRoot) {
-            const resolvedRoot = path.resolve(this._currentWorkspaceRoot);
-
-            // Write the active project to the DB the moment the filter changes (this method
-            // is called on every project-dropdown switch, via the setProjectFilter /
-            // selectWorkspace message handlers). The DB layer's _resolveProjectForInsert
-            // reads this key on fresh INSERT to stamp newly-created plans — exactly like
-            // the manual Assign button. _refreshBoardImpl also writes this key on every
-            // board refresh, and the constructor writes it on restore from workspaceState,
-            // so the DB layer always sees the current value even after a reload.
+            // Write the active project to the DB config the moment the filter changes.
+            // This method is the key's ONLY user-intent writer — invoked solely by
+            // webview-originated user actions (the setProjectFilter / selectWorkspace /
+            // addProject message handlers). The DB config row is the single source of
+            // truth; no second copy exists (the old workspaceState replica and its
+            // debounced write were deleted). _refreshBoardImpl READS the key into
+            // `_projectFilter` at the top of every refresh; it never writes the key.
             const activeProjectName = (filter && filter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) ? filter : '';
             try {
                 await this._getKanbanDb(this._currentWorkspaceRoot)
@@ -6359,13 +6351,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
             } catch (e) {
                 console.warn('[KanbanProvider] setProjectFilter: failed to persist active project to DB config:', e);
             }
-
-            if (this._projectFilterSaveTimeout) {
-                clearTimeout(this._projectFilterSaveTimeout);
-            }
-            this._projectFilterSaveTimeout = setTimeout(async () => {
-                await this._context.workspaceState.update(`kanban.projectFilter.${resolvedRoot}`, filter);
-            }, 100);
 
             // Global Override (plan 02 §6): when project override is ON, switching projects
             // must swap the effective settings atomically with the board refresh — reload
@@ -7181,12 +7166,39 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     if (!this.setCurrentWorkspaceRoot(msg.workspaceRoot)) {
                         return { success: false, error: 'workspaceRoot is not an allowed workspace' };
                     }
-                    // Only reset project filter if not explicitly provided
-                    if (msg.project === null || msg.project === undefined) {
-                        await this.setProjectFilter(KanbanDatabase.UNASSIGNED_PROJECT_FILTER); // Reset project filter on workspace switch
-                    } else {
-                        await this.setProjectFilter(msg.project); // Preserve selected project
+                    const workspaceActuallyChanged = prevWorkspaceRoot !== this._currentWorkspaceRoot;
+                    if (workspaceActuallyChanged) {
+                        // Clear the departed workspace's active-project key — a workspace
+                        // the user has left has no active project, so plans importing into
+                        // it land unassigned instead of on a frozen past selection. Guard
+                        // for prevWorkspaceRoot being null (first selection).
+                        if (prevWorkspaceRoot) {
+                            try {
+                                await this._getKanbanDb(prevWorkspaceRoot)
+                                    .setConfig('kanban.activeProjectFilter', '');
+                            } catch (e) {
+                                console.warn('[KanbanProvider] selectWorkspace: failed to clear departed workspace active project filter:', e);
+                            }
+                        }
+                        // Only reset/preserve the project filter on an actual workspace
+                        // change. The webview never sends a same-workspace selectWorkspace
+                        // with an explicit project (same-workspace project changes go
+                        // through the setProjectFilter message), so this branch is the
+                        // sole path for cross-workspace project establishment.
+                        if (msg.project === null || msg.project === undefined) {
+                            await this.setProjectFilter(KanbanDatabase.UNASSIGNED_PROJECT_FILTER); // Reset project filter on workspace switch
+                        } else {
+                            await this.setProjectFilter(msg.project); // Preserve selected project
+                        }
                     }
+                    // Same-workspace (panel restore self-recovery seed at
+                    // kanban.html:10510-10511, which sends project: null): do NOT touch
+                    // the project filter — leave the DB key and `_projectFilter` as-is.
+                    // The refresh read seeds display from the DB config. Under the old
+                    // model the refresh-assert healed this seed's `project: null` reset;
+                    // that heal is gone, so unmasked the seed would wipe the deliberately-
+                    // set active project on every panel restore. Skipping the mutation on
+                    // same-workspace makes the seed read-only, which is the fix.
 
                     // Determine if the selected workspace is a child workspace
                     // or the parent workspace. Only child workspaces should trigger filtering.

@@ -211,6 +211,9 @@
 
     let _htmlContentDims = null;
     let _stitchHtmlContentDims = null;
+    // One-shot: fit only on a fresh file load, never on auto-refresh or
+    // ResizeObserver re-reports. Keeps the user's manual zoom across saves.
+    const _fitPending = { html: false, stitchHtml: false, images: false, design: false };
 
     const ZOOM_MIN = 0.1;
     const ZOOM_MAX = 40.0;
@@ -274,12 +277,18 @@
         }
     }
 
-    function fitToContainer(tab, containerEl, viewportEl, retriesLeft = 5) {
+    // `mode` controls the initial-fit anchor:
+    //   'contain' (default) — fit the whole page (width AND height), centered. Used
+    //     by image tabs, dblclick, and the ⤢ Fit toolbar button ("see everything").
+    //   'width' — fit the page width (never upscale past 100%), anchored at the top.
+    //     Used by the HTML/Stitch iframe previews so a tall page opens at readable
+    //     width scrolled to the top, not shrunk to fit its whole vertical length.
+    function fitToContainer(tab, containerEl, viewportEl, retriesLeft = 5, mode = 'contain') {
         if (!containerEl || !viewportEl) return;
         const containerRect = containerEl.getBoundingClientRect();
         if (!containerRect.width || !containerRect.height) {
             if (retriesLeft > 0) {
-                requestAnimationFrame(() => fitToContainer(tab, containerEl, viewportEl, retriesLeft - 1));
+                requestAnimationFrame(() => fitToContainer(tab, containerEl, viewportEl, retriesLeft - 1, mode));
             }
             return;
         }
@@ -294,11 +303,37 @@
             contentH = contentEl.offsetHeight;
         }
         if (!contentW || !contentH) return;
-        const fitScale = Math.min(containerRect.width / contentW, containerRect.height / contentH, 1);
+        let fitScale, panY;
+        if (mode === 'width') {
+            fitScale = Math.min(containerRect.width / contentW, 1); // fit width, never upscale
+            panY = 0;                                                // anchor at the top of the page
+        } else {
+            fitScale = Math.min(containerRect.width / contentW, containerRect.height / contentH, 1);
+            panY = (containerRect.height - contentH * fitScale) / 2;
+        }
         zoomState[tab].scale = fitScale;
         zoomState[tab].panX = (containerRect.width - contentW * fitScale) / 2;
-        zoomState[tab].panY = (containerRect.height - contentH * fitScale) / 2;
+        zoomState[tab].panY = panY;
         applyZoom(tab, viewportEl);
+    }
+
+    // Shared wheel→pan/zoom pipeline used by both the container wheel handler
+    // (Pan mode on / Space held) and the forwarded `sbWheel` message from the
+    // iframe (Pan mode off). Keeps the two paths' math identical so scroll
+    // behaves the same whether or not the capture layer is up.
+    function applyWheelToTab(tab, container, viewportEl, deltaX, deltaY, ctrlKey, metaKey) {
+        if (!container || !viewportEl) return;
+        const rect = container.getBoundingClientRect();
+        if (ctrlKey || metaKey) {
+            const factor = Math.exp(-deltaY * 0.01);
+            zoomAt(tab, container, viewportEl, zoomState[tab].scale * factor, rect.width / 2, rect.height / 2);
+        } else {
+            zoomState[tab].panX -= deltaX;
+            zoomState[tab].panY -= deltaY;
+            const dims = getContentDims(viewportEl);
+            if (dims) clampPan(tab, rect, dims.w, dims.h);
+            applyZoom(tab, viewportEl);
+        }
     }
 
     function zoomAt(tab, container, viewportEl, newScale, cx, cy) {
@@ -403,7 +438,12 @@
                 zoomState[tab].scale = 1;
                 const dims = getContentDims(viewportEl);
                 if (dims) {
-                    clampPan(tab, rect, dims.w, dims.h);
+                    const scaledW = dims.w; // scale === 1
+                    // horizontal: center if it fits, else pin to left edge
+                    zoomState[tab].panX = scaledW <= rect.width ? (rect.width - scaledW) / 2 : 0;
+                    // vertical: always anchor to the top of the page
+                    zoomState[tab].panY = 0;
+                    clampPan(tab, rect, dims.w, dims.h); // keep it legal for both fit/overflow cases
                 } else {
                     zoomState[tab].panX = 0;
                     zoomState[tab].panY = 0;
@@ -1405,7 +1445,11 @@
 
         if (sourceId === 'html-folder') {
             if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
-            resetZoom('html');
+            if (!isAutoRefreshed) {
+                resetZoom('html');
+                _fitPending.html = true;   // fresh file → fit once when dims arrive
+            }
+            // on auto-refresh: keep zoomState.html as-is; do NOT set _fitPending
             _htmlContentDims = null;
 
             const initialState = document.getElementById('html-initial-state');
@@ -1463,6 +1507,7 @@
             state.htmlActiveFilePath = msg.filePath || null;
             const htmlInspectBtn = document.getElementById('html-btn-inspect');
             if (htmlInspectBtn) htmlInspectBtn.classList.remove('active');
+            document.body.classList.remove('inspect-active');
             const htmlTweakPopup = document.getElementById('html-tweak-popup');
             if (htmlTweakPopup) htmlTweakPopup.style.display = 'none';
             state.htmlSelectedElement = null;
@@ -1471,11 +1516,15 @@
             state.stitchHtmlActiveFilePath = msg.filePath || null;
             const inspectBtn = document.getElementById('stitch-html-btn-inspect');
             if (inspectBtn) inspectBtn.classList.remove('active');
+            document.body.classList.remove('inspect-active');
             const tweakPopup = document.getElementById('stitch-tweak-popup');
             if (tweakPopup) tweakPopup.style.display = 'none';
             state.stitchSelectedElement = null;
 
-            resetZoom('stitchHtml');
+            if (!isAutoRefreshed) {
+                resetZoom('stitchHtml');
+                _fitPending.stitchHtml = true;
+            }
             _stitchHtmlContentDims = null;
 
             const initialState = document.getElementById('stitch-html-initial-state');
@@ -3645,6 +3694,10 @@
                         btn.classList.remove('active');
                     }
                 }
+                // Inspect and pan share pointer events; when inspecting, never let the
+                // opaque capture layer cover the iframe or hover/select dies. Panning
+                // during inspect routes through the forwarded wheel (see sbWheel).
+                document.body.classList.toggle('inspect-active', !!msg.on);
                 break;
             }
 
@@ -3656,6 +3709,28 @@
                 if ((htmlFrame && event.source === htmlFrame.contentWindow) ||
                     (stitchFrame && event.source === stitchFrame.contentWindow)) {
                     setSpaceHeld(!!event.data.on);
+                }
+                break;
+            }
+
+            case 'sbWheel': {
+                // Forwarded wheel from the iframe so plain scroll navigates the
+                // canvas with Pan mode OFF (the capture layer is hidden, so the
+                // container wheel listener never sees events fired over the iframe).
+                // When the capture layer IS up (Space/pan), it handles wheel directly
+                // and the iframe's wheel won't fire — guard explicitly to be safe.
+                if (document.body.classList.contains('space-pan-active')) break;
+                const htmlFrame = document.getElementById('html-preview-frame');
+                const stitchFrame = document.getElementById('stitch-html-preview-frame');
+                const d = event.data;
+                if (htmlFrame && event.source === htmlFrame.contentWindow) {
+                    const wrapper = document.getElementById('html-preview-wrapper');
+                    const vp = wrapper ? wrapper.querySelector('.zoomable-viewport') : null;
+                    applyWheelToTab('html', wrapper, vp, d.deltaX, d.deltaY, d.ctrlKey, d.metaKey);
+                } else if (stitchFrame && event.source === stitchFrame.contentWindow) {
+                    const wrapper = document.getElementById('stitch-html-preview-wrapper');
+                    const vp = wrapper ? wrapper.querySelector('.zoomable-viewport') : null;
+                    applyWheelToTab('stitchHtml', wrapper, vp, d.deltaX, d.deltaY, d.ctrlKey, d.metaKey);
                 }
                 break;
             }
@@ -3681,7 +3756,14 @@
                         vp.style.width = w + 'px';
                         vp.style.height = h + 'px';
                         _htmlContentDims = { w, h };
-                        fitToContainer('html', wrapper, vp);
+                        if (_fitPending.html) {
+                            fitToContainer('html', wrapper, vp, 5, 'width');
+                            _fitPending.html = false;
+                        } else {
+                            // preserve the user's zoom; just keep it in-bounds for the new dims
+                            clampPan('html', wrapper.getBoundingClientRect(), w, h);
+                            applyZoom('html', vp);
+                        }
                     }
                 } else if (stitchFrame && event.source === stitchFrame.contentWindow) {
                     const wrapper = document.getElementById('stitch-html-preview-wrapper');
@@ -3692,7 +3774,13 @@
                         vp.style.width = w + 'px';
                         vp.style.height = h + 'px';
                         _stitchHtmlContentDims = { w, h };
-                        fitToContainer('stitchHtml', wrapper, vp);
+                        if (_fitPending.stitchHtml) {
+                            fitToContainer('stitchHtml', wrapper, vp, 5, 'width');
+                            _fitPending.stitchHtml = false;
+                        } else {
+                            clampPan('stitchHtml', wrapper.getBoundingClientRect(), w, h);
+                            applyZoom('stitchHtml', vp);
+                        }
                     }
                 }
                 break;

@@ -27,10 +27,14 @@ Fixes for the HTML preview zoom/pan/inspect controls in the Design and Planning 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Preserve HTML preview zoom/pan across file auto-refresh](../plans/feature_plan_20260720095401_preserve-html-preview-zoom-on-refresh.md) — **PLAN REVIEWED**
-- [ ] [Open HTML previews fit-to-width, not fully zoomed out](../plans/feature_plan_20260720095402_html-preview-initial-fit-to-width.md) — **PLAN REVIEWED**
-- [ ] [Fix the "Reset zoom" (⟲) toolbar button so it recenters predictably](../plans/feature_plan_20260720095403_reset-zoom-button-recenter-and-clarify.md) — **PLAN REVIEWED**
-- [ ] [Let HTML previews scroll/navigate without turning on Pan mode](../plans/feature_plan_20260720095404_html-preview-scroll-navigation-without-pan-mode.md) — **PLAN REVIEWED**
-- [ ] [Make Inspect Mode and Pan work together in HTML previews](../plans/feature_plan_20260720095405_inspect-and-pan-coexist-html-preview.md) — **PLAN REVIEWED**
+- [ ] [Preserve HTML preview zoom/pan across file auto-refresh](../plans/feature_plan_20260720095401_preserve-html-preview-zoom-on-refresh.md) — **LEAD CODED**
+- [ ] [Open HTML previews fit-to-width, not fully zoomed out](../plans/feature_plan_20260720095402_html-preview-initial-fit-to-width.md) — **LEAD CODED**
+- [ ] [Fix the "Reset zoom" (⟲) toolbar button so it recenters predictably](../plans/feature_plan_20260720095403_reset-zoom-button-recenter-and-clarify.md) — **LEAD CODED**
+- [ ] [Let HTML previews scroll/navigate without turning on Pan mode](../plans/feature_plan_20260720095404_html-preview-scroll-navigation-without-pan-mode.md) — **LEAD CODED**
+- [ ] [Make Inspect Mode and Pan work together in HTML previews](../plans/feature_plan_20260720095405_inspect-and-pan-coexist-html-preview.md) — **LEAD CODED**
 <!-- END SUBTASKS -->
+
+## Completion Summary
+
+Implemented all five subtasks in dependency order (fit-to-width → preserve-zoom → reset-button → scroll-without-pan → inspect+pan-coexist) across the duplicated Design/Planning webview engine. Files changed: `src/webview/design.js`, `src/webview/planning.js` (fitToContainer `mode` param + width-fit call sites, `_fitPending` one-shot gate on `isAutoRefreshed`, reset-branch recenter rewrite, `applyWheelToTab` helper + `sbWheel` case, `inspect-active` body-class toggle/clear); `src/webview/design.html`, `src/webview/planning.html` (reset button tooltips → "Reset view — 100% size", `body.inspect-active .zoom-event-layer { display:none !important }` CSS rule); `src/services/DesignPanelProvider.ts` (shared `_INSPECTOR_SCRIPT` wheel forwarder posting `sbWheel` with `deltaMode`). No backend/provider message-protocol changes — `isAutoRefreshed`, `sbContentDims`, `sbInspectState`, `sbSpacePan` already existed. No issues encountered; skipped compilation/tests per dispatch instructions.
 
