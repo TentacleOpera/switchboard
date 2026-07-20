@@ -31,11 +31,8 @@ Delete the Dev Docs tab and fold its two useful affordances (`+ New Doc`, `Draft
 ### 4 — Verb allowlist (auto-generated — edit source + regenerate)
 - **`protocol-catalog.json`** — remove the `PLANNING_VERBS` Dev Docs verbs (`loadDevDocs`, `readDevDoc`, `saveDevDoc`, `createDevDoc`, `deleteDevDoc`, `draftImproveDevDoc`, `importDevDocFromClipboard`); **add** `draftImproveLocalDoc`. Then `npm run catalog:generate` to regenerate `src/generated/verbAllowlist.ts` (do NOT hand-edit the generated file). Do NOT remove `getProjectContextEnabled` / `setProjectContextEnabled` — those are the PRD-injection toggle (owned by the auto-bundle subtask, must stay).
 
-### 5 — switchboard-site docs
-- Delete `switchboard-site/src/pages/docs/artifacts/dev-docs.md`.
-- `planning-artifacts.md`: remove "dev docs" from the `description` (line 4); delete the Dev Docs tabs-table row (line 25); reword line 34 to drop the Dev Docs reference (Research writes to your chosen docs folder; plan imports create cards on the board).
-- `docs.md`: document `+ New Doc` and `Draft with agent` in "The sidebar" (~line 27); note the merged Docs tab is the single home for markdown docs and the source filter lists sources only. Do NOT invent a folder-role concept.
-- `research.md` / `notebooklm.md`: deleting `dev-docs.md` breaks the prev/next chain. Repoint `research.md` `next` and `notebooklm.md` `prev` against the pages actually present at build time — note the `remove-notebooklm-export.md` subtask deletes `notebooklm.md`, so if it has landed, point `research.md` `next` at `create-plans` instead. The Astro build fails on a dangling chain either way.
+### 5 — switchboard-site docs → moved out
+All docs-site edits for this change (delete `dev-docs.md`; edit `planning-artifacts.md` and `docs.md`) live in the separate **Website-project** subtask `update-switchboard-site-docs.md`. This plan touches only the `switchboard` extension repo.
 
 ## Watch out
 - **`+ New Doc` / `Draft with agent` must gate on `state.activeSource === 'local'`** — never send an online source ID (ClickUp/Linear/Notion/Antigravity) as `folderPath`.
@@ -48,4 +45,4 @@ Delete the Dev Docs tab and fold its two useful affordances (`+ New Doc`, `Draft
 - `+ New Doc` creates a file in the active local folder (or quick-picks / toasts); disabled-path check: does not send an online source ID as `folderPath`. `Draft with agent` copies a prompt for the selected local doc; disabled when an online source is selected.
 - `docs-source-filter` unchanged (no `readme` entry); Manage Folders has no role selector; existing Edit/Save/Push/Copy-to-Online/Save-as-PRD/Save-as-Constitution and per-card Delete/Link still work.
 - `grep -rn "devDocsFolder\|loadDevDocs\|readDevDoc\|saveDevDoc\|createDevDoc\|deleteDevDoc\|draftImproveDevDoc\|importDevDocFromClipboard\|_listDevDocs\|_resolveDevDocPath\|_devDocsFolder" src/` → 0 hits. `draftImproveLocalDoc` present in `PLANNING_VERBS`.
-- `switchboard-site` builds with no dead links; `dev-docs.md` gone; `docs.md` documents the two buttons.
+- (switchboard-site docs are verified in `update-switchboard-site-docs.md`.)

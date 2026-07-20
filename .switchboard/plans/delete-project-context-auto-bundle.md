@@ -45,7 +45,7 @@ Delete the overengineered "project-context auto-bundle-push" feature in full —
 9. **`src/services/SetupPanelProvider.ts`** — delete the `case` blocks at 1377 (`getProjectContextSyncStatus`), 1382 (`setProjectContextSyncEnabled`), 1387 (`projectContextSyncNow`). (The `case` labels are message types, which differ from the KanbanProvider method names.)
 10. **`src/webview/setup.html`** — delete the "Project Context Sync" section (heading ~1521: auto checkbox, Sync Now button, status span, last-result div) and the JS handlers at 5308–5329 and 5535–5557 (incl. the `getProjectContextSyncStatus` post at 5535 and `projectContextSyncNow` post at 5557).
 11. **`protocol-catalog.json`** — remove the `SETUP_VERBS` entries `getProjectContextSyncStatus`, `setProjectContextSyncEnabled`, `projectContextSyncNow`; run `npm run catalog:generate`. Do NOT remove the `PLANNING_VERBS` Feature B verbs.
-12. **switchboard-site** — `integrations/remote-boards.md`: remove the ClickUp-row clause "No Project Context Sync either." (line 25, prose — the build won't catch it) and delete the "Project Context Sync" section (lines 56–63: heading, the two bullets, the "source of truth…" line); keep "Sync Health" above and "Provider-specific setup" below. `reference/settings-commands.md`: delete the `switchboard.devDocsFolder` row (line 122) **only if** the merge subtask hasn't already — coordinate; it's the merge subtask's edit primarily.
+> **switchboard-site docs → moved out.** The `remote-boards.md` "Project Context Sync" removal lives in the separate **Website-project** subtask `update-switchboard-site-docs.md`. This plan touches only the `switchboard` extension repo.
 
 ## Watch out
 - **Feature A vs B conflation is the top risk** — a broad `projectContext` grep-and-delete breaks dispatched prompts. Follow the coder rule.
@@ -59,4 +59,4 @@ Delete the overengineered "project-context auto-bundle-push" feature in full —
 - `grep -rn "projectContextSync\|pushProjectContext\|_onProjectContextContentChanged\|_resolveDevDocsDirForSync\|_resolveReadmePathForSync\|_projectContextSyncInFlight\|_projectContextSyncDebounce" src/` → 0 hits (Feature A gone).
 - `grep -rn "getProjectContextEnabled\|setProjectContextEnabled\|_resolveProjectContextEnabled\|btnProjectContext" src/` → EXPECTED hits present (Feature B intact); dispatch-path calls at 1865/3451/3627/4437 resolve.
 - Setup/Remote tab: no "Project Context Sync" section. Project panel "PROJECT CONTEXT: ON/OFF" toggle still works — toggle on → dispatched prompt includes the project PRD; toggle off → omits it.
-- `switchboard-site` builds; `remote-boards.md` has no Project Context Sync section and the ClickUp row no longer says "No Project Context Sync either."
+- (switchboard-site docs are verified in `update-switchboard-site-docs.md`.)

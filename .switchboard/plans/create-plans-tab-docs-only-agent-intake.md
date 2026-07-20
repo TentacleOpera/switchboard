@@ -62,9 +62,10 @@ behaviour, and edge cases. It will be pasted directly onto a planning board.
 - Add `bundleDocsContext(workspaceRoot, { activeProject? }): Promise<{ zipPath: string }>`. Source set = constitution + PRDs (all, or the active project's) + README + curated Docs-tab folders, filtered to `.md` + `.txt`. **Never** invoke `git ls-files`. Emit a markdown zip + `HOW-TO-PLAN.md`. Reuse the chunking/manifest shape of `bundleWorkspaceContext` but constrain the source set at the entry point.
 - Add an invariant comment at the top: `// DOCS-ONLY BY DESIGN. Do not add a code-inclusion option — see plan create-plans-tab-docs-only-agent-intake.md.`
 
-### 4 — Verbs + docs
+### 4 — Verbs
 - **`protocol-catalog.json`** — add `createPlansCopyPrompt`, `createPlansDownloadZip`, `createPlansPasteBack`, `createPlansImproveSource` to `PLANNING_VERBS`; run `npm run catalog:generate`.
-- **switchboard-site** — add `create-plans.md` describing the tab, the source picker (zip / public link / platform-via-MCP), and the docs-not-code / behaviour-first principle. Reconcile the Artifacts prev/next chain: this page takes NotebookLM's place in the sequence (coordinate with `remove-notebooklm-export.md`, which deletes `notebooklm.md`). Release notes: point users here as the replacement for "get context to an agent for planning."
+
+> **switchboard-site docs → moved out.** The new `create-plans.md` page, the Artifacts prev/next reconciliation, and release notes live in the separate **Website-project** subtask `update-switchboard-site-docs.md`. This plan touches only the `switchboard` extension repo.
 
 ## Watch out
 - **Paste-back pinning is unwired today** — `importPlanFromClipboard` passes no `projectName` (TaskViewerProvider.ts:18891). Thread it, or paste-back always lands unassigned. On project-filter read failure → unassigned (never invent a project).
