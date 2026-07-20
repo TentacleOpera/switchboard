@@ -7823,15 +7823,15 @@ Read the current content above. Determine what's missing. Produce a complete fea
         // Root README (any case variant).
         try {
             const rootEntries = await fs.promises.readdir(workspaceRoot);
-            const readme = rootEntries.find(e => e.toLowerCase() === 'readme.md');
+            const readme = rootEntries.find((e: string) => e.toLowerCase() === 'readme.md');
             if (readme) { add('.', path.join(workspaceRoot, readme)); }
         } catch { /* root unreadable — fine */ }
 
         // Curated Docs-tab folders (recursive, bounded depth).
         const walk = async (dir: string, zipDir: string, depth: number): Promise<void> => {
             if (depth > 4) { return; }
-            let entries: fs.Dirent[] = [];
-            try { entries = await fs.promises.readdir(dir, { withFileTypes: true }) as unknown as fs.Dirent[]; } catch { return; }
+            let entries: import('fs').Dirent[] = [];
+            try { entries = await fs.promises.readdir(dir, { withFileTypes: true }) as unknown as import('fs').Dirent[]; } catch { return; }
             for (const entry of entries) {
                 if (entry.name.startsWith('.') || entry.name === 'node_modules') { continue; }
                 const full = path.join(dir, entry.name);

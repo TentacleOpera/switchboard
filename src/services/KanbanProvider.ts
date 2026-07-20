@@ -7220,6 +7220,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             const message = result.rejectedSubtasks.length === 1
                                 ? `A subtask's project is governed by its feature; set the feature's project instead.`
                                 : `${result.rejectedSubtasks.length} subtasks' projects are governed by their feature; set the feature's project instead.`;
+                            // Partial success: the DB is already persisted (non-rejected rows
+                            // were written + cascaded), so refresh the board to reflect the
+                            // successful parts of the batch BEFORE surfacing the reject toast.
+                            // Without this, the board shows stale UI for the moved cards while
+                            // the toast claims failure.
+                            await this._refreshBoard(workspaceRoot);
                             void this._seams().ui.showWarningMessage(message);
                             return { success: false, error: message };
                         }
