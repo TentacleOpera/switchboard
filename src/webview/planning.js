@@ -8573,15 +8573,17 @@ Return ONLY the drafted prompt with no additional commentary.`;
         if (state.activeSource === 'local-folder' && typeof state.activeDocId === 'string' && /^\d+:/.test(state.activeDocId)) {
             const colonIdx = state.activeDocId.indexOf(':');
             const folderIndex = parseInt(state.activeDocId.substring(0, colonIdx), 10);
-            const rel = state.activeDocId.substring(colonIdx + 1);
-            const lastSlash = Math.max(rel.lastIndexOf('/'), rel.lastIndexOf('\\'));
-            const relDir = lastSlash >= 0 ? rel.substring(0, lastSlash) : '';
             // Match the backend's `/^\d+:/` resolution: iterate roots, take
             // folderPaths[folderIndex] from the first root that has it.
+            // NOTE: the location picker only offers top-level configured folders
+            // (getCurrentFolderPaths yields absolute folder roots, not
+            // subdirectories), so pre-select the PARENT folder — not the
+            // subdirectory path (paths[folderIndex] + '/' + relDir), which would
+            // never match any <option> and silently fall back to the first folder.
             const byRoot = state.localFolderPathsByRoot || {};
             for (const paths of Object.values(byRoot)) {
                 if (Array.isArray(paths) && folderIndex >= 0 && folderIndex < paths.length) {
-                    preselectAbs = relDir ? paths[folderIndex] + '/' + relDir : paths[folderIndex];
+                    preselectAbs = paths[folderIndex];
                     break;
                 }
             }
