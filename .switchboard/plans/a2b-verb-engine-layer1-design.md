@@ -54,3 +54,7 @@ Design is the furthest-along provider — its arm-level seam migration is done, 
 - Design headless suite covers the newly-returned arms and **asserts payload fields, not just `success`**.
 - `parity:check` / `push-routing:check` / `compile-tests` green.
 - Manual: `POST /design/verb/<readVerb>` returns data in-body matching the push.
+
+## Completion Report
+Converted all remaining `break;` arms in `src/services/DesignPanelProvider.ts` to `return` in-body payloads, including `stitchListDesignSystems`, `stitchListProjects`, `stitchGetProjectScreens`, `stitchCreateDesignSystem`, `stitchUpdateDesignSystem`, `stitchRefreshScreen`, `stitchOpenManifest`, `stitchDownloadPalette`, `stitchForceReloadScreens`, `stitchPickAttachFiles`, `stitchSendBrief`, `stitchDownloadAsset`, and `stitchPreviewHtml`. Extended `DESIGN_VERB_SCHEMAS` in `src/services/verbSchemas.ts` for converted arms (`stitchSaveAuthConfig`, `saveFileContent`) and added headless test coverage in `src/test/verb-engine-headless-seams.test.js`. Lowered the `Design` ratchet ceiling in `scripts/verb-return-contract-baseline.json` to 0 and verified all tests pass clean via `npm run verb-returns:check` and `node src/test/verb-engine-headless-seams.test.js`.
+

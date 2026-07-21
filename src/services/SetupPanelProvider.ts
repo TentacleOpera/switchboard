@@ -1407,6 +1407,12 @@ export class SetupPanelProvider implements vscode.Disposable {
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             this._seams().ui.showErrorMessage(`Setup panel error: ${errorMessage}`);
+            // Return-in-body contract (this plan): surface the failure to the HTTP
+            // caller (handleServiceVerb → route → 502) instead of falling through
+            // to `undefined`, which the route layer reads as {success:true} — a
+            // silent false-success on a failed token/config write. The webview
+            // path ignores this return value, so no UI behaviour changes.
+            return { success: false, error: errorMessage };
         }
     }
 

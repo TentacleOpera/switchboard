@@ -38,7 +38,7 @@ import { buildWorkspaceItems } from './workspaceUtils';
 import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import { InsightManager } from './InsightManager';
 import { GovernanceFileKey } from './constitutionUtils';
-import { getProjectPrdPath, sanitizeProjectSlug } from './prdUtils';
+import { getProjectPrdPath, sanitizeProjectSlug, buildPrdBuilderPrompt } from './prdUtils';
 import { PlanAutoFetchService } from './PlanAutoFetchService';
 import { classifyHttpError } from './errorMessages';
 import { bundleDocsContext, DocsBundleSource } from './ContextBundler';
@@ -4396,25 +4396,7 @@ Start by checking which documents exist, then present the menu.`;
                 const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!wsRoot || typeof msg.projectName !== 'string') { break; }
                 const projectName = msg.projectName;
-                const promptText =
-                    `Please act as a product manager. I want to build a Product Requirements Document (PRD) for the project "${projectName}" in the workspace at ${wsRoot}.\n` +
-                    `A PRD is a loose set of product requirements respected across all plans in this project — independent of features. It is NOT a technical spec or a constitution; it captures WHAT the product should do and for whom, not HOW it is built.\n\n` +
-                    `Please ask me the following questions one by one or help me draft it:\n` +
-                    `1. Vision: In one sentence, what is this project's primary purpose?\n` +
-                    `2. Target Users: Who are the primary users, and what is their main pain point?\n` +
-                    `3. Key Features: What are the 3-7 core features or capabilities? Give each a short name and one sentence.\n` +
-                    `4. Success Criteria: How will we know this project is working? List 2-4 measurable outcomes.\n` +
-                    `5. Non-Goals: What are specific things this project will NOT do in its current scope?\n` +
-                    `6. Open Questions: What are the top 2-3 unresolved decisions or risks?\n\n` +
-                    `Please format the output document strictly as follows:\n` +
-                    `# ${projectName} — PRD\n\n` +
-                    `> **Vision:** [one sentence]\n\n` +
-                    `## Target Users\n[Who they are and their main pain point]\n\n` +
-                    `## Key Features\n- **[Name]:** [one sentence]\n\n` +
-                    `## Success Criteria\n- [measurable outcome]\n\n` +
-                    `## Non-Goals\n- [explicit exclusion]\n\n` +
-                    `## Open Questions\n- [unresolved decision or risk]\n\n` +
-                    `Save the result to .switchboard/projects/${projectName.toLowerCase().replace(/[^a-z0-9_-]+/g, '-')}/prd.md\n`;
+                const promptText = buildPrdBuilderPrompt(projectName, wsRoot);
                 if (this._taskViewerProvider) {
                     const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole('planner', promptText, wsRoot);
                     if (dispatched) { break; }
@@ -4426,24 +4408,7 @@ Start by checking which documents exist, then present the menu.`;
                 const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!wsRoot || typeof msg.projectName !== 'string') { break; }
                 const projectName = msg.projectName;
-                const promptText =
-                    `Please act as a product manager. I want to build a Product Requirements Document (PRD) for the project "${projectName}" in the workspace at ${wsRoot}.\n` +
-                    `A PRD is a loose set of product requirements respected across all plans in this project — independent of features. It is NOT a technical spec or a constitution; it captures WHAT the product should do and for whom, not HOW it is built.\n\n` +
-                    `Please ask me the following questions one by one or help me draft it:\n` +
-                    `1. Vision: In one sentence, what is this project's primary purpose?\n` +
-                    `2. Target Users: Who are the primary users, and what is their main pain point?\n` +
-                    `3. Key Features: What are the 3-7 core features or capabilities? Give each a short name and one sentence.\n` +
-                    `4. Success Criteria: How will we know this project is working? List 2-4 measurable outcomes.\n` +
-                    `5. Non-Goals: What are specific things this project will NOT do in its current scope?\n` +
-                    `6. Open Questions: What are the top 2-3 unresolved decisions or risks?\n\n` +
-                    `Please format the output document strictly as follows:\n` +
-                    `# ${projectName} — PRD\n\n` +
-                    `> **Vision:** [one sentence]\n\n` +
-                    `## Target Users\n[Who they are and their main pain point]\n\n` +
-                    `## Key Features\n- **[Name]:** [one sentence]\n\n` +
-                    `## Success Criteria\n- [measurable outcome]\n\n` +
-                    `## Non-Goals\n- [explicit exclusion]\n\n` +
-                    `## Open Questions\n- [unresolved decision or risk]\n`;
+                const promptText = buildPrdBuilderPrompt(projectName, wsRoot);
                 await this._seams().clipboard.writeText(promptText);
                 this.postMessageToProjectWebview({ type: 'prdPromptCopied' });
                 break;

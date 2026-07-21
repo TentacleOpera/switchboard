@@ -152,6 +152,19 @@ const DESIGN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             apiKey: { type: 'string' },
         },
     },
+    stitchSaveAuthConfig: {
+        fields: {
+            apiKey: { type: 'string' },
+        },
+    },
+    saveFileContent: {
+        fields: {
+            filePath: { type: 'string', required: true },
+            content: { type: 'string' },
+            originalContent: { type: 'string' },
+            tab: { type: 'string' },
+        },
+    },
     copyStitchTweakPrompt: {
         fields: {
             prompt: { type: 'string', required: true },

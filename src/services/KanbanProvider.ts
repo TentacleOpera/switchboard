@@ -7200,23 +7200,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
 
                 const description = typeof msg.description === 'string' ? msg.description.trim() : '';
-                const { getProjectPrdPath } = require('./prdUtils');
+                const { getProjectPrdPath, buildPrdWriterPrompt } = require('./prdUtils');
                 const prdPath = getProjectPrdPath(workspaceRoot, projectName);
 
-                const prompt = [
-                    `You are a product requirements document (PRD) writer.`,
-                    `Create a concise but comprehensive PRD for the project "${projectName}".`,
-                    description ? `\nProject description: ${description}` : '',
-                    `\nSave the PRD as markdown to this exact file path: ${prdPath}`,
-                    `\nThe PRD should include:`,
-                    `- Project overview and purpose`,
-                    `- Target users / audience`,
-                    `- Core features and requirements`,
-                    `- Non-functional requirements (performance, security, etc.)`,
-                    `- Success criteria`,
-                    `- Out of scope items`,
-                    `\nKeep it practical and actionable. This PRD will be injected into agent prompts as project context.`,
-                ].filter(Boolean).join('\n');
+                const prompt = buildPrdWriterPrompt(projectName, workspaceRoot, description);
 
                 try {
                     await this._seams().clipboard.writeText(prompt);

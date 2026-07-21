@@ -2164,6 +2164,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         html: html,
                         htmlContent: html
                     });
+                    return { success: true, html, htmlContent: html };
                 } catch (err) {
                     this.postMessage({
                         type: 'markdownLiveRendered',
@@ -2172,8 +2173,8 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         htmlContent: '',
                         error: String(err)
                     });
+                    return { success: false, error: String(err) };
                 }
-                break;
             }
             case 'ready': {
                 const allRoots = this._getWorkspaceRoots();
@@ -2207,7 +2208,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 await this._sendImagesDocsReady();
                 await this._sendBriefsDocsReady();
                 await this._sendActiveDesignDocState();
-                break;
+                return { success: true, items, statePayload };
             }
 
             case 'persistTabState': {
@@ -2236,16 +2237,18 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     const buf = fs.readFileSync(filePath);
                     const ext = path.extname(filePath).slice(1).toLowerCase();
                     const mime = ext === 'jpg' ? 'jpeg' : (ext || 'png');
+                    const dataUrl = `data:image/${mime};base64,${buf.toString('base64')}`;
                     this.postMessage({
                         type: 'inspectDataUrl',
-                        dataUrl: `data:image/${mime};base64,${buf.toString('base64')}`,
+                        dataUrl,
                         requestId: message.requestId
                     });
+                    return { success: true, dataUrl };
                 } catch (e) {
                     console.error('[DesignPanelProvider] inspectRequestDataUrl failed', e);
                     this.postMessage({ type: 'inspectDataUrlError', requestId: message.requestId, error: String(e) });
+                    return { success: false, error: String(e) };
                 }
-                break;
             }
             case 'activeTabChanged': {
                 this._activeTab = message.tab;
@@ -2270,7 +2273,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     const docPath = await this._resolveDesignDocPath(message.sourceFolder, String(message.docId || ''));
                     if (!docPath) {
                         this.postMessage({ type: 'activeContextSet', success: false, error: 'Document not found' });
-                        break;
+                        return { success: false, error: 'Document not found' };
                     }
                     const pathConfig = this._seams().pathConfig;
                     await pathConfig.updateConfigWorkspace(
@@ -2290,10 +2293,11 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     await this._setPlannerDesignSystemAddon(true);
                     await this._sendActiveDesignDocState();
                     this.postMessage({ type: 'activeContextSet', success: true });
+                    return { success: true, docPath };
                 } catch (err: any) {
                     this.postMessage({ type: 'activeContextSet', success: false, error: String(err) });
+                    return { success: false, error: String(err) };
                 }
-                break;
             }
 
             case 'disableDesignDoc': {
@@ -2315,10 +2319,11 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     this._activeDesignSystemDocId = null;
                     await this._setPlannerDesignSystemAddon(false);
                     await this._sendActiveDesignDocState();
+                    return { success: true };
                 } catch (err: any) {
                     this.postMessage({ type: 'activeContextSet', success: false, error: String(err) });
+                    return { success: false, error: String(err) };
                 }
-                break;
             }
 
             case 'saveFileContent': {
@@ -2329,7 +2334,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const allRoots = this._getWorkspaceRoots();
                 if (!filePath || !path.isAbsolute(filePath)) {
                     this.postMessage({ type: 'saveFileContentResult', success: false, error: 'Invalid file path', tab });
-                    break;
+                    return { success: false, error: 'Invalid file path', tab };
                 }
                 const resolved = path.resolve(filePath);
                 let isAllowed = allRoots.some(r => resolved.startsWith(path.resolve(r) + path.sep));
@@ -2351,7 +2356,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 }
                 if (!isAllowed) {
                     this.postMessage({ type: 'saveFileContentResult', success: false, error: 'Invalid file path', tab });
-                    break;
+                    return { success: false, error: 'Invalid file path', tab };
                 }
                 try {
                     // Conflict detection: compare disk content with the content the editor started from
@@ -2361,7 +2366,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     }
                     if (originalContent && diskContent !== originalContent) {
                         this.postMessage({ type: 'saveFileContentResult', success: false, conflict: true, diskContent, tab });
-                        break;
+                        return { success: false, conflict: true, diskContent, tab };
                     }
 
                     // Validate JSON/YAML before write
@@ -2370,7 +2375,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         try { JSON.parse(content); }
                         catch (e: any) {
                             this.postMessage({ type: 'saveFileContentResult', success: false, error: `Invalid JSON: ${e.message}`, tab });
-                            break;
+                            return { success: false, error: `Invalid JSON: ${e.message}`, tab };
                         }
                     }
                     if (saveExt === '.yaml' || saveExt === '.yml') {
@@ -2378,16 +2383,17 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         try { yaml.load(content); }
                         catch (e: any) {
                             this.postMessage({ type: 'saveFileContentResult', success: false, error: `Invalid YAML: ${e.message}`, tab });
-                            break;
+                            return { success: false, error: `Invalid YAML: ${e.message}`, tab };
                         }
                     }
 
                     await fs.promises.writeFile(resolved, content, 'utf8');
                     this.postMessage({ type: 'saveFileContentResult', success: true, tab });
-                } catch (err) {
+                    return { success: true, tab };
+                } catch (err: any) {
                     this.postMessage({ type: 'saveFileContentResult', success: false, error: String(err), tab });
+                    return { success: false, error: String(err), tab };
                 }
-                break;
             }
 
             case 'fetchPreview': {
@@ -2414,14 +2420,14 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         this._activeStitchHtmlWorkspaceRoot = root;
                         void this._setupStitchHtmlFolderWatchers().catch(() => {});
                     }
-                    await this._buildAndSendPreview({
+                    const res = await this._buildAndSendPreview({
                         sourceId: message.sourceId,
                         sourceFolder: resolvedFolder,
                         docId: rawDocId,
                         requestId: message.requestId,
                         isAutoRefreshed: false
                     });
-                    break;
+                    return { success: true, preview: res };
                 }
                 if ((message.sourceId === 'html-folder' || message.sourceId === 'claude-folder') && message.sourceFolder) {
                     if (message.target === 'claude') {
@@ -2444,7 +2450,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         this._activeHtmlPreview = null;
                     }
                 }
-                await this._buildAndSendPreview({
+                const res = await this._buildAndSendPreview({
                     sourceId: message.sourceId,
                     sourceFolder: message.sourceFolder,
                     docId: rawDocId,
@@ -2452,7 +2458,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     requestId: message.requestId,
                     isAutoRefreshed: false
                 });
-                break;
+                return { success: true, preview: res };
             }
 
             case 'copyStitchTweakPrompt': {
@@ -2465,7 +2471,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
 
             case 'sendStitchTweakPrompt': {
                 const prompt = String(message.prompt || '');
-                if (!prompt) break;
+                if (!prompt) return { success: false, error: 'prompt is required' };
                 if (this._taskViewerProvider) {
                     await this._taskViewerProvider.sendPromptToAgentTerminal('coder', prompt, message.workspaceRoot || undefined);
                     showTemporaryNotification('Sent element tweak prompt to agent terminal.');
@@ -2473,7 +2479,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     await this._seams().clipboard.writeText(prompt);
                     showTemporaryNotification('Agent terminal unavailable — copied tweak prompt to clipboard instead.');
                 }
-                break;
+                return { success: true };
             }
 
             case 'copyHtmlTweakPrompt': {
@@ -2486,7 +2492,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
 
             case 'sendHtmlTweakPrompt': {
                 const prompt = String(message.prompt || '');
-                if (!prompt) break;
+                if (!prompt) return { success: false, error: 'prompt is required' };
                 if (this._taskViewerProvider) {
                     await this._taskViewerProvider.sendPromptToAgentTerminal('coder', prompt, message.workspaceRoot || undefined);
                     showTemporaryNotification('Sent element tweak prompt to agent terminal.');
@@ -2494,20 +2500,20 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     await this._seams().clipboard.writeText(prompt);
                     showTemporaryNotification('Agent terminal unavailable — copied tweak prompt to clipboard instead.');
                 }
-                break;
+                return { success: true };
             }
 
             case 'copyClaudeImportPrompt': {
                 const prompt = String(message.prompt || '');
-                if (!prompt) break;
+                if (!prompt) return { success: false, error: 'prompt is required' };
                 await this._seams().clipboard.writeText(prompt);
                 showTemporaryNotification('Copied Claude import prompt to clipboard.');
-                break;
+                return { success: true };
             }
 
             case 'sendClaudeImportPrompt': {
                 const prompt = String(message.prompt || '');
-                if (!prompt) break;
+                if (!prompt) return { success: false, error: 'prompt is required' };
                 if (this._taskViewerProvider) {
                     await this._taskViewerProvider.sendPromptToAgentTerminal('claude_import', prompt, message.workspaceRoot || undefined);
                     showTemporaryNotification('Sent Claude import prompt to agent terminal.');
@@ -2515,22 +2521,22 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     await this._seams().clipboard.writeText(prompt);
                     showTemporaryNotification('Agent terminal unavailable — copied Claude import prompt to clipboard instead.');
                 }
-                break;
+                return { success: true };
             }
 
             case 'copyClaudeArtifactPrompt': {
-                if (message.error) { showTemporaryNotification(String(message.error)); break; }
+                if (message.error) { showTemporaryNotification(String(message.error)); return { success: false, error: String(message.error) }; }
                 const prompt = String(message.prompt || '');
-                if (!prompt) break;
+                if (!prompt) return { success: false, error: 'prompt is required' };
                 await this._seams().clipboard.writeText(prompt);
                 showTemporaryNotification('Copied Claude artifact upload prompt to clipboard.');
-                break;
+                return { success: true };
             }
 
             case 'sendClaudeArtifactPrompt': {
-                if (message.error) { showTemporaryNotification(String(message.error)); break; }
+                if (message.error) { showTemporaryNotification(String(message.error)); return { success: false, error: String(message.error) }; }
                 const prompt = String(message.prompt || '');
-                if (!prompt) break;
+                if (!prompt) return { success: false, error: 'prompt is required' };
                 if (this._taskViewerProvider) {
                     await this._taskViewerProvider.sendPromptToAgentTerminal('claude_artifacts', prompt, message.workspaceRoot || undefined);
                     showTemporaryNotification('Sent artifact upload prompt to Claude.');
@@ -2539,7 +2545,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     await this._seams().clipboard.writeText(prompt);
                     showTemporaryNotification('Agent terminal unavailable — copied artifact upload prompt to clipboard instead.');
                 }
-                break;
+                return { success: true };
             }
 
             case 'linkToDocument': {
@@ -2554,12 +2560,12 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const linkRef = linkPath;
                 this._seams().clipboard.writeText(linkRef);
                 showTemporaryNotification(`Copied document path to clipboard: ${linkRef}`);
-                break;
+                return { success: true, linkRef };
             }
 
             case 'linkToFolder': {
                 await this._handleLinkToFolder(this._getWorkspaceRoot(), String(message.folderPath || ''));
-                break;
+                return { success: true };
             }
 
             case 'serveAndOpenHtml':
@@ -2576,10 +2582,11 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     const entry = await this._getOrCreateHtmlServer(path.resolve(serveFolder));
                     const url = this._buildLocalhostUrl(entry, path.resolve(serveFolder), fullPath);
                     await this._seams().ui.openExternal(url);
+                    return { success: true, url };
                 } catch (err: any) {
                     this._seams().ui.showErrorMessage('Failed to serve HTML file: ' + err.message);
+                    return { success: false, error: err.message || String(err) };
                 }
-                break;
 
             case 'stitchSaveApiKey':
                 try {
@@ -2619,10 +2626,11 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         apiKey: auth.apiKey
                     });
                     showTemporaryNotification('Stitch Authentication settings saved successfully.');
+                    return { success: true, configured: auth.valid };
                 } catch (err: any) {
                     this._seams().ui.showErrorMessage('Failed to save settings: ' + err.message);
+                    return { success: false, error: err.message || String(err) };
                 }
-                break;
 
             case 'stitchValidateAuth':
                 try {
@@ -2635,7 +2643,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                             error: 'Credentials not configured',
                             apiKey: auth.apiKey
                         });
-                        return;
+                        return { success: false, configured: false, valid: false, error: 'Credentials not configured' };
                     }
                     invalidateStitchSdkCache();
                     const stitch = await loadStitch('');
@@ -2646,6 +2654,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         valid: true,
                         apiKey: auth.apiKey
                     });
+                    return { success: true, configured: true, valid: true };
                 } catch (err: any) {
                     const auth = await this._setupStitchAuth();
                     this.postMessage({ 
@@ -2655,8 +2664,8 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         error: err.message || String(err),
                         apiKey: auth.apiKey
                     });
+                    return { success: false, configured: true, valid: false, error: err.message || String(err) };
                 }
-                break;
 
             case 'stitchListDesignSystems':
                 try {
@@ -2664,12 +2673,12 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     const auth = await this._setupStitchAuth();
                     if (!auth.valid) {
                         this.postMessage({ type: 'stitchError', error: 'Authentication not configured.', workspaceRoot });
-                        return;
+                        return { success: false, error: 'Authentication not configured.' };
                     }
                     const projectId = message.projectId;
                     if (!projectId) {
                         this.postMessage({ type: 'stitchError', error: 'No project selected.', workspaceRoot });
-                        return;
+                        return { success: false, error: 'No project selected.' };
                     }
                     const stitch = await loadStitch('');
                     const project = stitch.project(projectId);
@@ -2685,15 +2694,16 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                             : ''
                     }));
                     this.postMessage({ type: 'stitchDesignSystemsReady', designSystems, workspaceRoot });
+                    return { success: true, designSystems };
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
+                    return { success: false, error: err.message || String(err) };
                 }
-                break;
 
             case 'stitchCreateDesignSystem':
                 if (this._stitchOperationLock) {
                     this.postMessage({ type: 'stitchError', error: 'An operation is already in progress.', workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
-                    break;
+                    return { success: false, error: 'An operation is already in progress.' };
                 }
                 this._stitchOperationLock = true;
                 try {
@@ -2717,17 +2727,18 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     
                     await project.createDesignSystem(input);
                     this.postMessage({ type: 'stitchDesignSystemCreated', workspaceRoot });
+                    return { success: true };
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
+                    return { success: false, error: err.message || String(err) };
                 } finally {
                     this._stitchOperationLock = false;
                 }
-                break;
 
             case 'stitchUpdateDesignSystem':
                 if (this._stitchOperationLock) {
                     this.postMessage({ type: 'stitchError', error: 'An operation is already in progress.', workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
-                    break;
+                    return { success: false, error: 'An operation is already in progress.' };
                 }
                 this._stitchOperationLock = true;
                 try {
@@ -2753,12 +2764,13 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     
                     await ds.update(input);
                     this.postMessage({ type: 'stitchDesignSystemUpdated', workspaceRoot });
+                    return { success: true };
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
+                    return { success: false, error: err.message || String(err) };
                 } finally {
                     this._stitchOperationLock = false;
                 }
-                break;
 
             case 'stitchApplyDesignSystem':
                 if (this._stitchOperationLock) {
@@ -2839,7 +2851,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
                     if (!hasKey) {
                         this.postMessage({ type: 'stitchApiKeyStatus', configured: false, workspaceRoot });
-                        return;
+                        return { success: false, configured: false, error: 'API key not configured' };
                     }
                     const pathConfig = this._seams().pathConfig;
                     const defaultProjectId = pathConfig.getConfigString('stitch.defaultProjectId');
@@ -2890,16 +2902,18 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         if (changed) {
                             this.postMessage({ type: 'stitchProjectsReady', projects, defaultProjectId, defaultModelId, defaultCreativeRange, workspaceRoot });
                         }
+                        return { success: true, projects, defaultProjectId, defaultModelId, defaultCreativeRange };
                     } catch (refreshErr: any) {
                         // Cache was already served — a failed background refresh shouldn't
                         // paint an error over a working dropdown.
                         if (!servedFromCache) throw refreshErr;
                         console.error('Stitch background project refresh failed:', refreshErr);
+                        return { success: true, projects: dbProjects, defaultProjectId, defaultModelId, defaultCreativeRange };
                     }
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
+                    return { success: false, error: err.message || String(err) };
                 }
-                break;
 
             case 'stitchGetProjectScreens':
                 try {
@@ -2921,12 +2935,13 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     // never carry it) — remember it so re-formatted screens keep it.
                     const cachedCommentary = new Map<string, { summary: string; suggestions: any[] }>();
 
+                    let formattedCached: any[] = [];
                     if (workspaceRoot) {
                         const cached = await db.getStitchScreensForProject(projectId);
                         if (cached.length > 0) {
-                            const formatted = await Promise.all(cached.map(s => this._formatScreenFromCache(s, workspaceRoot)));
-                            this.postMessage({ type: 'stitchScreensReady', screens: formatted, workspaceRoot });
-                            for (const f of formatted) {
+                            formattedCached = await Promise.all(cached.map(s => this._formatScreenFromCache(s, workspaceRoot)));
+                            this.postMessage({ type: 'stitchScreensReady', screens: formattedCached, workspaceRoot });
+                            for (const f of formattedCached) {
                                 cachedIds.add(f.id);
                                 if (f.imageUrl) cachedWithImage.add(f.id);
                                 if (f.summary || (f.suggestions && f.suggestions.length)) {
@@ -2969,30 +2984,34 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         }
                         return f;
                     };
+                    let resultScreens: any[] = [];
                     if (cachedIds.size === 0) {
                         // No cache at all — send every screen at once
-                        const formatted = await Promise.all(list.map((s: any) => this._formatScreen(s, workspaceRoot)));
-                        this.postMessage({ type: 'stitchScreensReady', screens: formatted, workspaceRoot });
+                        resultScreens = await Promise.all(list.map((s: any) => this._formatScreen(s, workspaceRoot)));
+                        this.postMessage({ type: 'stitchScreensReady', screens: resultScreens, workspaceRoot });
                     } else {
                         // Cache was served — re-format screens that are new OR were cached without
                         // an image on disk. _formatScreen is the only path that triggers the PNG
                         // download, so filtering on cachedIds here would permanently strand any
                         // screen that entered the DB before its image finished rendering.
                         const needsUpdate = list.filter((s: any) => !cachedWithImage.has(s.id));
-                        await Promise.all(needsUpdate.map(async (screen: any) => {
+                        const updatedScreens = await Promise.all(needsUpdate.map(async (screen: any) => {
                             const formatted = withCommentary(await this._formatScreen(screen, workspaceRoot));
                             this.postMessage({ type: 'stitchScreenReady', screen: formatted, workspaceRoot });
+                            return formatted;
                         }));
+                        resultScreens = [...formattedCached, ...updatedScreens];
                     }
 
                     // Background sweep: archive any screen HTML not yet on disk before its
                     // signed URL expires. Covers screens served purely from cache above,
                     // which never pass through _formatScreen.
                     void this._backfillStitchHtmlCache(list, workspaceRoot);
+                    return { success: true, screens: resultScreens };
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
+                    return { success: false, error: err.message || String(err) };
                 }
-                break;
 
             case 'stitchRebuildImageCache':
                 try {
@@ -3044,7 +3063,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
                     if (this._stitchOperationLock) {
                         this.postMessage({ type: 'stitchError', error: 'Another Stitch operation is in progress. Please wait.', workspaceRoot });
-                        return;
+                        return { success: false, error: 'Another Stitch operation is in progress.' };
                     }
                     this._stitchOperationLock = true;
                     try {
@@ -3105,13 +3124,14 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                             return f;
                         }));
                         this.postMessage({ type: 'stitchScreensReady', screens: formatted, workspaceRoot });
+                        return { success: true, screens: formatted };
                     } finally {
                         this._stitchOperationLock = false;
                     }
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
+                    return { success: false, error: err.message || String(err) };
                 }
-                break;
 
             case 'stitchCreateProject':
                 try {
@@ -3161,11 +3181,14 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     const stitch = await loadStitch('');
                     const fresh = await stitch.project(message.projectId).getScreen(message.screenId);
                     this._activeScreens.set(fresh.id, fresh);
-                    this.postMessage({ type: 'stitchScreenReady', screen: await this._formatScreen(fresh, workspaceRoot), workspaceRoot });
+                    const formatted = await this._formatScreen(fresh, workspaceRoot);
+                    this.postMessage({ type: 'stitchScreenReady', screen: formatted, workspaceRoot });
+                    return { success: true, screen: formatted };
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
+                    return { success: false, error: err.message || String(err) };
                 }
-                break;
+
             case 'stitchOpenManifest':
                 try {
                     const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
@@ -3225,10 +3248,11 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         await fs.promises.writeFile(manifestPath, Buffer.from(designMd, 'utf8'));
                     }
                     await this._seams().editor.showTextDocument(manifestPath, { preview: false });
+                    return { success: true, manifestPath };
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
+                    return { success: false, error: err.message || String(err) };
                 }
-                break;
 
             case 'stitchDownloadPalette':
                 try {
@@ -3267,10 +3291,11 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     await fs.promises.writeFile(targetPath, Buffer.from(JSON.stringify(tokens, null, 2), 'utf8'));
 
                     showTemporaryNotification(`Downloaded design tokens to ${path.basename(outputDir)}/design-tokens.json`);
+                    return { success: true, targetPath };
                 } catch (err: any) {
                     this._seams().ui.showErrorMessage('Download failed: ' + err.message);
+                    return { success: false, error: err.message || String(err) };
                 }
-                break;
 
             case 'listDesignFolders': {
                 const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
@@ -3392,7 +3417,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     void this._setupStitchHtmlFolderWatchers().catch(() => {});
                 }
                 await this._sendStitchHtmlDocsReady(workspaceRoot, projectId);
-                break;
+                return { success: true };
             }
 
             case 'refreshDocsForTab': {
@@ -3410,7 +3435,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         await this._sendBriefsDocsReady();
                         break;
                 }
-                break;
+                return { success: true };
             }
 
             case 'listImagesFolders': {
@@ -3605,7 +3630,9 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                             'Reference Files': ['png', 'jpg', 'jpeg', 'webp', 'html', 'htm', 'md']
                         }
                     });
-                    if (!result || result.length === 0) break;
+                    if (!result || result.length === 0) {
+                        return { success: false, files: [] };
+                    }
                     const files = result.map(filePath => {
                         const ext = path.extname(filePath).toLowerCase().replace('.', '');
                         const name = path.basename(filePath);
@@ -3615,10 +3642,11 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         return { path: filePath, name, type };
                     });
                     this.postMessage({ type: 'stitchAttachedFilesPicked', files });
+                    return { success: true, files };
                 } catch (err: any) {
                     this._seams().ui.showErrorMessage('Failed to pick files: ' + err.message);
+                    return { success: false, error: err.message || String(err) };
                 }
-                break;
             }
 
             case 'stitchSendBrief': {
@@ -3674,13 +3702,14 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         }
                         this.postMessage({ type: 'stitchProjectsReady', projects, defaultProjectId: project.id, selectProjectId: project.id, workspaceRoot });
                         this.postMessage({ type: 'stitchBriefInjected', content, projectId: project.id, autoGenerate: true });
+                        return { success: true, projectId: project.id };
                     } finally {
                         this._stitchOperationLock = false;
                     }
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
+                    return { success: false, error: err.message || String(err) };
                 }
-                break;
             }
 
             case 'stitchGenerate':
@@ -3912,13 +3941,14 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         screenId: message.screenId,
                         path: targetPath
                     });
+                    return { success: true, path: targetPath };
                 } catch (err: any) {
                     this._seams().ui.showErrorMessage('Download failed: ' + err.message);
                     // A live preview may be waiting on this download — let it recover
                     // (show the placeholder + reload) instead of spinning forever.
                     this.postMessage({ type: 'stitchHtmlPreviewError', screenId: message.screenId, error: err.message || String(err) });
+                    return { success: false, error: err.message || String(err) };
                 }
-                break;
             case 'stitchPreviewHtml':
                 // Live-render a screen's downloaded HTML in the preview pane. Used as the
                 // fallback for screens that never get a static screenshot (WebGL/animated
@@ -3949,10 +3979,11 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         webviewUri = this._panel?.webview.asWebviewUri(vscode.Uri.file(htmlPath)).toString();
                     }
                     this.postMessage({ type: 'stitchHtmlPreviewReady', screenId: message.screenId, iframeSrc, htmlContent, webviewUri });
+                    return { success: true, iframeSrc, htmlContent, webviewUri };
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchHtmlPreviewError', screenId: message.screenId, error: err.message || String(err) });
+                    return { success: false, error: err.message || String(err) };
                 }
-                break;
         }
     }
 

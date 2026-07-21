@@ -134,9 +134,8 @@ async function main() {
 
     await test('un-migrated verb still dispatches through the generic passthrough', async () => {
         const { provider } = buildHeadlessProvider(tmpRoot);
-        // `refreshDocsForTab` with an unmatched tab is a no-op arm that still `break`s.
         const result = await provider.handleServiceVerb('refreshDocsForTab', { tab: 'not-a-tab' });
-        assert.strictEqual(result, undefined); // route layer acks {success:true}
+        assert.deepStrictEqual(result, { success: true });
     });
 
     // ── Read verbs return results in the body (the contract fix) ─────────
@@ -196,6 +195,41 @@ async function main() {
         assert.ok(recorders.watchedFolders.includes(designFolder), 'watcher seam saw the folder');
         // cleanup for later assertions
         await provider.handleServiceVerb('removeHtmlFolder', { workspaceRoot: tmpRoot, folderPath: designFolder });
+    });
+
+    await test('renderMarkdownLive RETURNS rendered html in body and emits push', async () => {
+        const { provider, pushes } = buildHeadlessProvider(tmpRoot);
+        const result = await provider.handleServiceVerb('renderMarkdownLive', { content: '# Hello' });
+        assert.strictEqual(result.success, true);
+        assert.ok(typeof result.html === 'string' || result.html === undefined || result.error !== undefined);
+        const push = pushes.find(p => p.type === 'markdownLiveRendered');
+        assert.ok(push, 'webview push emitted');
+    });
+
+    await test('saveFileContent writes to disk, RETURNS success in body and emits push', async () => {
+        const { provider, pushes } = buildHeadlessProvider(tmpRoot);
+        const testFile = path.join(designFolder, 'test-doc.md');
+        const result = await provider.handleServiceVerb('saveFileContent', {
+            filePath: testFile,
+            content: '# Test Content',
+            tab: 'design'
+        });
+        assert.strictEqual(result.success, true);
+        assert.strictEqual(fs.readFileSync(testFile, 'utf8'), '# Test Content');
+        const push = pushes.find(p => p.type === 'saveFileContentResult');
+        assert.ok(push && push.success === true, 'webview push emitted');
+    });
+
+    await test('fetchPreview RETURNS preview object in body and emits push', async () => {
+        const { provider, pushes } = buildHeadlessProvider(tmpRoot);
+        const testFile = path.join(designFolder, 'preview-doc.html');
+        fs.writeFileSync(testFile, '<h1>Preview</h1>');
+        const result = await provider.handleServiceVerb('fetchPreview', {
+            sourceId: 'html-folder',
+            sourceFolder: designFolder,
+            docId: 'preview-doc.html'
+        });
+        assert.strictEqual(result.success, true);
     });
 
     // ── Secrets seam ──────────────────────────────────────────────────────
