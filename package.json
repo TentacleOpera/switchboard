@@ -815,6 +815,7 @@
     "catalog:check": "node scripts/generate-protocol-catalog.js && node scripts/generate-verb-allowlist.js",
     "parity:check": "node scripts/check-protocol-parity.js",
     "push-routing:check": "node scripts/check-push-routing.js",
+    "verb-returns:check": "node scripts/check-verb-return-contract.js",
     "mirror:check": "node scripts/check-claude-mirror.js",
     "release": "bash scripts/publish-release.sh"
   },

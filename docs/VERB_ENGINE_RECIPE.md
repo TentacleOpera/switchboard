@@ -55,6 +55,7 @@ byte-compatible for panel callers. Un-migrated arms keep `break` (resolve
   - `npm run catalog:check` (regen with `npm run catalog:generate` if arms/pushes moved — verb surface itself must not change)
   - `npm run parity:check`
   - `npm run push-routing:check` (baselines only ever go DOWN)
+  - `npm run verb-returns:check` (break ceilings in `scripts/verb-return-contract-baseline.json` only ever go DOWN as arms convert to `return`)
   - `npm run test:contract:verb-engine` + the provider's headless test
 - Ratchet metric: migrated-arm count per provider (arms that `return` + pass under the trap). Design after subtask 1: **25 / 68** (18 folder CRUD, createBrief, deleteBrief, persistTabState, activeTabChanged, copyStitchTweakPrompt, copyHtmlTweakPrompt, stitchSaveApiKey). Kanban after subtask 4: **144 / 144, 0 shims** (zero `vscode.` refs and zero `break;` in the `_handleMessage` switch; headless test `test:contract:verb-engine-kanban`).
 - Byte-compat is the hard constraint (~4,000 installs): same pushes, same order, same webview behavior. New behavior is allowed only where it was impossible before (HTTP callers reading results, payload-supplied dialog answers).

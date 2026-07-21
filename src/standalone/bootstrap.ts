@@ -18,8 +18,6 @@ import {
     getShellHtml as sharedGetShellHtml,
     getBoardHtml as sharedGetBoardHtml,
     getProjectHtml as sharedGetProjectHtml,
-    getDesignHtml as sharedGetDesignHtml,
-    getSetupHtml as sharedGetSetupHtml,
     getPanelsManifest as sharedGetPanelsManifest,
     getPanelHtmlById as sharedGetPanelHtmlById,
     resolveRepoRootFromDir,
@@ -372,10 +370,13 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     const getBoardHtml = async () => sharedGetBoardHtml(repoRoot, workspaceRoot);
     const getProjectHtml = async () => sharedGetProjectHtml(repoRoot, workspaceRoot);
     const getShellHtml = async () => sharedGetShellHtml(repoRoot);
-    const getDesignHtml = async () => sharedGetDesignHtml(repoRoot, workspaceRoot);
-    const getSetupHtml = async () => sharedGetSetupHtml(repoRoot, workspaceRoot);
 
-    const getPanelsManifest = () => sharedGetPanelsManifest();
+    // Standalone serves Design/Setup HTML but does NOT wire their verb routers
+    // (only kanbanVerb + planningVerb are passed to LocalApiServer below), so
+    // their verbs 503. Mark them disabled in the manifest so the shell renders
+    // greyed, non-clickable icons instead of dead panels. When the extension is
+    // the host it wires designVerb/setupVerb and passes no availability override.
+    const getPanelsManifest = () => sharedGetPanelsManifest({ design: false, setup: false });
     const getPanelHtml = async (id: string): Promise<{ html: string; csp?: string } | null> => {
         const result = sharedGetPanelHtmlById(id, repoRoot, workspaceRoot);
         if (!result) { return null; }

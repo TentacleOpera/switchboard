@@ -21,10 +21,10 @@ Give Switchboard a real **browser cockpit**: `npx switchboard` opens a single ta
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Headless App-Shell — one-tab container with a left panel-switcher strip](../plans/headless-app-shell-nav-container.md) — **CODER CODED**
-- [ ] [Headless Design Panel — route + host-agnostic provider](../plans/headless-design-panel-route.md) — **CODER CODED**
-- [ ] [Headless Setup Panel — route + host-agnostic provider](../plans/headless-setup-panel-route.md) — **CODER CODED**
-- [ ] [Headless Memo — relocate capture into the Project panel](../plans/headless-memo-relocate-to-project.md) — **CODER CODED**
+- [ ] [Headless App-Shell — one-tab container with a left panel-switcher strip](../plans/headless-app-shell-nav-container.md) — **CODE REVIEWED**
+- [ ] [Headless Design Panel — route + host-agnostic provider](../plans/headless-design-panel-route.md) — **CODE REVIEWED**
+- [ ] [Headless Setup Panel — route + host-agnostic provider](../plans/headless-setup-panel-route.md) — **CODE REVIEWED**
+- [ ] [Headless Memo — relocate capture into the Project panel](../plans/headless-memo-relocate-to-project.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ---
@@ -47,3 +47,9 @@ Give Switchboard a real **browser cockpit**: `npx switchboard` opens a single ta
 
 ### Correction (verb dispatch)
 The A2b verb-engine extraction IS done. `TaskViewerProvider._startLocalApiServer` wires `designVerb`/`setupVerb`/`planningVerb`/`taskViewerVerb` to the providers' `handleServiceVerb` methods. The shell + panel HTML getters are extracted into `src/services/headlessPanelHtml.ts` (shared module) and wired into BOTH the standalone bootstrap AND the extension's LocalApiServer `serveStatic`. When the extension is running, `npx switchboard` opens a browser to the extension's port and gets the full shell + all panel HTML + all verb dispatch from one server. All four subtasks are fully delivered with no verb-dispatch gap.
+
+---
+
+## Review Findings
+
+Feature-level reviewer pass over all four subtasks (in-place, no workflow). **Delivered:** the App-Shell keystone (shell + all-iframes-mounted, hash deep-link, `switchPanel` bridge, token→`/` cookie exchange) and Memo relocation are genuinely complete; Design/Setup add their HTML routes + manifest rows + extension-wired A2b verb dispatch. **Accuracy correction:** the "Correction" paragraph above (repeated in each subtask) is wrong that `npx switchboard` attaches to a running extension — `cli.ts` refuses to reuse a running instance and runs the standalone bootstrap, which wires only `kanbanVerb`+`planningVerb`; so in the delivered npx path Design/Setup verbs return 503 (HTML-only) and Project is memo-plus-stubs. **MAJOR fixed:** `getPanelsManifest()` advertised all four panels enabled regardless of host, producing dead Design/Setup panels in standalone and failing App-Shell's own "`/panels` lists Board + Project as enabled" check — parameterized to disable Design/Setup in standalone while the extension keeps them enabled (`src/services/headlessPanelHtml.ts`, `src/standalone/bootstrap.ts`). **Remaining risks:** full standalone Design/Setup/Project verb dispatch awaits the deferred B1 headless-bootstrap + A2b work (out of scope here), and the `implementation.html` memo UI still coexists against the plan's "one home" rule; compile/tests skipped per session directive.

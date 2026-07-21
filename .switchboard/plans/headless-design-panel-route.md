@@ -120,3 +120,9 @@ Complexity 5 → **Send to Coder.** Ready to execute once the app-shell has land
 
 ### Correction (verb dispatch)
 The A2b verb-engine extraction IS done — `DesignPanelProvider.handleServiceVerb` is the host-agnostic generic dispatch entry point, and `TaskViewerProvider._startLocalApiServer` wires `designVerb` to it. When the extension is running (the primary headless host), `/design/verb/*` works fully. The HTML getter is now shared via `headlessPanelHtml.ts` and wired into the extension's LocalApiServer `serveStatic`, so the extension serves both the Design panel HTML AND its verbs from the same port. No verb-dispatch gap remains in the extension-hosted path.
+
+---
+
+## Review Findings
+
+Reviewer pass (in-place). Verified `getDesignHtml` (nonce/CSP/asset rewrites) + `/design` route + manifest row, the `send*`→clipboard degrade (`_taskViewerProvider` null-check + `host-terminal-dispatch-false` CSS), and `DesignPanelProvider.handleServiceVerb` (A2b allowlist+schema generic dispatch), which the extension's `TaskViewerProvider` wires as `designVerb`. **Accuracy correction (was CRITICAL in the report):** the completion report's claim that `npx switchboard` opens a browser to the running extension's port is false — `cli.ts` *refuses* to attach to a running instance ("Reusing is not supported") and runs the standalone bootstrap, which does **not** wire `designVerb`, so `/design/verb/*` returns 503 in the delivered npx path; Design is HTML-only there. **MAJOR fixed (shared with App-Shell):** the manifest now marks Design disabled in standalone (greyed, non-clickable icon) instead of advertising a dead panel — `src/services/headlessPanelHtml.ts`, `src/standalone/bootstrap.ts`. Remaining risk: full standalone Design verbs await the deferred B1 headless provider bootstrap (out of this subtask's scope); compile/tests skipped per session directive.

@@ -212,16 +212,33 @@ export interface PanelManifestEntry {
 }
 
 /**
- * Build the panel manifest for the shell's icon strip. All five headless-
- * capable panels are registered. Callers can filter by enabled flags if
- * needed.
+ * Which panels have their verb dispatch wired in the current host. Board and
+ * Project always ship a verb router in both hosts, so they are always enabled.
+ * Design/Setup default enabled — the extension's LocalApiServer wires
+ * `designVerb`/`setupVerb` to the providers. The standalone bootstrap passes
+ * `false`: it serves their HTML but does NOT wire their verb routers, so every
+ * action would 503. Marking them disabled keeps the shell honest — a disabled,
+ * greyed, non-clickable icon instead of a dead panel that loads then 503s on
+ * every action (the "reachable-but-not-host-agnostic" failure the Design/Setup
+ * plans call out, and the App-Shell plan's "no dead icons" rule).
  */
-export function getPanelsManifest(): PanelManifestEntry[] {
+export interface PanelAvailability {
+    design?: boolean;
+    setup?: boolean;
+}
+
+/**
+ * Build the panel manifest for the shell's icon strip. Board + Project are
+ * always enabled; Design/Setup reflect whether the host wired their verbs.
+ */
+export function getPanelsManifest(availability?: PanelAvailability): PanelManifestEntry[] {
+    const designEnabled = availability?.design !== false;
+    const setupEnabled = availability?.setup !== false;
     return [
         { id: 'board', label: 'Board', icon: 'B', route: '/board', enabled: true },
         { id: 'project', label: 'Project', icon: 'P', route: '/project', enabled: true },
-        { id: 'design', label: 'Design', icon: 'D', route: '/design', enabled: true },
-        { id: 'setup', label: 'Setup', icon: 'S', route: '/setup', enabled: true },
+        { id: 'design', label: 'Design', icon: 'D', route: '/design', enabled: designEnabled },
+        { id: 'setup', label: 'Setup', icon: 'S', route: '/setup', enabled: setupEnabled },
     ];
 }
 

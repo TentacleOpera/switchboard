@@ -182,6 +182,22 @@ export function createHeadlessFeatureFileRegenerator(workspaceRoot: string): (ws
                     : newContent.replace(/(^# [^\n]*\n)/m, `$1\n${complexityLine}\n`);
             }
 
+            // Bodyless-husk guard (mirrors KanbanProvider._regenerateFeatureFile): never
+            // (re)create a feature file whose only content is the auto-generated blocks.
+            // Regenerate is an UPDATE — a real feature is always authored with a `# Title`
+            // before this runs. An empty meaningful body means the DB row outlived its file
+            // (e.g. an agent rm'd the .md without deleting the row); writing now emits a
+            // titleless "(no subtasks)" stub that shows on the board as a ghost feature.
+            const meaningfulBody = newContent
+                .replace(/<!-- BEGIN SUBTASKS[\s\S]*?<!-- END SUBTASKS -->/g, '')
+                .replace(/<!-- BEGIN WORKTREES[\s\S]*?<!-- END WORKTREES -->/g, '')
+                .replace(/^[ \t>*\-]*\*\*Complexity:\*\*[^\n]*$/im, '')
+                .trim();
+            if (!meaningfulBody) {
+                console.warn(`[headless] regenerateFeatureFile: refusing to write bodyless feature file for ${featureId} (${feature.planFile}) — DB row has no authored file content (file likely deleted without removing the row). Skipping to avoid creating an empty husk.`);
+                return;
+            }
+
             if (newContent === existingContent) {
                 return;
             }

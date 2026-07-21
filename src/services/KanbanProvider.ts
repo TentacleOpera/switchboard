@@ -11096,6 +11096,25 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
                 ? newContent.replace(complexityRe, complexityLine)
                 : newContent.replace(/(^# [^\n]*\n)/m, `$1\n${complexityLine}\n`);
         }
+        // Bodyless-husk guard: never (re)create a feature file whose only content is the
+        // auto-generated blocks. Regenerate is an UPDATE operation — the creation paths
+        // (createFeatureFromPlanIds, promoteToFeature) always author a `# Title` (+ Goal)
+        // BEFORE regenerate runs, so a real feature always has authored body here. If the
+        // meaningful body — everything outside the SUBTASKS/WORKTREES blocks and the derived
+        // **Complexity:** line — is empty, the DB row has outlived its file (e.g. an agent
+        // rm'd the .md without deleting the row). Writing now emits a titleless
+        // "## Subtasks / (no subtasks)" stub that surfaces on the board as a ghost feature
+        // with a filename-derived title. Refuse the write; the proper delete path removes
+        // both row and file.
+        const meaningfulBody = newContent
+            .replace(/<!-- BEGIN SUBTASKS[\s\S]*?<!-- END SUBTASKS -->/g, '')
+            .replace(/<!-- BEGIN WORKTREES[\s\S]*?<!-- END WORKTREES -->/g, '')
+            .replace(/^[ \t>*\-]*\*\*Complexity:\*\*[^\n]*$/im, '')
+            .trim();
+        if (!meaningfulBody) {
+            console.warn(`[KanbanProvider] _regenerateFeatureFile: refusing to write bodyless feature file for planId=${featurePlanId} (${feature.planFile}) — DB row has no authored file content (file likely deleted without removing the row). Skipping to avoid creating an empty husk.`);
+            return;
+        }
         // Content no-op: skip the write (and the registerPendingCreation guard) when the
         // generated content is byte-identical to what's already on disk. This breaks the
         // feature-regen self-write loop at its source — an identical rewrite re-fires the plan

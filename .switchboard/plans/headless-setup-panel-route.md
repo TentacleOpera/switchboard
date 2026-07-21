@@ -121,3 +121,9 @@ Complexity 6 → **Send to Coder.** Ready to execute once the app-shell has land
 
 ### Correction (verb dispatch)
 The A2b verb-engine extraction IS done — `SetupPanelProvider.handleServiceVerb` is the host-agnostic generic dispatch entry point, and `TaskViewerProvider._startLocalApiServer` wires `setupVerb` to it. When the extension is running (the primary headless host), `/setup/verb/*` works fully. The HTML getter is now shared via `headlessPanelHtml.ts` and wired into the extension's LocalApiServer `serveStatic`, so the extension serves both the Setup panel HTML AND its verbs from the same port. No verb-dispatch gap remains in the extension-hosted path.
+
+---
+
+## Review Findings
+
+Reviewer pass (in-place). Verified `getSetupHtml` + `/setup` route + manifest row and `SetupPanelProvider.handleServiceVerb` (A2b allowlist+schema generic dispatch, 110 verbs in `SETUP_VERBS`), which the extension's `TaskViewerProvider` wires as `setupVerb`. **Accuracy correction (was CRITICAL in the report):** same as Design — `npx switchboard` does not attach to the extension (`cli.ts` refuses); the standalone bootstrap wires no `setupVerb`, so `/setup/verb/*` returns 503 and Setup is HTML-only in the delivered npx path. **MAJOR (gate list):** the five gated families are enforced only as CSS button-hiding in `transport.js` (`#btn-remote-control` etc.) + the `openKanban`→switchPanel interception — a gated verb is not *absent* at the verb layer as the plan asked, just a hidden button; acceptable for a same-origin token/cookie-gated API, left as-is. **MAJOR fixed (shared with App-Shell):** manifest marks Setup disabled in standalone instead of advertising a dead panel — `src/services/headlessPanelHtml.ts`, `src/standalone/bootstrap.ts`. Remaining risk: full standalone Setup verbs await the deferred B1 bootstrap; compile/tests skipped per session directive.

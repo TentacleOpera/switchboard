@@ -115,3 +115,9 @@ Complexity 5 → **Send to Coder.** Lowest-priority memo path (chat-driven memo 
 
 ### No gaps
 This subtask is fully delivered — memo verbs are pure file I/O + prompt generation, no terminal/editor/host-coupled dependencies remained.
+
+---
+
+## Review Findings
+
+Reviewer pass (in-place). Verified end-to-end across all three runtime contexts: project.html memo tab + project.js handlers (autosave debounce, `_memoDirty` overwrite guard, Clear/Copy/Send), `transport.js` `#memo-send-btn` gating, `PlanningPanelProvider.handleServiceVerb` delegating memo verbs to `TaskViewerProvider` (memo verbs present in `TASKVIEWER_VERBS`), standalone `planningVerb` implementing all four directly with `send`→copy degrade returning `prompt` in the body, and the extension's `send`→`dispatchCustomPromptToRole('planner')` dispatch intact. **MAJOR (deviation, not fixed):** the plan's OUT OF SCOPE explicitly rejected keeping a second memo UI in `implementation.html`, but that memo tab was deliberately kept (coexists) — not a functional bug (separate webview documents, shared `.switchboard/memo.md` store) but it contradicts the "one home, both hosts" rule; removing it touches the shipped extension sidebar, so left as a user decision. NIT: extension-hosted-browser Copy relies on server-side clipboard (arm `break`s, no `prompt` in body) — works only same-machine. No memo code changed this pass; compile/tests skipped per session directive.
