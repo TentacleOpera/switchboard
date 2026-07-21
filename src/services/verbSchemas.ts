@@ -453,10 +453,66 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
     },
 };
 
+export const SETUP_VERB_SCHEMAS: Record<string, VerbSchema> = {
+    applyClickUpConfig: {
+        fields: {
+            token: { type: 'string' },
+            options: { type: 'object' },
+        },
+    },
+    applyLinearConfig: {
+        fields: {
+            token: { type: 'string' },
+            options: { type: 'object' },
+        },
+    },
+    applyNotionConfig: {
+        fields: {
+            token: { type: 'string' },
+        },
+    },
+    saveWorkspaceMappings: {
+        fields: {
+            mappings: { type: 'array' },
+        },
+    },
+    setCustomDbPath: {
+        fields: {
+            customDbPath: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    executeControlPlaneMigration: {
+        fields: {
+            parentDir: { type: 'string' },
+            generateWorkspaceFile: { type: 'boolean' },
+            cleanupConfirmed: { type: 'array' },
+        },
+    },
+    updateGitIgnoreConfig: {
+        fields: {
+            rules: { type: 'object' },
+        },
+    },
+    setProtocolTarget: {
+        fields: {
+            value: { type: 'string' },
+        },
+    },
+    setRemoteConfig: {
+        fields: {
+            enabled: { type: 'boolean' },
+            linearConfig: { type: 'object' },
+            notionConfig: { type: 'object' },
+        },
+    },
+};
+
 export const VERB_SCHEMAS: Record<ProviderKey, Record<string, VerbSchema>> = {
     kanban: KANBAN_VERB_SCHEMAS,
     planning: {},
     design: DESIGN_VERB_SCHEMAS,
-    setup: {},
+    setup: SETUP_VERB_SCHEMAS,
     taskViewer: {},
 };
+

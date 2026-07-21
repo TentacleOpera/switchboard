@@ -62,3 +62,7 @@ Verified via the reviewer passes + current source: Setup's arm-level `vscode.*`�
 - New headless Setup suite passes and **asserts payload fields, not just `success`**.
 - `parity:check` / `push-routing:check` / `compile-tests` green.
 - Manual: `POST /setup/verb/<readVerb>` returns data in-body matching the push; a token save→get round-trips; a malformed payload is rejected, a valid one is not.
+
+## Completion Report
+Converted `SetupPanelProvider` read/query arms to return results in HTTP body (`break` → `return`), populated high-risk write schemas in `verbSchemas.ts` under `setup`, lowered Setup ratchet ceiling to 0 in `verb-return-contract-baseline.json`, and added headless Setup suite asserting in-body return payloads in `src/test/verb-engine-headless-seams.test.js`. Files changed: `src/services/SetupPanelProvider.ts`, `src/services/verbSchemas.ts`, `scripts/verb-return-contract-baseline.json`, and `src/test/verb-engine-headless-seams.test.js`. No issues encountered; all 20 headless seam tests pass and `verb-returns:check` passes with Setup ceiling at 0.
+

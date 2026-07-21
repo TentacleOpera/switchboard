@@ -24,6 +24,7 @@ const { installVscodeTrap, createHeadlessTestSeams, createFakeStateStore } = req
 installVscodeTrap();
 
 const { DesignPanelProvider } = require('../../out/services/DesignPanelProvider');
+const { SetupPanelProvider } = require('../../out/services/SetupPanelProvider');
 const { BroadcastHub } = require('../../out/services/broadcastHub');
 const { SwitchboardCommandRegistry } = require('../../out/services/commandRegistry');
 const { VscodeHostCommands } = require('../../out/services/hostSeams');
@@ -68,6 +69,32 @@ function buildHeadlessProvider(tmpRoot, seamOpts = {}) {
     provider._hostSeams = seams;
     provider._broadcaster = new BroadcastHub({ webview: fakeWebview, apiServer: null });
     return { provider, seams, recorders, stateStore, pushes };
+}
+
+function buildHeadlessSetupProvider(tmpRoot, seamOpts = {}) {
+    const { seams, recorders } = createHeadlessTestSeams({ roots: [tmpRoot], ...seamOpts });
+    const pushes = [];
+    const fakeWebview = {
+        postMessage: (msg) => {
+            pushes.push(msg);
+            return Promise.resolve(true);
+        },
+    };
+    const mockTaskViewer = {
+        getIntegrationSetupStates: async () => ({ clickUp: true }),
+        handleGetStartupCommands: async () => ({ commands: {} }),
+        handleGetColourKanbanIconsSetting: () => true,
+        postSetupPanelState: async () => {},
+        exportPromptSettings: async () => true,
+        importPromptSettings: async () => true,
+        copyDbSettingsToGlobal: async () => ({ copied: 0 }),
+        handleApplyClickUpConfig: async (token) => ({ success: true, tokenReceived: !!token }),
+    };
+    const provider = new SetupPanelProvider({ fsPath: path.join(tmpRoot, 'ext') });
+    provider.setTaskViewerProvider(mockTaskViewer);
+    provider._hostSeams = seams;
+    provider._broadcaster = new BroadcastHub({ webview: fakeWebview, apiServer: null });
+    return { provider, seams, recorders, pushes, mockTaskViewer };
 }
 
 async function main() {
@@ -277,6 +304,26 @@ async function main() {
         assert.deepStrictEqual(validateVerbPayload('kanban', 'whatever', null), { ok: true });
         const bad = validateVerbPayload('design', 'removeDesignFolder', {});
         assert.strictEqual(bad.ok, false);
+    });
+
+    // ── SetupPanelProvider slice ──────────────────────────────────────────
+    await test('Setup: getIntegrationSetupStates RETURNS data in body and emits push', async () => {
+        const { provider, pushes } = buildHeadlessSetupProvider(tmpRoot);
+        const result = await provider.handleServiceVerb('getIntegrationSetupStates', {});
+        assert.strictEqual(result.success, true);
+        assert.strictEqual(result.clickUp, true);
+        const push = pushes.find(p => p.type === 'integrationSetupStates');
+        assert.ok(push, 'webview push emitted');
+        assert.strictEqual(push.clickUp, true);
+    });
+
+    await test('Setup: applyClickUpConfig schema validates and RETURNS body data', async () => {
+        const { provider, pushes } = buildHeadlessSetupProvider(tmpRoot);
+        const result = await provider.handleServiceVerb('applyClickUpConfig', { token: 'secret-token-123' });
+        assert.strictEqual(result.success, true);
+        assert.strictEqual(result.tokenReceived, true);
+        const push = pushes.find(p => p.type === 'clickupApplyResult');
+        assert.ok(push, 'webview push emitted');
     });
 
     // ── Cleanup ───────────────────────────────────────────────────────────

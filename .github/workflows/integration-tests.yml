@@ -37,6 +37,9 @@ jobs:
       - name: Push-routing ratchet (Gap A)
         run: npm run push-routing:check
 
+      - name: Verb return-contract ratchet
+        run: npm run verb-returns:check
+
       - name: Claude mirror drift check
         run: npm run mirror:check
 

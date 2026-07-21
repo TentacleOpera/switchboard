@@ -284,7 +284,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         type: 'colourKanbanIconsSetting',
                         enabled: this._taskViewerProvider.handleGetColourKanbanIconsSetting()
                     });
-                    break;
+                    return { success: true };
                 }
                 case 'ready':
                     await this._taskViewerProvider.postSetupPanelState();
@@ -292,31 +292,31 @@ export class SetupPanelProvider implements vscode.Disposable {
                         this.postMessage({ type: 'openSetupSection', section: this._pendingSection });
                         this._pendingSection = undefined;
                     }
-                    break;
+                    return { success: true };
                 case 'getIntegrationSetupStates': {
                     const states = await this._taskViewerProvider.getIntegrationSetupStates();
                     this.postMessage({ type: 'integrationSetupStates', ...states });
-                    break;
+                    return { success: true, ...states };
                 }
                 case 'exportPromptSettings': {
                     const success = await this._taskViewerProvider.exportPromptSettings();
                     this.postMessage({ type: 'exportPromptSettingsResult', success });
-                    break;
+                    return { success: true };
                 }
                 case 'importPromptSettings': {
                     const success = await this._taskViewerProvider.importPromptSettings();
                     this.postMessage({ type: 'importPromptSettingsResult', success });
-                    break;
+                    return { success: true };
                 }
                 case 'copyDbSettingsToGlobal': {
                     const result = await this._taskViewerProvider.copyDbSettingsToGlobal();
                     this.postMessage({ type: 'copyDbSettingsResult', copiedCount: result.copied });
-                    break;
+                    return { success: true };
                 }
                 case 'getControlPlaneStatus': {
                     const status = await this._getControlPlaneStatus(typeof message.workspaceRoot === 'string' ? message.workspaceRoot : undefined);
                     this.postMessage({ type: 'controlPlaneStatusResult', ...status });
-                    break;
+                    return { success: true };
                 }
                 case 'setExplicitControlPlaneRoot': {
                     const result = await this._setExplicitControlPlaneRoot(
@@ -328,7 +328,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         await this._taskViewerProvider.postSetupPanelState();
                         await this._seams().commands.executeCommand('switchboard.refreshUI');
                     }
-                    break;
+                    return { success: true };
                 }
                 case 'resetExplicitControlPlaneRoot': {
                     const result = await this._resetExplicitControlPlaneRoot(
@@ -339,7 +339,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         await this._taskViewerProvider.postSetupPanelState();
                         await this._seams().commands.executeCommand('switchboard.refreshUI');
                     }
-                    break;
+                    return { success: true };
                 }
                 case 'clearControlPlaneCache': {
                     const confirmation = await this._seams().ui.showModalWarningMessage(
@@ -353,7 +353,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                             success: false,
                             error: 'Control Plane cache clear cancelled.'
                         });
-                        break;
+                        return { success: true };
                     }
                     const result = await this._clearControlPlaneCache(
                         typeof message.workspaceRoot === 'string' ? message.workspaceRoot : undefined
@@ -363,7 +363,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         await this._taskViewerProvider.postSetupPanelState();
                         await this._seams().commands.executeCommand('switchboard.refreshUI');
                     }
-                    break;
+                    return { success: true };
                 }
                 case 'detectControlPlaneCandidate': {
                     const workspaceRoot = this._getCurrentWorkspaceRoot();
@@ -373,12 +373,12 @@ export class SetupPanelProvider implements vscode.Disposable {
                     }
                     const candidate = await ControlPlaneMigrationService.detectCandidateParent(workspaceRoot);
                     this.postMessage({ type: 'controlPlaneCandidateResult', ...candidate });
-                    break;
+                    return { success: true };
                 }
                 case 'previewControlPlaneMigration': {
                     const preview = await ControlPlaneMigrationService.previewMigration(String(message.parentDir || ''));
                     this.postMessage({ type: 'controlPlaneMigrationPreview', ...preview });
-                    break;
+                    return { success: true };
                 }
                 case 'executeControlPlaneMigration': {
                     const workspaceRoot = this._getCurrentWorkspaceRoot();
@@ -406,7 +406,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     }
 
                     this.postMessage({ type: 'controlPlaneMigrationResult', ...result });
-                    break;
+                    return { success: true };
                 }
                 case 'executeControlPlaneFreshSetup': {
                     const workspaceRoot = this._getCurrentWorkspaceRoot();
@@ -433,7 +433,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     }
 
                     this.postMessage({ type: 'controlPlaneFreshSetupResult', ...result });
-                    break;
+                    return { success: true };
                 }
                 case 'setBoardStateExport': {
                     const workspaceRoot = this._getCurrentWorkspaceRoot();
@@ -442,7 +442,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         const value = typeof message.value === 'string' ? message.value : 'none';
                         await pathConfig.updateConfigWorkspace('boardStateExport', value);
                     }
-                    break;
+                    return { success: true };
                 }
                 case 'setBoardStateExportRemoteUrl': {
                     const workspaceRoot = this._getCurrentWorkspaceRoot();
@@ -451,7 +451,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         const value = typeof message.value === 'string' ? message.value : '';
                         await pathConfig.updateConfigWorkspace('boardStateExport.remoteUrl', value);
                     }
-                    break;
+                    return { success: true };
                 }
                 case 'initControlPlaneGit': {
                     const workspaceRoot = this._getCurrentWorkspaceRoot();
@@ -480,7 +480,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     } else {
                         this._seams().ui.showWarningMessage(`Control plane git init failed: ${result.error || 'unknown error'}`);
                     }
-                    break;
+                    return { success: true };
                 }
                 case 'scaffoldMultiRepo': {
                     try {
@@ -504,7 +504,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                             }
                         });
                     }
-                    break;
+                    return { success: true };
                 }
                 case 'applyClickUpConfig': {
                     const result = await this._taskViewerProvider.handleApplyClickUpConfig(
@@ -514,7 +514,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this.postMessage({ type: 'clickupApplyResult', ...result });
                     await this._taskViewerProvider.postSetupPanelState();
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return result;
                 }
                 case 'saveClickUpMappings': {
                     const result = await this._taskViewerProvider.handleSaveClickUpMappings(
@@ -523,7 +523,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this.postMessage({ type: 'clickupMappingsSaved', ...result });
                     await this._taskViewerProvider.postSetupPanelState();
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return { success: true };
                 }
                 case 'saveClickUpAutomation': {
                     const result = await this._taskViewerProvider.handleSaveClickUpAutomation(
@@ -532,7 +532,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this.postMessage({ type: 'clickupAutomationSaved', ...result });
                     await this._taskViewerProvider.postSetupPanelState();
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return { success: true };
                 }
                 case 'applyLinearConfig': {
                     try {
@@ -551,7 +551,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                             error: errorMessage
                         });
                     }
-                    break;
+                    return { success: true };
                 }
                 case 'saveLinearAutomation': {
                     const result = await this._taskViewerProvider.handleSaveLinearAutomation(
@@ -560,7 +560,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this.postMessage({ type: 'linearAutomationSaved', ...result });
                     await this._taskViewerProvider.postSetupPanelState();
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return { success: true };
                 }
                 case 'linearBrowseProjects': {
                     const result = await this._taskViewerProvider.handleLinearBrowseProjects();
@@ -570,7 +570,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                             success: false,
                             error: result.error
                         });
-                        break;
+                        return { success: true };
                     }
                     try {
                         const projectOptions = result.projects.map((p: { id: string; name: string }) => ({
@@ -600,7 +600,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                             error: error instanceof Error ? error.message : String(error)
                         });
                     }
-                    break;
+                    return { success: true };
                 }
                 case 'enableTriagePipeline': {
                     const provider = message.provider === 'linear' ? 'linear' : 'clickup';
@@ -611,7 +611,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this.postMessage({ type: 'triagePipelineResult', provider, ...result });
                     await this._taskViewerProvider.postSetupPanelState();
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return { success: true };
                 }
                 case 'applyNotionConfig': {
                     const result = await this._taskViewerProvider.handleApplyNotionConfig(
@@ -620,7 +620,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this.postMessage({ type: 'notionApplyResult', ...result });
                     await this._taskViewerProvider.postSetupPanelState();
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return { success: true };
                 }
                 case 'configureNotionBackup': {
                     const result = await this._taskViewerProvider.handleConfigureNotionBackup(
@@ -628,40 +628,40 @@ export class SetupPanelProvider implements vscode.Disposable {
                         typeof message.workspaceRoot === 'string' ? message.workspaceRoot : undefined
                     );
                     this.postMessage({ type: 'notionBackupConfigResult', ...result });
-                    break;
+                    return { success: true };
                 }
                 case 'backupToNotion': {
                     const result = await this._taskViewerProvider.handleBackupToNotion(
                         typeof message.workspaceRoot === 'string' ? message.workspaceRoot : undefined
                     );
                     this.postMessage({ type: 'notionBackupResult', ...result });
-                    break;
+                    return { success: true };
                 }
                 case 'restoreFromNotion': {
                     const result = await this._taskViewerProvider.handleRestoreFromNotion(
                         typeof message.workspaceRoot === 'string' ? message.workspaceRoot : undefined
                     );
                     this.postMessage({ type: 'notionRestoreResult', ...result });
-                    break;
+                    return { success: true };
                 }
                 case 'autoCreateNotionDatabase': {
                     const result = await this._taskViewerProvider.handleAutoCreateNotionDatabase(
                         typeof message.workspaceRoot === 'string' ? message.workspaceRoot : undefined
                     );
                     this.postMessage({ type: 'notionAutoCreateResult', ...result });
-                    break;
+                    return { success: true };
                 }
                 case 'runSetup':
                     await this._seams().commands.executeCommand('switchboard.setup');
                     this.postMessage({ type: 'setupComplete' });
-                    break;
+                    return { success: true };
 
                 case 'openDocs':
                     await this._openDocs();
-                    break;
+                    return { success: true };
                 case 'openKanban':
                     await this._seams().commands.executeCommand('switchboard.openKanban');
-                    break;
+                    return { success: true };
                 case 'saveStartupCommands':
                     if (this._setupService) {
                         await this._setupService.saveStartupCommands(message);
@@ -669,7 +669,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         await this._taskViewerProvider.handleSaveStartupCommands(message);
                         await this._seams().commands.executeCommand('switchboard.refreshUI');
                     }
-                    break;
+                    return { success: true };
                 case 'getStartupCommands': {
                     if (this._setupService) {
                         await this._setupService.getStartupCommands(message);
@@ -677,55 +677,55 @@ export class SetupPanelProvider implements vscode.Disposable {
                         const startupState = await this._taskViewerProvider.handleGetStartupCommands();
                         this.postMessage({ type: 'startupCommands', ...startupState });
                     }
-                    break;
+                    return { success: true };
                 }
                 case 'getVisibleAgents': {
                     const agents = await this._taskViewerProvider.getVisibleAgents();
                     this.postMessage({ type: 'visibleAgents', agents });
-                    break;
+                    return { success: true };
                 }
                 case 'getCustomAgents': {
                     const workspaceRoot = this._getCurrentWorkspaceRoot() || undefined;
                     const customAgents = await this._taskViewerProvider.getCustomAgents(workspaceRoot);
                     this.postMessage({ type: 'customAgents', customAgents, workspaceRoot });
-                    break;
+                    return { success: true };
                 }
                 case 'getKanbanStructure': {
                     const items = await this._taskViewerProvider.handleGetKanbanStructure();
                     this.postMessage({ type: 'kanbanStructure', items });
-                    break;
+                    return { success: true };
                 }
                 case 'getPlanScannerConfig':
                     this.postMessage({
                         type: 'planScannerConfig',
                         config: this._taskViewerProvider.handleGetPlanScannerConfig()
                     });
-                    break;
+                    return { success: true };
                 case 'setPlanScannerConfig':
                     await this._taskViewerProvider.handleSetPlanScannerConfig(message.config || {});
                     this.postMessage({
                         type: 'planScannerConfig',
                         config: this._taskViewerProvider.handleGetPlanScannerConfig()
                     });
-                    break;
+                    return { success: true };
                 case 'getAccurateCodingSetting':
                     this.postMessage({
                         type: 'accurateCodingSetting',
                         enabled: this._taskViewerProvider.handleGetAccurateCodingSetting()
                     });
-                    break;
+                    return { success: true };
                 case 'getAdvancedReviewerSetting':
                     this.postMessage({
                         type: 'advancedReviewerSetting',
                         enabled: this._taskViewerProvider.handleGetAdvancedReviewerSetting()
                     });
-                    break;
+                    return { success: true };
                 case 'getLeadChallengeSetting':
                     this.postMessage({
                         type: 'leadChallengeSetting',
                         enabled: this._taskViewerProvider.handleGetLeadChallengeSetting()
                     });
-                    break;
+                    return { success: true };
 
 
                 case 'getAutoCommitOnCodeReviewSetting': {
@@ -734,43 +734,43 @@ export class SetupPanelProvider implements vscode.Disposable {
                         type: 'autoCommitOnCodeReviewSetting',
                         enabled: value
                     });
-                    break;
+                    return { success: true };
                 }
                 case 'getExcludeReviewedBacklogSetting':
                     this.postMessage({
                         type: 'excludeReviewedBacklogSetting',
                         enabled: this._taskViewerProvider.handleGetExcludeReviewedBacklogSetting()
                     });
-                    break;
+                    return { success: true };
                 case 'getPersistPanelsSetting': {
                     const pathConfig = this._seams().pathConfig;
                     const enabled = pathConfig.getConfigBoolean('persistPanels', false);
                     this.postMessage({ type: 'persistPanelsSetting', enabled });
-                    break;
+                    return { success: true };
                 }
                 case 'setExcludeReviewedBacklogSetting':
                     await this._taskViewerProvider.handleSetExcludeReviewedBacklogSetting(message.enabled);
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return { success: true };
                 case 'setPersistPanelsSetting': {
                     const pathConfig = this._seams().pathConfig;
                     const enabled = message.enabled === true;
                     await pathConfig.updateConfigGlobal('persistPanels', enabled);
                     this.postMessage({ type: 'persistPanelsSetting', enabled });
-                    break;
+                    return { success: true };
                 }
                 case 'getProtocolTarget': {
                     const pathConfig = this._seams().pathConfig;
                     const value = pathConfig.getConfigStringWithDefault('protocol.target', 'both');
                     this.postMessage({ type: 'protocolTarget', value });
-                    break;
+                    return { success: true };
                 }
                 case 'setProtocolTarget': {
                     const value = ['agents', 'claude', 'both'].includes(message.value) ? message.value : 'both';
                     const pathConfig = this._seams().pathConfig;
                     await pathConfig.updateConfigWorkspace('protocol.target', value);
                     this.postMessage({ type: 'protocolTarget', value });
-                    break;
+                    return { success: true };
                 }
 
                 case 'getStatusShowTerminalsSetting':
@@ -778,109 +778,109 @@ export class SetupPanelProvider implements vscode.Disposable {
                         type: 'statusShowTerminalsSetting',
                         enabled: this._taskViewerProvider.handleGetStatusShowTerminalsSetting()
                     });
-                    break;
+                    return { success: true };
                 case 'setStatusShowTerminalsSetting':
                     await this._taskViewerProvider.handleSetStatusShowTerminalsSetting(message.enabled);
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return { success: true };
                 case 'getStatusShowKanbanSetting':
                     this.postMessage({
                         type: 'statusShowKanbanSetting',
                         enabled: this._taskViewerProvider.handleGetStatusShowKanbanSetting()
                     });
-                    break;
+                    return { success: true };
                 case 'setStatusShowKanbanSetting':
                     await this._taskViewerProvider.handleSetStatusShowKanbanSetting(message.enabled);
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return { success: true };
                 case 'getStatusShowArtifactsSetting':
                     this.postMessage({
                         type: 'statusShowArtifactsSetting',
                         enabled: this._taskViewerProvider.handleGetStatusShowArtifactsSetting()
                     });
-                    break;
+                    return { success: true };
                 case 'setStatusShowArtifactsSetting':
                     await this._taskViewerProvider.handleSetStatusShowArtifactsSetting(message.enabled);
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return { success: true };
                 case 'getStatusShowDesignSetting':
                     this.postMessage({
                         type: 'statusShowDesignSetting',
                         enabled: this._taskViewerProvider.handleGetStatusShowDesignSetting()
                     });
-                    break;
+                    return { success: true };
                 case 'setStatusShowDesignSetting':
                     await this._taskViewerProvider.handleSetStatusShowDesignSetting(message.enabled);
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return { success: true };
                 case 'getStatusShowProjectSetting':
                     this.postMessage({
                         type: 'statusShowProjectSetting',
                         enabled: this._taskViewerProvider.handleGetStatusShowProjectSetting()
                     });
-                    break;
+                    return { success: true };
                 case 'setStatusShowProjectSetting':
                     await this._taskViewerProvider.handleSetStatusShowProjectSetting(message.enabled);
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return { success: true };
                 case 'getStatusShowMemoSetting':
                     this.postMessage({
                         type: 'statusShowMemoSetting',
                         enabled: this._taskViewerProvider.handleGetStatusShowMemoSetting()
                     });
-                    break;
+                    return { success: true };
                 case 'setStatusShowMemoSetting':
                     await this._taskViewerProvider.handleSetStatusShowMemoSetting(message.enabled);
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return { success: true };
                 case 'getMemoHotkey': {
                     const pathConfig = this._seams().pathConfig;
                     const hotkey = pathConfig.getConfigStringWithDefault('memo.hotkey', 'cmd+shift+alt+m');
                     this.postMessage({ type: 'memoHotkey', value: hotkey });
-                    break;
+                    return { success: true };
                 }
                 case 'saveMemoHotkey': {
                     const pathConfig = this._seams().pathConfig;
                     await pathConfig.updateConfigGlobal('memo.hotkey', message.value);
                     this.postMessage({ type: 'memoHotkeySaved' });
-                    break;
+                    return { success: true };
                 }
                 case 'openKeybindings':
                     await this._seams().commands.executeCommand('workbench.action.openGlobalKeybindings');
-                    break;
+                    return { success: true };
                 case 'getThemeSetting': {
                     const currentTheme = this._seams().pathConfig.getConfigStringWithDefault('theme.name', 'afterburner');
                     this.postMessage({ type: 'switchboardThemeNameSetting', theme: currentTheme });
-                    break;
+                    return { success: true };
                 }
                 case 'getCyberAnimationDisabledSetting':
                     this.postMessage({
                         type: 'cyberAnimationDisabledSetting',
                         enabled: this._taskViewerProvider.handleGetCyberAnimationDisabledSetting()
                     });
-                    break;
+                    return { success: true };
                 case 'setCyberAnimationDisabledSetting':
                     await this._taskViewerProvider.handleSetCyberAnimationDisabledSetting(message.enabled);
                     await this._taskViewerProvider.postSetupPanelState();
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return { success: true };
                 case 'getCyberScanlinesDisabledSetting':
                     this.postMessage({
                         type: 'cyberScanlinesDisabledSetting',
                         enabled: this._taskViewerProvider.handleGetCyberScanlinesDisabledSetting()
                     });
-                    break;
+                    return { success: true };
                 case 'setCyberScanlinesDisabledSetting':
                     await this._taskViewerProvider.handleSetCyberScanlinesDisabledSetting(message.enabled);
                     await this._taskViewerProvider.postSetupPanelState();
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return { success: true };
                 case 'getColourKanbanIconsSetting':
                     this.postMessage({
                         type: 'colourKanbanIconsSetting',
                         enabled: this._taskViewerProvider.handleGetColourKanbanIconsSetting()
                     });
-                    break;
+                    return { success: true };
                 case 'setColourKanbanIconsSetting':
                     await this._taskViewerProvider.handleSetColourKanbanIconsSetting(message.enabled);
                     this._taskViewerProvider.broadcastToWebviews({
@@ -889,18 +889,18 @@ export class SetupPanelProvider implements vscode.Disposable {
                     });
                     await this._taskViewerProvider.postSetupPanelState();
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return { success: true };
                 case 'getUltracodeAnimationSetting':
                     this.postMessage({
                         type: 'ultracodeAnimationSetting',
                         enabled: this._taskViewerProvider.handleGetUltracodeAnimationSetting()
                     });
-                    break;
+                    return { success: true };
                 case 'setUltracodeAnimationSetting':
                     await this._taskViewerProvider.handleSetUltracodeAnimationSetting(message.enabled);
                     await this._taskViewerProvider.postSetupPanelState();
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return { success: true };
 
                 case 'getDesignSystemDocSetting': {
                     const setting = this._taskViewerProvider.handleGetDesignSystemDocSetting();
@@ -909,35 +909,35 @@ export class SetupPanelProvider implements vscode.Disposable {
                         enabled: setting.enabled,
                         link: setting.link
                     });
-                    break;
+                    return { success: true };
                 }
                 case 'getGitIgnoreConfig': {
                     const config = this._taskViewerProvider.handleGetGitIgnoreConfig();
                     this.postMessage({ type: 'gitIgnoreConfig', ...config });
-                    break;
+                    return { success: true };
                 }
                 case 'getDefaultPromptOverrides': {
                     const overrides = await this._taskViewerProvider.handleGetDefaultPromptOverrides();
                     this.postMessage({ type: 'defaultPromptOverrides', overrides });
-                    break;
+                    return { success: true };
                 }
                 case 'updateGitIgnoreConfig':
                     await this._taskViewerProvider.handleSaveGitIgnoreConfig(message);
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return { success: true };
                 case 'saveDefaultPromptOverrides':
                     await this._taskViewerProvider.handleSaveDefaultPromptOverrides(message);
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return { success: true };
 
                 case 'updateKanbanStructure':
                     await this._taskViewerProvider.handleUpdateKanbanStructure(message.sequence);
-                    break;
+                    return { success: true };
                 case 'restoreKanbanDefaults':
                     await this._taskViewerProvider.handleRestoreKanbanDefaults();
                     await this._taskViewerProvider.postSetupPanelState();
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return { success: true };
                 case 'savePlanningSources': {
                     const sources = {
                         clickup: message.clickup === true,
@@ -950,45 +950,45 @@ export class SetupPanelProvider implements vscode.Disposable {
                     await pathConfig.updateConfigWorkspace('planning.enabledSources', sources);
                     this.postMessage({ type: 'planningSourcesSaved', success: true });
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return { success: true };
                 }
                 case 'getDefaultPromptPreviews': {
                     const previews = await this._taskViewerProvider.handleGetDefaultPromptPreviews();
                     this.postMessage({ type: 'defaultPromptPreviews', previews });
-                    break;
+                    return { success: true };
                 }
                 case 'getDbPath': {
                     const dbPath = await this._taskViewerProvider.handleGetDbPath();
                     this.postMessage({ type: 'dbPathUpdated', ...dbPath });
-                    break;
+                    return { success: true };
                 }
                 case 'getAllDbPaths': {
                     const allDbPaths = await this._taskViewerProvider.handleGetAllDbPaths();
                     this.postMessage({ type: 'allDbPathsUpdated', databases: allDbPaths });
-                    break;
+                    return { success: true };
                 }
                 case 'setLocalDb':
                     await this._taskViewerProvider.handleSetLocalDb(
                         typeof message.targetWorkspaceRoot === 'string' ? message.targetWorkspaceRoot : undefined
                     );
-                    break;
+                    return { success: true };
                 case 'setCustomDbPath':
                     await this._taskViewerProvider.handleSetCustomDbPath(
                         message.path,
                         typeof message.targetWorkspaceRoot === 'string' ? message.targetWorkspaceRoot : undefined
                     );
-                    break;
+                    return { success: true };
                 case 'setPresetDbPath':
                     await this._taskViewerProvider.handleSetPresetDbPath(
                         message.preset,
                         typeof message.targetWorkspaceRoot === 'string' ? message.targetWorkspaceRoot : undefined
                     );
-                    break;
+                    return { success: true };
                 case 'resetDatabase':
                     await this._taskViewerProvider.handleResetDatabase(
                         typeof message.targetWorkspaceRoot === 'string' ? message.targetWorkspaceRoot : undefined
                     );
-                    break;
+                    return { success: true };
                 case 'getPlanningSources': {
                     // NOTE: intentionally folder-scoped — this setting is per-project, not shared across workspaces
                     const pathConfig = this._seams().pathConfig;
@@ -1002,7 +1002,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         type: 'planningSources',
                         sources: enabledSources
                     });
-                    break;
+                    return { success: true };
                 }
                 case 'getWorkspaceMappings': {
                     const workspaceRoot = this._getCurrentWorkspaceRoot();
@@ -1030,7 +1030,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         ...mappings,
                         warnings
                     });
-                    break;
+                    return { success: true };
                 }
                 case 'setWorkspaceMappingEnabled': {
                     const enabled = typeof message.enabled === 'boolean' ? message.enabled : false;
@@ -1067,7 +1067,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     });
                     await this._seams().commands.executeCommand('switchboard.mappingsChanged');
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return { success: true };
                 }
                 case 'saveWorkspaceMappings': {
                     const incoming = message.payload as { enabled?: boolean; mappings?: any[] };
@@ -1123,7 +1123,7 @@ export class SetupPanelProvider implements vscode.Disposable {
  
                     if (errors.length) {
                         this.postMessage({ type: 'workspaceMappingStatus', ok: false, error: errors.join('\n') });
-                        break;
+                        return { success: true };
                     }
  
                     // Write to DB
@@ -1145,13 +1145,13 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this.postMessage({ type: 'workspaceMappingStatus', ok: true });
                     await this._seams().commands.executeCommand('switchboard.mappingsChanged');
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    break;
+                    return { success: true };
                 }
                 case 'initializeWorkspaceDatabase': {
                     const parentFolder = String(message.parentFolder || '').trim();
                     if (!parentFolder) {
                         this.postMessage({ type: 'workspaceMappingInitResult', ok: false, error: 'Parent folder is required.' });
-                        break;
+                        return { success: true };
                     }
                     const expandHome = (p: string): string => {
                         const trimmed = p.trim();
@@ -1164,7 +1164,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         await fs.promises.access(resolvedParent, fs.constants.W_OK);
                     } catch {
                         this.postMessage({ type: 'workspaceMappingInitResult', ok: false, error: `Parent folder is not writable: ${resolvedParent}` });
-                        break;
+                        return { success: true };
                     }
                     const derivedDbPath = path.join(resolvedParent, '.switchboard', 'kanban.db');
  
@@ -1172,7 +1172,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     const childFolders = workspaceFolders.map((f: string) => path.resolve(expandHome(f)));
                     if (childFolders.includes(resolvedParent)) {
                         this.postMessage({ type: 'workspaceMappingInitResult', ok: false, error: 'Parent folder cannot also be a child workspace folder.' });
-                        break;
+                        return { success: true };
                     }
 
  
@@ -1182,7 +1182,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         const created = await db.createIfMissing();
                         if (!created) {
                             this.postMessage({ type: 'workspaceMappingInitResult', ok: false, error: 'Failed to create database. Check permissions and try again.' });
-                            break;
+                            return { success: true };
                         }
                         // Save the mapping config with dbPath pre-filled
                         // Read current mappings from DB (source of truth), not VS Code config
@@ -1232,7 +1232,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         const errorMessage = error instanceof Error ? error.message : String(error);
                         this.postMessage({ type: 'workspaceMappingInitResult', ok: false, error: errorMessage });
                     }
-                    break;
+                    return { success: true };
                 }
                 case 'browseWorkspaceMappingDbPath': {
                     const fileUri = await this._seams().ui.showOpenDialog({
@@ -1249,7 +1249,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                             mappingId: message.mappingId
                         });
                     }
-                    break;
+                    return { success: true };
                 }
                 case 'browseWorkspaceMappingFolder': {
                     const folderUri = await this._seams().ui.showOpenDialog({
@@ -1265,7 +1265,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                             mappingId: message.mappingId
                         });
                     }
-                    break;
+                    return { success: true };
                 }
 
                 case 'browseParentFolder': {
@@ -1286,7 +1286,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                             existingDbDetected
                         });
                     }
-                    break;
+                    return { success: true };
                 }
                 case 'browseTicketsFolder': {
                     const provider = message.provider;
@@ -1303,7 +1303,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                             path: folderUri[0]
                         });
                     }
-                    break;
+                    return { success: true };
                 }
                 case 'saveTicketsFolder': {
                     const provider = message.provider;
@@ -1319,11 +1319,11 @@ export class SetupPanelProvider implements vscode.Disposable {
                             ticketsAutoSync: await GlobalIntegrationConfigService.getTicketsAutoSync()
                         });
                     }
-                    break;
+                    return { success: true };
                 }
                 case 'saveTicketsAutoSync': {
                     await GlobalIntegrationConfigService.setTicketsAutoSync(message.enabled === true);
-                    break;
+                    return { success: true };
                 }
                 case 'listTicketsFolders': {
                     const clickupConfig = await GlobalIntegrationConfigService.loadConfig('clickup');
@@ -1341,47 +1341,47 @@ export class SetupPanelProvider implements vscode.Disposable {
                         path: linearConfig?.ticketSaveLocation || '',
                         ticketsAutoSync
                     });
-                    break;
+                    return { success: true };
                 }
                 // ── Remote Control (§10) — delegated to KanbanProvider ─────────
                 case 'getRemoteConfig': {
                     const payload = await this._kanbanProvider?.remoteGetConfigPayload(message.workspaceRoot);
                     if (payload) { this.postMessage(payload); }
-                    break;
+                    return { success: true };
                 }
                 case 'setRemoteConfig': {
                     const payload = await this._kanbanProvider?.remoteSetConfig(message.workspaceRoot, message.config);
                     if (payload) { this.postMessage(payload); }
-                    break;
+                    return { success: true };
                 }
                 case 'runNotionRemoteSetup': {
                     if (!this._kanbanProvider) {
                         this.postMessage({ type: 'notionRemoteSetupResult', success: false, error: 'Kanban provider unavailable' });
-                        break;
+                        return { success: true };
                     }
                     const result = await this._kanbanProvider.remoteRunNotionSetup(message.workspaceRoot);
                     this.postMessage({ type: 'notionRemoteSetupResult', ...result });
-                    break;
+                    return { success: true };
                 }
                 case 'startRemoteControl': {
                     const active = (await this._kanbanProvider?.remoteStart(message.workspaceRoot)) === true;
                     this.postMessage({ type: 'remoteControlState', active });
-                    break;
+                    return { success: true };
                 }
                 case 'stopRemoteControl': {
                     const active = this._kanbanProvider?.remoteStop(message.workspaceRoot) === true;
                     this.postMessage({ type: 'remoteControlState', active });
-                    break;
+                    return { success: true };
                 }
                 case 'getRemoteHealth': {
                     const payload = await this._kanbanProvider?.remoteGetHealthPayload(message.workspaceRoot);
                     if (payload) { this.postMessage(payload); }
-                    break;
+                    return { success: true };
                 }
                 case 'copyLinearAgentSkill': {
                     if (!this._kanbanProvider) {
                         this.postMessage({ type: 'linearAgentSkillText', text: null, error: 'Kanban provider unavailable' });
-                        break;
+                        return { success: true };
                     }
                     const result = await this._kanbanProvider.remoteBuildLinearAgentSkillText(message.workspaceRoot);
                     this.postMessage({
@@ -1389,20 +1389,20 @@ export class SetupPanelProvider implements vscode.Disposable {
                         text: result.text || null,
                         error: result.error,
                     });
-                    break;
+                    return { success: true };
                 }
                 case 'getAgentDirCleanupState': {
                     const state = await this._getAgentDirCleanupState();
                     this.postMessage({ type: 'agentDirCleanupState', ...state });
-                    break;
+                    return { success: true };
                 }
                 case 'performAgentDirCleanup': {
                     const result = await this._performAgentDirCleanup();
                     this.postMessage({ type: 'agentDirCleanupResult', ...result });
-                    break;
+                    return { success: true };
                 }
                 default:
-                    break;
+                    return { success: true };
             }
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
