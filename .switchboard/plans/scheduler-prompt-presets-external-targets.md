@@ -47,11 +47,14 @@ Reviewer must confirm the `reconcile` prompt's forward-only semantics and the `c
 - `plan://scheduler-local-execution-engine` — consumes the `board-batch`/`reconcile`/`custom` builders via the `job.source` dispatch.
 - `plan://scheduler-ui-replace-comms-tab` — renders the prerequisites blocks and wires the "Copy prompt" action.
 
+## Resolved Assumptions
+
+- **Antigravity scheduling feature (confirmed by user, 2026-07-21).** The tool is `schedule` (referred to as Timers & Schedules / Timer/Cron Notifications in docs/UI). It handles one-shot timers (`DurationSeconds`) and recurring cron jobs (`CronExpression`). "Scheduled Tasks" is functionally accurate as a user-facing label. UI location: the AUTOMATION tab (or Tasks / Background Notifications management section) in the Antigravity sidebar. `schedule` returns a Task ID (`timer-xxx` / `task-xxx`); `manage_task` with `Action="kill"` and that TaskId immediately cancels the active timer/recurring cron, prevents pending notifications and future cron iterations, and terminates the recurring-cron background runner cleanly. Plan 3's "honesty fix" wording ("Paste into Antigravity → Scheduled Tasks; set the recurrence there") holds; the prerequisites block may optionally name the `schedule` tool for advanced users.
+
 ## Uncertain Assumptions
 
-The following are external platform claims not verifiable from this repo. The user was advised to run web research to confirm them before implementation.
+The following external platform claim is not verifiable from this repo. The user was advised to run web research to confirm it before implementation.
 
-- **Antigravity has a "Scheduled Tasks" feature** that owns recurrence and that `manage_task` interacts with. The plan's "honesty fix" assumes this feature exists by that name and that the user can paste a prompt into it.
 - **Claude cowork/routine cloud jobs floor at ~1 poll/hour.** The plan uses this to justify restricting `cloud` to board-automation (not sub-hourly comms) and to set the `cloud` interval floor at ≥ 60 min.
 
 ## Adversarial Synthesis
