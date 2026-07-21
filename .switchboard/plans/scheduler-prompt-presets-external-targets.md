@@ -13,25 +13,71 @@ Give the scheduler its **source presets** (board-batch, reconciliation, comms, c
 
 **Reconciliation is a prompt, not a subsystem.** Because plan files are git-tracked (`.gitignore` un-ignores `.switchboard/plans/`), a cloud/off-machine agent writes its results into the standard `## Completion Report` / `## Review Findings` sections and commits. Reconciliation is then just a copyable IDE-agent prompt that pulls recent branches, scans those sections, and advances cards **via the sanctioned `kanban_operations` skill** (`move-card.js` / `POST /kanban/move`) — never raw SQL, which strands cards (per CLAUDE.md).
 
-## Implementation Steps
-
-1. **Source preset builders.** Add a prompt builder per `source`:
-   - `board-batch` — the existing Antigravity batch prompt, generalized out of `generateAntigravityPrompt`/[KanbanProvider.ts:5000](src/services/KanbanProvider.ts#L5000) so it is target-agnostic (agent + column + batchSize inputs).
-   - `reconcile` — **new authored prompt**: "fetch recent remote branches → pull → scan pulled plan files under `.switchboard/plans/` for new `## Completion Report` / `## Review Findings` → for each, move the card **forward-only** via the `kanban_operations` skill → report what moved and skip cards a human already advanced."
-   - `comms` — the existing read-only comms builder (from plan 2).
-   - `custom` — free-text `promptOverride`.
-2. **Target contracts.** For each `target`, define: interval floor (`local` = 1 min, `cloud` ≥ 60 min, `antigravity` = n/a/handoff), and a **prerequisites block** shown to the user:
-   - `antigravity` — "Paste into **Antigravity → Scheduled Tasks**; set the recurrence there. Switchboard does not run this timer." (the honesty fix).
-   - `cloud` — "Requires `boardStateExport = read-only-snapshot` (Setup) and an `origin` remote so the cloud job can read `board.json` from the `switchboard/board` branch. Read-only jobs need nothing else; card moves happen when you next reconcile locally."
-   - `local-terminal` — "Runs in an interactive Claude terminal on this machine; the laptop must be on. Supports sub-hourly intervals."
-3. **Export/copy path.** For `antigravity`/`cloud` targets, wire a "Copy prompt" action that returns the built prompt **plus** the prerequisites block, reusing the existing clipboard round-trip used by `generateAntigravityPrompt` ([KanbanProvider.ts](src/services/KanbanProvider.ts) message `antigravityPrompt`). Rename/generalize the message to `schedulerPrompt` with a `target` discriminator; keep the old message name as a shim.
-4. **Retire the confusing copy.** Update the `antigravity-batch` mode description so it no longer says "run manually as needed" without context — it now points at Antigravity Scheduled Tasks (or is fully absorbed into the Scheduler UI in plan 4).
-5. **Docs.** Add a short "Scheduler targets & prerequisites" note to the switchboard-site Remote Control / Cloud Coding Agents pages, cross-linking the existing `switchboard/board` snapshot mechanism. Docs only; no new hosting path.
-
 ## Metadata
 
 - **Complexity:** 5
 - **Tags:** backend, feature, docs
+
+## User Review Required
+
+Reviewer must confirm the `reconcile` prompt's forward-only semantics and the `cloud` target's prerequisites block wording before the docs/UI (plan 4) ship them to users. The Antigravity "Scheduled Tasks" feature name and the cloud ~1-poll/hour floor are external platform claims — see Uncertain Assumptions.
+
+## Complexity Audit
+
+### Routine
+- Generalizing the existing `generateAntigravityPrompt` / `KanbanProvider.ts:5000` batch prompt into a target-agnostic `board-batch` builder (agent + column + batchSize inputs).
+- Reusing the existing clipboard round-trip (`antigravityPrompt` message) for the new `schedulerPrompt` message with a `target` discriminator; keeping the old message name as a shim.
+- Docs note on the switchboard-site Remote Control / Cloud Coding Agents pages.
+
+### Complex / Risky
+- **The `reconcile` prompt is a new authored prompt that drives `kanban_operations`.** It must be forward-only, idempotent, and skip cards a human already advanced — a wrong prompt silently moves cards backward or double-advances.
+- **Target contract correctness.** Each target's prerequisites block must name the *actual* prerequisites (e.g. `cloud` requires `boardStateExport = read-only-snapshot` AND an `origin` remote). A wrong block sends users into a broken setup.
+- **Backward-compat of the `antigravityPrompt` message.** Existing callers (the `antigravity-batch` mode) must keep working until plan 4 removes/aliases the mode.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** None new — external targets emit a prompt; the external scheduler owns recurrence. The `reconcile` prompt runs in an IDE agent, not Switchboard's process.
+- **Security:** The `reconcile` prompt instructs the agent to use `kanban_operations` (the sanctioned path), never raw SQL. This is a security/correctness guardrail — raw SQL strands cards (per CLAUDE.md) and bypasses the move-card.js side-effects.
+- **Side Effects:** The `board-batch` builder output must be byte-identical to the current `generateAntigravityPrompt` output for the same inputs (snapshot test) — any drift changes the existing antigravity-batch behavior silently.
+- **Dependencies & Conflicts:** Owns the prompt builders and the target contracts. Plan 2's `job.source` dispatch consumes the builders. Plan 4's UI renders the prerequisites blocks and the "Copy prompt" action. The `antigravity-batch` automation mode ([:107](src/services/autobanState.ts#L107)) is retired in plan 4; this plan only generalizes its prompt and adds the honesty-fix copy.
+
+## Dependencies
+
+- `plan://scheduler-job-data-model` — provides the `source` / `target` union values.
+- `plan://scheduler-local-execution-engine` — consumes the `board-batch`/`reconcile`/`custom` builders via the `job.source` dispatch.
+- `plan://scheduler-ui-replace-comms-tab` — renders the prerequisites blocks and wires the "Copy prompt" action.
+
+## Uncertain Assumptions
+
+The following are external platform claims not verifiable from this repo. The user was advised to run web research to confirm them before implementation.
+
+- **Antigravity has a "Scheduled Tasks" feature** that owns recurrence and that `manage_task` interacts with. The plan's "honesty fix" assumes this feature exists by that name and that the user can paste a prompt into it.
+- **Claude cowork/routine cloud jobs floor at ~1 poll/hour.** The plan uses this to justify restricting `cloud` to board-automation (not sub-hourly comms) and to set the `cloud` interval floor at ≥ 60 min.
+
+## Adversarial Synthesis
+
+**Risk Summary:** Key risks: (1) the `reconcile` prompt silently moving cards backward or double-advancing; (2) the `board-batch` builder drifting from the current `generateAntigravityPrompt` output and changing existing behavior; (3) the `cloud` prerequisites block omitting a real prerequisite (e.g. branch-protection, PAT scope) and sending users into a broken setup. Mitigations: a snapshot test pinning `board-batch` output to the current output, a unit test asserting the `reconcile` prompt contains the forward-only + `kanban_operations` (no-SQL) instructions, and a unit test asserting the `cloud` block names `read-only-snapshot` + `origin`.
+
+## Proposed Changes
+
+### `src/services/KanbanProvider.ts` (prompt builders + message handler)
+- **Context:** Generalize `generateAntigravityPrompt` (around [:5000](src/services/KanbanProvider.ts#L5000)) and the `antigravityPrompt` message.
+- **Logic:**
+  - Extract the batch-prompt body into a target-agnostic `buildBoardBatchPrompt({ agent, column, batchSize })` function.
+  - Add `buildReconcilePrompt()` — authored text: "fetch recent remote branches → pull → scan pulled plan files under `.switchboard/plans/` for new `## Completion Report` / `## Review Findings` → for each, move the card **forward-only** via the `kanban_operations` skill → report what moved and skip cards a human already advanced."
+  - Add `buildCommsPrompt()` (moved from plan 2's comms builder location) and `buildCustomPrompt(job)` (free-text `promptOverride`).
+  - Add a `targetContracts` record: for each `target`, the interval floor (`local-terminal` = 1 min, `cloud` ≥ 60 min, `antigravity` = n/a/handoff) and the prerequisites block text.
+  - Rename/generalize the `antigravityPrompt` message to `schedulerPrompt` with a `target` discriminator; keep `antigravityPrompt` as a shim that calls `schedulerPrompt` with `target: 'antigravity'`.
+- **Implementation:** The `board-batch` builder MUST produce byte-identical output to the current `generateAntigravityPrompt` for the same inputs (snapshot test guards this).
+- **Edge Cases:** `antigravity` target with no workspace id → return the existing "No workspace ID found" error ([:4992](src/services/KanbanProvider.ts#L4992)).
+
+### `src/services/TaskViewerProvider.ts` (copy path)
+- **Context:** Wire the "Copy prompt" action for external targets.
+- **Logic:** For `antigravity`/`cloud` targets, the "Copy prompt" action returns the built prompt **plus** the prerequisites block, reusing the existing clipboard round-trip. Update the `antigravity-batch` mode description ([:8878](src/services/TaskViewerProvider.ts#L8878)) so it no longer says "run manually as needed" without context — it now points at Antigravity Scheduled Tasks (or is fully absorbed into the Scheduler UI in plan 4).
+
+### `switchboard-site` docs (Remote Control / Cloud Coding Agents pages)
+- **Context:** Cross-link the existing `switchboard/board` snapshot mechanism.
+- **Logic:** Add a short "Scheduler targets & prerequisites" note. Docs only; no new hosting path.
 
 ## Verification Plan
 
@@ -39,9 +85,14 @@ Give the scheduler its **source presets** (board-batch, reconciliation, comms, c
 - Unit test: `board-batch` builder output is identical (snapshot) to the current `generateAntigravityPrompt` output for the same agent/column/batchSize.
 - Unit test: `reconcile` prompt contains the forward-only + `kanban_operations` (no-SQL) instructions.
 - Unit test: each target returns the correct interval floor and a non-empty prerequisites block; `cloud` names the `read-only-snapshot` + `origin` requirement.
+- Unit test: the `antigravityPrompt` shim produces the same output as `schedulerPrompt` with `target: 'antigravity'`.
 
 ### Manual Acceptance
 - Select `antigravity` target → copied text includes explicit "schedule via Antigravity Scheduled Tasks" instructions (the honesty fix is visible).
 - Select `cloud` target with `board-batch` → copied prompt is self-contained and the prerequisites block names board-state-export + origin.
 - Paste the `reconcile` prompt into an IDE agent after a cloud branch is merged: it pulls, detects a `## Completion Report`, and moves that card forward via `kanban_operations` (verify the card moved and no SQL was used).
 - Confirm no Linear/Notion/ClickUp configuration is required for any of the above.
+
+## Routing
+
+**Complexity 5 → Send to Coder.** Mostly extraction + new authored text + a message shim; the only moderate risk is the `reconcile` prompt semantics, guarded by a unit test on its contents.
