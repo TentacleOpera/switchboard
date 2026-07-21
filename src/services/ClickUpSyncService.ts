@@ -41,6 +41,7 @@ export interface ClickUpConfig {
   selectedFolderId: string;
   selectedFolderName: string;
   deleteSyncEnabled?: boolean;   // default: false — delete ClickUp task when plan is deleted
+  inboundDeleteEnabled?: boolean; // default: false — tombstone local plan when ClickUp task is deleted (provider-sync inbound-delete)
   completeSyncEnabled?: boolean; // default: false — sync completed status to ClickUp
   excludeBacklog?: boolean;      // default: false — exclude tasks with 'backlog' status from sync
   ticketSaveLocation?: string;   // base dir for local ticket .md files (set via Setup / migration)
@@ -318,6 +319,9 @@ export class ClickUpSyncService {
       deleteSyncEnabled: raw.deleteSyncEnabled === undefined
         ? false   // Default false — require explicit opt-in
         : raw.deleteSyncEnabled === true,
+      inboundDeleteEnabled: raw.inboundDeleteEnabled === undefined
+        ? false   // Default false — require explicit opt-in (provider-sync inbound-delete)
+        : raw.inboundDeleteEnabled === true,
       completeSyncEnabled: raw.completeSyncEnabled === undefined
         ? true   // §4 migration — the flag was a no-op before, so sync was effectively
                  // unconditional. Defaulting undefined → true preserves that behavior for

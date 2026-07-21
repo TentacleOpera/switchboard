@@ -31,6 +31,7 @@ export interface LinearConfig {
   pullIntervalMinutes: AutoPullIntervalMinutes;
   automationRules: LinearAutomationRule[];
   deleteSyncEnabled?: boolean;  // default: false — archive Linear issue when plan is deleted (opt-in)
+  inboundDeleteEnabled?: boolean;  // default: false — tombstone local plan when Linear issue is deleted (provider-sync inbound-delete)
   completeSyncEnabled?: boolean;  // default: true — sync completed status to Linear
   excludeBacklog?: boolean;  // default: true — exclude backlog issues from sync
   selectedProjectName: string;  // Persisted project picker value for sidebar filter
@@ -246,6 +247,9 @@ export class LinearSyncService {
       deleteSyncEnabled: raw.deleteSyncEnabled === undefined
         ? false  // Changed from (raw.setupComplete === true) — require explicit opt-in for ALL users
         : raw.deleteSyncEnabled === true,
+      inboundDeleteEnabled: raw.inboundDeleteEnabled === undefined
+        ? false  // Default false — require explicit opt-in (provider-sync inbound-delete)
+        : raw.inboundDeleteEnabled === true,
       completeSyncEnabled: raw.completeSyncEnabled !== false,  // default true
       excludeBacklog: raw.excludeBacklog !== false,  // default true — exclude backlog issues
       selectedProjectName: raw.selectedProjectName || '',  // normalize missing/undefined to empty string

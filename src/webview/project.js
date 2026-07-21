@@ -50,6 +50,8 @@
                 vscode.postMessage({ type: 'loadConstitutionFiles' });
             } else if (activeTab === 'tuning') {
                 vscode.postMessage({ type: 'loadInsights', workspaceRoot: tuningWorkspaceFilter ? tuningWorkspaceFilter.value : '' });
+            } else if (activeTab === 'memo') {
+                vscode.postMessage({ type: 'memoLoad', workspaceRoot: getProjectsTabWorkspaceRoot() });
             }
 
         });
@@ -210,7 +212,6 @@
     const kanbanProjectFilter = document.getElementById('kanban-project-filter');
     const kanbanColumnFilter = document.getElementById('kanban-column-filter');
     const kanbanComplexityFilter = document.getElementById('kanban-complexity-filter');
-    const kanbanSearch = document.getElementById('kanban-search');
     const btnImportKanbanPlans = document.getElementById('btn-import-kanban-plans');
     const btnCreateKanbanPlan = document.getElementById('btn-create-kanban-plan');
     const btnChatCopyPrompt = document.getElementById('btn-chat-copy-prompt');
@@ -382,7 +383,7 @@
 
 
     const kanbanFilters = { column: '', workspaceRoot: '', project: '', search: '', complexity: '' };
-    const featuresFilters = { workspaceRoot: '', column: '', project: '' };
+    const featuresFilters = { workspaceRoot: '', column: '', project: '', search: '' };
     const projectsFilters = { workspaceRoot: '' };
 
     // Initialize Webview Content
@@ -649,6 +650,7 @@
                     featuresFilters.workspaceRoot = '';
                     featuresFilters.column = '';
                     featuresFilters.project = '';
+                    featuresFilters.search = '';
                     if (featuresWorkspaceFilter) featuresWorkspaceFilter.value = '';
                     if (featuresColumnFilter) featuresColumnFilter.value = '';
                     if (featuresProjectFilter) featuresProjectFilter.value = '';
@@ -695,7 +697,6 @@
                 // list before the Review Plan target scrolls into view, so it would hijack every
                 // navigation to whatever's typed. Wipe it so the target card is the one shown.
                 kanbanFilters.search = '';
-                if (kanbanSearch) kanbanSearch.value = '';
 
                 // Activate the Kanban tab — its click handler fires fetchKanbanPlans.
                 const kanbanTabBtn = document.querySelector('.shared-tab-btn[data-tab="kanban"]');
@@ -1162,11 +1163,88 @@
                 break;
             }
 
+            // ─── Memo (relocated from implementation.html — Feature: Headless Browser UI) ──
+            case 'memoContent': {
+                const textarea = document.getElementById('memo-textarea');
+                if (textarea) {
+                    const isFocused = document.activeElement === textarea;
+                    if (isFocused || _memoDirty) {
+                        break;
+                    }
+                    textarea.value = typeof msg.content === 'string' ? msg.content : '';
+                }
+                break;
+            }
+            case 'memoPromptResult': {
+                const statusEl = document.getElementById('memo-status');
+                if (statusEl) statusEl.textContent = msg.message || '';
+                break;
+            }
+            case 'memoError': {
+                const statusEl = document.getElementById('memo-status');
+                if (statusEl) { statusEl.textContent = msg.message || 'Memo error'; }
+                break;
+            }
+
 
 
 
         }
     });
+
+    // ─── Memo tab wiring (relocated from implementation.html) ────────────────
+    // Capture/autosave/clear/Copy Prompt are non-terminal and work in both
+    // hosts. "Send to Planner" dispatches to a planner terminal in the
+    // extension; headless (hostCapabilities.terminalDispatch === false) the
+    // backend degrades send→copy so the button never dead-clicks. The
+    // affordance is hidden via CSS when terminalDispatch is false (see
+    // transport.js capability gating) — but it stays clickable in the
+    // extension, so we keep the handler live here.
+    let _memoDirty = false;
+    let _memoSaveTimer = null;
+    function _debouncedMemoSave() {
+        _memoDirty = true;
+        if (_memoSaveTimer) clearTimeout(_memoSaveTimer);
+        _memoSaveTimer = setTimeout(() => {
+            const content = document.getElementById('memo-textarea')?.value || '';
+            vscode.postMessage({ type: 'memoSave', content, workspaceRoot: getProjectsTabWorkspaceRoot() });
+            _memoDirty = false;
+            const statusEl = document.getElementById('memo-status');
+            if (statusEl) { statusEl.textContent = 'Saved'; setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 1500); }
+        }, 800);
+    }
+    const _memoTextarea = document.getElementById('memo-textarea');
+    if (_memoTextarea) { _memoTextarea.addEventListener('input', _debouncedMemoSave); }
+    const _memoClearBtn = document.getElementById('memo-clear-btn');
+    if (_memoClearBtn) {
+        _memoClearBtn.addEventListener('click', () => {
+            const textarea = document.getElementById('memo-textarea');
+            if (textarea) textarea.value = '';
+            if (_memoSaveTimer) clearTimeout(_memoSaveTimer);
+            _memoDirty = false;
+            vscode.postMessage({ type: 'memoClear', workspaceRoot: getProjectsTabWorkspaceRoot() });
+            const statusEl = document.getElementById('memo-status');
+            if (statusEl) statusEl.textContent = 'Cleared';
+        });
+    }
+    const _memoCopyBtn = document.getElementById('memo-copy-btn');
+    if (_memoCopyBtn) {
+        _memoCopyBtn.addEventListener('click', () => {
+            if (_memoSaveTimer) clearTimeout(_memoSaveTimer);
+            _memoDirty = false;
+            const content = document.getElementById('memo-textarea')?.value || '';
+            vscode.postMessage({ type: 'memoGeneratePrompt', content, action: 'copy', workspaceRoot: getProjectsTabWorkspaceRoot() });
+        });
+    }
+    const _memoSendBtn = document.getElementById('memo-send-btn');
+    if (_memoSendBtn) {
+        _memoSendBtn.addEventListener('click', () => {
+            if (_memoSaveTimer) clearTimeout(_memoSaveTimer);
+            _memoDirty = false;
+            const content = document.getElementById('memo-textarea')?.value || '';
+            vscode.postMessage({ type: 'memoGeneratePrompt', content, action: 'send', workspaceRoot: getProjectsTabWorkspaceRoot() });
+        });
+    }
 
     // Ready-handshake: signal the extension host that the message listener is
     // registered. The host queues outbound messages until this arrives so that
@@ -1580,6 +1658,37 @@
         toggleBtn.addEventListener('click', toggleSidebarCollapsed);
         toggleRow.appendChild(toggleBtn);
         kanbanListPane.appendChild(toggleRow);
+
+        // Search row — rendered as a sibling of the toggle row so the existing
+        // `.content-row.collapsed #kanban-list-pane > *:not(.sidebar-toggle-row)`
+        // rule hides it when the sidebar is collapsed. Re-created on each render
+        // (the pane is rebuilt via innerHTML = '' above); value is restored from
+        // kanbanFilters.search so re-renders do not lose the user's typed term.
+        const searchRow = document.createElement('div');
+        searchRow.className = 'sidebar-search-row';
+        const searchInput = document.createElement('input');
+        searchInput.type = 'text';
+        searchInput.className = 'sidebar-search-input';
+        searchInput.placeholder = 'Search plans...';
+        searchInput.value = kanbanFilters.search || '';
+        searchInput.addEventListener('input', () => {
+            clearTimeout(kanbanSearchTimeout);
+            kanbanSearchTimeout = setTimeout(() => {
+                kanbanFilters.search = searchInput.value;
+                renderKanbanPlans();
+                // Re-focus the freshly-attached input and place the caret at the
+                // end — renderKanbanPlans() destroyed the input this listener was
+                // registered on, so we must query the new one from the pane.
+                const newInput = kanbanListPane.querySelector('.sidebar-search-input');
+                if (newInput) {
+                    newInput.focus();
+                    const len = newInput.value.length;
+                    newInput.setSelectionRange(len, len);
+                }
+            }, 200);
+        });
+        searchRow.appendChild(searchInput);
+        kanbanListPane.appendChild(searchRow);
 
         if (filtered.length === 0) {
             const emptyState = document.createElement('div');
@@ -2132,15 +2241,7 @@
         });
     }
     let kanbanSearchTimeout;
-    if (kanbanSearch) {
-        kanbanSearch.addEventListener('input', () => {
-            clearTimeout(kanbanSearchTimeout);
-            kanbanSearchTimeout = setTimeout(() => {
-                kanbanFilters.search = kanbanSearch.value;
-                renderKanbanPlans();
-            }, 200);
-        });
-    }
+    let featuresSearchTimeout;
 
     // =========================================================================
     // FEATURES TAB
@@ -2165,6 +2266,10 @@
                 filtered = filtered.filter(plan => plan.project === featuresFilters.project);
             }
         }
+        if (featuresFilters.search) {
+            const searchLower = featuresFilters.search.toLowerCase();
+            filtered = filtered.filter(plan => plan.topic.toLowerCase().includes(searchLower));
+        }
 
         featuresListPane.innerHTML = '';
 
@@ -2178,6 +2283,33 @@
         toggleBtn.addEventListener('click', toggleSidebarCollapsed);
         toggleRow.appendChild(toggleBtn);
         featuresListPane.appendChild(toggleRow);
+
+        // Search row — mirrors the kanban sidebar search row. Re-created on each
+        // render; value restored from featuresFilters.search. Uses a SEPARATE
+        // debounce timer (featuresSearchTimeout) so a features keystroke cannot
+        // cancel a pending kanban re-render (and vice versa).
+        const featuresSearchRow = document.createElement('div');
+        featuresSearchRow.className = 'sidebar-search-row';
+        const featuresSearchInput = document.createElement('input');
+        featuresSearchInput.type = 'text';
+        featuresSearchInput.className = 'sidebar-search-input';
+        featuresSearchInput.placeholder = 'Search features...';
+        featuresSearchInput.value = featuresFilters.search || '';
+        featuresSearchInput.addEventListener('input', () => {
+            clearTimeout(featuresSearchTimeout);
+            featuresSearchTimeout = setTimeout(() => {
+                featuresFilters.search = featuresSearchInput.value;
+                renderFeaturesList();
+                const newInput = featuresListPane.querySelector('.sidebar-search-input');
+                if (newInput) {
+                    newInput.focus();
+                    const len = newInput.value.length;
+                    newInput.setSelectionRange(len, len);
+                }
+            }, 200);
+        });
+        featuresSearchRow.appendChild(featuresSearchInput);
+        featuresListPane.appendChild(featuresSearchRow);
 
         if (filtered.length === 0) {
             const emptyState = document.createElement('div');

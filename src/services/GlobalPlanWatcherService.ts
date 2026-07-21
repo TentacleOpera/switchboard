@@ -1,367 +1,266 @@
+/**
+ * GlobalPlanWatcherService — VS Code adapter over the host-agnostic
+ * `PlanIngestionEngine` (Headless Ingestion piece 1).
+ *
+ * The engine holds all ingestion logic; this class is a thin shell that:
+ *   - constructs the engine with a VS Code-backed `PlanIngestionHost` seam,
+ *   - preserves the pre-extraction public API (`initialize`,
+ *     `setFeatureColumnRecomputer`, `setFeatureFileRegenerator`,
+ *     `registerPendingCreation`, `registerRename`, `refreshWatchers`,
+ *     `triggerScan`, `runPurgeSweep`, `isGitOpActive`, `onPlanDiscovered`,
+ *     `dispose`) so `extension.ts` is essentially untouched,
+ *   - re-exposes the `onPlanDiscovered` vscode.Event<{uri, workspaceRoot}>
+ *     shape the extension consumers (KanbanProvider, ContinuousSyncService,
+ *     OversightPassService) already depend on.
+ *
+ * Behaviour is byte-stable with the pre-extraction watcher — the engine does
+ * the work, the adapter only supplies vscode watchers/config/logger/roots and
+ * bridges the discovered-plan event back into a vscode.Uri shape.
+ */
 
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { v4 as uuidv4 } from 'uuid';
-import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord } from './KanbanDatabase';
-import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (is_feature clobber) — remove with the probes
-import { parsePlanMetadata, extractClickUpTaskId, extractLinearIssueId } from './planMetadataUtils';
-import { isRuntimeMirrorPlanFile } from './PlanFileImporter';
+import {
+    PlanIngestionEngine,
+    expandHome,
+    type PlanIngestionHost,
+    type PlanIngestionHostConfig,
+    type PlanIngestionWatcher,
+    type PlanIngestionWatchHandle,
+    type PlanIngestionWatchEvent,
+    type PlanIngestionEnvironmentChange,
+} from './PlanIngestionEngine';
 import type { ClickUpSyncService } from './ClickUpSyncService';
 import type { LinearSyncService } from './LinearSyncService';
+import type { NotionFetchService } from './NotionFetchService';
 
 export class GlobalPlanWatcherService implements vscode.Disposable {
-    private _watchers = new Map<string, vscode.FileSystemWatcher>();
-    private _nativeWatchers = new Map<string, fs.FSWatcher>();
+    private _engine: PlanIngestionEngine;
     private _outputChannel?: vscode.OutputChannel;
     private _disposables: vscode.Disposable[] = [];
-    
+
     private _onPlanDiscovered = new vscode.EventEmitter<{
         uri: vscode.Uri;
         workspaceRoot: string;
     }>();
     public readonly onPlanDiscovered = this._onPlanDiscovered.event;
 
-    // Per-file debounce timers to coalesce VS Code and native watcher events
-    private _debounceTimers = new Map<string, NodeJS.Timeout>();
-
-    private _scanInterval?: NodeJS.Timeout;
-    private _scanIntervalMs = 10000; // 10 seconds default
-    private _lastScanTime = new Map<string, number>(); // Track last scan per workspace
-    private _scanInProgress = false; // Guard against overlapping scans
-    private _recentRenames = new Set<string>();
-    private _scanSeenPaths = new Map<string, Set<string>>();
-    private _gitWatchers = new Map<string, vscode.FileSystemWatcher>();
-    private _gitOpActiveUntil = new Map<string, number>();
-    private _recentEvents: { fsPath: string; ts: number }[] = [];
-
-    // Deferred **Feature:** links: subtask plan-id → unresolved feature plan-id.
-    // Retried when a feature file is imported or on the next watcher cycle.
-    // Bounded — entries are dropped after MAX_FEATURE_LINK_RETRIES with a warning.
-    private _pendingFeatureLinks = new Map<string, { featureId: string; retries: number }>();
-    private static readonly MAX_FEATURE_LINK_RETRIES = 5;
-
-    // Paths currently being written by _createInitiatedPlan — skip watcher insert to avoid duplicates
-    private static _pendingCreations = new Map<string, NodeJS.Timeout>();
-
-    // Tombstone map to preserve the kanban column of deleted files during atomic write DELETE->INSERT race.
-    // Keyed by `${relativePath}|${workspaceId}`
-    private _recentlyDeletedColumns = new Map<string, { column: string; ts: number }>();
-
-    public static registerPendingCreation(absolutePath: string): void {
-        const key = path.resolve(absolutePath);
-        const existing = GlobalPlanWatcherService._pendingCreations.get(key);
-        if (existing) clearTimeout(existing);
-        GlobalPlanWatcherService._pendingCreations.set(key, setTimeout(() => {
-            GlobalPlanWatcherService._pendingCreations.delete(key);
-        }, 10000));
-    }
-
-    public registerRename(oldRelativePath: string): void {
-        const normalized = oldRelativePath.replace(/\\/g, '/');
-        this._recentRenames.add(normalized);
-        setTimeout(() => this._recentRenames.delete(normalized), 2000);
-    }
-
-    /**
-     * Live re-deriver into the KanbanProvider for a feature's kanban_column. Called
-     * after the is_feature re-assert in _handlePlanFile to self-heal the
-     * kanban_column clobber from insertFileDerivedPlan's hardcoded 'CREATED' on
-     * fresh INSERT (re-import after the 3000ms registerPendingCreation window, or
-     * the atomic-write DELETE->re-INSERT race). Re-derives from DB state
-     * (subtasks) so "new file" does NOT imply "CREATED column". No-op when the
-     * feature has no subtasks yet (the provider guards that case).
-     */
-    private _recomputeFeatureColumn?: (featurePlanId: string, workspaceRoot: string) => Promise<void>;
-
-    public setFeatureColumnRecomputer(fn: (featurePlanId: string, workspaceRoot: string) => Promise<void>): void {
-        this._recomputeFeatureColumn = fn;
-    }
-
-    /**
-     * Injected regen callback for the delete path. The watcher holds no KanbanProvider
-     * reference (only injected callbacks), so a parallel setter mirrors
-     * setFeatureColumnRecomputer. Invoked after deletePlanByPlanFile with the captured
-     * parent featureId so the feature .md's ## Subtasks block drops the removed subtask.
-     */
-    private _regenerateFeatureFile?: (workspaceRoot: string, featureId: string) => Promise<void>;
-
-    public setFeatureFileRegenerator(cb: (workspaceRoot: string, featureId: string) => Promise<void>): void {
-        this._regenerateFeatureFile = cb;
-    }
-
     constructor(
-        private readonly _getClickUpService: (workspaceRoot: string) => ClickUpSyncService,
-        private readonly _getLinearService: (workspaceRoot: string) => LinearSyncService,
+        getClickUpService: (workspaceRoot: string) => ClickUpSyncService,
+        getLinearService: (workspaceRoot: string) => LinearSyncService,
+        getNotionService?: (workspaceRoot: string) => NotionFetchService,
         outputChannel?: vscode.OutputChannel
     ) {
         this._outputChannel = outputChannel;
+        const host = createVsCodePlanIngestionHost(outputChannel);
+        this._engine = new PlanIngestionEngine(getClickUpService, getLinearService, host, getNotionService);
+
+        // Bridge the engine's discovered-plan callback into the vscode.Uri event shape
+        // the extension consumers expect. filePath is present for file-level events
+        // (create/change/delete); absent for folder-level rediscovery (periodic sweep,
+        // activity-light timeout) — fall back to the workspace root uri, matching the
+        // pre-extraction watcher's folder-level fire shape.
+        const bridge = this._engine.onPlanDiscovered((workspaceRoot, filePath) => {
+            const uri = vscode.Uri.file(filePath || workspaceRoot);
+            this._onPlanDiscovered.fire({ uri, workspaceRoot });
+        });
+        this._disposables.push(bridge);
+    }
+
+    public static registerPendingCreation(absolutePath: string): void {
+        PlanIngestionEngine.registerPendingCreation(absolutePath);
+    }
+
+    public registerRename(oldRelativePath: string): void {
+        this._engine.registerRename(oldRelativePath);
+    }
+
+    public setFeatureColumnRecomputer(fn: (featurePlanId: string, workspaceRoot: string) => Promise<void>): void {
+        this._engine.setFeatureColumnRecomputer(fn);
+    }
+
+    public setFeatureFileRegenerator(cb: (workspaceRoot: string, featureId: string) => Promise<void>): void {
+        this._engine.setFeatureFileRegenerator(cb);
     }
 
     public async refreshWatchers(): Promise<void> {
-        await this._refreshWatchers();
+        await this._engine.refreshWatchers();
     }
 
     public async initialize(): Promise<void> {
-        this._outputChannel?.appendLine('[GlobalPlanWatcher] Initializing...');
-        await this._refreshWatchers();
-        this._startPeriodicScan();
-        // Always run one startup scan regardless of periodicScanEnabled — this seeds the
-        // seen-paths cache and imports files that were created before this session started.
-        // periodicScanEnabled only controls whether the scan *repeats*; the initial pass
-        // must always happen so pre-startup files are not silently dropped.
-        this._runStartupScan();
-        void this.runPurgeSweep();
-        
-        // Watch for configuration changes
-        const configListener = vscode.workspace.onDidChangeConfiguration(async (e) => {
-            if (e.affectsConfiguration('switchboard.planWatcher.periodicScanEnabled') || 
-                e.affectsConfiguration('switchboard.planWatcher.scanIntervalMs')) {
-                this._outputChannel?.appendLine('[GlobalPlanWatcher] Plan watcher config changed, restarting periodic scan...');
-                this._startPeriodicScan();
-            }
-        });
-        this._disposables.push(configListener);
-
-        // NOTE: switchboard.mappingsChanged is registered in extension.ts, which calls
-        // this.refreshWatchers() directly. Do NOT register a duplicate handler here, as
-        // the second registerCommand() call would override this one.
-
-        // Watch for workspace folder additions/removals
-        const folderListener = vscode.workspace.onDidChangeWorkspaceFolders(async () => {
-            this._outputChannel?.appendLine('[GlobalPlanWatcher] Workspace folders changed, refreshing watchers...');
-            await this._refreshWatchers();
-        });
-        this._disposables.push(folderListener);
+        await this._engine.initialize();
     }
 
-    private _runStartupScan(): void {
-        void (async () => {
-            if (this._scanInProgress) { return; }
-            this._scanInProgress = true;
-            try {
-                const folders = await this._getAllMappedFolders();
-                for (const folder of folders) {
-                    await this._scanForNewFiles(folder);
-                }
-                this._outputChannel?.appendLine('[GlobalPlanWatcher] Startup scan complete');
-            } finally {
-                this._scanInProgress = false;
-            }
-        })();
+    public async triggerScan(workspaceRoot: string): Promise<void> {
+        await this._engine.triggerScan(workspaceRoot);
     }
 
-    private _startPeriodicScan(): void {
-        if (this._scanInterval) {
-            clearInterval(this._scanInterval);
-            this._scanInterval = undefined;
+    public async runPurgeSweep(): Promise<void> {
+        await this._engine.runPurgeSweep();
+    }
+
+    public isGitOpActive(workspaceRoot: string): boolean {
+        return this._engine.isGitOpActive(workspaceRoot);
+    }
+
+    /** Expose the engine for consumers that need to drive ingestion directly (e.g. headless verbs). */
+    public getEngine(): PlanIngestionEngine {
+        return this._engine;
+    }
+
+    public dispose(): void {
+        this._engine.dispose();
+        for (const d of this._disposables) {
+            try { d.dispose(); } catch {}
         }
-
-        const config = vscode.workspace.getConfiguration('switchboard.planWatcher');
-        const enabled = config.get<boolean>('periodicScanEnabled', true);
-        this._scanIntervalMs = config.get<number>('scanIntervalMs', 10000);
-
-        if (!enabled) {
-            this._outputChannel?.appendLine('[GlobalPlanWatcher] Periodic scan disabled');
-            return;
-        }
-
-        this._scanInterval = setInterval(async () => {
-            if (this._scanInProgress) { return; } // Skip if previous scan still running
-            this._scanInProgress = true;
-            try {
-                const folders = await this._getAllMappedFolders();
-                for (const folder of folders) {
-                    await this._scanForNewFiles(folder);
-                }
-                // Activity-light timeout sweep: null dispatched_at on cards older than the
-                // configured timeout. The authoritative backstop for the read-time age check
-                // and the marker-driven clear. Runs inside the _scanInProgress guard so it
-                // never overlaps itself; gated per workspace on `cleared > 0` so the board
-                // only refreshes when a light actually turned off (no 10-second flicker).
-                const activityConfig = vscode.workspace.getConfiguration('switchboard.activityLight');
-                const timeoutMs = activityConfig.get<number>('timeoutMs', 10 * 60 * 1000);
-                for (const folder of folders) {
-                    try {
-                        const db = KanbanDatabase.forWorkspace(folder);
-                        await db.ensureReady();
-                        const wsId = await db.getWorkspaceId();
-                        if (!wsId) continue;
-                        const cleared = await db.clearStaleWorkingState(wsId, timeoutMs);
-                        if (cleared > 0) {
-                            this._outputChannel?.appendLine(
-                                `[GlobalPlanWatcher] Activity-light timeout sweep cleared ${cleared} stale working card(s) in ${folder}`
-                            );
-                            this._onPlanDiscovered.fire({ uri: vscode.Uri.file(folder), workspaceRoot: folder });
-                        }
-                        // Retry deferred **Feature:** links — a subtask imported before its
-                        // feature (or referencing a bad id) waits here for the next cycle.
-                        // Without this, the defer queue only drains on feature-file imports,
-                        // so a permanently-unresolved id leaks memory (MAX_FEATURE_LINK_RETRIES
-                        // never triggers because retries only increment on feature-file import).
-                        await this._retryPendingFeatureLinks(db, folder);
-                    } catch (sweepErr) {
-                        this._outputChannel?.appendLine(
-                            `[GlobalPlanWatcher] Activity-light timeout sweep failed for ${folder}: ${sweepErr}`
-                        );
-                    }
-                }
-                try {
-                    await this.runPurgeSweep();
-                } catch (purgeErr) {
-                    this._outputChannel?.appendLine(`[GlobalPlanWatcher] Purge sweep failed: ${purgeErr}`);
-                }
-            } finally {
-                this._scanInProgress = false;
-            }
-        }, this._scanIntervalMs);
-        this._outputChannel?.appendLine(`[GlobalPlanWatcher] Periodic scan started (${this._scanIntervalMs}ms)`);
+        this._disposables = [];
+        this._onPlanDiscovered.dispose();
     }
+}
 
-    private async _scanForNewFiles(workspaceRoot: string): Promise<void> {
-        const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
-        const featuresDir = path.join(workspaceRoot, '.switchboard', 'features');
-        if (!fs.existsSync(plansDir) && !fs.existsSync(featuresDir)) { return; }
+// ─── VS Code host seam ──────────────────────────────────────────────────────
 
-        try {
-            const currentPaths = new Set<string>();
+function createVsCodePlanIngestionHost(outputChannel?: vscode.OutputChannel): PlanIngestionHost {
+    const logger = {
+        appendLine: (line: string) => { outputChannel?.appendLine(line); },
+    };
 
-            const collectPaths = async (dir: string): Promise<void> => {
-                const entries = await fs.promises.readdir(dir, { withFileTypes: true });
-                for (const entry of entries) {
-                    const entryPath = path.join(dir, entry.name);
-                    if (entry.isDirectory()) {
-                        await collectPaths(entryPath);
-                    } else if (entry.isFile() && entry.name.endsWith('.md')) {
-                        currentPaths.add(entryPath.replace(/\\/g, '/'));
-                    }
-                }
-            };
+    const watcher: PlanIngestionWatcher = {
+        watchFolder(folder, onEvent) {
+            // VS Code FileSystemWatcher for workspace folders (handles .switchboard/{plans,features}/ and nested .md)
+            const workspaceFolderPaths = new Set(
+                (vscode.workspace.workspaceFolders || []).map(f => path.resolve(f.uri.fsPath))
+            );
+            const handles: vscode.Disposable[] = [];
+            let nativeWatcher: fs.FSWatcher | undefined;
 
-            if (fs.existsSync(plansDir)) {
-                await collectPaths(plansDir);
-            }
-            if (fs.existsSync(featuresDir)) {
-                await collectPaths(featuresDir);
-            }
-
-            const prevPaths = this._scanSeenPaths.get(workspaceRoot);
-            this._scanSeenPaths.set(workspaceRoot, currentPaths);
-
-            let filesToProcess: string[];
-            if (prevPaths === undefined) {
-                // First cycle: preserve current behavior — process all files (imports files that predate startup)
-                filesToProcess = [...currentPaths];
+            if (workspaceFolderPaths.has(folder)) {
+                const pattern = new vscode.RelativePattern(folder, '.switchboard/{plans,features}/**/*.md');
+                const vw = vscode.workspace.createFileSystemWatcher(pattern, false, false, false);
+                vw.onDidCreate((uri) => onEvent('create', uri.fsPath));
+                vw.onDidChange((uri) => onEvent('change', uri.fsPath));
+                vw.onDidDelete((uri) => onEvent('delete', uri.fsPath));
+                handles.push(vw);
+                outputChannel?.appendLine(`[GlobalPlanWatcher] VS Code watcher active for: ${folder}`);
             } else {
-                filesToProcess = [...currentPaths].filter(p => !prevPaths.has(p));
-                if (filesToProcess.length === 0) {
-                    // Steady state: nothing new, skip DB query and stats
-                    return;
+                outputChannel?.appendLine(`[GlobalPlanWatcher] Folder ${folder} is not a VS Code workspace folder, relying on native fs.watch`);
+            }
+
+            // Native fs.watch fallback (handles non-workspace folders and .gitignore issues)
+            const switchboardDir = path.join(folder, '.switchboard');
+            const watchPath = fs.existsSync(switchboardDir) ? switchboardDir : folder;
+            try {
+                nativeWatcher = fs.watch(watchPath, { recursive: true }, (eventType, filename) => {
+                    if (!filename || !filename.endsWith('.md')) return;
+                    const fullPath = path.resolve(path.join(watchPath, filename));
+                    const plansDir = path.resolve(path.join(folder, '.switchboard', 'plans'));
+                    const featuresDir = path.resolve(path.join(folder, '.switchboard', 'features'));
+                    if (!fullPath.startsWith(plansDir) && !fullPath.startsWith(featuresDir)) return;
+
+                    if (eventType === 'rename' || !fs.existsSync(fullPath)) {
+                        if (!fs.existsSync(fullPath)) {
+                            onEvent('delete', fullPath);
+                            return;
+                        }
+                    }
+                    onEvent('change', fullPath);
+                });
+                outputChannel?.appendLine(`[GlobalPlanWatcher] Native watch active for: ${watchPath}`);
+            } catch (e) {
+                outputChannel?.appendLine(`[GlobalPlanWatcher] Native watch failed for ${watchPath}: ${e}`);
+            }
+
+            return {
+                dispose: () => {
+                    for (const h of handles) { try { h.dispose(); } catch {} }
+                    if (nativeWatcher) { try { nativeWatcher.close(); } catch {} }
+                },
+            };
+        },
+        watchFile(filePath, onEvent) {
+            const folder = path.dirname(filePath);
+            const fileName = path.basename(filePath);
+            const relativePattern = new vscode.RelativePattern(folder, fileName);
+            const vw = vscode.workspace.createFileSystemWatcher(relativePattern, false, false, false);
+            vw.onDidChange((uri) => onEvent('change', uri.fsPath));
+            vw.onDidCreate((uri) => onEvent('create', uri.fsPath));
+            vw.onDidDelete((uri) => onEvent('delete', uri.fsPath));
+            return { dispose: () => { try { vw.dispose(); } catch {} } };
+        },
+    };
+
+    const makeConfig = (section: 'planWatcher' | 'activityLight'): PlanIngestionHostConfig => ({
+        getBoolean: (key, defaultValue) => {
+            try {
+                const v = vscode.workspace.getConfiguration(`switchboard.${section}`).get<boolean>(key);
+                return v !== undefined ? v : defaultValue;
+            } catch { return defaultValue; }
+        },
+        getNumber: (key, defaultValue) => {
+            try {
+                const v = vscode.workspace.getConfiguration(`switchboard.${section}`).get<number>(key);
+                return v !== undefined ? v : defaultValue;
+            } catch { return defaultValue; }
+        },
+    });
+
+    const host: PlanIngestionHost = {
+        watcher,
+        getConfig: makeConfig,
+        logger,
+        async listWatchedRoots() {
+            return resolveWatchedRoots(outputChannel);
+        },
+        onEnvironmentChanged(handler) {
+            const disposables: vscode.Disposable[] = [];
+            disposables.push(vscode.workspace.onDidChangeConfiguration((e) => {
+                if (
+                    e.affectsConfiguration('switchboard.planWatcher.periodicScanEnabled') ||
+                    e.affectsConfiguration('switchboard.planWatcher.scanIntervalMs') ||
+                    e.affectsConfiguration('switchboard.activityLight.timeoutMs') ||
+                    e.affectsConfiguration('switchboard.workspaceDatabaseMappings')
+                ) {
+                    handler('config');
                 }
-            }
+            }));
+            disposables.push(vscode.workspace.onDidChangeWorkspaceFolders(() => {
+                handler('roots');
+            }));
+            return {
+                dispose: () => { for (const d of disposables) { try { d.dispose(); } catch {} } },
+            };
+        },
+    };
+    return host;
+}
 
-            const db = KanbanDatabase.forWorkspace(workspaceRoot);
-            await db.ensureReady();
-            const workspaceId = await db.getWorkspaceId();
-            if (!workspaceId) { return; }
-
-            const existingPlans = await db.getAllPlans(workspaceId);
-            const existingPaths = new Set(
-                existingPlans.map(p => {
-                    const rel = path.isAbsolute(p.planFile) ? path.relative(workspaceRoot, p.planFile) : p.planFile;
-                    return rel.replace(/\\/g, '/');
-                })
-            );
-            // Also add absolute paths to catch legacy DB entries stored with absolute paths
-            const existingAbsolutePaths = new Set(
-                existingPlans.map(p => p.planFile.replace(/\\/g, '/'))
-                    .filter(p => path.isAbsolute(p))
-            );
-            const now = Date.now();
-            const lastScan = this._lastScanTime.get(workspaceRoot) || 0;
-            this._lastScanTime.set(workspaceRoot, now);
-
-            for (const entryPath of filesToProcess) {
-                const normalizedPath = entryPath.replace(/\\/g, '/');
-                const relativePath = path.relative(workspaceRoot, entryPath).replace(/\\/g, '/');
-                if (existingPaths.has(relativePath) || existingAbsolutePaths.has(normalizedPath)) { continue; }
-
-                const stats = await fs.promises.stat(entryPath);
-                // Skip files older than the last scan to avoid re-importing
-                if (stats.mtimeMs < lastScan) { continue; }
-                // Skip very recently created files to avoid reading partial writes
-                if (now - stats.mtimeMs < 500) { continue; }
-
-                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Periodic scan found new file: ${relativePath}`);
-                const uri = vscode.Uri.file(entryPath);
-                // Route through debounce to avoid races with fs.watch events
-                this._debounceHandleFile(uri, workspaceRoot);
-            }
-        } catch (err) {
-            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Periodic scan error in ${workspaceRoot}: ${err}`);
-        }
-    }
-
-    private async _refreshWatchers(): Promise<void> {
-        // Get all folders that should be watched
-        const foldersToWatch = await this._getAllMappedFolders();
-        
-        // Dispose watchers for folders no longer in config
-        for (const [folder, watcher] of this._watchers) {
-            if (!foldersToWatch.includes(folder)) {
-                watcher.dispose();
-                this._watchers.delete(folder);
-                
-                const gitWatcher = this._gitWatchers.get(folder);
-                if (gitWatcher) {
-                    gitWatcher.dispose();
-                    this._gitWatchers.delete(folder);
-                }
-                this._gitOpActiveUntil.delete(folder);
-                
-                const native = this._nativeWatchers.get(folder);
-                if (native) {
-                    try { native.close(); } catch {}
-                    this._nativeWatchers.delete(folder);
-                }
-                this._scanSeenPaths.delete(folder);
-
-                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Stopped watching: ${folder}`);
-            }
-        }
-
-        // Create watchers for new folders
-        for (const folder of foldersToWatch) {
-            if (!this._watchers.has(folder)) {
-                this._setupWatcherForFolder(folder);
-            }
-        }
-    }
-
-    private async _getAllMappedFolders(): Promise<string[]> {
+/**
+ * Resolve the watched-roots list: the workspace-database mappings (parent +
+ * child folders) when enabled, falling back to the VS Code workspace folders.
+ * Mirrors the pre-extraction `_getAllMappedFolders` byte-for-byte.
+ */
+function resolveWatchedRoots(outputChannel?: vscode.OutputChannel): Promise<string[]> {
+    return (async () => {
         const folders: string[] = [];
-        
         try {
             const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
             const cfg = getMappingsFromIndex();
-
-            this._outputChannel?.appendLine(
+            outputChannel?.appendLine(
                 `[GlobalPlanWatcher] Config: enabled=${cfg?.enabled}, mappings=${cfg?.mappings?.length ?? 0}`
             );
-
             if (cfg?.enabled && Array.isArray(cfg.mappings)) {
                 for (const mapping of cfg.mappings) {
-                    // Collect both parentFolder (if exists) and all workspaceFolders
                     if (mapping.parentFolder) {
-                        const resolved = path.resolve(this._expandHome(mapping.parentFolder));
+                        const resolved = path.resolve(expandHome(mapping.parentFolder));
                         if (fs.existsSync(resolved) && !folders.includes(resolved)) {
                             folders.push(resolved);
                         }
                     }
                     if (Array.isArray(mapping.workspaceFolders)) {
                         for (const wf of mapping.workspaceFolders) {
-                            const resolved = path.resolve(this._expandHome(wf));
+                            const resolved = path.resolve(expandHome(wf));
                             if (fs.existsSync(resolved) && !folders.includes(resolved)) {
                                 folders.push(resolved);
                             }
@@ -369,8 +268,6 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     }
                 }
             }
-            
-            // Fallback: If no mappings or mappings empty, include current workspace folders
             if (folders.length === 0) {
                 const workspaceFolders = vscode.workspace.workspaceFolders || [];
                 for (const wf of workspaceFolders) {
@@ -381,806 +278,22 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 }
             }
         } catch (err) {
-            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Error resolving mapped folders: ${err}`);
+            outputChannel?.appendLine(`[GlobalPlanWatcher] Error resolving mapped folders: ${err}`);
         }
-
-        this._outputChannel?.appendLine(
+        outputChannel?.appendLine(
             `[GlobalPlanWatcher] Mapped folders: [${folders.map(f => path.basename(f)).join(', ')}] (total: ${folders.length})`
         );
         return folders;
-    }
-
-    private _expandHome(p: string): string {
-        const trimmed = p.trim();
-        return trimmed.startsWith('~')
-            ? path.join(os.homedir(), trimmed.slice(1))
-            : trimmed;
-    }
-
-    private _setupWatcherForFolder(folder: string): void {
-        // VS Code watcher - works even if dir doesn't exist yet (if it's in a workspace folder)
-        const workspaceFolderPaths = new Set(
-            (vscode.workspace.workspaceFolders || []).map(f => path.resolve(f.uri.fsPath))
-        );
-
-        if (workspaceFolderPaths.has(folder)) {
-            const pattern = new vscode.RelativePattern(folder, '.switchboard/{plans,features}/**/*.md');
-            const watcher = vscode.workspace.createFileSystemWatcher(pattern, false, false, false);
-
-            watcher.onDidCreate((uri) => {
-                this._outputChannel?.appendLine(`[GlobalPlanWatcher] VS Code Created: ${uri.fsPath}`);
-                this._debounceHandleFile(uri, folder);
-            });
-
-            watcher.onDidChange((uri) => {
-                this._outputChannel?.appendLine(`[GlobalPlanWatcher] VS Code Changed: ${uri.fsPath}`);
-                this._debounceHandleFile(uri, folder);
-            });
-
-            watcher.onDidDelete((uri) => {
-                this._outputChannel?.appendLine(`[GlobalPlanWatcher] VS Code Deleted: ${uri.fsPath}`);
-                this._debounceHandleDelete(uri, folder);
-            });
-
-            this._watchers.set(folder, watcher);
-            this._outputChannel?.appendLine(`[GlobalPlanWatcher] VS Code watcher active for: ${folder}`);
-        } else {
-            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Folder ${folder} is not a VS Code workspace folder, relying on native fs.watch`);
-        }
-
-        const gitDir = this._resolveDotGitDir(folder);
-        if (gitDir && !this._gitWatchers.has(folder)) {
-            try {
-                const headPattern = new vscode.RelativePattern(vscode.Uri.file(gitDir), 'HEAD');
-                const headWatcher = vscode.workspace.createFileSystemWatcher(headPattern, false, false, false);
-                let lastBranchName = '';
-                const checkBranch = () => {
-                    try {
-                        const headPath = path.join(gitDir, 'HEAD');
-                        if (fs.existsSync(headPath)) {
-                            const content = fs.readFileSync(headPath, 'utf8').trim();
-                            if (content !== lastBranchName) {
-                                lastBranchName = content;
-                                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Git branch/HEAD changed for ${folder}: ${content}`);
-                                this._gitOpActiveUntil.set(folder, Date.now() + 15000);
-                            }
-                        }
-                    } catch (err) {
-                        this._outputChannel?.appendLine(`[GlobalPlanWatcher] Failed to check branch in Git watcher for ${folder}: ${err}`);
-                    }
-                };
-                headWatcher.onDidChange(checkBranch);
-                headWatcher.onDidCreate(checkBranch);
-                headWatcher.onDidDelete(checkBranch);
-                this._gitWatchers.set(folder, headWatcher);
-                this._disposables.push(headWatcher);
-                checkBranch();
-            } catch (gitWatchErr) {
-                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Failed to watch HEAD for ${folder}: ${gitWatchErr}`);
-            }
-        }
-
-        // Native fs.watch fallback (handles non-workspace folders and .gitignore issues)
-        this._setupNativeWatcher(folder);
-    }
-
-    public isGitOpActive(workspaceRoot: string): boolean {
-        const gitOpTime = this._gitOpActiveUntil.get(workspaceRoot) || 0;
-        return Date.now() < gitOpTime;
-    }
-
-    private _resolveDotGitDir(workspaceRoot: string): string | null {
-        try {
-            const dotGitPath = path.join(workspaceRoot, '.git');
-            if (!fs.existsSync(dotGitPath)) {
-                return null;
-            }
-            const stat = fs.statSync(dotGitPath);
-            if (stat.isDirectory()) {
-                return dotGitPath;
-            } else if (stat.isFile()) {
-                const content = fs.readFileSync(dotGitPath, 'utf8');
-                const match = content.match(/^gitdir:\s*(.+)$/m);
-                if (match) {
-                    const gitDirPointer = match[1].trim();
-                    return path.isAbsolute(gitDirPointer)
-                        ? gitDirPointer
-                        : path.resolve(workspaceRoot, gitDirPointer);
-                }
-            }
-        } catch (e) {
-            console.error(`[GlobalPlanWatcher] Failed to resolve .git for ${workspaceRoot}:`, e);
-        }
-        return null;
-    }
-
-    public async runPurgeSweep(): Promise<void> {
-        try {
-            const folders = await this._getAllMappedFolders();
-            for (const folder of folders) {
-                if (this.isGitOpActive(folder)) {
-                    this._outputChannel?.appendLine(`[GlobalPlanWatcher] Skipping purge sweep for ${folder} because git operation is active.`);
-                    continue;
-                }
-                const db = KanbanDatabase.forWorkspace(folder);
-                await db.ensureReady();
-                const workspaceId = await db.getWorkspaceId();
-                if (!workspaceId) continue;
-
-                // 24 hour grace period
-                const cutoffIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-                const missingPlans = await db.getMissingPlansOlderThan(cutoffIso, workspaceId);
-                for (const plan of missingPlans) {
-                    // 1. External tracker archive:
-                    if (plan.clickupTaskId) {
-                        try {
-                            const clickup = this._getClickUpService(folder);
-                            const clickupConfig = await clickup.loadConfig();
-                            if (clickupConfig?.deleteSyncEnabled === true) {
-                                await clickup.archiveTask(plan.clickupTaskId);
-                            }
-                        } catch (clickUpErr) {
-                            this._outputChannel?.appendLine(`[GlobalPlanWatcher] ClickUp archive failed for task ${plan.clickupTaskId} during purge: ${clickUpErr}`);
-                        }
-                    }
-                    if (plan.linearIssueId) {
-                        try {
-                            const linear = this._getLinearService(folder);
-                            const linearConfig = await linear.loadConfig();
-                            if (linearConfig?.deleteSyncEnabled === true) {
-                                await linear.archiveIssue(plan.linearIssueId);
-                            }
-                        } catch (linearErr) {
-                            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Linear archive failed for issue ${plan.linearIssueId} during purge: ${linearErr}`);
-                        }
-                    }
-                    // 2. Real DB delete:
-                    await db.deletePlanByPlanFile(plan.planFile, plan.workspaceId);
-                    this._outputChannel?.appendLine(`[GlobalPlanWatcher] Purged missing plan: ${plan.planFile}`);
-                    
-                    if (plan.featureId && this._regenerateFeatureFile) {
-                        try {
-                            await this._regenerateFeatureFile(folder, plan.featureId);
-                        } catch (regenErr) {
-                            this._outputChannel?.appendLine(`[GlobalPlanWatcher] regenerateFeatureFile failed for ${plan.featureId} during purge: ${regenErr}`);
-                        }
-                    }
-                }
-            }
-        } catch (err) {
-            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Error in purge sweep: ${err}`);
-        }
-    }
-
-    private _setupNativeWatcher(folder: string): void {
-        const switchboardDir = path.join(folder, '.switchboard');
-        if (fs.existsSync(switchboardDir)) {
-            this._setupNativeFsWatch(switchboardDir, folder);
-        } else {
-            this._setupNativeFsWatch(folder, folder);
-        }
-    }
-
-    private _setupNativeFsWatch(watchPath: string, workspaceRoot: string): void {
-        try {
-            const nativeWatcher = fs.watch(watchPath, { recursive: true }, (eventType, filename) => {
-                if (!filename || !filename.endsWith('.md')) return;
-                
-                // Ensure it's in .switchboard/plans or .switchboard/features
-                const fullPath = path.resolve(path.join(watchPath, filename));
-                const plansDir = path.resolve(path.join(workspaceRoot, '.switchboard', 'plans'));
-                const featuresDir = path.resolve(path.join(workspaceRoot, '.switchboard', 'features'));
-                if (!fullPath.startsWith(plansDir) && !fullPath.startsWith(featuresDir)) return;
-
-                const uri = vscode.Uri.file(fullPath);
-                
-                if (eventType === 'rename' || !fs.existsSync(fullPath)) {
-                    if (!fs.existsSync(fullPath)) {
-                        this._outputChannel?.appendLine(`[GlobalPlanWatcher] Native Delete: ${fullPath}`);
-                        this._debounceHandleDelete(uri, workspaceRoot);
-                        return;
-                    }
-                }
-
-                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Native Change: ${fullPath}`);
-                this._debounceHandleFile(uri, workspaceRoot);
-            });
-
-            this._nativeWatchers.set(workspaceRoot, nativeWatcher);
-            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Native watch active for: ${watchPath}`);
-        } catch (e) {
-            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Native watch failed for ${watchPath}: ${e}`);
-        }
-    }
-
-    private _registerEventForBulkCheck(fsPath: string, workspaceRoot: string): void {
-        const now = Date.now();
-        this._recentEvents.push({ fsPath, ts: now });
-        this._recentEvents = this._recentEvents.filter(e => now - e.ts <= 2000);
-        if (this._recentEvents.length >= 5) {
-            const count = this._recentEvents.length;
-            this._recentEvents = []; // reset
-            void (async () => {
-                try {
-                    const db = KanbanDatabase.forWorkspace(workspaceRoot);
-                    await db.ensureReady();
-                    await db.writeDbBackup('bulk-change');
-                    this._outputChannel?.appendLine(`[GlobalPlanWatcher] bulk change (${count}); snapshot written`);
-                } catch (e) {
-                    this._outputChannel?.appendLine(`[GlobalPlanWatcher] Failed to write bulk-change backup: ${e}`);
-                }
-            })();
-        }
-    }
-
-    private _debounceHandleFile(uri: vscode.Uri, workspaceRoot: string): void {
-        this._registerEventForBulkCheck(uri.fsPath, workspaceRoot);
-        const key = uri.fsPath;
-        const existing = this._debounceTimers.get(key);
-        if (existing) clearTimeout(existing);
-
-        const timer = setTimeout(() => {
-            this._debounceTimers.delete(key);
-            void this._handlePlanFile(uri, workspaceRoot);
-        }, 300);
-        this._debounceTimers.set(key, timer);
-    }
-
-    private _debounceHandleDelete(uri: vscode.Uri, workspaceRoot: string): void {
-        this._registerEventForBulkCheck(uri.fsPath, workspaceRoot);
-        const key = `delete:${uri.fsPath}`;
-        const existing = this._debounceTimers.get(key);
-        if (existing) clearTimeout(existing);
-
-        const timer = setTimeout(() => {
-            this._debounceTimers.delete(key);
-            void this._handlePlanDelete(uri, workspaceRoot);
-        }, 300);
-        this._debounceTimers.set(key, timer);
-    }
-
-    /**
-     * Apply a `**Feature:** <feature-plan-id>` durable fact on import.
-     * Apply-if-empty / positive-payload guard: ONLY links when the subtask's
-     * current feature_id is empty — an omitted key never clears a link, and
-     * the file does not overwrite a link the DB already has (so a human's UI
-     * regroup is not clobbered on re-import). If the feature row isn't imported
-     * yet, the link is deferred and retried when a feature file lands or on the
-     * next watcher cycle.
-     */
-    private async _applyFeatureLink(
-        db: KanbanDatabase,
-        subtaskPlanId: string,
-        featureId: string,
-        relativePath: string,
-        workspaceId: string,
-        workspaceRoot: string
-    ): Promise<void> {
-        if (!featureId || subtaskPlanId === featureId) return;
-        // Don't link a feature to itself.
-        if (relativePath.startsWith('.switchboard/features/')) return;
-
-        try {
-            const featureRow = await db.resolveFeatureIdentifier(featureId, workspaceId);
-            if (!featureRow || !featureRow.isFeature) {
-                // Defer — feature not imported yet, or not a feature row.
-                const existing = this._pendingFeatureLinks.get(subtaskPlanId);
-                const retries = existing ? existing.retries + 1 : 0;
-                if (retries >= GlobalPlanWatcherService.MAX_FEATURE_LINK_RETRIES) {
-                    this._outputChannel?.appendLine(
-                        `[GlobalPlanWatcher] **Feature:** ${featureId} on ${relativePath} unresolved after ${retries} retries — dropping defer`
-                    );
-                    this._pendingFeatureLinks.delete(subtaskPlanId);
-                    return;
-                }
-                this._pendingFeatureLinks.set(subtaskPlanId, { featureId, retries });
-                return;
-            }
-            // Apply-if-empty: only link if the subtask's current feature_id is empty.
-            const subtaskRow = await db.getPlanByPlanId(subtaskPlanId);
-            if (!subtaskRow) return;
-            if (subtaskRow.featureId && subtaskRow.featureId !== '') {
-                // DB already has a link — file does not overwrite (apply-if-empty).
-                return;
-            }
-            await db.updateFeatureStatus(subtaskPlanId, 0, featureRow.planId);
-            this._pendingFeatureLinks.delete(subtaskPlanId);
-            this._outputChannel?.appendLine(
-                `[GlobalPlanWatcher] Linked subtask ${relativePath} to feature ${featureRow.planId} via **Feature:** frontmatter`
-            );
-            // Regenerate the parent feature file so its Subtasks block includes the newly linked plan.
-            try {
-                await this._regenerateFeatureFile?.(workspaceRoot, featureRow.planId);
-            } catch (regenErr) {
-                this._outputChannel?.appendLine(
-                    `[GlobalPlanWatcher] regenerateFeatureFile failed for ${featureRow.planId}: ${regenErr instanceof Error ? regenErr.message : String(regenErr)}`
-                );
-            }
-        } catch (e) {
-            this._outputChannel?.appendLine(
-                `[GlobalPlanWatcher] _applyFeatureLink failed for ${relativePath}: ${e instanceof Error ? e.message : String(e)}`
-            );
-        }
-    }
-
-    /** Retry deferred feature links (called on feature-file import + periodic scan). */
-    private async _retryPendingFeatureLinks(db: KanbanDatabase, workspaceRoot: string): Promise<void> {
-        if (this._pendingFeatureLinks.size === 0) return;
-        const workspaceId = (await db.getWorkspaceId()) || '';
-        const entries = [...this._pendingFeatureLinks.entries()];
-        for (const [subtaskPlanId, { featureId }] of entries) {
-            // Re-resolve via DB; the feature may have landed since the defer.
-            await this._applyFeatureLink(db, subtaskPlanId, featureId, '', workspaceId, workspaceRoot);
-        }
-    }
-
-    private async _handlePlanFile(uri: vscode.Uri, workspaceRoot: string): Promise<void> {
-        try {
-            if (GlobalPlanWatcherService._pendingCreations.has(path.resolve(uri.fsPath))) {
-                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Skipping watcher insert for internally created plan: ${uri.fsPath}`);
-                return;
-            }
-
-            const db = KanbanDatabase.forWorkspace(workspaceRoot);
-            await db.ensureReady();
-
-            const relativePath = path.relative(workspaceRoot, uri.fsPath).replace(/\\/g, '/');
-            // DIAGNOSTIC (is_feature clobber investigation): log which sql.js instance the watcher
-            // operates on when it handles a feature file. Compare against the provider=… /
-            // watcher=… line from createFeatureFromPlanIds. Same instanceId ⇒ candidate ❷ is dead;
-            // different ⇒ this handler may persist a stale snapshot over the feature's is_feature=1.
-            // See docs/investigation-feature-is_feature-clobber.md. Remove once the clobber is fixed.
-            if (relativePath.startsWith('.switchboard/features/')) {
-                this._outputChannel?.appendLine(`[GlobalPlanWatcher] feature-file handle: instance ${db.instanceId} (dbPath=${db.dbPath}) for ${relativePath}`);
-                appendFeatureClobberDiag(workspaceRoot, `watcher._handlePlanFile: instance=${db.instanceId} handling feature file ${relativePath}`);
-            }
-            if (isRuntimeMirrorPlanFile(path.basename(relativePath))) {
-                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Skipped brain mirror file: ${relativePath}`);
-                return;
-            }
-            const workspaceId = await db.getWorkspaceId();
-            
-            if (!workspaceId) {
-                this._outputChannel?.appendLine(`[GlobalPlanWatcher] No workspaceId for ${workspaceRoot}, skipping import`);
-                return;
-            }
-
-            let plan = await db.getPlanByPlanFile(relativePath, workspaceId);
-            if (plan && plan.status === 'missing') {
-                await db.reactivatePlanByPlanFile(plan.planFile, plan.workspaceId);
-                plan.status = 'active';
-                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Reactivated missing plan: ${plan.planFile}`);
-            }
-
-            let fileMtime = new Date().toISOString();
-            let fileBirthtime = fileMtime;
-            try {
-                const stats = await fs.promises.stat(uri.fsPath);
-                fileMtime = stats.mtime.toISOString();
-                fileBirthtime = stats.birthtime && stats.birthtime.getTime() > 0
-                    ? stats.birthtime.toISOString()
-                    : fileMtime;
-            } catch (statErr) {
-                // Fallback to current time if stat fails (e.g., file deleted mid-process)
-                this._outputChannel?.appendLine(`[GlobalPlanWatcher] stat() failed for ${uri.fsPath}: ${statErr}`);
-            }
-
-            if (plan && new Date(fileMtime).getTime() <= new Date(plan.updatedAt).getTime()) {
-                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Plan unchanged, skipping: ${relativePath}`);
-                return;
-            }
-
-            if (!plan) {
-                // Fallback: try absolute path lookup for legacy DB entries
-                const absolutePath = uri.fsPath.replace(/\\/g, '/');
-                plan = await db.getPlanByPlanFile(absolutePath, workspaceId);
-                if (plan) {
-                    if (plan.status === 'missing') {
-                        await db.reactivatePlanByPlanFile(plan.planFile, plan.workspaceId);
-                        plan.status = 'active';
-                        this._outputChannel?.appendLine(`[GlobalPlanWatcher] Reactivated missing plan (absolute fallback): ${plan.planFile}`);
-                    }
-                    // Update to relative path for consistency
-                    if (plan.sourceType === 'local') {
-                        await db.movePlanByPlanFile(absolutePath, workspaceId, plan.kanbanColumn, relativePath);
-                        plan = await db.getPlanByPlanFile(relativePath, workspaceId);
-                    }
-                }
-            }
-
-            // plan_id tombstone guard (multi-branch resurrection fix): for feature
-            // files, the plan_id is derived from the filename UUID, so a file returning
-            // via merge/clone at the same path re-creates the SAME plan_id. If that id
-            // was previously deleted (status='deleted'), skip import — the user deleted
-            // this card and a returning file must not undo that. Non-feature plans get
-            // a fresh random plan_id on re-import, so the path-keyed delete already
-            // covers them; this guard is specifically for features.
-            if (!plan && relativePath.startsWith('.switchboard/features/')) {
-                const featureUuidMatch = path.basename(relativePath).match(
-                    /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.md$/i
-                );
-                if (featureUuidMatch) {
-                    const tombstoned = await db.getPlanByPlanId(featureUuidMatch[1]);
-                    if (tombstoned && tombstoned.status === 'deleted') {
-                        this._outputChannel?.appendLine(
-                            `[GlobalPlanWatcher] Skipping import of deleted feature (plan_id tombstone guard): ${relativePath}`
-                        );
-                        return;
-                    }
-                }
-            }
-
-            const content = await fs.promises.readFile(uri.fsPath, 'utf8');
-            const metadata = await parsePlanMetadata(content, relativePath);
-
-            // Extract provider linkage from the stub so imported cards can round-trip
-            // back to their source ticket. Independent of any automation-rule metadata.
-            let importClickupTaskId = extractClickUpTaskId(content);
-            let importLinearIssueId = extractLinearIssueId(content);
-            let importSourceType: KanbanPlanRecord['sourceType'] = 'local';
-            if (importClickupTaskId && importLinearIssueId) {
-                // Edge case: ambiguous provider — treat as local, drop both IDs.
-                importClickupTaskId = '';
-                importLinearIssueId = '';
-            } else if (importClickupTaskId) {
-                importSourceType = 'clickup-import';
-            } else if (importLinearIssueId) {
-                importSourceType = 'linear-import';
-            }
-
-            if (!plan) {
-                // Project assignment is now resolved inside the DB layer
-                // (insertFileDerivedPlan → _resolveProjectForInsert): an explicit
-                // **Project:** pin in the file (metadata.project) wins; otherwise the
-                // active project (kanban.activeProjectFilter) is stamped on fresh
-                // INSERT only. The watcher no longer reads the config itself — the DB
-                // layer is the single choke point so the run-sheet/session upsert path
-                // and the watcher path cannot drift. metadata.project still flows in
-                // via the record so the pin is honored.
-                const project = metadata.project;
-                // New plan - parse and insert (sessionId left empty; plan_file+workspace_id is the unique key)
-                //
-                // For feature files named `feature-<uuid>.md`, reuse the embedded UUID as the
-                // plan_id instead of minting a random one. Subtask→feature links are stored as
-                // subtask.feature_id = feature.plan_id (DB-only, not in the subtask file), so if a
-                // re-import (atomic save/rename, migration, transient delete+create) gives the
-                // feature a fresh random plan_id, every subtask is silently orphaned and the feature
-                // shows 0 subtasks. Deriving the id from the stable filename keeps the link
-                // intact across re-imports.
-                let derivedPlanId = uuidv4();
-                if (relativePath.startsWith('.switchboard/features/')) {
-                    // Matches both the legacy `feature-<uuid>.md` scheme and the current
-                    // `<slug>-<uuid>.md` scheme — any feature file whose name ends in a UUID.
-                    const featureUuidMatch = path.basename(relativePath).match(
-                        /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.md$/i
-                    );
-                    if (featureUuidMatch) {
-                        derivedPlanId = featureUuidMatch[1];
-                    }
-                }
-                const newRecord: KanbanPlanRecord = {
-                    planId: derivedPlanId,
-                    sessionId: '',
-                    topic: metadata.topic,
-                    planFile: relativePath,
-                    kanbanColumn: metadata.kanbanColumn || 'CREATED',
-                    status: 'active',
-                    complexity: metadata.complexity,
-                    tags: metadata.tags,
-                    repoScope: '',
-                    project,
-                    workspaceId: workspaceId,
-                    createdAt: fileBirthtime,
-                    updatedAt: fileMtime,
-                    lastAction: '',
-                    sourceType: 'local',
-                    brainSourcePath: '',
-                    mirrorPath: '',
-                    routedTo: '',
-                    dispatchedAgent: '',
-                    dispatchedIde: '',
-                    clickupTaskId: importClickupTaskId,
-                    linearIssueId: importLinearIssueId
-                };
-                newRecord.sourceType = importSourceType;
-                if (relativePath.startsWith('.switchboard/features/')) {
-                    newRecord.isFeature = 1;
-                }
-                await db.insertFileDerivedPlan(newRecord);
-                if (relativePath.startsWith('.switchboard/features/')) {
-                    await db.updateFeatureStatus(newRecord.planId, 1, '');
-                    // A feature file landed — retry deferred subtask links.
-                    await this._retryPendingFeatureLinks(db, workspaceRoot);
-                } else if (metadata.feature) {
-                    // Durable **Feature:** frontmatter fact — link subtask to feature
-                    // (apply-if-empty; defer if feature not imported yet).
-                    await this._applyFeatureLink(db, newRecord.planId, metadata.feature, relativePath, workspaceId, workspaceRoot);
-                }
-                // Restore the real pre-delete column from the delete-tombstone for ALL
-                // plans — features included. insertFileDerivedPlan hardcodes 'CREATED' on a
-                // fresh INSERT, so the atomic-write DELETE->re-INSERT race re-inserts the
-                // row at CREATED; the tombstone (captured for every plan in
-                // _handlePlanDelete) holds the column it actually had. A feature is a
-                // container whose column is authoritative — restoring its true (DB-owned)
-                // column is preferred over re-deriving it from subtasks, which only yields
-                // the least-progressed subtask and yanks an advanced feature backward.
-                const tombKey = `${relativePath}|${workspaceId}`;
-                const tomb = this._recentlyDeletedColumns.get(tombKey);
-                let restoredFromTombstone = false;
-                if (tomb && Date.now() - tomb.ts < 5000 && tomb.column && tomb.column !== 'CREATED') {
-                    // movePlanByPlanFile validates the column against VALID_KANBAN_COLUMNS + SAFE_COLUMN_NAME_RE
-                    // at KanbanDatabase.ts:1531 — if the column was removed since the delete, the move is
-                    // silently rejected and the plan stays at CREATED (status quo fallback).
-                    const moved = await db.movePlanByPlanFile(relativePath, workspaceId, tomb.column, relativePath);
-                    if (moved) {
-                        newRecord.kanbanColumn = tomb.column; // update in-memory record for ClickUp sync at :664
-                        restoredFromTombstone = true;
-                        this._outputChannel?.appendLine(
-                            `[GlobalPlanWatcher] Restored column '${tomb.column}' from delete-tombstone for: ${relativePath}`
-                        );
-                    } else {
-                        this._outputChannel?.appendLine(
-                            `[GlobalPlanWatcher] Tombstone column '${tomb.column}' rejected by movePlanByPlanFile (invalid/removed), plan stays at CREATED: ${relativePath}`
-                        );
-                    }
-                }
-                this._recentlyDeletedColumns.delete(tombKey); // consume tombstone regardless of restore
-                if (relativePath.startsWith('.switchboard/features/') && !restoredFromTombstone) {
-                    // No tombstone (genuinely new feature, not a race re-insert): derive the
-                    // column from subtasks. recomputeFeatureColumnFromSubtasks is itself guarded
-                    // to only touch a 'CREATED' column, so it never overrides a real one.
-                    await this._recomputeFeatureColumn?.(newRecord.planId, workspaceRoot);
-                }
-                plan = newRecord;
-
-                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Imported new plan: ${relativePath} in ${workspaceId}`);
-            } else {
-                // Existing plan - update metadata.
-                // Pins are ingest-only: a `**Project:**` pin resolves ONCE, at first
-                // import (the !plan branch above), and never again. After first import
-                // the board (and its API) is the sole authority over a card's project —
-                // a file save must never move a card between projects. The file-derived
-                // upsert's ON CONFLICT clause (insertFileDerivedPlan) hard-enforces this
-                // (project = plans.project on conflict), so even if a caller passed a
-                // pin-derived project here the DB row would be untouched; we also do not
-                // pass it, so the watcher and the DB layer agree.
-                const updatedRecord: KanbanPlanRecord = {
-                    ...plan,
-                    topic: metadata.topic,
-                    complexity: metadata.complexity,
-                    tags: metadata.tags,
-                    project: plan.project,
-                    updatedAt: fileMtime
-                };
-                if (relativePath.startsWith('.switchboard/features/')) {
-                    updatedRecord.isFeature = 1;
-                }
-                await db.insertFileDerivedPlan(updatedRecord);
-                // Always assert is_feature=1 for feature files. The conditional check on
-                // !plan.isFeature is unsafe: plan was fetched before insertFileDerivedPlan,
-                // and a concurrent _handlePlanDelete (from an atomic write: temp+rename)
-                // can delete the row between the fetch and the insert. insertFileDerivedPlan
-                // then INSERTs a fresh row with is_feature=0 (column default), but the stale
-                // plan.isFeature=1 skips updateFeatureStatus — leaving the new row stuck at 0.
-                // Unconditional update is idempotent and cheap.
-                if (relativePath.startsWith('.switchboard/features/')) {
-                    await db.updateFeatureStatus(updatedRecord.planId, 1, '');
-                    // A feature file landed — retry deferred subtask links.
-                    await this._retryPendingFeatureLinks(db, workspaceRoot);
-                    // Same clobber vector as above (the atomic-write DELETE->re-INSERT
-                    // race hits this branch: _handlePlanDelete deletes the row, then
-                    // this branch's insertFileDerivedPlan re-INSERTs with
-                    // kanban_column='CREATED'). Prefer the tombstoned (DB-owned) column —
-                    // the feature's authoritative position — over re-deriving from subtasks,
-                    // which only yields the least-progressed subtask and pulls an advanced
-                    // feature backward. Fall back to subtask-derivation (itself guarded to
-                    // only touch a 'CREATED' column) only when no tombstone is available.
-                    const tombKey = `${relativePath}|${workspaceId}`;
-                    const tomb = this._recentlyDeletedColumns.get(tombKey);
-                    let restoredFromTombstone = false;
-                    if (tomb && Date.now() - tomb.ts < 5000 && tomb.column && tomb.column !== 'CREATED') {
-                        const moved = await db.movePlanByPlanFile(relativePath, workspaceId, tomb.column, relativePath);
-                        if (moved) {
-                            updatedRecord.kanbanColumn = tomb.column;
-                            restoredFromTombstone = true;
-                            this._outputChannel?.appendLine(
-                                `[GlobalPlanWatcher] Restored column '${tomb.column}' from delete-tombstone for feature: ${relativePath}`
-                            );
-                        }
-                    }
-                    this._recentlyDeletedColumns.delete(tombKey); // consume tombstone regardless of restore
-                    if (!restoredFromTombstone) {
-                        await this._recomputeFeatureColumn?.(updatedRecord.planId, workspaceRoot);
-                    }
-                } else if (updatedRecord.featureId) {
-                    // Subtask rescoring bubble-up: insertFileDerivedPlan writes the
-                    // fresh complexity into the subtask's column (now full-fidelity
-                    // via parsePlanMetadata → deriveComplexityFromContent), but it
-                    // does NOT recompute the parent feature's derived max — unlike
-                    // updateComplexityByPlanFile (KanbanDatabase.ts:1682), which
-                    // bubbles up. Without this, a subtask whose audit section
-                    // changes would self-heal its own column but leave the feature
-                    // stale until a membership change or the one-time backfill.
-                    // Guard: only for non-feature plans with a non-empty featureId.
-                    try {
-                        await db.recomputeFeatureComplexity(updatedRecord.featureId);
-                    } catch (bubbleErr) {
-                        this._outputChannel?.appendLine(
-                            `[GlobalPlanWatcher] recomputeFeatureComplexity failed for ${updatedRecord.featureId}: ${bubbleErr}`
-                        );
-                    }
-                }
-                // Durable **Feature:** frontmatter fact on re-save (apply-if-empty).
-                if (metadata.feature && !relativePath.startsWith('.switchboard/features/')) {
-                    await this._applyFeatureLink(db, updatedRecord.planId, metadata.feature, relativePath, workspaceId, workspaceRoot);
-                }
-                // Activity-light OFF-switch: the next plan-file edit after dispatch turns off
-                // the light. The watcher only fires on mtime advance (the gate at line 589
-                // early-returns when fileMtime <= plan.updatedAt), and the dispatch flow does
-                // not write the plan file (updateDispatchInfoByPlanFile only runs SQL), so any
-                // mtime advance reaching here while dispatched_at is set is the agent's
-                // completion edit. No agent-authored text is trusted.
-                if (updatedRecord.dispatchedAt) {
-                    try {
-                        await db.clearWorkingState(relativePath, workspaceId);
-                        updatedRecord.dispatchedAt = null;
-                        this._outputChannel?.appendLine(
-                            `[GlobalPlanWatcher] Plan file edit cleared working state for: ${relativePath}`
-                        );
-                    } catch (clearErr) {
-                        this._outputChannel?.appendLine(
-                            `[GlobalPlanWatcher] clearWorkingState failed for ${relativePath}: ${clearErr}`
-                        );
-                    }
-                }
-                plan = updatedRecord;
-
-                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Updated plan: ${plan.planFile} in ${workspaceId}`);
-            }
-
-            // ClickUp real-time sync
-            if (plan) {
-                try {
-                    const clickUp = this._getClickUpService(workspaceRoot);
-                    const clickUpConfig = await clickUp.loadConfig();
-                    if (clickUpConfig?.setupComplete === true && clickUpConfig.realTimeSyncEnabled === true && (await clickUp.hasApiToken())) {
-                        clickUp.debouncedSync(plan.planFile, {
-                            planId: plan.planId,
-                            sessionId: plan.sessionId,
-                            topic: plan.topic,
-                            planFile: plan.planFile,
-                            kanbanColumn: plan.kanbanColumn,
-                            status: plan.status,
-                            complexity: plan.complexity,
-                            tags: plan.tags,
-                            createdAt: plan.createdAt,
-                            updatedAt: plan.updatedAt,
-                            lastAction: plan.lastAction
-                        });
-                    }
-                } catch { /* skip sync errors */ }
-            }
-
-            // Emit event for UI refresh
-            this._onPlanDiscovered.fire({ uri, workspaceRoot });
-        } catch (err) {
-            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Error handling plan: ${err}`);
-        }
-    }
-
-    private async _handlePlanDelete(uri: vscode.Uri, workspaceRoot: string): Promise<void> {
-        try {
-            // Atomic-write guard. External tools (the write tool, agents, most editors) save
-            // via temp-file + rename, which fires a DELETE event for the target path even though
-            // the rename immediately recreated it. The VS Code FileSystemWatcher's onDidDelete
-            // (unlike the native fs.watch path) does not re-check the filesystem, and the create
-            // vs delete debounce timers are separately keyed so they do not coalesce — so without
-            // this guard a spurious delete can win the ordering and hard-delete the row for a file
-            // that still exists, racing a concurrent _handlePlanFile re-insert. Checked here, AFTER
-            // the 300ms debounce, so the rename has definitely landed (an event-time check, as the
-            // native watcher does at line 419-425, can fire mid-rename).
-            if (fs.existsSync(uri.fsPath)) {
-                this._outputChannel?.appendLine(
-                    `[GlobalPlanWatcher] Skipping delete; file still exists (atomic write/rename): ${uri.fsPath}`
-                );
-                return;
-            }
-
-            const db = KanbanDatabase.forWorkspace(workspaceRoot);
-            await db.ensureReady();
-            
-            const relativePath = path.relative(workspaceRoot, uri.fsPath).replace(/\\/g, '/');
-            const workspaceId = await db.getWorkspaceId();
-            
-            if (workspaceId) {
-                if (this._recentRenames.has(relativePath)) {
-                    this._outputChannel?.appendLine(`[GlobalPlanWatcher] Skipping delete for recently-renamed plan: ${relativePath}`);
-                    return;
-                }
-                const plan = await db.getPlanByPlanFile(relativePath, workspaceId);
-                if (plan) {
-                    // Don't delete completed plans — they were archived, not deleted
-                    if (plan.status === 'completed') {
-                        this._outputChannel?.appendLine(`[GlobalPlanWatcher] Skipping delete for archived completed plan: ${plan.planFile}`);
-                        return;
-                    }
-                    const tombKey = `${relativePath}|${workspaceId}`;
-                    this._recentlyDeletedColumns.set(tombKey, {
-                        column: plan.kanbanColumn || '',
-                        ts: Date.now()
-                    });
-                    await db.markPlanMissingByPlanFile(plan.planFile, plan.workspaceId);
-                    this._outputChannel?.appendLine(`[GlobalPlanWatcher] Soft-deleted (marked missing) plan: ${plan.planFile}`);
-                    this._onPlanDiscovered.fire({ uri, workspaceRoot });
-                }
-            }
-        } catch (err) {
-            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Error deleting plan: ${err}`);
-        }
-    }
-
-    public async triggerScan(workspaceRoot: string): Promise<void> {
-        this._outputChannel?.appendLine(`[GlobalPlanWatcher] Manual scan triggered for ${workspaceRoot}`);
-        const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
-        const featuresDir = path.join(workspaceRoot, '.switchboard', 'features');
-
-        if (!fs.existsSync(plansDir) && !fs.existsSync(featuresDir)) {
-            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Switchboard directories not found in ${workspaceRoot}`);
-            return;
-        }
-
-        try {
-            let processed = 0;
-            const scanDir = async (dir: string): Promise<void> => {
-                const entries = await fs.promises.readdir(dir, { withFileTypes: true });
-                for (const entry of entries) {
-                    const entryPath = path.join(dir, entry.name);
-                    if (entry.isDirectory()) {
-                        await scanDir(entryPath);
-                    } else if (entry.isFile() && entry.name.endsWith('.md')) {
-                        const uri = vscode.Uri.file(entryPath);
-                        await this._handlePlanFile(uri, workspaceRoot);
-                        processed++;
-                    }
-                }
-            };
-            if (fs.existsSync(plansDir)) {
-                await scanDir(plansDir);
-            }
-            if (fs.existsSync(featuresDir)) {
-                await scanDir(featuresDir);
-            }
-
-            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Scanned ${processed} files in ${workspaceRoot}`);
-        } catch (err) {
-            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Scan error in ${workspaceRoot}: ${err}`);
-        }
-    }
-
-    public dispose(): void {
-        if (this._scanInterval) {
-            clearInterval(this._scanInterval);
-            this._scanInterval = undefined;
-        }
-
-        for (const watcher of this._watchers.values()) {
-            watcher.dispose();
-        }
-        this._watchers.clear();
-
-        for (const watcher of this._nativeWatchers.values()) {
-            try { watcher.close(); } catch {}
-        }
-        this._nativeWatchers.clear();
-
-        for (const timer of this._debounceTimers.values()) {
-            clearTimeout(timer);
-        }
-        this._debounceTimers.clear();
-
-        for (const d of this._disposables) {
-            d.dispose();
-        }
-        this._disposables = [];
-    }
+    })();
 }
+
+// Re-export the engine types for consumers that import from this module.
+export {
+    PlanIngestionEngine,
+    type PlanIngestionHost,
+    type PlanIngestionHostConfig,
+    type PlanIngestionWatcher,
+    type PlanIngestionWatchHandle,
+    type PlanIngestionWatchEvent,
+    type PlanIngestionEnvironmentChange,
+};

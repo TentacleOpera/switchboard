@@ -113,11 +113,18 @@ const standaloneConfig = {
         filename: 'cli.js',
         libraryTarget: 'commonjs2'
     },
-    externals: {
-        vscode: 'commonjs vscode' // not imported, but ensures any stray dynamic require stays external
-    },
+    // Headless Ingestion piece 3: the standalone bundle imports the real
+    // ClickUp/Linear/Notion services (which `import * as vscode from 'vscode'`
+    // for SecretStorage + window UI). We map `vscode` to a headless shim that
+    // provides a SecretStorage adapter over StandaloneHostSecrets and no-op
+    // window/UI surfaces. Interactive setup flows (showInputBox/showQuickPick)
+    // throw a clear "not available headless" error — the ingestion path only
+    // uses SecretStorage.get, which works.
     resolve: {
-        extensions: ['.ts', '.js']
+        extensions: ['.ts', '.js'],
+        alias: {
+            vscode: path.resolve(__dirname, 'src', 'standalone', 'vscodeShim.ts'),
+        },
     },
     module: extensionConfig.module,
     devtool: 'nosources-source-map',

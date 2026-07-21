@@ -46,6 +46,7 @@ import type { RemoteProvider } from './remote/RemoteProvider';
 import { LinearRemoteProvider } from './remote/LinearRemoteProvider';
 import { NotionRemoteProvider } from './remote/NotionRemoteProvider';
 import { ClickUpRemoteProvider } from './remote/ClickUpRemoteProvider';
+import { loadNotionRemoteSetup } from './remote/notionRemoteConfig';
 import { LastWriteWinsResolver } from './remote/ContentConflictResolver';
 import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { NotionFetchService } from './NotionFetchService';
@@ -2114,11 +2115,42 @@ export class KanbanProvider implements vscode.Disposable {
             // this for a locking/turn-taking resolver without touching _pollDescriptions.
             contentConflictResolver: new LastWriteWinsResolver(),
             getWorkspaceRoot: () => resolved,
+            // Inbound-delete opt-in resolver (provider-sync inbound-delete). Reads the
+            // per-provider config blob — default false, so the ~4,000 existing installs
+            // are unchanged until explicitly enabled. When false, the reconcile-sweep
+            // skips that provider entirely (no detection, no tombstone).
+            getInboundDeleteEnabled: async (kind) => this._getInboundDeleteEnabled(resolved, kind),
             log: (m) => this._outputChannel?.appendLine(m)
         });
 
         this._remoteControls.set(resolved, service);
         return service;
+    }
+
+    /**
+     * Inbound-delete opt-in resolver (provider-sync inbound-delete). Reads the
+     * per-provider config blob — default false, so the ~4,000 existing installs are
+     * unchanged until explicitly enabled. When false, the reconcile-sweep skips
+     * that provider entirely (no detection, no tombstone).
+     */
+    private async _getInboundDeleteEnabled(resolved: string, kind: RemoteProviderKind): Promise<boolean> {
+        try {
+            if (kind === 'notion') {
+                const setup = await loadNotionRemoteSetup(this._getKanbanDb(resolved));
+                return setup?.plansDatabaseId ? setup.inboundDeleteEnabled === true : false;
+            }
+            if (kind === 'clickup') {
+                const config = await this._getClickUpService(resolved).loadConfig();
+                return config?.setupComplete ? config.inboundDeleteEnabled === true : false;
+            }
+            if (kind === 'linear') {
+                const config = await this._getLinearService(resolved).loadConfig();
+                return config?.setupComplete ? config.inboundDeleteEnabled === true : false;
+            }
+        } catch (e) {
+            this._outputChannel?.appendLine(`[KanbanProvider] _getInboundDeleteEnabled(${kind}) failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        return false;
     }
 
     /**
@@ -2938,25 +2970,61 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     }
 
     /**
-     * Push a column move to Notion via the provider's pushState.
-     * Only fires if the plan has a notionPageId and Notion remote control is set up.
-     * No realTimeSyncEnabled flag for Notion — push is gated by the remote.config push
-     * flag (formalized in Plan 3/3). For now, push fires if Notion is the active provider.
+     * Push a column move to Notion via the provider's pushState, with create-if-missing
+     * for plans that have no notionPageId yet (provider-sync full parity).
+     *
+     * Enable signal: the Notion setup blob's `realTimeSyncEnabled` flag (mirrors
+     * ClickUp/Linear's per-service flag). When true, Notion pushes independently of
+     * which provider is the active poll backend — all three push simultaneously.
+     * Default false → the ~4,000 existing installs are unchanged until enabled.
+     *
+     * Create-if-missing mirrors ClickUp's `syncPlan` lazy-create: when a push-enabled
+     * board fires an outbound sync for a plan with no notionPageId, dedup-check by
+     * Plan ID, create the page (title + Kanban Column + Plan ID in one POST), and
+     * persist the returned id atomically before the next poll cycle can advance
+     * (loop safety: the inbound byRemoteId map guards re-import only after the id
+     * round-trips).
      */
     private async _queueNotionSync(
         workspaceRoot: string,
         plan: import('./KanbanDatabase').KanbanPlanRecord,
         targetColumn: string
     ): Promise<void> {
-        if (!plan.notionPageId) { return; }
         try {
-            const rc = this._getRemoteControl(workspaceRoot);
-            const config = await rc.getConfig();
-            // Only push if Notion is the active provider, push is enabled, and remote control is active.
-            if (config.provider !== 'notion' || !config.push || !rc.isActive) { return; }
-            const provider = this._getPushProviderForPlan(workspaceRoot, plan);
-            if (!provider || !provider.capabilities.push) { return; }
-            await provider.pushState(plan.notionPageId, targetColumn);
+            const db = this._getKanbanDb(workspaceRoot);
+            if (!db || !(await db.ensureReady())) { return; }
+            const setup = await loadNotionRemoteSetup(db);
+            if (!setup?.plansDatabaseId || setup.realTimeSyncEnabled !== true) { return; }
+
+            const notionProvider = new NotionRemoteProvider({
+                notion: this._getNotionService(workspaceRoot),
+                db,
+                getWorkspaceId: async () => (await db.getWorkspaceId()) || '',
+                getPlansDir: () => this._getIntegrationImportDir(workspaceRoot),
+                log: (m: string) => this._outputChannel?.appendLine(m),
+            });
+
+            if (plan.notionPageId) {
+                // Update path: push state to the existing page.
+                await notionProvider.pushState(plan.notionPageId, targetColumn);
+                return;
+            }
+
+            // Create-if-missing path: dedup-check by Plan ID, then create the page.
+            const newPageId = await notionProvider.createPageForPlan(plan, targetColumn);
+            if (!newPageId) { return; }
+            // Persist the id atomically before the poll cursor can advance — the
+            // inbound byRemoteId map guards re-import only after the id round-trips,
+            // so this write must land before the next poll cycle sees the new page.
+            const workspaceId = await db.getWorkspaceId();
+            if (workspaceId) {
+                await db.updateNotionPageIdByPlanFile(plan.planFile, workspaceId, newPageId);
+                // Register with the inbound-delete sweep's mid-create race guard so
+                // a reconcile-sweep running before the new page is visible to a
+                // paginated query doesn't tombstone the just-created plan.
+                this._getRemoteControl(workspaceRoot).registerOutboundCreate(newPageId);
+                this._outputChannel?.appendLine(`[KanbanProvider] _queueNotionSync: created Notion page ${newPageId} for plan ${plan.planId} and persisted id.`);
+            }
         } catch (e) {
             this._outputChannel?.appendLine(`[KanbanProvider] _queueNotionSync failed: ${e instanceof Error ? e.message : String(e)}`);
         }

@@ -8,6 +8,13 @@ import * as path from 'path';
 import { getConstitutionPath } from './constitutionUtils';
 import { stateFs as fs, stateLockfile as lockfile, getWorkspaceRootFromStatePath } from './stateConfigBridge';
 import { applyThemeBodyClass, getEffectiveColourKanbanIcons } from './themeBodyClass';
+import {
+    getShellHtml as sharedGetShellHtml,
+    getBoardHtml as sharedGetBoardHtml,
+    getProjectHtml as sharedGetProjectHtml,
+    getPanelsManifest as sharedGetPanelsManifest,
+    getPanelHtmlById as sharedGetPanelHtmlById,
+} from './headlessPanelHtml';
 import type { FSWatcher, Dirent, Stats } from 'fs';
 import * as os from 'os';
 import * as crypto from 'crypto';
@@ -1746,6 +1753,33 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     : payload;
                 return await this.handleServiceVerb(verb, p);
             },
+            // Headless browser UI (Feature: Headless Browser UI): serve the
+            // shell + panel HTML from the extension's LocalApiServer so that
+            // `npx switchboard` (which detects the running extension via
+            // api-server-port.txt and opens a browser to this port) gets the
+            // full shell + panel HTML + verb dispatch in one server. The HTML
+            // getters are shared with the standalone bootstrap via
+            // headlessPanelHtml.ts. Verb dispatch (designVerb/setupVerb/etc.)
+            // is wired above — the extraction is done, so all panel verbs work.
+            serveStatic: (() => {
+                const repoRoot = this._extensionUri.fsPath;
+                const wsRoot = effectiveRoot;
+                return {
+                    getBoardHtml: async () => sharedGetBoardHtml(repoRoot, wsRoot),
+                    getProjectHtml: async () => sharedGetProjectHtml(repoRoot, wsRoot),
+                    getShellHtml: async () => sharedGetShellHtml(repoRoot),
+                    getPanelsManifest: () => sharedGetPanelsManifest(),
+                    getPanelHtml: async (id: string) => {
+                        const result = sharedGetPanelHtmlById(id, repoRoot, wsRoot);
+                        return result || null;
+                    },
+                    staticRoutes: {
+                        webview: [path.join(repoRoot, 'dist', 'webview'), path.join(repoRoot, 'src', 'webview')],
+                        icons: [path.join(repoRoot, 'icons')],
+                        designs: [path.join(repoRoot, 'designs')],
+                    },
+                };
+            })(),
             onPhoneAFriend: async (planFile: string, originRole?: string) => {
                 // Route the coder's batch-end POST to the Phone-a-Friend terminal dispatch.
                 // The callback handles the silent drop internally and MUST NOT throw on

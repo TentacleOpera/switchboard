@@ -249,6 +249,91 @@ export class NotionRemoteProvider implements RemoteProvider {
         }
     }
 
+    /**
+     * Outbound create-if-missing (provider-sync full parity). Mirrors ClickUp's
+     * `syncPlan` lazy-create: when a Notion-configured, push-enabled board fires an
+     * outbound sync for a plan with no `notionPageId`, dedup-check by Plan ID, then
+     * create a new page under the plans database with the title + Kanban Column
+     * select + Plan ID rich_text in a single `POST /v1/pages` body (one-shot property
+     * set at create — no follow-up PATCH). Returns the page id (existing or new), or
+     * '' on failure. Idempotent: a repeated sync / second machine finds the page by
+     * Plan ID and returns its id instead of duplicating.
+     */
+    public async createPageForPlan(
+        plan: { planId: string; topic: string; kanbanColumn: string },
+        targetColumn?: string
+    ): Promise<string> {
+        const setup = await this._ensureSetup();
+        if (!setup?.plansDatabaseId) {
+            this._log('createPageForPlan: no plans database configured — skipping.');
+            return '';
+        }
+        const planId = String(plan.planId || '').trim();
+        if (!planId) {
+            this._log('createPageForPlan: plan has no planId — skipping (cannot dedup).');
+            return '';
+        }
+        const column = String(targetColumn || plan.kanbanColumn || '').trim();
+        const title = String(plan.topic || `Plan ${planId}`).trim() || `Plan ${planId}`;
+
+        // Pre-create dedup: query the plans database by Plan ID rich_text equals.
+        // This is the Notion analog to ClickUp's `_findTaskByPlanId` — suppresses
+        // duplicate pages on repeated sync / second machine / pre-round-trip poll.
+        try {
+            const queryResult = await this._deps.notion.httpRequest(
+                'POST',
+                `/databases/${setup.plansDatabaseId}/query`,
+                { filter: { property: 'Plan ID', rich_text: { equals: planId } }, page_size: 100 },
+                15000
+            );
+            if (queryResult.status === 200) {
+                const existing = queryResult.data?.results?.[0];
+                if (existing?.id) {
+                    this._log(`createPageForPlan: dedup hit for planId ${planId} → page ${existing.id}.`);
+                    return String(existing.id);
+                }
+            } else {
+                this._log(`createPageForPlan: dedup query failed (HTTP ${queryResult.status}) — proceeding to create (dup risk).`);
+            }
+        } catch (e) {
+            this._log(`createPageForPlan: dedup query threw for planId ${planId} (${e instanceof Error ? e.message : String(e)}) — proceeding to create (dup risk).`);
+        }
+
+        // Create with properties in one shot. The plans database schema uses 'Topic'
+        // as the title property and 'Plan ID' as a rich_text (verified in
+        // NotionBackupService._planToNotionProperties). Kanban Column is a select.
+        const properties: Record<string, any> = {
+            'Topic': { title: [{ text: { content: title } }] },
+            'Plan ID': { rich_text: [{ text: { content: planId } }] },
+        };
+        if (column) {
+            properties['Kanban Column'] = { select: { name: column } };
+        }
+
+        try {
+            const result = await this._deps.notion.httpRequest(
+                'POST',
+                '/pages',
+                { parent: { database_id: setup.plansDatabaseId }, properties },
+                15000
+            );
+            if (result.status < 200 || result.status >= 300) {
+                this._log(`createPageForPlan: create failed (HTTP ${result.status}): ${JSON.stringify(result.data)?.slice(0, 200)}`);
+                return '';
+            }
+            const pageId = String(result.data?.id || '');
+            if (!pageId) {
+                this._log('createPageForPlan: create returned no page id.');
+                return '';
+            }
+            this._log(`createPageForPlan: created page ${pageId} for planId ${planId} (column="${column}").`);
+            return pageId;
+        } catch (e) {
+            this._log(`createPageForPlan: create threw for planId ${planId}: ${e instanceof Error ? e.message : String(e)}`);
+            return '';
+        }
+    }
+
     public async archiveCard(remoteId: string): Promise<ArchiveResult> {
         const setup = await this._ensureSetup();
         if (!setup?.plansDatabaseId) {
@@ -333,6 +418,81 @@ export class NotionRemoteProvider implements RemoteProvider {
         } catch (e) {
             this._log(`importRemotePlan failed for ${remoteId}: ${e instanceof Error ? e.message : String(e)}`);
             return null;
+        }
+    }
+
+    /**
+     * Inbound-delete reconcile-sweep (provider-sync inbound-delete). Paginate the
+     * plans database (all non-archived pages) and collect their ids. Throttled at
+     * the same ~3 RPS limiter the delta query uses; honours Retry-After via the
+     * internal httpRequest retry. If any page fails (non-200 after retries), the
+     * sweep is reported INCOMPLETE — the caller MUST NOT tombstone the un-fetched
+     * tail. Only a fully-completed sweep produces a reliable deletion list.
+     */
+    public async reconcileLiveIds(): Promise<{ complete: boolean; liveIds: Set<string> }> {
+        const setup = await this._ensureSetup();
+        if (!setup?.plansDatabaseId) {
+            return { complete: true, liveIds: new Set() };
+        }
+        const liveIds = new Set<string>();
+        let complete = true;
+        let startCursor: string | undefined;
+        for (let page = 0; page < MAX_PAGES; page++) {
+            const body: Record<string, unknown> = { page_size: PAGE_SIZE };
+            if (startCursor) { body.start_cursor = startCursor; }
+            let result;
+            try {
+                result = await this._deps.notion.httpRequest('POST', `/databases/${setup.plansDatabaseId}/query`, body, 30000);
+            } catch (e) {
+                this._log(`reconcileLiveIds: page ${page} threw (${e instanceof Error ? e.message : String(e)}) — marking sweep incomplete.`);
+                complete = false;
+                break;
+            }
+            if (result.status !== 200) {
+                this._log(`reconcileLiveIds: page ${page} failed (HTTP ${result.status}) — marking sweep incomplete.`);
+                complete = false;
+                break;
+            }
+            for (const row of (result.data?.results || [])) {
+                const id = String(row.id || '');
+                if (id) { liveIds.add(id); }
+            }
+            if (!result.data?.has_more) { break; }
+            startCursor = result.data?.next_cursor || undefined;
+            if (!startCursor) { break; }
+            await this._delay(LIMITER_MS);
+        }
+        if (complete) {
+            this._log(`reconcileLiveIds: complete sweep — ${liveIds.size} live page(s).`);
+        } else {
+            this._log(`reconcileLiveIds: INCOMPLETE sweep — ${liveIds.size} page(s) fetched before abort; no tombstones will be issued.`);
+        }
+        return { complete, liveIds };
+    }
+
+    /**
+     * Inbound-delete disambiguation probe (provider-sync inbound-delete). After the
+     * sweep reports a mapped page id as missing, re-check it directly: a GET /pages/{id}
+     * that returns the page (archived or not) means the page still exists (a move, or
+     * archived-but-not-deleted) → 'moved'; a 404/genuine absence → 'deleted'; any
+     * uncertainty → 'unknown' (safe skip).
+     */
+    public async probeRemoteId(remoteId: string): Promise<'deleted' | 'moved' | 'unknown'> {
+        const pageId = String(remoteId || '').trim();
+        if (!pageId) { return 'unknown'; }
+        try {
+            const result = await this._deps.notion.httpRequest('GET', `/pages/${pageId}`, undefined, 15000);
+            if (result.status === 404) { return 'deleted'; }
+            if (result.status >= 200 && result.status < 300) {
+                // Page exists — archived or not, it wasn't deleted. Treat as moved
+                // (out of the queried scope, or archived which the query excludes).
+                return 'moved';
+            }
+            this._log(`probeRemoteId: ${pageId} returned HTTP ${result.status} — treating as unknown.`);
+            return 'unknown';
+        } catch (e) {
+            this._log(`probeRemoteId: ${pageId} threw (${e instanceof Error ? e.message : String(e)}) — treating as unknown.`);
+            return 'unknown';
         }
     }
 }

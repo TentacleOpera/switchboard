@@ -190,6 +190,62 @@ export class StandaloneHostSecrets implements HostSecrets {
     }
 }
 
+// ─── Plan watcher config + watched-folders surface (Headless Ingestion piece 2) ─
+
+/**
+ * Read the `switchboard.planWatcher.*` config from the standalone config file.
+ * The `PlanIngestionHost` seam reads these via `getConfig('planWatcher')` on
+ * the host; this helper exposes the same values to external callers (e.g. a
+ * headless status endpoint) without going through the engine.
+ */
+export function readPlanWatcherConfig(config: StandaloneHostPathConfigProvider): {
+    periodicScanEnabled: boolean;
+    scanIntervalMs: number;
+} {
+    return {
+        periodicScanEnabled: config.getConfigBoolean('planWatcher.periodicScanEnabled', true),
+        scanIntervalMs: config.getConfigNumber('planWatcher.scanIntervalMs', 10000),
+    };
+}
+
+/**
+ * Resolve the watched-folders list for the standalone host: the workspace root
+ * plus any configured planScanner custom-source directories that exist on disk.
+ * Mirrors the engine's `listWatchedRoots()` but is safe to call before the
+ * engine is constructed (e.g. for a pre-init status report).
+ */
+export function resolveStandaloneWatchedRoots(
+    config: StandaloneHostPathConfigProvider,
+    workspaceRoot: string,
+    extraRoots: string[] = [],
+): string[] {
+    const roots = [path.resolve(workspaceRoot)];
+    for (const r of extraRoots) {
+        const resolved = path.resolve(r);
+        if (fs.existsSync(resolved) && !roots.includes(resolved)) {
+            roots.push(resolved);
+        }
+    }
+    // Include planScanner custom-source dirs from the config.
+    const rawCustom = config.getConfigJson<any[]>('planScanner.customSources', []);
+    if (Array.isArray(rawCustom)) {
+        for (const src of rawCustom) {
+            if (!src || typeof src !== 'object') continue;
+            const globs = Array.isArray(src.globs) ? src.globs : [];
+            for (const g of globs) {
+                if (typeof g !== 'string') continue;
+                const candidate = path.isAbsolute(g) ? g : path.resolve(workspaceRoot, g);
+                try {
+                    if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory() && !roots.includes(candidate)) {
+                        roots.push(candidate);
+                    }
+                } catch { /* skip unreadable */ }
+            }
+        }
+    }
+    return roots;
+}
+
 // ─── Memento/state bridge ────────────────────────────────────────────────────
 
 export interface HostMemento {

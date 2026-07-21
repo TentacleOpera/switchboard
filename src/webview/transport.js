@@ -135,6 +135,17 @@
     connectWs();
 
     // ─── acquireVsCodeApi shim ────────────────────────────────────────────────
+    // VS Code command verbs that open another panel — in the headless shell
+    // these become cross-panel switches instead of HTTP posts. The shell's
+    // postMessage listener handles {type:'switchPanel', panel}.
+    const PANEL_SWITCH_VERBS = {
+        openKanban: 'board',
+        openPlanningPanel: 'project',
+        openProjectPanel: 'project',
+        openSetupPanel: 'setup',
+        openDesignPanel: 'design',
+    };
+
     const vscodeShim = {
         postMessage: function (message) {
             if (!message || typeof message.type !== 'string') {
@@ -142,6 +153,16 @@
                 return;
             }
             const verb = message.type;
+
+            // Cross-panel switch: in the shell, opening another panel is a
+            // client-side switch (no HTTP round-trip). Outside the shell
+            // (standalone full-page route), fall through to the HTTP post —
+            // the server returns a no-op ack.
+            if (PANEL_SWITCH_VERBS[verb] && window.parent && window.parent !== window) {
+                window.parent.postMessage({ type: 'switchPanel', panel: PANEL_SWITCH_VERBS[verb] }, '*');
+                return;
+            }
+
             const body = Object.assign({}, message);
             const url = `${routePrefix}/${encodeURIComponent(verb)}`;
 
@@ -176,6 +197,22 @@
 
     window.__switchboardVscodeShim = vscodeShim;
     window.acquireVsCodeApi = function () { return vscodeShim; };
+
+    // ─── Cross-panel switch bridge (headless app-shell) ──────────────────────
+    // Panels run inside same-origin iframes hosted by the shell. A panel can
+    // request the shell switch to another panel by calling this helper, which
+    // posts {type:'switchPanel', panel} to the parent window. No-op when not
+    // iframed (extension webview or standalone full-page route) — the parent
+    // listener only exists in the shell.
+    window.__switchboardSwitchPanel = function (panelId) {
+        try {
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({ type: 'switchPanel', panel: String(panelId) }, '*');
+            }
+        } catch (err) {
+            console.warn('[transport] switchPanel postMessage failed:', err);
+        }
+    };
 
     // ─── Host-adaptive UI ────────────────────────────────────────────────────
     function applyCapabilityGating() {
@@ -214,6 +251,12 @@
 .host-terminal-dispatch-false #btn-update-via-planner,
 .host-terminal-dispatch-false #btn-build-system,
 .host-terminal-dispatch-false #btn-build-prd-via-planner {
+    display: none !important;
+}
+/* Memo tab (relocated into Project panel): "Send to Planner" dispatches to a
+   planner terminal agent. In a no-terminal host it degrades to Copy Prompt
+   server-side, so hide the affordance — the Copy Prompt button stays. */
+.host-terminal-dispatch-false #memo-send-btn {
     display: none !important;
 }
 /* NOTE: moveSelected / moveAll are NOT hidden. In a headless host they degrade

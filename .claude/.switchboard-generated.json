@@ -1,7 +1,7 @@
 {
   "generator": "ClaudeCodeMirrorService",
   "version": "1.7.13",
-  "generatedAt": "2026-07-19T22:05:27.842Z",
+  "generatedAt": "2026-07-21T08:30:35.473Z",
   "skills": [
     {
       "source": "workflows/switchboard.md",
@@ -124,11 +124,6 @@
       "relPath": ".claude/skills/worktree-cleanup/SKILL.md"
     },
     {
-      "source": "skills/refine_ticket.md",
-      "name": "refine-ticket",
-      "relPath": ".claude/skills/refine-ticket/SKILL.md"
-    },
-    {
       "source": "skills/refine_feature.md",
       "name": "refine-feature",
       "relPath": ".claude/skills/refine-feature/SKILL.md"
@@ -137,6 +132,11 @@
       "source": "skills/group-into-features",
       "name": "group-into-features",
       "relPath": ".claude/skills/group-into-features/SKILL.md"
+    },
+    {
+      "source": "skills/rearrange-feature",
+      "name": "rearrange-feature",
+      "relPath": ".claude/skills/rearrange-feature/SKILL.md"
     },
     {
       "source": "skills/switchboard-orchestration",

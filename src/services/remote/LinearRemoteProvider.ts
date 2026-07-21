@@ -227,4 +227,92 @@ export class LinearRemoteProvider implements RemoteProvider {
         const description = String(issue.description || '').trim();
         return `# ${title}\n\n> **Linear Issue ID:** ${remoteId}\n\n${description}`;
     }
+
+    /**
+     * Inbound-delete reconcile-sweep (provider-sync inbound-delete). Paginate all
+     * non-archived Linear issues in the configured team(s) and collect their ids.
+     * Throttled via the graphqlRequest layer's internal retry/backoff. If any page
+     * fails, the sweep is reported INCOMPLETE — the caller MUST NOT tombstone the
+     * un-fetched tail. Only a fully-completed sweep produces a reliable deletion list.
+     *
+     * Linear's `issues` query excludes archived issues by default, so a mapped issue
+     * that was archived (Linear's "delete" = archive) simply stops appearing →
+     * candidate deletion. The probeRemoteId step distinguishes archived (moved) from
+     * genuinely-gone (deleted, though Linear keeps the id resolvable as archived).
+     */
+    public async reconcileLiveIds(): Promise<{ complete: boolean; liveIds: Set<string> }> {
+        const config = await this._linear.loadConfig();
+        if (!config?.setupComplete) { return { complete: true, liveIds: new Set() }; }
+        if (!(await this._linear.hasApiToken())) { return { complete: true, liveIds: new Set() }; }
+
+        const liveIds = new Set<string>();
+        let complete = true;
+        let cursor: string | null = null;
+        const PAGE = 100;
+        const MAX = 50; // safety backstop: ≤ 5,000 issues
+        try {
+            for (let page = 0; page < MAX; page++) {
+                const after = cursor ? `, after: ${JSON.stringify(cursor)}` : '';
+                const QUERY = `
+                  query {
+                    issues(first: ${PAGE}${after}) {
+                      nodes { id }
+                      pageInfo { hasNextPage endCursor }
+                    }
+                  }
+                `;
+                const resp = await this._linear.graphqlRequest(QUERY, {});
+                const issues = resp?.data?.issues;
+                if (!issues) { complete = false; break; }
+                for (const node of (issues.nodes || [])) {
+                    const id = String(node.id || '');
+                    if (id) { liveIds.add(id); }
+                }
+                if (!issues.pageInfo?.hasNextPage) { break; }
+                cursor = issues.pageInfo.endCursor || null;
+                if (!cursor) { break; }
+            }
+        } catch (e) {
+            this._deps.log?.(`[LinearRemoteProvider] reconcileLiveIds failed: ${e instanceof Error ? e.message : String(e)} — marking incomplete.`);
+            complete = false;
+        }
+        if (complete) {
+            this._deps.log?.(`[LinearRemoteProvider] reconcileLiveIds: complete sweep — ${liveIds.size} live issue(s).`);
+        } else {
+            this._deps.log?.(`[LinearRemoteProvider] reconcileLiveIds: INCOMPLETE — ${liveIds.size} issue(s) before abort; no tombstones will be issued.`);
+        }
+        return { complete, liveIds };
+    }
+
+    /**
+     * Inbound-delete disambiguation probe (provider-sync inbound-delete). Re-check
+     * the issue id directly: Linear keeps archived issues resolvable, so a found
+     * issue with `archivedAt` set is a move (archived, not deleted); a found issue
+     * with no `archivedAt` is in scope (shouldn't be reported missing — treat as
+     * moved); a not-found/error is 'unknown' (safe skip). Linear has no hard-delete
+     * from the API surface (issues are archived), so 'deleted' is only returned
+     * when the id is genuinely unresolvable.
+     */
+    public async probeRemoteId(remoteId: string): Promise<'deleted' | 'moved' | 'unknown'> {
+        const id = String(remoteId || '').trim();
+        if (!id) { return 'unknown'; }
+        try {
+            const resp = await this._linear.graphqlRequest(`
+                query($id: String!) {
+                    issue(id: $id) { id archivedAt state { id } }
+                }
+            `, { id });
+            const issue = resp?.data?.issue;
+            if (!issue) { return 'deleted'; }
+            // Archived = Linear's "delete". Treat as deleted (the user removed it
+            // from the active board). This is the tombstone trigger.
+            if (issue.archivedAt) { return 'deleted'; }
+            // Exists and not archived — it's in scope, so the sweep shouldn't have
+            // reported it missing. Treat as moved (safe skip).
+            return 'moved';
+        } catch (e) {
+            this._deps.log?.(`[LinearRemoteProvider] probeRemoteId: ${id} threw (${e instanceof Error ? e.message : String(e)}) — treating as unknown.`);
+            return 'unknown';
+        }
+    }
 }

@@ -119,6 +119,14 @@ interface RemoteControlDeps {
     contentConflictResolver?: ContentConflictResolver;
     /** Resolve the workspace root for file path operations (plan files). */
     getWorkspaceRoot?: () => string;
+    /**
+     * Inbound-delete opt-in check (provider-sync inbound-delete). Returns true if the
+     * given provider has inbound-delete detection+tombstone enabled (default off).
+     * When false, the reconcile-sweep still runs (detecting deletions) but takes no
+     * destructive action — or is skipped entirely if the provider isn't configured.
+     * If not injected, the sweep is skipped (safe default — no destructive action).
+     */
+    getInboundDeleteEnabled?: (kind: RemoteProviderKind) => Promise<boolean>;
     log?: (msg: string) => void;
 }
 
@@ -137,6 +145,19 @@ export class RemoteControlService {
     private _lastPushAt: string | null = null;
     private _lastPushOk = true;
     private _lastPushError: string | null = null;
+    // ── Inbound-delete reconcile-sweep state (provider-sync inbound-delete) ──
+    private _sweeping = false;
+    /** Polls between reconcile sweeps. Default targets ~10–15 min of wall-clock at
+     *  a 60s poll (N = round(600 / 60) = 10), bounded [4, 20] so a ~13s sweep never
+     *  starves the normal poll. Tunable later without a redesign. */
+    private _sweepEveryN = 10;
+    private _pollsSinceSweep = 0;
+    /** Mid-create race guard: remoteId → ISO timestamp of the most recent outbound
+     *  create that persisted the id. A sweep must NOT tombstone a plan whose id was
+     *  persisted within this window (the outbound create just round-tripped; the
+     *  remote item exists but may not yet be visible to a paginated query). */
+    private _recentlyCreatedRemoteIds = new Map<string, string>();
+    private static readonly MID_CREATE_GUARD_MS = 60_000;
 
     constructor(deps: RemoteControlDeps) {
         this._deps = deps;
@@ -178,6 +199,26 @@ export class RemoteControlService {
         this._lastPushAt = new Date().toISOString();
         this._lastPushOk = ok;
         this._lastPushError = ok ? null : (error || 'unknown error');
+    }
+
+    /**
+     * Register a freshly-persisted outbound create id (provider-sync full parity).
+     * The inbound-delete reconcile-sweep must NOT tombstone a plan whose remote id
+     * was persisted within the MID_CREATE_GUARD_MS window — the outbound create just
+     * round-tripped and the remote item exists, but a paginated sweep query may not
+     * yet reflect it (eventual consistency / race). Called by the outbound create
+     * path after the id is written to the local DB.
+     */
+    public registerOutboundCreate(remoteId: string): void {
+        const id = String(remoteId || '').trim();
+        if (!id) { return; }
+        this._recentlyCreatedRemoteIds.set(id, new Date().toISOString());
+        // Bounded — drop entries older than the guard window on each registration.
+        const cutoff = Date.now() - RemoteControlService.MID_CREATE_GUARD_MS;
+        for (const [rid, ts] of this._recentlyCreatedRemoteIds) {
+            const t = Date.parse(ts);
+            if (isFinite(t) && t < cutoff) { this._recentlyCreatedRemoteIds.delete(rid); }
+        }
     }
 
     private _log(msg: string): void {
@@ -260,9 +301,16 @@ export class RemoteControlService {
             this._log('No boards selected — not starting.');
             return;
         }
+        // Size the sweep cadence to ~10 min of wall-clock at the configured poll rate,
+        // bounded [4, 20] so a ~13s sweep never starves the normal poll.
+        this._sweepEveryN = Math.min(20, Math.max(4, Math.round(600 / Math.max(1, config.pingFrequencySeconds))));
         if (!config.silentSync) {
             this._log('Silent sync off — running a reconciling poll before starting loop.');
             await this._poll(); // one-time reconcile before the loop
+            // Inbound-delete reconcile-sweep on start() (provider-sync inbound-delete).
+            // Runs once on boot so deletions accumulated while the machine was off are
+            // caught; the Nth-poll cadence below handles mid-run deletions.
+            await this._reconcileSweep();
         }
         this._active = true;
         this._scheduleTimer(config.pingFrequencySeconds);
@@ -281,6 +329,10 @@ export class RemoteControlService {
         if (config.boards.length === 0) { return; } // unconfigured — clean no-op
         if (config.silentSync) { return; } // opt-in: match start() semantics
         await this._poll();
+        // Inbound-delete reconcile-sweep on the one-shot startup reconcile too, so
+        // deletions accumulated while the machine was off are caught even when the
+        // poll loop isn't started (e.g. the extension's startup reconcile).
+        await this._reconcileSweep();
     }
 
     /** Stop pinging. Silent sync, when on, continues elsewhere; the ping loop stops here. */
@@ -329,6 +381,19 @@ export class RemoteControlService {
             this._lastPollOk = true;
             this._lastPollError = null;
             this._consecutiveFailures = 0;
+
+            // Inbound-delete reconcile-sweep cadence (provider-sync inbound-delete).
+            // Runs every Nth poll cycle (N sized in start()) so a headless service
+            // that boots once and runs for days still catches mid-run deletions.
+            // The sweep is guarded like _polling — an overlapping sweep is skipped.
+            this._pollsSinceSweep++;
+            if (this._pollsSinceSweep >= this._sweepEveryN) {
+                this._pollsSinceSweep = 0;
+                // Fire-and-forget — the sweep must not block or crash the poll loop.
+                void this._reconcileSweep().catch(sweepErr => {
+                    this._log(`Reconcile sweep error: ${sweepErr instanceof Error ? sweepErr.message : String(sweepErr)}`);
+                });
+            }
         } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
             this._log(`Poll error: ${msg}`);
@@ -349,6 +414,121 @@ export class RemoteControlService {
             }
         } finally {
             this._polling = false;
+        }
+    }
+
+    // ── Inbound-delete reconcile-sweep (provider-sync inbound-delete) ──
+    //
+    // Detects when a mapped remote card is deleted/archived in the tracker
+    // (ClickUp/Linear/Notion) and tombstones the mapped local plan (recoverable,
+    // opt-in default-off, never hard-delete, never unmapped). The
+    // RemoteStateDelta seam has no deletion signal, so the mechanism is a
+    // reconcile-sweep: paginate the live remote id set per provider and diff
+    // against locally-mapped remoteIds. A mapped id absent from the live set is a
+    // candidate deletion — confirmed via probeRemoteId (move-vs-delete
+    // disambiguation) and the mid-create race guard before tombstoning.
+
+    private async _reconcileSweep(): Promise<void> {
+        if (this._sweeping) { return; } // skip overlapping sweeps
+        if (!this._deps.getInboundDeleteEnabled) {
+            // No opt-in resolver wired — safe default is no destructive action.
+            return;
+        }
+        this._sweeping = true;
+        try {
+            const db = this._deps.getDb();
+            if (!db || !(await db.ensureReady())) { return; }
+            const workspaceId = await this._deps.getWorkspaceId();
+            if (!workspaceId) { return; }
+            const config = await this.getConfig();
+            const boardSet = new Set(config.boards);
+            const allPlans = await db.getAllPlans(workspaceId);
+
+            // Sweep every provider that (a) can be built and (b) has inbound-delete
+            // opted in. All three providers are swept independently and simultaneously
+            // (no single-active restriction) — mirroring the outbound parity design.
+            const kinds: RemoteProviderKind[] = ['linear', 'notion', 'clickup'];
+            for (const kind of kinds) {
+                try {
+                    const enabled = await this._deps.getInboundDeleteEnabled(kind);
+                    if (!enabled) { continue; }
+                    const provider = this._deps.getProvider(kind);
+                    if (!provider || !provider.reconcileLiveIds) { continue; }
+                    await this._sweepProvider(db, provider, allPlans, boardSet, workspaceId);
+                } catch (e) {
+                    this._log(`Reconcile sweep for ${kind} failed: ${e instanceof Error ? e.message : String(e)}`);
+                }
+            }
+        } finally {
+            this._sweeping = false;
+        }
+    }
+
+    private async _sweepProvider(
+        db: KanbanDatabase,
+        provider: RemoteProvider,
+        allPlans: KanbanPlanRecord[],
+        boardSet: Set<string>,
+        workspaceId: string
+    ): Promise<void> {
+        if (!provider.reconcileLiveIds) { return; }
+        const { complete, liveIds } = await provider.reconcileLiveIds();
+        if (!complete) {
+            // Partial sweep (rate-limit backoff mid-pagination) — MUST NOT tombstone
+            // the un-fetched tail. Log and bail; the next sweep retries.
+            this._log(`Reconcile sweep for ${provider.kind}: incomplete — no tombstones issued.`);
+            return;
+        }
+
+        // Index locally-mapped plans by remoteId for this provider kind, filtered to
+        // the selected boards (same shape as _indexByRemoteId, but we rebuild here so
+        // the sweep is independent of the active poll provider).
+        const mapped = new Map<string, KanbanPlanRecord>();
+        for (const p of allPlans) {
+            if (p.status === 'deleted') { continue; }
+            if (!boardSet.has(p.project || '')) { continue; }
+            const rid = this._remoteIdOf(provider.kind, p);
+            if (rid) { mapped.set(rid, p); }
+        }
+
+        const cutoff = Date.now() - RemoteControlService.MID_CREATE_GUARD_MS;
+        for (const [remoteId, plan] of mapped) {
+            if (liveIds.has(remoteId)) { continue; } // still live — no action
+            // Mid-create race guard: skip if the id was persisted by an outbound
+            // create within the guard window (the remote item exists but may not yet
+            // be visible to a paginated query).
+            const createdTs = this._recentlyCreatedRemoteIds.get(remoteId);
+            if (createdTs) {
+                const t = Date.parse(createdTs);
+                if (isFinite(t) && t > cutoff) {
+                    this._log(`Reconcile sweep for ${provider.kind}: skipping ${remoteId} — mid-create guard (persisted ${createdTs}).`);
+                    continue;
+                }
+            }
+            // Move-vs-delete disambiguation: re-check the id directly. A card moved
+            // out of the queried scope looks identical to a deletion in a scoped
+            // query; probeRemoteId distinguishes them. 'unknown' → safe skip.
+            if (!provider.probeRemoteId) {
+                this._log(`Reconcile sweep for ${provider.kind}: ${remoteId} missing but no probe — skipping (safe default).`);
+                continue;
+            }
+            const status = await provider.probeRemoteId(remoteId);
+            if (status !== 'deleted') {
+                this._log(`Reconcile sweep for ${provider.kind}: ${remoteId} probe=${status} — skipping (not a confirmed deletion).`);
+                continue;
+            }
+            // Confirmed deletion — tombstone the mapped local plan (recoverable,
+            // never hard-delete, never git rm, never unmapped).
+            try {
+                const ok = await db.tombstonePlan(plan.planId);
+                if (ok) {
+                    this._log(`Reconcile sweep for ${provider.kind}: tombstoned plan ${plan.planId} (remote ${remoteId} deleted).`);
+                } else {
+                    this._log(`Reconcile sweep for ${provider.kind}: tombstonePlan returned false for ${plan.planId} (already tombstoned?).`);
+                }
+            } catch (e) {
+                this._log(`Reconcile sweep for ${provider.kind}: tombstonePlan threw for ${plan.planId}: ${e instanceof Error ? e.message : String(e)}`);
+            }
         }
     }
 

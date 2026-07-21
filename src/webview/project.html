@@ -135,8 +135,7 @@
             font-size: 11px;
             font-family: var(--font-mono);
         }.sidebar-search-input {
-            margin-left: auto;
-            width: 150px;
+            width: 100%;
             background: #111;
             border: 1px solid var(--border-color);
             color: var(--text-primary);
@@ -453,6 +452,11 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
+            padding: 6px 12px;
+            background: var(--panel-bg2);
+            border-bottom: 1px solid var(--border-color);
+        }.sidebar-search-row {
+            display: flex;
             padding: 6px 12px;
             background: var(--panel-bg2);
             border-bottom: 1px solid var(--border-color);
@@ -1217,6 +1221,7 @@
         <button class="shared-tab-btn" data-tab="constitution">CONSTITUTION</button>
         <button class="shared-tab-btn" data-tab="system">SYSTEM</button>
         <button class="shared-tab-btn" data-tab="tuning">TUNING</button>
+        <button class="shared-tab-btn" data-tab="memo">MEMO</button>
     </div>
     <div class="container">
         <!-- Kanban tab -->
@@ -1242,7 +1247,6 @@
                 <button id="btn-create-kanban-plan" class="strip-btn" title="Create a new plan">Create</button>
                 <button id="btn-chat-copy-prompt" class="strip-btn" title="Copy general chat planning prompt to clipboard">Chat Prompt</button>
                 <button id="btn-review-kanban" class="strip-btn review-mode-btn" title="Toggle review mode: highlight text in the plan to comment">Review</button>
-                <input type="text" id="kanban-search" class="sidebar-search-input" placeholder="Search plans..." />
             </div>
             <div class="content-row">
                 <div id="kanban-list-pane">
@@ -1447,6 +1451,28 @@
                         </div>
                         <textarea id="tuning-editor" class="markdown-editor"></textarea>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Memo tab (relocated from implementation.html — Feature: Headless Browser UI · Memo) -->
+        <div id="memo-content" class="shared-tab-content">
+            <div class="memo-tab-content" style="padding: 12px; display: flex; flex-direction: column; gap: 8px; max-width: 720px; margin: 0 auto;">
+                <p style="font-size: 11px; color: var(--text-secondary); margin: 0 0 4px;">
+                    Jot down bugs, thoughts, or issues — one per line or paragraph. Saved automatically.
+                    Send to an agent via Copy Prompt / Send to Planner to create one plan per issue.
+                </p>
+                <p style="font-size: 11px; color: var(--text-secondary); margin: 0 0 4px;">
+                    Tip: you can also use 'start memo capture' in an agent chat.
+                </p>
+                <textarea id="memo-textarea" class="markdown-editor"
+                          placeholder="Bug: login button overlaps on mobile&#10;&#10;Thought: maybe cache the user profile&#10;&#10;Issue: API returns 500 on empty payload..."
+                          style="width: 100%; min-height: 320px; resize: vertical; font-family: var(--font-mono, monospace); font-size: 13px; background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 8px; border-radius: 4px;"></textarea>
+                <span id="memo-status" style="font-size: 11px; color: var(--text-secondary); min-height: 14px;"></span>
+                <div style="display: flex; gap: 8px;">
+                    <button id="memo-clear-btn" class="strip-btn" style="flex: 1;">Clear</button>
+                    <button id="memo-copy-btn" class="strip-btn" style="flex: 1; border-color: var(--accent-teal, #00f0ff);">Copy Prompt</button>
+                    <button id="memo-send-btn" class="strip-btn" style="flex: 1; border-color: var(--accent-teal, #00f0ff);">Send to Planner</button>
                 </div>
             </div>
         </div>

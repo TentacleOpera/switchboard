@@ -205,4 +205,77 @@ export class ClickUpRemoteProvider implements RemoteProvider {
     public async archiveCard(_remoteId: string): Promise<ArchiveResult> {
         return { ok: true, skipped: true };
     }
+
+    /**
+     * Inbound-delete reconcile-sweep (provider-sync inbound-delete). Paginate all
+     * non-archived ClickUp tasks across every mapped list (columnMappings) and
+     * collect their ids. Throttled via the ClickUpSyncService list-fetch path. If
+     * any list fails, the sweep is reported INCOMPLETE — the caller MUST NOT
+     * tombstone the un-fetched tail. Only a fully-completed sweep produces a
+     * reliable deletion list.
+     *
+     * ClickUp `getListTasks` excludes archived/closed tasks by default
+     * (includeClosed: false), so a mapped task that was archived (ClickUp's
+     * "delete" = archive) simply stops appearing → candidate deletion. The
+     * probeRemoteId step distinguishes archived (deleted) from moved (exists in
+     * another list) from genuinely-gone.
+     */
+    public async reconcileLiveIds(): Promise<{ complete: boolean; liveIds: Set<string> }> {
+        const config = await this._clickup.loadConfig();
+        if (!config?.setupComplete) { return { complete: true, liveIds: new Set() }; }
+        if (!(await this._clickup.hasApiToken())) { return { complete: true, liveIds: new Set() }; }
+
+        const liveIds = new Set<string>();
+        let complete = true;
+        try {
+            const listIds = Object.values(config.columnMappings || {}).filter(Boolean) as string[];
+            for (const listId of listIds) {
+                try {
+                    const tasks = await this._clickup.getListTasks(listId, { includeClosed: false });
+                    for (const t of tasks) {
+                        const id = String(t.id || '');
+                        if (id) { liveIds.add(id); }
+                    }
+                } catch (e) {
+                    this._log(`reconcileLiveIds: list ${listId} failed (${e instanceof Error ? e.message : String(e)}) — marking sweep incomplete.`);
+                    complete = false;
+                    break;
+                }
+            }
+        } catch (e) {
+            this._log(`reconcileLiveIds: outer error (${e instanceof Error ? e.message : String(e)}) — marking incomplete.`);
+            complete = false;
+        }
+        if (complete) {
+            this._log(`reconcileLiveIds: complete sweep — ${liveIds.size} live task(s).`);
+        } else {
+            this._log(`reconcileLiveIds: INCOMPLETE — ${liveIds.size} task(s) before abort; no tombstones will be issued.`);
+        }
+        return { complete, liveIds };
+    }
+
+    /**
+     * Inbound-delete disambiguation probe (provider-sync inbound-delete). Re-check
+     * the task id directly: a found task that is closed/archived = deleted (the user
+     * removed it from the active board); a found task that is open and in a mapped
+     * list = moved (in scope, sweep shouldn't have flagged it); a 404/genuinely-gone
+     * = deleted; any error = unknown (safe skip).
+     */
+    public async probeRemoteId(remoteId: string): Promise<'deleted' | 'moved' | 'unknown'> {
+        const id = String(remoteId || '').trim();
+        if (!id) { return 'unknown'; }
+        try {
+            const { task } = await this._clickup.getTaskDetails(id);
+            if (!task) { return 'deleted'; }
+            // ClickUp "delete" = archive (closed). A closed task is the tombstone trigger.
+            const closed = (task as any).status?.type === 'closed' || (task as any).archived === true;
+            if (closed) { return 'deleted'; }
+            // Open task — it exists and is active. The sweep shouldn't have flagged it.
+            // Treat as moved (safe skip).
+            return 'moved';
+        } catch (e) {
+            this._log(`probeRemoteId: ${id} threw (${e instanceof Error ? e.message : String(e)}) — treating as unknown.`);
+            return 'unknown';
+        }
+    }
 }

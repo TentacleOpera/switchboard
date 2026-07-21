@@ -14,6 +14,32 @@ import {
     SKIP_TESTS_DIRECTIVE,
 } from '../services/agentPromptBuilder';
 import { StandaloneHostPathConfigProvider, StandaloneHostSecrets, StandaloneHostState } from './hostServices';
+import {
+    getShellHtml as sharedGetShellHtml,
+    getBoardHtml as sharedGetBoardHtml,
+    getProjectHtml as sharedGetProjectHtml,
+    getDesignHtml as sharedGetDesignHtml,
+    getSetupHtml as sharedGetSetupHtml,
+    getPanelsManifest as sharedGetPanelsManifest,
+    getPanelHtmlById as sharedGetPanelHtmlById,
+    resolveRepoRootFromDir,
+} from '../services/headlessPanelHtml';
+import { PlanIngestionEngine } from '../services/PlanIngestionEngine';
+import { createStandalonePlanIngestionHost, readPlanScannerCustomSourceDirs } from './planIngestionHost';
+import {
+    createHeadlessFeatureColumnRecomputer,
+    createHeadlessFeatureFileRegenerator,
+} from './headlessFeatureCallbacks';
+import { ClickUpSyncService } from '../services/ClickUpSyncService';
+import { LinearSyncService } from '../services/LinearSyncService';
+import { NotionFetchService } from '../services/NotionFetchService';
+// Headless Ingestion piece 3: the standalone bundle's webpack alias maps
+// `vscode` to `src/standalone/vscodeShim.ts`, so importing the real provider
+// services (which `import * as vscode from 'vscode'`) resolves to the shim's
+// SecretStorage adapter + no-op window UI. The shim must be installed with the
+// workspace root before any service that touches `vscode.workspace.getConfiguration`
+// is constructed.
+import { __setStandaloneWorkspaceRoot, createStandaloneSecretStorage } from './vscodeShim';
 
 export interface HeadlessSwitchboardOptions {
     workspaceRoot: string;
@@ -203,6 +229,33 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
 
     const hostState = new StandaloneHostState(db);
 
+    // ─── Headless Ingestion: construct the shared PlanIngestionEngine ──────────
+    // The engine is the same host-agnostic engine the VS Code extension uses
+    // (piece 1). The standalone host seam (piece 2) supplies native fs.watch +
+    // config.json config + watched-roots. Piece 3 wires the real provider
+    // factories (ClickUp/Linear/Notion) so provider-linked plans sync headless.
+    // The engine is constructed here but initialized AFTER pushFullState is
+    // defined, so the discovered-plan subscription can broadcast board updates.
+    __setStandaloneWorkspaceRoot(workspaceRoot);
+    const secretStorage = createStandaloneSecretStorage(secrets);
+    const clickUpService = new ClickUpSyncService(workspaceRoot, secretStorage as any);
+    const linearService = new LinearSyncService(workspaceRoot, secretStorage as any);
+    const notionService = new NotionFetchService(workspaceRoot, secretStorage as any);
+    const getClickUpService = (_root: string) => clickUpService;
+    const getLinearService = (_root: string) => linearService;
+    const getNotionService = (_root: string) => notionService;
+
+    const extraScannerRoots = readPlanScannerCustomSourceDirs(configProvider, workspaceRoot);
+    const ingestionHost = createStandalonePlanIngestionHost({
+        workspaceRoot,
+        config: configProvider,
+        extraRoots: extraScannerRoots,
+        log: (line: string) => log(opts, line),
+    });
+    const ingestionEngine = new PlanIngestionEngine(getClickUpService, getLinearService, ingestionHost, getNotionService);
+    ingestionEngine.setFeatureColumnRecomputer(createHeadlessFeatureColumnRecomputer(workspaceRoot));
+    ingestionEngine.setFeatureFileRegenerator(createHeadlessFeatureFileRegenerator(workspaceRoot));
+
     // In-memory UI settings (persisted to DB in saveSetting)
     const uiSettings = new Map<string, any>();
     let projectFilter: string | null = null;
@@ -271,107 +324,35 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         ];
     };
 
-    const getBoardHtml = async () => {
-        const repoRoot = resolveRepoRoot();
-        const candidates = [
-            path.join(repoRoot, 'dist', 'webview', 'kanban.html'),
-            path.join(repoRoot, 'src', 'webview', 'kanban.html'),
-        ];
-        const htmlPath = findFile(candidates);
-        if (!htmlPath) {
-            return { html: '<html><body>Kanban board HTML not found.</body></html>', csp: undefined };
-        }
-        let content = fs.readFileSync(htmlPath, 'utf8');
-        const nonce = crypto.randomBytes(16).toString('base64');
-        const csp = `default-src 'self'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*;`;
+    // ─── Headless panel HTML (shared module) ─────────────────────────────────
+    // The HTML getters live in src/services/headlessPanelHtml.ts so both the
+    // standalone bootstrap and the extension's LocalApiServer (TaskViewerProvider)
+    // serve identical browser UI. Adding a panel = add a getter there + a route
+    // in LocalApiServer.
 
-        content = content.replace(/<script>/g, `<script nonce="${nonce}">`);
-        content = content.replace('<!-- SHARED_DEFAULTS_SCRIPT -->',
-            `<script src="/static/webview/sharedDefaults.js" nonce="${nonce}"></script>\n<script src="/static/webview/transport.js" nonce="${nonce}"></script>`);
-
-        const hostCapabilities = { terminalDispatch: false, automation: false, orchestrator: false, terminalFleet: false, mcpTerminals: false };
-        const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="kanban" data-host-capabilities="${htmlEscapeJson(JSON.stringify(hostCapabilities))}"`;
-        content = content.replace('<body', `<body ${bodyAttr}`);
-
-        const iconDir = '/static/icons';
-        const iconMap: Record<string, string> = {
-            '{{ICON_22}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-78.png`,
-            '{{ICON_COLLAPSE_CODERS}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-66 copy.png`,
-            '{{ICON_28}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-24.png`,
-            '{{ICON_REMOTE}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-28.png`,
-            '{{ICON_53}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-53.png`,
-            '{{ICON_54}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-54.png`,
-            '{{ICON_115}}': `${iconDir}/25-101-150 Sci-Fi Flat icons-115.png`,
-            '{{ICON_ANALYST_MAP}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-42.png`,
-            '{{ICON_IMPORT_CLIPBOARD}}': `${iconDir}/25-101-150 Sci-Fi Flat icons-121.png`,
-            '{{ICON_CLI}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-53.png`,
-            '{{ICON_CLI_TRIGGERS}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-65.png`,
-            '{{ICON_ULTRACODE}}': `${iconDir}/25-101-150 Sci-Fi Flat icons-102.png`,
-            '{{ICON_GOAL}}': `${iconDir}/25-101-150 Sci-Fi Flat icons-139.png`,
-            '{{ICON_PROMPT}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-22.png`,
-            '{{ICON_55}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-55.png`,
-            '{{ICON_85}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-85.png`,
-            '{{ICON_CHAT}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-65.png`,
-            '{{ICON_77}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-77.png`,
-            '{{ICON_59}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-59.png`,
-            '{{ICON_41}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-41.png`,
-            '{{ICON_DELETE_PROJECT}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-46.png`,
-            '{{ICON_IMPORT_PLANS}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-67.png`,
-            '{{ICON_CODE_MAP}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-90.png`,
-            '{{ICON_WORKTREE}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-68.png`,
-            '{{ICON_WORKTREE_ACTIVE}}': `${iconDir}/worktree-active.svg`,
-            '{{ICON_WORKTREE_MERGED}}': `${iconDir}/worktree-merged.svg`,
-            '{{ICON_MANAGER_PASS}}': `${iconDir}/25-101-150 Sci-Fi Flat icons-125.png`,
-        };
-        for (const [placeholder, uri] of Object.entries(iconMap)) {
-            content = content.split(placeholder).join(uri);
-        }
-
-        content = content.replace(/\{\{HANKEN_FONT_URI\}\}/g, '/static/designs/HankenGrotesk-Variable.woff2');
-        content = content.replace(/\{\{GEIST_PIXEL_FONT_URI\}\}/g, '/static/designs/GeistPixel-Square.woff2');
-
-        return { html: content, csp };
-    };
-
-    const getProjectHtml = async () => {
-        const repoRoot = resolveRepoRoot();
-        const candidates = [
-            path.join(repoRoot, 'dist', 'webview', 'project.html'),
-            path.join(repoRoot, 'src', 'webview', 'project.html'),
-        ];
-        const htmlPath = findFile(candidates);
-        if (!htmlPath) {
-            return { html: '<html><body>Project panel HTML not found.</body></html>', csp: undefined };
-        }
-        let content = fs.readFileSync(htmlPath, 'utf8');
-        const nonce = crypto.randomBytes(16).toString('base64');
-        const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; frame-src 'self' http: https: about:srcdoc blob: data:;`;
-
-        // Replace all nonce placeholders with the generated nonce.
-        content = content.replace(/\{\{NONCE\}\}/g, nonce);
-        content = content.replace(/{{WEBVIEW_CSP_SOURCE}}/g, "'self'");
-        content = content.replace(/{{PROJECT_JS_URI}}/g, '/static/webview/project.js');
-        content = content.replace(/{{SHARED_UTILS_URI}}/g, '/static/webview/sharedUtils.js');
-        content = content.replace(/{{MARKDOWN_EDITOR_URI}}/g, '/static/webview/markdownEditor.js');
-        content = content.replace(/{{GEIST_PIXEL_FONT_URI}}/g, '/static/designs/GeistPixel-Square.woff2');
-        content = content.replace(/{{HANKEN_FONT_URI}}/g, '/static/designs/HankenGrotesk-Variable.woff2');
-
-        // Inject shared defaults + browser transport shim before the first script tag.
-        const sharedDefaultsScript = `<script src="/static/webview/sharedDefaults.js" nonce="${nonce}"></script>\n<script src="/static/webview/transport.js" nonce="${nonce}"></script>`;
-        content = content.replace(
-            `<script nonce="${nonce}" src="/static/webview/sharedUtils.js"></script>`,
-            `${sharedDefaultsScript}\n<script nonce="${nonce}" src="/static/webview/sharedUtils.js"></script>`
-        );
-
-        // Tag the body so the transport shim routes to /project/verb.
-        const hostCapabilities = { terminalDispatch: false, automation: false, orchestrator: false, terminalFleet: false, mcpTerminals: false };
-        const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="project" data-host-capabilities="${htmlEscapeJson(JSON.stringify(hostCapabilities))}"`;
-        content = content.replace(/<body/, `<body ${bodyAttr}`);
-
-        return { html: content, csp };
-    };
+    // Subscribe to discovered-plan events so the headless board UI refreshes when
+    // a plan is ingested — mirrors the extension's KanbanProvider subscription.
+    // Done here (after pushFullState is defined) so the callback can broadcast.
+    ingestionEngine.onPlanDiscovered((_root, _filePath) => {
+        try { void pushFullState(); } catch (e) { console.error('[bootstrap] ingestion-driven pushFullState failed:', e); }
+    });
+    await ingestionEngine.initialize();
+    log(opts, 'PlanIngestionEngine initialized (headless)');
 
     const repoRoot = resolveRepoRoot();
+    const getBoardHtml = async () => sharedGetBoardHtml(repoRoot, workspaceRoot);
+    const getProjectHtml = async () => sharedGetProjectHtml(repoRoot, workspaceRoot);
+    const getShellHtml = async () => sharedGetShellHtml(repoRoot);
+    const getDesignHtml = async () => sharedGetDesignHtml(repoRoot, workspaceRoot);
+    const getSetupHtml = async () => sharedGetSetupHtml(repoRoot, workspaceRoot);
+
+    const getPanelsManifest = () => sharedGetPanelsManifest();
+    const getPanelHtml = async (id: string): Promise<{ html: string; csp?: string } | null> => {
+        const result = sharedGetPanelHtmlById(id, repoRoot, workspaceRoot);
+        if (!result) { return null; }
+        return result;
+    };
+
     const staticRoutes: Record<string, string[]> = {
         webview: [path.join(repoRoot, 'dist', 'webview'), path.join(repoRoot, 'src', 'webview')],
         icons: [path.join(repoRoot, 'icons')],
@@ -519,7 +500,17 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                 }
 
                 case 'createPlan':
-                case 'scanFoldersNow':
+                case 'scanFoldersNow': {
+                    // Headless Ingestion piece 2: drive the shared engine's scan directly,
+                    // mirroring the extension's kanbanService.scanFoldersNow() path.
+                    try {
+                        await ingestionEngine.triggerScan(root);
+                        await pushFullState();
+                        return { success: true };
+                    } catch (e) {
+                        return { success: false, error: e instanceof Error ? e.message : String(e) };
+                    }
+                }
                 case 'importFromClipboard':
                     return { success: true };
 
@@ -533,6 +524,110 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     };
 
     const planningVerb = async (verb: string, payload: any, _workspaceRootArg?: string): Promise<any> => {
+        // Memo verbs (Feature: Headless Browser UI · Memo subtask): the memo
+        // capture UI was relocated from implementation.html to project.html.
+        // In standalone/headless mode there's no TaskViewerProvider to delegate
+        // to, so implement the file I/O directly. "Send to Planner" (action:
+        // 'send') degrades to copy — there's no planner terminal in a headless
+        // host, so the prompt is returned in the HTTP body for the transport
+        // shim to copy to the clipboard (see transport.js postMessage handler).
+        const memoPath = (root: string) => path.join(root, '.switchboard', 'memo.md');
+        const parseMemoEntries = (content: string): string[] => {
+            const trimmed = content.trim();
+            if (!trimmed) { return []; }
+            const paragraphSplit = trimmed.split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
+            if (paragraphSplit.length > 1) { return paragraphSplit; }
+            const ENTRY_PREFIXES = /^(bug|thought|issue|todo|note|fix|idea)[:\s]/i;
+            const lines = trimmed.split('\n').map(s => s.trim()).filter(Boolean);
+            const entries: string[] = [];
+            for (const line of lines) {
+                const isNewEntry = ENTRY_PREFIXES.test(line) ||
+                    (line.length > 0 && line[0] === line[0].toUpperCase() && line[0] !== line[0].toLowerCase());
+                if (entries.length === 0 || isNewEntry) {
+                    entries.push(line);
+                } else {
+                    entries[entries.length - 1] += '\n' + line;
+                }
+            }
+            return entries;
+        };
+        const buildMemoPlannerPrompt = (issues: string[], root: string): string => {
+            const plansDir = path.join(root, '.switchboard', 'plans');
+            const issueList = issues.map((issue, i) => `### Issue ${i + 1}\n${issue}`).join('\n\n');
+            return `You are a planner agent. The user has captured the following issues in their memo during testing. Your task is to refine EACH issue into a separate, complete plan file — one plan per issue. Do not combine issues.
+
+## Issues to Refine
+
+${issueList}
+
+## Instructions
+
+For EACH issue above:
+1. Create a separate plan file in \`${plansDir}\` using the naming convention \`feature_plan_<timestamp>_<slug>.md\`
+2. Follow the standard Switchboard plan format (Goal, Metadata, Complexity Audit, Edge-Case & Dependency Audit, Proposed Changes, Verification Plan)
+3. Investigate the codebase to understand the root cause and write an actionable plan
+4. Each plan must be self-contained — do not reference other memo issues
+5. If a single issue covers 3+ distinct deliverables or 2+ independently-shippable phases, split it into multiple plan files.
+
+## Plan File Format
+
+Each plan file must include:
+- # Title (derived from the issue — descriptive, never generic)
+- ## Goal (with problem analysis and root cause)
+- ## Metadata (**Complexity:** <1-10>, **Tags:** <from allowed list>)
+- ## Complexity Audit
+- ## Edge-Case & Dependency Audit
+- ## Proposed Changes (per-file breakdown with code snippets)
+- ## Verification Plan
+
+## Important
+- Create ${issues.length} plan file(s) total — one per issue
+- Write each plan to: ${plansDir}/feature_plan_<YYYYMMDDHHMMSS>_<slug>.md
+- Do NOT skip the investigation step — read the relevant code before writing each plan`;
+        };
+
+        if (verb === 'memoLoad') {
+            const root = workspaceRoot;
+            try {
+                const content = await fs.promises.readFile(memoPath(root), 'utf8');
+                return { success: true, type: 'memoContent', content };
+            } catch {
+                return { success: true, type: 'memoContent', content: '' };
+            }
+        }
+        if (verb === 'memoSave') {
+            const root = workspaceRoot;
+            const mp = memoPath(root);
+            await fs.promises.mkdir(path.dirname(mp), { recursive: true });
+            await fs.promises.writeFile(mp, typeof payload.content === 'string' ? payload.content : '', 'utf8');
+            return { success: true };
+        }
+        if (verb === 'memoClear') {
+            const root = workspaceRoot;
+            await fs.promises.writeFile(memoPath(root), '', 'utf8');
+            return { success: true, type: 'memoContent', content: '' };
+        }
+        if (verb === 'memoGeneratePrompt') {
+            const root = workspaceRoot;
+            const content = typeof payload.content === 'string' ? payload.content : '';
+            const action = payload.action === 'send' ? 'send' : 'copy';
+            const issues = parseMemoEntries(content);
+            if (issues.length === 0) {
+                return { success: true, type: 'memoPromptResult', message: 'No entries to process.' };
+            }
+            const prompt = buildMemoPlannerPrompt(issues, root);
+            // Headless degrade: no planner terminal → always copy. Return the
+            // prompt in the body; transport.js copies it client-side.
+            const mp = memoPath(root);
+            await fs.promises.writeFile(mp, '', 'utf8');
+            return {
+                success: true,
+                type: 'memoPromptResult',
+                message: `Prompt for ${issues.length} issue(s) copied to clipboard. Memo cleared.`,
+                prompt,
+            };
+        }
+
         console.log(`[bootstrap] planningVerb '${verb}' received`, payload);
         return { success: true, note: `Planning verb '${verb}' not fully wired in standalone yet` };
     };
@@ -542,9 +637,9 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         port: opts.port,
         clickupMetadataPath: path.join(switchboardDir, 'clickup.json'),
         linearMetadataPath: path.join(switchboardDir, 'linear.json'),
-        getClickUpService: () => null,
-        getLinearService: () => null,
-        getNotionService: () => null,
+        getClickUpService: () => clickUpService,
+        getLinearService: () => linearService,
+        getNotionService: () => notionService,
         getAuthToken: async () => sessionToken,
         getRegisteredTerminals: () => [],
         getSelectedWorkspaceRoot: () => workspaceRoot,
@@ -561,6 +656,9 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         serveStatic: {
             getBoardHtml,
             getProjectHtml,
+            getShellHtml,
+            getPanelsManifest,
+            getPanelHtml,
             staticRoutes,
         },
     };
@@ -581,6 +679,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         url,
         oneTimeToken,
         stop: async () => {
+            try { ingestionEngine.dispose(); } catch { /* ignore */ }
             try { await server.stop(); } catch { /* ignore */ }
             try { fs.unlinkSync(portFile); } catch { /* ignore */ }
         },

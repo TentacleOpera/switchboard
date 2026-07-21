@@ -297,6 +297,24 @@ interface LocalApiServerOptions {
     serveStatic?: {
         getBoardHtml: () => Promise<{ html: string; csp?: string }>;
         getProjectHtml?: () => Promise<{ html: string; csp?: string }>;
+        /**
+         * Headless app-shell HTML (served at `/`). The shell hosts every
+         * headless-capable panel behind a left icon strip. Optional — when
+         * absent, `/` falls back to the board (legacy behaviour).
+         */
+        getShellHtml?: () => Promise<{ html: string; csp?: string }>;
+        /**
+         * Returns the panel manifest (`{id, label, icon, route, enabled}[]`)
+         * the shell's icon strip renders. Data-driven so adding a panel route
+         * later adds a strip icon with no shell code change. Optional.
+         */
+        getPanelsManifest?: () => Array<{ id: string; label: string; icon: string; route: string; enabled: boolean }>;
+        /**
+         * Returns the HTML for a registered panel by id (used by the
+         * `/board`, `/design`, `/setup` routes). Optional — when absent only
+         * the explicit getBoardHtml/getProjectHtml getters are used.
+         */
+        getPanelHtml?: (id: string) => Promise<{ html: string; csp?: string } | null>;
         staticRoutes: Record<string, string[]>;
     };
 }
@@ -619,6 +637,119 @@ export class LocalApiServer {
             console.error('[LocalApiServer] getProjectHtml failed:', err);
             res.writeHead(500, { 'Content-Type': 'text/plain' });
             res.end('Failed to render project panel');
+        }
+    }
+
+    private async _handleServeShell(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!this._options.serveStatic || !this._options.serveStatic.getShellHtml) {
+            // Legacy fallback: no shell wired → serve the board at `/`.
+            await this._handleServeBoard(req, res);
+            return;
+        }
+
+        const url = new URL(req.url || '', `http://${req.headers.host}`);
+        const token = url.searchParams.get('token');
+
+        // One-time token exchange lands on `/` (the shell). The 8-hour session
+        // cookie flows into each same-origin iframe unchanged.
+        if (token) {
+            if (this._options.consumeOneTimeToken && this._options.consumeOneTimeToken(token)) {
+                const expected = await this._options.getAuthToken();
+                const expires = new Date(Date.now() + 8 * 60 * 60 * 1000).toUTCString();
+                res.writeHead(303, {
+                    'Location': '/',
+                    'Set-Cookie': `sb_session=${expected}; Path=/; HttpOnly; SameSite=Strict; Expires=${expires}`,
+                    'Cache-Control': 'no-store',
+                });
+                res.end();
+                return;
+            }
+            res.writeHead(401, { 'Content-Type': 'text/plain' });
+            res.end('Invalid or expired one-time token');
+            return;
+        }
+
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+
+        try {
+            const { html, csp } = await this._options.serveStatic.getShellHtml();
+            const headers: Record<string, string> = {
+                'Content-Type': 'text/html',
+                'Cache-Control': 'no-store, no-cache, must-revalidate',
+                'Pragma': 'no-cache',
+                'Referrer-Policy': 'no-referrer',
+            };
+            if (csp) {
+                headers['Content-Security-Policy'] = csp;
+            }
+            res.writeHead(200, headers);
+            res.end(html);
+        } catch (err) {
+            console.error('[LocalApiServer] getShellHtml failed:', err);
+            res.writeHead(500, { 'Content-Type': 'text/plain' });
+            res.end('Failed to render shell');
+        }
+    }
+
+    private async _handleServePanels(_req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!this._options.serveStatic || !this._options.serveStatic.getPanelsManifest) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Panels manifest not configured' }));
+            return;
+        }
+        if (!await this._checkAuth(_req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const manifest = this._options.serveStatic.getPanelsManifest();
+            res.writeHead(200, {
+                'Content-Type': 'application/json',
+                'Cache-Control': 'no-store, no-cache, must-revalidate',
+            });
+            res.end(JSON.stringify(manifest));
+        } catch (err) {
+            console.error('[LocalApiServer] getPanelsManifest failed:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Failed to build panels manifest' }));
+        }
+    }
+
+    private async _handleServePanelById(id: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!this._options.serveStatic || !this._options.serveStatic.getPanelHtml) {
+            res.writeHead(503, { 'Content-Type': 'text/plain' });
+            res.end('Panel serving not configured');
+            return;
+        }
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const result = await this._options.serveStatic.getPanelHtml(id);
+            if (!result) {
+                res.writeHead(404, { 'Content-Type': 'text/plain' });
+                res.end('Panel not found or not enabled');
+                return;
+            }
+            const headers: Record<string, string> = {
+                'Content-Type': 'text/html',
+                'Cache-Control': 'no-store, no-cache, must-revalidate',
+                'Pragma': 'no-cache',
+                'Referrer-Policy': 'no-referrer',
+            };
+            if (result.csp) {
+                headers['Content-Security-Policy'] = result.csp;
+            }
+            res.writeHead(200, headers);
+            res.end(result.html);
+        } catch (err) {
+            console.error(`[LocalApiServer] getPanelHtml('${id}') failed:`, err);
+            res.writeHead(500, { 'Content-Type': 'text/plain' });
+            res.end(`Failed to render panel '${id}'`);
         }
     }
 
@@ -3076,9 +3207,23 @@ export class LocalApiServer {
             } else if (pathname === '/catalog' && req.method === 'GET') {
                 await this._handleGetCatalog(req, res);
             } else if ((pathname === '/' || pathname === '/index.html') && req.method === 'GET') {
+                // Headless app-shell (Feature: Headless Browser UI). When a
+                // shell getter is wired, `/` serves the shell and the board
+                // moves to `/board`. When no shell is wired, falls back to the
+                // board (legacy behaviour).
+                await this._handleServeShell(req, res);
+            } else if ((pathname === '/board' || pathname === '/board.html') && req.method === 'GET') {
+                // Board relocated from `/` to `/board` so the shell can own `/`.
+                // Direct `/board` remains reachable standalone (back-compat).
                 await this._handleServeBoard(req, res);
+            } else if (pathname === '/panels' && req.method === 'GET') {
+                await this._handleServePanels(req, res);
             } else if ((pathname === '/project' || pathname === '/project.html') && req.method === 'GET') {
                 await this._handleServeProject(req, res);
+            } else if ((pathname === '/design' || pathname === '/design.html') && req.method === 'GET') {
+                await this._handleServePanelById('design', req, res);
+            } else if ((pathname === '/setup' || pathname === '/setup.html') && req.method === 'GET') {
+                await this._handleServePanelById('setup', req, res);
             } else if (pathname.startsWith('/static/') && req.method === 'GET') {
                 await this._handleServeStatic(req, res);
             } else {

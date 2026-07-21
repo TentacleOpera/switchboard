@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Switchboard</title>
+    <!--
+        Headless app-shell — Feature: Headless Browser UI.
+        Left icon strip + same-origin iframe content area. The strip is rendered
+        from the /panels manifest (data-driven), so adding a panel route later
+        adds a strip icon with no shell code change. All panels stay mounted as
+        iframes (state + live WebSocket preserved across switches).
+        CSP: same-origin only; scripts via nonce; frames same-origin; WebSocket
+        to 127.0.0.1 for the panels' live transport.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{NONCE}}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; frame-src 'self';" />
+    <style>
+        @font-face {
+            font-family: 'Hanken Grotesk';
+            src: url('/static/designs/HankenGrotesk-Variable.woff2') format('woff2');
+            font-weight: 100 900;
+            font-display: swap;
+        }
+        :root {
+            --bg: #0a0a0f;
+            --bg-elev: #11111a;
+            --bg-strip: #060609;
+            --border: #1f1f2e;
+            --text: #e0e0e8;
+            --text-dim: #7a7a8c;
+            --accent: #00f0ff;
+            --accent-dim: #007a8a;
+            --font: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            --font-mono: 'SF Mono', Menlo, Consolas, monospace;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { height: 100%; width: 100%; overflow: hidden; }
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: var(--font);
+            display: flex;
+            flex-direction: row;
+        }
+        #strip {
+            flex: 0 0 48px;
+            width: 48px;
+            background: var(--bg-strip);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 8px 0;
+            gap: 4px;
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+        .strip-icon {
+            width: 36px;
+            height: 36px;
+            border: 1px solid transparent;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--text-dim);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-family: var(--font-mono);
+            transition: background 80ms ease, color 80ms ease, border-color 80ms ease;
+            position: relative;
+            flex: 0 0 36px;
+        }
+        .strip-icon:hover { background: var(--bg-elev); color: var(--text); }
+        .strip-icon.is-active {
+            background: var(--bg-elev);
+            color: var(--accent);
+            border-color: var(--accent-dim);
+        }
+        .strip-icon[disabled] {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+        .strip-icon[disabled]:hover { background: transparent; color: var(--text-dim); }
+        .strip-icon .strip-label {
+            position: absolute;
+            left: 44px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: var(--bg-elev);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-family: var(--font);
+            white-space: nowrap;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 120ms ease;
+            z-index: 100;
+        }
+        .strip-icon:hover .strip-label { opacity: 1; }
+        #content {
+            flex: 1 1 auto;
+            position: relative;
+            background: var(--bg);
+            overflow: hidden;
+        }
+        .panel-frame {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            border: none;
+            background: var(--bg);
+            display: none;
+        }
+        .panel-frame.is-active { display: block; }
+        #strip-error {
+            color: var(--text-dim);
+            font-size: 11px;
+            font-family: var(--font-mono);
+            padding: 12px 8px;
+            text-align: center;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="strip" role="tablist" aria-label="Switchboard panels"></div>
+    <div id="content"></div>
+    <script nonce="{{NONCE}}" src="/static/webview/shell.js"></script>
+</body>
+
+</html>

@@ -156,4 +156,27 @@ export interface RemoteProvider {
      * the archive outward. Idempotent: safe to call on an already-archived card.
      */
     archiveCard(remoteId: string): Promise<ArchiveResult>;
+
+    /**
+     * Inbound-delete reconcile-sweep (provider-sync inbound-delete). Enumerate the
+     * live remote id set in the configured scope (paginated, throttled ≤ ~2.5 RPS,
+     * honouring Retry-After). `complete` is false if the sweep was aborted by
+     * backoff mid-pagination — the caller MUST NOT treat the un-fetched tail as
+     * "missing" (only a fully-completed sweep produces a reliable deletion list).
+     * `liveIds` is the set of remote ids currently visible in the queried scope.
+     * Optional — providers that don't support reconcile-sweep return
+     * `{ complete: true, liveIds: new Set() }` (treat as "no deletions detectable").
+     */
+    reconcileLiveIds?(): Promise<{ complete: boolean; liveIds: Set<string> }>;
+
+    /**
+     * Inbound-delete disambiguation probe (provider-sync inbound-delete). After the
+     * sweep reports a mapped id as missing, re-check that id directly to distinguish
+     * a genuine deletion from a move-out-of-scope (the item still exists but is no
+     * longer in the queried database/list/project). Returns 'deleted' (genuinely
+     * gone — tombstone), 'moved' (exists but out of scope — skip), or 'unknown'
+     * (couldn't determine — skip, safe default). Optional — providers that don't
+     * implement this return 'unknown' (the sweep caller skips tombstoning).
+     */
+    probeRemoteId?(remoteId: string): Promise<'deleted' | 'moved' | 'unknown'>;
 }
