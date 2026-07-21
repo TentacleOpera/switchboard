@@ -1672,9 +1672,13 @@
         searchInput.placeholder = 'Search plans...';
         searchInput.value = kanbanFilters.search || '';
         searchInput.addEventListener('input', () => {
+            // Update synchronously so an external re-render (e.g. kanbanPlansReady
+            // arriving mid-type) recreates the input with the current value instead
+            // of the stale pre-debounce value. The debounce only gates the re-render
+            // triggered by this keystroke; it does not own the filter state.
+            kanbanFilters.search = searchInput.value;
             clearTimeout(kanbanSearchTimeout);
             kanbanSearchTimeout = setTimeout(() => {
-                kanbanFilters.search = searchInput.value;
                 renderKanbanPlans();
                 // Re-focus the freshly-attached input and place the caret at the
                 // end — renderKanbanPlans() destroyed the input this listener was
@@ -2296,9 +2300,10 @@
         featuresSearchInput.placeholder = 'Search features...';
         featuresSearchInput.value = featuresFilters.search || '';
         featuresSearchInput.addEventListener('input', () => {
+            // Synchronous update — same rationale as the kanban listener above.
+            featuresFilters.search = featuresSearchInput.value;
             clearTimeout(featuresSearchTimeout);
             featuresSearchTimeout = setTimeout(() => {
-                featuresFilters.search = featuresSearchInput.value;
                 renderFeaturesList();
                 const newInput = featuresListPane.querySelector('.sidebar-search-input');
                 if (newInput) {

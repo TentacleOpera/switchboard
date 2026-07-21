@@ -434,10 +434,19 @@ export class NotionRemoteProvider implements RemoteProvider {
         if (!setup?.plansDatabaseId) {
             return { complete: true, liveIds: new Set() };
         }
+        // Full-database sweep cap — deliberately NOT the delta query's MAX_PAGES (5 ≈ 500
+        // changed rows/poll). The plan sizes the target install at ~4,000 cards (≈40 pages);
+        // cap at 60 pages (≈6,000) with headroom. Crucially, if the cap is hit while more
+        // pages remain, the sweep MUST be reported INCOMPLETE — a truncated liveIds set
+        // would otherwise flag every un-fetched mapped id as a candidate deletion (and even
+        // with the per-id probe as a backstop, that means thousands of probe calls per
+        // sweep, blowing the rate budget). "Only act on a complete sweep" is the contract.
+        const RECONCILE_MAX_PAGES = 60;
         const liveIds = new Set<string>();
         let complete = true;
+        let hasMore = false;
         let startCursor: string | undefined;
-        for (let page = 0; page < MAX_PAGES; page++) {
+        for (let page = 0; page < RECONCILE_MAX_PAGES; page++) {
             const body: Record<string, unknown> = { page_size: PAGE_SIZE };
             if (startCursor) { body.start_cursor = startCursor; }
             let result;
@@ -457,15 +466,22 @@ export class NotionRemoteProvider implements RemoteProvider {
                 const id = String(row.id || '');
                 if (id) { liveIds.add(id); }
             }
-            if (!result.data?.has_more) { break; }
+            hasMore = result.data?.has_more === true;
+            if (!hasMore) { break; }
             startCursor = result.data?.next_cursor || undefined;
-            if (!startCursor) { break; }
+            if (!startCursor) { hasMore = false; break; }
             await this._delay(LIMITER_MS);
+        }
+        // Cap reached with pages still remaining → truncated set. Report incomplete so the
+        // caller issues no tombstones (never mistake the un-fetched tail for deletions).
+        if (hasMore) {
+            this._log(`reconcileLiveIds: hit page cap (${RECONCILE_MAX_PAGES}) with more pages remaining — marking INCOMPLETE (no tombstones).`);
+            complete = false;
         }
         if (complete) {
             this._log(`reconcileLiveIds: complete sweep — ${liveIds.size} live page(s).`);
         } else {
-            this._log(`reconcileLiveIds: INCOMPLETE sweep — ${liveIds.size} page(s) fetched before abort; no tombstones will be issued.`);
+            this._log(`reconcileLiveIds: INCOMPLETE sweep — ${liveIds.size} page(s) fetched; no tombstones will be issued.`);
         }
         return { complete, liveIds };
     }

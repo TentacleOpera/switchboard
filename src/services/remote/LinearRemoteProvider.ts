@@ -247,6 +247,7 @@ export class LinearRemoteProvider implements RemoteProvider {
 
         const liveIds = new Set<string>();
         let complete = true;
+        let hasMore = false;
         let cursor: string | null = null;
         const PAGE = 100;
         const MAX = 50; // safety backstop: ≤ 5,000 issues
@@ -268,12 +269,19 @@ export class LinearRemoteProvider implements RemoteProvider {
                     const id = String(node.id || '');
                     if (id) { liveIds.add(id); }
                 }
-                if (!issues.pageInfo?.hasNextPage) { break; }
+                hasMore = issues.pageInfo?.hasNextPage === true;
+                if (!hasMore) { break; }
                 cursor = issues.pageInfo.endCursor || null;
-                if (!cursor) { break; }
+                if (!cursor) { hasMore = false; break; }
             }
         } catch (e) {
             this._deps.log?.(`[LinearRemoteProvider] reconcileLiveIds failed: ${e instanceof Error ? e.message : String(e)} — marking incomplete.`);
+            complete = false;
+        }
+        // Cap reached with issues still remaining → truncated set. Report incomplete so the
+        // caller issues no tombstones (never mistake the un-fetched tail for deletions).
+        if (hasMore) {
+            this._deps.log?.(`[LinearRemoteProvider] reconcileLiveIds: hit page cap (${MAX}) with more issues remaining — marking INCOMPLETE (no tombstones).`);
             complete = false;
         }
         if (complete) {

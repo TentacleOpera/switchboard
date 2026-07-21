@@ -485,7 +485,15 @@ export class RemoteControlService {
         // the sweep is independent of the active poll provider).
         const mapped = new Map<string, KanbanPlanRecord>();
         for (const p of allPlans) {
-            if (p.status === 'deleted') { continue; }
+            // Only ACTIVE plans are deletion candidates. Excluding archived/completed/
+            // missing/deleted is load-bearing: AutoArchiveService archives the REMOTE card
+            // of an auto-archived plan (status='archived', remoteId retained), which the
+            // sweep would then see as "missing" and — for Linear/ClickUp, whose probe maps
+            // archived→'deleted' — tombstone. That is our OWN outbound archive echoing back
+            // as an inbound delete (archived→deleted), exactly the self-round-trip the poll
+            // guards prevent. A 'missing' plan is already en route to the purge sweep. Only
+            // a live plan whose remote genuinely vanished should tombstone.
+            if (p.status !== 'active') { continue; }
             if (!boardSet.has(p.project || '')) { continue; }
             const rid = this._remoteIdOf(provider.kind, p);
             if (rid) { mapped.set(rid, p); }
