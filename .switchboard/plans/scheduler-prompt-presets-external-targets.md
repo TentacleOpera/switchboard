@@ -51,11 +51,23 @@ Reviewer must confirm the `reconcile` prompt's forward-only semantics and the `c
 
 - **Antigravity scheduling feature (confirmed by user, 2026-07-21).** The tool is `schedule` (referred to as Timers & Schedules / Timer/Cron Notifications in docs/UI). It handles one-shot timers (`DurationSeconds`) and recurring cron jobs (`CronExpression`). "Scheduled Tasks" is functionally accurate as a user-facing label. UI location: the AUTOMATION tab (or Tasks / Background Notifications management section) in the Antigravity sidebar. `schedule` returns a Task ID (`timer-xxx` / `task-xxx`); `manage_task` with `Action="kill"` and that TaskId immediately cancels the active timer/recurring cron, prevents pending notifications and future cron iterations, and terminates the recurring-cron background runner cleanly. Plan 3's "honesty fix" wording ("Paste into Antigravity → Scheduled Tasks; set the recurrence there") holds; the prerequisites block may optionally name the `schedule` tool for advanced users.
 
+## Resolved Assumptions (cont.)
+
+- **Claude cloud routines floor at 1 hour (confirmed by user, 2026-07-21).** Routines are saved Claude Code configs that run autonomously on Anthropic's cloud (laptop closed, no local machine). Managed at `claude.ai/code/routines` or via `/schedule`. Shipped ~April 2026 as a research preview — limits can shift. Scheduling details:
+  - **Minimum interval: 1 hour.** Standard 5-field cron (`minute hour day-of-month month day-of-week`); supports `*`, steps (`*/6`), ranges (`1-5`), lists (`1,15,30`). Extended tokens (`L`, `W`, `?`, `MON` aliases) are NOT supported. Finer-than-hourly cron is rejected.
+  - **Timezone:** local wall-clock time, converted automatically.
+  - **Stagger:** a run may start up to ~30 min after the scheduled time (deterministic per routine ID) — treat as "around then," not to-the-second.
+  - **Daily run cap per account** (shown on routines/usage pages); one-off manual runs are exempt.
+  - **Usage/cost:** routines burn subscription usage exactly like interactive sessions.
+  - **Branch pushes:** by default Claude can only push to `claude/`-prefixed branches unless unrestricted pushes are enabled per-repo. **Implication for the `cloud` target:** a cloud routine writing completion reports / review findings to `.switchboard/plans/` must push to a `claude/`-prefixed branch (or the user must enable unrestricted pushes per-repo). The `reconcile` prompt already pulls recent remote branches, so this is compatible — but the prerequisites block should name the `claude/` prefix default so users are not surprised.
+  - **Network:** default "Trusted" access (registries, common dev domains); custom domains need editing the routine's environment. MCP connectors route through Anthropic so they don't need allowlisting.
+  - **Sub-hourly alternative:** if sub-hourly cadence is actually needed, the two local options (`/loop` recurring in-session runs, or Desktop scheduled tasks) allow a 1-minute minimum but require the machine running. This is exactly the niche the `local-terminal` target (plan 2) owns.
+
+  Plan 3's `cloud` interval floor (≥ 60 min) and the "cloud suits board-automation, not sub-hourly comms" framing are correct. The `cloud` prerequisites block (step 2) should additionally name: the `claude/`-branch-prefix default (or the per-repo unrestricted-pushes opt-in), the daily-run-cap consideration, and the ~30-min stagger (so users do not expect to-the-second timing).
+
 ## Uncertain Assumptions
 
-The following external platform claim is not verifiable from this repo. The user was advised to run web research to confirm it before implementation.
-
-- **Claude cowork/routine cloud jobs floor at ~1 poll/hour.** The plan uses this to justify restricting `cloud` to board-automation (not sub-hourly comms) and to set the `cloud` interval floor at ≥ 60 min.
+None remaining. All external platform claims have been confirmed by the user (2026-07-21).
 
 ## Adversarial Synthesis
 
@@ -69,7 +81,7 @@ The following external platform claim is not verifiable from this repo. The user
   - Extract the batch-prompt body into a target-agnostic `buildBoardBatchPrompt({ agent, column, batchSize })` function.
   - Add `buildReconcilePrompt()` — authored text: "fetch recent remote branches → pull → scan pulled plan files under `.switchboard/plans/` for new `## Completion Report` / `## Review Findings` → for each, move the card **forward-only** via the `kanban_operations` skill → report what moved and skip cards a human already advanced."
   - Add `buildCommsPrompt()` (moved from plan 2's comms builder location) and `buildCustomPrompt(job)` (free-text `promptOverride`).
-  - Add a `targetContracts` record: for each `target`, the interval floor (`local-terminal` = 1 min, `cloud` ≥ 60 min, `antigravity` = n/a/handoff) and the prerequisites block text.
+  - Add a `targetContracts` record: for each `target`, the interval floor (`local-terminal` = 1 min, `cloud` ≥ 60 min, `antigravity` = n/a/handoff) and the prerequisites block text. The `cloud` block must name: `boardStateExport = read-only-snapshot` + `origin` remote (to read `board.json` from `switchboard/board`), the `claude/`-branch-prefix default (or per-repo unrestricted-pushes opt-in) for writing completion/review sections, the 1-hour minimum interval (cron finer than hourly is rejected), the ~30-min stagger, and the daily-run-cap consideration. See "Resolved Assumptions (cont.)" for the full confirmed contract.
   - Rename/generalize the `antigravityPrompt` message to `schedulerPrompt` with a `target` discriminator; keep `antigravityPrompt` as a shim that calls `schedulerPrompt` with `target: 'antigravity'`.
 - **Implementation:** The `board-batch` builder MUST produce byte-identical output to the current `generateAntigravityPrompt` for the same inputs (snapshot test guards this).
 - **Edge Cases:** `antigravity` target with no workspace id → return the existing "No workspace ID found" error ([:4992](src/services/KanbanProvider.ts#L4992)).
@@ -87,7 +99,7 @@ The following external platform claim is not verifiable from this repo. The user
 ### Automated Tests
 - Unit test: `board-batch` builder output is identical (snapshot) to the current `generateAntigravityPrompt` output for the same agent/column/batchSize.
 - Unit test: `reconcile` prompt contains the forward-only + `kanban_operations` (no-SQL) instructions.
-- Unit test: each target returns the correct interval floor and a non-empty prerequisites block; `cloud` names the `read-only-snapshot` + `origin` requirement.
+- Unit test: each target returns the correct interval floor and a non-empty prerequisites block; `cloud` names the `read-only-snapshot` + `origin` requirement, the `claude/`-branch-prefix default, the 1-hour minimum, and the ~30-min stagger.
 - Unit test: the `antigravityPrompt` shim produces the same output as `schedulerPrompt` with `target: 'antigravity'`.
 
 ### Manual Acceptance
