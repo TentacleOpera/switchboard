@@ -3360,7 +3360,7 @@
         }
 
         /* Kanban preview meta bar */
-        #kanban-preview-meta-bar, #tickets-preview-meta-bar, #tickets-local-meta-bar {
+        #kanban-preview-meta-bar, #tickets-preview-meta-bar, #tickets-local-meta-bar, #docs-preview-meta-bar {
             display: flex;
             align-items: center;
             gap: 12px;
@@ -3697,7 +3697,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         <button class="shared-tab-btn" data-tab="html">HTML</button>
         <button class="shared-tab-btn" data-tab="tickets" id="tickets-tab-btn">TICKETS</button>
         <button class="shared-tab-btn" data-tab="research">RESEARCH</button>
-        <button class="shared-tab-btn" data-tab="create-plans">CREATE PLANS</button>
+        <button class="shared-tab-btn" data-tab="create-plans">WEB AGENTS</button>
     </div>
     <div class="container">
         <!-- Unified Docs Tab: breadcrumb on top, then sidebar + content -->
@@ -3714,16 +3714,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <option value="notion">Notion</option>
                     <option value="antigravity">Antigravity</option>
                 </select>
-                <button id="btn-import-full-doc" class="strip-btn" disabled style="display: none;">Import</button>
-                <button id="btn-edit" class="strip-btn" disabled>Edit</button>
-                <button id="btn-save" class="strip-btn" style="display:none;">Save</button>
-                <button id="btn-cancel" class="strip-btn" style="display:none;">Cancel</button>
-                <button id="btn-push-doc" class="strip-btn" disabled title="Push local changes to the online source">Push</button>
-                <button id="btn-set-prd" class="strip-btn strip-btn--primary" disabled title="No projects in this workspace yet — create one on the Kanban board first (+ Add Project).">Save as PRD</button>
-                <button id="btn-set-constitution" class="strip-btn strip-btn--primary" title="Copy the open document into this workspace's Constitution. If one already exists you can keep, append, or replace it.">Save as Constitution</button>
                 <button id="btn-create-doc" class="strip-btn" title="Create a new markdown doc in a configured folder">+ New Doc</button>
-                <button id="btn-agent-doc" class="strip-btn" disabled title="Copy a Draft/Improve prompt to clipboard">Draft with agent</button>
-                <button id="btn-sync-to-online" class="strip-btn" disabled>Copy to Online…</button>
                 <input type="text" id="docs-search" class="sidebar-search-input" placeholder="Search docs..." />
                 <span id="status" style="margin-left: 0; display: none;"></span>
             </div>
@@ -3735,7 +3726,23 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <div class="empty-state">Loading docs...</div>
                 </div>
                 <div class="preview-panel-wrapper">
-                    <div id="preview-pane" style="flex: 1; width: 100%; box-sizing: border-box;">
+                    <div id="preview-pane" style="flex: 1; width: 100%; box-sizing: border-box; display: flex; flex-direction: column;">
+                        <div id="docs-preview-meta-bar" style="display:none;">
+                            <button id="btn-edit" class="strip-btn" disabled>Edit</button>
+                            <button id="btn-save" class="strip-btn" style="display:none;">Save</button>
+                            <button id="btn-cancel" class="strip-btn" style="display:none;">Cancel</button>
+                            <button id="btn-push-doc" class="strip-btn" disabled title="Push local changes to the online source">Push</button>
+                            <button id="btn-agent-doc" class="strip-btn" disabled title="Copy a Draft/Improve prompt to clipboard">Draft with agent</button>
+                            <div class="overflow-menu" data-overflow-menu>
+                                <button type="button" class="strip-btn overflow-menu-trigger" data-overflow-trigger title="More actions">⋯ More</button>
+                                <div class="overflow-menu-popover" data-overflow-popover>
+                                    <button id="btn-import-full-doc" class="strip-btn overflow-menu-item" disabled style="display: none;">Import</button>
+                                    <button id="btn-set-prd" class="strip-btn strip-btn--primary overflow-menu-item" disabled title="No projects in this workspace yet — create one on the Kanban board first (+ Add Project).">Save as PRD</button>
+                                    <button id="btn-set-constitution" class="strip-btn strip-btn--primary overflow-menu-item" title="Copy the open document into this workspace's Constitution. If one already exists you can keep, append, or replace it.">Save as Constitution</button>
+                                    <button id="btn-sync-to-online" class="strip-btn overflow-menu-item" disabled>Copy to Online…</button>
+                                </div>
+                            </div>
+                        </div>
                         <div class="preview-content-wrapper">
                             <style>
                                 .page-navigation { margin-bottom: 16px; padding: 12px; background: var(--panel-bg2); border: 1px solid var(--accent-teal-dim); border-radius: 4px; }
@@ -3761,9 +3768,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </select>
                 <button id="planning-html-btn-inspect" class="preview-overlay-btn" title="Toggle hover-to-select element mode">Inspect Mode</button>
                 <input type="text" id="planning-html-docs-search" class="sidebar-search-input" placeholder="Search HTML files..." />
-                <span id="status-planning-html" style="margin-left: 0; font-size: 12px; color: var(--text-secondary);">No folder configured</span>
                 <button id="btn-copy-artifact-prompt" class="strip-btn" title="Copy the upload prompt to clipboard">Copy upload prompt</button>
-                <button id="btn-send-artifact-prompt" class="strip-btn stitch-btn-primary" title="Send the upload prompt to Claude">⇨ Upload to Claude Artifacts</button>
             </div>
             <div class="content-row">
                 <div id="tree-pane-planning-html">
@@ -3802,8 +3807,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                     <textarea id="planning-html-tweak-input" class="stitch-input" style="width: 100%; height: 80px; box-sizing: border-box; resize: vertical;" placeholder="Describe the change to this element, e.g. 'make it dark blue'..."></textarea>
                                     <div id="planning-html-tweak-status" style="display: none; font-size: 11px; color: var(--accent-red); margin-bottom: 4px;"></div>
                                     <div style="display: flex; gap: 8px;">
-                                        <button id="planning-html-tweak-btn-send" class="preview-overlay-btn primary" style="flex: 1;">Send to Agent</button>
-                                        <button id="planning-html-tweak-btn-copy" class="preview-overlay-btn" style="flex: 1;">Copy Prompt</button>
+                                        <button id="planning-html-tweak-btn-copy" class="preview-overlay-btn primary" style="flex: 1;">Copy Prompt</button>
                                     </div>
                                 </div>
                             </div>
@@ -3898,7 +3902,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <div class="cp-section">
                     <div class="cp-label">1 · WHERE ARE YOUR DOCS?</div>
                     <label class="cp-radio"><input type="radio" name="cp-source" value="zip" checked>
-                        <span><strong>Generated zip</strong> — bundle the managed doc set (constitution, PRDs, README, Docs-tab folders). Docs only, never code.</span></label>
+                        <span><strong>Zip a folder</strong> — pick a folder; the zip is built from the docs in it. Docs only, never code.</span></label>
                     <label class="cp-radio"><input type="radio" name="cp-source" value="link">
                         <span><strong>Public link</strong> — GitHub Pages, a public repo branch, any fetchable URL.</span></label>
                     <label class="cp-radio"><input type="radio" name="cp-source" value="platform">
@@ -3906,8 +3910,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </div>
 
                 <div class="cp-section" id="cp-zip-row">
-                    <button id="cp-btn-zip" class="strip-btn strip-btn--primary">Download docs zip</button>
-                    <span id="cp-zip-hint" class="cp-hint">Bundles your docs with a HOW-TO-PLAN.md the agent follows.</span>
+                    <div class="cp-row">
+                        <button id="cp-btn-folder" class="strip-btn">Choose folder…</button>
+                        <span id="cp-folder-path" class="cp-hint">No folder chosen.</span>
+                    </div>
+                    <label class="cp-radio" style="margin-top:6px;"><input type="checkbox" id="cp-include-extras">
+                        <span>Also include the managed docs (constitution, PRDs, README) on top of the folder.</span></label>
+                    <div class="cp-row" style="margin-top:6px;">
+                        <button id="cp-btn-zip" class="strip-btn strip-btn--primary" disabled title="Choose a folder first">Download docs zip</button>
+                        <span id="cp-zip-hint" class="cp-hint">Bundles the folder's docs with a HOW-TO-PLAN.md the agent follows.</span>
+                    </div>
                 </div>
 
                 <div class="cp-section" id="cp-link-row" style="display:none;">
@@ -4188,6 +4200,35 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
                     <button id="btn-cancel-create-ticket" class="strip-btn">Cancel</button>
                     <button id="btn-submit-create-ticket" class="planning-button" style="margin: 0; padding: 4px 12px;">Create</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="folder-modal" id="new-doc-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="new-doc-modal-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="new-doc-modal-title">New Document</h3>
+                <button class="modal-close-btn" id="btn-close-new-doc-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label for="new-doc-name" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Name *</label>
+                    <input type="text" id="new-doc-name" class="planning-input" placeholder="e.g. my-plan.md (.md added if missing)" required style="width: 100%; box-sizing: border-box;" />
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label for="new-doc-location" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Location *</label>
+                    <select id="new-doc-location" class="planning-input" style="width: 100%; box-sizing: border-box;"></select>
+                    <div id="new-doc-location-hint" style="font-size: 11px; color: var(--text-secondary); display: none;">Add a folder via Manage Folders first.</div>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label for="new-doc-description" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Description</label>
+                    <textarea id="new-doc-description" class="planning-input" placeholder="Optional — seeds the agent draft when using Create with agent" style="width: 100%; height: 90px; resize: vertical; box-sizing: border-box; font-family: inherit;"></textarea>
+                </div>
+                <div id="new-doc-error" style="font-size: 12px; color: var(--vscode-errorForeground, #ff6b6b); display: none;"></div>
+                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
+                    <button id="btn-cancel-new-doc" class="strip-btn">Cancel</button>
+                    <button id="btn-new-doc-create-agent" class="strip-btn" title="Create the doc and copy a Draft/Improve prompt to the clipboard">Create with agent</button>
+                    <button id="btn-new-doc-create" class="planning-button" style="margin: 0; padding: 4px 12px;">Create</button>
                 </div>
             </div>
         </div>

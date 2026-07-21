@@ -1,7 +1,7 @@
 {
   "generator": "SwitchboardControlPlane",
   "version": "1.7.13",
-  "generatedAt": "2026-07-20T07:09:01.977Z",
+  "generatedAt": "2026-07-20T22:11:59.746Z",
   "files": [
     "skills/_lib/sb_api_call.sh",
     "skills/accuracy/SKILL.md",
@@ -62,7 +62,6 @@
     "skills/query_switchboard_kanban.md",
     "skills/rearrange-feature/SKILL.md",
     "skills/refine_feature.md",
-    "skills/refine_ticket.md",
     "skills/switchboard-contracts/SKILL.md",
     "skills/switchboard-orchestration/SKILL.md",
     "skills/switchboard-orchestrator/SKILL.md",

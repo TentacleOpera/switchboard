@@ -1867,8 +1867,8 @@
         }
         .tree-node .card-checkbox {
             flex: 0 0 auto;
-            align-self: flex-start;
-            margin-top: 2px;
+            align-self: center;
+            accent-color: var(--accent-teal);
             cursor: pointer;
         }
         .tree-node:not([data-selectable="html"]) .card-checkbox {
@@ -3888,12 +3888,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </select>
                 <button id="html-btn-inspect" class="preview-overlay-btn" title="Toggle hover-to-select element mode">Inspect Mode</button>
                 <input type="text" id="html-docs-search" class="sidebar-search-input" placeholder="Search previews..." />
-                <span id="status-html" style="margin-left: 0; font-size: 12px; color: var(--text-secondary);">No folder configured</span>
                 <button id="btn-copy-design-html-artifact-prompt" class="strip-btn" title="Copy a prompt to publish the selected HTML file to claude.ai as an Artifact">Copy upload prompt</button>
-                <button id="btn-send-design-html-artifact-prompt" class="strip-btn stitch-btn-primary" title="Send the artifact upload prompt to Claude">⇨ Upload to Claude Artifacts</button>
                 <button id="btn-make-canvas-copy" class="strip-btn" title="Copy a prompt to flatten the selected HTML files into one inline board" disabled>Make Canvas — Copy Prompt</button>
-                <button id="btn-make-canvas-send" class="strip-btn stitch-btn-primary" title="Send the make-canvas prompt to the agent" disabled>⇨ Make Canvas</button>
-                <span id="html-selection-count" style="font-size: 12px; color: var(--text-secondary);">0 selected</span>
+                <span id="html-selection-count" style="margin-left: auto; font-size: 12px; color: var(--text-secondary);">0 selected</span>
             </div>
             <div class="content-row">
                 <div id="tree-pane-html">
@@ -3932,8 +3929,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                     <textarea id="html-tweak-input" class="stitch-input" style="width: 100%; height: 80px; box-sizing: border-box; resize: vertical;" placeholder="Describe the change to this element, e.g. 'make it dark blue'..."></textarea>
                                     <div id="html-tweak-status" style="display: none; font-size: 11px; color: var(--accent-red); margin-bottom: 4px;"></div>
                                     <div style="display: flex; gap: 8px;">
-                                        <button id="html-tweak-btn-send" class="preview-overlay-btn primary" style="flex: 1;">Send to Agent</button>
-                                        <button id="html-tweak-btn-copy" class="preview-overlay-btn" style="flex: 1;">Copy Prompt</button>
+                                        <button id="html-tweak-btn-copy" class="preview-overlay-btn primary" style="flex: 1;">Copy Prompt</button>
                                     </div>
                                 </div>
                             </div>

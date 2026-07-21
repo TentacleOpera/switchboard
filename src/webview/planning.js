@@ -2307,9 +2307,20 @@
         });
     }
 
+    // Close a single popover and return it to its home menu. While open the popover
+    // is portaled to <body> (see the open branch below) so that a backdrop-filter /
+    // transform ancestor — which turns position:fixed into "relative to that ancestor"
+    // and clips it inside a short overflow:auto strip — cannot contain or clip it.
+    function _closeOneOverflowPopover(p) {
+        p.removeAttribute('data-open');
+        if (p._ownerMenu && p.parentElement !== p._ownerMenu) {
+            p._ownerMenu.appendChild(p);
+        }
+    }
+
     function _closeAllOverflowPopovers(except) {
         document.querySelectorAll('[data-overflow-popover][data-open="true"]').forEach(p => {
-            if (p !== except) p.removeAttribute('data-open');
+            if (p !== except) _closeOneOverflowPopover(p);
         });
     }
 
@@ -2349,15 +2360,26 @@
                 const willOpen = popover.getAttribute('data-open') !== 'true';
                 _closeAllOverflowPopovers(willOpen ? popover : null);
                 if (willOpen) {
+                    // Portal the popover to <body> so no backdrop-filter/transform
+                    // ancestor (e.g. .cyber-theme-enabled .controls-strip) becomes its
+                    // containing block and clips it inside the short overflow:auto strip.
+                    // Remember its home menu so it can be reparented back on close (the
+                    // gating recompute queries items via the menu).
+                    popover._ownerMenu = menu;
+                    if (popover.parentElement !== document.body) {
+                        document.body.appendChild(popover);
+                    }
                     _positionOverflowPopover(popover, trigger);
                     popover.setAttribute('data-open', 'true');
                 } else {
-                    popover.removeAttribute('data-open');
+                    _closeOneOverflowPopover(popover);
                 }
                 return;
             }
-            // Outside click — close all open popovers.
-            if (!e.target.closest('[data-overflow-menu]')) {
+            // Outside click — close all open popovers. A click inside an open popover
+            // (portaled to <body>, so it is NOT inside [data-overflow-menu]) must count
+            // as inside, else selecting an item would be treated as an outside click.
+            if (!e.target.closest('[data-overflow-menu]') && !e.target.closest('[data-overflow-popover]')) {
                 _closeAllOverflowPopovers(null);
             }
         });
@@ -2366,15 +2388,17 @@
             if (e.key !== 'Escape') return;
             const openPopovers = document.querySelectorAll('[data-overflow-popover][data-open="true"]');
             if (openPopovers.length) {
-                openPopovers.forEach(p => p.removeAttribute('data-open'));
+                openPopovers.forEach(_closeOneOverflowPopover);
             }
         });
 
         // Reposition open popovers on scroll/resize (capture so we catch scroll inside
-        // any scrollable ancestor, e.g. the top strip's overflow-x:auto).
+        // any scrollable ancestor, e.g. the top strip's overflow-x:auto). The popover is
+        // portaled to <body> while open, so resolve its trigger via the remembered home
+        // menu rather than a DOM-ancestor lookup.
         const repositionOpen = () => {
             document.querySelectorAll('[data-overflow-popover][data-open="true"]').forEach(p => {
-                const menu = p.closest('[data-overflow-menu]');
+                const menu = p._ownerMenu || p.closest('[data-overflow-menu]');
                 const trigger = menu && menu.querySelector('[data-overflow-trigger]');
                 if (trigger) _positionOverflowPopover(p, trigger);
             });
@@ -2840,6 +2864,9 @@
         const platformSel = document.getElementById('cp-platform');
         const pasteArea = document.getElementById('cp-paste');
         const btnZip = document.getElementById('cp-btn-zip');
+        const btnFolder = document.getElementById('cp-btn-folder');
+        const folderPathEl = document.getElementById('cp-folder-path');
+        const includeExtras = document.getElementById('cp-include-extras');
         const btnCopyLink = document.getElementById('cp-btn-copy-link');
         const btnCopyPlatform = document.getElementById('cp-btn-copy-platform');
         const btnCreate = document.getElementById('cp-btn-create');
@@ -2847,6 +2874,9 @@
         const statusEl = document.getElementById('cp-status');
         const zipHint = document.getElementById('cp-zip-hint');
         if (!rows.zip || !btnZip) { return; } // pane absent — nothing to wire
+
+        // The chosen folder is the zip's source; the button stays disabled until one is picked.
+        let chosenFolder = '';
 
         document.querySelectorAll('input[name="cp-source"]').forEach(radio => {
             radio.addEventListener('change', () => {
@@ -2861,8 +2891,16 @@
         if (refInput) refInput.addEventListener('input', gatePlatform);
         if (pasteArea) pasteArea.addEventListener('input', gateCreate);
 
+        if (btnFolder) btnFolder.addEventListener('click', () => {
+            vscode.postMessage({ type: 'createPlansPickFolder' });
+        });
         btnZip.addEventListener('click', () => {
-            vscode.postMessage({ type: 'createPlansDownloadZip' });
+            if (!chosenFolder) { return; }
+            vscode.postMessage({
+                type: 'createPlansDownloadZip',
+                folder: chosenFolder,
+                includeExtras: !!(includeExtras && includeExtras.checked)
+            });
         });
         btnCopyLink.addEventListener('click', () => {
             vscode.postMessage({ type: 'createPlansCopyPrompt', source: 'link', url: urlInput.value.trim() });
@@ -2883,16 +2921,27 @@
 
         window.__createPlansHandleMessage = (message) => {
             if (message.type === 'createPlansState') {
-                // No docs yet → never offer an empty zip; point at writing a first doc.
-                btnZip.disabled = !message.hasDocs;
-                if (zipHint) {
-                    zipHint.textContent = message.hasDocs
-                        ? 'Bundles your docs with a HOW-TO-PLAN.md the agent follows.'
-                        : 'No docs yet — write a first doc (a PRD or constitution in the Docs tab), then bundle.';
+                // The zip is gated on a folder being chosen, not on managed docs existing.
+                // If no managed docs exist, the "include extras" checkbox has nothing to add.
+                if (includeExtras && !message.hasDocs) {
+                    includeExtras.checked = false;
+                    includeExtras.disabled = true;
+                    includeExtras.parentElement.title = 'No managed docs (constitution / PRDs / README) found in this workspace.';
                 }
                 if (urlInput && !urlInput.value && message.publicUrl) { urlInput.value = message.publicUrl; gateLink(); }
                 if (platformSel && message.platform) { platformSel.value = message.platform; }
                 if (refInput && !refInput.value && message.platformRef) { refInput.value = message.platformRef; gatePlatform(); }
+                return;
+            }
+            if (message.type === 'createPlansFolderPicked') {
+                chosenFolder = message.folder || '';
+                if (folderPathEl) folderPathEl.textContent = chosenFolder || 'No folder chosen.';
+                btnZip.disabled = !chosenFolder;
+                if (zipHint) {
+                    zipHint.textContent = chosenFolder
+                        ? "Bundles the folder's docs with a HOW-TO-PLAN.md the agent follows."
+                        : 'Choose a folder to bundle its docs.';
+                }
                 return;
             }
             if (message.type === 'createPlansPasteBackResult') {
@@ -3432,6 +3481,11 @@
         }
         activateDocNode(nodes[idx]);
         e.preventDefault();
+    }
+
+    function _setDocsMetaBarVisible(visible) {
+        const bar = document.getElementById('docs-preview-meta-bar');
+        if (bar) bar.style.display = visible ? 'flex' : 'none';
     }
 
     function loadDocumentPreview(sourceId, docId, docName) {
@@ -4060,8 +4114,10 @@
                 state.selectedEl = activeNode;
             }
         }
-        
+
         updateSyncButtonVisibility();
+        // Recompute docs meta-bar overflow trigger after sync-button visibility update.
+        _recomputeAllOverflowTriggers();
     }
 
     function rerenderUnifiedDocs() {
@@ -4392,6 +4448,7 @@
         if (sourceId === 'local-folder' || sourceId === 'antigravity') {
             state.activeDocFilePath = filePath || null;
             if (btnEdit) btnEdit.disabled = false;
+            _setDocsMetaBarVisible(true);
             if (btnImportFullDoc) {
                 btnImportFullDoc.style.display = 'none';
                 btnImportFullDoc.disabled = true;
@@ -4409,6 +4466,7 @@
                 btnEdit.disabled = false;
                 btnEdit.title = 'Edit document content';
             }
+            _setDocsMetaBarVisible(true);
             if (btnImportFullDoc) {
                 btnImportFullDoc.style.display = '';
                 btnImportFullDoc.disabled = false;
@@ -4422,6 +4480,12 @@
                     : 'Import or edit this doc first to enable Push';
             }
         }
+
+        // Recompute the docs meta-bar "⋯ More" trigger visibility after the
+        // document-scoped button gating above (Import/PRD/Constitution/Copy
+        // enable/disable + show/hide). Parity with the Tickets meta-bar, which
+        // recomputes after its own gating updates.
+        _recomputeAllOverflowTriggers();
 
         if (pages && pages.length > 0) {
             state.currentPages = pages;
@@ -5408,6 +5472,7 @@
                 handleLocalDocsReady(msg);
                 break;
             case 'createPlansState':
+            case 'createPlansFolderPicked':
             case 'createPlansPasteBackResult': {
                 if (window.__createPlansHandleMessage) { window.__createPlansHandleMessage(msg); }
                 break;
@@ -6209,6 +6274,8 @@
             }
             case 'moveTicketResult': {
                 setTicketsLoadingState(false);
+                // Capture the moved ticket id before exitMoveMode() clears _moveTicketId.
+                const _movedTicketId = msg.ticketId || _moveTicketId;
                 if (_moveMode) {
                     const srcModal = document.getElementById('tickets-source-modal');
                     if (srcModal) srcModal.style.display = 'none';
@@ -6223,28 +6290,29 @@
                         successText += ` (Task remains in ${msg.remainsInLists} other list(s))`;
                     }
                     showTicketsStatus(successText, false);
+                    // Keep the current list on screen — the moved ticket simply leaves it.
+                    // Previously this fired refreshTicketsDelta / loadLocalTicketFiles, which
+                    // reloaded and re-scoped the sidebar to local files and could collapse the
+                    // whole list down to a single ticket (or empty it). The backend already
+                    // performed the source-system move and rewrote the local file, so no
+                    // client re-fetch is needed: drop the moved ticket from the in-memory list
+                    // and re-render in place. (Refresh still reconciles on demand.)
                     if (msg.provider === 'clickup') {
-                        if (clickUpSelectedListId) {
-                            vscode.postMessage({
-                                type: 'refreshTicketsDelta',
-                                provider: 'clickup',
-                                listId: clickUpSelectedListId,
-                                workspaceRoot: ticketsWorkspaceRoot
-                            });
-                        } else {
-                            loadLocalTicketFiles();
+                        if (_movedTicketId) {
+                            clickUpProjectIssues = clickUpProjectIssues.filter(t => t.id !== _movedTicketId);
+                            if (selectedClickUpIssue && selectedClickUpIssue.task && selectedClickUpIssue.task.id === _movedTicketId) {
+                                selectedClickUpIssue = null;
+                            }
                         }
+                        renderTicketsClickUpPanel();
                     } else {
-                        if (linearProjectPickerValue) {
-                            vscode.postMessage({
-                                type: 'refreshTicketsDelta',
-                                provider: 'linear',
-                                projectId: linearProjectPickerValue,
-                                workspaceRoot: ticketsWorkspaceRoot
-                            });
-                        } else {
-                            loadLocalTicketFiles();
+                        if (_movedTicketId) {
+                            linearProjectIssues = linearProjectIssues.filter(t => t.id !== _movedTicketId);
+                            if (selectedLinearIssue && selectedLinearIssue.issue && selectedLinearIssue.issue.id === _movedTicketId) {
+                                selectedLinearIssue = null;
+                            }
                         }
+                        renderTicketsLinearPanel();
                     }
                 } else {
                     showTicketsStatus(msg.error || 'Failed to move ticket', true);
@@ -6400,6 +6468,7 @@
                         state.activeDocId = null;
                         state.activeDocName = null;
                         state.activeSource = null;
+                        _setDocsMetaBarVisible(false);
                         updateLocalActiveContextButtonState();
                         if (state.selectedEl) {
                             state.selectedEl.classList.remove('selected');
@@ -6424,6 +6493,7 @@
                         state.activeDocId = null;
                         state.activeDocName = null;
                         state.activeSource = null;
+                        _setDocsMetaBarVisible(false);
                         updateLocalActiveContextButtonState();
                         if (state.selectedEl) {
                             state.selectedEl.classList.remove('selected');
@@ -8457,26 +8527,122 @@ Return ONLY the drafted prompt with no additional commentary.`;
         });
     }
 
-    // + New Doc — create a markdown doc in a configured local folder. Reuses the
-    // existing createLocalDoc message (no new message type). Gates on a local
-    // source being active so an online source ID is never sent as folderPath.
+    // + New Doc — opens an in-webview modal (name + location picker + optional
+    // description + Create / Create with agent). Reuses the existing createLocalDoc
+    // message, widened with name/description/withAgent fields.
     const btnCreateDoc = document.getElementById('btn-create-doc');
-    if (btnCreateDoc) {
-        btnCreateDoc.addEventListener('click', () => {
-            if (state.activeSource === 'local-folder' && typeof state.activeDocId === 'string' && /^\d+:/.test(state.activeDocId)) {
-                // A local doc is selected — reuse its folder as a `N:relDir` reference,
-                // the shape the backend's `/^\d+:/` branch resolves (subfolders included).
-                const colonIdx = state.activeDocId.indexOf(':');
-                const folderIndex = state.activeDocId.substring(0, colonIdx);
-                const rel = state.activeDocId.substring(colonIdx + 1);
-                const lastSlash = Math.max(rel.lastIndexOf('/'), rel.lastIndexOf('\\'));
-                const relDir = lastSlash >= 0 ? rel.substring(0, lastSlash) : '';
-                vscode.postMessage({ type: 'createLocalDoc', folderPath: folderIndex + ':' + relDir });
-                return;
+    const newDocModal = document.getElementById('new-doc-modal');
+    const newDocNameInput = document.getElementById('new-doc-name');
+    const newDocLocationSelect = document.getElementById('new-doc-location');
+    const newDocLocationHint = document.getElementById('new-doc-location-hint');
+    const newDocDescriptionInput = document.getElementById('new-doc-description');
+    const newDocErrorEl = document.getElementById('new-doc-error');
+    const btnNewDocCreate = document.getElementById('btn-new-doc-create');
+    const btnNewDocCreateAgent = document.getElementById('btn-new-doc-create-agent');
+    const btnCancelNewDoc = document.getElementById('btn-cancel-new-doc');
+    const btnCloseNewDocModal = document.getElementById('btn-close-new-doc-modal');
+
+    function _closeNewDocModal() {
+        if (newDocModal) newDocModal.style.display = 'none';
+        if (newDocErrorEl) { newDocErrorEl.textContent = ''; newDocErrorEl.style.display = 'none'; }
+    }
+
+    function _openNewDocModal() {
+        if (!newDocModal) return;
+        // Populate the location picker from the client-side folder map (zero
+        // backend round-trips). Reflects the active workspace filter.
+        const folderPaths = getCurrentFolderPaths(state.localFolderPathsByRoot, state.docsWorkspaceRootFilter);
+        if (newDocLocationSelect) {
+            newDocLocationSelect.innerHTML = '';
+            folderPaths.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p;
+                const item = (_workspaceItems || []).find(w => w.workspaceRoot === p);
+                opt.textContent = (item && item.label) || p.split(/[\\/]/).pop() || p;
+                newDocLocationSelect.appendChild(opt);
+            });
+        }
+        const hasFolders = folderPaths.length > 0;
+        if (newDocLocationHint) newDocLocationHint.style.display = hasFolders ? 'none' : '';
+        if (newDocLocationSelect) newDocLocationSelect.style.display = hasFolders ? '' : 'none';
+        if (btnNewDocCreate) btnNewDocCreate.disabled = !hasFolders;
+        if (btnNewDocCreateAgent) btnNewDocCreateAgent.disabled = !hasFolders;
+
+        // Pre-select the active local doc's folder when one is selected.
+        let preselectAbs = '';
+        if (state.activeSource === 'local-folder' && typeof state.activeDocId === 'string' && /^\d+:/.test(state.activeDocId)) {
+            const colonIdx = state.activeDocId.indexOf(':');
+            const folderIndex = parseInt(state.activeDocId.substring(0, colonIdx), 10);
+            const rel = state.activeDocId.substring(colonIdx + 1);
+            const lastSlash = Math.max(rel.lastIndexOf('/'), rel.lastIndexOf('\\'));
+            const relDir = lastSlash >= 0 ? rel.substring(0, lastSlash) : '';
+            // Match the backend's `/^\d+:/` resolution: iterate roots, take
+            // folderPaths[folderIndex] from the first root that has it.
+            const byRoot = state.localFolderPathsByRoot || {};
+            for (const paths of Object.values(byRoot)) {
+                if (Array.isArray(paths) && folderIndex >= 0 && folderIndex < paths.length) {
+                    preselectAbs = relDir ? paths[folderIndex] + '/' + relDir : paths[folderIndex];
+                    break;
+                }
             }
-            // No active local doc — the backend quick-picks a configured folder,
-            // or toasts "Add a folder via Manage Folders first." when none exist.
-            vscode.postMessage({ type: 'createLocalDoc', folderPath: '' });
+        }
+        if (newDocLocationSelect && hasFolders) {
+            const matched = Array.from(newDocLocationSelect.options).find(o => o.value === preselectAbs);
+            newDocLocationSelect.value = matched ? matched.value : newDocLocationSelect.options[0].value;
+        }
+        if (newDocNameInput) { newDocNameInput.value = ''; }
+        if (newDocDescriptionInput) { newDocDescriptionInput.value = ''; }
+        if (newDocErrorEl) { newDocErrorEl.textContent = ''; newDocErrorEl.style.display = 'none'; }
+        newDocModal.style.display = 'block';
+        if (newDocNameInput) newDocNameInput.focus();
+    }
+
+    function _submitNewDoc(withAgent) {
+        if (!newDocNameInput || !newDocLocationSelect) return;
+        const name = newDocNameInput.value.trim();
+        const folderPath = newDocLocationSelect.value || '';
+        if (!name) {
+            if (newDocErrorEl) { newDocErrorEl.textContent = 'Name is required.'; newDocErrorEl.style.display = ''; }
+            newDocNameInput.focus();
+            return;
+        }
+        if (!folderPath) {
+            if (newDocErrorEl) { newDocErrorEl.textContent = 'Pick a folder first.'; newDocErrorEl.style.display = ''; }
+            return;
+        }
+        const description = newDocDescriptionInput ? newDocDescriptionInput.value.trim() : '';
+        vscode.postMessage({
+            type: 'createLocalDoc',
+            folderPath,
+            name,
+            description,
+            withAgent: !!withAgent
+        });
+        _closeNewDocModal();
+    }
+
+    if (btnCreateDoc) {
+        btnCreateDoc.addEventListener('click', _openNewDocModal);
+    }
+    if (btnNewDocCreate) {
+        btnNewDocCreate.addEventListener('click', () => _submitNewDoc(false));
+    }
+    if (btnNewDocCreateAgent) {
+        btnNewDocCreateAgent.addEventListener('click', () => _submitNewDoc(true));
+    }
+    if (btnCancelNewDoc) {
+        btnCancelNewDoc.addEventListener('click', _closeNewDocModal);
+    }
+    if (btnCloseNewDocModal) {
+        btnCloseNewDocModal.addEventListener('click', _closeNewDocModal);
+    }
+    if (newDocModal) {
+        newDocModal.addEventListener('click', (e) => {
+            // Backdrop click — close only when the click hits the modal shell, not its content.
+            if (e.target === newDocModal) _closeNewDocModal();
+        });
+        newDocModal.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') { e.stopPropagation(); _closeNewDocModal(); }
         });
     }
 
@@ -8588,6 +8754,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
         btnSetPrd.title = btnSetPrd.disabled
             ? 'No projects in this workspace yet — create one on the Kanban board first (+ Add Project).'
             : "Copy the open document into a project's PRD. You'll choose the project; if it already has a PRD you can keep, append, or replace it.";
+        // Recompute docs meta-bar overflow trigger — Save as PRD lives in ⋯ More.
+        _recomputeAllOverflowTriggers();
     }
 
     function checkProjectContextEnabled(workspaceRoot, callback) {
@@ -10069,6 +10237,12 @@ Instructions:
                 }
                 return;
             }
+            // A click on a card's "⋯" overflow trigger opens its menu (handled by the
+            // global overflow-menu listener) — it must NOT also select/drill-down the
+            // card. The Move item itself is caught above via [data-move-ticket-id].
+            if (e.target.closest('[data-overflow-trigger]')) {
+                return;
+            }
             const card = e.target.closest('[data-linear-issue-id], [data-clickup-task-id]');
             if (card) {
                 const linearId = card.dataset.linearIssueId;
@@ -10876,8 +11050,13 @@ Instructions:
             <div class="card-actions">
                 <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(task.id)}" data-provider="clickup" title="Add to kanban">To kanban</button>
                 <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(task.id)}" data-provider="clickup" title="Link to ticket">Link</button>
-                <button type="button" class="card-icon-btn" data-move-ticket-id="${escapeAttr(task.id)}" data-provider="clickup">Move</button>
                 ${openBtn}
+                <div class="overflow-menu" data-overflow-menu>
+                    <button type="button" class="card-icon-btn overflow-menu-trigger" data-overflow-trigger title="More actions">⋯</button>
+                    <div class="overflow-menu-popover" data-overflow-popover>
+                        <button type="button" class="card-icon-btn overflow-menu-item" data-move-ticket-id="${escapeAttr(task.id)}" data-provider="clickup" title="Move to another list">Move</button>
+                    </div>
+                </div>
             </div>
         </div>
         `;
@@ -10904,8 +11083,13 @@ Instructions:
             <div class="card-actions">
                 <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(issue.id)}" data-provider="linear" title="Add to kanban">To kanban</button>
                 <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(issue.id)}" data-provider="linear" title="Link to ticket">Link</button>
-                <button type="button" class="card-icon-btn" data-move-ticket-id="${escapeAttr(issue.id)}" data-provider="linear">Move</button>
                 ${openBtn}
+                <div class="overflow-menu" data-overflow-menu>
+                    <button type="button" class="card-icon-btn overflow-menu-trigger" data-overflow-trigger title="More actions">⋯</button>
+                    <div class="overflow-menu-popover" data-overflow-popover>
+                        <button type="button" class="card-icon-btn overflow-menu-item" data-move-ticket-id="${escapeAttr(issue.id)}" data-provider="linear" title="Move to another project">Move</button>
+                    </div>
+                </div>
             </div>
         </div>
         `;
@@ -12235,6 +12419,8 @@ Instructions:
         // Unified Docs tab: canSync-based visibility is the single source of truth for the
         // shared Sync button. Delegate so per-doc canSync gating is not overridden on selection.
         updateSyncButtonVisibility();
+        // Recompute docs meta-bar overflow trigger — Copy to Online lives in ⋯ More.
+        _recomputeAllOverflowTriggers();
     }
 
     // Sync-to-online button state is updated inside updateLocalActiveContextButtonState and handleOnlineDocsReady

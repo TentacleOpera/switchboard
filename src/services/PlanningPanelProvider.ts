@@ -3140,8 +3140,10 @@ Start by checking which documents exist, then present the menu.`;
             // ── Create Plans tab (docs-first external planning intake) ──────
             case 'createPlansInit': {
                 const cpRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
+                // hasDocs now reports whether managed extras (constitution / PRDs /
+                // README) exist — it gates the "include extras" checkbox, not the zip.
                 let hasDocs = false;
-                try { hasDocs = cpRoot ? (await this._collectDocsBundleSources(cpRoot)).length > 0 : false; } catch { hasDocs = false; }
+                try { hasDocs = cpRoot ? (await this._collectExtraDocSources(cpRoot)).length > 0 : false; } catch { hasDocs = false; }
                 this.postMessageToWebview({
                     type: 'createPlansState',
                     hasDocs,
@@ -3177,18 +3179,43 @@ Start by checking which documents exist, then present the menu.`;
                 this._seams().ui.showTemporaryNotification('Planning prompt copied to clipboard');
                 break;
             }
+            case 'createPlansPickFolder': {
+                // The zip is built from a folder the user chooses — Switchboard does
+                // not decide the doc set. This is the primary Create Plans source.
+                const picked = await this._seams().ui.showOpenDialog({
+                    openLabel: 'Zip this folder',
+                    canSelectFiles: false,
+                    canSelectFolders: true,
+                    canSelectMany: false
+                });
+                const folder = picked && picked.length > 0 ? picked[0] : '';
+                if (folder) {
+                    this.postMessageToWebview({ type: 'createPlansFolderPicked', folder });
+                }
+                break;
+            }
             case 'createPlansDownloadZip': {
                 const cpRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
                 if (!cpRoot) {
                     this._seams().ui.showTemporaryNotification('No workspace open');
                     break;
                 }
+                const folder = typeof msg.folder === 'string' ? msg.folder.trim() : '';
+                if (!folder) {
+                    this._seams().ui.showTemporaryNotification('Choose a folder to bundle first');
+                    break;
+                }
                 try {
-                    const sources = await this._collectDocsBundleSources(cpRoot);
+                    // Primary source: the docs in the chosen folder, recursively.
+                    const sources = await this._collectFolderDocSources(folder);
+                    // Opt-in extras: constitution + PRDs + README on top of the folder.
+                    if (msg.includeExtras) {
+                        for (const extra of await this._collectExtraDocSources(cpRoot)) {
+                            if (!sources.some(s => s.absPath === extra.absPath)) { sources.push(extra); }
+                        }
+                    }
                     if (sources.length === 0) {
-                        // Never an empty zip — point the user at writing a first doc.
-                        this.postMessageToWebview({ type: 'createPlansState', hasDocs: false });
-                        this._seams().ui.showTemporaryNotification('No docs yet — write a PRD or constitution in the Docs tab first');
+                        this._seams().ui.showTemporaryNotification('That folder has no docs (.md / .txt) to bundle');
                         break;
                     }
                     const howToPlan = `# How to plan from these docs\n\n${CREATE_PLANS_CORE_PROMPT}\n\nThe docs are the other markdown files in this zip — see MANIFEST.md for the list.`;
@@ -3268,7 +3295,7 @@ Start by checking which documents exist, then present the menu.`;
                 break;
             }
             case 'createLocalDoc': {
-                await this._handleCreateLocalDoc(workspaceRoot, msg.folderPath);
+                await this._handleCreateLocalDoc(workspaceRoot, msg.folderPath, msg.name, msg.description, msg.withAgent === true);
                 break;
             }
 
@@ -3299,14 +3326,7 @@ Start by checking which documents exist, then present the menu.`;
                 let currentContent = '';
                 try { currentContent = await fs.promises.readFile(safePath, 'utf8'); } catch { /* treat as empty → Draft */ }
                 const hasContent = !!(msg.hasContent === true) && !!(currentContent && currentContent.trim());
-                let prompt: string;
-                if (hasContent && currentContent.length > 200_000) {
-                    prompt = `You are improving an existing document for the project at ${wsRoot}.\n\n## Document\n- **Title:** ${title}\n- **File path (read the current doc here, and write the improved doc back here):** ${safePath}\n\nThe current content is large (>200 KB) and is not inlined here. Read the file at the path above, then fill gaps, correct anything out of date, and improve clarity and structure without discarding accurate existing material. Write the improved markdown back to the file path, preserving any YAML frontmatter. Report back with a summary of what you changed.`;
-                } else if (hasContent) {
-                    prompt = `You are improving an existing document for the project at ${wsRoot}.\n\n## Document\n- **Title:** ${title}\n- **File path (write the improved doc back here):** ${safePath}\n\n## Current content\n${currentContent}\n\nRead the current content above and the relevant parts of the codebase. Fill gaps, correct anything out of date, and improve clarity and structure without discarding accurate existing material. Write the improved markdown back to the file path, preserving any YAML frontmatter. Report back with a summary of what you changed.`;
-                } else {
-                    prompt = `You are writing a document for the project at ${wsRoot}.\n\n## Document\n- **Title:** ${title}\n- **File path (write the finished doc here):** ${safePath}\n\nThe file is currently empty (or contains only a title heading). Research the codebase as needed to write an accurate, useful document for this topic. Write the finished markdown directly to the file path above. Report back with a short summary of what you covered.`;
-                }
+                const prompt = this._buildLocalDocDraftPrompt(safePath, title, wsRoot, hasContent, currentContent);
                 await this._seams().clipboard.writeText(prompt);
                 this._seams().ui.showTemporaryNotification('Doc prompt copied to clipboard');
                 break;
@@ -7621,9 +7641,16 @@ Read the current content above. Determine what's missing. Produce a complete fea
 
     private async _handleCreateLocalDoc(
         workspaceRoot: string,
-        folderPath: string
+        folderPath: string,
+        name?: string,
+        description?: string,
+        withAgent: boolean = false
     ): Promise<void> {
         try {
+            // Webview-modal path: when `name` is supplied, the modal already
+            // captured folder + name + description — skip the native prompts.
+            // The no-`name` path below is retained as a safety-net fallback.
+            let docName: string | undefined = typeof name === 'string' ? name : undefined;
             if (!folderPath) {
                 // No active local folder — quick-pick among the configured folders
                 // (all roots); with none configured, point at Manage Folders.
@@ -7648,17 +7675,19 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     folderPath = picked.description;
                 }
             }
-            const docName = await this._seams().ui.showInputBox({
-                prompt: 'New document name',
-                placeHolder: 'e.g. my-plan.md',
-                validateInput: (value) => {
-                    if (!value || !value.trim()) { return 'Name is required'; }
-                    const sanitized = value.trim().replace(/[\\/:]/g, '').replace(/\.\./g, '');
-                    if (!sanitized) { return 'Invalid name'; }
-                    return undefined;
-                }
-            });
-            if (!docName) { return; }
+            if (!docName) {
+                docName = await this._seams().ui.showInputBox({
+                    prompt: 'New document name',
+                    placeHolder: 'e.g. my-plan.md',
+                    validateInput: (value) => {
+                        if (!value || !value.trim()) { return 'Name is required'; }
+                        const sanitized = value.trim().replace(/[\\/:]/g, '').replace(/\.\./g, '');
+                        if (!sanitized) { return 'Invalid name'; }
+                        return undefined;
+                    }
+                });
+                if (!docName) { return; }
+            }
 
             let sanitized = docName.trim().replace(/[\\/:]/g, '').replace(/\.\./g, '');
             if (!sanitized.toLowerCase().endsWith('.md')) {
@@ -7717,7 +7746,10 @@ Read the current content above. Determine what's missing. Produce a complete fea
             }
 
             const title = sanitized.replace(/\.md$/i, '');
-            const stub = `# ${title}\n`;
+            const descTrimmed = typeof description === 'string' ? description.trim() : '';
+            const stub = descTrimmed
+                ? `# ${title}\n\n${descTrimmed}\n`
+                : `# ${title}\n`;
             await fs.promises.writeFile(filePath, stub, 'utf8');
 
             this._lastLocalDocsSignature = '';
@@ -7727,8 +7759,42 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 docId,
                 docName: sanitized
             });
+
+            // Create with agent — copy the Draft/Improve prompt for the freshly
+            // created file. A description seeds the "improve" variant; an empty
+            // doc uses the "write from scratch" variant. The path was validated
+            // above (configured-folder check), so call the builder directly.
+            if (withAgent) {
+                const wsRoot = workspaceRoot;
+                const prompt = this._buildLocalDocDraftPrompt(filePath, title, wsRoot, !!descTrimmed, descTrimmed);
+                await this._seams().clipboard.writeText(prompt);
+                this._seams().ui.showTemporaryNotification('Doc prompt copied to clipboard');
+            }
         } catch (err) {
             this._seams().ui.showErrorMessage(`Failed to create document: ${String(err)}`);
+        }
+    }
+
+    /**
+     * Build the Draft/Improve prompt for a local doc. Shared by the standalone
+     * Draft-with-agent button (`draftImproveLocalDoc`) and the Create-with-agent
+     * branch of `createLocalDoc` so the two produce byte-for-byte identical
+     * prompts for the same inputs. Three branches preserved verbatim: large
+     * (>200 KB), has-content, and empty.
+     */
+    private _buildLocalDocDraftPrompt(
+        filePath: string,
+        title: string,
+        workspaceRoot: string,
+        hasContent: boolean,
+        currentContent: string
+    ): string {
+        if (hasContent && currentContent.length > 200_000) {
+            return `You are improving an existing document for the project at ${workspaceRoot}.\n\n## Document\n- **Title:** ${title}\n- **File path (read the current doc here, and write the improved doc back here):** ${filePath}\n\nThe current content is large (>200 KB) and is not inlined here. Read the file at the path above, then fill gaps, correct anything out of date, and improve clarity and structure without discarding accurate existing material. Write the improved markdown back to the file path, preserving any YAML frontmatter. Report back with a summary of what you changed.`;
+        } else if (hasContent) {
+            return `You are improving an existing document for the project at ${workspaceRoot}.\n\n## Document\n- **Title:** ${title}\n- **File path (write the improved doc back here):** ${filePath}\n\n## Current content\n${currentContent}\n\nRead the current content above and the relevant parts of the codebase. Fill gaps, correct anything out of date, and improve clarity and structure without discarding accurate existing material. Write the improved markdown back to the file path, preserving any YAML frontmatter. Report back with a summary of what you changed.`;
+        } else {
+            return `You are writing a document for the project at ${workspaceRoot}.\n\n## Document\n- **Title:** ${title}\n- **File path (write the finished doc here):** ${filePath}\n\nThe file is currently empty (or contains only a title heading). Research the codebase as needed to write an accurate, useful document for this topic. Write the finished markdown directly to the file path above. Report back with a short summary of what you covered.`;
         }
     }
 
@@ -7737,7 +7803,40 @@ Read the current content above. Determine what's missing. Produce a complete fea
      * every project PRD, the root README, and the curated Docs-tab folders.
      * Paths only — the bundler applies the docs-only (.md/.txt) allowlist.
      */
-    private async _collectDocsBundleSources(workspaceRoot: string): Promise<DocsBundleSource[]> {
+    /**
+     * The zip's primary source: every doc in one user-chosen folder, walked
+     * recursively (bounded depth). Switchboard does NOT decide the doc set — the
+     * user points at a folder and gets its docs. Docs-only (.md/.txt); dotfiles
+     * and node_modules are skipped so nothing but prose enters the bundle.
+     */
+    private async _collectFolderDocSources(folder: string): Promise<DocsBundleSource[]> {
+        const sources: DocsBundleSource[] = [];
+        const root = path.resolve(folder);
+        const base = path.basename(root) || 'docs';
+        const walk = async (dir: string, zipDir: string, depth: number): Promise<void> => {
+            if (depth > 8) { return; }
+            let entries: import('fs').Dirent[] = [];
+            try { entries = await fs.promises.readdir(dir, { withFileTypes: true }) as unknown as import('fs').Dirent[]; } catch { return; }
+            for (const entry of entries) {
+                if (entry.name.startsWith('.') || entry.name === 'node_modules') { continue; }
+                const full = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                    await walk(full, path.posix.join(zipDir, entry.name), depth + 1);
+                } else if (['.md', '.txt'].includes(path.extname(entry.name).toLowerCase())) {
+                    sources.push({ zipDir, absPath: full });
+                }
+            }
+        };
+        await walk(root, base, 0);
+        return sources;
+    }
+
+    /**
+     * The opt-in extras: the managed doc set (constitution + every project PRD +
+     * root README). Added on top of the chosen folder only when the user ticks
+     * "include extras" — never auto-scooped. No Docs-tab folder walk here.
+     */
+    private async _collectExtraDocSources(workspaceRoot: string): Promise<DocsBundleSource[]> {
         const sources: DocsBundleSource[] = [];
         const seen = new Set<string>();
         const add = (zipDir: string, absPath: string) => {
@@ -7770,28 +7869,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
             if (readme) { add('.', path.join(workspaceRoot, readme)); }
         } catch { /* root unreadable — fine */ }
 
-        // Curated Docs-tab folders (recursive, bounded depth).
-        const walk = async (dir: string, zipDir: string, depth: number): Promise<void> => {
-            if (depth > 4) { return; }
-            let entries: import('fs').Dirent[] = [];
-            try { entries = await fs.promises.readdir(dir, { withFileTypes: true }) as unknown as import('fs').Dirent[]; } catch { return; }
-            for (const entry of entries) {
-                if (entry.name.startsWith('.') || entry.name === 'node_modules') { continue; }
-                const full = path.join(dir, entry.name);
-                if (entry.isDirectory()) {
-                    await walk(full, path.posix.join(zipDir, entry.name), depth + 1);
-                } else {
-                    add(zipDir, full);
-                }
-            }
-        };
-        try {
-            for (const folder of this._getLocalFolderService(workspaceRoot).getFolderPaths()) {
-                await walk(folder, path.posix.join('docs', path.basename(folder)), 0);
-            }
-        } catch { /* no local folders — fine */ }
-
-        // Docs-only filter here too so hasDocs isn't fooled by non-doc files.
+        // Docs-only filter so hasDocs isn't fooled by non-doc files.
         return sources.filter(s => ['.md', '.txt'].includes(path.extname(s.absPath).toLowerCase()));
     }
 
