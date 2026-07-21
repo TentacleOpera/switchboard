@@ -28,7 +28,6 @@ The genuinely rich logic — feature-column recompute, feature-file regeneration
 Conclusion: extract, don't reimplement. One engine, two host adapters.
 
 ## Metadata
-- **Plan ID:** ed88bf95-0993-4c8e-939b-431c72317f36
 - **Tags:** standalone, npx, headless, plan-watcher, ingestion, parity, refactor
 - **Complexity:** 7
 - **Release phase:** Headless go-live blocker. This is the gate on advertising headless as parity-complete. Touches the extension's ingestion path, so it carries the VSIX-parity release gate from `extract-standalone-npx-04`.
