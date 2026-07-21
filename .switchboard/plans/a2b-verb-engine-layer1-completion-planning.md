@@ -4,7 +4,7 @@ description: "Planning Layer-1, sub-card 1 of 3 (SEQUENTIAL, same file): the Pla
 
 # Verb Engine — Layer-1: PlanningProvider · P1 — Plans & Features (Return-in-Body + Schemas + Test)
 
-> **Split note:** `PlanningPanelProvider` (~169 verbs) is broken into 3 sequential family sub-cards because they all edit the same file — parallel cards would collide (the documented burndown hazard). Order is **hard**: P1 → P2 (`a2b-verb-engine-layer1-planning-p2-docs.md`) → P3 (`a2b-verb-engine-layer1-planning-p3-tickets.md`), one agent stream throughout. The `planning` ratchet ceiling lowers in three steps and only reaches 0 after P3.
+> **Split note:** `PlanningPanelProvider` (~169 verbs) is broken into 3 sequential family sub-cards because they all edit the same file — parallel cards would collide (the documented burndown hazard). Order is **hard**: P1 → P2 (`a2b-verb-engine-layer1-planning-p2-docs.md`) → P3 (`a2b-verb-engine-layer1-planning-p3-tickets.md`), one agent stream throughout. The `planning` ratchet ceiling lowers in three steps, reaching its residual `break` floor after P3 (0 only if `PlanningPanelProvider` has no legitimate nested-control-flow breaks — inner switches / loop breaks must stay `break`).
 
 ## Metadata
 - **Project:** browser-switchboard
@@ -38,7 +38,7 @@ The Project feature's own 2026-07-17 review found ·6's arm-level seam migration
 2. Baseline with `analyze-verb-migration2.js`; convert this family's read arms (Kanban idiom).
 3. Add the `planning` schema entries for this family's writes.
 4. Create the headless Planning suite; assert in-body data.
-5. **Lower the `planning` ratchet ceiling by this family's converted-arm count** (partial — full 0 after P3); note progress in `a2b-verb-engine-06-planning-panel.md`.
+5. **Lower the `planning` ratchet ceiling by this family's converted-arm count** (partial — reaches its residual floor after P3, which may be > 0 if nested-control-flow breaks remain; never force 0); note progress in `a2b-verb-engine-06-planning-panel.md`.
 
 ## Complexity Audit
 ### Routine

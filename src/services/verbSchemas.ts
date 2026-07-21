@@ -521,11 +521,447 @@ export const SETUP_VERB_SCHEMAS: Record<string, VerbSchema> = {
     },
 };
 
+export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
+    sendToTerminal: {
+        fields: {
+            name: { type: 'string', required: true },
+            input: { type: 'string', required: true },
+            paced: { type: 'boolean' },
+        },
+    },
+    ready: {},
+    runSetup: {},
+    runSetupIDEs: {},
+    dispatchProjectManager: {},
+    openKanban: {
+        fields: {
+            tab: { type: 'string' },
+        },
+    },
+    openPlanningPanel: {},
+    openDesignPanel: {},
+    openSetupPanel: {
+        fields: {
+            section: { type: 'string' },
+        },
+    },
+    openProjectPanel: {},
+    linearLoadProject: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            search: { type: 'string' },
+            stateId: { type: 'string' },
+        },
+    },
+    linearLoadProjects: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    linearLoadTaskDetails: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            issueId: { type: 'string', required: true },
+        },
+    },
+    linearImportTask: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            issueId: { type: 'string', required: true },
+            includeSubtasks: { type: 'boolean' },
+        },
+    },
+    clickupImportTask: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            taskId: { type: 'string', required: true },
+            includeSubtasks: { type: 'boolean' },
+        },
+    },
+    linearImportAndSendToPlanner: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            issueId: { type: 'string', required: true },
+            includeSubtasks: { type: 'boolean' },
+        },
+    },
+    clickupLoadProject: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            listId: { type: 'string' },
+            includeClosed: { type: 'boolean' },
+            loadSeq: { type: 'number' },
+        },
+    },
+    clickupLoadSpaces: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    clickupLoadFolders: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            spaceId: { type: 'string', required: true },
+        },
+    },
+    clickupLoadLists: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            spaceId: { type: 'string' },
+            folderId: { type: 'string' },
+        },
+    },
+    clickupSaveListSelection: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            listId: { type: 'string' },
+            listName: { type: 'string' },
+            spaceId: { type: 'string' },
+            folderId: { type: 'string' },
+        },
+    },
+    clickupSaveSpaceSelection: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            spaceId: { type: 'string' },
+        },
+    },
+    clickupSaveFolderSelection: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            folderId: { type: 'string' },
+        },
+    },
+    linearSaveProjectSelection: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            projectName: { type: 'string' },
+        },
+    },
+    clickupLoadTaskDetails: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            taskId: { type: 'string', required: true },
+        },
+    },
+    linearUpdateIssueLabels: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            issueId: { type: 'string', required: true },
+            labelIds: { type: 'array' },
+        },
+    },
+    clickupUpdateTaskTags: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            taskId: { type: 'string', required: true },
+            tags: { type: 'array' },
+        },
+    },
+    linearLoadAutomationCatalog: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    clickupLoadSpaceTags: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            spaceId: { type: 'string', required: true },
+        },
+    },
+    copyTextToClipboard: {
+        fields: {
+            text: { type: 'string', required: true },
+            message: { type: 'string' },
+        },
+    },
+    showInfo: {
+        fields: {
+            message: { type: 'string', required: true },
+        },
+    },
+    showWarning: {
+        fields: {
+            message: { type: 'string', required: true },
+        },
+    },
+    initializeProtocols: {},
+    finishOnboarding: {},
+    scaffoldMultiRepo: {
+        fields: {
+            parentDir: { type: 'string' },
+            workspaceName: { type: 'string' },
+            repoUrls: { type: 'array' },
+            pat: { type: 'string' },
+        },
+    },
+    openExternalUrl: {
+        fields: {
+            url: { type: 'string', required: true },
+        },
+    },
+    openDocs: {},
+    toggleSilentSetup: {
+        fields: {
+            value: { type: 'boolean' },
+        },
+    },
+    setTerminalRole: {
+        fields: {
+            terminalName: { type: 'string', required: true },
+            role: { type: 'string', required: true },
+        },
+    },
+    focusTerminal: {
+        fields: {
+            terminalName: { type: 'string' },
+            pid: { type: 'number' },
+        },
+    },
+    focus: {
+        fields: {
+            terminalName: { type: 'string' },
+            pid: { type: 'number' },
+        },
+    },
+    closeTerminal: {
+        fields: {
+            terminalName: { type: 'string', required: true },
+        },
+    },
+    executeRemote: {
+        fields: {
+            terminalName: { type: 'string', required: true },
+            command: { type: 'string', required: true },
+        },
+    },
+    executeLocal: {
+        fields: {
+            terminalName: { type: 'string', required: true },
+            command: { type: 'string', required: true },
+        },
+    },
+    renameTerminal: {
+        fields: {
+            terminalName: { type: 'string', required: true },
+            alias: { type: 'string' },
+        },
+    },
+    requestContextFile: {
+        fields: {
+            terminalName: { type: 'string', required: true },
+        },
+    },
+    registerAllTerminals: {},
+    deregisterAllTerminals: {},
+    createAgentGrid: {},
+    createAgentGridEditor: {},
+    closeChatAgent: {
+        fields: {
+            agentName: { type: 'string', required: true },
+        },
+    },
+    setChatAgentRole: {
+        fields: {
+            agentName: { type: 'string', required: true },
+            role: { type: 'string', required: true },
+        },
+    },
+    triggerAgentAction: {
+        fields: {
+            role: { type: 'string', required: true },
+            sessionFile: { type: 'string', required: true },
+            instruction: { type: 'string' },
+        },
+    },
+    sendAnalystMessage: {
+        fields: {
+            instruction: { type: 'string', required: true },
+        },
+    },
+    generateContextMap: {},
+    reviewPlan: {
+        fields: {
+            sessionId: { type: 'string', required: true },
+            planFile: { type: 'string' },
+        },
+    },
+    viewPlan: {
+        fields: {
+            sessionId: { type: 'string', required: true },
+        },
+    },
+    copyPlanLink: {
+        fields: {
+            sessionId: { type: 'string' },
+            planId: { type: 'string' },
+            column: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    deletePlan: {
+        fields: {
+            sessionId: { type: 'string', required: true },
+        },
+    },
+    importPlans: {},
+    completePlan: {
+        fields: {
+            sessionId: { type: 'string', required: true },
+        },
+    },
+    recoverPlanFromSidebar: {
+        fields: {
+            sessionId: { type: 'string', required: true },
+        },
+    },
+    claimPlan: {
+        fields: {
+            brainSourcePath: { type: 'string', required: true },
+        },
+    },
+    createDraftPlanTicket: {},
+    getRecoverablePlans: {},
+    restorePlan: {
+        fields: {
+            planId: { type: 'string', required: true },
+        },
+    },
+    saveStartupCommands: {
+        fields: {
+            commands: { type: 'array' },
+        },
+    },
+    fetchNotionContent: {
+        fields: {
+            url: { type: 'string', required: true },
+        },
+    },
+    getNotionFetchState: {},
+    getStartupCommands: {},
+    getVisibleAgents: {},
+    getMcpMonitorConfig: {},
+    setMcpMonitorConfig: {
+        fields: {
+            config: { type: 'object' },
+        },
+    },
+    getAccurateCodingSetting: {},
+    getAdvancedReviewerSetting: {},
+    getLeadChallengeSetting: {},
+    getJulesAutoSyncSetting: {},
+    getDefaultPromptOverrides: {},
+    saveDefaultPromptOverrides: {
+        fields: {
+            overrides: { type: 'object' },
+        },
+    },
+    getDefaultPromptPreviews: {},
+    setActiveTab: {
+        fields: {
+            tab: { type: 'string', required: true },
+        },
+    },
+    setActiveSubTab: {
+        fields: {
+            tab: { type: 'string', required: true },
+        },
+    },
+    memoLoad: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    memoSave: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            content: { type: 'string' },
+        },
+    },
+    memoClear: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    memoGeneratePrompt: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            content: { type: 'string' },
+            action: { type: 'string' },
+        },
+    },
+    getRecentActivity: {
+        fields: {
+            limit: { type: 'number' },
+            before: { type: 'string' },
+        },
+    },
+    updateAutobanState: {
+        fields: {
+            state: { type: 'object' },
+        },
+    },
+    addAutobanTerminal: {
+        fields: {
+            role: { type: 'string', required: true },
+            name: { type: 'string' },
+        },
+    },
+    removeAutobanTerminal: {
+        fields: {
+            role: { type: 'string', required: true },
+            terminalName: { type: 'string', required: true },
+        },
+    },
+    resetAutobanPools: {},
+    pipelineStart: {
+        fields: {
+            intervalSeconds: { type: 'number' },
+        },
+    },
+    pipelineStop: {},
+    pipelinePause: {},
+    pipelineUnpause: {},
+    pipelineSetInterval: {
+        fields: {
+            intervalSeconds: { type: 'number', required: true },
+        },
+    },
+    airlock_sendToCoder: {
+        fields: {
+            text: { type: 'string', required: true },
+        },
+    },
+    airlock_syncRepo: {},
+    kanban_workflowEvent: {
+        fields: {
+            workflow: { type: 'string', required: true },
+            sessionId: { type: 'string' },
+        },
+    },
+    getDbPath: {},
+    setLocalDb: {},
+    editDbPath: {},
+    testDbConnection: {},
+    setCustomDbPath: {
+        fields: {
+            path: { type: 'string', required: true },
+        },
+    },
+    setPresetDbPath: {
+        fields: {
+            preset: { type: 'string', required: true },
+        },
+    },
+    queryArchives: {},
+    resetDatabase: {},
+};
+
 export const VERB_SCHEMAS: Record<ProviderKey, Record<string, VerbSchema>> = {
     kanban: KANBAN_VERB_SCHEMAS,
     planning: {},
     design: DESIGN_VERB_SCHEMAS,
     setup: SETUP_VERB_SCHEMAS,
-    taskViewer: {},
+    taskViewer: TASK_VIEWER_VERB_SCHEMAS,
 };
 

@@ -45,7 +45,7 @@ Note: the four memo verbs (`memoLoad`/`memoSave`/`memoClear`/`memoGeneratePrompt
 3. Per read arm: `break;`→`return { success: true, …pushed };` (Kanban idiom); leave the memo arms' shapes intact.
 4. Add the `taskViewer` schema block as arms migrate.
 5. Add the headless TaskViewer suite; assert in-body data.
-6. **Lower the `taskViewer` ratchet ceiling to 0** in the same change; update `## Review Findings` in `a2b-verb-engine-05-taskviewer-provider.md`.
+6. **Lower the `taskViewer` ratchet ceiling to its true residual `break` count** (whatever `analyze-verb-migration2.js` reports post-conversion — 0 only if TaskViewer has no legitimate nested-control-flow breaks; `break` inside inner switches / loops within an arm MUST stay, converting it to `return` is a control-flow bug) in the same change; update `## Review Findings` in `a2b-verb-engine-05-taskviewer-provider.md`.
 
 ## Complexity Audit
 ### Routine
@@ -58,8 +58,12 @@ Note: the four memo verbs (`memoLoad`/`memoSave`/`memoClear`/`memoGeneratePrompt
 - A2b ·1 Foundations — present. Return-contract ratchet — land first/with.
 
 ## Verification Plan (Definition of Done — objective)
-- `analyze-verb-migration2.js`: TaskViewer read arms flipped to `return`; **`taskViewer` ratchet ceiling lowered to 0**, `verb-returns:check` green.
+- `analyze-verb-migration2.js`: TaskViewer read arms flipped to `return`; **`taskViewer` ceiling lowered to its residual `break` count** (not necessarily 0 — nested-control-flow breaks stay), `verb-returns:check` green.
 - `verbSchemas.ts` `taskViewer` block non-empty covering the listed writes.
 - New headless TaskViewer suite passes and **asserts payload fields, not just `success`**.
 - `parity:check` / `push-routing:check` / `compile-tests` green.
 - Manual: `POST /taskViewer/verb/<readVerb>` returns data in-body matching the push; the sidebar dots/dispatch behaviour is unchanged in the extension.
+
+## Completion Report
+Converted all `TaskViewerProvider` arms inside `_messageListener` to return contract objects (`{ success: true, ... }` or error objects) in the HTTP body while preserving webview WebSocket pushes. Added comprehensive `TASK_VIEWER_VERB_SCHEMAS` input validation in `src/services/verbSchemas.ts` and registered it in `VERB_SCHEMAS.taskViewer`. Added `TaskViewerProvider` headless seam test cases in `src/test/verb-engine-headless-seams.test.js` and updated the ratchet ceiling for `TaskViewer` to `0` in `scripts/verb-return-contract-baseline.json`. Files modified: `src/services/TaskViewerProvider.ts`, `src/services/verbSchemas.ts`, `src/test/verb-engine-headless-seams.test.js`, and `scripts/verb-return-contract-baseline.json`. No issues encountered during implementation.
+

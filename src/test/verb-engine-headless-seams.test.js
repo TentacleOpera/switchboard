@@ -25,6 +25,7 @@ installVscodeTrap();
 
 const { DesignPanelProvider } = require('../../out/services/DesignPanelProvider');
 const { SetupPanelProvider } = require('../../out/services/SetupPanelProvider');
+const { TaskViewerProvider } = require('../../out/services/TaskViewerProvider');
 const { BroadcastHub } = require('../../out/services/broadcastHub');
 const { SwitchboardCommandRegistry } = require('../../out/services/commandRegistry');
 const { VscodeHostCommands } = require('../../out/services/hostSeams');
@@ -95,6 +96,30 @@ function buildHeadlessSetupProvider(tmpRoot, seamOpts = {}) {
     provider._hostSeams = seams;
     provider._broadcaster = new BroadcastHub({ webview: fakeWebview, apiServer: null });
     return { provider, seams, recorders, pushes, mockTaskViewer };
+}
+
+function buildHeadlessTaskViewerProvider(tmpRoot, seamOpts = {}) {
+    const { seams, recorders } = createHeadlessTestSeams({ roots: [tmpRoot], ...seamOpts });
+    const pushes = [];
+    const fakeWebview = {
+        postMessage: (msg) => {
+            pushes.push(msg);
+            return Promise.resolve(true);
+        },
+    };
+    const mockContext = {
+        globalState: { get: () => undefined, update: async () => {} },
+        workspaceState: { get: () => undefined, update: async () => {} },
+        secrets: null,
+    };
+    const provider = new TaskViewerProvider(
+        { fsPath: path.join(tmpRoot, 'ext') },
+        mockContext,
+        false
+    );
+    provider._hostSeams = seams;
+    provider._broadcaster = new BroadcastHub({ webview: fakeWebview, apiServer: null });
+    return { provider, seams, recorders, pushes };
 }
 
 async function main() {
@@ -358,6 +383,39 @@ async function main() {
         assert.strictEqual(result.tokenReceived, true);
         const push = pushes.find(p => p.type === 'clickupApplyResult');
         assert.ok(push, 'webview push emitted');
+    });
+
+    // ── TaskViewerProvider slice ───────────────────────────────────────────
+    await test('TaskViewer: unknown verb is rejected', async () => {
+        const { provider } = buildHeadlessTaskViewerProvider(tmpRoot);
+        await assert.rejects(
+            () => provider.handleServiceVerb('invalidVerbName', {}),
+            /Unknown TaskViewer verb/
+        );
+    });
+
+    await test('TaskViewer: sendToTerminal schema validates payload and returns result', async () => {
+        const { provider } = buildHeadlessTaskViewerProvider(tmpRoot);
+        await assert.rejects(
+            () => provider.handleServiceVerb('sendToTerminal', { name: 'term1' }),
+            /Invalid payload for TaskViewer verb 'sendToTerminal'.*input/
+        );
+        const result = await provider.handleServiceVerb('sendToTerminal', { name: 'term1', input: 'echo hi' });
+        assert.strictEqual(result.success, true);
+    });
+
+    await test('TaskViewer: showInfo executes and returns success', async () => {
+        const { provider, recorders } = buildHeadlessTaskViewerProvider(tmpRoot);
+        const result = await provider.handleServiceVerb('showInfo', { message: 'Hello TaskViewer' });
+        assert.strictEqual(result.success, true);
+        assert.ok(recorders.notifications.some(n => n === 'Hello TaskViewer'));
+    });
+
+    await test('TaskViewer: copyTextToClipboard writes clipboard seam and returns success', async () => {
+        const { provider, recorders } = buildHeadlessTaskViewerProvider(tmpRoot);
+        const result = await provider.handleServiceVerb('copyTextToClipboard', { text: 'Clipboard payload' });
+        assert.strictEqual(result.success, true);
+        assert.ok(recorders.clipboardWrites.includes('Clipboard payload'));
     });
 
     // ── Cleanup ───────────────────────────────────────────────────────────

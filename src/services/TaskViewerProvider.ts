@@ -7007,17 +7007,19 @@ Each plan file must include:
         }
     }
 
-    private async _postRecentActivity(limit: number, beforeTimestamp?: string, workspaceRoot?: string): Promise<void> {
+    private async _postRecentActivity(limit: number, beforeTimestamp?: string, workspaceRoot?: string): Promise<any> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
-        if (!resolvedRoot) return;
+        if (!resolvedRoot) return undefined;
         const page = await this._getSessionLog(resolvedRoot).getRecentActivity(limit, beforeTimestamp);
-        this.postMessage({
+        const payload = {
             type: 'recentActivity',
             events: page.events,
             hasMore: page.hasMore,
             nextCursor: page.nextCursor,
             append: typeof beforeTimestamp === 'string' && beforeTimestamp.length > 0
-        });
+        };
+        this.postMessage(payload);
+        return payload;
     }
 
     private async _getKanbanDb(workspaceRoot: string): Promise<KanbanDatabase | undefined> {
@@ -10699,31 +10701,31 @@ Each plan file must include:
                                 }
                             }
                         } catch { /* non-blocking */ }
-                        break;
+                        return { success: true };
                     case 'runSetup':
                         this._seams().commands.executeCommand('switchboard.setup');
-                        break;
+                        return { success: true };
                     case 'runSetupIDEs':
                         this._seams().commands.executeCommand('switchboard.setupIDEs');
-                        break;
+                        return { success: true };
                     case 'dispatchProjectManager':
                         await this._handleDispatchProjectManager();
-                        break;
+                        return { success: true };
                     case 'openKanban':
                         this._seams().commands.executeCommand('switchboard.openKanban', data.tab);
-                        break;
+                        return { success: true };
                     case 'openPlanningPanel':
                         this._seams().commands.executeCommand('switchboard.openPlanningPanel');
-                        break;
+                        return { success: true };
                     case 'openDesignPanel':
                         this._seams().commands.executeCommand('switchboard.openDesignPanel');
-                        break;
+                        return { success: true };
                     case 'openSetupPanel':
                         this._seams().commands.executeCommand('switchboard.openSetupPanel', data.section);
-                        break;
+                        return { success: true };
                     case 'openProjectPanel':
                         this._seams().commands.executeCommand('switchboard.openProjectPanel');
-                        break;
+                        return { success: true };
                     case 'linearLoadProject': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
                         if (!workspaceRoot) {
@@ -10733,7 +10735,7 @@ Each plan file must include:
                                 issues: [],
                                 message: 'No workspace open.'
                             });
-                            break;
+                            return { success: false, status: 'error', issues: [], message: 'No workspace open.' };
                         }
 
                         const linear = this._getLinearService(workspaceRoot);
@@ -10745,7 +10747,7 @@ Each plan file must include:
                                 issues: [],
                                 message: 'Set up Linear in Setup before using the Project tab.'
                             });
-                            break;
+                            return { success: false, status: 'setup-required', issues: [], message: 'Set up Linear in Setup before using the Project tab.' };
                         }
 
                         try {
@@ -10771,14 +10773,16 @@ Each plan file must include:
                                 issues,
                                 projectName
                             });
+                            return { success: true, status: 'loaded', issues, projectName };
                         } catch (error) {
+                            const errStr = error instanceof Error ? error.message : String(error);
                             this.postMessage({
                                 type: 'linearError',
                                 scope: 'project',
-                                error: error instanceof Error ? error.message : String(error)
+                                error: errStr
                             });
+                            return { success: false, error: errStr };
                         }
-                        break;
                     }
                     case 'linearLoadProjects': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
@@ -10789,7 +10793,7 @@ Each plan file must include:
                                 projects: [],
                                 message: 'No workspace open.'
                             });
-                            break;
+                            return { success: false, status: 'error', projects: [], message: 'No workspace open.' };
                         }
 
                         const linear = this._getLinearService(workspaceRoot);
@@ -10801,7 +10805,7 @@ Each plan file must include:
                                 projects: [],
                                 message: 'Set up Linear in Setup before using the Project tab.'
                             });
-                            break;
+                            return { success: false, status: 'setup-required', projects: [], message: 'Set up Linear in Setup before using the Project tab.' };
                         }
 
                         try {
@@ -10811,14 +10815,16 @@ Each plan file must include:
                                 status: 'loaded',
                                 projects
                             });
+                            return { success: true, status: 'loaded', projects };
                         } catch (error) {
+                            const errStr = error instanceof Error ? error.message : String(error);
                             this.postMessage({
                                 type: 'linearError',
                                 scope: 'project',
-                                error: error instanceof Error ? error.message : String(error)
+                                error: errStr
                             });
+                            return { success: false, error: errStr };
                         }
-                        break;
                     }
                     case 'linearLoadTaskDetails': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
@@ -10830,7 +10836,7 @@ Each plan file must include:
                                 issueId,
                                 error: 'Select a Linear issue first.'
                             });
-                            break;
+                            return { success: false, error: 'Select a Linear issue first.' };
                         }
 
                         try {
@@ -10858,7 +10864,7 @@ Each plan file must include:
                                     issueId,
                                     error: `Linear issue ${issueId} was not found.`
                                 });
-                                break;
+                                return { success: false, error: `Linear issue ${issueId} was not found.` };
                             }
 
                             // Render markdown description to HTML using VS Code's built-in renderer
@@ -10879,15 +10885,17 @@ Each plan file must include:
                                 attachments,
                                 renderedDescriptionHtml
                             });
+                            return { success: true, issue, subtasks, comments, attachments, renderedDescriptionHtml };
                         } catch (error) {
+                            const errStr = error instanceof Error ? error.message : String(error);
                             this.postMessage({
                                 type: 'linearError',
                                 scope: 'task',
                                 issueId,
-                                error: error instanceof Error ? error.message : String(error)
+                                error: errStr
                             });
+                            return { success: false, error: errStr };
                         }
-                        break;
                     }
                     case 'linearImportTask': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
@@ -10899,7 +10907,7 @@ Each plan file must include:
                                 importedPlanFiles: [],
                                 error: 'Select a Linear issue first.'
                             });
-                            break;
+                            return { success: false, importedPlanFiles: [], error: 'Select a Linear issue first.' };
                         }
 
                         const result = await this.importLinearTask(workspaceRoot, issueId, data.includeSubtasks !== false);
@@ -10912,7 +10920,7 @@ Each plan file must include:
                             this.refresh();
                             await this._kanbanProvider?.refresh();
                         }
-                        break;
+                        return { success: result.success, ...result };
                     }
                     case 'clickupImportTask': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
@@ -10924,7 +10932,7 @@ Each plan file must include:
                                 importedPlanFiles: [],
                                 error: 'Select a ClickUp task first.'
                             });
-                            break;
+                            return { success: false, importedPlanFiles: [], error: 'Select a ClickUp task first.' };
                         }
 
                         const result = await this.importClickUpTask(workspaceRoot, taskId, data.includeSubtasks !== false);
@@ -10937,7 +10945,7 @@ Each plan file must include:
                             this.refresh();
                             await this._kanbanProvider?.refresh();
                         }
-                        break;
+                        return { success: result.success, ...result };
                     }
                     case 'linearImportAndSendToPlanner': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
@@ -10947,7 +10955,7 @@ Each plan file must include:
                                 type: 'linearTaskImportedToPlanner',
                                 error: 'Missing workspace or issue ID.'
                             });
-                            break;
+                            return { success: false, error: 'Missing workspace or issue ID.' };
                         }
 
                         try {
@@ -10957,7 +10965,7 @@ Each plan file must include:
                                     type: 'linearTaskImportedToPlanner',
                                     error: result.error || 'Failed to import the Linear task.'
                                 });
-                                break;
+                                return { success: false, error: result.error || 'Failed to import the Linear task.' };
                             }
 
                             // Import succeeded — now move ALL imported cards (parent + subtasks) to PLAN REVIEWED
@@ -10980,25 +10988,29 @@ Each plan file must include:
                                     type: 'linearTaskImportedToPlanner',
                                     error: 'Imported but failed to move to Planned column. The card remains in Created.'
                                 });
+                                return { success: false, error: 'Imported but failed to move to Planned column. The card remains in Created.' };
                             } else {
+                                const msg = result.message
+                                    ? result.message.replace('Imported', 'Imported and sent to planner')
+                                    : 'Imported and sent to planner.';
                                 this.postMessage({
                                     type: 'linearTaskImportedToPlanner',
-                                    message: result.message
-                                        ? result.message.replace('Imported', 'Imported and sent to planner')
-                                        : 'Imported and sent to planner.'
+                                    message: msg
                                 });
+                                return { success: true, message: msg };
                             }
 
                             await this._syncFilesAndRefreshRunSheets(workspaceRoot);
                             this.refresh();
                             await this._kanbanProvider?.refresh();
                         } catch (error) {
+                            const errStr = error instanceof Error ? error.message : 'Unknown error occurred.';
                             this.postMessage({
                                 type: 'linearTaskImportedToPlanner',
-                                error: error instanceof Error ? error.message : 'Unknown error occurred.'
+                                error: errStr
                             });
+                            return { success: false, error: errStr };
                         }
-                        break;
                     }
                     case 'clickupLoadProject': {
                         const loadSeq = data.loadSeq;
@@ -11014,7 +11026,7 @@ Each plan file must include:
                                 message: 'No workspace open.',
                                 loadSeq
                             });
-                            break;
+                            return { success: false, status: 'error', message: 'No workspace open.', loadSeq };
                         }
 
                         const clickUp = this._getClickUpService(workspaceRoot);
@@ -11027,7 +11039,7 @@ Each plan file must include:
                                 message: 'ClickUp setup is incomplete. Please complete setup in the Setup panel.',
                                 loadSeq
                             });
-                            break;
+                            return { success: false, status: 'setup-required', message: 'ClickUp setup is incomplete. Please complete setup in the Setup panel.', loadSeq };
                         }
 
                         // Use listId from message if provided (avoids race condition with config save)
@@ -11039,7 +11051,7 @@ Each plan file must include:
                                 message: 'No list selected. Please select a Space, Folder, and List to view tasks.',
                                 loadSeq
                             });
-                            break;
+                            return { success: false, status: 'setup-required', message: 'No list selected. Please select a Space, Folder, and List to view tasks.', loadSeq };
                         }
 
                         try {
@@ -11047,23 +11059,27 @@ Each plan file must include:
                                 includeClosed: data.includeClosed || false,
                                 archived: false
                             });
+                            const mappedTasks = tasks.map(t => this._mapClickUpTaskToSidebar(t));
+                            const listName = config.selectedListName || 'Unknown List';
 
                             this.postMessage({
                                 type: 'clickupProjectLoaded',
                                 status: 'loaded',
-                                tasks: tasks.map(t => this._mapClickUpTaskToSidebar(t)),
-                                listName: config.selectedListName || 'Unknown List',
+                                tasks: mappedTasks,
+                                listName,
                                 loadSeq
                             });
+                            return { success: true, status: 'loaded', tasks: mappedTasks, listName, loadSeq };
                         } catch (error) {
+                            const errStr = error instanceof Error ? error.message : 'Failed to load ClickUp project';
                             this.postMessage({
                                 type: 'clickupError',
                                 scope: 'project',
-                                error: error instanceof Error ? error.message : 'Failed to load ClickUp project',
+                                error: errStr,
                                 loadSeq
                             });
+                            return { success: false, error: errStr, loadSeq };
                         }
-                        break;
                     }
                     case 'clickupLoadSpaces': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
@@ -11073,7 +11089,7 @@ Each plan file must include:
                                 scope: 'hierarchy',
                                 error: 'No workspace folder found'
                             });
-                            break;
+                            return { success: false, error: 'No workspace folder found' };
                         }
                         const clickUp = this._getClickUpService(workspaceRoot);
 
@@ -11083,14 +11099,16 @@ Each plan file must include:
                                 type: 'clickupSpacesLoaded',
                                 spaces
                             });
+                            return { success: true, spaces };
                         } catch (error) {
+                            const errStr = error instanceof Error ? error.message : 'Failed to load Spaces';
                             this.postMessage({
                                 type: 'clickupError',
                                 scope: 'hierarchy',
-                                error: error instanceof Error ? error.message : 'Failed to load Spaces'
+                                error: errStr
                             });
+                            return { success: false, error: errStr };
                         }
-                        break;
                     }
                     case 'clickupLoadFolders': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
@@ -11100,26 +11118,29 @@ Each plan file must include:
                                 scope: 'hierarchy',
                                 error: 'No workspace folder found'
                             });
-                            break;
+                            return { success: false, error: 'No workspace folder found' };
                         }
                         const clickUp = this._getClickUpService(workspaceRoot);
 
                         try {
                             const folders = await clickUp.getFolders(data.spaceId);
+                            const directLists = await clickUp.getLists(data.spaceId);
                             this.postMessage({
                                 type: 'clickupFoldersLoaded',
                                 spaceId: data.spaceId,
                                 folders,
-                                directLists: await clickUp.getLists(data.spaceId)
+                                directLists
                             });
+                            return { success: true, spaceId: data.spaceId, folders, directLists };
                         } catch (error) {
+                            const errStr = error instanceof Error ? error.message : 'Failed to load Folders';
                             this.postMessage({
                                 type: 'clickupError',
                                 scope: 'hierarchy',
-                                error: error instanceof Error ? error.message : 'Failed to load Folders'
+                                error: errStr
                             });
+                            return { success: false, error: errStr };
                         }
-                        break;
                     }
                     case 'clickupLoadLists': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
@@ -11129,7 +11150,7 @@ Each plan file must include:
                                 scope: 'hierarchy',
                                 error: 'No workspace folder found'
                             });
-                            break;
+                            return { success: false, error: 'No workspace folder found' };
                         }
                         const clickUp = this._getClickUpService(workspaceRoot);
 
@@ -11141,19 +11162,21 @@ Each plan file must include:
                                 folderId: data.folderId,
                                 lists
                             });
+                            return { success: true, spaceId: data.spaceId, folderId: data.folderId, lists };
                         } catch (error) {
+                            const errStr = error instanceof Error ? error.message : 'Failed to load Lists';
                             this.postMessage({
                                 type: 'clickupError',
                                 scope: 'hierarchy',
-                                error: error instanceof Error ? error.message : 'Failed to load Lists'
+                                error: errStr
                             });
+                            return { success: false, error: errStr };
                         }
-                        break;
                     }
                     case 'clickupSaveListSelection': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
                         if (!workspaceRoot) {
-                            break;
+                            return { success: false, error: 'No workspace open' };
                         }
                         const clickUp = this._getClickUpService(workspaceRoot);
 
@@ -11170,12 +11193,12 @@ Each plan file must include:
                         } catch (error) {
                             console.error('Failed to save ClickUp list selection:', error);
                         }
-                        break;
+                        return { success: true };
                     }
                     case 'clickupSaveSpaceSelection': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
                         if (!workspaceRoot) {
-                            break;
+                            return { success: false, error: 'No workspace open' };
                         }
                         const clickUp = this._getClickUpService(workspaceRoot);
 
@@ -11193,12 +11216,12 @@ Each plan file must include:
                         } catch (error) {
                             console.error('Failed to save ClickUp space selection:', error);
                         }
-                        break;
+                        return { success: true };
                     }
                     case 'clickupSaveFolderSelection': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
                         if (!workspaceRoot) {
-                            break;
+                            return { success: false, error: 'No workspace open' };
                         }
                         const clickUp = this._getClickUpService(workspaceRoot);
 
@@ -11215,12 +11238,12 @@ Each plan file must include:
                         } catch (error) {
                             console.error('Failed to save ClickUp folder selection:', error);
                         }
-                        break;
+                        return { success: true };
                     }
                     case 'linearSaveProjectSelection': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
                         if (!workspaceRoot) {
-                            break;
+                            return { success: false, error: 'No workspace open' };
                         }
                         const linear = this._getLinearService(workspaceRoot);
 
@@ -11233,7 +11256,7 @@ Each plan file must include:
                         } catch (error) {
                             console.error('Failed to save Linear project selection:', error);
                         }
-                        break;
+                        return { success: true };
                     }
                     case 'clickupLoadTaskDetails': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
@@ -11243,7 +11266,7 @@ Each plan file must include:
                                 scope: 'task',
                                 error: 'No workspace folder found'
                             });
-                            break;
+                            return { success: false, error: 'No workspace folder found' };
                         }
                         const clickUp = this._getClickUpService(workspaceRoot);
 
@@ -11259,23 +11282,30 @@ Each plan file must include:
                                 renderedDescriptionHtml = '';
                             }
 
+                            const task = this._mapClickUpTaskToSidebar(details.task);
+                            const subtasks = details.subtasks.map(s => this._mapClickUpTaskToSidebar(s));
+                            const comments = details.comments.map(c => this._mapClickUpComment(c));
+                            const attachments = details.attachments.map(a => this._mapClickUpAttachment(a));
+
                             this.postMessage({
                                 type: 'clickupTaskDetailsLoaded',
-                                task: this._mapClickUpTaskToSidebar(details.task),
-                                subtasks: details.subtasks.map(s => this._mapClickUpTaskToSidebar(s)),
-                                comments: details.comments.map(c => this._mapClickUpComment(c)),
-                                attachments: details.attachments.map(a => this._mapClickUpAttachment(a)),
+                                task,
+                                subtasks,
+                                comments,
+                                attachments,
                                 renderedDescriptionHtml
                             });
+                            return { success: true, task, subtasks, comments, attachments, renderedDescriptionHtml };
                         } catch (error) {
+                            const errStr = error instanceof Error ? error.message : 'Failed to load task details';
                             this.postMessage({
                                 type: 'clickupError',
                                 scope: 'task',
                                 taskId: data.taskId,
-                                error: error instanceof Error ? error.message : 'Failed to load task details'
+                                error: errStr
                             });
+                            return { success: false, error: errStr };
                         }
-                        break;
                     }
                     case 'linearUpdateIssueLabels': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
@@ -11290,7 +11320,7 @@ Each plan file must include:
                                 error: 'Invalid issue ID or workspace.',
                                 workspaceRoot
                             });
-                            break;
+                            return { success: false, error: 'Invalid issue ID or workspace.' };
                         }
 
                         try {
@@ -11302,16 +11332,18 @@ Each plan file must include:
                                 labelIds,
                                 workspaceRoot
                             });
+                            return { success: true, issueId, labelIds };
                         } catch (error) {
+                            const errStr = error instanceof Error ? error.message : String(error);
                             this.postMessage({
                                 type: 'linearError',
                                 scope: 'task',
                                 issueId,
-                                error: error instanceof Error ? error.message : String(error),
+                                error: errStr,
                                 workspaceRoot
                             });
+                            return { success: false, error: errStr };
                         }
-                        break;
                     }
                     case 'clickupUpdateTaskTags': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
@@ -11327,7 +11359,7 @@ Each plan file must include:
                                 error: 'Invalid task ID or workspace.',
                                 workspaceRoot
                             });
-                            break;
+                            return { success: false, error: 'Invalid task ID or workspace.' };
                         }
 
                         try {
@@ -11339,20 +11371,22 @@ Each plan file must include:
                                 tags: tagNames,
                                 workspaceRoot
                             });
+                            return { success: true, taskId, tags: tagNames };
                         } catch (error) {
+                            const errStr = error instanceof Error ? error.message : String(error);
                             this.postMessage({
                                 type: 'clickupError',
                                 scope: 'task',
                                 taskId,
-                                error: error instanceof Error ? error.message : String(error),
+                                error: errStr,
                                 workspaceRoot
                             });
+                            return { success: false, error: errStr };
                         }
-                        break;
                     }
                     case 'linearLoadAutomationCatalog': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
-                        if (!workspaceRoot) { break; }
+                        if (!workspaceRoot) { return { success: false, error: 'No workspace open' }; }
                         try {
                             const linear = this._getLinearService(workspaceRoot);
                             const catalog = await linear.getAutomationCatalog();
@@ -11361,20 +11395,22 @@ Each plan file must include:
                                 labels: catalog.labels,
                                 workspaceRoot
                             });
+                            return { success: true, labels: catalog.labels };
                         } catch (error) {
+                            const errStr = error instanceof Error ? error.message : String(error);
                             this.postMessage({
                                 type: 'linearError',
                                 scope: 'task',
-                                error: error instanceof Error ? error.message : String(error),
+                                error: errStr,
                                 workspaceRoot
                             });
+                            return { success: false, error: errStr };
                         }
-                        break;
                     }
                     case 'clickupLoadSpaceTags': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
                         const spaceId = String(data.spaceId || '').trim();
-                        if (!workspaceRoot || !spaceId) { break; }
+                        if (!workspaceRoot || !spaceId) { return { success: false, error: 'Missing workspace or space ID' }; }
                         try {
                             const clickUp = this._getClickUpService(workspaceRoot);
                             const tags = await clickUp.getSpaceTags(spaceId);
@@ -11383,45 +11419,47 @@ Each plan file must include:
                                 tags,
                                 workspaceRoot
                             });
+                            return { success: true, tags };
                         } catch (error) {
+                            const errStr = error instanceof Error ? error.message : String(error);
                             this.postMessage({
                                 type: 'clickupError',
                                 scope: 'task',
-                                error: error instanceof Error ? error.message : String(error),
+                                error: errStr,
                                 workspaceRoot
                             });
+                            return { success: false, error: errStr };
                         }
-                        break;
                     }
 
                     case 'copyTextToClipboard': {
                         const text = String(data.text || '');
                         if (!text.trim()) {
                             this._seams().ui.showWarningMessage('Nothing to copy to the clipboard.');
-                            break;
+                            return { success: false, error: 'Nothing to copy to clipboard' };
                         }
                         await this._seams().clipboard.writeText(text);
                         this._showTemporaryNotification(typeof data.message === 'string' && data.message.trim()
                             ? data.message
                             : 'Copied to clipboard.');
-                        break;
+                        return { success: true };
                     }
                     case 'showInfo':
                         if (typeof data.message === 'string' && data.message.length > 0) {
                             this._showTemporaryNotification(data.message);
                         }
-                        break;
+                        return { success: true };
                     case 'showWarning':
                         if (typeof data.message === 'string' && data.message.length > 0) {
                             this._seams().ui.showWarningMessage(data.message);
                         }
-                        break;
+                        return { success: true };
                     case 'initializeProtocols':
                         await this._handleInitializeProtocols();
-                        break;
+                        return { success: true };
                     case 'finishOnboarding':
                         await this._handleFinishOnboarding();
-                        break;
+                        return { success: true };
                     case 'scaffoldMultiRepo': {
                         try {
                             const result = await MultiRepoScaffoldingService.scaffold(
@@ -11434,17 +11472,19 @@ Each plan file must include:
                                 this._extensionUri.fsPath
                             );
                             this.postMessage({ type: 'multiRepoScaffoldResult', result });
+                            return { success: result.success, result };
                         } catch (error) {
+                            const result = {
+                                success: false,
+                                repos: [],
+                                error: error instanceof Error ? error.message : String(error)
+                            };
                             this.postMessage({
                                 type: 'multiRepoScaffoldResult',
-                                result: {
-                                    success: false,
-                                    repos: [],
-                                    error: error instanceof Error ? error.message : String(error)
-                                }
+                                result
                             });
+                            return { success: false, result };
                         }
-                        break;
                     }
                     case 'openExternalUrl':
                         if (data.url && typeof data.url === 'string' && data.url.startsWith('https://')) {
@@ -11452,23 +11492,23 @@ Each plan file must include:
                         } else if (data.url) {
                             console.warn(`[TaskViewerProvider] Blocked openExternalUrl with disallowed scheme: ${data.url}`);
                         }
-                        break;
+                        return { success: true };
                     case 'openDocs': {
                         const docsUrl = 'https://tentacleopera.github.io/switchboard-site/docs/getting-started/installation';
                         this._seams().ui.openExternal(docsUrl);
-                        break;
+                        return { success: true };
                     }
                     case 'toggleSilentSetup':
                         if (data.value !== undefined) {
                             this._seams().commands.executeCommand('switchboard.toggleSilent', data.value);
                         }
-                        break;
+                        return { success: true };
 
                     case 'setTerminalRole':
                         if (data.terminalName && data.role) {
                             await this._setTerminalRole(data.terminalName, data.role);
                         }
-                        break;
+                        return { success: true };
                     case 'focusTerminal':
                     case 'focus':
                         if (data.terminalName) {
@@ -11479,74 +11519,75 @@ Each plan file must include:
                         } else if (data.pid) {
                             await this._seams().commands.executeCommand('switchboard.focusTerminal', data.pid);
                         }
-                        break;
+                        return { success: true };
                     case 'closeTerminal':
                         if (data.terminalName) {
                             await this._closeTerminal(data.terminalName);
                         }
-                        break;
+                        return { success: true };
                     case 'executeRemote':
                         if (data.terminalName && data.command) {
                             await this._executeLocal(data.terminalName, data.command);
                         }
-                        break;
+                        return { success: true };
                     case 'executeLocal':
                         if (data.terminalName && data.command) {
                             await this._executeLocal(data.terminalName, data.command);
                         }
-                        break;
+                        return { success: true };
                     case 'renameTerminal':
                         if (data.terminalName && data.alias !== undefined) {
                             await this._renameTerminal(data.terminalName, data.alias);
                         }
-                        break;
+                        return { success: true };
                     case 'requestContextFile':
                         if (data.terminalName) {
                             await this._handleContextFileRequest(data.terminalName);
                         }
-                        break;
+                        return { success: true };
                     case 'registerAllTerminals':
                         await this._registerAllTerminals();
-                        break;
+                        return { success: true };
                     case 'deregisterAllTerminals':
                         await this._deregisterAllTerminals();
-                        break;
+                        return { success: true };
                     case 'createAgentGrid':
                         try {
                             await this._seams().commands.executeCommand('switchboard.createAgentGrid');
                             this.postMessage({ type: 'createAgentGridResult', success: true });
+                            return { success: true };
                         } catch (e) {
                             this.postMessage({ type: 'createAgentGridResult', success: false });
+                            return { success: false };
                         }
-                        break;
                     case 'createAgentGridEditor':
                         await this._seams().commands.executeCommand('switchboard.createAgentGridEditor');
-                        break;
+                        return { success: true };
                     case 'closeChatAgent':
                         if (data.agentName) {
                             await this._closeChatAgent(data.agentName);
                         }
-                        break;
+                        return { success: true };
                     case 'setChatAgentRole':
                         if (data.agentName && data.role) {
                             await this._setChatAgentRole(data.agentName, data.role);
                         }
-                        break;
+                        return { success: true };
 
                     case 'triggerAgentAction':
                         if (data.role && data.sessionFile) {
                             await this._handleTriggerAgentAction(data.role, data.sessionFile, data.instruction);
                         }
-                        break;
+                        return { success: true };
                     case 'sendAnalystMessage':
                         if (data.instruction) {
                             await this._handleSendAnalystMessage(data.instruction);
                         }
-                        break;
+                        return { success: true };
                     case 'generateContextMap':
                         // Removed: sidebar context map button no longer exists.
                         // Context map generation is now triggered from the Kanban board.
-                        break;
+                        return { success: true };
                     case 'reviewPlan': {
                         if (data.sessionId) {
                             this.postMessage({ type: 'planLoading', value: true, sessionId: data.sessionId });
@@ -11567,7 +11608,7 @@ Each plan file must include:
                                 this.postMessage({ type: 'planLoading', value: false, sessionId: data.sessionId });
                             }
                         }
-                        break;
+                        return { success: true };
                     }
                     case 'viewPlan':
                         // No webview currently sends viewPlan (grep confirms implementation.html:2145
@@ -11581,44 +11622,44 @@ Each plan file must include:
                                 this.postMessage({ type: 'planLoading', value: false, sessionId: data.sessionId });
                             }
                         }
-                        break;
+                        return { success: true };
                     case 'copyPlanLink': {
                         const effectiveId = data.sessionId || data.planId;
                         if (effectiveId) {
                             await this._handleCopyPlanLink(effectiveId, data.column, data.workspaceRoot, data.planId);
                         }
-                        break;
+                        return { success: true };
                     }
                     case 'deletePlan':
                         if (data.sessionId) {
                             await this._handleDeletePlan(data.sessionId);
                         }
-                        break;
+                        return { success: true };
                     case 'importPlans':
                         await this.handleImportUnclaimedPlans();
-                        break;
+                        return { success: true };
                     case 'completePlan':
                         if (data.sessionId) {
                             await this._handleCompletePlan(data.sessionId);
                         }
-                        break;
+                        return { success: true };
                     case 'recoverPlanFromSidebar':
                         if (data.sessionId) {
                             await this.handleKanbanRestorePlan(data.sessionId);
                         }
-                        break;
+                        return { success: true };
                     case 'claimPlan':
                         if (data.brainSourcePath) {
                             await this._handleClaimPlan(data.brainSourcePath);
                         }
-                        break;
+                        return { success: true };
                     case 'createDraftPlanTicket':
                         await this.createDraftPlanTicket();
-                        break;
+                        return { success: true };
                     case 'getRecoverablePlans': {
                         const plans = await this._getRecoverablePlans();
                         this.postMessage({ type: 'recoverablePlans', plans });
-                        break;
+                        return { success: true, type: 'recoverablePlans', plans };
                     }
                     case 'restorePlan': {
                         if (data.planId) {
@@ -11628,15 +11669,16 @@ Each plan file must include:
                                 const plans = await this._getRecoverablePlans();
                                 this.postMessage({ type: 'recoverablePlans', plans });
                             }
+                            return { success, planId: data.planId };
                         }
-                        break;
+                        return { success: false };
                     }
                     case 'saveStartupCommands':
                         await this.handleSaveStartupCommands(data);
-                        break;
+                        return { success: true };
                     case 'fetchNotionContent': {
                         const wsRoot = this._getWorkspaceRoot();
-                        if (!wsRoot || !data.url) { break; }
+                        if (!wsRoot || !data.url) { return { success: false, error: 'Missing workspace or URL' }; }
 
                         const service = this._getNotionService(wsRoot);
                         try {
@@ -11651,110 +11693,117 @@ Each plan file must include:
                                     pageUrl: config?.pageUrl,
                                     charCount: result.charCount
                                 });
+                                return { success: true, ...result, syncedAt: config?.lastFetchAt, pageTitle: config?.pageTitle, pageUrl: config?.pageUrl };
                             } else {
                                 this.postMessage({
                                     type: 'notionFetchState',
                                     error: result.error || 'Fetch failed'
                                 });
+                                return { success: false, error: result.error || 'Fetch failed' };
                             }
                         } catch (err) {
+                            const errStr = err instanceof Error ? err.message : String(err);
                             this.postMessage({
                                 type: 'notionFetchState',
-                                error: err instanceof Error ? err.message : String(err)
+                                error: errStr
                             });
+                            return { success: false, error: errStr };
                         }
-                        break;
                     }
 
                     case 'getNotionFetchState': {
                         const wsRoot = this._getWorkspaceRoot();
-                        if (!wsRoot) { break; }
+                        if (!wsRoot) { return { success: false, error: 'No workspace open' }; }
                         try {
                             const notionService = this._getNotionService(wsRoot);
                             const config = await notionService.loadConfig();
                             if (config?.setupComplete && config.lastFetchAt) {
                                 const cached = await notionService.loadCachedContent();
-                                this.postMessage({
-                                    type: 'notionFetchState',
+                                const payload = {
                                     syncedAt: config.lastFetchAt,
                                     pageTitle: config.pageTitle,
                                     pageUrl: config.pageUrl,
                                     charCount: cached?.length ?? 0
+                                };
+                                this.postMessage({
+                                    type: 'notionFetchState',
+                                    ...payload
                                 });
+                                return { success: true, ...payload };
                             }
                         } catch { /* non-blocking */ }
-                        break;
+                        return { success: true };
                     }
                     case 'getStartupCommands': {
                         const startupState = await this.handleGetStartupCommands();
                         this.postMessage({ type: 'startupCommands', ...startupState });
-                        break;
+                        return { success: true, ...startupState };
                     }
                     case 'getVisibleAgents': {
                         const vis = await this.getVisibleAgents();
                         this.postMessage({ type: 'visibleAgents', agents: vis });
-                        break;
+                        return { success: true, agents: vis };
                     }
                     case 'getMcpMonitorConfig': {
-                        await this._postMcpMonitorConfig();
-                        break;
+                        const msg = await this._postMcpMonitorConfig();
+                        return { success: true, ...(msg || {}) };
                     }
                     case 'setMcpMonitorConfig': {
                         if (data.config) {
                             await this.setMcpMonitorConfigFromKanban(data.config);
                         }
-                        break;
+                        return { success: true };
                     }
                     case 'getAccurateCodingSetting': {
                         const enabled = this._isAccurateCodingEnabled();
                         this.postMessage({ type: 'accurateCodingSetting', enabled });
-                        break;
+                        return { success: true, enabled };
                     }
                     case 'getAdvancedReviewerSetting': {
                         const enabled = this._isAdvancedReviewerEnabled();
                         this.postMessage({ type: 'advancedReviewerSetting', enabled });
-                        break;
+                        return { success: true, enabled };
                     }
                     case 'getLeadChallengeSetting': {
                         const enabled = this._isLeadInlineChallengeEnabled();
                         this.postMessage({ type: 'leadChallengeSetting', enabled });
-                        break;
+                        return { success: true, enabled };
                     }
                     case 'getJulesAutoSyncSetting': {
                         const enabled = this._isJulesAutoSyncEnabled();
                         this.postMessage({ type: 'julesAutoSyncSetting', enabled });
-                        break;
+                        return { success: true, enabled };
                     }
                     case 'getDefaultPromptOverrides': {
                         const overrides = await this.handleGetDefaultPromptOverrides();
                         this.postMessage({ type: 'defaultPromptOverrides', overrides });
-                        break;
+                        return { success: true, overrides };
                     }
                     case 'saveDefaultPromptOverrides': {
                         await this.handleSaveDefaultPromptOverrides(data);
-                        break;
+                        return { success: true };
                     }
                     case 'getDefaultPromptPreviews': {
                         const previews = await this.handleGetDefaultPromptPreviews();
                         this.postMessage({ type: 'defaultPromptPreviews', previews });
-                        break;
+                        return { success: true, previews };
                     }
                     case 'setActiveTab': {
                         const activeTab = data.tab === 'activity' ? 'activity' : 'agents';
                         await this._context.workspaceState.update(TaskViewerProvider.ACTIVE_TAB_STATE_KEY, activeTab);
-                        break;
+                        return { success: true };
                     }
                     case 'setActiveSubTab': {
                         const validSubTabs = ['agents', 'terminals', 'memo'];
                         const activeSubTab = validSubTabs.includes(data.tab) ? data.tab : 'terminals';
                         await this._context.workspaceState.update(TaskViewerProvider.ACTIVE_SUB_TAB_STATE_KEY, activeSubTab);
-                        break;
+                        return { success: true };
                     }
                     case 'memoLoad': {
                         const workspaceRoot = this._resolveStateWorkspaceRoot(data.workspaceRoot);
                         if (!workspaceRoot) {
                             this.postMessage({ type: 'memoError', message: 'No workspace folder found for memo.' });
-                            break;
+                            return { success: false, message: 'No workspace folder found for memo.' };
                         }
                         const memoPath = this._getMemoPath(workspaceRoot);
                         let content = '';
@@ -11762,35 +11811,35 @@ Each plan file must include:
                             content = await fs.promises.readFile(memoPath, 'utf8');
                         } catch { /* file doesn't exist yet — that's fine */ }
                         this.postMessage({ type: 'memoContent', content });
-                        break;
+                        return { success: true, content };
                     }
                     case 'memoSave': {
                         const workspaceRoot = this._resolveStateWorkspaceRoot(data.workspaceRoot);
                         if (!workspaceRoot) {
                             this.postMessage({ type: 'memoError', message: 'No workspace folder found for memo.' });
-                            break;
+                            return { success: false, message: 'No workspace folder found for memo.' };
                         }
                         const memoPath = this._getMemoPath(workspaceRoot);
                         const dir = path.dirname(memoPath);
                         await fs.promises.mkdir(dir, { recursive: true });
                         await fs.promises.writeFile(memoPath, typeof data.content === 'string' ? data.content : '', 'utf8');
-                        break;
+                        return { success: true };
                     }
                     case 'memoClear': {
                         const workspaceRoot = this._resolveStateWorkspaceRoot(data.workspaceRoot);
                         if (!workspaceRoot) {
                             this.postMessage({ type: 'memoError', message: 'No workspace folder found for memo.' });
-                            break;
+                            return { success: false, message: 'No workspace folder found for memo.' };
                         }
                         const memoPath = this._getMemoPath(workspaceRoot);
                         await fs.promises.writeFile(memoPath, '', 'utf8');
-                        break;
+                        return { success: true };
                     }
                     case 'memoGeneratePrompt': {
                         const workspaceRoot = this._resolveStateWorkspaceRoot(data.workspaceRoot);
                         if (!workspaceRoot) {
                             this.postMessage({ type: 'memoError', message: 'No workspace folder found for memo.' });
-                            break;
+                            return { success: false, message: 'No workspace folder found for memo.' };
                         }
                         const content = typeof data.content === 'string' ? data.content : '';
                         const action = data.action === 'send' ? 'send' : 'copy';
@@ -11800,7 +11849,7 @@ Each plan file must include:
                                 type: 'memoPromptResult',
                                 message: 'No entries to process.'
                             });
-                            break;
+                            return { success: false, message: 'No entries to process.' };
                         }
                         const db = KanbanDatabase.forWorkspace(workspaceRoot);
                         const activeProject = await db.getConfig('kanban.activeProjectFilter');
@@ -11828,21 +11877,22 @@ Each plan file must include:
                             this.postMessage({ type: 'memoContent', content: '' });
                         }
 
+                        const msg = sendSucceeded
+                            ? (action === 'send'
+                                ? `Sent ${issues.length} issue(s) to planner. Memo cleared.`
+                                : `Prompt for ${issues.length} issue(s) copied to clipboard. Memo cleared.`)
+                            : `Failed to send to planner. Prompt copied to clipboard. Memo preserved for retry.`;
                         this.postMessage({
                             type: 'memoPromptResult',
-                            message: sendSucceeded
-                                ? (action === 'send'
-                                    ? `Sent ${issues.length} issue(s) to planner. Memo cleared.`
-                                    : `Prompt for ${issues.length} issue(s) copied to clipboard. Memo cleared.`)
-                                : `Failed to send to planner. Prompt copied to clipboard. Memo preserved for retry.`
+                            message: msg
                         });
-                        break;
+                        return { success: sendSucceeded, message: msg };
                     }
                     case 'getRecentActivity': {
                         const limit = Number(data.limit) || 50;
                         const beforeTimestamp = typeof data.before === 'string' ? data.before : undefined;
-                        await this._postRecentActivity(limit, beforeTimestamp);
-                        break;
+                        const activity = await this._postRecentActivity(limit, beforeTimestamp);
+                        return { success: true, ...(activity || {}) };
                     }
                     case 'updateAutobanState': {
                         // Sidebar Autoban configuration changed
@@ -11863,67 +11913,67 @@ Each plan file must include:
                             await this._persistAutobanState();
                             this._postAutobanStateNow();
                         }
-                        break;
+                        return { success: true };
                     }
 
                     case 'addAutobanTerminal': {
                         if (typeof data.role === 'string') {
                             await this._createAutobanTerminal(data.role, typeof data.name === 'string' ? data.name : undefined);
                         }
-                        break;
+                        return { success: true };
                     }
                     case 'removeAutobanTerminal': {
                         if (typeof data.role === 'string' && typeof data.terminalName === 'string') {
                             await this._removeAutobanTerminal(data.role, data.terminalName);
                         }
-                        break;
+                        return { success: true };
                     }
                     case 'resetAutobanPools': {
                         await this._resetAutobanPools();
-                        break;
+                        return { success: true };
                     }
                     case 'pipelineStart': {
                         const requestedInterval = typeof data.intervalSeconds === 'number'
                             ? data.intervalSeconds
                             : undefined;
                         this._pipeline.start(requestedInterval);
-                        break;
+                        return { success: true };
                     }
                     case 'pipelineStop':
                         this._pipeline.stop();
-                        break;
+                        return { success: true };
                     case 'pipelinePause':
                         this._pipeline.pause();
-                        break;
+                        return { success: true };
                     case 'pipelineUnpause':
                         this._pipeline.unpause();
-                        break;
+                        return { success: true };
                     case 'pipelineSetInterval':
                         if (typeof data.intervalSeconds === 'number' && Number.isFinite(data.intervalSeconds)) {
                             this._pipeline.setInterval(data.intervalSeconds);
                         }
-                        break;
+                        return { success: true };
                     case 'airlock_sendToCoder':
                         if (data.text) {
                             this._handleAirlockSendToCoder(data.text);
                         }
-                        break;
+                        return { success: true };
                     case 'airlock_syncRepo':
                         this._handleAirlockSyncRepo();
-                        break;
+                        return { success: true };
                     case 'kanban_workflowEvent':
                         if (data.workflow) {
                             this._handleKanbanWorkflowEvent(data.workflow, data.sessionId);
                         }
-                        break;
+                        return { success: true };
                     case 'getDbPath': {
                         const dbPath = await this.handleGetDbPath();
                         this.postMessage({ type: 'dbPathUpdated', ...dbPath });
-                        break;
+                        return { success: true, ...dbPath };
                     }
                     case 'setLocalDb': {
                         await this.handleSetLocalDb();
-                        break;
+                        return { success: true };
                     }
                     case 'editDbPath': {
                         const dbConfig = this._seams().pathConfig;
@@ -11938,7 +11988,7 @@ Each plan file must include:
                             const validation = KanbanDatabase.validatePath(trimmedPath);
                             if (!validation.valid && trimmedPath !== '') {
                                 this._seams().ui.showErrorMessage(`❌ Invalid path: ${validation.error}`);
-                                return;
+                                return { success: false, error: validation.error };
                             }
                             const wsRoot = this._getWorkspaceRoot();
                             if (wsRoot) {
@@ -11953,7 +12003,7 @@ Each plan file must include:
                                     );
                                     if (choice === 'Open Reconciliation') {
                                         this._seams().commands.executeCommand('switchboard.reconcileKanbanDbs');
-                                        return;
+                                        return { success: false, reason: 'reconciliation' };
                                     }
                                 } else if (migResult.migrated) {
                                     this._showTemporaryNotification('✅ Migrated plans to new database location.');
@@ -11966,7 +12016,7 @@ Each plan file must include:
                             void this._refreshSessionStatus();
                             this._showTemporaryNotification('✅ Database path updated successfully.');
                         }
-                        break;
+                        return { success: true };
                     }
                     case 'testDbConnection': {
                         try {
@@ -11976,11 +12026,13 @@ Each plan file must include:
                                 if (db) {
                                     this.postMessage({ type: 'dbConnectionResult', success: true });
                                     this._showTemporaryNotification('✅ Database connection successful');
+                                    return { success: true };
                                 } else {
                                     const effectiveRoot = this._kanbanProvider?.resolveEffectiveWorkspaceRoot(wsRoot) || wsRoot;
                                     const error = this._lastKanbanDbWarnings.get(effectiveRoot) || 'Unknown initialization error';
                                     this.postMessage({ type: 'dbConnectionResult', success: false, error });
                                     this._seams().ui.showErrorMessage(`❌ Database connection failed: ${error}`);
+                                    return { success: false, error };
                                 }
                             } else {
                                 throw new Error('No active workspace root found.');
@@ -11988,16 +12040,16 @@ Each plan file must include:
                         } catch (dbErr: any) {
                             this.postMessage({ type: 'dbConnectionResult', success: false, error: dbErr.message });
                             this._seams().ui.showErrorMessage(`⚠️ Database test error: ${dbErr.message}`);
+                            return { success: false, error: dbErr.message };
                         }
-                        break;
                     }
                     case 'setCustomDbPath': {
                         await this.handleSetCustomDbPath(data.path);
-                        break;
+                        return { success: true };
                     }
                     case 'setPresetDbPath': {
                         await this.handleSetPresetDbPath(data.preset);
-                        break;
+                        return { success: true };
                     }
                     case 'queryArchives': {
                         const archConfig = this._seams().pathConfig;
@@ -12023,12 +12075,12 @@ ${duckdbInstalled ? 'DuckDB CLI is installed and ready' : 'DuckDB CLI needs to b
 What would you like to find?`;
 
                         await this._handleSendAnalystMessage(instruction);
-                        break;
+                        return { success: true };
                     }
 
                     case 'resetDatabase': {
                         await this.handleResetDatabase();
-                        break;
+                        return { success: true };
                     }
                     case 'sendToTerminal': {
                         // NOTE: The webview also sends a `source` field (actor, tool, allowBroadcast)
@@ -12037,11 +12089,11 @@ What would you like to find?`;
                         const { name, input, paced } = data;
                         if (typeof name !== 'string' || !name.trim()) {
                             console.error('[TaskViewer] sendToTerminal rejected: invalid terminal name');
-                            break;
+                            return { success: false, error: 'invalid terminal name' };
                         }
                         if (typeof input !== 'string') {
                             console.error('[TaskViewer] sendToTerminal rejected: invalid input');
-                            break;
+                            return { success: false, error: 'invalid input' };
                         }
 
                         // Resolve terminal: registered terminals first (exact → suffix-aware → case-insensitive),
@@ -12073,7 +12125,7 @@ What would you like to find?`;
 
                         if (!terminal) {
                             console.error(`[TaskViewer] sendToTerminal failed: terminal '${name}' not found or not local`);
-                            break;
+                            return { success: false, error: `terminal '${name}' not found or not local` };
                         }
 
                         // Host-agnostic terminals use the TerminalHandle interface. When a real
@@ -12085,7 +12137,7 @@ What would you like to find?`;
                             terminal.sendText(input, true);
                         }
                         console.log(`[TaskViewer] sendToTerminal: sent to '${name}' (paced: ${paced}, len: ${input.length})`);
-                        break;
+                        return { success: true };
                     }
                 }
             } catch (error) {
@@ -22243,6 +22295,7 @@ What would you like to find?`;
         };
         this.postMessage(message);
         this._kanbanProvider?.postMessage(message);
+        return message;
     }
 
     /**

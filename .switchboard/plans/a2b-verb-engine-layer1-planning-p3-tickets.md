@@ -1,5 +1,5 @@
 ---
-description: "Planning Layer-1, sub-card 3 of 3 (SEQUENTIAL, same file): the Tickets (ClickUp/Linear) verb family — the largest family. Convert its read arms to return-in-body and add per-verb schemas; extend the headless Planning suite. Lands LAST, after P1 and P2. Completing this drives the planning ratchet ceiling to 0."
+description: "Planning Layer-1, sub-card 3 of 3 (SEQUENTIAL, same file): the Tickets (ClickUp/Linear) verb family — the largest family. Convert its read arms to return-in-body and add per-verb schemas; extend the headless Planning suite. Lands LAST, after P1 and P2. Completing this drives the planning ratchet ceiling to its residual floor (0 only if no nested-control-flow breaks remain)."
 ---
 
 # Verb Engine — Layer-1: PlanningProvider · P3 — Tickets (ClickUp / Linear) (Return-in-Body + Schemas + Test)
@@ -14,7 +14,7 @@ description: "Planning Layer-1, sub-card 3 of 3 (SEQUENTIAL, same file): the Tic
 
 ## Goal
 
-Convert the **Tickets (ClickUp / Linear)** verb family in `PlanningPanelProvider` to return-in-body, add per-verb schemas for its untrusted writes (ticket create/edit/move/comment, provider config), and extend the headless Planning suite. This is the largest family and the last Planning slice; its completion flips the `planning` ratchet ceiling to 0.
+Convert the **Tickets (ClickUp / Linear)** verb family in `PlanningPanelProvider` to return-in-body, add per-verb schemas for its untrusted writes (ticket create/edit/move/comment, provider config), and extend the headless Planning suite. This is the largest family and the last Planning slice; its completion drops the `planning` ratchet ceiling to its true residual `break` count (0 only if no legitimate nested-control-flow breaks remain — inner switches / loop breaks must stay `break`).
 
 ### Problem / root-cause analysis
 Same root cause as P1/P2: arms push then `break`; `planning: {}` empty. The tickets family is the biggest untrusted-write surface in the Project panel (creating/moving/commenting on real ClickUp/Linear items over HTTP), so schema validation here is the security-critical part — hence the `security` tag.
@@ -38,7 +38,7 @@ Same root cause as P1/P2: arms push then `break`; `planning: {}` empty. The tick
 1. **Same single agent stream as P1/P2** (started after P2 merges); `PlanningPanelProvider.ts` + append the tickets schemas.
 2. Convert this family's read arms (Kanban idiom); add its write schemas.
 3. Extend the headless Planning suite over this family.
-4. **Lower the `planning` ratchet ceiling to 0** in the same change — Planning Layer-1 complete — and update `## Review Findings` in `a2b-verb-engine-06-planning-panel.md` and the Project feature file.
+4. **Lower the `planning` ratchet ceiling to its true residual `break` count** (per `analyze-verb-migration2.js`; not forced to 0 — nested-control-flow breaks stay `break`) in the same change — Planning Layer-1 read-arm conversion complete — and update `## Review Findings` in `a2b-verb-engine-06-planning-panel.md` and the Project feature file.
 
 ## Complexity Audit
 ### Routine
@@ -53,7 +53,7 @@ Same root cause as P1/P2: arms push then `break`; `planning: {}` empty. The tick
 - A2b ·1 Foundations; return-contract ratchet.
 
 ## Verification Plan (Definition of Done — objective)
-- `analyze-verb-migration2.js`: this family's read arms `return`; **`planning` ratchet ceiling == 0**, `verb-returns:check` green — Planning Layer-1 fully done.
+- `analyze-verb-migration2.js`: this family's read arms `return`; **`planning` ceiling lowered to its residual `break` count** (0 only if no nested-control-flow breaks remain), `verb-returns:check` green — Planning Layer-1 read-arm conversion done.
 - `verbSchemas.ts` `planning` block covers the tickets writes.
 - Headless Planning suite covers this family and **asserts payload fields**.
 - `parity:check` / `push-routing:check` / `compile-tests` green.
