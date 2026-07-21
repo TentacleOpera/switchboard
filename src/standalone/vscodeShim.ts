@@ -228,6 +228,14 @@ export namespace extensions {
 export namespace env {
     export const machineId: string = 'standalone-machine';
     export const sessionId: string = 'standalone-session';
+    // NotionFetchService (and any OAuth flow) calls vscode.env.openExternal. Headless
+    // can't open a browser tab — log the URL best-effort (matches the headless HostSeams
+    // openExternal) rather than crashing with a raw TypeError on the missing member.
+    export async function openExternal(target: Uri | string): Promise<boolean> {
+        const url = typeof target === 'string' ? target : target?.fsPath || '';
+        console.log('[headless openExternal]', url);
+        return true;
+    }
 }
 
 // ─── Standalone-only: install the workspace root for the SecretStorage/config ─

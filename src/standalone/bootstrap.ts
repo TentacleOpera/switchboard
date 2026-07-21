@@ -268,6 +268,10 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     const getWorkspaceId = async () => (await db.getWorkspaceId()) || '';
 
     const pushFullState = async () => {
+        // The engine can fire discovered-plan events (boot scan / live watcher) before
+        // `server` is constructed on boot — skip the broadcast then (no clients yet; a
+        // late-joining client gets getFullState). Avoids a boot-time TypeError.
+        if (!server) { return; }
         try {
             const workspaceId = await getWorkspaceId();
             if (!workspaceId) {
@@ -338,6 +342,31 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     });
     await ingestionEngine.initialize();
     log(opts, 'PlanIngestionEngine initialized (headless)');
+
+    // Headless Ingestion piece 2: write a plan file then ingest it through the shared
+    // engine. Shared primitive for the create/import verbs — mirrors the extension's
+    // TaskViewerProvider._createInitiatedPlan (same feature_plan_<ts>_<slug>.md naming).
+    // The DB assigns the planId on ingest (plans never author their own). A collision
+    // guard stops rapid clicks (same second + same title) from overwriting a fresh draft.
+    const createAndIngestPlan = async (root: string, title: string, content: string): Promise<string> => {
+        const plansDir = path.join(root, '.switchboard', 'plans');
+        await fs.promises.mkdir(plansDir, { recursive: true });
+        const now = new Date();
+        const pad = (n: number) => String(n).padStart(2, '0');
+        const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+        const slug = (title.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'new_plan').slice(0, 60);
+        let fileName = `feature_plan_${timestamp}_${slug}.md`;
+        let absPath = path.join(plansDir, fileName);
+        let counter = 2;
+        while (fs.existsSync(absPath)) {
+            fileName = `feature_plan_${timestamp}_${slug}_${counter}.md`;
+            absPath = path.join(plansDir, fileName);
+            counter++;
+        }
+        await fs.promises.writeFile(absPath, content, 'utf8');
+        await ingestionEngine.ingestPlanFile(absPath, root);
+        return path.relative(root, absPath).replace(/\\/g, '/');
+    };
 
     const repoRoot = resolveRepoRoot();
     const getBoardHtml = async () => sharedGetBoardHtml(repoRoot, workspaceRoot);
@@ -499,7 +528,21 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                     return { success: true };
                 }
 
-                case 'createPlan':
+                case 'createPlan': {
+                    // Headless Ingestion piece 2: create a draft plan then ingest it via the
+                    // shared engine — mirrors the extension's createDraftPlanTicket (an
+                    // "Untitled Plan" the user renames in the project panel). The old arm
+                    // fell through to a folder scan and created nothing.
+                    try {
+                        const createdAt = new Date().toISOString();
+                        const content = `---\ncreated: ${createdAt}\n---\n\n# Untitled Plan\n`;
+                        const planFile = await createAndIngestPlan(root, 'Untitled Plan', content);
+                        await pushFullState();
+                        return { success: true, planFile };
+                    } catch (e) {
+                        return { success: false, error: e instanceof Error ? e.message : String(e) };
+                    }
+                }
                 case 'scanFoldersNow': {
                     // Headless Ingestion piece 2: drive the shared engine's scan directly,
                     // mirroring the extension's kanbanService.scanFoldersNow() path.
@@ -511,8 +554,42 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                         return { success: false, error: e instanceof Error ? e.message : String(e) };
                     }
                 }
-                case 'importFromClipboard':
-                    return { success: true };
+                case 'importFromClipboard': {
+                    // Headless Ingestion piece 2: import the markdown the browser passed
+                    // (msg.markdownText) as one or more plan files, then ingest — mirrors
+                    // TaskViewerProvider.importPlanFromClipboard (H1→H2→H3→default title,
+                    // `--- PLAN ---` multi-plan split, 200 KB cap). Headless has no
+                    // server-side clipboard, so the no-markdownText path is an honest
+                    // failure, not the old fake {success:true} no-op.
+                    try {
+                        const md = typeof payload?.markdownText === 'string' ? payload.markdownText : '';
+                        if (!md.trim()) {
+                            return { success: false, error: 'Clipboard import needs markdown from the browser; none was provided (headless has no server-side clipboard access).' };
+                        }
+                        if (md.length > 200_000) {
+                            return { success: false, error: 'Clipboard content too large (>200 KB). Aborting import.' };
+                        }
+                        const extractTitle = (text: string): string => {
+                            const h1 = text.match(/^#\s+(.+)$/m); if (h1) return h1[1].trim();
+                            const h2 = text.match(/^##\s+(.+)$/m); if (h2) return h2[1].trim();
+                            const h3 = text.match(/^###\s+(.+)$/m); if (h3) return h3[1].trim();
+                            return 'Imported Plan';
+                        };
+                        // Non-global regex: String.split() splits on every match regardless of
+                        // the /g flag, so no stateful-lastIndex trap.
+                        const hasMulti = /^---\s*PLAN\s*---\s*$/m.test(md);
+                        const chunks = hasMulti
+                            ? md.split(/^---\s*PLAN\s*---\s*$/m).map(s => s.trim()).filter(Boolean)
+                            : [md.trim()];
+                        for (const chunk of chunks) {
+                            await createAndIngestPlan(root, extractTitle(chunk), chunk);
+                        }
+                        await pushFullState();
+                        return { success: true, imported: chunks.length };
+                    } catch (e) {
+                        return { success: false, error: e instanceof Error ? e.message : String(e) };
+                    }
+                }
 
                 default:
                     return { success: false, error: `Verb '${verb}' not implemented in standalone mode` };

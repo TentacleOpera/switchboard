@@ -14,9 +14,9 @@ Make `npx switchboard` ingest plans identically to the VS Code extension — sam
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Headless Ingestion 1 — Shared Engine Extraction + VS Code Adapter](../plans/headless-plan-file-ingestion-watcher.md) — **CODER CODED**
-- [ ] [Headless Ingestion 2 — Standalone Ingestion (adapter + bootstrap + verbs)](../plans/headless-standalone-ingestion.md) — **CODER CODED**
-- [ ] [Headless Ingestion 3 — Headless Provider Sync](../plans/headless-provider-sync.md) — **CODER CODED**
+- [ ] [Headless Ingestion 1 — Shared Engine Extraction + VS Code Adapter](../plans/headless-plan-file-ingestion-watcher.md) — **CODE REVIEWED**
+- [ ] [Headless Ingestion 2 — Standalone Ingestion (adapter + bootstrap + verbs)](../plans/headless-standalone-ingestion.md) — **CODE REVIEWED**
+- [ ] [Headless Ingestion 3 — Headless Provider Sync](../plans/headless-provider-sync.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Implementation Summary
@@ -52,4 +52,8 @@ All three pieces implemented and verified:
 Strictly ordered: **1 → 2 → 3.** Piece 1 (the engine + seam) is the foundation both other pieces consume. Piece 2 (standalone ingestion) needs the engine to exist before it can wire a host onto it. Piece 3 (provider sync) needs piece 2's standalone host to be constructing the engine and running ingestion batches before there is anything for sync to fire on. Piece 1 is the high-risk refactor and should land behind its own review + VSIX-parity gate; 2 and 3 are additive with no extension risk.
 
 **Related (not a blocker):** full cross-provider (ClickUp/Linear/Notion), all-trigger sync parity is tracked in the standalone `provider-sync-full-parity.md` plan. This ingestion feature does not depend on it — piece 3 ships the ingest-path provider-sync subset (ClickUp content-on-import + Linear archive-on-delete) on its own. Provider sync already largely exists in the extension via the merged `RemoteProvider` seam; headless reaching full parity is that separate plan's concern.
+
+## Review Findings (Feature)
+
+Reviewer pass over all three subtasks. **Piece 1 (engine extraction):** faithful API-preserving refactor, no fixes needed. **Piece 2 (standalone ingestion):** fixed two MAJOR verb-wiring gaps in `src/standalone/bootstrap.ts` — `createPlan` now creates-then-ingests a draft and `importFromClipboard` now imports the browser-supplied markdown (both were fake/no-op) — plus a `!server` boot guard on `pushFullState`; one MAJOR deferred (external scanner-folder ingestion is a no-op, needs the PlanScanner subsystem ported). **Piece 3 (provider sync):** fixed one MINOR shim gap — added `env.openExternal` to `src/standalone/vscodeShim.ts`. Verification: compile/tests skipped per directive; verified statically via caller-tracing, origin/main diffs, singleton-DB race analysis, and idempotency checks. Remaining risks: external/brain-folder ingestion and on-column-move provider sync are still absent headless (both tracked separately).
 
