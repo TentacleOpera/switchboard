@@ -15,16 +15,19 @@ function run() {
     const logicStr = match[0];
 
     // Build an evaluator
+    // CODED_IDS is referenced by the AUTOCODE remap inside the extracted block;
+    // it must be supplied to the sandbox to match the webview's runtime scope.
+    const CODED_IDS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
     function evaluateLabel(cardColumn, getNextColumnImpl, columnDefs, columnsArr, collapseCodersEnabled = true) {
         let card = { column: cardColumn };
         let columnDefinitions = columnDefs;
         let getNextColumn = getNextColumnImpl;
         let columns = columnsArr;
-        
+
         // Execute the extracted logic
         const wrappedLogic = logicStr + '\nreturn copyLabel;';
-        const func = new Function('card', 'columnDefinitions', 'getNextColumn', 'columns', 'collapseCodersEnabled', wrappedLogic);
-        return func(card, columnDefinitions, getNextColumn, columns, collapseCodersEnabled);
+        const func = new Function('card', 'columnDefinitions', 'getNextColumn', 'columns', 'collapseCodersEnabled', 'CODED_IDS', wrappedLogic);
+        return func(card, columnDefinitions, getNextColumn, columns, collapseCodersEnabled, CODED_IDS);
     }
 
     // Mocks

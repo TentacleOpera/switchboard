@@ -6368,7 +6368,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 // emission below is gated separately on the same condition so a terminal next
                 // (COMPLETED) suppresses the button entirely. The label switch is kept inline
                 // to preserve the regression-test regex extraction contract
-                // (let copyLabel = 'Copy Prompt'; ... primaryActionBtn =).
+                // (the copyLabel block must stay inline up to the button assignment).
                 if (nextColId && nextDef && nextDef.kind !== 'completed') {
                     const isCustom = nextDef.kind === 'custom-user' || nextDef.kind === 'custom-agent';
                     if (isCustom) {
