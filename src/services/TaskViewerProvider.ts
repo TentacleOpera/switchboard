@@ -295,13 +295,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (!validation.ok) {
             throw new Error(`Invalid payload for TaskViewer verb '${verb}': ${validation.error}`);
         }
-        // VS Code is the host here; _handleMessage runs in-process.
-        // TODO(verb-engine·5): the return-in-body contract is NOT yet applied to
-        // this provider's arms. Read verbs still push their result over the WS hub
-        // and `break`, so an HTTP caller receives only the route layer's
-        // {success:true} ack with no data — the "write-only reads" anti-pattern the
-        // A2b design record set out to eliminate. Migrate each arm to `return` its
-        // result (push kept additive) per a2b-verb-engine-05-taskviewer-provider.md.
+        // VS Code is the host here; _handleMessage delegates to _messageListener,
+        // whose arms now RETURN their result in the HTTP body (Layer-1 done): reads
+        // carry data, failures return {success:false,error}, and the webview push
+        // stays additive. One legitimate loop `break` remains (terminal lookup) —
+        // control flow, not a contract gap.
         // `type` is set LAST so a payload `type` field can never override the
         // allowlist-checked verb, regardless of caller.
         return this._handleMessage({ ...(payload ?? {}), type: verb });
@@ -12143,6 +12141,12 @@ What would you like to find?`;
             } catch (error) {
                 const errorMessage = error instanceof Error ? error.message : String(error);
                 this._seams().ui.showErrorMessage(`Error: ${errorMessage}`);
+                // Return-in-body contract (this plan): surface the failure to the
+                // HTTP caller (handleServiceVerb → route → 502) instead of falling
+                // through to `undefined`, which the route reads as {success:true} —
+                // a silent false-success on a failed dispatch/plan/DB verb. The
+                // webview path ignores this return value, so no UI behaviour changes.
+                return { success: false, error: errorMessage };
             }
         });
     }

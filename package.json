@@ -816,6 +816,7 @@
     "parity:check": "node scripts/check-protocol-parity.js",
     "push-routing:check": "node scripts/check-push-routing.js",
     "verb-returns:check": "node scripts/check-verb-return-contract.js",
+    "verb-returns:baseline": "node scripts/check-verb-return-contract.js --write",
     "mirror:check": "node scripts/check-claude-mirror.js",
     "release": "bash scripts/publish-release.sh"
   },

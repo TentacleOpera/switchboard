@@ -88,9 +88,37 @@ function analyzeProviderSwitch(providerConfig) {
     };
 }
 
+// Map each provider to its generated allowlist constant. Used as a
+// measurement-validity check: the number of `case` labels the brace-matcher
+// extracts from a switch MUST equal the provider's allowlist size. If they
+// diverge, the block was mis-bounded (the naive `{`/`}` counter truncated on a
+// brace inside a string/template) — so the break count is untrustworthy and any
+// ratchet decision built on it is invalid. Callers should fail closed on a
+// mismatch rather than trust a silently-truncated count.
+const ALLOWLIST_CONST = {
+    Kanban: 'KANBAN_VERBS',
+    Planning: 'PLANNING_VERBS',
+    Design: 'DESIGN_VERBS',
+    TaskViewer: 'TASKVIEWER_VERBS',
+    Setup: 'SETUP_VERBS',
+};
+
+function countAllowlistVerbs(providerName) {
+    const key = ALLOWLIST_CONST[providerName];
+    if (!key) { return null; }
+    let src;
+    try {
+        src = fs.readFileSync(path.join(REPO_ROOT, 'src', 'generated', 'verbAllowlist.ts'), 'utf8');
+    } catch { return null; }
+    const m = src.match(new RegExp(key + '[^\\[]*\\[([^\\]]*)\\]'));
+    if (!m) { return null; }
+    return (m[1].match(/['"][^'"]+['"]/g) || []).length;
+}
+
 module.exports = {
     REPO_ROOT,
     PROVIDERS,
     findSwitchBlock,
-    analyzeProviderSwitch
+    analyzeProviderSwitch,
+    countAllowlistVerbs
 };
