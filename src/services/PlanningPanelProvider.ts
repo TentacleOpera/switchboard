@@ -3783,11 +3783,22 @@ Start by checking which documents exist, then present the menu.`;
                     this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: false, sessionId: '', error: 'No sessionId' });
                     break;
                 }
+                if (!this._kanbanProvider) {
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: 'No kanban provider' });
+                    break;
+                }
                 try {
-                    const success = await this._seams().commands.executeCommand<boolean>(
-                        'switchboard.copyPlanFromKanban', sessionId, column, wsRoot
-                    );
-                    this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: !!success, sessionId });
+                    const result = await this._kanbanProvider.handleServiceVerb('promptSelected', {
+                        sessionIds: [sessionId],
+                        column,
+                        workspaceRoot: wsRoot
+                    });
+                    this.postMessageToProjectWebview({
+                        type: 'kanbanPlanPromptCopied',
+                        success: !!result?.success,
+                        sessionId,
+                        targetColumn: result?.targetColumn || undefined
+                    });
                 } catch (err) {
                     this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: String(err) });
                 }
@@ -3802,35 +3813,17 @@ Start by checking which documents exist, then present the menu.`;
                     break;
                 }
                 try {
-                    const kp = this._kanbanProvider;
-                    const db = (kp as any)._getKanbanDb(wsRoot);
-                    if (!db || !(await db.ensureReady())) {
-                        this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: 'Could not resolve this feature.' });
-                        break;
-                    }
-                    const feature = await db.getPlanByPlanId(sessionId);
-                    if (!feature || !feature.isFeature) {
-                        this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: 'Could not resolve this feature.' });
-                        break;
-                    }
-
-                    // Resolve effective column: explicit param > feature's DB column > CREATED
-                    const effectiveColumn = column || feature.kanbanColumn || 'CREATED';
-                    // Resolve role from column (mirror _handleCopyPlanLink, TaskViewerProvider.ts:14303-14310)
-                    let role: string;
-                    if (effectiveColumn === 'PLAN REVIEWED') {
-                        const complexity = await kp.getComplexityFromPlan(wsRoot, (kp as any)._resolvePlanFilePath(wsRoot, feature.planFile));
-                        role = kp.resolveRoutedRole(parseComplexityScore(complexity));
-                    } else {
-                        role = columnToPromptRole(effectiveColumn) || 'coder';
-                    }
-
-                    // Plan arrays for dispatch MUST come from KanbanProvider.buildDispatchPlans
-                    // — do not hand-roll (feature subtasks get silently dropped otherwise).
-                    const plans = await kp.buildDispatchPlans(wsRoot, [feature]);
-                    const prompt = await kp.generateUnifiedPrompt(role, plans, wsRoot);
-                    await this._seams().clipboard.writeText(prompt);
-                    this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: true, sessionId });
+                    const result = await this._kanbanProvider.handleServiceVerb('promptSelected', {
+                        sessionIds: [sessionId],
+                        column,
+                        workspaceRoot: wsRoot
+                    });
+                    this.postMessageToProjectWebview({
+                        type: 'kanbanPlanPromptCopied',
+                        success: !!result?.success,
+                        sessionId,
+                        targetColumn: result?.targetColumn || undefined
+                    });
                 } catch (err) {
                     this.postMessageToProjectWebview({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: String(err) });
                 }

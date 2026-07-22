@@ -8617,10 +8617,14 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 // This is required for CODED_AUTO: the frontend resolves it to LEAD CODED,
                 // but selected cards may actually be in INTERN CODED or CODER CODED.
                 // This aligns with moveSelected (line 2046) which also trusts sessionIds directly.
-                const sourceCards = this._lastCards.filter(card => card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds));
+                let sourceCards = this._lastCards.filter(card => card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds));
                 if (sourceCards.length === 0) {
-                    void this._seams().ui.showInformationMessage('No matching plans found for prompt generation.');
-                    return { success: false, error: 'No matching plans found for prompt generation.' };
+                    const dbCards = await this._buildCardsFromDbSessionIds(workspaceRoot, msg.sessionIds);
+                    if (dbCards.length === 0) {
+                        void this._seams().ui.showInformationMessage('No matching plans found for prompt generation.');
+                        return { success: false, error: 'No matching plans found for prompt generation.' };
+                    }
+                    sourceCards = dbCards;
                 }
 
                 // Get next column BEFORE generating prompt so we can use destination role
@@ -8818,6 +8822,37 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`, isError: false });
                 }
                 return { success: true, prompt, targetColumn: nextCol };
+            }
+            private async _buildCardsFromDbSessionIds(workspaceRoot: string, sessionIds: string[]): Promise<KanbanCard[]> {
+                const db = (this as any)._getKanbanDb(workspaceRoot);
+                if (!db || !(await db.ensureReady())) {
+                    return [];
+                }
+                const cards: KanbanCard[] = [];
+                for (const sid of sessionIds) {
+                    let plan = await db.getPlanBySessionId(sid);
+                    if (!plan) {
+                        plan = await db.getPlanByPlanId(sid);
+                    }
+                    if (plan) {
+                        cards.push({
+                            planId: plan.planId,
+                            sessionId: plan.sessionId,
+                            topic: plan.topic || plan.planFile || 'Untitled',
+                            planFile: plan.planFile || '',
+                            column: this._normalizeLegacyKanbanColumn(plan.kanbanColumn) || 'CREATED',
+                            lastActivity: plan.updatedAt || plan.createdAt || '',
+                            createdAt: plan.createdAt || '',
+                            complexity: plan.complexity || 'Unknown',
+                            workspaceRoot: workspaceRoot,
+                            project: plan.project || '',
+                            isFeature: !!plan.isFeature,
+                            featureId: plan.featureId || undefined,
+                            working: false
+                        });
+                    }
+                }
+                return cards;
             }
             case 'julesSelected': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);

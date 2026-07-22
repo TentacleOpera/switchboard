@@ -829,13 +829,17 @@
                         btn.disabled = false;
                     }, 2000);
                 }
-                // Refresh the kanban plans list so the card reflects any column advance
-                // the backend performed after copying the prompt. Without this, the card
-                // stays in its old column/status in the UI. Fire on both success AND
-                // failure — on failure the DB state is unchanged, but the UI must still
-                // be consistent with the DB (no stale "advanced" state from a prior
-                // action). The fetchKanbanPlans handler in PlanningPanelProvider has a
-                // request-ID dedup guard so duplicate requests are safe.
+                if (msg.success && msg.targetColumn) {
+                    const card = btn ? btn.closest('.kanban-plan-item, .feature-plan-item') : null;
+                    if (card) {
+                        const badge = card.querySelector('.kanban-column-badge.clickable');
+                        if (badge) {
+                            const colDef = _kanbanAvailableColumns.find(c => c.id === msg.targetColumn);
+                            badge.textContent = colDef ? colDef.label : msg.targetColumn;
+                            badge.dataset.column = msg.targetColumn;
+                        }
+                    }
+                }
                 if (activeTab === 'kanban' || activeTab === 'features') {
                     vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
                 }
@@ -1756,18 +1760,39 @@
                 });
             }
 
-            const copyPromptBtn = itemDiv.querySelector('.kanban-plan-copy-prompt');
-            if (copyPromptBtn) {
-                copyPromptBtn.addEventListener('click', e => {
-                    e.stopPropagation();
-                    vscode.postMessage({
-                        type: 'copyKanbanPlanPrompt',
-                        sessionId: copyPromptBtn.dataset.sessionId,
-                        column: copyPromptBtn.dataset.column,
-                        workspaceRoot: copyPromptBtn.dataset.workspaceRoot
-                    });
-                });
+    function _optimisticNextColumn(currentColumn) {
+        if (currentColumn === 'PLAN REVIEWED') return null;
+        const idx = _kanbanAvailableColumns.findIndex(c => c.id === currentColumn);
+        if (idx < 0 || idx >= _kanbanAvailableColumns.length - 1) return null;
+        for (let i = idx + 1; i < _kanbanAvailableColumns.length; i++) {
+            const col = _kanbanAvailableColumns[i];
+            if (col.featureOnly || col.dragDropMode === 'disabled') continue;
+            return col.id;
+        }
+        return null;
+    }
+
+    const copyPromptBtn = itemDiv.querySelector('.kanban-plan-copy-prompt');
+    if (copyPromptBtn) {
+        copyPromptBtn.addEventListener('click', e => {
+            e.stopPropagation();
+            const nextCol = _optimisticNextColumn(copyPromptBtn.dataset.column);
+            if (nextCol) {
+                const badge = itemDiv.querySelector('.kanban-column-badge.clickable');
+                if (badge) {
+                    const nextColDef = _kanbanAvailableColumns.find(c => c.id === nextCol);
+                    badge.textContent = nextColDef ? nextColDef.label : nextCol;
+                    badge.dataset.column = nextCol;
+                }
             }
+            vscode.postMessage({
+                type: 'copyKanbanPlanPrompt',
+                sessionId: copyPromptBtn.dataset.sessionId,
+                column: copyPromptBtn.dataset.column,
+                workspaceRoot: copyPromptBtn.dataset.workspaceRoot
+            });
+        });
+    }
 
             const editBtn = itemDiv.querySelector('.kanban-plan-edit');
             if (editBtn) {
@@ -2448,13 +2473,15 @@
             if (featureCopyPromptBtn) {
                 featureCopyPromptBtn.addEventListener('click', e => {
                     e.stopPropagation();
-                    // No optimistic "Copied" text: the backend kanbanPlanPromptCopied
-                    // response handler (project.js ~565) finds this button via
-                    // .kanban-plan-copy-prompt[data-session-id] and sets "Copied!"/"Failed"
-                    // with a reset timer. An optimistic update would race with that handler
-                    // (it captures oldText at response time) and leave the button stuck on
-                    // "Copied". Matches the regular kanban Copy Prompt pattern (no optimistic
-                    // update — see project.js ~1174).
+                    const nextCol = _optimisticNextColumn(featureCopyPromptBtn.dataset.column);
+                    if (nextCol) {
+                        const badge = itemDiv.querySelector('.kanban-column-badge.clickable');
+                        if (badge) {
+                            const nextColDef = _kanbanAvailableColumns.find(c => c.id === nextCol);
+                            badge.textContent = nextColDef ? nextColDef.label : nextCol;
+                            badge.dataset.column = nextCol;
+                        }
+                    }
                     vscode.postMessage({
                         type: 'copyFeaturePlannerPrompt',
                         sessionId: featureCopyPromptBtn.dataset.sessionId,
