@@ -159,6 +159,7 @@ export interface Configuration {
     get<T>(section: string, defaultValue?: T, _scope?: any): T;
     has(section: string): boolean;
     update(section: string, value: any, _target?: any): Promise<void>;
+    inspect<T>(section: string): { key: string; defaultValue?: T; globalValue?: T; workspaceValue?: T; workspaceFolderValue?: T } | undefined;
 }
 
 class StandaloneConfiguration implements Configuration {
@@ -178,6 +179,13 @@ class StandaloneConfiguration implements Configuration {
     }
     has(_section: string): boolean { return false; }
     async update(_section: string, _value: any, _target?: any): Promise<void> { /* no-op */ }
+    inspect<T>(section: string): { key: string; defaultValue?: T; globalValue?: T; workspaceValue?: T; workspaceFolderValue?: T } | undefined {
+        // Headless: config.json is the store; there is no VS Code global/workspace
+        // settings layer. Return all-undefined layers so migrations that read
+        // inspect().globalValue/workspaceValue treat every setting as "not
+        // explicitly set" (→ no-op) instead of crashing on a missing method.
+        return { key: section, defaultValue: undefined, globalValue: undefined, workspaceValue: undefined, workspaceFolderValue: undefined };
+    }
 }
 
 export namespace workspace {
@@ -201,6 +209,9 @@ export namespace workspace {
                 }
                 if (prop === 'update') {
                     return (key: string, value: any, target2?: any) => target.update(`${section}.${key}`, value, target2);
+                }
+                if (prop === 'inspect') {
+                    return (key: string) => (target as any).inspect(`${section}.${key}`);
                 }
                 return (target as any)[prop];
             },

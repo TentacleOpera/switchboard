@@ -7371,13 +7371,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                 console.error('Failed to copy worktree merge prompt (strip-icon):', err);
                                 mergePendingWorktreeId = null; // clear optimistic flag → re-eval re-enables for retry
                                 stripBtn.setAttribute('data-tooltip', 'Failed to copy merge prompt — try again');
-                                updateCreateWorktreeButton();
+                                // Delay re-eval so the error tooltip is visible (mirrors the Worktrees-tab
+                                // "ERROR" 2-second flash). Calling updateCreateWorktreeButton() immediately
+                                // would re-enter merge-mode-ready and overwrite this tooltip before paint.
+                                setTimeout(() => { updateCreateWorktreeButton(); }, 2000);
                             });
                         } else {
                             // Backend returned an error (e.g. worktree not found)
                             mergePendingWorktreeId = null;
                             stripBtn.setAttribute('data-tooltip', 'Failed to generate merge prompt — try the Worktrees tab');
-                            updateCreateWorktreeButton();
+                            // Delay re-eval so the error tooltip is visible (see catch branch above).
+                            setTimeout(() => { updateCreateWorktreeButton(); }, 2000);
                         }
                     }
                     break;
