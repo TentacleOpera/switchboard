@@ -1543,12 +1543,31 @@ export class LocalApiServer {
             this._sendUnauthorized(res);
             return;
         }
+        const SECRET_WRITE_VERBS = new Set([
+            'applyClickUpConfig',
+            'applyLinearConfig',
+            'applyNotionConfig',
+            'runNotionRemoteSetup',
+            'setRemoteConfig',
+            'startRemoteControl',
+            'setApiToken',
+            'setClickUpToken',
+            'setLinearToken',
+            'setNotionToken',
+        ]);
+        if (SECRET_WRITE_VERBS.has(verb)) {
+            res.writeHead(403, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: `Secret-write verb '${verb}' is editor-only and denied over HTTP.` }));
+            return;
+        }
+
         const setupVerb = this._options.setupVerb;
         if (!setupVerb) {
             res.writeHead(503, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'Setup verb dispatch not available' }));
             return;
         }
+
         try {
             const rawBody = await this._parseJsonBody(req);
             const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
@@ -3220,11 +3239,14 @@ export class LocalApiServer {
                 await this._handleServePanels(req, res);
             } else if ((pathname === '/project' || pathname === '/project.html') && req.method === 'GET') {
                 await this._handleServeProject(req, res);
+            } else if ((pathname === '/planning' || pathname === '/planning.html') && req.method === 'GET') {
+                await this._handleServePanelById('planning', req, res);
             } else if ((pathname === '/design' || pathname === '/design.html') && req.method === 'GET') {
                 await this._handleServePanelById('design', req, res);
             } else if ((pathname === '/setup' || pathname === '/setup.html') && req.method === 'GET') {
                 await this._handleServePanelById('setup', req, res);
-            } else if (pathname.startsWith('/static/') && req.method === 'GET') {
+            }
+ else if (pathname.startsWith('/static/') && req.method === 'GET') {
                 await this._handleServeStatic(req, res);
             } else {
                 res.writeHead(404, { 'Content-Type': 'application/json' });

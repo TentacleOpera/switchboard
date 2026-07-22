@@ -164,15 +164,6 @@ When creating or improving any implementation plan (including via the extension-
   - **3+ distinct deliverables:** the work produces 3+ independent outputs (e.g. 3+ pages, 3+ components that don't share a root cause, 3+ API endpoints in different domains, 3+ unrelated bug fixes).
   - **2+ independently-shippable phases:** the work has sequential stages where each could be shipped on its own (e.g. "migrate framework" then "build new pages" then "set up deploy pipeline").
   When splitting: write each as a separate plan file with its own Goal, Metadata, and Verification Plan. Do NOT write one mega-plan covering all deliverables/phases — each plan must be independently codeable. If the user explicitly asks for a single plan, respect that and write one. If you wrote 3+ plans, group them into a feature via the `create-feature-from-plans` skill — if the user already asked for grouping or a feature, treat the original ask as confirmation and create it without a second confirm; if you are proposing grouping the user did not request, offer it and wait for confirmation.
-- **Discriminating Verification:** Every plan's `## Verification Plan → ### Automated`
-  section must include at least one check whose exit code discriminates done from
-  not-done. `compile-tests` / `build` / `typecheck` alone are insufficient — they
-  pass on incomplete work. The check must fail if the plan's stated goal is unmet.
-  Manual/behavioral criteria may supplement but cannot be the sole acceptance signal.
-  Plans with complexity ≤ 2 may claim a mechanical-change exemption by explicitly
-  writing "No discriminating check needed — mechanical change" in the Automated
-  subsection. This rule is enforced at plan creation and improvement time; existing
-  plans are not retroactively modified.
 
 ### 📂 Workspace Detection for Plan Creation
 

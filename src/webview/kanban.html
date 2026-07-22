@@ -10042,6 +10042,38 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     intervalRow.appendChild(minLabel);
                     row.appendChild(intervalRow);
 
+                    // Board-batch source config (agent / column / batchSize).
+                    // Shown only when source === 'board-batch'. Stored in sourceConfig.
+                    const batchConfigRow = document.createElement('div');
+                    batchConfigRow.style.cssText = 'display:flex; gap:6px; align-items:center; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
+                    const batchAgentInput = document.createElement('input');
+                    batchAgentInput.type = 'text';
+                    batchAgentInput.dataset.field = 'batchAgent';
+                    batchAgentInput.value = (job.sourceConfig && job.sourceConfig.agent) || job.agent || 'coder';
+                    batchAgentInput.placeholder = 'agent';
+                    batchAgentInput.style.cssText = 'flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px;';
+                    const batchColumnInput = document.createElement('input');
+                    batchColumnInput.type = 'text';
+                    batchColumnInput.dataset.field = 'batchColumn';
+                    batchColumnInput.value = (job.sourceConfig && job.sourceConfig.column) || job.column || 'CREATED';
+                    batchColumnInput.placeholder = 'column';
+                    batchColumnInput.style.cssText = 'flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px;';
+                    const batchBatchSizeInput = document.createElement('input');
+                    batchBatchSizeInput.type = 'number';
+                    batchBatchSizeInput.dataset.field = 'batchSize';
+                    batchBatchSizeInput.min = '1';
+                    batchBatchSizeInput.max = '20';
+                    const storedBatch = (job.sourceConfig && job.sourceConfig.batchSize) != null ? job.sourceConfig.batchSize : job.batchSize;
+                    batchBatchSizeInput.value = String(storedBatch != null ? storedBatch : 5);
+                    batchBatchSizeInput.style.cssText = 'width:50px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px;';
+                    const batchAgentLabel = document.createElement('span');
+                    batchAgentLabel.textContent = 'BATCH:';
+                    batchConfigRow.appendChild(batchAgentLabel);
+                    batchConfigRow.appendChild(batchAgentInput);
+                    batchConfigRow.appendChild(batchColumnInput);
+                    batchConfigRow.appendChild(batchBatchSizeInput);
+                    row.appendChild(batchConfigRow);
+
                     // Prompt override (for custom / board-batch-with-override).
                     const promptRow = document.createElement('div');
                     promptRow.style.cssText = 'display:flex; gap:6px; align-items:flex-start; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
@@ -10098,10 +10130,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // Toggle comms sub-form + prerequisites on source/target change.
                     function refreshSubForms() {
                         const isComms = sourceSelect.value === 'comms';
+                        const isBatch = sourceSelect.value === 'board-batch';
                         commsRoot.style.display = isComms ? 'block' : 'none';
                         if (isComms && commsRoot.childElementCount === 0) {
                             renderCommsPanel();
                         }
+                        batchConfigRow.style.display = isBatch ? 'flex' : 'none';
                         renderSchedulerPrereq(targetSelect.value);
                         // Show/hide start-stop vs copy-prompt based on target.
                         const isLocal = targetSelect.value === 'local-terminal';
@@ -10129,24 +10163,36 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const enableChk = rowEl.querySelector('input[type="checkbox"]');
                     const labelInput = rowEl.querySelectorAll('input[type="text"]')[0];
                     const selects = rowEl.querySelectorAll('select');
-                    const numInput = rowEl.querySelector('input[type="number"]');
+                    const numInputs = rowEl.querySelectorAll('input[type="number"]');
+                    const intervalInput = numInputs[0]; // first number input is always the interval
                     const textarea = rowEl.querySelector('textarea');
+                    const source = selects[0] ? selects[0].value : 'custom';
+                    // Build sourceConfig from data-field inputs (board-batch: agent/column/batchSize).
+                    const sourceConfig = {};
+                    const batchAgentEl = rowEl.querySelector('input[data-field="batchAgent"]');
+                    const batchColumnEl = rowEl.querySelector('input[data-field="batchColumn"]');
+                    const batchSizeEl = rowEl.querySelector('input[data-field="batchSize"]');
+                    if (source === 'board-batch') {
+                        if (batchAgentEl) sourceConfig.agent = batchAgentEl.value || 'coder';
+                        if (batchColumnEl) sourceConfig.column = batchColumnEl.value || 'CREATED';
+                        if (batchSizeEl) sourceConfig.batchSize = parseInt(batchSizeEl.value, 10) || 5;
+                    }
                     return {
                         id: rowEl.dataset.jobId,
                         label: labelInput ? labelInput.value : '',
                         enabled: enableChk ? enableChk.checked : false,
-                        source: selects[0] ? selects[0].value : 'custom',
+                        source: source,
                         target: selects[1] ? selects[1].value : 'local-terminal',
-                        intervalMinutes: numInput ? parseInt(numInput.value, 10) || 10 : 10,
+                        intervalMinutes: intervalInput ? parseInt(intervalInput.value, 10) || 10 : 10,
                         promptOverride: textarea ? textarea.value : '',
-                        sourceConfig: {}
+                        sourceConfig: sourceConfig
                     };
                 }
                 function collectSchedulerJobs() {
                     const rows = jobListRoot.querySelectorAll('[data-job-id]');
                     const jobs = [];
                     rows.forEach(r => jobs.push(collectJobFromRow(r)));
-                    return { schemaVersion: 1, jobs };
+                    return { schemaVersion: (window.__schedulerConfig && window.__schedulerConfig.schemaVersion) || 1, jobs };
                 }
 
                 // Render existing jobs from the host-pushed config (if any).

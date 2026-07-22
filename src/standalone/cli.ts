@@ -95,6 +95,24 @@ async function main() {
         fs.mkdirSync(switchboardDir, { recursive: true });
     }
 
+    if (process.argv[2] === 'secrets') {
+        const sub = process.argv[3];
+        if (sub === 'set') {
+            const secretKey = process.argv[4];
+            const secretValue = process.argv[5];
+            if (!secretKey || !secretValue) {
+                console.error('Usage: npx switchboard secrets set <clickup|linear|notion|apiToken> <value>');
+                process.exit(1);
+            }
+            const { StandaloneHostSecrets } = require('./hostServices');
+            const secrets = new StandaloneHostSecrets(workspaceRoot);
+            await secrets.storeSecret(secretKey, secretValue);
+            console.log(`[switchboard] Secret '${secretKey}' saved securely to standalone store.`);
+            process.exit(0);
+        }
+    }
+
+
     const existing = await findRunningInstance(workspaceRoot);
     if (existing !== null) {
         console.error(`[switchboard] Another Switchboard instance is already running on port ${existing} for ${workspaceRoot}.`);

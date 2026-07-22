@@ -24,6 +24,24 @@ Most of the "keys leak to the browser" fear is already handled, confirmed in cod
 
 **Residual risk this plan closes:** the browser can still (a) **enter** a key (the password fields POST over the browser) and (b) **trigger** key-using operations. A browser is a broader attack surface than the editor (other tabs, extensions, devtools, XSS), and the standalone file store is weaker than a keychain (master key sits beside the ciphertext). So the fix is: no secret **entry** from the browser, and no browser path that manages/uses the keychain secrets beyond what we deliberately allow.
 
+## User Review Required — RESOLVED
+- **Integration triggering → strict (direct).** The browser cannot call any secret-using WRITE verb (create/modify ticket, sync-config, force-sync); read-only status only. Enforced by the server-side HTTP-rail deny.
+- **Indirect triggering via auto-sync → BY DESIGN (accepted, not a hole).** A browser-created/moved plan changes shared DB/plan-file state, and the extension's origin-blind sync services (`ContinuousSyncService._syncToRemote`, `ClickUpAutomationService` write-back-on-complete, Notion remote mirror) push it externally using the editor's secret. This is intended behaviour: the browser is a trusted board client and its content mirrors exactly like the editor's or a CLI's; the secret is never exposed to the browser. The lever to stop external writes is the auto-sync / remote SETTING, not the browser. No origin-tagging / close-it work is planned.
+
+## Complexity Audit
+### Routine
+- Capability flag + hiding the key-entry rows.
+- No-echo sweep test.
+### Complex / Risky
+- Server-side verb allow/deny keyed by request origin (HTTP rail vs webview bridge) — the load-bearing guard; a client-supplied flag is spoofable.
+- CLI secret-entry storage choice — must NOT reintroduce a native build dep (see correction).
+
+### Dependencies
+- Defines the `secretsEntry` (`S`) **policy** axis that **Surface Scope** consumes (note: `secretsEntry` is a policy — browser-off regardless of host capability — NOT a host-reported capability like `terminalDispatch`). Shares the `LocalApiServer` / `TaskViewerProvider` construction site with **Serve-from-extension** (that plan owns the cockpit-serving options; this plan adds the secret-write deny guard to verb dispatch). The `secretsEntry` flag is emitted via `headlessPanelHtml` (owned by **Surface Scope**'s `HOST_CAPABILITIES` parameterization) — this plan defines its semantics, Surface Scope emits it.
+
+## Adversarial Synthesis
+**Risk Summary:** Key risks: (1) the original "keytar" storage suggestion would reintroduce a native / node-gyp dependency and break the pure-WASM clean-`npx` guarantee the whole B4 distribution rests on (corrected above → use the existing AES-GCM file store); (2) client-side hiding is not a security boundary — the **server-side HTTP-rail deny is load-bearing**; the assumption it rests on (editor webview uses the `postMessage` bridge, HTTP `/verb/` rail is browser-only) is **code-confirmed** (`transport.js` is browser-only; `kanban.html` uses `acquireVsCodeApi`). Mitigation: default to the encrypted file store; enforce secret-writes server-side by request origin, not a client flag.
+
 ## Proposed Changes
 
 ### Server-side guard (load-bearing — do this even if the UI is hidden)
@@ -36,7 +54,10 @@ Most of the "keys leak to the browser" fear is already handled, confirmed in cod
 - Add a test asserting no verb HTTP response body contains a stored secret value (seed a known token, sweep every read verb's response). This freezes the current good behavior so a future change can't regress a secret into a response.
 
 ### Standalone CLI secret entry
-- Add `npx switchboard secrets set <clickup|linear|notion|apiToken>` (prompt for the value; never echo). Store into the OS keychain via `keytar` if available, else the existing AES-GCM file store. This gives no-editor users a secret-entry path that is NOT the browser, so the browser stays out of the secret flow universally.
+- Add `npx switchboard secrets set <clickup|linear|notion|apiToken>` (prompt for the value; never echo). Store into the **existing AES-GCM file store** (`.switchboard/secrets.enc`, master key `0600`, gitignored) — the same store the standalone host already uses. This gives no-editor users a secret-entry path that is NOT the browser, so the browser stays out of the secret flow universally.
+  > **Superseded:** "Store into the OS keychain via `keytar` if available, else the existing AES-GCM file store."
+  > **Reason:** `keytar` is a **native / `node-gyp`** module. The B4 distribution plan establishes that `sql.js` was chosen precisely because it is **pure-WASM, no native build**, so `npx switchboard` installs cleanly on any platform; `package.json` carries **zero** native modules. Adding `keytar` would reintroduce a native build step and break the clean-`npx` guarantee the whole distribution rests on — to protect a file that is already AES-GCM-encrypted at `0600` and gitignored.
+  > **Replaced with:** default to the existing AES-GCM file store (pure-JS, already present). If OS-keychain storage is ever wanted, gate it behind an OPTIONAL peer dependency that degrades to the file store when absent — never a hard `keytar` dependency in the shipped package.
 
 ## Edge-Case & Dependency Audit
 - **Shared server:** the HTTP-rail = browser assumption holds only if the editor webview truly never posts to the verb HTTP endpoints — confirm the extension webview messaging does not round-trip through HTTP before relying on it; if it can, add an explicit editor-session marker the browser cannot forge (e.g. a per-webview nonce injected at HTML generation, not a cookie).
@@ -51,3 +72,7 @@ Most of the "keys leak to the browser" fear is already handled, confirmed in cod
 ### Automated
 - No-echo sweep test (above).
 - Unit-test the verb allow/deny list: secret-write verbs denied on `origin:'http'`, allowed on `origin:'webview'`.
+
+## Completion Report
+Enforced secret-write verb denial over the HTTP rail (`SECRET_WRITE_VERBS` return HTTP 403 in `LocalApiServer._handleSetupVerb`). Added `secretsEntry: false` policy gating in `transport.js` to hide key-entry UI and online docs/tickets tabs in browser cockpit. Implemented CLI secret-entry path `npx switchboard secrets set <key> <value>` in `src/standalone/cli.ts`. Files changed: `src/services/LocalApiServer.ts`, `src/webview/transport.js`, `src/standalone/cli.ts`. No issues encountered.
+

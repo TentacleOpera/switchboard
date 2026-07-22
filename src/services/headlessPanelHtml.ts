@@ -13,6 +13,24 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 
+export interface HostCapabilities {
+    terminalDispatch?: boolean;
+    automation?: boolean;
+    orchestrator?: boolean;
+    terminalFleet?: boolean;
+    mcpTerminals?: boolean;
+    secretsEntry?: boolean;
+}
+
+const DEFAULT_HOST_CAPABILITIES: HostCapabilities = {
+    terminalDispatch: false,
+    automation: false,
+    orchestrator: false,
+    terminalFleet: false,
+    mcpTerminals: false,
+    secretsEntry: false,
+};
+
 export function findFile(candidates: string[]): string | undefined {
     for (const c of candidates) {
         try {
@@ -26,8 +44,6 @@ export function htmlEscapeJson(json: string): string {
     return json.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-const HOST_CAPABILITIES = { terminalDispatch: false, automation: false, orchestrator: false, terminalFleet: false, mcpTerminals: false };
-
 function makeNonce(): string {
     return crypto.randomBytes(16).toString('base64');
 }
@@ -40,6 +56,14 @@ function injectTransportShim(content: string, nonce: string, marker: string, fir
     }
     // Otherwise inject before the first script tag (design.html / project.html shape).
     return content.replace(firstScript, `${shim}\n${firstScript}`);
+}
+
+function applyThemeClass(content: string, themeClass?: string): string {
+    if (!themeClass) return content;
+    return content.replace(/<body\b([^>]*)>/i, (_match, attrs: string) => {
+        const withoutClass = attrs.replace(/\s*class="[^"]*"/i, '');
+        return `<body${withoutClass} class="${htmlEscapeJson(themeClass)}">`;
+    });
 }
 
 export interface PanelHtmlResult {
@@ -56,7 +80,7 @@ export function resolveRepoRootFromDir(dir: string): string {
     return path.resolve(dir, '..', '..');
 }
 
-export function getShellHtml(repoRoot: string): PanelHtmlResult {
+export function getShellHtml(repoRoot: string, themeClass?: string): PanelHtmlResult {
     const candidates = [
         path.join(repoRoot, 'dist', 'webview', 'shell.html'),
         path.join(repoRoot, 'src', 'webview', 'shell.html'),
@@ -69,10 +93,11 @@ export function getShellHtml(repoRoot: string): PanelHtmlResult {
     const nonce = makeNonce();
     const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; frame-src 'self';`;
     content = content.replace(/\{\{NONCE\}\}/g, nonce);
+    content = applyThemeClass(content, themeClass);
     return { html: content, csp };
 }
 
-export function getBoardHtml(repoRoot: string, workspaceRoot: string): PanelHtmlResult {
+export function getBoardHtml(repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult {
     const candidates = [
         path.join(repoRoot, 'dist', 'webview', 'kanban.html'),
         path.join(repoRoot, 'src', 'webview', 'kanban.html'),
@@ -87,8 +112,10 @@ export function getBoardHtml(repoRoot: string, workspaceRoot: string): PanelHtml
     content = content.replace(/<script>/g, `<script nonce="${nonce}">`);
     content = content.replace('<!-- SHARED_DEFAULTS_SCRIPT -->',
         `<script src="/static/webview/sharedDefaults.js" nonce="${nonce}"></script>\n<script src="/static/webview/transport.js" nonce="${nonce}"></script>`);
-    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="kanban" data-host-capabilities="${htmlEscapeJson(JSON.stringify(HOST_CAPABILITIES))}"`;
+    const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
+    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="kanban" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
     content = content.replace(/<body/, `<body ${bodyAttr}`);
+    content = applyThemeClass(content, themeClass);
 
     // Icon replacements (kanban.html uses {{ICON_*}} placeholders).
     const iconDir = '/static/icons';
@@ -130,7 +157,7 @@ export function getBoardHtml(repoRoot: string, workspaceRoot: string): PanelHtml
     return { html: content, csp };
 }
 
-export function getProjectHtml(repoRoot: string, workspaceRoot: string): PanelHtmlResult {
+export function getProjectHtml(repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult {
     const candidates = [
         path.join(repoRoot, 'dist', 'webview', 'project.html'),
         path.join(repoRoot, 'src', 'webview', 'project.html'),
@@ -149,12 +176,42 @@ export function getProjectHtml(repoRoot: string, workspaceRoot: string): PanelHt
     content = content.replace(/{{MARKDOWN_EDITOR_URI}}/g, '/static/webview/markdownEditor.js');
     const firstScript = `<script nonce="${nonce}" src="/static/webview/sharedUtils.js"></script>`;
     content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', firstScript);
-    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="project" data-host-capabilities="${htmlEscapeJson(JSON.stringify(HOST_CAPABILITIES))}"`;
+    const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
+    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="project" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
     content = content.replace(/<body/, `<body ${bodyAttr}`);
+    content = applyThemeClass(content, themeClass);
     return { html: content, csp };
 }
 
-export function getDesignHtml(repoRoot: string, workspaceRoot: string): PanelHtmlResult {
+export function getPlanningHtml(repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult {
+    const candidates = [
+        path.join(repoRoot, 'dist', 'webview', 'planning.html'),
+        path.join(repoRoot, 'src', 'webview', 'planning.html'),
+    ];
+    const htmlPath = findFile(candidates);
+    if (!htmlPath) {
+        return { html: '<html><body>Planning panel HTML not found.</body></html>', csp: '' };
+    }
+    let content = fs.readFileSync(htmlPath, 'utf8');
+    const nonce = makeNonce();
+    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; frame-src 'self' http: https: about:srcdoc blob: data:;`;
+    content = content.replace(/\{\{NONCE\}\}/g, nonce);
+    content = content.replace(/{{WEBVIEW_CSP_SOURCE}}/g, "'self'");
+    content = content.replace(/{{PLANNING_JS_URI}}/g, '/static/webview/planning.js');
+    content = content.replace(/{{SHARED_UTILS_URI}}/g, '/static/webview/sharedUtils.js');
+    content = content.replace(/{{MARKDOWN_EDITOR_URI}}/g, '/static/webview/markdownEditor.js');
+    content = content.replace(/{{GEIST_PIXEL_FONT_URI}}/g, '/static/designs/GeistPixel-Square.woff2');
+    content = content.replace(/{{HANKEN_FONT_URI}}/g, '/static/designs/HankenGrotesk-Variable.woff2');
+    const firstScript = `<script nonce="${nonce}" src="/static/webview/sharedUtils.js"></script>`;
+    content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', firstScript);
+    const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
+    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="planning" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
+    content = content.replace(/<body/, `<body ${bodyAttr}`);
+    content = applyThemeClass(content, themeClass);
+    return { html: content, csp };
+}
+
+export function getDesignHtml(repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult {
     const candidates = [
         path.join(repoRoot, 'dist', 'webview', 'design.html'),
         path.join(repoRoot, 'src', 'webview', 'design.html'),
@@ -176,12 +233,14 @@ export function getDesignHtml(repoRoot: string, workspaceRoot: string): PanelHtm
     content = content.replace(/{{HANKEN_FONT_URI}}/g, '/static/designs/HankenGrotesk-Variable.woff2');
     const firstScript = `<script nonce="${nonce}" src="/static/webview/sharedUtils.js"></script>`;
     content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', firstScript);
-    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="design" data-host-capabilities="${htmlEscapeJson(JSON.stringify(HOST_CAPABILITIES))}"`;
+    const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
+    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="design" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
     content = content.replace(/<body/, `<body ${bodyAttr}`);
+    content = applyThemeClass(content, themeClass);
     return { html: content, csp };
 }
 
-export function getSetupHtml(repoRoot: string, workspaceRoot: string): PanelHtmlResult {
+export function getSetupHtml(repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult {
     const candidates = [
         path.join(repoRoot, 'dist', 'webview', 'setup.html'),
         path.join(repoRoot, 'src', 'webview', 'setup.html'),
@@ -198,8 +257,10 @@ export function getSetupHtml(repoRoot: string, workspaceRoot: string): PanelHtml
         `<script src="/static/webview/sharedDefaults.js" nonce="${nonce}"></script>\n<script src="/static/webview/transport.js" nonce="${nonce}"></script>`);
     content = content.replace(/\{\{HANKEN_FONT_URI\}\}/g, '/static/designs/HankenGrotesk-Variable.woff2');
     content = content.replace(/\{\{GEIST_PIXEL_FONT_URI\}\}/g, '/static/designs/GeistPixel-Square.woff2');
-    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="setup" data-host-capabilities="${htmlEscapeJson(JSON.stringify(HOST_CAPABILITIES))}"`;
+    const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
+    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="setup" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
     content = content.replace(/<body/, `<body ${bodyAttr}`);
+    content = applyThemeClass(content, themeClass);
     return { html: content, csp };
 }
 
@@ -211,46 +272,34 @@ export interface PanelManifestEntry {
     enabled: boolean;
 }
 
-/**
- * Which panels have their verb dispatch wired in the current host. Board and
- * Project always ship a verb router in both hosts, so they are always enabled.
- * Design/Setup default enabled — the extension's LocalApiServer wires
- * `designVerb`/`setupVerb` to the providers. The standalone bootstrap passes
- * `false`: it serves their HTML but does NOT wire their verb routers, so every
- * action would 503. Marking them disabled keeps the shell honest — a disabled,
- * greyed, non-clickable icon instead of a dead panel that loads then 503s on
- * every action (the "reachable-but-not-host-agnostic" failure the Design/Setup
- * plans call out, and the App-Shell plan's "no dead icons" rule).
- */
 export interface PanelAvailability {
     design?: boolean;
     setup?: boolean;
+    planning?: boolean;
 }
 
-/**
- * Build the panel manifest for the shell's icon strip. Board + Project are
- * always enabled; Design/Setup reflect whether the host wired their verbs.
- */
 export function getPanelsManifest(availability?: PanelAvailability): PanelManifestEntry[] {
     const designEnabled = availability?.design !== false;
     const setupEnabled = availability?.setup !== false;
+    const planningEnabled = availability?.planning !== false;
+    const iconDir = '/static/icons';
     return [
-        { id: 'board', label: 'Board', icon: 'B', route: '/board', enabled: true },
-        { id: 'project', label: 'Project', icon: 'P', route: '/project', enabled: true },
-        { id: 'design', label: 'Design', icon: 'D', route: '/design', enabled: designEnabled },
-        { id: 'setup', label: 'Setup', icon: 'S', route: '/setup', enabled: setupEnabled },
+        { id: 'board', label: 'Board', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-78.png`, route: '/board', enabled: true },
+        { id: 'project', label: 'Project', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-24.png`, route: '/project', enabled: true },
+        { id: 'planning', label: 'Artifacts', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-42.png`, route: '/planning', enabled: planningEnabled },
+        { id: 'design', label: 'Design', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-90.png`, route: '/design', enabled: designEnabled },
+        { id: 'setup', label: 'Setup', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-55.png`, route: '/setup', enabled: setupEnabled },
     ];
 }
 
-/**
- * Returns the HTML for a registered panel by id.
- */
-export function getPanelHtmlById(id: string, repoRoot: string, workspaceRoot: string): PanelHtmlResult | null {
+export function getPanelHtmlById(id: string, repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult | null {
     switch (id) {
-        case 'board': return getBoardHtml(repoRoot, workspaceRoot);
-        case 'project': return getProjectHtml(repoRoot, workspaceRoot);
-        case 'design': return getDesignHtml(repoRoot, workspaceRoot);
-        case 'setup': return getSetupHtml(repoRoot, workspaceRoot);
+        case 'board': return getBoardHtml(repoRoot, workspaceRoot, capabilities, themeClass);
+        case 'project': return getProjectHtml(repoRoot, workspaceRoot, capabilities, themeClass);
+        case 'planning': return getPlanningHtml(repoRoot, workspaceRoot, capabilities, themeClass);
+        case 'design': return getDesignHtml(repoRoot, workspaceRoot, capabilities, themeClass);
+        case 'setup': return getSetupHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         default: return null;
     }
 }
+

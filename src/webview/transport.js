@@ -220,56 +220,54 @@
             const raw = document.body.dataset.hostCapabilities;
             if (!raw) { return; }
             const caps = JSON.parse(raw.replace(/&quot;/g, '"'));
-            if (caps.terminalDispatch !== false) { return; }
 
-            document.body.classList.add('host-terminal-dispatch-false');
-
-            const style = document.createElement('style');
-            style.textContent = `
+            if (caps.terminalDispatch === false) {
+                document.body.classList.add('host-terminal-dispatch-false');
+                const style = document.createElement('style');
+                style.textContent = `
 .host-terminal-dispatch-false #btn-autoban,
 .host-terminal-dispatch-false #btn-manager-pass,
 .host-terminal-dispatch-false #btn-cli-triggers,
-.host-terminal-dispatch-false #btn-create-worktree,
 .host-terminal-dispatch-false #btn-remote-control,
 .host-terminal-dispatch-false .autoban-timers-inline,
 .host-terminal-dispatch-false #btn-pause-autoban-timer,
 .host-terminal-dispatch-false #btn-reset-autoban-timer,
 .host-terminal-dispatch-false #clear-terminal-before-prompt-label,
-.host-terminal-dispatch-false .shared-tab-btn[data-tab="agents"],
-.host-terminal-dispatch-false .shared-tab-btn[data-tab="automation"],
-.host-terminal-dispatch-false .shared-tab-btn[data-tab="worktrees"],
-.host-terminal-dispatch-false #agents-tab-content,
-.host-terminal-dispatch-false #automation-tab-content,
-.host-terminal-dispatch-false #worktrees-tab-content,
 .host-terminal-dispatch-false button[data-action="julesSelected"],
-/* Project panel (data-panel="project"): the AI-builder verbs dispatch a prompt
-   into a host terminal (invokeConstitutionBuilder/Updater, invokeSystemBuilder,
-   invokePrdBuilder). In a no-terminal host they cannot fire, so hide the
-   "Build/Update via Planner" affordances. The sibling Copy Build/Update Prompt
-   buttons stay — they return the prompt in the HTTP body and copy client-side. */
+.host-terminal-dispatch-false button[data-action="moveSelected"],
+.host-terminal-dispatch-false button[data-action="moveAll"],
+.host-terminal-dispatch-false button[data-action="rePlanSelected"],
 .host-terminal-dispatch-false #btn-build-via-planner,
 .host-terminal-dispatch-false #btn-update-via-planner,
 .host-terminal-dispatch-false #btn-build-system,
-.host-terminal-dispatch-false #btn-build-prd-via-planner {
-    display: none !important;
-}
-/* Memo tab (relocated into Project panel): "Send to Planner" dispatches to a
-   planner terminal agent. In a no-terminal host it degrades to Copy Prompt
-   server-side, so hide the affordance — the Copy Prompt button stays. */
+.host-terminal-dispatch-false #btn-build-prd-via-planner,
 .host-terminal-dispatch-false #memo-send-btn {
     display: none !important;
 }
-/* NOTE: moveSelected / moveAll are NOT hidden. In a headless host they degrade
-   to plain column-advances (no CLI trigger fires) — that is board management,
-   which the host-adaptive UI keeps. The standalone kanbanVerb implements both,
-   so hiding them would orphan a live backend path. Copy-Prompt (promptSelected/
-   promptAll) remains the default advance affordance. */
 `;
-            document.head.appendChild(style);
+                document.head.appendChild(style);
+            }
+
+            if (caps.secretsEntry === false) {
+                document.body.classList.add('host-secrets-entry-false');
+                const style = document.createElement('style');
+                style.textContent = `
+.host-secrets-entry-false .secret-key-entry-row,
+.host-secrets-entry-false .secret-input-container,
+.host-secrets-entry-false .shared-tab-btn[data-tab="docs"],
+.host-secrets-entry-false .shared-tab-btn[data-tab="tickets"],
+.host-secrets-entry-false #docs-tab-content,
+.host-secrets-entry-false #tickets-tab-content {
+    display: none !important;
+}
+`;
+                document.head.appendChild(style);
+            }
         } catch (err) {
             console.warn('[transport] Capability gating failed:', err);
         }
     }
+
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', applyCapabilityGating);

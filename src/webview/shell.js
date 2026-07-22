@@ -51,9 +51,19 @@
         btn.dataset.panel = panel.id;
         btn.setAttribute('aria-label', panel.label || panel.id);
         if (panel.enabled === false) { btn.disabled = true; }
-        const glyph = document.createElement('span');
-        glyph.textContent = panel.icon || panel.id.charAt(0).toUpperCase();
-        btn.appendChild(glyph);
+        if (panel.icon && (panel.icon.startsWith('/') || panel.icon.includes('.'))) {
+            const img = document.createElement('img');
+            img.src = panel.icon;
+            img.alt = panel.label || panel.id;
+            img.style.width = '20px';
+            img.style.height = '20px';
+            img.style.objectFit = 'contain';
+            btn.appendChild(img);
+        } else {
+            const glyph = document.createElement('span');
+            glyph.textContent = panel.icon || panel.id.charAt(0).toUpperCase();
+            btn.appendChild(glyph);
+        }
         if (panel.label) {
             const label = document.createElement('span');
             label.className = 'strip-label';
@@ -65,6 +75,49 @@
             selectPanel(panel.id);
         });
         return btn;
+    }
+
+    function buildThemeToggle() {
+        const btn = document.createElement('button');
+        btn.className = 'strip-icon theme-toggle-btn';
+        btn.type = 'button';
+        btn.setAttribute('aria-label', 'Toggle Theme');
+        btn.style.marginTop = 'auto';
+        btn.textContent = '🎨';
+        const label = document.createElement('span');
+        label.className = 'strip-label';
+        label.textContent = 'Toggle Theme';
+        btn.appendChild(label);
+
+        btn.addEventListener('click', async () => {
+            const isClaudify = document.body.classList.contains('theme-claudify');
+            const newTheme = isClaudify ? 'afterburner' : 'claudify';
+            try {
+                await fetch('/setup/verb/setThemeSetting', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ theme: newTheme })
+                });
+            } catch (err) {
+                console.warn('[shell] Failed to persist theme change:', err);
+            }
+            applyThemeToAll(newTheme);
+        });
+        return btn;
+    }
+
+    function applyThemeToAll(themeName) {
+        const isClaudify = themeName === 'claudify';
+        if (isClaudify) {
+            document.body.className = 'theme-claudify kanban-icons-colour';
+        } else {
+            document.body.className = 'cyber-theme-enabled';
+        }
+        for (const [_, frame] of frames) {
+            try {
+                frame.contentWindow?.postMessage({ type: 'switchboardThemeChanged', theme: themeName }, '*');
+            } catch { /* ignore */ }
+        }
     }
 
     function buildFrame(panel) {
@@ -87,8 +140,6 @@
         }
         for (const panel of manifest) {
             if (panel.enabled === false) {
-                // Render a disabled icon so the strip is honest about what's
-                // configured-but-unavailable; never a dead button.
                 const icon = buildIcon(panel);
                 icons.set(panel.id, icon);
                 strip.appendChild(icon);
@@ -101,6 +152,10 @@
             strip.appendChild(icon);
             content.appendChild(frame);
         }
+
+        const themeBtn = buildThemeToggle();
+        strip.appendChild(themeBtn);
+
         const hash = window.location.hash.replace(/^#/, '');
         const initial = (hash && frames.has(hash)) ? hash : defaultPanelId(manifest);
         if (initial) { selectPanel(initial); }
@@ -122,7 +177,7 @@
             });
     }
 
-    // Cross-panel bridge: iframes post {type:'switchPanel', panel} to switch.
+    // Cross-panel bridge & theme sync
     window.addEventListener('message', (event) => {
         if (event.source === window) { return; }
         const data = event.data;
@@ -131,6 +186,8 @@
             if (frames.has(data.panel)) {
                 selectPanel(data.panel);
             }
+        } else if (data.type === 'switchboardThemeChanged') {
+            applyThemeToAll(data.theme);
         }
     });
 
@@ -148,3 +205,4 @@
         loadManifest();
     }
 })();
+

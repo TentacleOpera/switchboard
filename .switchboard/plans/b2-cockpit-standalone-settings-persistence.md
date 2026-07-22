@@ -19,6 +19,21 @@ In a standalone `npx switchboard` session, a setting changed in one panel (e.g. 
 
 Reproduced by the user: set claudify in Setup → go to Board → return to Setup → it's back to afterburner. Root cause: the standalone composition root (`src/standalone/bootstrap.ts`) constructs providers with **in-memory** `globalState`/`workspaceState` Mementos (`inMemoryMemento()`), and each browser panel is a **separate iframe that reloads** on navigation. globalState-backed settings (theme among them) live only in that process's memory and are re-read as defaults on each panel load — and even within one session, writes from the Setup iframe aren't observed by the Board iframe because there's no shared durable store. Config.json-backed settings (via `StandaloneHostPathConfigProvider`) DO persist; globalState-backed ones do not. Theme (`switchboard.theme.name`) is the visible casualty.
 
+## User Review Required
+- None — standalone-only fix.
+
+## Complexity Audit
+### Routine
+- File-backed Memento (read / hydrate-at-boot / write-through).
+### Complex / Risky
+- Two candidate stores (file-Memento vs config.json) — must pick ONE per setting or theme reads/writes split and the persistence bug returns.
+
+## Dependencies
+- Standalone-only; independent of the other subtasks (the keystone fixes persistence for the concurrent-with-editor case via real `vscode` config). Reads/writes the SAME store `themeBodyClass` / the theme verb use — coordinate with **Real Icons + Theming** on the theme source of truth.
+
+## Adversarial Synthesis
+**Risk Summary:** Key risk: splitting a setting across a file-Memento AND config.json would re-open the exact claudify→afterburner regression the user reported. Mitigation: single source of truth — route theme/visibility through the already-persistent config.json; reserve the file-Memento for genuinely globalState-only keys. Lowest priority (the keystone fixes the concurrent case).
+
 ## Proposed Changes
 
 ### `src/standalone/bootstrap.ts` — durable Memento
@@ -41,3 +56,7 @@ Reproduced by the user: set claudify in Setup → go to Board → return to Setu
 ### Automated
 - Unit-test `fileBackedMemento`: `update` then re-instantiate from the same path → `get` returns the written value; corrupt file → empty, no throw.
 - Standalone smoke: `POST /setup/verb/setTheme {claudify}` then `GET /board` HTML contains the `theme-claudify` body class (persisted read path).
+
+## Completion Report
+Implemented disk-backed Memento storage (`fileBackedMemento`) in `src/standalone/bootstrap.ts` targeting `.switchboard/standalone-state.json`. Persisted settings now survive iframe reloads and process restarts in standalone `npx` sessions. Files changed: `src/standalone/bootstrap.ts`. No issues encountered.
+

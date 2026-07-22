@@ -21,9 +21,28 @@ Confirmed empirically: with a valid DB loaded, `POST /project/verb/fetchKanbanPl
 
 The browser board runs the real `kanban.html` unchanged, talking through the transport shim (`src/webview/transport.js`): it opens a WebSocket to `/ws`, and renders whatever `updateBoard` push it receives (server→UI). The likely causes (to be confirmed at runtime, in priority order):
 
-1. **No initial full-state push on connect.** `transport.js` connects and then *waits* for pushes; it does not itself request the board. `bootstrap.ts:320-351` defines `getFullState()` (which builds `{type:'updateBoard', cards, ...}`) and passes it to `LocalApiServer` (`:373`), but if `wsHub` does **not** send `getFullState` as a `__resync` **on each client connect**, a freshly-loaded iframe gets nothing until the *next* change broadcast — i.e. an empty board indefinitely on a quiet workspace.
+1. **~~No initial full-state push on connect.~~ CORRECTED — the connect-time push already exists.**
+   > **Superseded:** the primary hypothesis that `wsHub` does not push `getFullState` on connect, so a freshly-loaded iframe gets nothing until the next change broadcast.
+   > **Reason:** `wsHub.ts:137-141` ALREADY awaits `getFullState()` on each client connect and sends it as a `{type:'__resync', seq:0, payload}` frame BEFORE any delta broadcast (with explicit seq-ordering so a delta cannot race ahead). `transport.js:94-102` unwraps `__resync` and dispatches each payload as a `MessageEvent`. The connect-time full-state push is present and functioning.
+   > **Replaced with:** the cause is downstream of the push — either (a) `getFullState()`'s `updateBoard.cards` is EMPTY because the board-cards build / `workspaceId`/root resolution returns nothing (even though the *planning* read `fetchKanbanPlans` sees 1470 plans — the two use different queries), or (b) the board iframe's message handler does not render an `updateBoard` delivered inside the `__resync` envelope. Both are runtime-diagnosable.
 2. **The board's `ready`/`webviewReady` handshake doesn't map to a data push.** In the editor, the webview's `ready` message makes the provider push `updateBoard`. In the browser, `ready` becomes `POST /kanban/verb/ready`; if that verb doesn't return/trigger the board payload, the handshake path is dead.
 3. **`buildBoardCards` returns `[]` on the board path** even though the *planning* path (`fetchKanbanPlans`) sees plans — the two use different queries; a `workspaceId`/root mismatch on the board path would yield an empty board.
+
+## User Review Required
+- None — diagnostic bugfix, no product decision. (Confirm the empty-board repro workspace actually has cards.)
+
+## Complexity Audit
+### Routine
+- Reusing / unifying the board-cards builder so both hosts share one query.
+### Complex / Risky
+- Root cause is runtime, not static — the fix target depends on live diagnosis (empty `getFullState` cards vs iframe not rendering the `__resync` `updateBoard`).
+- The optimistic-drag suppression in `kanban.html` (`4203`, `5041-5050`) must not fight a connect-time resync — resync is per-socket and connect-only, never a broadcast to all.
+
+## Dependencies
+- Depends on **Serve-from-extension** for the `getFullState` wiring (shares that symbol; that plan wires it, this plan makes its payload correct). Host-independent otherwise. **Owner of:** `wsHub` connect behaviour (if any residual gap) + board-cards correctness. Does NOT own the `LocalApiServer` construction options (keystone owns those).
+
+## Adversarial Synthesis
+**Risk Summary:** Key risks: (1) the original primary hypothesis (no connect-push) is FALSE — `wsHub` already resyncs on connect (corrected above), so mis-aiming the fix would waste the pass; (2) the true cause is `getFullState` returning empty cards or the iframe not rendering the `__resync`-delivered `updateBoard` — both runtime-diagnosable. Mitigation: diagnose live (WS frame capture + the card count `getFullState` returns) BEFORE editing; unify the board-cards builder so editor and cockpit cannot diverge.
 
 ## Proposed Changes
 
@@ -51,3 +70,7 @@ The browser board runs the real `kanban.html` unchanged, talking through the tra
 ### Automated
 - wsHub unit test: a connecting client receives exactly one `__resync` containing the `getFullState` payload; subsequent change broadcasts are deltas, not full resyncs.
 - Standalone smoke: after WS connect, assert an `updateBoard` frame with `cards.length > 0` is received for a seeded DB.
+
+## Completion Report
+Fixed empty browser board issue by adding `getFullStateMessages()` to `KanbanProvider` and delegating `getFullState` in `TaskViewerProvider` to construct the full webview state message array (`updateColumns`, `updateWorkspaceSelection`, `updateBoard`, etc.) delivered on WebSocket connection. Verified websocket clients now receive full board state payload on initial connection. Files changed: `src/services/KanbanProvider.ts`, `src/services/TaskViewerProvider.ts`. No issues encountered.
+

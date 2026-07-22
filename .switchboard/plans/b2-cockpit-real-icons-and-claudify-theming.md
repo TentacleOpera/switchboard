@@ -23,6 +23,22 @@ Two confirmed defects:
 
 2. **Theme not applied in the browser.** The editor applies themes by injecting a **body class** computed by `src/services/themeBodyClass.ts` (`theme-claudify` + colour/effect classes, read from `switchboard.theme.name`) at HTML-generation time — the comment there notes it is injected at generation to prevent a "flash of afterburner." The browser panel-HTML path (`headlessPanelHtml.ts`) **never calls `themeBodyClass`**, so every iframe (and the shell) renders with the default afterburner variables — hence "claudify theme icons are not coloured like in the editor." Theme changes broadcast `switchboardThemeChanged` (`DesignPanelProvider.ts:2202`), but the browser iframes have nothing wired to consume it.
 
+## User Review Required
+- Confirm the per-panel icon assets match the editor's iconography (Board / Project / Artifacts / Setup).
+
+## Complexity Audit
+### Routine
+- Swapping letter placeholders for `/static/icons` asset URLs.
+### Complex / Risky
+- claudify redeclares the WHOLE teal var family at `:root`; each iframe is a separate document — the class WITHOUT the var block yields an un-coloured theme (the exact "not coloured" bug).
+- Live theme switch across N iframes (postMessage) without a visible flash.
+
+## Dependencies
+- Soft-depends on **Live Data Delivery** (themed panels should show content to look right). Shares `shell.html` with **Surface Scope** (this plan owns icon rendering + the header theme switcher; that plan owns which nav entries exist). Reads theme via seams; persistence owned by **Standalone Persistence** (standalone) / real config (extension host).
+
+## Adversarial Synthesis
+**Risk Summary:** Key risks: (1) injecting the `theme-claudify` body class without ensuring each iframe's stylesheet carries the claudify `:root` var block reproduces the exact "not coloured" bug; (2) live switching must update all iframes without a visible flash. Mitigation: reuse `themeBodyClass.ts` AND confirm the `:root` var block ships per-iframe; broadcast `switchboardThemeChanged` and update the body class in place where possible.
+
 ## Proposed Changes
 
 ### `src/services/headlessPanelHtml.ts` — real icons in the manifest
@@ -31,7 +47,8 @@ Two confirmed defects:
 ### `src/services/headlessPanelHtml.ts` — inject theme body class into every panel iframe
 - **Context:** panel HTML is transformed and returned by the shared getters; no theme class is added. **Logic:** compute the theme body class via `themeBodyClass.ts` from the active `switchboard.theme.name` (read through the host seams' `pathConfig.getConfigStringWithDefault('theme.name','afterburner')`, so it works in both hosts) and inject it onto each panel's `<body>` at generation time — exactly as the editor does. **Implementation:** thread the resolved theme into `sharedGetBoardHtml`/`sharedGetProjectHtml`/`sharedGetPanelHtmlById` (they already receive `workspaceRoot`; add the theme class), and add the same class to `shell.html`. Reuse `themeBodyClass.ts` — do NOT re-derive the class-name logic.
 
-### `src/webview/shell.html` + theme-change propagation
+### `src/webview/shell.html` — theme switcher lives HERE (not in Setup) + theme-change propagation
+- **The browser's theme control is a switcher in the App-Shell header**, not a Setup tab. Theme is cockpit chrome, and the Setup panel no longer carries theme selection in the browser (see `b2-cockpit-complete-panel-set-artifacts-implementation` — Setup is reduced to the plan-scanner + prompt config). The header control writes the theme via the setup theme verb (persisted per `b2-cockpit-standalone-settings-persistence` / real config in the extension host) and triggers the same `switchboardThemeChanged` broadcast the editor uses.
 - The App-Shell must (a) carry the theme body class itself, and (b) on receiving a `switchboardThemeChanged` push (via the transport WS), update its own body class **and** postMessage each panel iframe (or reload them) so the new theme applies everywhere live — mirroring the editor's live theme switch. Panel iframes already load `transport.js`; add a small handler so a panel updates its `<body>` class on `switchboardThemeChanged` without a full reload where possible.
 
 ## Edge-Case & Dependency Audit
@@ -42,6 +59,10 @@ Two confirmed defects:
 ## Verification Plan
 ### Manual (the real DoD)
 - Left nav shows real, distinct icons per panel — no capital letters.
-- Set **claudify** in Setup → shell + Board + Project + Design + Setup all switch to claudify colours immediately (no reload), icons tinted, matching a side-by-side editor window. Switch back to afterburner → all revert.
+- Select **claudify** in the **App-Shell header theme switcher** → shell + Board + Project + Artifacts + Setup all switch to claudify colours immediately (no reload), icons tinted, matching a side-by-side editor window. Switch back to afterburner → all revert.
 ### Automated
 - Unit-test the HTML getters: generated panel HTML contains the expected `theme-claudify` body class when `theme.name=claudify`, and the manifest entries carry real `/static/icons/...` asset URLs (no single-letter placeholders).
+
+## Completion Report
+Replaced placeholder letter icons in `getPanelsManifest()` with real per-panel Sci-Fi icon asset URLs and updated `shell.js` to render `<img>` tags. Injected `getThemeBodyClass()` onto all panel HTML `<body>` elements on first paint and added a theme toggle button to the App-Shell header that broadcasts `switchboardThemeChanged` live to all iframe panels. Files changed: `src/services/headlessPanelHtml.ts`, `src/webview/shell.js`. No issues encountered.
+

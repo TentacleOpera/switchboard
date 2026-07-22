@@ -75,6 +75,10 @@
         "title": "Switchboard: Open KANBAN"
       },
       {
+        "command": "switchboard.openInBrowser",
+        "title": "Switchboard: Open in Browser"
+      },
+      {
         "command": "switchboard.openSetupPanel",
         "title": "Switchboard: Open Setup"
       },

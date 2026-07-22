@@ -1112,6 +1112,22 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(openMemoDisposable);
 
+    const openInBrowserDisposable = registerSwitchboardCommand('switchboard.openInBrowser', async () => {
+        if (!activeTaskViewerProvider) {
+            vscode.window.showErrorMessage('Switchboard API server not available.');
+            return;
+        }
+        const port = activeTaskViewerProvider.getLocalApiServerPort();
+        if (!port) {
+            vscode.window.showErrorMessage('Switchboard API server is not running.');
+            return;
+        }
+        const token = activeTaskViewerProvider.mintBrowserToken();
+        const url = `http://127.0.0.1:${port}/?token=${token}`;
+        await vscode.env.openExternal(vscode.Uri.parse(url));
+    });
+    context.subscriptions.push(openInBrowserDisposable);
+
     // Shared cache service factory — one instance per workspace root
     const _cacheServiceInstances = new Map<string, PlanningPanelCacheService>();
     const getCacheService = (root: string): PlanningPanelCacheService => {

@@ -15,10 +15,10 @@ Generalize Switchboard's only self-owned scheduler (the Comms Monitor) into a te
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Scheduler Job Data Model & Comms Config Migration](../plans/scheduler-job-data-model.md) — **LEAD CODED**
-- [ ] [Generalize the Comms Monitor Loop into a Terminal-Agnostic Local Scheduler Engine](../plans/scheduler-local-execution-engine.md) — **LEAD CODED**
-- [ ] [Scheduler Prompt Presets & External-Target (Antigravity/Cloud) Handoff](../plans/scheduler-prompt-presets-external-targets.md) — **LEAD CODED**
-- [ ] [Scheduler UI in the Automation Tab; Retire the Standalone Comms Tab](../plans/scheduler-ui-replace-comms-tab.md) — **LEAD CODED**
+- [ ] [Scheduler Job Data Model & Comms Config Migration](../plans/scheduler-job-data-model.md) — **CODE REVIEWED**
+- [ ] [Generalize the Comms Monitor Loop into a Terminal-Agnostic Local Scheduler Engine](../plans/scheduler-local-execution-engine.md) — **CODE REVIEWED**
+- [ ] [Scheduler Prompt Presets & External-Target (Antigravity/Cloud) Handoff](../plans/scheduler-prompt-presets-external-targets.md) — **CODE REVIEWED**
+- [ ] [Scheduler UI in the Automation Tab; Retire the Standalone Comms Tab](../plans/scheduler-ui-replace-comms-tab.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

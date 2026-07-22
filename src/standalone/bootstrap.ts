@@ -419,23 +419,51 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // which would otherwise derive an empty workspace root from the shim's
     // `workspaceFolders` and bail. `handleServiceVerb` then dispatches read/
     // query arms over HTTP with no `vscode` process reachable.
-    const inMemoryMemento = () => {
+    const fileBackedMemento = (filePath: string) => {
         const store = new Map<string, any>();
+        try {
+            if (fs.existsSync(filePath)) {
+                const raw = fs.readFileSync(filePath, 'utf8');
+                const parsed = JSON.parse(raw);
+                if (parsed && typeof parsed === 'object') {
+                    for (const [k, v] of Object.entries(parsed)) {
+                        store.set(k, v);
+                    }
+                }
+            }
+        } catch { /* start empty */ }
+
+        const persist = () => {
+            try {
+                const dir = path.dirname(filePath);
+                if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }); }
+                fs.writeFileSync(filePath, JSON.stringify(Object.fromEntries(store.entries()), null, 2), 'utf8');
+            } catch (e) {
+                console.error(`[fileBackedMemento] Failed writing to ${filePath}:`, e);
+            }
+        };
+
         return {
             get: <T>(key: string, defaultValue?: T): T | undefined =>
                 store.has(key) ? store.get(key) as T : defaultValue,
-            update: async (key: string, value: any): Promise<void> => { store.set(key, value); },
+            update: async (key: string, value: any): Promise<void> => {
+                store.set(key, value);
+                persist();
+            },
             keys: () => Array.from(store.keys()),
         };
     };
+
+    const standaloneStateFile = path.join(switchboardDir, 'standalone-state.json');
     const headlessContext = {
-        globalState: inMemoryMemento(),
-        workspaceState: inMemoryMemento(),
+        globalState: fileBackedMemento(standaloneStateFile),
+        workspaceState: fileBackedMemento(standaloneStateFile),
         secrets: secretStorage as any,
         extensionUri: { fsPath: repoRoot } as any,
         extensionPath: repoRoot,
         subscriptions: [] as any[],
     } as any;
+
 
     const headlessSeams: HostSeams = createVscodeHostSeams(workspaceRoot, secretStorage as any);
     const headlessBroadcaster = new BroadcastHub({ webview: null, apiServer: null });

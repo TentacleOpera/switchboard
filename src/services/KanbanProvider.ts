@@ -1909,6 +1909,34 @@ export class KanbanProvider implements vscode.Disposable {
             this.postMessage({ type: 'updateAgentNames', agentNames });
             this.postMessage({ type: 'visibleAgents', agents: visibleAgents });
 
+    public async getFullStateMessages(wsRoot?: string): Promise<any[]> {
+        const root = wsRoot || this.getCurrentWorkspaceRoot();
+        if (!root) return [];
+        try {
+            const db = await this.getKanbanDb(root);
+            if (!db) return [];
+            const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+            if (!wsId) return [];
+            const cards = await this._buildBoardCardsForWorkspace(root, db, wsId);
+            const projects = await db.getProjects(wsId);
+            const allWorktrees = await db.getWorktrees();
+            const featureWorktrees = allWorktrees
+                .filter(w => w.feature_id !== null && w.status === 'active')
+                .reduce((acc, w) => { acc[w.feature_id!] = { branch: w.branch, path: w.path, id: w.id }; return acc; }, {} as Record<string, { branch: string; path: string; id: number }>);
+            const workspaceItems = [{ value: root, label: path.basename(root) }];
+            const allWorkspaceProjects: Record<string, string[]> = { [root]: projects };
+            return [
+                { type: 'updateColumns', columns: DEFAULT_KANBAN_COLUMNS },
+                { type: 'updateWorkspaceSelection', workspaceRoot: root, workspaces: workspaceItems, activeFilter: null, projectFilter: this._projectFilter ?? null, projects, allWorkspaceProjects, controlPlaneMode: 'none', controlPlaneRoot: null, effectiveControlPlaneRoot: root, explicitControlPlaneRoot: root, pendingCandidate: null, repoScopeFilter: null, projectContextEnabled: false },
+                { type: 'cliTriggersState', enabled: this._cliTriggersEnabled },
+                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig, featureWorktrees },
+            ];
+        } catch (err) {
+            console.error('[KanbanProvider] getFullStateMessages error:', err);
+            return [];
+        }
+    }
+
 
 
             const effectiveModes: Record<string, 'cli' | 'prompt' | 'disabled'> = {};
@@ -5243,7 +5271,14 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             const agent = job.sourceConfig?.agent || job.agent || 'coder';
             const column = job.sourceConfig?.column || job.column || 'CREATED';
             const batchSize = job.sourceConfig?.batchSize ?? job.batchSize;
-            const result = await this._buildBoardBatchPromptCore(agent, workspaceRoot, column, typeof batchSize === 'number' ? batchSize : undefined);
+            // Default to batchSize=1 when unspecified. Without this, the core
+            // builder falls into the non-batch schedulingBlock which hardcodes
+            // "You are running on a scheduled Antigravity timer" — wrong for
+            // cloud or local-terminal targets. The batch path (batchBlock) is
+            // target-agnostic. The legacy antigravityPrompt shim still passes
+            // undefined to preserve byte-identical backward-compat output.
+            const effectiveBatch = typeof batchSize === 'number' ? batchSize : 1;
+            const result = await this._buildBoardBatchPromptCore(agent, workspaceRoot, column, effectiveBatch);
             body = result.prompt;
             error = result.error;
         } else if (source === 'reconcile') {
