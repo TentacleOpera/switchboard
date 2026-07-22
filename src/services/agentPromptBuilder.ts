@@ -1172,8 +1172,24 @@ export function buildKanbanBatchPrompt(
 3. Stage 2 (Balanced): synthesize Stage 1 into actionable fixes — what to keep, what to fix now, what can defer.
 4. Apply code fixes for valid CRITICAL/MAJOR findings.
 5. Run verification checks (typecheck/tests as applicable) and include results, unless specified otherwise in this prompt.
-6. Update the original plan file with fixed items, files changed, validation results, and remaining risks. Do NOT truncate, summarize, or delete existing implementation steps.
-7. End with a brief structured summary: list findings by severity with file:line references, fixes applied, and remaining risks. No prose re-encapsulation of what Stage 2 already covered.
+6. Gate-wiring audit: for every automated check named in the plan's
+   \`### Automated\` verification subsection, verify it is actually invoked by CI
+   (grep \`.github/workflows/\`, \`package.json\` aggregate scripts, or equivalent
+   gate wiring) — not just defined. A check that is defined in \`package.json\`
+   but not invoked by CI is a MAJOR finding: it is the exact "green while
+   incomplete" hole. Name the check, where it is defined, and where (if anywhere)
+   it is invoked. This step is static analysis — it applies even when
+   skip-tests/skip-compilation directives are active.
+7. Skip-tests disclosure: if this prompt includes a SKIP TESTS or SKIP
+   COMPILATION directive, you MUST state in your review findings:
+   "Verification was static-only — the plan's automated checks were not
+   executed in this review pass." The review verdict is provisional: the card
+   may move to CODE REVIEWED, but the findings must note that the
+   discriminating checks were not run and a subsequent pass with tests enabled
+   is needed for full confidence. Do not omit this disclosure even if all
+   other findings are clean.
+8. Update the original plan file with fixed items, files changed, validation results, and remaining risks. Do NOT truncate, summarize, or delete existing implementation steps.
+9. End with a brief structured summary: list findings by severity with file:line references, fixes applied, and remaining risks. No prose re-encapsulation of what Stage 2 already covered.
 
 CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced synthesis, the code fixes, and the plan update all in one continuous response.`;
 

@@ -307,3 +307,9 @@ This is sufficient — no dedicated cancel button on the strip-icon is needed. T
 ---
 
 **Recommendation:** Complexity 4 → **Send to Coder**.
+
+---
+
+## Completion Report
+
+Implemented the context-sensitive merge mode for the kanban `btn-create-worktree` strip-icon in `src/webview/kanban.html` (single-file change, no backend/verb/schema edits). Changes: (1) added module-scoped `mergePendingWorktreeId` state variable; (2) added `.merge-mode` CSS rules for afterburner (yellow) and claudify (Claude-orange tint) themes near the existing claudify overrides; (3) rewrote `updateCreateWorktreeButton()` with a 4-branch mode-resolution (merge-pending → feature-merge → project-merge → create/disabled) using presence-based worktree lookup mirroring `recomputeWorktreeIndicator` exactly (no `status` field); (4) added a merge-mode branch at the top of the click handler that sets `mergePendingWorktreeId` optimistically before posting via the existing `copyWorktreeMergePrompt` helper; (5) added a parallel strip-icon path to the `mergePromptReady` handler guarded by `classList.contains('merge-mode')` AND worktree-id match (so it can't collide with the Worktrees-tab `data-wt-id` path); (6) extended the `worktreeConfig` handler to clear `mergePendingWorktreeId` when the worktree leaves the list. Red-team fix applied: the strip-icon `mergePromptReady` path is also guarded by `String(msg.worktreeId) === stripBtn.dataset.mergeWorktreeId` to prevent a Worktrees-tab response from mistakenly driving the strip-icon's tooltip/clipboard. No issues encountered; verification is manual click-through per the plan (compilation/tests skipped per session directives).

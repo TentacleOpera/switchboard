@@ -109,9 +109,28 @@ const headlessReject = (name: string) => Promise.reject(new Error(
     `via the StandaloneHostSecrets file store.`
 ));
 
+// ─── Terminal (headless: createTerminal rejects; type-only otherwise) ────────
+export interface Terminal {
+    readonly name: string;
+    sendText(text: string, addNewLine?: boolean): void;
+    show(preserveFocus?: boolean): void;
+    hide(): void;
+    dispose(): void;
+    readonly exitStatus?: { code: number | undefined };
+}
+
 export namespace window {
     export const onDidChangeActiveTextEditor: Event<any> = () => ({ dispose() {} });
     export const onDidChangeVisibleTextEditors: Event<any[]> = () => ({ dispose() {} });
+    export const onDidOpenTerminal: Event<Terminal> = () => ({ dispose() {} });
+    export const onDidCloseTerminal: Event<Terminal> = () => ({ dispose() {} });
+    // No active terminal headless; dispatch verbs that reach createTerminal fail
+    // with a clear error instead of `undefined is not a function`.
+    export const activeTerminal: Terminal | undefined = undefined;
+    export const terminals: readonly Terminal[] = [];
+    export function createTerminal(_options?: any): Terminal {
+        throw new Error('vscode.window.createTerminal is not available in the headless standalone host; dispatch verbs are not supported over npx (B3).');
+    }
     export async function showInputBox(_options?: any): Promise<string | undefined> { return headlessReject('showInputBox'); }
     export async function showQuickPick(_items: any, _options?: any): Promise<any> { return headlessReject('showQuickPick'); }
     export async function showInformationMessage(_message: string, ..._items: any[]): Promise<any> { return undefined; }

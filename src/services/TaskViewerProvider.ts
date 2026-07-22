@@ -341,6 +341,24 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return this._hostSeams;
     }
 
+    /**
+     * Headless verb-serving init for the standalone (`npx`) host. The extension
+     * host registers `_messageListener` inside `resolveWebviewView` (sidebar
+     * mount); the standalone host has no sidebar, so it calls this instead to
+     * register the listener + seam/broadcaster bundle without spinning up the
+     * webview or the heavy deferred constructor init. After this call,
+     * `handleServiceVerb` dispatches read/query verbs over HTTP with no
+     * `vscode` process reachable. Dispatch verbs that need a real terminal
+     * still fail with a clear headless error (B3).
+     */
+    public initHeadlessVerbServing(seams: HostSeams, broadcaster: BroadcastHub): void {
+        this._hostSeams = seams;
+        this._broadcaster = broadcaster;
+        if (!this._messageListener) {
+            this._messageListener = this._createMessageListener();
+        }
+    }
+
     private _hostSeams?: HostSeams;
     private _broadcaster?: BroadcastHub;
     private _messageListener?: (message: any) => Promise<any>;
@@ -10666,7 +10684,20 @@ Each plan file must include:
         webviewView.webview.onDidReceiveMessage(async (data) => {
             return await this._handleMessage(data);
         });
-        this._messageListener = (async (data) => {
+        this._messageListener = this._createMessageListener();
+    }
+
+    /**
+     * Build the verb/message listener that `_handleMessage` delegates to. The
+     * listener is a self-contained async switch over `data.type` — it does not
+     * depend on a live webview (pushes go through `_broadcaster`, which no-ops
+     * when no webview/WS clients are attached). Extracted from `resolveWebviewView`
+     * so the standalone (`npx`) host can register it for verb-serving without
+     * spinning up the sidebar webview + heavy deferred init — call
+     * `initHeadlessVerbServing()` after construction.
+     */
+    private _createMessageListener(): (message: any) => Promise<any> {
+        return (async (data) => {
             try {
                 switch (data.type) {
                     case 'ready':

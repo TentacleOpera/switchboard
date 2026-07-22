@@ -30,6 +30,27 @@ async function run() {
         'Expected reviewer prompt to include Grumpy adversarial critique instructions.'
     );
 
+    // Prompt-content presence tests (not behavior tests) — guard against the
+    // gate-wiring audit and skip-tests disclosure steps being silently dropped
+    // from DEFAULT_REVIEWER_BASE_INSTRUCTIONS. These assert text presence in
+    // the builder source, not that the reviewer actually acts on the steps.
+    assert.ok(
+        builderSource.includes('Gate-wiring audit: for every automated check named in the plan'),
+        'Expected reviewer base instructions to include the gate-wiring audit step.'
+    );
+    assert.ok(
+        builderSource.includes('verify it is actually invoked by CI'),
+        'Expected gate-wiring audit step to require CI invocation verification.'
+    );
+    assert.ok(
+        builderSource.includes('Skip-tests disclosure: if this prompt includes a SKIP TESTS or SKIP'),
+        'Expected reviewer base instructions to include the skip-tests disclosure step.'
+    );
+    assert.ok(
+        builderSource.includes('Verification was static-only'),
+        'Expected skip-tests disclosure step to state the static-only constraint.'
+    );
+
     console.log('autoban reviewer prompt regression test passed');
 }
 

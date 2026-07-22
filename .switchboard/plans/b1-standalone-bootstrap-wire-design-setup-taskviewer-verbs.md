@@ -73,3 +73,9 @@ The good news — the server side is already built: `LocalApiServer` declares th
 - `npx` (dev build) → shell shows Design/Setup panels live (not greyed); a Design/Setup/TaskViewer verb round-trips over HTTP with no `vscode` process.
 - Setup token save → get round-trip works against `StandaloneHostSecrets`.
 - A non-memo Project-panel verb no longer returns `{ note: 'not fully wired' }`.
+
+---
+
+## Completion Report
+
+Implemented the Layer-2 standalone wiring so `npx switchboard` constructs the Design/Setup/TaskViewer/Planning providers headlessly and routes their verbs through `LocalApiServer` (no 503s). Files changed: `src/standalone/vscodeShim.ts` (added `Terminal` type + `createTerminal`/`activeTerminal`/`terminals` headless-reject surfaces so dispatch paths fail loudly instead of `undefined is not a function`); `src/services/TaskViewerProvider.ts` (extracted the inline `_messageListener` assignment in `resolveWebviewView` into a new `_createMessageListener()` method plus a public `initHeadlessVerbServing(seams, broadcaster)` entry point, so the listener can be registered without spinning up the sidebar webview); `src/standalone/bootstrap.ts` (construct the four providers with an in-memory `ExtensionContext` + `createVscodeHostSeams` bundle over `StandaloneHostSecrets`/the vscode shim, inject `_hostSeams`/`_broadcaster`, wire `designVerb`/`setupVerb`/`taskViewerVerb` into the `LocalApiServer` options, flip `getPanelsManifest` to `{design:true, setup:true}`, rework `planningVerb` to delegate non-memo verbs to `PlanningPanelProvider.handleServiceVerb` while preserving the headless memo special-cases, and call `setApiServer`/`dispose` on the new providers). No issues encountered; per the task directives compilation and automated tests were skipped, so a `npm run compile-tests` + a standalone smoke (`POST /{design,setup,taskViewer}/verb/<readVerb>` → 200) should be run before marking Layer-2 done.

@@ -65,6 +65,32 @@
         body.theme-claudify .worktree-primary-btn { background: color-mix(in srgb, #D97757 12%, transparent); }
         body.theme-claudify .worktree-primary-btn:hover:not(:disabled) { background: color-mix(in srgb, #D97757 25%, transparent); }
 
+        /* ── Create Worktree strip-icon: merge mode (worktree already exists for context) ── */
+        /* Afterburner (default theme): yellow */
+        #btn-create-worktree.merge-mode {
+            background: rgba(255, 204, 0, 0.15);
+            border-color: #ffcc00;
+        }
+        #btn-create-worktree.merge-mode:hover:not(:disabled) {
+            background: rgba(255, 204, 0, 0.25);
+        }
+        /* Optional: tint the icon */
+        #btn-create-worktree.merge-mode img {
+            filter: sepia(1) saturate(5) hue-rotate(5deg);
+        }
+
+        /* Claudify theme: Claude-orange tint (matches existing .worktree-primary-btn claudify override) */
+        body.theme-claudify #btn-create-worktree.merge-mode {
+            background: color-mix(in srgb, #D97757 18%, transparent);
+            border-color: color-mix(in srgb, #D97757 50%, transparent);
+        }
+        body.theme-claudify #btn-create-worktree.merge-mode:hover:not(:disabled) {
+            background: color-mix(in srgb, #D97757 30%, transparent);
+        }
+        body.theme-claudify #btn-create-worktree.merge-mode img {
+            filter: brightness(0) invert(35%) sepia(1) saturate(3) hue-rotate(340deg);
+        }
+
         /* Claudify: avoid afterburner's glowing coloured icons. The teal-tinted PNGs are knocked
            to black (brightness(0)) then inverted to a flat neutral GREY at rest and on hover.
            Terracotta appears ONLY during the click flash (.flash is added for 0.3s by flashIconBtn
@@ -4133,6 +4159,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             .map(col => col.id);
         let currentCards = [];
         let currentFeatureWorktrees = {};
+        let mergePendingWorktreeId = null; // set when merge prompt copied from strip-icon; cleared on cleanup completion
         let lastAgentNames = {};
         let cliTriggersEnabled = true;
         let dynamicComplexityRoutingEnabled = true;
@@ -4238,10 +4265,26 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         document.getElementById('btn-create-worktree')?.addEventListener('click', () => {
             const btn = document.getElementById('btn-create-worktree');
-            if (btn) {
+            if (!btn || btn.disabled) return;
+
+            // Merge mode: copy the merge-and-cleanup prompt.
+            // The strip-icon carries data-merge-worktree-id (NEVER data-wt-id) so the
+            // mergePromptReady handler's button[data-wt-id=...] path (Worktrees tab) and
+            // this strip-icon path cannot collide.
+            const mergeWtId = btn.dataset.mergeWorktreeId;
+            if (btn.classList.contains('merge-mode') && mergeWtId) {
+                // Set optimistically BEFORE posting so intermediate updateCreateWorktreeButton()
+                // re-evals (from updateBoard / worktreeConfig) keep the button disabled.
+                mergePendingWorktreeId = Number(mergeWtId);
                 btn.disabled = true;
-                setTimeout(() => { updateCreateWorktreeButton(); }, 5000);
+                btn.setAttribute('data-tooltip', 'Copying merge prompt…');
+                copyWorktreeMergePrompt(Number(mergeWtId)); // existing helper
+                return;
             }
+
+            // Create mode: existing behavior (5s debounce preserved here only).
+            btn.disabled = true;
+            setTimeout(() => { updateCreateWorktreeButton(); }, 5000);
 
             const size = selectedCards.size;
             if (size === 0) {
@@ -5852,34 +5895,82 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const btn = document.getElementById('btn-create-worktree');
             if (!btn) return;
 
+            const worktrees = (lastWorktreeConfig && lastWorktreeConfig.worktrees) || [];
+
+            // 1. Merge-pending: a merge prompt was copied from the strip-icon and we are
+            //    awaiting worktree cleanup. Stay disabled until the worktreeConfig handler
+            //    clears mergePendingWorktreeId (when the worktree leaves the list).
+            if (mergePendingWorktreeId !== null) {
+                btn.classList.add('merge-mode');
+                btn.disabled = true;
+                btn.setAttribute('data-tooltip', 'Merge prompt copied — awaiting worktree cleanup (cancel via Worktrees tab)');
+                btn.title = '';
+                // Preserve data-merge-worktree-id so the click handler / mergePromptReady path
+                // can still identify the worktree if needed.
+                return;
+            }
+
+            const clearMergeMode = () => {
+                btn.classList.remove('merge-mode');
+                delete btn.dataset.mergeWorktreeId;
+            };
+
             const size = selectedCards.size;
+
+            // 2. One feature selected + that feature has a worktree → merge mode.
+            if (size === 1) {
+                const [pid, val] = Array.from(selectedCards.entries())[0];
+                if (val && val.isFeature) {
+                    // Presence-based lookup mirroring recomputeWorktreeIndicator exactly
+                    // (no status field on worktree objects — list membership IS the active signal).
+                    const fromMap = currentFeatureWorktrees[pid];
+                    const fromList = worktrees.find(w => String(w.featureId) === String(pid));
+                    const wt = fromMap || fromList;
+                    if (wt) {
+                        btn.classList.add('merge-mode');
+                        btn.disabled = false;
+                        btn.dataset.mergeWorktreeId = wt.id != null ? String(wt.id) : '';
+                        btn.setAttribute('data-tooltip', 'Merge & clean up worktree for this feature');
+                        btn.title = '';
+                        return;
+                    }
+                    // No worktree → create mode (existing behavior).
+                    clearMergeMode();
+                    btn.disabled = false;
+                    btn.setAttribute('data-tooltip', 'Create a worktree for this feature');
+                    btn.title = '';
+                    return;
+                }
+                // Non-feature selected → disabled (existing behavior).
+                clearMergeMode();
+                btn.disabled = true;
+                btn.setAttribute('data-tooltip', 'Only feature cards can have worktrees');
+                return;
+            }
+
+            // 3. Nothing selected + active project filter has a worktree → merge mode.
             if (size === 0) {
+                if (activeProjectFilter && activeProjectFilter !== '__unassigned__') {
+                    const projWt = worktrees.find(w => w.project && w.project === activeProjectFilter);
+                    if (projWt) {
+                        btn.classList.add('merge-mode');
+                        btn.disabled = false;
+                        btn.dataset.mergeWorktreeId = projWt.id != null ? String(projWt.id) : '';
+                        btn.setAttribute('data-tooltip', `Merge & clean up worktree for ${activeProjectFilter}`);
+                        btn.title = '';
+                        return;
+                    }
+                }
+                // No project worktree → create mode (existing behavior).
+                clearMergeMode();
                 btn.disabled = false;
                 btn.setAttribute('data-tooltip', 'Create a worktree for the active project / workspace');
                 btn.title = '';
                 return;
             }
 
-            if (size === 1) {
-                const [pid, val] = Array.from(selectedCards.entries())[0];
-                if (val && val.isFeature) {
-                    const hasWorktree = currentFeatureWorktrees[pid] || 
-                                       ((lastWorktreeConfig && lastWorktreeConfig.worktrees) || []).some(w => String(w.featureId) === String(pid));
-                    if (hasWorktree) {
-                        btn.disabled = true;
-                        btn.setAttribute('data-tooltip', 'Feature already has a worktree');
-                    } else {
-                        btn.disabled = false;
-                        btn.setAttribute('data-tooltip', 'Create a worktree for this feature');
-                        btn.title = '';
-                    }
-                } else {
-                    btn.disabled = true;
-                    btn.setAttribute('data-tooltip', 'Only feature cards can have worktrees');
-                }
-                return;
-            }
-
+            // 4. 2+ selected → disabled (existing behavior).
+            clearMergeMode();
             btn.disabled = true;
             btn.setAttribute('data-tooltip', 'Select a single feature to create its worktree');
         }
@@ -6278,24 +6369,39 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
 
                 const nextColId = getNextColumn(sourceColumn);
-                if (nextColId) {
-                    const nextDef = columnDefinitions.find(d => d.id === nextColId);
-                    if (nextDef) {
-                        const isCustom = nextDef.kind === 'custom-user' || nextDef.kind === 'custom-agent';
-                        if (isCustom) {
-                            copyLabel = 'Copy advance prompt';
-                        } else if (nextDef.role === 'planner' || nextDef.id === 'PLAN REVIEWED') {
-                            copyLabel = 'Copy planning prompt';
-                        } else if (['lead', 'coder', 'intern'].includes(nextDef.role)) {
-                            copyLabel = 'Copy coder prompt';
-                        } else if (nextDef.role === 'reviewer' || nextDef.id === 'CODE REVIEWED') {
-                            copyLabel = 'Copy review prompt';
-                        } else {
-                            copyLabel = 'Copy advance prompt';
-                        }
+                const nextDef = nextColId ? columnDefinitions.find(d => d.id === nextColId) : null;
+                // Derive the label only when there is an actionable next column. The button
+                // emission below is gated separately on the same condition so a terminal next
+                // (COMPLETED) suppresses the button entirely. The label switch is kept inline
+                // to preserve the regression-test regex extraction contract
+                // (let copyLabel = 'Copy Prompt'; ... primaryActionBtn =).
+                if (nextColId && nextDef && nextDef.kind !== 'completed') {
+                    const isCustom = nextDef.kind === 'custom-user' || nextDef.kind === 'custom-agent';
+                    if (isCustom) {
+                        copyLabel = 'Copy advance prompt';
+                    } else if (nextDef.role === 'planner' || nextDef.id === 'PLAN REVIEWED') {
+                        copyLabel = 'Copy planning prompt';
+                    } else if (['lead', 'coder', 'intern'].includes(nextDef.role)) {
+                        copyLabel = 'Copy coder prompt';
+                    } else if (nextDef.role === 'reviewer' || nextDef.id === 'CODE REVIEWED') {
+                        copyLabel = 'Copy review prompt';
+                    } else if (nextDef.role === 'tester') {
+                        copyLabel = 'Copy acceptance test prompt';
+                    } else if (nextDef.role === 'researcher') {
+                        copyLabel = 'Copy research prompt';
+                    } else if (nextDef.role === 'ticket_updater') {
+                        copyLabel = 'Copy ticket updater prompt';
+                    } else {
+                        copyLabel = 'Copy advance prompt';
                     }
                 }
-                primaryActionBtn = `<button class="card-btn copy" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-column="${escapeAttr(card.column)}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-copy-label="${escapeAttr(copyLabel)}" data-tooltip="Copy prompt and advance">${copyLabel}</button>`;
+                // Suppress the copy-prompt button when there is no next column OR the next
+                // column is terminal (COMPLETED). getNextColumn returns 'COMPLETED' (truthy)
+                // for a card at the last actionable column, so a nextColId-only guard is
+                // insufficient — the kind !== 'completed' check is required.
+                primaryActionBtn = (nextColId && nextDef && nextDef.kind !== 'completed')
+                    ? `<button class="card-btn copy" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-column="${escapeAttr(card.column)}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-copy-label="${escapeAttr(copyLabel)}" data-tooltip="Copy prompt and advance">${copyLabel}</button>`
+                    : '';
             }
 
             const backlogActionBtn = (!isCompleted && card.column === 'CREATED' && !showingBacklog)
@@ -7182,6 +7288,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
                 case 'worktreeConfig': {
                     lastWorktreeConfig = msg;
+                    // Clear merge-pending state if the worktree was cleaned up (no status field —
+                    // list membership is the active signal; cleaned-up worktrees leave the list).
+                    if (mergePendingWorktreeId !== null) {
+                        const stillExists = (msg.worktrees || []).some(w => w.id === mergePendingWorktreeId);
+                        if (!stillExists) {
+                            mergePendingWorktreeId = null;
+                        }
+                    }
                     renderWorktreesTab();
                     recomputeWorktreeIndicator();
                     updateCreateWorktreeButton();
@@ -7205,6 +7319,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     break;
                 }
                 case 'mergePromptReady': {
+                    // Existing: Worktrees-tab button (by data-wt-id) — unchanged.
+                    // INVARIANT: the strip-icon (btn-create-worktree) must never carry data-wt-id
+                    // (it uses data-merge-worktree-id), so this selector never matches it.
                     const btn = document.querySelector(`button[data-wt-id="${msg.worktreeId}"]`);
                     if (btn && msg.prompt) {
                         navigator.clipboard.writeText(msg.prompt).then(() => {
@@ -7227,6 +7344,35 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         setTimeout(() => {
                             btn.textContent = oldText;
                         }, 2000);
+                    }
+
+                    // New: strip-icon button path (kanban board merge mode).
+                    // Guarded by classList.contains('merge-mode') AND worktree-id match so it only
+                    // runs when the strip-icon is in merge mode AND the response is for its worktree
+                    // — cannot accidentally handle a Worktrees-tab response for a different worktree.
+                    const stripBtn = document.getElementById('btn-create-worktree');
+                    if (stripBtn && stripBtn.classList.contains('merge-mode') &&
+                        stripBtn.dataset.mergeWorktreeId &&
+                        String(msg.worktreeId) === String(stripBtn.dataset.mergeWorktreeId)) {
+                        if (msg.prompt) {
+                            navigator.clipboard.writeText(msg.prompt).then(() => {
+                                // mergePendingWorktreeId was already set optimistically in the click handler;
+                                // keep it set — updateCreateWorktreeButton() applies the disabled merge-pending state.
+                                stripBtn.setAttribute('data-tooltip', 'Merge prompt copied — awaiting worktree cleanup (cancel via Worktrees tab)');
+                                stripBtn.style.opacity = '0.6';
+                                setTimeout(() => { stripBtn.style.opacity = ''; }, 600);
+                            }).catch(err => {
+                                console.error('Failed to copy worktree merge prompt (strip-icon):', err);
+                                mergePendingWorktreeId = null; // clear optimistic flag → re-eval re-enables for retry
+                                stripBtn.setAttribute('data-tooltip', 'Failed to copy merge prompt — try again');
+                                updateCreateWorktreeButton();
+                            });
+                        } else {
+                            // Backend returned an error (e.g. worktree not found)
+                            mergePendingWorktreeId = null;
+                            stripBtn.setAttribute('data-tooltip', 'Failed to generate merge prompt — try the Worktrees tab');
+                            updateCreateWorktreeButton();
+                        }
                     }
                     break;
                 }

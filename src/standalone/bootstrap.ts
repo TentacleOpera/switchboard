@@ -31,6 +31,20 @@ import {
 import { ClickUpSyncService } from '../services/ClickUpSyncService';
 import { LinearSyncService } from '../services/LinearSyncService';
 import { NotionFetchService } from '../services/NotionFetchService';
+import { NotionBrowseService } from '../services/NotionBrowseService';
+import { DesignPanelProvider } from '../services/DesignPanelProvider';
+import { SetupPanelProvider } from '../services/SetupPanelProvider';
+import { TaskViewerProvider } from '../services/TaskViewerProvider';
+import { PlanningPanelProvider } from '../services/PlanningPanelProvider';
+import { ResearchImportService } from '../services/ResearchImportService';
+import { PlannerPromptWriter } from '../services/PlannerPromptWriter';
+import { PlanningPanelCacheService } from '../services/PlanningPanelCacheService';
+import { LinearDocsAdapter } from '../services/LinearDocsAdapter';
+import { ClickUpDocsAdapter } from '../services/ClickUpDocsAdapter';
+import { PanelStateStore } from '../services/PanelStateStore';
+import { LocalFolderService } from '../services/LocalFolderService';
+import { BroadcastHub } from '../services/broadcastHub';
+import { createVscodeHostSeams, type HostSeams } from '../services/hostSeams';
 // Headless Ingestion piece 3: the standalone bundle's webpack alias maps
 // `vscode` to `src/standalone/vscodeShim.ts`, so importing the real provider
 // services (which `import * as vscode from 'vscode'`) resolves to the shim's
@@ -371,12 +385,14 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     const getProjectHtml = async () => sharedGetProjectHtml(repoRoot, workspaceRoot);
     const getShellHtml = async () => sharedGetShellHtml(repoRoot);
 
-    // Standalone serves Design/Setup HTML but does NOT wire their verb routers
-    // (only kanbanVerb + planningVerb are passed to LocalApiServer below), so
-    // their verbs 503. Mark them disabled in the manifest so the shell renders
-    // greyed, non-clickable icons instead of dead panels. When the extension is
-    // the host it wires designVerb/setupVerb and passes no availability override.
-    const getPanelsManifest = () => sharedGetPanelsManifest({ design: false, setup: false });
+    // Standalone now wires the Design/Setup/TaskViewer/Planning verb routers
+    // (B1) — their `/verb/*` endpoints serve results instead of 503. Mark
+    // Design/Setup enabled in the manifest so the shell renders live icons.
+    // TaskViewer has no shell icon (it's the VS Code sidebar; the browser shell
+    // surfaces its verbs through the other panels), so the manifest only gates
+    // design/setup. When the extension is the host it wires the same verbs and
+    // passes no availability override.
+    const getPanelsManifest = () => sharedGetPanelsManifest({ design: true, setup: true });
     const getPanelHtml = async (id: string): Promise<{ html: string; csp?: string } | null> => {
         const result = sharedGetPanelHtmlById(id, repoRoot, workspaceRoot);
         if (!result) { return null; }
@@ -388,6 +404,106 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         icons: [path.join(repoRoot, 'icons')],
         designs: [path.join(repoRoot, 'designs')],
     };
+
+    // ─── Headless panel providers (B1: wire Design/Setup/TaskViewer/Planning verbs) ─
+    // The standalone bundle's webpack alias maps `vscode` to vscodeShim.ts, so
+    // `createVscodeHostSeams` builds a seam bundle whose config/path/watcher/UI
+    // surfaces run against the shim (config.json, no-op watchers, rejecting UI
+    // dialogs) and whose `secrets` resolves to StandaloneHostSecrets via the
+    // SecretStorage adapter. Each provider is constructed with a minimal
+    // in-memory ExtensionContext (globalState/workspaceState backed by Maps),
+    // then injected with the seam bundle + a BroadcastHub (webview null — no
+    // sidebar in npx; pushes go to the WS hub once `server` is wired below via
+    // setApiServer). This mirrors the verb-engine test harness: pre-assigning
+    // `_hostSeams`/`_broadcaster` pre-empts each provider's `_initXService`,
+    // which would otherwise derive an empty workspace root from the shim's
+    // `workspaceFolders` and bail. `handleServiceVerb` then dispatches read/
+    // query arms over HTTP with no `vscode` process reachable.
+    const inMemoryMemento = () => {
+        const store = new Map<string, any>();
+        return {
+            get: <T>(key: string, defaultValue?: T): T | undefined =>
+                store.has(key) ? store.get(key) as T : defaultValue,
+            update: async (key: string, value: any): Promise<void> => { store.set(key, value); },
+            keys: () => Array.from(store.keys()),
+        };
+    };
+    const headlessContext = {
+        globalState: inMemoryMemento(),
+        workspaceState: inMemoryMemento(),
+        secrets: secretStorage as any,
+        extensionUri: { fsPath: repoRoot } as any,
+        extensionPath: repoRoot,
+    } as any;
+
+    const headlessSeams: HostSeams = createVscodeHostSeams(workspaceRoot, secretStorage as any);
+    const headlessBroadcaster = new BroadcastHub({ webview: null, apiServer: null });
+    const panelStateStore = new PanelStateStore(headlessContext.globalState, 'standalone');
+
+    // Design: extensionUri, getWorkspaceRoot, context, stateStore, taskViewer?
+    const designProvider = new DesignPanelProvider(
+        { fsPath: repoRoot } as any,
+        () => workspaceRoot,
+        headlessContext,
+        panelStateStore,
+        undefined
+    );
+    (designProvider as any)._hostSeams = headlessSeams;
+    (designProvider as any)._broadcaster = headlessBroadcaster;
+
+    // Setup: extensionUri only; seams/broadcaster injected post-construction.
+    const setupProvider = new SetupPanelProvider({ fsPath: repoRoot } as any);
+    (setupProvider as any)._hostSeams = headlessSeams;
+    (setupProvider as any)._broadcaster = headlessBroadcaster;
+
+    // TaskViewer: extensionUri, context, needsSetup=false. The message listener
+    // is registered headlessly via initHeadlessVerbServing (extracted from
+    // resolveWebviewView) so verb dispatch has a target without the sidebar.
+    const taskViewerProvider = new TaskViewerProvider(
+        { fsPath: repoRoot } as any,
+        headlessContext,
+        false
+    );
+    taskViewerProvider.initHeadlessVerbServing(headlessSeams, headlessBroadcaster);
+    // Setup arms delegate startup-command / integration-state reads to the
+    // TaskViewer provider; wire the real (headless) instance.
+    setupProvider.setTaskViewerProvider(taskViewerProvider);
+
+    // Planning: extensionUri, researchImportService, plannerPromptWriter,
+    // getWorkspaceRoot, adapterFactories, context, stateStore. Memo verbs
+    // delegate to TaskViewerProvider (attached below) — the headless memo
+    // special-cases in planningVerb below take precedence over that delegation
+    // for the 4 memo verbs (send→copy degrade), so non-memo verbs reach here.
+    const researchImportService = new ResearchImportService();
+    const notionBrowseService = new NotionBrowseService(workspaceRoot, notionService);
+    const plannerPromptWriter = new PlannerPromptWriter({
+        getNotionService: (root: string) => notionService,
+        getLocalFolderService: (root: string) => new LocalFolderService(root),
+        getLinearDocsAdapter: (root: string) => new LinearDocsAdapter(root, linearService),
+        getClickUpDocsAdapter: (root: string) => new ClickUpDocsAdapter(root, clickUpService),
+        getCacheService: (root: string) => new PlanningPanelCacheService(root),
+    });
+    const planningAdapterFactories = {
+        getNotionService: (_root: string) => notionService,
+        getNotionBrowseService: (_root: string) => notionBrowseService,
+        getLinearDocsAdapter: (root: string) => new LinearDocsAdapter(root, linearService),
+        getClickUpDocsAdapter: (root: string) => new ClickUpDocsAdapter(root, clickUpService),
+        getCacheService: (root: string) => new PlanningPanelCacheService(root),
+        getLinearSyncService: (_root: string) => linearService,
+        getClickUpSyncService: (_root: string) => clickUpService,
+    };
+    const planningProvider = new PlanningPanelProvider(
+        { fsPath: repoRoot } as any,
+        researchImportService,
+        plannerPromptWriter,
+        () => workspaceRoot,
+        planningAdapterFactories,
+        headlessContext,
+        panelStateStore
+    );
+    (planningProvider as any)._hostSeams = headlessSeams;
+    (planningProvider as any)._broadcaster = headlessBroadcaster;
+    planningProvider.setTaskViewerProvider(taskViewerProvider);
 
     const moveSessionsToColumn = async (sessionIds: string[], sourceColumn: string, targetColumn: string) => {
         for (const sid of sessionIds) {
@@ -706,8 +822,21 @@ Each plan file must include:
             };
         }
 
-        console.log(`[bootstrap] planningVerb '${verb}' received`, payload);
-        return { success: true, note: `Planning verb '${verb}' not fully wired in standalone yet` };
+        // Non-memo Project-panel verbs: delegate to the headlessly-constructed
+        // PlanningPanelProvider.handleServiceVerb (B1). The provider's arms run
+        // against the headless seam bundle (no vscode reachable) and return their
+        // result in the HTTP body (Layer-1 return contract). Memo verbs are
+        // intentionally NOT delegated — the headless special-cases above (send→
+        // copy degrade, file I/O without a TaskViewerProvider sidebar) differ
+        // from the extension's memo path, so they stay local. Verbs the provider
+        // hasn't migrated to return-in-body still ack through the route layer
+        // (reachable-but-empty until Layer 1 lands for that arm).
+        try {
+            return await planningProvider.handleServiceVerb(verb, payload);
+        } catch (err) {
+            console.error(`[bootstrap] planningVerb '${verb}' delegation failed:`, err);
+            return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
     };
 
     const options: any = {
@@ -725,6 +854,12 @@ Each plan file must include:
         getKanbanDatabase: async () => db,
         kanbanVerb,
         planningVerb,
+        designVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
+            designProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),
+        setupVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
+            setupProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),
+        taskViewerVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
+            taskViewerProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),
         getFullState,
         consumeOneTimeToken: (t: string) => {
             if (oneTimeConsumed || t !== oneTimeToken) return false;
@@ -742,6 +877,12 @@ Each plan file must include:
     };
 
     server = new LocalApiServer(options);
+    // Point the headless providers' broadcaster at the live WS hub so verb arms
+    // that push state updates reach browser clients (additive to the HTTP body).
+    designProvider.setApiServer(server);
+    setupProvider.setApiServer(server);
+    taskViewerProvider.setApiServer(server);
+    planningProvider.setApiServer(server);
     const port = await server.start();
 
     // Write the discovery port file for external skills/scripts
@@ -758,6 +899,10 @@ Each plan file must include:
         oneTimeToken,
         stop: async () => {
             try { ingestionEngine.dispose(); } catch { /* ignore */ }
+            try { (designProvider as any).dispose?.(); } catch { /* ignore */ }
+            try { (setupProvider as any).dispose?.(); } catch { /* ignore */ }
+            try { (taskViewerProvider as any).dispose?.(); } catch { /* ignore */ }
+            try { (planningProvider as any).dispose?.(); } catch { /* ignore */ }
             try { await server.stop(); } catch { /* ignore */ }
             try { fs.unlinkSync(portFile); } catch { /* ignore */ }
         },

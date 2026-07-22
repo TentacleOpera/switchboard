@@ -210,3 +210,7 @@ This closes the named-but-unacted gap: the rule is now enforced at the only hook
 ---
 
 **Recommendation:** Complexity 5 → **Send to Coder.**
+
+## Review Findings
+
+Implemented all six implementation steps. Files changed: `.agents/skills/improve-plan/SKILL.md` and `.claude/skills/improve-plan/SKILL.md` (Verification Plan section rewritten with discriminating-check requirement + mechanical-change exemption + Manual/behavioral subsection; verification-plan probe added to step 4 architecture review); `AGENTS.md` and `CLAUDE.md` (Discriminating Verification bullet added to Plan Authoring protocol after Plan Sizing); `src/services/agentPromptBuilder.ts` (inserted step 6 gate-wiring audit + step 7 skip-tests disclosure into `DEFAULT_REVIEWER_BASE_INSTRUCTIONS`; renumbered existing 6→8, 7→9; backtick-escaped inline code in the new template-literal steps); `src/test/autoban-reviewer-prompt-regression.test.js` (extended with four source-grep presence assertions for the gate-wiring audit and skip-tests disclosure text). Verification was static-only — per SKIP COMPILATION + SKIP TESTS directives, `npm run compile-tests` and the regression test were not executed in this pass; manual inspection confirmed mirror consistency, sequential 1-9 step numbering, and that the compact-mode/concise-mode string replacements still match their targets (they key off text content in the renumbered step 8, not step number). No issues encountered.
