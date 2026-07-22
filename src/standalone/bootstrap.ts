@@ -696,13 +696,56 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                         // the /g flag, so no stateful-lastIndex trap.
                         const hasMulti = /^---\s*PLAN\s*---\s*$/m.test(md);
                         const chunks = hasMulti
-                            ? md.split(/^---\s*PLAN\s*---\s*$/m).map(s => s.trim()).filter(Boolean)
+                            ? md.split(/^---\s*PLAN\s*---\s*$/m).map((s: string) => s.trim()).filter(Boolean)
                             : [md.trim()];
                         for (const chunk of chunks) {
                             await createAndIngestPlan(root, extractTitle(chunk), chunk);
                         }
                         await pushFullState();
                         return { success: true, imported: chunks.length };
+                    } catch (e) {
+                        return { success: false, error: e instanceof Error ? e.message : String(e) };
+                    }
+                }
+
+                case 'improvePlan': {
+                    // Standalone mirror of KanbanProvider.improvePlan. Reads the
+                    // improve-plan skill file, builds the prompt, and returns it in
+                    // the body — transport.js copies `prompt` to the clipboard
+                    // client-side (headless has no server-side clipboard).
+                    try {
+                        const planFile = typeof payload.planFile === 'string' ? payload.planFile : '';
+                        if (!planFile) { return { success: false, error: 'planFile is required' }; }
+                        const topic = typeof payload.topic === 'string' ? payload.topic : '(untitled)';
+                        const fsLocal = require('fs') as typeof import('fs');
+                        let skillContent = '';
+                        try {
+                            skillContent = fsLocal.readFileSync(path.join(root, '.agents', 'skills', 'improve-plan', 'SKILL.md'), 'utf8');
+                        } catch {
+                            try {
+                                skillContent = fsLocal.readFileSync(path.join(root, '.claude', 'skills', 'improve-plan', 'SKILL.md'), 'utf8');
+                            } catch {
+                                skillContent = `Improve this plan: deepen the goal/problem analysis, verify file paths and line numbers against the real codebase, add a Complexity Audit and Edge-Case/Dependency Audit, and refine the Proposed Changes and Verification Plan. Preserve YAML frontmatter. Write the result back to the local file path provided.`;
+                            }
+                        }
+                        const planFilePath = path.isAbsolute(planFile) ? planFile : path.resolve(root, planFile);
+                        let existingContent = '';
+                        try { existingContent = fsLocal.readFileSync(planFilePath, 'utf8'); } catch { /* may not exist yet */ }
+                        const prompt = `You are improving a Switchboard implementation plan in place.
+
+## Skill Instructions
+${skillContent}
+
+## Plan to Improve
+- **Title:** ${topic}
+- **Local file path (write the improved content here):** ${planFilePath}
+
+## Current plan file content
+${existingContent ? existingContent : '(file is empty or does not exist yet — author a complete plan at the path above)'}
+
+Read the current content above. Deepen the problem analysis, verify every file path/line number against the real codebase, and refine the Proposed Changes and Verification Plan per the skill instructions. Write the improved markdown directly to the local file path, preserving any YAML frontmatter. Do NOT modify any database or kanban card. Report back with a summary of what you deepened.`;
+                        server.broadcastWs('showStatusMessage', { message: 'Improve-plan prompt copied to clipboard. Paste it into your agent.', isError: false });
+                        return { success: true, prompt };
                     } catch (e) {
                         return { success: false, error: e instanceof Error ? e.message : String(e) };
                     }

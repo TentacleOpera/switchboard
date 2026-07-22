@@ -4968,25 +4968,39 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     }
 
     private async _generateAntigravityPrompt(agentName: string, workspaceRoot: string, column: string = 'CREATED', batchSize?: number): Promise<void> {
+        // Shim: delegates to the target-agnostic board-batch core and posts the
+        // result as `antigravityPrompt` (legacy message name). The scheduler
+        // surface (`schedulerPrompt` with a `target` discriminator) is the
+        // successor; this shim keeps existing antigravity-batch callers working
+        // until plan 4 retires the standalone mode.
+        const result = await this._buildBoardBatchPromptCore(agentName, workspaceRoot, column, batchSize);
+        this.postMessage({
+            type: 'antigravityPrompt',
+            prompt: result.prompt,
+            error: result.error
+        });
+    }
+
+    /**
+     * Target-agnostic board-batch prompt builder. Extracted from the former
+     * `_generateAntigravityPrompt` so the scheduler can reuse it for any
+     * target (antigravity / cloud / local-terminal). Returns the prompt string
+     * (or an error) WITHOUT posting — callers post via their own message name.
+     *
+     * Byte-identical to the pre-extraction output for the same inputs: the
+     * string construction (schedulingBlock / batchBlock / sqlInstruction /
+     * preamble) is preserved verbatim.
+     */
+    private async _buildBoardBatchPromptCore(agentName: string, workspaceRoot: string, column: string = 'CREATED', batchSize?: number): Promise<{ prompt: string | null; error?: string }> {
         try {
             if (!agentName) {
-                this.postMessage({
-                    type: 'antigravityPrompt',
-                    prompt: null,
-                    error: 'No agent specified'
-                });
-                return;
+                return { prompt: null, error: 'No agent specified' };
             }
 
             // Get the oldest plan in the specified column
             const db = this._getKanbanDb(workspaceRoot);
             if (!await db.ensureReady()) {
-                this.postMessage({
-                    type: 'antigravityPrompt',
-                    prompt: null,
-                    error: 'Database not available'
-                });
-                return;
+                return { prompt: null, error: 'Database not available' };
             }
 
             const workspaceId = await this._readWorkspaceId(workspaceRoot)
@@ -4994,24 +5008,14 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 || await db.getDominantWorkspaceId();
 
             if (!workspaceId) {
-                this.postMessage({
-                    type: 'antigravityPrompt',
-                    prompt: null,
-                    error: 'No workspace ID found'
-                });
-                return;
+                return { prompt: null, error: 'No workspace ID found' };
             }
 
             // Query for plans in the specified column
             const columnPlans = await db.getPlansByColumn(workspaceId, column, this._projectFilter);
 
             if (!columnPlans || columnPlans.length === 0) {
-                this.postMessage({
-                    type: 'antigravityPrompt',
-                    prompt: null,
-                    error: `No plans found in ${column} column`
-                });
-                return;
+                return { prompt: null, error: `No plans found in ${column} column` };
             }
 
             // Map agent name to role (for custom agents, use their role)
@@ -5034,7 +5038,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 batchPlans = columnPlans.slice(-batchSize);
                 oldestPlan = batchPlans[batchPlans.length - 1];
                 resolvedNextColumn = await this._getNextColumnId(column, workspaceRoot);
-                
+
                 batchBlock = `\n\n---\n\nProcess the ${batchPlans.length} oldest plans in the **${column}** column using subagent delegation.\n\nFor each plan:\n1. Read the plan file from .switchboard/plans/\n2. Delegate execution to a subagent with the full plan context (use invoke_subagent)\n3. Wait for the subagent to complete\n4. Move the plan to the next column in the workflow\n5. Track completion status\n\nAfter all plans are processed, provide a summary:\n- Plans completed successfully\n- Plans that failed or need attention\n- Next column each plan was moved to\n\nAgent role for delegation context: **${role}**\nCancel this task immediately if no plans remain in **${column}**.\n\nIMPORTANT: Process plans in parallel using invoke_subagent for each plan simultaneously, not sequentially.`;
 
                 sqlInstruction = resolvedNextColumn === null
@@ -5126,18 +5130,144 @@ This step is what moves the plan forward in the Switchboard pipeline.
             preamble = preamble.replace(/\n*PLANS TO PROCESS:\n?\s*$/, '').trimEnd();
             prompt = preamble + targetBlock + sqlInstruction;
 
-            this.postMessage({
-                type: 'antigravityPrompt',
-                prompt
-            });
+            return { prompt };
         } catch (error) {
-            console.error('[KanbanProvider] Failed to generate antigravity prompt:', error);
-            this.postMessage({
-                type: 'antigravityPrompt',
-                prompt: null,
-                error: String(error)
-            });
+            console.error('[KanbanProvider] Failed to build board-batch prompt:', error);
+            return { prompt: null, error: String(error) };
         }
+    }
+
+    // ─── Scheduler prompt presets & target contracts ────────────────────────
+
+    /**
+     * Reconcile prompt: a copyable IDE-agent prompt that pulls recent remote
+     * branches, scans pulled plan files for new `## Completion Report` /
+     * `## Review Findings` sections, and advances cards **forward-only** via
+     * the sanctioned `kanban_operations` skill — never raw SQL (which strands
+     * cards and bypasses move-card.js side-effects per CLAUDE.md).
+     *
+     * Forward-only + idempotent: skip cards a human already advanced. A wrong
+     * prompt silently moves cards backward or double-advances, so the wording
+     * is load-bearing.
+     */
+    private _buildReconcilePrompt(): string {
+        return `You are a reconciliation agent for Switchboard. Your job is to advance kanban cards whose work has already been completed off-machine (e.g. by a cloud routine on a \`claude/\`-prefixed branch) but whose card was not moved on the board.
+
+Steps (do them in order):
+
+1. Fetch and pull recent remote branches:
+\`\`\`bash
+git fetch --prune
+git pull --all || true
+\`\`\`
+
+2. For each recently-merged or pushed branch, scan the plan files under \`.switchboard/plans/\` for a NEW \`## Completion Report\` or \`## Review Findings\` section that was not present on the previous reconcile pass. (Use \`git log --since="last reconcile"\` or compare against the last reconcile commit to scope this.)
+
+3. For each plan file with a new completion/review section, move its card **forward-only** — and ONLY forward — via the sanctioned \`kanban_operations\` skill (\`move-card.js\` / \`POST /kanban/move\`), NEVER raw SQL. Raw SQL strands cards and bypasses the move-card.js side-effects (cascades, syncs).
+
+   - Determine the correct next column from the plan's current column and the workspace pipeline. If you cannot determine it, SKIP the card and report it — do not guess.
+   - If a card has already been advanced by a human (its current column is already at or past the expected next column), SKIP it. Never move a card backward. Never double-advance.
+   - Run: \`node .agents/skills/kanban_operations/move-card.js "<planId>" "<nextColumn>" "" "<workspaceRoot>"\` and verify the output is \`OK\`.
+
+4. Report what you moved and what you skipped (and why). Do NOT take any other actions — this is a reconciliation pass, not a coding pass.
+
+Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-path-only (no SQL).`;
+    }
+
+    /**
+     * Custom prompt: free-text from the job's `promptOverride`. The engine
+     * already sends promptOverride directly for non-comms sources; this builder
+     * exists so the scheduler UI's "Copy prompt" action can emit it for external
+     * targets too.
+     */
+    private _buildCustomPrompt(promptOverride: string): string {
+        return (promptOverride || '').trim();
+    }
+
+    /**
+     * Per-target contracts: the interval floor (minimum minutes between runs)
+     * and the prerequisites block text shown to the user before they paste the
+     * prompt into the external scheduler. Only `local-terminal` owns a live
+     * timer; `antigravity` and `cloud` are prompt-handoff targets — Switchboard
+     * emits prompt + instructions and the external scheduler owns recurrence.
+     *
+     * The `cloud` block names the real prerequisites confirmed by the user
+     * (2026-07-21): board-state-export = read-only-snapshot + an origin remote
+     * (to read board.json from switchboard/board), the claude/-branch-prefix
+     * default for writing completion/review sections, the 1-hour minimum
+     * interval, the ~30-min stagger, and the daily-run-cap consideration.
+     */
+    public static readonly SCHEDULER_TARGET_CONTRACTS: Record<string, { intervalFloorMinutes: number | null; prerequisites: string }> = {
+        'local-terminal': {
+            intervalFloorMinutes: 1,
+            prerequisites: 'Local terminal target. Runs in an interactive, subscription-authed Claude terminal in this VS Code window. Requires the laptop to be on. The only target that can poll faster than hourly (minute-granularity intervals). Never headless — prompts go via sendText, never `claude -p`.'
+        },
+        'antigravity': {
+            intervalFloorMinutes: null,
+            prerequisites: 'Antigravity target (prompt handoff). Switchboard emits the prompt; you own recurrence via Antigravity Scheduled Tasks. Steps:\n1. Copy the prompt below.\n2. In Antigravity, open the AUTOMATION tab (or Tasks / Background Notifications) → Scheduled Tasks.\n3. Paste the prompt and set the recurrence there (the `schedule` tool: one-shot `DurationSeconds` or recurring `CronExpression`). Antigravity owns the timer — Switchboard does not schedule it.\n4. The prompt instructs the agent to `manage_task kill` itself when no plans remain.'
+        },
+        'cloud': {
+            intervalFloorMinutes: 60,
+            prerequisites: 'Cloud target (prompt handoff — Claude cowork / routine). Runs laptop-off on Anthropic\'s cloud. Prerequisites:\n- Board state export must be set to `read-only-snapshot` AND the repo must have an `origin` remote, so the routine can read `board.json` from the `switchboard/board` orphan branch.\n- Minimum interval is 1 hour (cron finer than hourly is rejected). Standard 5-field cron only (`*`, steps `*/6`, ranges `1-5`, lists `1,15,30`); extended tokens (`L`,`W`,`?`,`MON`) are NOT supported.\n- A run may start up to ~30 min after the scheduled time (deterministic per routine ID) — treat as "around then," not to-the-second.\n- Branch pushes default to `claude/`-prefixed branches unless unrestricted pushes are enabled per-repo. A cloud routine writing `## Completion Report` / `## Review Findings` to `.switchboard/plans/` must push to a `claude/`-prefixed branch (or you must enable unrestricted pushes per-repo).\n- Daily run cap per account applies (shown on routines/usage pages); one-off manual runs are exempt.\n- Usage/cost: routines burn subscription usage exactly like interactive sessions.\nAfter a cloud branch is merged, run the `reconcile` prompt locally to advance the cards via `kanban_operations`.'
+        }
+    };
+
+    /**
+     * Build the scheduler prompt for a job + target. Dispatches on `job.source`:
+     *   - comms → the comms monitor prompt (read-only; built by TaskViewerProvider)
+     *   - board-batch → the board-batch core (DB-backed; byte-identical to the
+     *     legacy antigravity-batch output for the same agent/column/batchSize)
+     *   - reconcile → the forward-only reconcile prompt
+     *   - custom → the job's promptOverride
+     *
+     * For external targets (antigravity/cloud) the returned text is the prompt
+     * PLUS the target's prerequisites block, so "Copy prompt" yields a
+     * self-contained handoff. For local-terminal the prerequisites are shown
+     * separately by the UI (plan 4) and not appended here.
+     */
+    private async _buildSchedulerPrompt(job: any, workspaceRoot: string): Promise<{ prompt: string | null; error?: string }> {
+        const target: string = job.target || 'local-terminal';
+        const source: string = job.source || 'custom';
+        let body: string | null = null;
+        let error: string | undefined;
+
+        if (source === 'comms') {
+            // Comms prompt is built by TaskViewerProvider (read-only monitor).
+            // For external targets comms is not meaningful, but we still emit
+            // the override if present.
+            body = (job.promptOverride || '').trim() || null;
+            if (!body) {
+                return { prompt: null, error: 'Comms source requires a local-terminal target and a configured comms job.' };
+            }
+        } else if (source === 'board-batch') {
+            const agent = job.sourceConfig?.agent || job.agent || 'coder';
+            const column = job.sourceConfig?.column || job.column || 'CREATED';
+            const batchSize = job.sourceConfig?.batchSize ?? job.batchSize;
+            const result = await this._buildBoardBatchPromptCore(agent, workspaceRoot, column, typeof batchSize === 'number' ? batchSize : undefined);
+            body = result.prompt;
+            error = result.error;
+        } else if (source === 'reconcile') {
+            body = this._buildReconcilePrompt();
+        } else {
+            // custom
+            body = this._buildCustomPrompt(job.promptOverride || '');
+            if (!body) {
+                return { prompt: null, error: 'Custom source requires a non-empty prompt.' };
+            }
+        }
+
+        if (!body) {
+            return { prompt: null, error: error || 'No prompt produced.' };
+        }
+
+        // External targets: append the prerequisites block (honesty fix).
+        if (target === 'antigravity' || target === 'cloud') {
+            const contract = KanbanProvider.SCHEDULER_TARGET_CONTRACTS[target];
+            if (contract) {
+                return { prompt: `${body}\n\n---\n\n**Setup — ${target} target**\n\n${contract.prerequisites}` };
+            }
+        }
+        return { prompt: body };
     }
 
     private async _savePromptsConfig(workspaceRoot: string, msg: any): Promise<void> {
@@ -6834,6 +6964,38 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
 
 
+    private async _buildCardsFromDbSessionIds(workspaceRoot: string, sessionIds: string[]): Promise<KanbanCard[]> {
+        const db = (this as any)._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) {
+            return [];
+        }
+        const cards: KanbanCard[] = [];
+        for (const sid of sessionIds) {
+            let plan = await db.getPlanBySessionId(sid);
+            if (!plan) {
+                plan = await db.getPlanByPlanId(sid);
+            }
+            if (plan) {
+                cards.push({
+                    planId: plan.planId,
+                    sessionId: plan.sessionId,
+                    topic: plan.topic || plan.planFile || 'Untitled',
+                    planFile: plan.planFile || '',
+                    column: this._normalizeLegacyKanbanColumn(plan.kanbanColumn) || 'CREATED',
+                    lastActivity: plan.updatedAt || plan.createdAt || '',
+                    createdAt: plan.createdAt || '',
+                    complexity: plan.complexity || 'Unknown',
+                    workspaceRoot: workspaceRoot,
+                    project: plan.project || '',
+                    isFeature: !!plan.isFeature,
+                    featureId: plan.featureId || undefined,
+                    working: false
+                });
+            }
+        }
+        return cards;
+    }
+
     private async _handleMessage(msg: any): Promise<any> {
         switch (msg.type) {
             case 'ready': {
@@ -7362,11 +7524,11 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 return { success: true };
             }
             case 'launchMcpMonitorTerminal': {
-                await this._seams().commands.executeCommand('switchboard.launchMcpMonitorTerminal');
+                await this._seams().commands.executeCommand('switchboard.launchMcpMonitorTerminal', msg.jobId);
                 return { success: true };
             }
             case 'stopMcpMonitorTerminal': {
-                await this._seams().commands.executeCommand('switchboard.stopMcpMonitorTerminal');
+                await this._seams().commands.executeCommand('switchboard.stopMcpMonitorTerminal', msg.jobId);
                 return { success: true };
             }
             case 'checkMcpMonitorAuth': {
@@ -7386,6 +7548,24 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     const preview = this._taskViewerProvider.buildMcpMonitorPreview(msg.config);
                     this.postMessage({ type: 'mcpMonitorPreview', preview });
                     return { success: true, preview };
+                }
+                return { success: false, error: 'config is required' };
+            }
+            case 'getSchedulerConfig': {
+                const config = await GlobalIntegrationConfigService.getSchedulerConfig();
+                this.postMessage({ type: 'updateSchedulerConfig', config });
+                return { success: true, config };
+            }
+            case 'setSchedulerConfig': {
+                if (msg.config && typeof msg.config === 'object') {
+                    await GlobalIntegrationConfigService.setSchedulerConfig(msg.config);
+                    // Restart loops so enabled local-terminal jobs pick up changes.
+                    if (this._taskViewerProvider) {
+                        await this._taskViewerProvider.startAllSchedulerLoops();
+                    }
+                    const config = await GlobalIntegrationConfigService.getSchedulerConfig();
+                    this.postMessage({ type: 'updateSchedulerConfig', config });
+                    return { success: true, config };
                 }
                 return { success: false, error: 'config is required' };
             }
@@ -8823,37 +9003,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
                 return { success: true, prompt, targetColumn: nextCol };
             }
-            private async _buildCardsFromDbSessionIds(workspaceRoot: string, sessionIds: string[]): Promise<KanbanCard[]> {
-                const db = (this as any)._getKanbanDb(workspaceRoot);
-                if (!db || !(await db.ensureReady())) {
-                    return [];
-                }
-                const cards: KanbanCard[] = [];
-                for (const sid of sessionIds) {
-                    let plan = await db.getPlanBySessionId(sid);
-                    if (!plan) {
-                        plan = await db.getPlanByPlanId(sid);
-                    }
-                    if (plan) {
-                        cards.push({
-                            planId: plan.planId,
-                            sessionId: plan.sessionId,
-                            topic: plan.topic || plan.planFile || 'Untitled',
-                            planFile: plan.planFile || '',
-                            column: this._normalizeLegacyKanbanColumn(plan.kanbanColumn) || 'CREATED',
-                            lastActivity: plan.updatedAt || plan.createdAt || '',
-                            createdAt: plan.createdAt || '',
-                            complexity: plan.complexity || 'Unknown',
-                            workspaceRoot: workspaceRoot,
-                            project: plan.project || '',
-                            isFeature: !!plan.isFeature,
-                            featureId: plan.featureId || undefined,
-                            working: false
-                        });
-                    }
-                }
-                return cards;
-            }
             case 'julesSelected': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || !Array.isArray(msg.sessionIds) || msg.sessionIds.length === 0) {
@@ -9105,6 +9254,59 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     return { success: !!success, sessionId: copySessionId };
                 }
                 return { success: false, error: 'Could not resolve session id' };
+            }
+            case 'improvePlan': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
+                const planFile = typeof msg.planFile === 'string' ? msg.planFile : '';
+                if (!workspaceRoot || !planFile) {
+                    return { success: false, error: 'workspaceRoot and planFile are required' };
+                }
+                const topic = typeof msg.topic === 'string' ? msg.topic : '(untitled)';
+                try {
+                    // Read user-editable skill file (.agents → embedded fallback).
+                    const nfs = require('fs') as typeof import('fs');
+                    let skillContent = '';
+                    try {
+                        skillContent = nfs.readFileSync(path.join(workspaceRoot, '.agents', 'skills', 'improve-plan', 'SKILL.md'), 'utf8');
+                    } catch {
+                        try {
+                            skillContent = nfs.readFileSync(path.join(workspaceRoot, '.claude', 'skills', 'improve-plan', 'SKILL.md'), 'utf8');
+                        } catch {
+                            skillContent = `Improve this plan: deepen the goal/problem analysis, verify file paths and line numbers against the real codebase, add a Complexity Audit and Edge-Case/Dependency Audit, and refine the Proposed Changes and Verification Plan. Preserve YAML frontmatter. Write the result back to the local file path provided.`;
+                        }
+                    }
+                    const planFilePath = path.isAbsolute(planFile) ? planFile : path.resolve(workspaceRoot, planFile);
+                    let existingContent = '';
+                    try { existingContent = nfs.readFileSync(planFilePath, 'utf8'); } catch { /* may not exist yet */ }
+                    const prompt = `You are improving a Switchboard implementation plan in place.
+
+## Skill Instructions
+${skillContent}
+
+## Plan to Improve
+- **Title:** ${topic}
+- **Local file path (write the improved content here):** ${planFilePath}
+
+## Current plan file content
+${existingContent ? existingContent : '(file is empty or does not exist yet — author a complete plan at the path above)'}
+
+Read the current content above. Deepen the problem analysis, verify every file path/line number against the real codebase, and refine the Proposed Changes and Verification Plan per the skill instructions. Write the improved markdown directly to the local file path, preserving any YAML frontmatter. Do NOT modify any database or kanban card. Report back with a summary of what you deepened.`;
+                    await this._seams().clipboard.writeText(prompt);
+                    this.postMessage({
+                        type: 'showStatusMessage',
+                        message: 'Improve-plan prompt copied to clipboard. Paste it into your agent.',
+                        isError: false
+                    });
+                    return { success: true, prompt };
+                } catch (err) {
+                    console.error('[KanbanProvider] improvePlan failed:', err);
+                    this.postMessage({
+                        type: 'showStatusMessage',
+                        message: 'Failed to copy improve-plan prompt to clipboard.',
+                        isError: true
+                    });
+                    return { success: false, error: 'Failed to copy improve-plan prompt to clipboard.' };
+                }
             }
             case 'createPlan':
                 if (this._showingBacklog) {
@@ -9525,6 +9727,36 @@ ${FOCUS_DIRECTIVE}`;
                 const column = typeof msg.column === 'string' && msg.column.trim() ? msg.column.trim() : 'CREATED';
                 const batchSize = typeof msg.batchSize === 'number' && msg.batchSize > 0 ? msg.batchSize : undefined;
                 await this._generateAntigravityPrompt(msg.agent, workspaceRoot, column, batchSize);
+                return { success: true };
+            }
+            case 'schedulerPrompt': {
+                // Scheduler prompt handoff. Dispatches on job.source and appends
+                // the target's prerequisites block for external targets
+                // (antigravity/cloud). The legacy `antigravityPrompt` message is
+                // kept as a shim (generateAntigravityPrompt above) until plan 4
+                // retires the standalone antigravity-batch mode.
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || typeof msg.job !== 'object' || !msg.job) {
+                    return { success: false, error: 'workspaceRoot and job are required' };
+                }
+                const result = await this._buildSchedulerPrompt(msg.job, workspaceRoot);
+                this.postMessage({
+                    type: 'schedulerPrompt',
+                    jobId: msg.job.id,
+                    target: msg.job.target,
+                    prompt: result.prompt,
+                    error: result.error
+                });
+                return { success: true };
+            }
+            case 'getSchedulerTargetContracts': {
+                // Exposes the target contracts (interval floors + prerequisites
+                // blocks) to the webview so the Scheduler UI (plan 4) can render
+                // them without hardcoding the text.
+                this.postMessage({
+                    type: 'schedulerTargetContracts',
+                    contracts: KanbanProvider.SCHEDULER_TARGET_CONTRACTS
+                });
                 return { success: true };
             }
             case 'getPersonaForRole': {

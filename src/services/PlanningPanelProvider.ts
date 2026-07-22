@@ -1649,7 +1649,7 @@ Start by checking which documents exist, then present the menu.`;
     }
 
 
-    private async _handleFetchKanbanPlanPreview(filePath: string, requestId: number): Promise<void> {
+    private async _handleFetchKanbanPlanPreview(filePath: string, requestId: number): Promise<any> {
         const allRoots = Array.from(this._getAllowedRoots());
         // Resolve relative paths against workspace roots, not just CWD
         let resolved = path.isAbsolute(filePath) ? path.resolve(filePath) : '';
@@ -2527,7 +2527,7 @@ Start by checking which documents exist, then present the menu.`;
                     };
                     const targetPanel = isProject ? this._projectPanel : this._panel;
                     this._pushTo(targetPanel, 'planning', okRes);
-                    return { success: true, ...okRes };
+                    return { ...okRes, success: true };
                 } catch (err) {
                     const errRes = {
                         type: 'markdownLiveRendered',
@@ -2538,7 +2538,7 @@ Start by checking which documents exist, then present the menu.`;
                     };
                     const targetPanel = isProject ? this._projectPanel : this._panel;
                     this._pushTo(targetPanel, 'planning', errRes);
-                    return { success: false, ...errRes };
+                    return { ...errRes, success: false };
                 }
             }
             case 'fetchRoots': {
@@ -2858,7 +2858,7 @@ Start by checking which documents exist, then present the menu.`;
                         docName: path.basename(artifactPath, '.md')
                     };
                     this.postMessageToWebview(okRes);
-                    return { success: true, ...okRes };
+                    return { ...okRes, success: true };
                 } else {
                     const errRes = {
                         type: 'previewError',
@@ -2867,7 +2867,7 @@ Start by checking which documents exist, then present the menu.`;
                         error: result.error || 'Failed to load artifact'
                     };
                     this.postMessageToWebview(errRes);
-                    return { success: false, ...errRes };
+                    return { ...errRes, success: false };
                 }
             }
             case 'addLocalFolder': {
@@ -2957,7 +2957,7 @@ Start by checking which documents exist, then present the menu.`;
                 if (result && result.length > 0) {
                     const res = { type: 'browseTicketsFolderResult', path: result[0], workspaceRoot: root };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 }
                 return { success: true, type: 'browseTicketsFolderResult', path: null, workspaceRoot: root };
             }
@@ -3049,17 +3049,17 @@ Start by checking which documents exist, then present the menu.`;
                 if (!adapter) {
                     const res = { type: 'containersReady', sourceId, containers: [] };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 }
                 try {
                     const containers = await adapter.listContainers();
                     const res = { type: 'containersReady', sourceId, containers };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 } catch {
                     const res = { type: 'containersReady', sourceId, containers: [] };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
             }
             case 'fetchImportedDocs': {
@@ -3085,7 +3085,7 @@ Start by checking which documents exist, then present the menu.`;
                 if (!adapter) {
                     const res = { type: 'filteredDocsReady', sourceId, nodes: [], requestId };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 }
                 try {
                     let nodes: TreeNode[];
@@ -3106,12 +3106,12 @@ Start by checking which documents exist, then present the menu.`;
                     if (requestId !== this._latestRequestIds.get(filterKey)) { return { success: false, error: 'Stale request' }; }
                     const res = { type: 'filteredDocsReady', sourceId, nodes, requestId };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 } catch {
                     if (requestId === this._latestRequestIds.get(filterKey)) {
                         const res = { type: 'filteredDocsReady', sourceId, nodes: [], requestId };
                         this.postMessageToWebview(res);
-                        return { success: false, ...res };
+                        return { ...res, success: false };
                     }
                     return { success: false, error: 'Stale request' };
                 }
@@ -3130,7 +3130,7 @@ Start by checking which documents exist, then present the menu.`;
                 if (!adapter || !adapter.listDocPages) {
                     const res = { type: 'docPagesReady', sourceId, docId, pages: [], requestId };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 }
 
                 try {
@@ -3139,12 +3139,12 @@ Start by checking which documents exist, then present the menu.`;
                     if (requestId !== this._latestRequestIds.get(pagesKey)) { return { success: false, error: 'Stale request' }; }
                     const res = { type: 'docPagesReady', sourceId, docId, pages, requestId };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 } catch {
                     if (requestId === this._latestRequestIds.get(pagesKey)) {
                         const res = { type: 'docPagesReady', sourceId, docId, pages: [], requestId };
                         this.postMessageToWebview(res);
-                        return { success: false, ...res };
+                        return { ...res, success: false };
                     }
                     return { success: false, error: 'Stale request' };
                 }
@@ -3162,7 +3162,7 @@ Start by checking which documents exist, then present the menu.`;
                 if (!adapter || !adapter.fetchPageContent) {
                     const res = { type: 'previewError', sourceId, requestId, error: 'Adapter does not support page content' };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
 
                 try {
@@ -3171,17 +3171,17 @@ Start by checking which documents exist, then present the menu.`;
                     if (result.success) {
                         const res = { type: 'previewReady', sourceId, requestId, content: result.content, docName: result.docName };
                         this.postMessageToWebview(res);
-                        return { success: true, ...res };
+                        return { ...res, success: true };
                     } else {
                         const res = { type: 'previewError', sourceId, requestId, error: result.error };
                         this.postMessageToWebview(res);
-                        return { success: false, ...res };
+                        return { ...res, success: false };
                     }
                 } catch (err) {
                     if (requestId === this._latestRequestIds.get(sourceId)) {
                         const res = { type: 'previewError', sourceId, requestId, error: String(err) };
                         this.postMessageToWebview(res);
-                        return { success: false, ...res };
+                        return { ...res, success: false };
                     }
                     return { success: false, error: 'Stale request' };
                 }
@@ -3376,7 +3376,7 @@ Start by checking which documents exist, then present the menu.`;
                     break;
                 }
                 const title = typeof msg.title === 'string' && msg.title ? msg.title : path.basename(safePath, '.md');
-                const wsRoot = owningRoot;
+                const wsRoot = owningRoot || '';
                 let currentContent = '';
                 try { currentContent = await fs.promises.readFile(safePath, 'utf8'); } catch { /* treat as empty → Draft */ }
                 const hasContent = !!(msg.hasContent === true) && !!(currentContent && currentContent.trim());
@@ -4007,7 +4007,7 @@ Start by checking which documents exist, then present the menu.`;
                 if (!sessionId || !wsRoot) {
                     const errRes = { type: 'kanbanPlanLogReady', entries: [], error: 'Missing sessionId or workspaceRoot' };
                     this.postMessageToProjectWebview(errRes);
-                    return { success: false, ...errRes };
+                    return { ...errRes, success: false };
                 }
                 try {
                     const { SessionActionLog } = require('./SessionActionLog');
@@ -4017,11 +4017,11 @@ Start by checking which documents exist, then present the menu.`;
                     const entries = formatReviewLogEntries(events);
                     const okRes = { type: 'kanbanPlanLogReady', entries };
                     this.postMessageToProjectWebview(okRes);
-                    return { success: true, ...okRes };
+                    return { ...okRes, success: true };
                 } catch (err) {
                     const errRes = { type: 'kanbanPlanLogReady', entries: [], error: String(err) };
                     this.postMessageToProjectWebview(errRes);
-                    return { success: false, ...errRes };
+                    return { ...errRes, success: false };
                 }
             }
             case 'getFeatureDetails': {
@@ -4030,7 +4030,7 @@ Start by checking which documents exist, then present the menu.`;
                 if (!sessionId || !wsRoot) {
                     const errRes = { type: 'featureDetails', feature: null, subtasks: [] };
                     this.postMessageToProjectWebview(errRes);
-                    return { success: false, ...errRes };
+                    return { ...errRes, success: false };
                 }
                 try {
                     const db = KanbanDatabase.forWorkspace(wsRoot);
@@ -4038,11 +4038,11 @@ Start by checking which documents exist, then present the menu.`;
                     const subtasks = feature && feature.isFeature ? await db.getSubtasksByFeatureId(feature.planId) : [];
                     const okRes = { type: 'featureDetails', feature, subtasks };
                     this.postMessageToProjectWebview(okRes);
-                    return { success: true, ...okRes };
+                    return { ...okRes, success: true };
                 } catch (err) {
                     const errRes = { type: 'featureDetails', feature: null, subtasks: [], error: String(err) };
                     this.postMessageToProjectWebview(errRes);
-                    return { success: false, ...errRes };
+                    return { ...errRes, success: false };
                 }
             }
             case 'addSubtaskToFeature': {
@@ -4255,7 +4255,7 @@ Start by checking which documents exist, then present the menu.`;
                         error: 'Invalid workspace root'
                     };
                     this._postToBothPanels(errRes);
-                    return { success: false, ...errRes };
+                    return { ...errRes, success: false };
                 }
                 const filePath = this._getGovernanceFilePath(wsRoot, key);
                 if (fs.existsSync(filePath)) {
@@ -4272,7 +4272,7 @@ Start by checking which documents exist, then present the menu.`;
                             renderedHtml
                         };
                         this._postToBothPanels(okRes);
-                        return { success: true, ...okRes };
+                        return { ...okRes, success: true };
                     } catch (err) {
                         const errRes = {
                             type: 'constitutionFileRead',
@@ -4282,7 +4282,7 @@ Start by checking which documents exist, then present the menu.`;
                             error: String(err)
                         };
                         this._postToBothPanels(errRes);
-                        return { success: false, ...errRes };
+                        return { ...errRes, success: false };
                     }
                 } else {
                     const res = {
@@ -4292,7 +4292,7 @@ Start by checking which documents exist, then present the menu.`;
                         exists: false
                     };
                     this._postToBothPanels(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 }
             }
             case 'saveConstitutionFile': {
@@ -4403,7 +4403,7 @@ Start by checking which documents exist, then present the menu.`;
                         path: filePath
                     };
                     this._postToBothPanels(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 }
                 return { success: false, error: 'Missing workspaceRoot or projectName' };
             }
@@ -4923,7 +4923,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot: msg.workspaceRoot || undefined
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
 
                 const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
@@ -4937,7 +4937,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
 
                 try {
@@ -4961,7 +4961,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 } catch (error) {
                     const res = {
                         type: 'linearError',
@@ -4970,7 +4970,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
             }
             case 'linearLoadProjects': {
@@ -4984,7 +4984,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot: msg.workspaceRoot || undefined
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
 
                 const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
@@ -4998,7 +4998,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
 
                 try {
@@ -5010,7 +5010,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 } catch (error) {
                     const res = {
                         type: 'linearError',
@@ -5019,7 +5019,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
             }
             case 'linearLoadTaskDetails': {
@@ -5034,7 +5034,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot: workspaceRoot || msg.workspaceRoot || undefined
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
 
                 try {
@@ -5065,7 +5065,7 @@ Please format the updated output document strictly as follows:
                             workspaceRoot
                         };
                         this.postMessageToWebview(res);
-                        return { success: false, ...res };
+                        return { ...res, success: false };
                     }
 
                     let renderedDescriptionHtml = '';
@@ -5086,7 +5086,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 } catch (error: any) {
                     const errMsg = error?.message || String(error);
                     const statusMatch = errMsg.match(/HTTP (\d{3})/);
@@ -5103,7 +5103,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
             }
             case 'linearSaveProjectSelection': {
@@ -5134,7 +5134,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot: msg.workspaceRoot || undefined
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
                 const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
 
@@ -5146,7 +5146,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 } catch (error) {
                     const res = {
                         type: 'clickupError',
@@ -5155,7 +5155,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
             }
             case 'clickupLoadFolders': {
@@ -5168,7 +5168,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot: msg.workspaceRoot || undefined
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
                 const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
 
@@ -5183,7 +5183,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 } catch (error) {
                     const res = {
                         type: 'clickupError',
@@ -5192,7 +5192,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
             }
             case 'clickupLoadLists': {
@@ -5205,7 +5205,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot: msg.workspaceRoot || undefined
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
                 const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
 
@@ -5219,7 +5219,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 } catch (error) {
                     const res = {
                         type: 'clickupError',
@@ -5228,7 +5228,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
             }
             case 'invalidateClickUpCache': {
@@ -5252,7 +5252,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot: msg.workspaceRoot || undefined
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
 
                 const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
@@ -5267,7 +5267,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
 
                 const listId = msg.listId || config.selectedListId;
@@ -5280,7 +5280,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
 
                 try {
@@ -5301,7 +5301,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 } catch (error) {
                     const res = {
                         type: 'clickupError',
@@ -5311,7 +5311,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
             }
             case 'clickupLoadTaskDetails': {
@@ -5324,7 +5324,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot: msg.workspaceRoot || undefined
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
                 const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
 
@@ -5349,7 +5349,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 } catch (error: any) {
                     const errMsg = error?.message || String(error);
                     const statusMatch = errMsg.match(/HTTP (\d{3})/);
@@ -5366,7 +5366,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
             }
             case 'linearUpdateIssueLabels': {
@@ -5457,7 +5457,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
 
                 try {
@@ -5485,7 +5485,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 } catch (error) {
                     const res = {
                         type: 'ticketAssigneesError',
@@ -5495,7 +5495,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
             }
             case 'loadTicketMembers': {
@@ -5510,7 +5510,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
                 try {
                     let members: any[] = [];
@@ -5533,7 +5533,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 } catch (error) {
                     const res = {
                         type: 'ticketMembersError',
@@ -5542,7 +5542,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
             }
             case 'linearUpdateIssueAssignee': {
@@ -5717,7 +5717,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 } catch (error) {
                     const res = {
                         type: 'linearError',
@@ -5726,7 +5726,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
             }
             case 'clickupLoadSpaceTags': {
@@ -5742,7 +5742,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 } catch (error) {
                     const res = {
                         type: 'clickupError',
@@ -5751,7 +5751,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
             }
             case 'clickupLoadListStatuses': {
@@ -5768,7 +5768,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 } catch (error) {
                     const res = {
                         type: 'clickupError',
@@ -5777,7 +5777,7 @@ Please format the updated output document strictly as follows:
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
             }
             case 'clickupSaveSpaceSelection': {
@@ -5993,7 +5993,7 @@ Please format the updated output document strictly as follows:
                         page
                     };
                     this.postMessageToWebview({ ...res, success: result.success });
-                    return { success: !!result.success, ...res };
+                    return { ...res, success: !!result.success };
                 } catch (error) {
                     const errMsg = error instanceof Error ? error.message : String(error);
                     this._seams().ui.showErrorMessage(`Import all (${importMode}) failed: ${errMsg}`);
@@ -6008,7 +6008,7 @@ Please format the updated output document strictly as follows:
                         page
                     };
                     this.postMessageToWebview({ ...res, success: false });
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
             }
             case 'refreshTicketsDelta': {
@@ -6106,7 +6106,7 @@ Please format the updated output document strictly as follows:
                         isDelta: isDeltaRefresh
                     };
                     this.postMessageToWebview({ ...res, success: result.success });
-                    return { success: !!result.success, ...res };
+                    return { ...res, success: !!result.success };
                 } catch (error) {
                     const errMsg = error instanceof Error ? error.message : String(error);
                     this._seams().ui.showErrorMessage(`Refresh failed: ${errMsg}`);
@@ -6120,7 +6120,7 @@ Please format the updated output document strictly as follows:
                         projectId
                     };
                     this.postMessageToWebview({ ...res, success: false });
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
             }
             case 'openExternalUrl': {
@@ -6267,7 +6267,7 @@ Please format the updated output document strictly as follows:
                 if (!workspaceRoot) {
                     const res = { type: 'localTicketFilesListed', provider, tickets: [] };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
                 const ticketDirs = this._getTicketDocumentDirs(workspaceRoot, provider);
                 const tickets: any[] = [];
@@ -6480,13 +6480,13 @@ Please format the updated output document strictly as follows:
                 if (!workspaceRoot || !provider || !id) {
                     const res = { type: 'localTicketFileRead', provider, id, success: false };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
                 const filePath = await this._findTicketFilePath(workspaceRoot, provider, id);
                 if (!filePath) {
                     const res = { type: 'localTicketFileRead', provider, id, success: false };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
                 try {
                     const raw = fs.readFileSync(filePath, 'utf8');
@@ -6498,11 +6498,11 @@ Please format the updated output document strictly as follows:
                     const displayContent = this._rewriteLocalImagePaths(content, path.dirname(filePath));
                     const res = { type: 'localTicketFileRead', provider, id, success: true, title, content: displayContent, rawContent: content };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 } catch {
                     const res = { type: 'localTicketFileRead', provider, id, success: false };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
             }
             case 'ticketAttachImage': {
@@ -6747,7 +6747,7 @@ Please format the updated output document strictly as follows:
                     if (!refresh && cached && Date.now() - cached.at < PlanningPanelProvider.MOVE_TARGETS_TTL_MS) {
                         const res = { type: 'moveTargetsResult', provider, ticketId, targets: cached.targets };
                         this.postMessageToWebview(res);
-                        return { success: true, ...res };
+                        return { ...res, success: true };
                     }
                     if (provider === 'clickup') {
                         const clickUpService = this._adapterFactories.getClickUpSyncService(workspaceRoot);
@@ -6769,7 +6769,7 @@ Please format the updated output document strictly as follows:
                         this._moveTargetsCache.set('clickup', { at: Date.now(), targets });
                         const res = { type: 'moveTargetsResult', provider, ticketId, targets };
                         this.postMessageToWebview(res);
-                        return { success: true, ...res };
+                        return { ...res, success: true };
                     } else {
                         const linearService = this._adapterFactories.getLinearSyncService(workspaceRoot);
                         const projects = await linearService.getAvailableProjects();
@@ -6777,13 +6777,13 @@ Please format the updated output document strictly as follows:
                         this._moveTargetsCache.set('linear', { at: Date.now(), targets });
                         const res = { type: 'moveTargetsResult', provider, ticketId, targets };
                         this.postMessageToWebview(res);
-                        return { success: true, ...res };
+                        return { ...res, success: true };
                     }
                 } catch (err) {
                     console.error('[PlanningPanelProvider] Failed to fetch move targets:', err);
                     const res = { type: 'moveTargetsResult', provider: msg.provider, ticketId: msg.ticketId, targets: [], error: String(err) };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
             }
             case 'moveTicket': {
@@ -6815,31 +6815,48 @@ Please format the updated output document strictly as follows:
                 }
                 break;
             }
-            case 'refineFeature': {
+            case 'improveFeature': {
                 try {
                     const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                     const { planId, planFile, title, subtaskCount } = msg;
                     if (!workspaceRoot || !planFile) {
-                        this._seams().ui.showErrorMessage('Missing workspace or feature file for refine prompt');
+                        this._seams().ui.showErrorMessage('Missing workspace or feature file for improve prompt');
                         break;
                     }
 
-                    // Read user-editable skill file (.agents → legacy .agent → embedded fallback).
-                    const nfs = require('fs') as typeof import('fs');
-                    let skillContent = '';
-                    try {
-                        skillContent = nfs.readFileSync(path.join(workspaceRoot, '.agents', 'skills', 'refine_feature.md'), 'utf8');
-                    } catch {
-                        try {
-                            skillContent = nfs.readFileSync(path.join(workspaceRoot, '.agent', 'skills', 'refine_feature.md'), 'utf8');
-                        } catch {
-                            skillContent = `Refine this feature into a complete specification with:
+                    // Context-aware skill selection:
+                    // - subtaskCount > 0 → improve-feature/SKILL.md (destructive
+                    //   reconcile/restructure of existing subtasks).
+                    // - subtaskCount === 0 → refine_feature.md (non-destructive
+                    //   fleshing-out of a thin feature + proposed subtask breakdown).
+                    // The button label is "Improve" in both cases; the backend picks
+                    // the right skill silently.
+                    const hasSubtasks = (typeof subtaskCount === 'number' ? subtaskCount : 0) > 0;
+                    const skillRelPath = hasSubtasks
+                        ? path.join('.agents', 'skills', 'improve-feature', 'SKILL.md')
+                        : path.join('.agents', 'skills', 'refine_feature.md');
+                    const skillRelPathLegacy = hasSubtasks
+                        ? path.join('.agent', 'skills', 'improve-feature', 'SKILL.md')
+                        : path.join('.agent', 'skills', 'refine_feature.md');
+                    const fallbackContent = hasSubtasks
+                        ? `Improve this feature: reconcile and restructure its subtasks — improve each subtask, then merge/delete/rewrite/split to make the set coherent. Preserve YAML frontmatter and the auto-generated <!-- BEGIN SUBTASKS --> block. Write the result back to the local file path provided.`
+                        : `Refine this feature into a complete specification with:
 - A clear ## Goal (outcome + problem it solves)
 - ## Success Criteria (checkboxed, testable)
 - ## Scope (in/out)
 - ## Proposed Subtasks (ordered, checkboxed breakdown into shippable units)
 - ## Risks / Open Questions
 Preserve YAML frontmatter and the auto-generated <!-- BEGIN SUBTASKS --> block. Do not create kanban cards. Write the result back to the local file path provided.`;
+
+                    const nfs = require('fs') as typeof import('fs');
+                    let skillContent = '';
+                    try {
+                        skillContent = nfs.readFileSync(path.join(workspaceRoot, skillRelPath), 'utf8');
+                    } catch {
+                        try {
+                            skillContent = nfs.readFileSync(path.join(workspaceRoot, skillRelPathLegacy), 'utf8');
+                        } catch {
+                            skillContent = fallbackContent;
                         }
                     }
 
@@ -6848,25 +6865,31 @@ Preserve YAML frontmatter and the auto-generated <!-- BEGIN SUBTASKS --> block. 
                     let existingContent = '';
                     try { existingContent = nfs.readFileSync(featureFilePath, 'utf8'); } catch { /* file may not exist yet */ }
 
-                    const prompt = `You are refining a Switchboard feature into a complete, decomposable specification.
+                    const actionVerb = hasSubtasks ? 'improving' : 'refining';
+                    const prompt = `You are ${actionVerb} a Switchboard feature${hasSubtasks ? ' and reconciling its subtasks' : ' into a complete, decomposable specification'}.
 
 ## Skill Instructions
 ${skillContent}
 
-## Feature to Refine
+## Feature to Improve
 - **Title:** ${title || ''}
 - **Existing subtask cards:** ${subtaskCount || 0}
-- **Local file path (write the refined content here):** ${featureFilePath}
+- **Local file path (write the improved content here):** ${featureFilePath}
 
 ## Current feature file content
 ${existingContent ? existingContent : '(file is empty or does not exist yet — author a complete feature at the path above)'}
 
-Read the current content above. Determine what's missing. Produce a complete feature following the skill instructions — pay special attention to a concrete ## Proposed Subtasks breakdown. Write the refined markdown directly to the local file path, preserving any YAML frontmatter and the auto-generated <!-- BEGIN SUBTASKS --> block. Do NOT create kanban cards or modify any database. Report back with a summary and the proposed subtask list.`;
+Read the current content above. ${hasSubtasks
+    ? 'Reconcile and restructure the subtasks per the skill instructions — improve each, then merge/delete/rewrite/split to make the set coherent.'
+    : "Determine what's missing. Produce a complete feature following the skill instructions — pay special attention to a concrete ## Proposed Subtasks breakdown."}
+Write the resulting markdown directly to the local file path, preserving any YAML frontmatter and the auto-generated <!-- BEGIN SUBTASKS --> block. Do NOT create kanban cards or modify any database. Report back with a summary${hasSubtasks ? ' of the restructuring' : ' and the proposed subtask list'}.`;
 
                     await this._seams().clipboard.writeText(prompt);
-                    this._seams().ui.showTemporaryNotification('Refine-feature prompt copied to clipboard. Paste it into your agent.');
+                    this._seams().ui.showTemporaryNotification('Improve-feature prompt copied to clipboard. Paste it into your agent.');
+                    return { success: true, prompt };
                 } catch (err) {
-                    this._seams().ui.showErrorMessage(`Failed to copy refine-feature prompt: ${String(err)}`);
+                    this._seams().ui.showErrorMessage(`Failed to copy improve-feature prompt: ${String(err)}`);
+                    return { success: false, error: String(err) };
                 }
                 break;
             }
@@ -6945,7 +6968,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         workspaceRoot
                     };
                     this.postMessageToWebview({ ...res, success: result.success });
-                    return { success: !!result.success, ...res };
+                    return { ...res, success: !!result.success };
                 } catch (error) {
                     const res = {
                         type: 'ticketCommentsLoaded',
@@ -6958,7 +6981,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
             }
             case 'postTicketReply': {
@@ -7006,7 +7029,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: !!result.success, ...res };
+                    return { ...res, success: !!result.success };
                 } catch (error) {
                     const res = {
                         type: 'attachmentDownloaded',
@@ -7016,7 +7039,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         workspaceRoot
                     };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
             }
             case 'viewAttachments': {
@@ -7052,7 +7075,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         workspaceRoot
                     };
                     this._pushTo(targetPanel, 'planning', okRes);
-                    return { success: true, ...okRes };
+                    return { ...okRes, success: true };
                 } catch (error) {
                     const targetPanel = isProject ? this._projectPanel : this._panel;
                     const errRes = {
@@ -7064,7 +7087,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         workspaceRoot
                     };
                     this._pushTo(targetPanel, 'planning', errRes);
-                    return { success: false, ...errRes };
+                    return { ...errRes, success: false };
                 }
             }
             case 'openAttachment': {
@@ -7544,11 +7567,11 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         docMappings: config.docMappings || {}
                     };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 } catch (err) {
                     const errRes = { type: 'syncConfigReady', uploadLocations: {}, docMappings: {} };
                     this.postMessageToWebview(errRes);
-                    return { success: false, ...errRes };
+                    return { ...errRes, success: false };
                 }
             }
             case 'loadInsights': {
@@ -7589,7 +7612,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                             renderedHtml
                         };
                         this.postMessageToProjectWebview(res);
-                        return { success: true, ...res };
+                        return { ...res, success: true };
                     }
                     return { success: true, type: 'insightContent', filename, workspaceRoot: wsRoot, content: '' };
                 } catch (err) {
@@ -8526,7 +8549,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                                 filePath: resolvedPath
                             };
                             this.postMessageToWebview(res);
-                            return { success: true, ...res };
+                            return { ...res, success: true };
                         }
                         return { success: true, type: 'previewReady', sourceId, requestId, content: result.content || '', docName: result.docTitle };
                     }
@@ -8542,11 +8565,11 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         filePath: resolvedPath
                     };
                     this.postMessageToWebview(res);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 } else {
                     const res = { type: 'previewError', sourceId, requestId, error: result.error || 'Failed to fetch document' };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
             } catch (err) {
                 console.error('[PlanningPanel] Error fetching local doc:', err);
@@ -8605,7 +8628,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     this.postMessageToWebview(res);
                     // Refresh cache in background after returning cached content
                     this._refreshCacheInBackground(sourceId, docId, adapter);
-                    return { success: true, ...res };
+                    return { ...res, success: true };
                 }
             }
 
@@ -8630,14 +8653,14 @@ Read the current content above. Determine what's missing. Produce a complete fea
                             isAutoRefreshed: this._isAutoRefreshing
                         };
                         this.postMessageToWebview(res);
-                        return { success: true, ...res };
+                        return { ...res, success: true };
                     }
                     content = docResult.content || '';
                     docName = docResult.docTitle;
                 } else {
                     const res = { type: 'previewError', sourceId, requestId, error: docResult.error || 'Failed to fetch ClickUp document' };
                     this.postMessageToWebview(res);
-                    return { success: false, ...res };
+                    return { ...res, success: false };
                 }
             } else if ('fetchContent' in adapter) {
                 content = await adapter.fetchContent(docId);

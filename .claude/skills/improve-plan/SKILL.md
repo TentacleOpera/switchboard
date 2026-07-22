@@ -75,18 +75,7 @@ If the target file is under `.switchboard/features/` or contains an auto-generat
       - ### [Target File]
         - Context, Logic, Implementation, Edge Cases
    9. **## Verification Plan**
-      - ### Automated
-        - **Discriminating-check requirement:** must include at least one check
-          whose exit code discriminates done from not-done — not just a command
-          that passes when run. `compile-tests` / `build` / `typecheck` alone are
-          insufficient because they pass on incomplete work. The check must fail
-          if the plan's stated goal is unmet, even if the code compiles.
-        - **Mechanical-change exemption:** plans with complexity ≤ 2 may omit the
-          discriminating check by explicitly writing "No discriminating check
-          needed — mechanical change" in the Automated subsection. A wrong claim
-          is the failure this exists to catch.
-      - ### Manual / behavioral
-        - May supplement but cannot be the sole acceptance signal.
+      - ### Automated Tests
 
    **Complexity Criteria:**
    - **Routine (1-4):** Single-file, localized changes. Reuses existing patterns. Low risk. Small scope.
@@ -113,12 +102,6 @@ If the target file is under `.switchboard/features/` or contains an auto-generat
      - **Alternatives.** List 2–3 genuinely different approaches that could meet the same goal; one line of trade-off each.
      - **Justify or supersede.** Argue why the plan's approach is the best of the set — OR, if an alternative is clearly better, correct the plan's approach with a **Superseded** callout and flag it in chat. Do not stay inside the plan's frame just because it is the frame.
      - **Goal-vs-appearance probe (the load-bearing question):** does this approach actually *achieve the stated goal*, or only *appear* to? Name any way the plan could pass its own success check while the real goal is unmet — e.g. a completeness metric that counts scaffolding as "done"; an interface that abstracts a *call* without decoupling the *logic* behind it; a surface that is *reachable* but not *usable* (e.g. returns success but no data). If such a gap exists, it is a top finding — a green metric is NEVER a substitute for this judgment.
-     - **Verification-plan probe:** does the plan's `### Automated` verification subsection
-       actually include a check whose exit code discriminates done from not-done? A check
-       that passes when the code compiles but the goal is unmet is non-discriminating
-       (e.g. `compile-tests`, `build`, `typecheck` alone). If the plan claims a
-       mechanical-change exemption, is the claim correct? Name the check and argue why
-       it discriminates — or flag it as a top finding.
    - **Output:** write this architecture review to the chat response (like the Grumpy critique below), so the user can see the approach was actually challenged and veto it. It is separate from, and precedes, the execution-level adversarial review.
 
 5. **Run the internal adversarial review**

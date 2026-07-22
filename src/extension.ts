@@ -1562,13 +1562,13 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(removeAutobanTerminalDisposable);
 
-    const launchMcpMonitorTerminalDisposable = registerSwitchboardCommand('switchboard.launchMcpMonitorTerminal', async () => {
-        await taskViewerProvider.launchMcpMonitorTerminal();
+    const launchMcpMonitorTerminalDisposable = registerSwitchboardCommand('switchboard.launchMcpMonitorTerminal', async (jobId?: string) => {
+        await taskViewerProvider.launchMcpMonitorTerminal(jobId);
     });
     context.subscriptions.push(launchMcpMonitorTerminalDisposable);
 
-    const stopMcpMonitorTerminalDisposable = registerSwitchboardCommand('switchboard.stopMcpMonitorTerminal', async () => {
-        await taskViewerProvider.stopMcpMonitorTerminal();
+    const stopMcpMonitorTerminalDisposable = registerSwitchboardCommand('switchboard.stopMcpMonitorTerminal', async (jobId?: string) => {
+        await taskViewerProvider.stopMcpMonitorTerminal(jobId);
     });
     context.subscriptions.push(stopMcpMonitorTerminalDisposable);
 

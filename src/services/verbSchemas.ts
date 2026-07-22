@@ -33,7 +33,7 @@ export interface VerbFieldSchema {
 
 export interface VerbSchema {
     /** Field-level constraints. Fields not listed are passed through. */
-    fields: Record<string, VerbFieldSchema>;
+    fields?: Record<string, VerbFieldSchema>;
 }
 
 export type ProviderKey = 'kanban' | 'planning' | 'design' | 'setup' | 'taskViewer';
@@ -59,7 +59,7 @@ export function validateVerbPayload(
         return { ok: false, error: 'payload must be a JSON object' };
     }
 
-    for (const [field, spec] of Object.entries(schema.fields)) {
+    for (const [field, spec] of Object.entries(schema.fields || {})) {
         const value = (body as any)[field];
         if (value === undefined || value === null) {
             if (spec.required) {
@@ -285,13 +285,6 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
 
 export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
     // Features
-    addSubtaskToFeature: {
-        fields: {
-            planId: { type: 'string' },
-            sessionId: { type: 'string' },
-            workspaceRoot: { type: 'string' },
-        },
-    },
     sendToNew: {
         fields: {
             planId: { type: 'string' },
@@ -514,9 +507,12 @@ export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
             workspaceRoot: { type: 'string' },
         },
     },
-    refineFeature: {
+    improveFeature: {
         fields: {
-            sessionId: { type: 'string', required: true },
+            planId: { type: 'string' },
+            planFile: { type: 'string', required: true },
+            title: { type: 'string' },
+            subtaskCount: { type: 'number' },
             workspaceRoot: { type: 'string' },
         },
     },
@@ -1284,6 +1280,14 @@ export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
             sessionId: { type: 'string' },
             planId: { type: 'string' },
             column: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    improvePlan: {
+        fields: {
+            planId: { type: 'string' },
+            planFile: { type: 'string', required: true },
+            topic: { type: 'string' },
             workspaceRoot: { type: 'string' },
         },
     },

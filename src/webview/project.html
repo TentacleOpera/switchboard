@@ -134,6 +134,14 @@
             border-radius: 4px;
             font-size: 11px;
             font-family: var(--font-mono);
+        }.kanban-meta-dropdown {
+            background: #111;
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-family: var(--font-mono);
         }.sidebar-search-input {
             width: 100%;
             background: #111;
@@ -1246,7 +1254,7 @@
                 <button id="btn-import-kanban-plans" class="strip-btn" title="Scan configured AI IDE folders and pick unclaimed plans to add">Import</button>
                 <button id="btn-create-kanban-plan" class="strip-btn" title="Create a new plan">Create</button>
                 <button id="btn-chat-copy-prompt" class="strip-btn" title="Copy general chat planning prompt to clipboard">Chat Prompt</button>
-                <button id="btn-review-kanban" class="strip-btn review-mode-btn" title="Toggle review mode: highlight text in the plan to comment">Review</button>
+                <button id="btn-improve-kanban" class="strip-btn" disabled title="Copy the improve-plan workflow prompt to clipboard">Improve</button>
             </div>
             <div class="content-row">
                 <div id="kanban-list-pane">
@@ -1316,8 +1324,14 @@
                 <select id="features-column-filter">
                     <option value="">All Columns</option>
                 </select>
+                <select id="features-complexity-filter">
+                    <option value="">All Complexity</option>
+                    <option value="unknown">Unknown</option>
+                    <option value="1-3">Low (1-3)</option>
+                    <option value="4-6">Medium (4-6)</option>
+                    <option value="7-10">High (7-10)</option>
+                </select>
                 <button id="btn-new-feature" class="strip-btn">+ New Feature</button>
-                <button id="btn-review-features" class="strip-btn review-mode-btn" title="Toggle review mode: highlight text in the feature to comment">Review</button>
             </div>
             <div class="content-row">
                 <div id="features-list-pane">

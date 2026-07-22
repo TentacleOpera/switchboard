@@ -2675,7 +2675,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         <button class="shared-tab-btn" data-tab="worktrees">WORKTREES</button>
 
         <button class="shared-tab-btn" data-tab="uat">UAT</button>
-        <button class="shared-tab-btn" data-tab="comms">COMMS</button>
         <button class="shared-tab-btn" data-tab="setup">SETUP</button>
     </div>
 
@@ -2763,11 +2762,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
     <!-- Automation Tab Content -->
     <div id="automation-tab-content" class="shared-tab-content">
         <div id="automation-panel-root" class="automation-panel"></div>
-    </div>
-
-    <!-- Comms Tab Content -->
-    <div id="comms-tab-content" class="shared-tab-content">
-        <div id="comms-panel-root" class="automation-panel"></div>
     </div>
 
     <!-- The Remote tab (§10) moved to project.html (Project panel). The toolbar
@@ -5799,13 +5793,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             const resetBtn = document.getElementById('btn-reset-autoban-timer');
             if (resetBtn) {
-                const showReset = isEnabled && currentAutomationMode !== 'antigravity-batch' && currentAutomationMode !== 'orchestration';
+                const showReset = isEnabled && currentAutomationMode !== 'antigravity-batch' && currentAutomationMode !== 'orchestration' && currentAutomationMode !== 'scheduler';
                 resetBtn.style.display = showReset ? '' : 'none';
             }
 
             const pauseBtn = document.getElementById('btn-pause-autoban-timer');
             if (pauseBtn) {
-                const showPause = isEnabled && currentAutomationMode !== 'antigravity-batch' && currentAutomationMode !== 'orchestration';
+                const showPause = isEnabled && currentAutomationMode !== 'antigravity-batch' && currentAutomationMode !== 'orchestration' && currentAutomationMode !== 'scheduler';
                 pauseBtn.style.display = showPause ? '' : 'none';
                 const isPaused = !!(autobanConfig && autobanConfig.paused);
                 pauseBtn.classList.toggle('is-paused', isPaused);
@@ -7027,6 +7021,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let lastWorktreeConfig = null;
         let selectedWorktreeRepo = '';
         let currentAutomationMode = 'single-column';
+        // Remap persisted automation modes that no longer exist as standalone
+        // entries. `antigravity-batch` is kept as a legacy alias in the union
+        // (autobanState.ts) but the Scheduler UI supersedes it — remap to
+        // `scheduler` so a user whose last mode was antigravity-batch lands on
+        // the Scheduler panel without error. The comms tab is removed entirely
+        // (plan 4); a persisted `comms` tab value is handled by the tab-restore
+        // path (no longer matches a tab button → falls back to the default
+        // active tab, which is the board).
+        function remapAutomationMode(mode) {
+            if (mode === 'antigravity-batch') return 'scheduler';
+            return mode;
+        }
         let lastAntigravityBatchSize = 5;
         let managedTerminalPools = {};
         let mcpMonitorConfig = { enabled: false, pollingEnabled: false, targetRole: 'mcp_monitor', sources: ['slack'], customInstruction: '', sourceIntervals: { slack: 5, gmail: 5, gcal: 5, custom: 5 }, sourceLastCheckAt: {} };
@@ -7672,7 +7678,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 case 'updateAutobanConfig':
                     autobanConfig = msg.state || null;
                     if (autobanConfig && autobanConfig.automationMode) {
-                        currentAutomationMode = autobanConfig.automationMode;
+                        currentAutomationMode = remapAutomationMode(autobanConfig.automationMode);
                         saveWebviewState();
                     }
                     updateAutobanIndicators(true);
@@ -7807,6 +7813,52 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     break;
                 }
+                case 'schedulerOutput': {
+                    // Per-job output capture (non-comms local-terminal jobs).
+                    // Stored on window for the job row to display; comms jobs use
+                    // commsMonitorOutput above.
+                    window.__schedulerOutput = window.__schedulerOutput || {};
+                    window.__schedulerOutput[msg.jobId] = msg.output
+                        ? `[${new Date(msg.timestamp).toLocaleTimeString()}]\n${msg.output}`
+                        : `[${new Date(msg.timestamp).toLocaleTimeString()}] No output captured.`;
+                    break;
+                }
+                case 'schedulerPrompt': {
+                    // "Copy prompt" result for external targets. Copy to clipboard.
+                    if (msg.prompt) {
+                        try {
+                            navigator.clipboard.writeText(msg.prompt);
+                            postKanbanMessage({ type: 'showInfo', message: 'Scheduler prompt copied to clipboard.' });
+                        } catch (e) {
+                            postKanbanMessage({ type: 'showWarning', message: 'Failed to copy prompt to clipboard.' });
+                        }
+                    } else if (msg.error) {
+                        postKanbanMessage({ type: 'showWarning', message: msg.error });
+                    }
+                    // Reset any COPY PROMPT buttons that were in LOADING state.
+                    document.querySelectorAll('button').forEach(b => {
+                        if (b.textContent === 'LOADING...') { b.textContent = 'COPY PROMPT'; b.disabled = false; }
+                    });
+                    break;
+                }
+                case 'schedulerTargetContracts': {
+                    window.__schedulerTargetContracts = msg.contracts || {};
+                    // Re-render any visible prerequisites blocks.
+                    const prereqRoot = document.getElementById('scheduler-prereq-root');
+                    if (prereqRoot && prereqRoot.style.display !== 'none') {
+                        // The current target is derived from the active job row;
+                        // re-render is handled by the job row's refreshSubForms.
+                    }
+                    break;
+                }
+                case 'updateSchedulerConfig': {
+                    window.__schedulerConfig = msg.config || { schemaVersion: 1, jobs: [] };
+                    // Re-render the scheduler panel if it is the active mode.
+                    if (currentAutomationMode === 'scheduler') {
+                        renderAutobanPanel();
+                    }
+                    break;
+                }
                 case 'mcpMonitorPreview': {
                   // Backend-rendered preview (response to renderMcpMonitorPreview).
                   // Only update the textarea if the user has not manually overridden.
@@ -7897,7 +7949,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const sourceCol = (autobanConfig.singleColumnConfig || {}).sourceColumn;
                     const sourceIdx = autobanColumns.indexOf(sourceCol);
                     filteredBadgeData = sourceIdx >= 0 ? [badgeData[sourceIdx]] : [];
-                } else if (currentAutomationMode === 'antigravity-batch' || currentAutomationMode === 'orchestration') {
+                } else if (currentAutomationMode === 'antigravity-batch' || currentAutomationMode === 'orchestration' || currentAutomationMode === 'scheduler') {
                     filteredBadgeData = [];
                 }
                 if (forceRebuild || container.children.length !== filteredBadgeData.length) {
@@ -7938,7 +7990,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const sourceCol = (autobanConfig.singleColumnConfig || {}).sourceColumn;
                 const sourceIdx = autobanColumns.indexOf(sourceCol);
                 filteredBadgeData = sourceIdx >= 0 ? [badgeData[sourceIdx]] : [];
-            } else if (currentAutomationMode === 'antigravity-batch' || currentAutomationMode === 'orchestration') {
+            } else if (currentAutomationMode === 'antigravity-batch' || currentAutomationMode === 'orchestration' || currentAutomationMode === 'scheduler') {
                 filteredBadgeData = [];
             }
             // multi-column: show all badges (no filtering)
@@ -8169,6 +8221,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     batchSize: lastAntigravityBatchSize,
                     workspaceRoot: getActiveWorkspaceRoot()
                 });
+                return;
+            }
+            if (currentAutomationMode === 'scheduler') {
+                // The Scheduler panel owns its own start/stop/copy-prompt controls
+                // per job. The toolbar button is a no-op in this mode (the panel
+                // is the single control surface). Surface a hint so the user knows
+                // where to look.
+                postKanbanMessage({ type: 'showInfo', message: 'Use the Scheduler panel below to start/stop jobs or copy prompts.' });
                 return;
             }
             if (currentAutomationMode === 'orchestration') {
@@ -8709,7 +8769,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             [
                 { value: 'single-column', label: 'Switchboard Single Column' },
                 { value: 'multi-column', label: 'Switchboard Multi Column' },
-                { value: 'antigravity-batch', label: 'Antigravity Batch' },
+                { value: 'scheduler', label: 'Scheduler' },
+                { value: 'antigravity-batch', label: 'Antigravity Batch (legacy)' },
                 { value: 'orchestration', label: 'Orchestration' }
             ].forEach(m => {
                 const opt = document.createElement('option');
@@ -8725,7 +8786,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const modeDescriptions = {
                 'single-column': 'Automates a single workflow stage. For example, code all plans in the PLANNED column overnight, ready for review the next day.',
                 'multi-column': 'Automates multiple column transitions with per-role terminal pools. Best for full pipeline automation.',
-                'antigravity-batch': 'Generates a one-shot batch prompt for Antigravity chat. No continuous automation — run manually as needed.',
+                'scheduler': 'Schedule any prompt on a recurring timer. Sources: board-batch, reconcile cloud work, custom prompt, or comms (Slack/Gmail/Calendar). Targets: local terminal (sub-hourly), Antigravity, or cloud (laptop-off). The successor to the standalone COMMS tab.',
+                'antigravity-batch': 'Generates a one-shot batch prompt for Antigravity chat. No continuous automation — run manually as needed. (Legacy — use Scheduler with source=board-batch, target=antigravity instead.)',
                 'orchestration': 'A system-woken orchestrator agent batches plans into features, fans work out across per-feature worktrees, and merges results back feature by feature. Selecting this mode enables per-feature feature worktrees automatically (restored on switching away).'
             };
             const modeHelpText = document.createElement('div');
@@ -9692,7 +9754,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                 const antigravityDesc = document.createElement('div');
                 antigravityDesc.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
-                antigravityDesc.textContent = 'Select an agent and column, then copy a one-shot batch prompt. Paste it into Antigravity chat. The agent will delegate each plan to a subagent in parallel, then move completed plans forward. Run once daily or as needed.';
+                antigravityDesc.textContent = 'Select an agent and column, then copy a batch prompt. Paste it into Antigravity → Scheduled Tasks (the `schedule` tool) and set the recurrence there — Antigravity owns the timer, not Switchboard. The agent delegates each plan to a subagent in parallel, then moves completed plans forward. (Legacy mode — prefer Scheduler with source=board-batch, target=antigravity.)';
                 antigravitySection.appendChild(antigravityDesc);
 
                 const antigravityActions = document.createElement('div');
@@ -9809,6 +9871,295 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 batchSizeRow.appendChild(batchSizeLabel);
                 batchSizeRow.appendChild(batchSizeSelect);
                 antigravitySection.appendChild(batchSizeRow);
+            } else if (currentAutomationMode === 'scheduler') {
+                // ─── Scheduler panel (plan 4) ─────────────────────────────────
+                // Replaces the standalone COMMS tab. Surfaces the generic scheduler
+                // as a mode in the Automation dropdown. Comms is demoted to one
+                // source option; board-batch / reconcile / custom are the others.
+                // External targets (antigravity/cloud) emit a copyable prompt +
+                // prerequisites block; local-terminal jobs start/stop a terminal.
+                const schedContainer = document.createElement('div');
+                schedContainer.style.cssText = 'display: flex; flex-direction: column; gap: 12px;';
+                container.appendChild(schedContainer);
+
+                const schedSection = document.createElement('div');
+                schedSection.className = 'db-subsection';
+                schedContainer.appendChild(schedSection);
+
+                const schedHeader = document.createElement('div');
+                schedHeader.className = 'subsection-header';
+                const schedSpan = document.createElement('span');
+                schedSpan.textContent = 'SCHEDULER';
+                schedHeader.appendChild(schedSpan);
+                schedSection.appendChild(schedHeader);
+
+                const schedDesc = document.createElement('div');
+                schedDesc.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
+                schedDesc.textContent = 'Schedule any prompt on a recurring timer. Add a job, pick a source and target, set an interval (respecting the target floor), and start (local) or copy the prompt (external). Comms (Slack/Gmail/Calendar) is one source — the sub-form appears when selected.';
+                schedSection.appendChild(schedDesc);
+
+                // Job list root. The host pushes SchedulerConfig via
+                // `updateSchedulerConfig`; until then show an empty list with an
+                // "Add job" affordance. Do NOT auto-create a comms job.
+                const jobListRoot = document.createElement('div');
+                jobListRoot.id = 'scheduler-job-list';
+                jobListRoot.style.cssText = 'padding:0 8px; display:flex; flex-direction:column; gap:8px;';
+                schedSection.appendChild(jobListRoot);
+
+                // Comms sub-form container — populated by renderCommsPanel() when
+                // a comms job is selected. Reuses the existing createCommsPanel()
+                // controls (sources, intervals, Slack/Gmail scoping, editable
+                // preview) lifted, not rewritten.
+                const commsRoot = document.createElement('div');
+                commsRoot.id = 'scheduler-comms-root';
+                commsRoot.style.cssText = 'padding:0 8px;';
+                schedSection.appendChild(commsRoot);
+
+                // Prerequisites block container — rendered from the target
+                // contracts fetched via `getSchedulerTargetContracts`.
+                const prereqRoot = document.createElement('div');
+                prereqRoot.id = 'scheduler-prereq-root';
+                prereqRoot.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); line-height:1.4; white-space:pre-wrap; display:none;';
+                schedSection.appendChild(prereqRoot);
+
+                // Add-job button
+                const addJobRow = document.createElement('div');
+                addJobRow.style.cssText = 'padding:0 8px; display:flex; gap:8px; align-items:center;';
+                const addJobBtn = document.createElement('button');
+                addJobBtn.className = 'strip-btn is-teal';
+                addJobBtn.textContent = '+ ADD JOB';
+                addJobBtn.style.cssText = 'font-family:var(--font-mono); font-size:10px;';
+                addJobBtn.addEventListener('click', () => {
+                    // Optimistic add: append a placeholder job row. The host
+                    // persists via setSchedulerConfig on save. A fresh job
+                    // defaults to source=board-batch, target=local-terminal.
+                    const jobEl = createSchedulerJobRow({
+                        id: 'job-' + Date.now(),
+                        label: 'New job',
+                        enabled: false,
+                        source: 'board-batch',
+                        target: 'local-terminal',
+                        intervalMinutes: 10,
+                        promptOverride: '',
+                        sourceConfig: {}
+                    });
+                    jobListRoot.appendChild(jobEl);
+                });
+                addJobRow.appendChild(addJobBtn);
+                schedSection.appendChild(addJobRow);
+
+                // Helper: render the prerequisites block for a target.
+                function renderSchedulerPrereq(target) {
+                    const contracts = window.__schedulerTargetContracts || {};
+                    const c = contracts[target];
+                    if (!c) { prereqRoot.style.display = 'none'; prereqRoot.textContent = ''; return; }
+                    const floor = c.intervalFloorMinutes != null ? ` (min interval: ${c.intervalFloorMinutes} min)` : '';
+                    prereqRoot.textContent = `Target: ${target}${floor}\n\n${c.prerequisites}`;
+                    prereqRoot.style.display = 'block';
+                }
+
+                // Helper: build one job row with source/target dropdowns, interval,
+                // and start/stop (local) or copy-prompt (external) controls.
+                function createSchedulerJobRow(job) {
+                    const row = document.createElement('div');
+                    row.style.cssText = 'border:1px solid var(--border-color); border-radius:4px; padding:8px; display:flex; flex-direction:column; gap:6px; background:var(--panel-bg2);';
+                    row.dataset.jobId = job.id;
+
+                    const topRow = document.createElement('div');
+                    topRow.style.cssText = 'display:flex; gap:6px; align-items:center;';
+                    const enableChk = document.createElement('input');
+                    enableChk.type = 'checkbox';
+                    enableChk.checked = !!job.enabled;
+                    enableChk.title = 'Enable/disable this job';
+                    const labelInput = document.createElement('input');
+                    labelInput.type = 'text';
+                    labelInput.value = job.label || '';
+                    labelInput.placeholder = 'Job label';
+                    labelInput.style.cssText = 'flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px;';
+                    const delBtn = document.createElement('button');
+                    delBtn.className = 'strip-btn';
+                    delBtn.textContent = '✕';
+                    delBtn.style.cssText = 'font-family:var(--font-mono); font-size:10px; padding:2px 6px;';
+                    delBtn.title = 'Delete this job';
+                    delBtn.addEventListener('click', () => {
+                        row.remove();
+                        postKanbanMessage({ type: 'setSchedulerConfig', config: collectSchedulerJobs() });
+                    });
+                    topRow.appendChild(enableChk);
+                    topRow.appendChild(labelInput);
+                    topRow.appendChild(delBtn);
+                    row.appendChild(topRow);
+
+                    const midRow = document.createElement('div');
+                    midRow.style.cssText = 'display:flex; gap:6px; align-items:center;';
+                    const sourceSelect = document.createElement('select');
+                    sourceSelect.style.cssText = autobanSelectStyle + ' flex:1;';
+                    // Source dropdown ordering: board-batch → reconcile → custom → comms (last).
+                    [
+                        { value: 'board-batch', label: 'Board batch' },
+                        { value: 'reconcile', label: 'Reconcile cloud work' },
+                        { value: 'custom', label: 'Custom prompt' },
+                        { value: 'comms', label: 'Comms (Slack/Gmail/Calendar)' }
+                    ].forEach(s => {
+                        const opt = document.createElement('option');
+                        opt.value = s.value; opt.textContent = s.label;
+                        if (s.value === job.source) opt.selected = true;
+                        sourceSelect.appendChild(opt);
+                    });
+                    const targetSelect = document.createElement('select');
+                    targetSelect.style.cssText = autobanSelectStyle + ' flex:1;';
+                    [
+                        { value: 'local-terminal', label: 'Local terminal' },
+                        { value: 'antigravity', label: 'Antigravity' },
+                        { value: 'cloud', label: 'Cloud' }
+                    ].forEach(t => {
+                        const opt = document.createElement('option');
+                        opt.value = t.value; opt.textContent = t.label;
+                        if (t.value === job.target) opt.selected = true;
+                        targetSelect.appendChild(opt);
+                    });
+                    midRow.appendChild(sourceSelect);
+                    midRow.appendChild(targetSelect);
+                    row.appendChild(midRow);
+
+                    const intervalRow = document.createElement('div');
+                    intervalRow.style.cssText = 'display:flex; gap:6px; align-items:center; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
+                    const intervalLabel = document.createElement('span');
+                    intervalLabel.textContent = 'EVERY';
+                    const intervalInput = document.createElement('input');
+                    intervalInput.type = 'number';
+                    intervalInput.min = '1';
+                    intervalInput.value = String(job.intervalMinutes || 10);
+                    intervalInput.style.cssText = autobanNumberInputStyle;
+                    const minLabel = document.createElement('span');
+                    minLabel.textContent = 'min';
+                    intervalRow.appendChild(intervalLabel);
+                    intervalRow.appendChild(intervalInput);
+                    intervalRow.appendChild(minLabel);
+                    row.appendChild(intervalRow);
+
+                    // Prompt override (for custom / board-batch-with-override).
+                    const promptRow = document.createElement('div');
+                    promptRow.style.cssText = 'display:flex; gap:6px; align-items:flex-start; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
+                    const promptLabel = document.createElement('span');
+                    promptLabel.textContent = 'PROMPT:';
+                    const promptArea = document.createElement('textarea');
+                    promptArea.value = job.promptOverride || '';
+                    promptArea.placeholder = 'Custom prompt (overrides the source preset). For board-batch/reconcile leave blank to use the preset.';
+                    promptArea.style.cssText = 'flex:1; min-height:40px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:4px; border-radius:3px; resize:vertical;';
+                    promptRow.appendChild(promptLabel);
+                    promptRow.appendChild(promptArea);
+                    row.appendChild(promptRow);
+
+                    // Action row: start/stop (local) or copy prompt (external).
+                    const actionRow = document.createElement('div');
+                    actionRow.style.cssText = 'display:flex; gap:6px; align-items:center;';
+                    const startBtn = document.createElement('button');
+                    startBtn.className = 'strip-btn is-teal';
+                    startBtn.textContent = 'START';
+                    startBtn.style.cssText = 'font-family:var(--font-mono); font-size:10px;';
+                    startBtn.addEventListener('click', () => {
+                        postKanbanMessage({ type: 'launchMcpMonitorTerminal', jobId: job.id });
+                    });
+                    const stopBtn = document.createElement('button');
+                    stopBtn.className = 'strip-btn';
+                    stopBtn.textContent = 'STOP';
+                    stopBtn.style.cssText = 'font-family:var(--font-mono); font-size:10px;';
+                    stopBtn.addEventListener('click', () => {
+                        postKanbanMessage({ type: 'stopMcpMonitorTerminal', jobId: job.id });
+                    });
+                    const copyBtn = document.createElement('button');
+                    copyBtn.className = 'strip-btn';
+                    copyBtn.textContent = 'COPY PROMPT';
+                    copyBtn.style.cssText = 'font-family:var(--font-mono); font-size:10px;';
+                    copyBtn.addEventListener('click', () => {
+                        copyBtn.textContent = 'LOADING...'; copyBtn.disabled = true;
+                        postKanbanMessage({ type: 'schedulerPrompt', job: collectJobFromRow(row), workspaceRoot: getActiveWorkspaceRoot() });
+                    });
+                    actionRow.appendChild(startBtn);
+                    actionRow.appendChild(stopBtn);
+                    actionRow.appendChild(copyBtn);
+                    row.appendChild(actionRow);
+
+                    // Save button — persists the whole job list.
+                    const saveBtn = document.createElement('button');
+                    saveBtn.className = 'strip-btn';
+                    saveBtn.textContent = 'SAVE';
+                    saveBtn.style.cssText = 'font-family:var(--font-mono); font-size:10px;';
+                    saveBtn.addEventListener('click', () => {
+                        postKanbanMessage({ type: 'setSchedulerConfig', config: collectSchedulerJobs() });
+                    });
+                    row.appendChild(saveBtn);
+
+                    // Toggle comms sub-form + prerequisites on source/target change.
+                    function refreshSubForms() {
+                        const isComms = sourceSelect.value === 'comms';
+                        commsRoot.style.display = isComms ? 'block' : 'none';
+                        if (isComms && commsRoot.childElementCount === 0) {
+                            renderCommsPanel();
+                        }
+                        renderSchedulerPrereq(targetSelect.value);
+                        // Show/hide start-stop vs copy-prompt based on target.
+                        const isLocal = targetSelect.value === 'local-terminal';
+                        startBtn.style.display = isLocal ? '' : 'none';
+                        stopBtn.style.display = isLocal ? '' : 'none';
+                        copyBtn.style.display = isLocal ? 'none' : '';
+                    }
+                    sourceSelect.addEventListener('change', refreshSubForms);
+                    targetSelect.addEventListener('change', refreshSubForms);
+                    refreshSubForms();
+
+                    return row;
+                }
+
+                // Collect all job rows into a SchedulerConfig-shaped object.
+                function collectJobFromRow(rowEl) {
+                    const inputs = rowEl.querySelectorAll('input, select, textarea');
+                    const vals = {};
+                    inputs.forEach(i => {
+                        if (i.type === 'checkbox') vals[i.dataset.field || 'enabled'] = i.checked;
+                        else if (i.tagName === 'SELECT') vals[i.dataset.field || i.className] = i.value;
+                        else vals[i.dataset.field || 'text'] = i.value;
+                    });
+                    // Read by position: the row structure is fixed.
+                    const enableChk = rowEl.querySelector('input[type="checkbox"]');
+                    const labelInput = rowEl.querySelectorAll('input[type="text"]')[0];
+                    const selects = rowEl.querySelectorAll('select');
+                    const numInput = rowEl.querySelector('input[type="number"]');
+                    const textarea = rowEl.querySelector('textarea');
+                    return {
+                        id: rowEl.dataset.jobId,
+                        label: labelInput ? labelInput.value : '',
+                        enabled: enableChk ? enableChk.checked : false,
+                        source: selects[0] ? selects[0].value : 'custom',
+                        target: selects[1] ? selects[1].value : 'local-terminal',
+                        intervalMinutes: numInput ? parseInt(numInput.value, 10) || 10 : 10,
+                        promptOverride: textarea ? textarea.value : '',
+                        sourceConfig: {}
+                    };
+                }
+                function collectSchedulerJobs() {
+                    const rows = jobListRoot.querySelectorAll('[data-job-id]');
+                    const jobs = [];
+                    rows.forEach(r => jobs.push(collectJobFromRow(r)));
+                    return { schemaVersion: 1, jobs };
+                }
+
+                // Render existing jobs from the host-pushed config (if any).
+                const existingJobs = (window.__schedulerConfig && window.__schedulerConfig.jobs) || [];
+                if (existingJobs.length === 0) {
+                    const empty = document.createElement('div');
+                    empty.style.cssText = 'padding:8px; color:var(--text-secondary); font-family:var(--font-mono); font-size:10px;';
+                    empty.textContent = 'No scheduler jobs yet. Click "+ ADD JOB" to create one.';
+                    jobListRoot.appendChild(empty);
+                } else {
+                    existingJobs.forEach(j => jobListRoot.appendChild(createSchedulerJobRow(j)));
+                }
+
+                // Request the target contracts + scheduler config from the host
+                // so the prerequisites blocks and job list populate.
+                postKanbanMessage({ type: 'getSchedulerTargetContracts' });
+                postKanbanMessage({ type: 'getSchedulerConfig' });
             } else if (currentAutomationMode === 'orchestration') {
                 const orchSection = document.createElement('div');
                 orchSection.className = 'db-subsection';
@@ -10368,7 +10719,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         function renderCommsPanel() {
             try {
-                const root = document.getElementById('comms-panel-root');
+                // The standalone COMMS tab is retired (plan 4). The comms sub-form
+                // now lives inside the Scheduler panel as a nested section when a
+                // comms job exists. Render into `scheduler-comms-root` (created by
+                // the Scheduler panel) instead of the deleted `comms-panel-root`.
+                const root = document.getElementById('scheduler-comms-root');
                 if (!root) return;
                 if (isCommsPanelInteracting) {
                     console.log('[kanban] Skipping comms panel re-render: user interaction guard active');
@@ -10406,10 +10761,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         postKanbanMessage({ type: 'getAutobanConfig' });
                     }
                     renderAutobanPanel();
-                } else if (btn.dataset.tab === 'comms') {
-                    // Config already arrives on webview 'ready' (KanbanProvider ready
-                    // handler calls postMcpMonitorConfig), so render from current state.
-                    renderCommsPanel();
                 }
             });
         });

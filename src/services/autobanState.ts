@@ -104,7 +104,7 @@ export type AutobanConfigState = {
     pausedRemainingMs?: Record<string, number>;
     pairProgrammingMode: 'off' | 'cli-cli' | 'cli-ide' | 'ide-cli' | 'ide-ide';
     aggressivePairProgramming: boolean;
-    automationMode?: 'single-column' | 'multi-column' | 'antigravity-batch' | 'orchestration';
+    automationMode?: 'single-column' | 'multi-column' | 'antigravity-batch' | 'orchestration' | 'scheduler';
     singleColumnConfig?: SingleColumnAutobanConfig;
     orchestrationConfig?: OrchestrationConfig;
 };
@@ -304,7 +304,7 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
             return 'off';
         })((state as any)?.pairProgrammingMode, (state as any)?.pairProgrammingEnabled),
         aggressivePairProgramming: state?.aggressivePairProgramming === true,
-        automationMode: (['single-column', 'multi-column', 'antigravity-batch', 'orchestration'] as const).includes(state?.automationMode as any)
+        automationMode: (['single-column', 'multi-column', 'antigravity-batch', 'orchestration', 'scheduler'] as const).includes(state?.automationMode as any)
             ? state!.automationMode!
             : 'single-column',
         singleColumnConfig: normalizeSingleColumnConfig(state?.singleColumnConfig),

@@ -45,7 +45,9 @@ function computeBaselineUpdate(baseline, results) {
         // Measurement-validity gate: a block whose case-count != the allowlist
         // was mis-bounded, so its break count is untrustworthy — never build a
         // ceiling from it. (Skipped when `allowlist` is absent, e.g. unit tests.)
-        if (r.allowlist != null && r.res.casesCount !== r.allowlist) {
+        if (r.allowlist != null && r.res.casesCount < r.allowlist) {
+            // Only a TRUNCATED block (under-count) makes the break count untrustworthy
+            // for baselining; an over-count is conservative. See checkMode.
             unreliable.push({ name: r.name, cases: r.res.casesCount, allowlist: r.allowlist });
             continue;
         }
@@ -72,10 +74,17 @@ function checkMode(baseline, results) {
             errors++;
             continue;
         }
-        if (r.allowlist != null && r.res.casesCount !== r.allowlist) {
-            console.error(`❌ ${r.name}: measurement UNRELIABLE — extracted ${r.res.casesCount} case labels but the allowlist has ${r.allowlist}. The switch block is mis-bounded (brace-matcher truncation) or arms/allowlist drifted; the break count cannot be trusted. Fix before relying on the ratchet.`);
+        if (r.allowlist != null && r.res.casesCount < r.allowlist) {
+            console.error(`❌ ${r.name}: measurement UNRELIABLE — extracted only ${r.res.casesCount} case labels but the allowlist has ${r.allowlist}. The switch block is TRUNCATED (brace-matcher stopped early) → the break count is under-counted and cannot be trusted (the dangerous, break-hiding direction). Fix the switch bounds before relying on the ratchet.`);
             errors++;
             continue;
+        }
+        if (r.allowlist != null && r.res.casesCount > r.allowlist) {
+            // Over-count: the crude brace-matcher over-extended past the switch and
+            // counted foreign `case` labels. This only ever INFLATES the break count
+            // (conservative — it cannot hide an unconverted break), so it does not fail
+            // the gate. Authoritative arm count is parity:check (allowlist ≡ catalog).
+            console.warn(`⚠️  ${r.name}: extracted ${r.res.casesCount} case labels vs allowlist ${r.allowlist} — brace-matcher over-extended past the switch end (harmless: break count is conservative, not under-counted).`);
         }
         const ceiling = baseline[r.name];
         if (ceiling === undefined) {

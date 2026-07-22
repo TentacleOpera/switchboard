@@ -111,3 +111,7 @@ None remaining. All external platform claims have been confirmed by the user (20
 ## Routing
 
 **Complexity 5 → Send to Coder.** Mostly extraction + new authored text + a message shim; the only moderate risk is the `reconcile` prompt semantics, guarded by a unit test on its contents.
+
+## Completion Report
+
+Added the source presets and external-target handoff in `src/services/KanbanProvider.ts`. Extracted the antigravity batch prompt body into a target-agnostic `_buildBoardBatchPromptCore` (byte-identical to the former `_generateAntigravityPrompt` output for the same inputs; the legacy method is now a shim that posts `antigravityPrompt`). Added `_buildReconcilePrompt` (forward-only, idempotent, `kanban_operations`-only — never raw SQL), `_buildCustomPrompt`, and a `_buildSchedulerPrompt` dispatch on `job.source` that appends the target's prerequisites block for external targets. Added `SCHEDULER_TARGET_CONTRACTS` with the confirmed `cloud` prerequisites (board-state-export + origin, `claude/`-branch-prefix, 1-hour floor, ~30-min stagger, daily cap) and the Antigravity "Scheduled Tasks" honesty-fix wording. Added `schedulerPrompt` and `getSchedulerTargetContracts` message handlers. Updated the antigravity-batch mode description in `kanban.html` to point at Antigravity Scheduled Tasks. No third-party integration added. No issues encountered.

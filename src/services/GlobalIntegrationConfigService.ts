@@ -11,6 +11,11 @@ export interface GlobalConfig {
     /**
      * MCP Monitor settings that are global to the MACHINE — shared across every
      * workspace and IDE, because MCP servers are account-scoped.
+     *
+     * LEGACY: retained as a rollback safety net for one release after the
+     * scheduler migration. The live source of truth is `scheduler` (below);
+     * the comms job's `sourceConfig` mirrors this blob. Do not delete on
+     * migration — the rollback path reads it if `scheduler` is absent.
      */
     mcpMonitor?: {
         enabled?: boolean;
@@ -25,6 +30,16 @@ export interface GlobalConfig {
         slackDmOnly?: boolean;
         slackChannelOnly?: boolean;
         gmailLabel?: string;
+    };
+    /**
+     * Scheduler settings — the terminal-agnostic successor to `mcpMonitor`.
+     * Holds an ordered list of `ScheduledJob`s. The comms monitor is one job
+     * (`source: 'comms'`); board-batch / reconcile / custom are others. See
+     * `SchedulerConfig` / `ScheduledJob` below for the shape.
+     */
+    scheduler?: {
+        schemaVersion?: number;
+        jobs?: ScheduledJob[];
     };
     /**
      * Agent settings that are global to the MACHINE — shared across every
@@ -67,6 +82,43 @@ export const DEFAULT_MCP_MONITOR_CONFIG: McpMonitorConfig = {
     sourceIntervals: { slack: 5, gmail: 5, gcal: 5, custom: 5 },
     sourceLastCheckAt: {},
 };
+
+/**
+ * A single scheduled job. `source` picks the prompt preset; `target` picks the
+ * execution surface. `sourceConfig` is an untyped bag whose shape is owned by
+ * the source (comms packs the legacy McpMonitorConfig fields; other sources
+ * pack their own). Downstream consumers cast based on `source`.
+ */
+export interface ScheduledJob {
+    id: string;
+    label: string;
+    enabled: boolean;
+    source: 'comms' | 'board-batch' | 'reconcile' | 'custom';
+    target: 'local-terminal' | 'antigravity' | 'cloud';
+    intervalMinutes: number;
+    promptOverride?: string;
+    sourceConfig: Record<string, unknown>;
+}
+
+/**
+ * Container for all scheduler jobs. `schemaVersion` anchors future migrations —
+ * without it the next migration has no branch point. Bump only when the
+ * persisted shape changes in a way old code cannot read.
+ */
+export interface SchedulerConfig {
+    schemaVersion: number;
+    jobs: ScheduledJob[];
+}
+
+export const SCHEDULER_SCHEMA_VERSION = 1;
+
+export const DEFAULT_SCHEDULER_CONFIG: SchedulerConfig = {
+    schemaVersion: SCHEDULER_SCHEMA_VERSION,
+    jobs: [],
+};
+
+/** Stable id for the migrated comms job (deterministic across machines). */
+export const COMMS_JOB_ID = 'comms-monitor';
 
 export class GlobalIntegrationConfigService {
     private static getFilePath(): string {
@@ -234,8 +286,204 @@ export class GlobalIntegrationConfigService {
         await this.saveGlobal(globalConfig);
     }
 
+    // ─── Scheduler accessors (new, terminal-agnostic) ───────────────────────
+
+    /**
+     * Synthesize a comms `ScheduledJob` from a legacy `mcpMonitor` blob.
+     * Packs every legacy field verbatim into `sourceConfig`; mirrors
+     * `pollingEnabled` → `job.enabled` and `promptOverride` → `job.promptOverride`
+     * so the engine's per-job dispatch sees them without unpacking.
+     *
+     * NOTE on interval: the comms job's real tick interval is the GCD of
+     * `sourceIntervals`, computed in the engine (plan 2). `intervalMinutes`
+     * here is a placeholder default; the engine ignores it for `source: 'comms'`
+     * and uses the GCD. Non-comms jobs use `intervalMinutes` directly. This
+     * split is intentional — do not mistake the placeholder for dead code.
+     */
+    private static _migrateCommsJob(mcpMonitor: NonNullable<GlobalConfig['mcpMonitor']>): ScheduledJob {
+        const cfg: McpMonitorConfig = {
+            enabled: mcpMonitor.enabled ?? DEFAULT_MCP_MONITOR_CONFIG.enabled,
+            pollingEnabled: mcpMonitor.pollingEnabled ?? DEFAULT_MCP_MONITOR_CONFIG.pollingEnabled,
+            targetRole: mcpMonitor.targetRole ?? DEFAULT_MCP_MONITOR_CONFIG.targetRole,
+            sources: mcpMonitor.sources ?? DEFAULT_MCP_MONITOR_CONFIG.sources,
+            customInstruction: mcpMonitor.customInstruction ?? DEFAULT_MCP_MONITOR_CONFIG.customInstruction,
+            sourceIntervals: { ...DEFAULT_MCP_MONITOR_CONFIG.sourceIntervals, ...(mcpMonitor.sourceIntervals || {}) },
+            sourceLastCheckAt: { ...(mcpMonitor.sourceLastCheckAt || {}) },
+            promptOverride: mcpMonitor.promptOverride,
+            slackChannels: mcpMonitor.slackChannels,
+            slackDmOnly: mcpMonitor.slackDmOnly,
+            slackChannelOnly: mcpMonitor.slackChannelOnly,
+            gmailLabel: mcpMonitor.gmailLabel,
+        };
+        return {
+            id: COMMS_JOB_ID,
+            label: 'Comms Monitor',
+            enabled: cfg.pollingEnabled,
+            source: 'comms',
+            target: 'local-terminal',
+            intervalMinutes: 5,
+            promptOverride: cfg.promptOverride,
+            sourceConfig: {
+                enabled: cfg.enabled,
+                pollingEnabled: cfg.pollingEnabled,
+                targetRole: cfg.targetRole,
+                sources: cfg.sources,
+                customInstruction: cfg.customInstruction,
+                sourceIntervals: cfg.sourceIntervals,
+                sourceLastCheckAt: cfg.sourceLastCheckAt,
+                promptOverride: cfg.promptOverride,
+                slackChannels: cfg.slackChannels,
+                slackDmOnly: cfg.slackDmOnly,
+                slackChannelOnly: cfg.slackChannelOnly,
+                gmailLabel: cfg.gmailLabel,
+            },
+        };
+    }
+
+    /**
+     * One-time migration: if `scheduler` is absent but `mcpMonitor` is present,
+     * synthesize a comms job and write the new `SchedulerConfig`. Compare-and-
+     * swap guarded — re-reads the file and only writes if `scheduler` is still
+     * absent (a concurrent writer wins). Forward-compat: a `scheduler` whose
+     * `schemaVersion` is newer than known is returned as-is, never re-migrated.
+     *
+     * Returns the resolved `SchedulerConfig` (migrated or existing). Does NOT
+     * delete the legacy `mcpMonitor` blob (rollback safety net for one release).
+     */
+    private static _ensureSchedulerMigration(globalConfig: GlobalConfig): SchedulerConfig {
+        const existing = globalConfig.scheduler;
+        if (existing && typeof existing.schemaVersion === 'number') {
+            if (existing.schemaVersion > SCHEDULER_SCHEMA_VERSION) {
+                // Forward-compat: unknown newer schema — do not migrate, return as-is.
+                console.warn(`[GlobalIntegrationConfigService] scheduler schemaVersion ${existing.schemaVersion} is newer than known ${SCHEDULER_SCHEMA_VERSION}; returning as-is without migration.`);
+                return { schemaVersion: existing.schemaVersion, jobs: Array.isArray(existing.jobs) ? existing.jobs : [] };
+            }
+            return { schemaVersion: existing.schemaVersion, jobs: Array.isArray(existing.jobs) ? existing.jobs : [] };
+        }
+        // No scheduler yet — migrate from mcpMonitor if present (even if empty,
+        // so the comms job shape is stable). If neither exists, return default.
+        const legacy = globalConfig.mcpMonitor;
+        const jobs: ScheduledJob[] = legacy ? [this._migrateCommsJob(legacy)] : [];
+        return { schemaVersion: SCHEDULER_SCHEMA_VERSION, jobs };
+    }
+
+    /**
+     * Persist the migrated `SchedulerConfig` only if `scheduler` is still
+     * absent on a fresh re-read (compare-and-swap). Guards against a concurrent
+     * writer clobbering a newer `scheduler` with a re-migrated one.
+     */
+    private static async _persistMigratedSchedulerIfAbsent(migrated: SchedulerConfig): Promise<void> {
+        const fresh = await this.loadGlobal();
+        if (fresh.scheduler) {
+            // A concurrent writer already landed a scheduler — do not overwrite.
+            console.warn('[GlobalIntegrationConfigService] scheduler appeared during migration; skipping write-back.');
+            return;
+        }
+        fresh.scheduler = migrated;
+        await this.saveGlobal(fresh);
+    }
+
+    /** Sync variant of the compare-and-swap write-back. */
+    private static _persistMigratedSchedulerIfAbsentSync(migrated: SchedulerConfig): void {
+        const fresh = this.loadGlobalSync();
+        if (fresh.scheduler) {
+            console.warn('[GlobalIntegrationConfigService] scheduler appeared during migration; skipping write-back.');
+            return;
+        }
+        fresh.scheduler = migrated;
+        try {
+            const filePath = this.getFilePath();
+            const dir = path.dirname(filePath);
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+            }
+            const tempPath = `${filePath}.tmp`;
+            fs.writeFileSync(tempPath, JSON.stringify(fresh, null, 2), { encoding: 'utf8', mode: 0o600 });
+            fs.renameSync(tempPath, filePath);
+        } catch (err) {
+            console.error('[GlobalIntegrationConfigService] Failed to persist migrated scheduler (sync):', err);
+        }
+    }
+
+    public static getSchedulerConfigSync(): SchedulerConfig {
+        const globalConfig = this.loadGlobalSync();
+        if (!globalConfig.scheduler) {
+            const migrated = this._ensureSchedulerMigration(globalConfig);
+            if (globalConfig.mcpMonitor || migrated.jobs.length > 0) {
+                this._persistMigratedSchedulerIfAbsentSync(migrated);
+            }
+            return migrated;
+        }
+        return this._ensureSchedulerMigration(globalConfig);
+    }
+
+    public static async getSchedulerConfig(): Promise<SchedulerConfig> {
+        const globalConfig = await this.loadGlobal();
+        if (!globalConfig.scheduler) {
+            const migrated = this._ensureSchedulerMigration(globalConfig);
+            if (globalConfig.mcpMonitor || migrated.jobs.length > 0) {
+                await this._persistMigratedSchedulerIfAbsent(migrated);
+            }
+            return migrated;
+        }
+        return this._ensureSchedulerMigration(globalConfig);
+    }
+
+    public static async setSchedulerConfig(config: Partial<SchedulerConfig>): Promise<void> {
+        const globalConfig = await this.loadGlobal();
+        const current = this._ensureSchedulerMigration(globalConfig);
+        const nextSchema = config.schemaVersion ?? current.schemaVersion;
+        const nextJobs = config.jobs ?? current.jobs;
+        globalConfig.scheduler = { schemaVersion: nextSchema, jobs: nextJobs };
+        await this.saveGlobal(globalConfig);
+    }
+
+    /** Find the comms job (`source === 'comms'`) in the scheduler config. */
+    private static _findCommsJob(jobs: ScheduledJob[]): ScheduledJob | undefined {
+        return jobs.find(j => j.source === 'comms');
+    }
+
+    /**
+     * Unpack a comms job's `sourceConfig` into the legacy `McpMonitorConfig`
+     * shape, applying the exact `?? DEFAULT_MCP_MONITOR_CONFIG` default-merge
+     * the pre-migration accessors used. Shim fidelity: byte-for-byte consistent
+     * with the migrated comms job.
+     */
+    private static _unpackCommsJob(job: ScheduledJob | undefined): McpMonitorConfig {
+        if (!job) {
+            return { ...DEFAULT_MCP_MONITOR_CONFIG, sourceLastCheckAt: {} };
+        }
+        const sc = (job.sourceConfig || {}) as Record<string, any>;
+        return {
+            enabled: sc.enabled ?? DEFAULT_MCP_MONITOR_CONFIG.enabled,
+            pollingEnabled: sc.pollingEnabled ?? DEFAULT_MCP_MONITOR_CONFIG.pollingEnabled,
+            targetRole: sc.targetRole ?? DEFAULT_MCP_MONITOR_CONFIG.targetRole,
+            sources: sc.sources ?? DEFAULT_MCP_MONITOR_CONFIG.sources,
+            customInstruction: sc.customInstruction ?? DEFAULT_MCP_MONITOR_CONFIG.customInstruction,
+            sourceIntervals: { ...DEFAULT_MCP_MONITOR_CONFIG.sourceIntervals, ...(sc.sourceIntervals || {}) },
+            sourceLastCheckAt: { ...(sc.sourceLastCheckAt || {}) },
+            promptOverride: sc.promptOverride,
+            slackChannels: sc.slackChannels,
+            slackDmOnly: sc.slackDmOnly,
+            slackChannelOnly: sc.slackChannelOnly,
+            gmailLabel: sc.gmailLabel,
+        };
+    }
+
+    // ─── Legacy comms shims (read/write the migrated comms job) ────────────
+    //
+    // These preserve the pre-migration accessor surface so plans 2–4 can cut
+    // over incrementally. They read/write the comms job in `SchedulerConfig`;
+    // the legacy `mcpMonitor` blob is only read as a fallback when no
+    // scheduler config exists yet (pre-migration / rollback).
+
     public static getMcpMonitorConfigSync(): McpMonitorConfig {
         const globalConfig = this.loadGlobalSync();
+        if (globalConfig.scheduler) {
+            const resolved = this._ensureSchedulerMigration(globalConfig);
+            return this._unpackCommsJob(this._findCommsJob(resolved.jobs));
+        }
+        // Pre-migration / rollback: read legacy blob directly.
         const cfg = globalConfig.mcpMonitor || {};
         return {
             enabled: cfg.enabled ?? DEFAULT_MCP_MONITOR_CONFIG.enabled,
@@ -255,6 +503,10 @@ export class GlobalIntegrationConfigService {
 
     public static async getMcpMonitorConfig(): Promise<McpMonitorConfig> {
         const globalConfig = await this.loadGlobal();
+        if (globalConfig.scheduler) {
+            const resolved = this._ensureSchedulerMigration(globalConfig);
+            return this._unpackCommsJob(this._findCommsJob(resolved.jobs));
+        }
         const cfg = globalConfig.mcpMonitor || {};
         return {
             enabled: cfg.enabled ?? DEFAULT_MCP_MONITOR_CONFIG.enabled,
@@ -274,13 +526,16 @@ export class GlobalIntegrationConfigService {
 
     public static async setMcpMonitorConfig(config: Partial<McpMonitorConfig>): Promise<void> {
         const globalConfig = await this.loadGlobal();
-        const current = globalConfig.mcpMonitor || {};
-        globalConfig.mcpMonitor = {
-            enabled: config.enabled ?? current.enabled ?? DEFAULT_MCP_MONITOR_CONFIG.enabled,
-            pollingEnabled: config.pollingEnabled ?? current.pollingEnabled ?? DEFAULT_MCP_MONITOR_CONFIG.pollingEnabled,
-            targetRole: config.targetRole ?? current.targetRole ?? DEFAULT_MCP_MONITOR_CONFIG.targetRole,
-            sources: config.sources ?? current.sources ?? DEFAULT_MCP_MONITOR_CONFIG.sources,
-            customInstruction: config.customInstruction ?? current.customInstruction ?? DEFAULT_MCP_MONITOR_CONFIG.customInstruction,
+        const resolved = this._ensureSchedulerMigration(globalConfig);
+        const jobs = [...resolved.jobs];
+        const idx = jobs.findIndex(j => j.source === 'comms');
+        const current = idx >= 0 ? this._unpackCommsJob(jobs[idx]) : { ...DEFAULT_MCP_MONITOR_CONFIG, sourceLastCheckAt: {} };
+        const merged: McpMonitorConfig = {
+            enabled: config.enabled ?? current.enabled,
+            pollingEnabled: config.pollingEnabled ?? current.pollingEnabled,
+            targetRole: config.targetRole ?? current.targetRole,
+            sources: config.sources ?? current.sources,
+            customInstruction: config.customInstruction ?? current.customInstruction,
             sourceIntervals: { ...DEFAULT_MCP_MONITOR_CONFIG.sourceIntervals, ...(current.sourceIntervals || {}), ...(config.sourceIntervals || {}) },
             sourceLastCheckAt: { ...(current.sourceLastCheckAt || {}), ...(config.sourceLastCheckAt || {}) },
             promptOverride: config.promptOverride ?? current.promptOverride,
@@ -289,6 +544,35 @@ export class GlobalIntegrationConfigService {
             slackChannelOnly: config.slackChannelOnly ?? current.slackChannelOnly,
             gmailLabel: config.gmailLabel ?? current.gmailLabel,
         };
+        const job: ScheduledJob = {
+            id: COMMS_JOB_ID,
+            label: 'Comms Monitor',
+            enabled: merged.pollingEnabled,
+            source: 'comms',
+            target: 'local-terminal',
+            intervalMinutes: 5,
+            promptOverride: merged.promptOverride,
+            sourceConfig: {
+                enabled: merged.enabled,
+                pollingEnabled: merged.pollingEnabled,
+                targetRole: merged.targetRole,
+                sources: merged.sources,
+                customInstruction: merged.customInstruction,
+                sourceIntervals: merged.sourceIntervals,
+                sourceLastCheckAt: merged.sourceLastCheckAt,
+                promptOverride: merged.promptOverride,
+                slackChannels: merged.slackChannels,
+                slackDmOnly: merged.slackDmOnly,
+                slackChannelOnly: merged.slackChannelOnly,
+                gmailLabel: merged.gmailLabel,
+            },
+        };
+        if (idx >= 0) {
+            jobs[idx] = job;
+        } else {
+            jobs.push(job);
+        }
+        globalConfig.scheduler = { schemaVersion: resolved.schemaVersion, jobs };
         await this.saveGlobal(globalConfig);
     }
 }

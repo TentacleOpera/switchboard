@@ -255,6 +255,15 @@ export namespace env {
         console.log('[headless openExternal]', url);
         return true;
     }
+    // Headless has no real clipboard. Provider arms that call
+    // `vscode.env.clipboard.writeText` (via VscodeHostClipboard) would crash with a
+    // TypeError on the missing member. No-op here; the prompt-copy verbs return the
+    // prompt in the HTTP body and transport.js copies it client-side (see the memo
+    // prompt pattern and the new improvePlan/improveFeature arms).
+    export const clipboard = {
+        async writeText(_text: string): Promise<void> { /* no-op headless */ },
+        async readText(): Promise<string> { return ''; },
+    };
 }
 
 // ─── Standalone-only: install the workspace root for the SecretStorage/config ─

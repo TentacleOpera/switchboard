@@ -215,6 +215,7 @@
     const btnImportKanbanPlans = document.getElementById('btn-import-kanban-plans');
     const btnCreateKanbanPlan = document.getElementById('btn-create-kanban-plan');
     const btnChatCopyPrompt = document.getElementById('btn-chat-copy-prompt');
+    const btnImproveKanban = document.getElementById('btn-improve-kanban');
     const btnSaveKanban = null;
     const btnCancelKanban = null;
     const kanbanListPane = document.getElementById('kanban-list-pane');
@@ -225,6 +226,7 @@
     const featuresWorkspaceFilter = document.getElementById('features-workspace-filter');
     const featuresColumnFilter = document.getElementById('features-column-filter');
     const featuresProjectFilter = document.getElementById('features-project-filter');
+    const featuresComplexityFilter = document.getElementById('features-complexity-filter');
 
     const btnNewFeature = document.getElementById('btn-new-feature');
     const newFeatureModal = document.getElementById('new-feature-modal');
@@ -383,7 +385,7 @@
 
 
     const kanbanFilters = { column: '', workspaceRoot: '', project: '', search: '', complexity: '' };
-    const featuresFilters = { workspaceRoot: '', column: '', project: '', search: '' };
+    const featuresFilters = { workspaceRoot: '', column: '', project: '', search: '', complexity: '' };
     const projectsFilters = { workspaceRoot: '' };
 
     // Initialize Webview Content
@@ -651,9 +653,11 @@
                     featuresFilters.column = '';
                     featuresFilters.project = '';
                     featuresFilters.search = '';
+                    featuresFilters.complexity = '';
                     if (featuresWorkspaceFilter) featuresWorkspaceFilter.value = '';
                     if (featuresColumnFilter) featuresColumnFilter.value = '';
                     if (featuresProjectFilter) featuresProjectFilter.value = '';
+                    if (featuresComplexityFilter) featuresComplexityFilter.value = '';
                     // Stash intent for features (reuse the same mechanism)
                     _pendingKanbanFilterIntent = _pendingKanbanFilterIntent || {};
                     _pendingKanbanFilterIntent.featureWorkspaceRoot = msg.workspaceRoot || '';
@@ -721,6 +725,7 @@
             case 'kanbanPlanDeleted':
                 if (msg.success) {
                     _kanbanSelectedPlan = null;
+                    if (btnImproveKanban) btnImproveKanban.disabled = true;
                     if (kanbanPreviewContent) kanbanPreviewContent.innerHTML = '<div class="kanban-empty-state">Select a plan to preview</div>';
                     vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
                 } else {
@@ -1733,7 +1738,6 @@
                         </select>
                         ${plan.planFile ? `<button class="kanban-plan-copy-link" data-plan-file="${escapeHtml(plan.planFile)}">Copy Link</button>` : ''}
                         ${plan.sessionId ? `<button class="kanban-plan-copy-prompt" data-session-id="${escapeHtml(plan.sessionId)}" data-column="${escapeHtml(plan.column)}" data-workspace-root="${escapeHtml(plan.workspaceRoot)}">Copy Prompt</button>` : ''}
-                        ${plan.planFile ? `<button class="kanban-plan-edit">Edit</button>` : ''}
                         <span class="complexity-dot ${complexityClass}" title="Complexity: ${escapeHtml(plan.complexity)}" style="margin-left: auto;"></span>
                     </div>
                 </div>
@@ -1793,23 +1797,6 @@
             });
         });
     }
-
-            const editBtn = itemDiv.querySelector('.kanban-plan-edit');
-            if (editBtn) {
-                editBtn.addEventListener('click', e => {
-                    e.stopPropagation();
-                    const isSelected = _kanbanSelectedPlan && _kanbanSelectedPlan.planId === plan.planId;
-                    if (!isSelected) {
-                        if (state.dirtyFlags.kanban) exitEditMode('kanban');
-                        document.querySelectorAll('.kanban-plan-item').forEach(el => el.classList.remove('selected'));
-                        itemDiv.classList.add('selected');
-                        _pendingAutoEdit = true;
-                        loadKanbanPlanPreview(plan);
-                    } else {
-                        enterEditMode('kanban');
-                    }
-                });
-            }
 
             const badge = itemDiv.querySelector('.kanban-column-badge.clickable');
             const select = itemDiv.querySelector('.kanban-column-dropdown');
@@ -1985,6 +1972,7 @@
 
     function loadKanbanPlanPreview(plan) {
         _kanbanSelectedPlan = plan;
+        if (btnImproveKanban) btnImproveKanban.disabled = !plan.planFile;
         renderKanbanMetaBar(plan);
         if (plan.sessionId) {
             vscode.postMessage({ type: 'planShown', sessionId: plan.sessionId });
@@ -2012,13 +2000,13 @@
         const complexityClass = _complexityToCssClass(plan.complexity);
         const complexityLabel = escapeHtml(plan.complexity || 'Unknown');
 
+        const reviewActive = state.reviewMode.kanban;
         metaBar.innerHTML = `
             <div class="kanban-meta-group">
                 <span class="kanban-meta-label">Column:</span>
                 <span class="kanban-meta-value" id="kanban-meta-column">${columnLabel}</span>
                 <select class="kanban-meta-dropdown" id="kanban-meta-column-select" style="display:none;" data-plan-file="${escapeHtml(plan.planFile || '')}" data-workspace-root="${escapeHtml(plan.workspaceRoot)}" data-plan-id="${escapeHtml(plan.planId)}">
                     ${_kanbanAvailableColumns.map(col => `<option value="${escapeHtml(col.id)}">${escapeHtml(col.label)}</option>`).join('')}
-                    <option value="COMPLETED">COMPLETED</option>
                     <option value="__delete__">— Delete Plan —</option>
                 </select>
             </div>
@@ -2029,13 +2017,12 @@
                 <select class="kanban-meta-dropdown" id="kanban-meta-complexity-select" style="display:none;" data-plan-id="${escapeHtml(plan.planId)}" data-workspace-root="${escapeHtml(plan.workspaceRoot)}">
                     ${['Unknown', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10'].map(v => `<option value="${v}" ${v === plan.complexity ? 'selected' : ''}>${v}</option>`).join('')}
                 </select>
-                ${plan.planFile ? `<button class="strip-btn" id="kanban-meta-copy-link-btn" title="Copy plan link to clipboard">Copy Link</button>` : ''}
-                ${plan.sessionId ? `<button class="strip-btn" id="kanban-meta-copy-prompt-btn" title="Copy dispatch prompt to clipboard">Copy Prompt</button>` : ''}
-            </div>
-            <div class="kanban-meta-group" style="margin-left: auto;">
                 ${plan.planFile ? `<button class="strip-btn" id="btn-edit-kanban" style="${state.editMode.kanban ? 'display:none;' : ''}">Edit</button>` : ''}
                 <button class="strip-btn" id="btn-save-kanban" style="${state.editMode.kanban ? '' : 'display:none;'}">Save</button>
                 <button class="strip-btn" id="btn-cancel-kanban" style="${state.editMode.kanban ? '' : 'display:none;'}">Cancel</button>
+            </div>
+            <div class="kanban-meta-group" style="margin-left: auto;">
+                <button class="strip-btn review-mode-btn${reviewActive ? ' active' : ''}" id="btn-review-kanban" title="Toggle review mode: highlight text in the plan to comment">${reviewActive ? 'Exit Review' : 'Review'}</button>
                 ${plan.clickupTaskId || plan.linearIssueId ? `
                     <button class="strip-btn" id="kanban-meta-upload-btn" ${uploadingPlanAttachment ? 'disabled' : ''}>
                         ${uploadingPlanAttachment ? 'Uploading...' : 'Upload'}
@@ -2055,28 +2042,15 @@
             dynamicEditBtn.addEventListener('click', () => enterEditMode('kanban'));
         }
 
-        // Copy Link / Copy Prompt — promoted into the top bar so the user does not
-        // have to locate the plan in the sidebar to access these actions.
-        const metaCopyLinkBtn = document.getElementById('kanban-meta-copy-link-btn');
-        if (metaCopyLinkBtn) {
-            metaCopyLinkBtn.addEventListener('click', () => {
-                const path = plan.planFile;
-                navigator.clipboard.writeText(toAgentRef(path)).then(() => {
-                    const oldText = metaCopyLinkBtn.textContent;
-                    metaCopyLinkBtn.textContent = 'Copied';
-                    setTimeout(() => { metaCopyLinkBtn.textContent = oldText; }, 2000);
-                });
-            });
-        }
-        const metaCopyPromptBtn = document.getElementById('kanban-meta-copy-prompt-btn');
-        if (metaCopyPromptBtn) {
-            metaCopyPromptBtn.addEventListener('click', () => {
-                vscode.postMessage({
-                    type: 'copyKanbanPlanPrompt',
-                    sessionId: plan.sessionId,
-                    column: plan.column,
-                    workspaceRoot: plan.workspaceRoot
-                });
+        // Review toggle — moved from the global strip into the meta bar (per-item
+        // action). Re-wired on every render because the meta bar is rebuilt via
+        // innerHTML on each selection. enterReviewMode/exitReviewMode query the
+        // button by id, so they find this dynamic element on toggle.
+        const reviewBtn = document.getElementById('btn-review-kanban');
+        if (reviewBtn) {
+            reviewBtn.addEventListener('click', () => {
+                if (state.reviewMode.kanban) exitReviewMode('kanban', true);
+                else enterReviewMode('kanban');
             });
         }
 
@@ -2190,6 +2164,22 @@
             });
         });
     }
+    if (btnImproveKanban) {
+        btnImproveKanban.addEventListener('click', () => {
+            const p = _kanbanSelectedPlan;
+            if (!p || !p.planFile) return;
+            const original = btnImproveKanban.textContent;
+            btnImproveKanban.textContent = 'Copied ✓';
+            setTimeout(() => { btnImproveKanban.textContent = original; }, 1200);
+            vscode.postMessage({
+                type: 'improvePlan',
+                planId: p.planId || '',
+                planFile: p.planFile,
+                topic: p.topic || '(untitled)',
+                workspaceRoot: p.workspaceRoot
+            });
+        });
+    }
     const autofetchModal = document.getElementById('autofetch-modal');
     const btnCloseAutofetchModal = document.getElementById('btn-close-autofetch-modal');
 
@@ -2299,6 +2289,18 @@
             const searchLower = featuresFilters.search.toLowerCase();
             filtered = filtered.filter(plan => plan.topic.toLowerCase().includes(searchLower));
         }
+        if (featuresFilters.complexity) {
+            filtered = filtered.filter(plan => {
+                const agg = _featureAggregateComplexity(plan);
+                const c = String(agg || '').toLowerCase();
+                if (featuresFilters.complexity === 'unknown') {
+                    return c === 'unknown' || c === '';
+                }
+                const [lo, hi] = featuresFilters.complexity.split('-').map(Number);
+                const score = parseInt(agg, 10);
+                return !isNaN(score) && score >= lo && score <= hi;
+            });
+        }
 
         featuresListPane.innerHTML = '';
 
@@ -2385,8 +2387,24 @@
                 if (plan.column === 'PLAN REVIEWED') return 'Copy Coder Prompt';
                 // Coded columns → reviewer stage
                 if (kind === 'coded') return 'Copy Review Prompt';
-                // CODE REVIEWED → tester stage (next is ACCEPTANCE TESTED)
-                if (plan.column === 'CODE REVIEWED') return 'Copy Acceptance Test Prompt';
+                // CODE REVIEWED → derive label from the actual next actionable column.
+                // The old code hardcoded 'Copy Acceptance Test Prompt' regardless of
+                // whether an ACCEPTANCE TESTED column (or acceptance-tester agent)
+                // exists. Now: find the next column via _optimisticNextColumn; if
+                // none exists (terminal), no copy-prompt button. If the next column
+                // is ACCEPTANCE TESTED, label is the acceptance-test prompt. For
+                // other next columns, derive from that column's id/kind.
+                if (plan.column === 'CODE REVIEWED') {
+                    const nextCol = _optimisticNextColumn(plan.column);
+                    if (!nextCol) return null;
+                    if (nextCol === 'ACCEPTANCE TESTED') return 'Copy Acceptance Test Prompt';
+                    const nextDef = _kanbanAvailableColumns.find(c => c.id === nextCol);
+                    const nextKind = nextDef?.kind;
+                    if (nextKind === 'completed') return null;
+                    if (nextCol === 'TICKET UPDATER') return 'Copy Ticket Updater Prompt';
+                    if (nextKind === 'custom-agent' || nextKind === 'custom-user') return 'Copy Advance Prompt';
+                    return 'Copy Prompt';
+                }
                 // Non-standard lanes — handle by explicit id (kind overlaps standard columns)
                 if (plan.column === 'RESEARCHER') return 'Copy Researcher Prompt';
                 if (plan.column === 'TICKET UPDATER') return 'Copy Ticket Updater Prompt';
@@ -2402,12 +2420,15 @@
             const copyPromptLabel = _featureCopyPromptLabel(plan);
             const showSendToPlanner = !plan.column || plan.column === 'CREATED'
                 || (_kanbanAvailableColumns.find(c => c.id === plan.column)?.kind === 'created');
+            const aggregateComplexity = _featureAggregateComplexity(plan);
+            const aggregateComplexityClass = _complexityToCssClass(aggregateComplexity);
             const actionButtons = `
                 <div class="kanban-plan-actions" style="margin-top: 6px;">
                     ${columnBadge}
                     ${plan.planFile ? `<button class="kanban-plan-copy-link feature-card-action" data-plan-file="${escapeHtml(plan.planFile)}">Copy Link</button>` : ''}
                     ${copyPromptLabel && (plan.sessionId || plan.planId) ? `<button class="kanban-plan-copy-prompt feature-card-action" data-session-id="${escapeHtml(plan.sessionId || plan.planId)}" data-column="${escapeHtml(plan.column || 'CREATED')}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}">${escapeHtml(copyPromptLabel)}</button>` : ''}
                     ${showSendToPlanner && (plan.sessionId || plan.planId) ? `<button class="feature-send-to-planner feature-card-action" data-plan-file="${escapeHtml(plan.planFile || '')}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}">Send to Planner</button>` : ''}
+                    <span class="complexity-dot ${aggregateComplexityClass}" title="Aggregate complexity (max subtask): ${escapeHtml(aggregateComplexity)}" style="margin-left: auto;"></span>
                 </div>
             `;
 
@@ -2558,13 +2579,15 @@
                 <button class="strip-btn" id="btn-edit-features" style="${state.editMode.features ? 'display:none;' : ''}">Edit</button>
                 <button class="strip-btn" id="btn-save-features" style="${state.editMode.features ? '' : 'display:none;'}">Save</button>
                 <button class="strip-btn" id="btn-cancel-features" style="${state.editMode.features ? '' : 'display:none;'}">Cancel</button>
-                <button class="strip-btn" id="btn-feature-refine" title="Refine this feature's description and propose a subtask breakdown — copies a prompt to the clipboard">Refine</button>
+                <button class="strip-btn" id="btn-feature-improve" title="Copy the improve-feature workflow prompt to clipboard">Improve</button>
                 <button class="strip-btn" id="btn-feature-add-subtask" title="Add an existing plan to this feature as a subtask">+ Subtask</button>
             </div>
         `;
+        const reviewActiveF = state.reviewMode.features;
         metaBar.innerHTML = `
             ${manageGroup}
             <div class="kanban-meta-group" style="margin-left: auto;">
+                <button class="strip-btn review-mode-btn${reviewActiveF ? ' active' : ''}" id="btn-review-features" title="Toggle review mode: highlight text in the feature to comment">${reviewActiveF ? 'Exit Review' : 'Review'}</button>
                 <button class="strip-btn" id="btn-feature-delete" style="color:#ff6b6b;" title="Delete this feature (subtasks are detached)">Delete Feature</button>
             </div>
         `;
@@ -2572,20 +2595,25 @@
         if (isManageable) {
             const btnAddSub = document.getElementById('btn-feature-add-subtask');
             const btnDelFeature = document.getElementById('btn-feature-delete');
-            const btnRefine = document.getElementById('btn-feature-refine');
-            if (btnRefine) btnRefine.addEventListener('click', () => {
+            const btnImprove = document.getElementById('btn-feature-improve');
+            if (btnImprove) btnImprove.addEventListener('click', () => {
                 if (!_featureSelectedPlan) return;
-                const original = btnRefine.textContent;
-                btnRefine.textContent = 'Copied ✓';
-                setTimeout(() => { btnRefine.textContent = original; }, 1200);
+                const original = btnImprove.textContent;
+                btnImprove.textContent = 'Copied ✓';
+                setTimeout(() => { btnImprove.textContent = original; }, 1200);
                 vscode.postMessage({
-                    type: 'refineFeature',
+                    type: 'improveFeature',
                     planId: _featureSelectedPlan.planId || '',
                     planFile: _featureSelectedPlan.planFile || '',
                     title: _featureSelectedPlan.topic || _featureSelectedPlan.name || '',
                     subtaskCount: _featureSelectedPlan.subtaskCount || 0,
                     workspaceRoot: _featureSelectedPlan.workspaceRoot
                 });
+            });
+            const btnReviewFeatures = document.getElementById('btn-review-features');
+            if (btnReviewFeatures) btnReviewFeatures.addEventListener('click', () => {
+                if (state.reviewMode.features) exitReviewMode('features', true);
+                else enterReviewMode('features');
             });
             if (btnAddSub) btnAddSub.addEventListener('click', openFeatureAddSubtaskOverlay);
             if (btnDelFeature) btnDelFeature.addEventListener('click', () => {
@@ -2667,6 +2695,7 @@
                 <button class="strip-btn" id="btn-edit-features" style="${state.editMode.features ? 'display:none;' : ''}">Edit</button>
                 <button class="strip-btn" id="btn-save-features" style="${state.editMode.features ? '' : 'display:none;'}">Save</button>
                 <button class="strip-btn" id="btn-cancel-features" style="${state.editMode.features ? '' : 'display:none;'}">Cancel</button>
+                <button class="strip-btn review-mode-btn${state.reviewMode.features ? ' active' : ''}" id="btn-review-features" title="Toggle review mode: highlight text in the subtask to comment">${state.reviewMode.features ? 'Exit Review' : 'Review'}</button>
                 ${removeBtn}
                 ${deleteBtn}
             </div>
@@ -2676,6 +2705,11 @@
         const btnEdit = document.getElementById('btn-edit-features');
         const btnCancel = document.getElementById('btn-cancel-features');
         const btnSave = document.getElementById('btn-save-features');
+        const btnReviewSubtask = document.getElementById('btn-review-features');
+        if (btnReviewSubtask) btnReviewSubtask.addEventListener('click', () => {
+            if (state.reviewMode.features) exitReviewMode('features', true);
+            else enterReviewMode('features');
+        });
         if (btnEdit) btnEdit.addEventListener('click', () => enterEditMode('features'));
         if (btnCancel) btnCancel.addEventListener('click', () => exitEditMode('features'));
         if (btnSave) {
@@ -2845,6 +2879,13 @@
     if (featuresColumnFilter) {
         featuresColumnFilter.addEventListener('change', () => {
             featuresFilters.column = featuresColumnFilter.value;
+            renderFeaturesList();
+        });
+    }
+
+    if (featuresComplexityFilter) {
+        featuresComplexityFilter.addEventListener('change', () => {
+            featuresFilters.complexity = featuresComplexityFilter.value;
             renderFeaturesList();
         });
     }
@@ -3587,6 +3628,23 @@
         if (score <= 6) return 'medium';
         if (score <= 8) return 'high';
         return 'very-high';
+    }
+
+    // Aggregate feature complexity = max subtask complexity (the highest-risk
+    // subtask determines the feature's tier). Subtask plans live in the shared
+    // board cache with `featureId` set, so no lazy subtask fetch is needed. If
+    // no subtasks are present in the cache, degrades to 'Unknown' rather than
+    // blocking render (per plan 2a clarification).
+    function _featureAggregateComplexity(plan) {
+        if (!plan || !plan.planId) return 'Unknown';
+        const subtasks = _kanbanPlansCache.filter(p => p.featureId === plan.planId && !p.isFeature);
+        if (subtasks.length === 0) return 'Unknown';
+        let max = NaN;
+        for (const st of subtasks) {
+            const score = parseInt(st.complexity, 10);
+            if (!isNaN(score) && (isNaN(max) || score > max)) max = score;
+        }
+        return isNaN(max) ? 'Unknown' : String(max);
     }
 
     // ─── Review Mode (generalized across project.html tabs) ─────────────────────

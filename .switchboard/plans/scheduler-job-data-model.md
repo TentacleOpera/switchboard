@@ -80,3 +80,7 @@ No user-facing decision is required before implementation. The migration is loss
 ## Routing
 
 **Complexity 5 → Send to Coder.** Single-file refactor with a well-scoped migration; the only moderate risk is the concurrent-write guard, which is a known pattern.
+
+## Completion Report
+
+Implemented the `ScheduledJob` / `SchedulerConfig` data model and the one-time comms config migration in `src/services/GlobalIntegrationConfigService.ts`. Added the new types (`ScheduledJob`, `SchedulerConfig`, `SCHEDULER_SCHEMA_VERSION`, `DEFAULT_SCHEDULER_CONFIG`, `COMMS_JOB_ID`) beside the legacy `McpMonitorConfig`, plus `getSchedulerConfigSync` / `getSchedulerConfig` / `setSchedulerConfig` accessors mirroring the legacy pattern. The migration (`_ensureSchedulerMigration` + compare-and-swap `_persistMigratedSchedulerIfAbsent`) synthesizes one comms job from the legacy `mcpMonitor` blob on first read, guarded by `schemaVersion` for forward-compat, and never overwrites a concurrent writer's `scheduler`. The legacy `getMcpMonitorConfigSync` / `getMcpMonitorConfig` / `setMcpMonitorConfig` accessors are now thin shims that read/write the migrated comms job, preserving the exact `?? DEFAULT_MCP_MONITOR_CONFIG` default-merge semantics. No user-visible behavior change ships with this plan. No issues encountered.

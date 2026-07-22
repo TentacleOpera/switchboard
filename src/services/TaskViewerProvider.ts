@@ -75,7 +75,7 @@ let LinearDocsAdapterClass: any;
 import { LocalFolderService } from './LocalFolderService';
 import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import { LocalApiServer } from './LocalApiServer';
-import { GlobalIntegrationConfigService, AgentGlobalKey, McpMonitorConfig } from './GlobalIntegrationConfigService';
+import { GlobalIntegrationConfigService, AgentGlobalKey, McpMonitorConfig, ScheduledJob, SchedulerConfig, COMMS_JOB_ID } from './GlobalIntegrationConfigService';
 import { MultiRepoScaffoldingService } from './MultiRepoScaffoldingService';
 import { KanbanDatabase, KanbanPlanRecord, WorkspaceDatabaseMapping } from './KanbanDatabase';
 import { matchWorktreePath } from './worktreeResolver';
@@ -351,6 +351,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * `vscode` process reachable. Dispatch verbs that need a real terminal
      * still fail with a clear headless error (B3).
      */
+    public setApiServer(server: any): void {
+        this._broadcaster?.setApiServer(server);
+    }
+
     public initHeadlessVerbServing(seams: HostSeams, broadcaster: BroadcastHub): void {
         this._hostSeams = seams;
         this._broadcaster = broadcaster;
@@ -468,14 +472,22 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
     // Safety-net sweep: checks every 60s whether source columns are empty and stops autoban if so.
     private _autobanEmptyColumnSweepTimer?: NodeJS.Timeout;
-    private _mcpMonitorTimer?: NodeJS.Timeout;
-    private _mcpMonitorFirstPromptTimer?: NodeJS.Timeout;
-    private _mcpMonitorConfigChangeTimer?: NodeJS.Timeout;
-    private _mcpMonitorOutputWatcher?: vscode.FileSystemWatcher;
-    private _mcpMonitorOutputFallbackTimer?: NodeJS.Timeout;
-    private _mcpMonitorTickQueue: Promise<void> = Promise.resolve();
-    private _mcpMonitorLastSendAt = 0;
-    private _mcpMonitorInFlight = false;
+    // ─── Scheduler engine (per-job, terminal-agnostic) ──────────────────────
+    // Replaces the singleton comms timer/queue/in-flight fields. Keyed by jobId
+    // so N local-terminal jobs can run concurrently. The comms job uses
+    // COMMS_JOB_ID; its terminal name stays 'Comms Monitor' (upgrade safety).
+    private _schedulerTimers = new Map<string, NodeJS.Timeout>();
+    private _schedulerFirstPromptTimers = new Map<string, NodeJS.Timeout>();
+    private _schedulerConfigChangeTimers = new Map<string, NodeJS.Timeout>();
+    private _schedulerOutputWatchers = new Map<string, vscode.FileSystemWatcher>();
+    private _schedulerOutputFallbackTimers = new Map<string, NodeJS.Timeout>();
+    private _schedulerTickQueues = new Map<string, Promise<void>>();
+    private _schedulerLastSendAt = new Map<string, number>();
+    private _schedulerInFlight = new Map<string, boolean>();
+    // Single source of truth for closed-terminal → job resolution. Maintained
+    // at launch/stop. The closed-terminal handler reads this index instead of
+    // string-matching the terminal name, so it stops the right job's loop.
+    private _schedulerTerminalToJobId = new Map<string, string>();
     // Dedupe key set: tracks recently processed mirror events (sessionId+stablePath) to prevent watcher churn re-processing
     private _recentMirrorProcessed = new Map<string, NodeJS.Timeout>();
     // Persisted workspace blacklist: stable-path keys of brain plans present during setup.
@@ -661,7 +673,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // Start local API server for agent access
         void this._startLocalApiServer();
         void this._validateNoSwitchboardPollution();
-        void this._startMcpMonitorLoop();
+        void this._startAllSchedulerLoops();
         this._initEventHandlers();
     }
 
@@ -8858,7 +8870,7 @@ Each plan file must include:
 
     public async setAutomationModeFromKanban(msg: any): Promise<void> {
         const newMode = msg.mode;
-        if (!['single-column', 'multi-column', 'antigravity-batch', 'orchestration'].includes(newMode)) return;
+        if (!['single-column', 'multi-column', 'antigravity-batch', 'orchestration', 'scheduler'].includes(newMode)) return;
 
         const wasEnabled = this._autobanState.enabled;
 
@@ -10963,11 +10975,11 @@ Each plan file must include:
                             ...result
                         });
                         if (result.success) {
-                            await this._syncFilesAndRefreshRunSheets(workspaceRoot);
+                            await this._syncFilesAndRefreshRunSheets(workspaceRoot ?? undefined);
                             this.refresh();
                             await this._kanbanProvider?.refresh();
                         }
-                        return { success: result.success, ...result };
+                        return { ...result, success: result.success };
                     }
                     case 'clickupImportTask': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
@@ -10988,11 +11000,11 @@ Each plan file must include:
                             ...result
                         });
                         if (result.success) {
-                            await this._syncFilesAndRefreshRunSheets(workspaceRoot);
+                            await this._syncFilesAndRefreshRunSheets(workspaceRoot ?? undefined);
                             this.refresh();
                             await this._kanbanProvider?.refresh();
                         }
-                        return { success: result.success, ...result };
+                        return { ...result, success: result.success };
                     }
                     case 'linearImportAndSendToPlanner': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
@@ -11047,7 +11059,7 @@ Each plan file must include:
                                 return { success: true, message: msg };
                             }
 
-                            await this._syncFilesAndRefreshRunSheets(workspaceRoot);
+                            await this._syncFilesAndRefreshRunSheets(workspaceRoot ?? undefined);
                             this.refresh();
                             await this._kanbanProvider?.refresh();
                         } catch (error) {
@@ -11740,7 +11752,7 @@ Each plan file must include:
                                     pageUrl: config?.pageUrl,
                                     charCount: result.charCount
                                 });
-                                return { success: true, ...result, syncedAt: config?.lastFetchAt, pageTitle: config?.pageTitle, pageUrl: config?.pageUrl };
+                                return { ...result, success: true, syncedAt: config?.lastFetchAt, pageTitle: config?.pageTitle, pageUrl: config?.pageUrl };
                             } else {
                                 this.postMessage({
                                     type: 'notionFetchState',
@@ -13022,7 +13034,7 @@ What would you like to find?`;
         this._managedImportMirrorsForActiveFolder = desiredMirrors;
 
         if (anyMirrorChanged || cleanupMissingManagedImports) {
-            await this._syncFilesAndRefreshRunSheets(workspaceRoot);
+            await this._syncFilesAndRefreshRunSheets(workspaceRoot ?? undefined);
         }
     }
 
@@ -13850,7 +13862,7 @@ What would you like to find?`;
             planId,
             topic: entry.topic
         });
-        await this._syncFilesAndRefreshRunSheets(workspaceRoot);
+        await this._syncFilesAndRefreshRunSheets(workspaceRoot ?? undefined);
         if (resolvedSessionId) {
             this.postMessage({ type: 'selectSession', sessionId: resolvedSessionId });
         }
@@ -14744,7 +14756,7 @@ What would you like to find?`;
             // _syncFilesAndRefreshRunSheets() runs the (now unified) external-plan
             // rescan and refreshes the board. UI posts are no-ops when no view is open,
             // but the claim into the DB still happens — so closed/minimised panels work.
-            await this._syncFilesAndRefreshRunSheets(workspaceRoot);
+            await this._syncFilesAndRefreshRunSheets(workspaceRoot ?? undefined);
         } catch (e) {
             console.error('[TaskViewerProvider] Plan Scanner sweep failed:', e);
         } finally {
@@ -15977,7 +15989,7 @@ What would you like to find?`;
         } catch (e) {
             console.error('[TaskViewerProvider] Incremental registration failed, falling back to full sync:', e);
             // Full fallback: repairs any partial state from the failed refresh.
-            await this._syncFilesAndRefreshRunSheets(workspaceRoot);
+            await this._syncFilesAndRefreshRunSheets(workspaceRoot ?? undefined);
             this.postMessage({ type: 'selectSession', sessionId: planId });
         }
     }
@@ -16656,7 +16668,7 @@ What would you like to find?`;
                 console.error('[TaskViewerProvider] Import plan failed:', item.sourcePath, e);
             }
         }
-        await this._syncFilesAndRefreshRunSheets(workspaceRoot);
+        await this._syncFilesAndRefreshRunSheets(workspaceRoot ?? undefined);
         this._showTemporaryNotification(`Imported ${claimed} plan(s).`);
     }
 
@@ -17774,22 +17786,26 @@ What would you like to find?`;
 
             await this._removeAutobanTerminalReferences(cleanedTerminalName || terminal.name);
 
-            // If the closed terminal was the Comms Monitor, stop the polling
-            // loop and push the updated status to the kanban webview so the
-            // status line flips from 🟢 to 🔴. Match by NAME (available
-            // synchronously on the close event) rather than PID, so detection
-            // is robust even when terminal.processId does not resolve within
-            // the 1s timeout.
-            const monitorStripped = this._normalizeAgentKey(this._stripIdeSuffix(TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME));
-            const closedStripped = this._normalizeAgentKey(this._stripIdeSuffix(terminal.name));
-            if (closedStripped === monitorStripped) {
-                await GlobalIntegrationConfigService.setMcpMonitorConfig({ pollingEnabled: false });
-                this._stopMcpMonitorLoop();
-                // Reset visibility so the monitor doesn't reappear in the agent grid
-                await this.setVisibleAgent('mcp_monitor', false);
-                // Clean up in-memory dispatch map
-                this._registeredTerminals?.delete(this._suffixedName(TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME));
-                await this._postMcpMonitorConfig();
+            // If the closed terminal was a scheduler job's terminal, stop that
+            // job's polling loop and push the updated status to the kanban
+            // webview so the status line flips from 🟢 to 🔴. Resolve the job
+            // from the terminal→jobId index (single source of truth) rather
+            // than string-matching the terminal name, so the right loop stops.
+            const closedJobId = this._jobIdForTerminalName(terminal.name);
+            if (closedJobId) {
+                const isComms = closedJobId === COMMS_JOB_ID;
+                if (isComms) {
+                    await GlobalIntegrationConfigService.setMcpMonitorConfig({ pollingEnabled: false });
+                    // Reset visibility so the monitor doesn't reappear in the agent grid
+                    await this.setVisibleAgent('mcp_monitor', false);
+                }
+                this._stopSchedulerJobLoop(closedJobId);
+                // Clean up in-memory dispatch map + index entry
+                this._registeredTerminals?.delete(this._suffixedName(terminal.name));
+                this._schedulerTerminalToJobId.delete(terminal.name);
+                if (isComms) {
+                    await this._postMcpMonitorConfig();
+                }
             }
 
             this._refreshTerminalStatuses();
@@ -20635,7 +20651,10 @@ What would you like to find?`;
         this._oversightPass?.dispose();
         this._oversightPass = null;
         this._stopAutobanEngine();
-        this._stopMcpMonitorLoop();
+        // Stop every scheduler loop (comms + any other local-terminal jobs).
+        for (const jobId of Array.from(this._schedulerTimers.keys())) {
+            this._stopSchedulerJobLoop(jobId);
+        }
         this.stopPlanScanner();
         if (this._postAutobanStateDebounceTimer) {
             clearTimeout(this._postAutobanStateDebounceTimer);
@@ -22029,181 +22048,304 @@ What would you like to find?`;
         return numbers.reduce((acc, n) => gcd2(acc, n), 0);
     }
 
-    private async _startMcpMonitorLoop() {
-        const cfg = await GlobalIntegrationConfigService.getMcpMonitorConfig();
-        if (!cfg.pollingEnabled) {
-            this._stopMcpMonitorLoop();
-            return;
+    // ─── Scheduler engine (per-job, terminal-agnostic) ──────────────────────
+    //
+    // Generalizes the former singleton Comms Monitor loop into an engine that
+    // runs any `ScheduledJob` whose `target` is `local-terminal`. N timers, N
+    // terminals, N tick queues — all keyed by jobId. The comms job keeps its
+    // literal terminal name 'Comms Monitor' so an upgrade does not orphan the
+    // running terminal.
+    //
+    // Load-bearing constraints preserved for EVERY local-terminal job:
+    //   - Never headless: prompts go via sendText to an interactive terminal,
+    //     never `claude -p` (API-billed, loses claude.ai MCP connectors).
+    //   - Sub-hourly niche: minute-granularity intervals; the only target that
+    //     can poll faster than hourly.
+
+    /** Derive the terminal name for a job. Comms keeps 'Comms Monitor' verbatim. */
+    private _schedulerTerminalName(job: ScheduledJob): string {
+        if (job.source === 'comms') {
+            return TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME;
         }
-        const activeSources = (cfg.sources || []).filter(src => cfg.sourceIntervals[src] && cfg.sourceIntervals[src] > 0);
-        if (activeSources.length === 0) {
-            this._stopMcpMonitorLoop();
-            return;
-        }
-        if (this._mcpMonitorTimer) {
-            clearInterval(this._mcpMonitorTimer);
-        }
-        const periodMinutes = this._gcd(activeSources.map(src => cfg.sourceIntervals[src]));
-        const intervalMs = Math.max(periodMinutes, 1) * 60 * 1000;
-        this._mcpMonitorTimer = setInterval(() => this._enqueueMcpMonitorTick(), intervalMs);
+        return `Scheduler: ${job.label}`;
     }
 
-    private _stopMcpMonitorLoop() {
-        if (this._mcpMonitorTimer) {
-            clearInterval(this._mcpMonitorTimer);
-            this._mcpMonitorTimer = undefined;
+    /** Resolve the jobId that owns a given terminal name (closed-terminal handler). */
+    private _jobIdForTerminalName(terminalName: string): string | undefined {
+        const stripped = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
+        for (const [rawName, jobId] of this._schedulerTerminalToJobId.entries()) {
+            if (this._normalizeAgentKey(this._stripIdeSuffix(rawName)) === stripped) {
+                return jobId;
+            }
         }
-        if (this._mcpMonitorFirstPromptTimer) {
-            clearTimeout(this._mcpMonitorFirstPromptTimer);
-            this._mcpMonitorFirstPromptTimer = undefined;
-        }
-        if (this._mcpMonitorConfigChangeTimer) {
-            clearTimeout(this._mcpMonitorConfigChangeTimer);
-            this._mcpMonitorConfigChangeTimer = undefined;
-        }
-        this._disposeMcpMonitorOutputCapture();
+        return undefined;
     }
 
-    private _enqueueMcpMonitorTick() {
-        this._mcpMonitorTickQueue = this._mcpMonitorTickQueue.then(async () => {
+    /**
+     * Start (or restart) the loop for a single `local-terminal` job. For the
+     * comms job the interval is the GCD of `sourceIntervals` (preserved from the
+     * pre-refactor loop); for every other source the interval is the job's
+     * single `intervalMinutes`. No-op if the job is disabled.
+     */
+    private async _startSchedulerJobLoop(job: ScheduledJob): Promise<void> {
+        if (!job.enabled) {
+            this._stopSchedulerJobLoop(job.id);
+            return;
+        }
+        let intervalMs: number;
+        if (job.source === 'comms') {
+            const cfg = await GlobalIntegrationConfigService.getMcpMonitorConfig();
+            const activeSources = (cfg.sources || []).filter(src => cfg.sourceIntervals[src] && cfg.sourceIntervals[src] > 0);
+            if (activeSources.length === 0) {
+                this._stopSchedulerJobLoop(job.id);
+                return;
+            }
+            const periodMinutes = this._gcd(activeSources.map(src => cfg.sourceIntervals[src]));
+            intervalMs = Math.max(periodMinutes, 1) * 60 * 1000;
+        } else {
+            intervalMs = Math.max(job.intervalMinutes || 1, 1) * 60 * 1000;
+        }
+        const existing = this._schedulerTimers.get(job.id);
+        if (existing) {
+            clearInterval(existing);
+        }
+        this._schedulerTimers.set(job.id, setInterval(() => this._enqueueSchedulerTick(job.id), intervalMs));
+    }
+
+    /**
+     * Stop the loop for one job: clear its timer, first-prompt timer,
+     * config-change timer, output watcher + fallback, and drain the tick queue.
+     * Does NOT close the terminal (the caller / closed-terminal handler owns that).
+     */
+    private _stopSchedulerJobLoop(jobId: string): void {
+        const timer = this._schedulerTimers.get(jobId);
+        if (timer) {
+            clearInterval(timer);
+            this._schedulerTimers.delete(jobId);
+        }
+        const first = this._schedulerFirstPromptTimers.get(jobId);
+        if (first) {
+            clearTimeout(first);
+            this._schedulerFirstPromptTimers.delete(jobId);
+        }
+        const cfgChange = this._schedulerConfigChangeTimers.get(jobId);
+        if (cfgChange) {
+            clearTimeout(cfgChange);
+            this._schedulerConfigChangeTimers.delete(jobId);
+        }
+        this._disposeSchedulerOutputCapture(jobId);
+    }
+
+    private _enqueueSchedulerTick(jobId: string): void {
+        const prev = this._schedulerTickQueues.get(jobId) || Promise.resolve();
+        this._schedulerTickQueues.set(jobId, prev.then(async () => {
             try {
-                await this._mcpMonitorTick();
+                await this._schedulerTick(jobId);
             } catch (err) {
-                console.error('[Comms Monitor] Tick failed:', err);
+                console.error(`[Scheduler] Tick failed for job ${jobId}:`, err);
             }
-        });
+        }));
     }
 
-    private async _mcpMonitorTick() {
-        const cfg = await GlobalIntegrationConfigService.getMcpMonitorConfig();
-        if (!cfg.pollingEnabled) return;
+    /**
+     * One tick for one job. Resolves the job's terminal by name (via the
+     * terminal→jobId index), applies the per-job in-flight guard, builds the
+     * prompt via a `job.source` dispatch, and sends it. Output capture is
+     * started per job after a successful send.
+     */
+    private async _schedulerTick(jobId: string): Promise<void> {
+        const sched = await GlobalIntegrationConfigService.getSchedulerConfig();
+        const job = sched.jobs.find(j => j.id === jobId);
+        if (!job || !job.enabled) return;
 
-        // Singleton guard: resolve the target terminal in this window
-        const openTerminals = vscode.window.terminals || [];
-        const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME));
-        const terminal = openTerminals.find(t => {
+        const terminalName = this._schedulerTerminalName(job);
+        const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
+        const terminal = (vscode.window.terminals || []).find(t => {
             const tName = this._normalizeAgentKey(this._stripIdeSuffix(t.name));
-            return tName === strippedTarget;
+            return tName === strippedTarget && t.exitStatus === undefined;
         });
-
-        if (!terminal || terminal.exitStatus !== undefined) {
-            // No monitor terminal running in this window. Another window may own it.
+        if (!terminal) {
+            // No terminal for this job running in this window. Another window may own it.
             return;
         }
 
-        // In-flight guard
-        if (this._mcpMonitorInFlight) {
+        if (this._schedulerInFlight.get(jobId)) {
             return;
         }
 
-        // Compute due sources (those whose per-source interval has elapsed).
-        // A source with no recorded baseline is always due (first check).
-        const now = Date.now();
-        const dueSources = (cfg.sources || []).filter(src => {
-            const intervalMin = cfg.sourceIntervals[src];
-            if (!intervalMin || intervalMin <= 0) return false;
-            const last = cfg.sourceLastCheckAt[src];
-            if (!last) return true;
-            const elapsed = now - new Date(last).getTime();
-            return elapsed >= intervalMin * 60 * 1000;
-        });
-        if (dueSources.length === 0) return;
-
-        this._mcpMonitorInFlight = true;
-        try {
-            const prompt = this._buildMcpMonitorPrompt(cfg, { dueSources });
-            if (prompt) {
-                await sendRobustText(terminal, prompt, true, undefined, { background: true });
-                this._mcpMonitorLastSendAt = Date.now();
-                // Persist sourceLastCheckAt for the sent sources only (successful send).
-                const nowIso = new Date().toISOString();
-                const updatedBaselines: Record<string, string> = {};
-                for (const src of dueSources) {
-                    updatedBaselines[src] = nowIso;
+        let prompt: string;
+        if (job.source === 'comms') {
+            const cfg = await GlobalIntegrationConfigService.getMcpMonitorConfig();
+            if (!cfg.pollingEnabled) return;
+            const now = Date.now();
+            const dueSources = (cfg.sources || []).filter(src => {
+                const intervalMin = cfg.sourceIntervals[src];
+                if (!intervalMin || intervalMin <= 0) return false;
+                const last = cfg.sourceLastCheckAt[src];
+                if (!last) return true;
+                const elapsed = now - new Date(last).getTime();
+                return elapsed >= intervalMin * 60 * 1000;
+            });
+            if (dueSources.length === 0) return;
+            this._schedulerInFlight.set(jobId, true);
+            try {
+                prompt = this._buildMcpMonitorPrompt(cfg, { dueSources });
+                if (prompt) {
+                    await sendRobustText(terminal, prompt, true, undefined, { background: true });
+                    this._schedulerLastSendAt.set(jobId, Date.now());
+                    const nowIso = new Date().toISOString();
+                    const updatedBaselines: Record<string, string> = {};
+                    for (const src of dueSources) {
+                        updatedBaselines[src] = nowIso;
+                    }
+                    await GlobalIntegrationConfigService.setMcpMonitorConfig({ sourceLastCheckAt: updatedBaselines });
+                    this._startSchedulerOutputCapture(job);
                 }
-                await GlobalIntegrationConfigService.setMcpMonitorConfig({ sourceLastCheckAt: updatedBaselines });
-
-                // Output capture: watch the results file rather than polling on a
-                // fixed timer. The watcher fires the moment Claude writes the file;
-                // a 90s fallback timeout covers the case where Claude never writes
-                // (responds inline, errors, or the terminal is closed mid-response).
-                this._startMcpMonitorOutputCapture();
+            } finally {
+                this._schedulerInFlight.set(jobId, false);
             }
+            return;
+        }
+
+        // Non-comms sources: prompt comes from promptOverride (plan 3 supplies
+        // authored builders for board-batch/reconcile/custom via the same
+        // dispatch; until then promptOverride is the carrier). promptOverride
+        // precedence is preserved exactly — an empty override skips the tick.
+        prompt = (job.promptOverride || '').trim();
+        if (!prompt) return;
+        this._schedulerInFlight.set(jobId, true);
+        try {
+            await sendRobustText(terminal, normalizeNewlines(prompt), true, undefined, { background: true });
+            this._schedulerLastSendAt.set(jobId, Date.now());
+            this._startSchedulerOutputCapture(job);
         } finally {
-            this._mcpMonitorInFlight = false;
+            this._schedulerInFlight.set(jobId, false);
         }
     }
 
     /**
-     * Start a file watcher + 90s fallback timer to capture the monitor's written
-     * findings (.switchboard/comms-monitor-latest.md) and push them to the webview.
-     * Disposes any previous capture cycle first.
+     * Start a per-job file watcher + 90s fallback timer to capture the job's
+     * written findings and push them to the webview. The comms job writes to
+     * `.switchboard/comms-monitor-latest.md` (backward compat — the webview
+     * watches that file and the message type stays `commsMonitorOutput`); other
+     * jobs write to `.switchboard/scheduler-<id>-latest.md` and post a
+     * `schedulerOutput` message carrying the jobId.
      */
-    private _startMcpMonitorOutputCapture(): void {
-        this._disposeMcpMonitorOutputCapture();
-
+    private _startSchedulerOutputCapture(job: ScheduledJob): void {
+        this._disposeSchedulerOutputCapture(job.id);
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) return;
-        const outputPath = path.join(workspaceRoot, '.switchboard', 'comms-monitor-latest.md');
+        const outputPath = job.source === 'comms'
+            ? path.join(workspaceRoot, '.switchboard', 'comms-monitor-latest.md')
+            : path.join(workspaceRoot, '.switchboard', `scheduler-${job.id}-latest.md`);
 
-        // Use RelativePattern (dir + basename) — the repo-wide convention for
-        // single-file watchers (see PlanningPanelProvider). A raw fsPath string
-        // glob breaks on Windows (backslashes are glob escapes), so the watcher
-        // would never fire and capture would always fall through to the 90s timer.
-        this._mcpMonitorOutputWatcher = vscode.workspace.createFileSystemWatcher(
+        const watcher = vscode.workspace.createFileSystemWatcher(
             new vscode.RelativePattern(path.dirname(outputPath), path.basename(outputPath)),
             false, false, false
         );
-        this._mcpMonitorOutputWatcher.onDidChange(() => this._captureMcpMonitorOutput());
-        this._mcpMonitorOutputWatcher.onDidCreate(() => this._captureMcpMonitorOutput());
+        watcher.onDidChange(() => this._captureSchedulerOutput(job));
+        watcher.onDidCreate(() => this._captureSchedulerOutput(job));
+        this._schedulerOutputWatchers.set(job.id, watcher);
 
-        this._mcpMonitorOutputFallbackTimer = setTimeout(async () => {
-            await this._captureMcpMonitorOutput();
-        }, 90 * 1000);
+        this._schedulerOutputFallbackTimers.set(job.id, setTimeout(async () => {
+            await this._captureSchedulerOutput(job);
+        }, 90 * 1000));
     }
 
-    /**
-     * Read the results file and push its contents to the webview. Posts a
-     * "no output" state if the file is missing or unreadable (Claude responded
-     * inline without writing, or hasn't finished yet). Disposes the watcher +
-     * fallback timer once capture fires.
-     */
-    private async _captureMcpMonitorOutput(): Promise<void> {
-        this._disposeMcpMonitorOutputCapture();
-
+    private async _captureSchedulerOutput(job: ScheduledJob): Promise<void> {
+        this._disposeSchedulerOutputCapture(job.id);
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) return;
-        const outputPath = path.join(workspaceRoot, '.switchboard', 'comms-monitor-latest.md');
+        const outputPath = job.source === 'comms'
+            ? path.join(workspaceRoot, '.switchboard', 'comms-monitor-latest.md')
+            : path.join(workspaceRoot, '.switchboard', `scheduler-${job.id}-latest.md`);
+        const isComms = job.source === 'comms';
         try {
             const content = await fs.promises.readFile(outputPath, 'utf-8');
             const stat = await fs.promises.stat(outputPath);
-            const message = {
-                type: 'commsMonitorOutput',
-                output: content,
-                timestamp: stat.mtime.toISOString()
-            };
+            const message = isComms
+                ? { type: 'commsMonitorOutput', output: content, timestamp: stat.mtime.toISOString() }
+                : { type: 'schedulerOutput', jobId: job.id, output: content, timestamp: stat.mtime.toISOString() };
             this.postMessage(message);
             this._kanbanProvider?.postMessage(message);
         } catch {
-            const message = {
-                type: 'commsMonitorOutput',
-                output: null,
-                timestamp: new Date().toISOString()
-            };
+            const message = isComms
+                ? { type: 'commsMonitorOutput', output: null, timestamp: new Date().toISOString() }
+                : { type: 'schedulerOutput', jobId: job.id, output: null, timestamp: new Date().toISOString() };
             this.postMessage(message);
             this._kanbanProvider?.postMessage(message);
         }
     }
 
-    private _disposeMcpMonitorOutputCapture(): void {
-        if (this._mcpMonitorOutputWatcher) {
-            this._mcpMonitorOutputWatcher.dispose();
-            this._mcpMonitorOutputWatcher = undefined;
+    private _disposeSchedulerOutputCapture(jobId: string): void {
+        const watcher = this._schedulerOutputWatchers.get(jobId);
+        if (watcher) {
+            watcher.dispose();
+            this._schedulerOutputWatchers.delete(jobId);
         }
-        if (this._mcpMonitorOutputFallbackTimer) {
-            clearTimeout(this._mcpMonitorOutputFallbackTimer);
-            this._mcpMonitorOutputFallbackTimer = undefined;
+        const fallback = this._schedulerOutputFallbackTimers.get(jobId);
+        if (fallback) {
+            clearTimeout(fallback);
+            this._schedulerOutputFallbackTimers.delete(jobId);
         }
+    }
+
+    /**
+     * Start loops for every enabled `local-terminal` job in the scheduler
+     * config. Called at activation (replaces the single `_startMcpMonitorLoop()`
+     * call) and after config writes. Stops loops for jobs that no longer exist
+     * or are disabled.
+     */
+    private async _startAllSchedulerLoops(): Promise<void> {
+        const sched = await GlobalIntegrationConfigService.getSchedulerConfig();
+        const enabledIds = new Set<string>();
+        for (const job of sched.jobs) {
+            if (job.enabled && job.target === 'local-terminal') {
+                enabledIds.add(job.id);
+                await this._startSchedulerJobLoop(job);
+            }
+        }
+        // Stop loops for jobs that vanished or were disabled.
+        for (const jobId of Array.from(this._schedulerTimers.keys())) {
+            if (!enabledIds.has(jobId)) {
+                this._stopSchedulerJobLoop(jobId);
+            }
+        }
+    }
+
+    /**
+     * Public wrapper so KanbanProvider can restart scheduler loops after a
+     * `setSchedulerConfig` write from the webview. Mirrors the
+     * `postMcpMonitorConfig` pattern for the comms shim.
+     */
+    public async startAllSchedulerLoops(): Promise<void> {
+        await this._startAllSchedulerLoops();
+    }
+
+    // ─── Comms shims (target the migrated comms job) ────────────────────────
+    //
+    // Preserve the pre-refactor method names so every existing caller
+    // (activation, setMcpMonitorConfigFromKanban, startMcpMonitorPolling,
+    // stopMcpMonitorPolling, stopMcpMonitorTerminal, handleTerminalClosed,
+    // dispose) keeps working without per-call edits. Each shim resolves the
+    // comms job and forwards to the generalized engine.
+
+    private async _startMcpMonitorLoop(): Promise<void> {
+        const sched = await GlobalIntegrationConfigService.getSchedulerConfig();
+        const comms = sched.jobs.find(j => j.source === 'comms');
+        if (!comms) {
+            this._stopSchedulerJobLoop(COMMS_JOB_ID);
+            return;
+        }
+        await this._startSchedulerJobLoop(comms);
+    }
+
+    private _stopMcpMonitorLoop(): void {
+        this._stopSchedulerJobLoop(COMMS_JOB_ID);
+    }
+
+    private _enqueueMcpMonitorTick(): void {
+        this._enqueueSchedulerTick(COMMS_JOB_ID);
     }
 
     private _buildMcpMonitorPrompt(cfg: McpMonitorConfig, opts?: { dueSources?: string[] }): string {
@@ -22323,14 +22465,15 @@ What would you like to find?`;
         // Coalesced (500ms) config-change tick so source toggles apply on the
         // next tick without a terminal restart. Reset the secondary debounce on
         // this path only so the immediate prompt isn't eaten.
-        if (this._mcpMonitorConfigChangeTimer) {
-            clearTimeout(this._mcpMonitorConfigChangeTimer);
+        const prev = this._schedulerConfigChangeTimers.get(COMMS_JOB_ID);
+        if (prev) {
+            clearTimeout(prev);
         }
-        this._mcpMonitorConfigChangeTimer = setTimeout(() => {
-            this._mcpMonitorConfigChangeTimer = undefined;
-            this._mcpMonitorLastSendAt = 0;
+        this._schedulerConfigChangeTimers.set(COMMS_JOB_ID, setTimeout(() => {
+            this._schedulerConfigChangeTimers.delete(COMMS_JOB_ID);
+            this._schedulerLastSendAt.set(COMMS_JOB_ID, 0);
             this._enqueueMcpMonitorTick();
-        }, 500);
+        }, 500));
         this._postMcpMonitorConfig();
     }
 
@@ -22369,8 +22512,12 @@ What would you like to find?`;
      * schedule a first prompt — use checkMcpMonitorAuth() then
      * startMcpMonitorPolling() for that.
      */
-    public async launchMcpMonitorTerminal(): Promise<void> {
-        const targetName = TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME;
+    public async launchMcpMonitorTerminal(jobId?: string): Promise<void> {
+        const resolvedJobId = jobId || COMMS_JOB_ID;
+        const sched = await GlobalIntegrationConfigService.getSchedulerConfig();
+        const job = sched.jobs.find(j => j.id === resolvedJobId);
+        const isComms = !job || job.source === 'comms';
+        const targetName = isComms ? TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME : this._schedulerTerminalName(job!);
         const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(targetName));
 
         // Dispose any zombie (exited) terminal with the same name
@@ -22389,12 +22536,19 @@ What would you like to find?`;
         });
         if (live) {
             live.show();
-            await this._postMcpMonitorConfig();
+            // Register the terminal→jobId index so the closed-terminal handler
+            // can resolve this job even on a reveal (terminal already existed).
+            this._schedulerTerminalToJobId.set(targetName, resolvedJobId);
+            if (isComms) {
+                await this._postMcpMonitorConfig();
+            }
             return;
         }
 
         // Auto-enable mcp_monitor visibility so createAgentGrid doesn't dispose it
-        await this.setVisibleAgent('mcp_monitor', true);
+        if (isComms) {
+            await this.setVisibleAgent('mcp_monitor', true);
+        }
 
         // Create the terminal
         const terminal = vscode.window.createTerminal({
@@ -22405,6 +22559,8 @@ What would you like to find?`;
 
         if (!this._registeredTerminals) this._registeredTerminals = new Map();
         this._registeredTerminals.set(this._suffixedName(targetName), terminal);
+        // Index: terminal name → jobId (single source of truth for closed-terminal resolution)
+        this._schedulerTerminalToJobId.set(targetName, resolvedJobId);
 
         terminal.show();
         try {
@@ -22417,7 +22573,7 @@ What would you like to find?`;
             const key = this._suffixedName(targetName);
             if (!state.terminals[key]) state.terminals[key] = {};
             state.terminals[key].purpose = 'agent-grid';
-            state.terminals[key].role = 'mcp_monitor';
+            state.terminals[key].role = isComms ? 'mcp_monitor' : 'scheduler';
             state.terminals[key].friendlyName = targetName;
             state.terminals[key].lastSeen = new Date().toISOString();
             state.terminals[key].ideName = vscode.env.appName;
@@ -22425,7 +22581,7 @@ What would you like to find?`;
         this.refresh();
 
         // Wait for shell readiness, then send startup command
-        const cmd = await this.getAgentStartupCommand('mcp_monitor');
+        const cmd = await this.getAgentStartupCommand(isComms ? 'mcp_monitor' : 'coder');
         if (cmd && cmd.trim()) {
             const shellReady = new Promise<void>((resolve) => {
                 const disposable = vscode.window.onDidStartTerminalShellExecution((e) => {
@@ -22442,7 +22598,9 @@ What would you like to find?`;
 
         // Push updated status to kanban. No loop start, no first-prompt one-shot —
         // the user runs checkMcpMonitorAuth() then startMcpMonitorPolling().
-        await this._postMcpMonitorConfig();
+        if (isComms) {
+            await this._postMcpMonitorConfig();
+        }
     }
 
     /**
@@ -22480,13 +22638,14 @@ What would you like to find?`;
         // (Start Terminal → Check Auth → Start Polling) already gates on auth,
         // so the 30s grace period is redundant. A short delay lets the config
         // write settle and the webview update before the tick runs.
-        if (this._mcpMonitorFirstPromptTimer) {
-            clearTimeout(this._mcpMonitorFirstPromptTimer);
+        const prev = this._schedulerFirstPromptTimers.get(COMMS_JOB_ID);
+        if (prev) {
+            clearTimeout(prev);
         }
-        this._mcpMonitorFirstPromptTimer = setTimeout(() => {
-            this._mcpMonitorFirstPromptTimer = undefined;
+        this._schedulerFirstPromptTimers.set(COMMS_JOB_ID, setTimeout(() => {
+            this._schedulerFirstPromptTimers.delete(COMMS_JOB_ID);
             this._enqueueMcpMonitorTick();
-        }, 2 * 1000);
+        }, 2 * 1000));
         await this._postMcpMonitorConfig();
     }
 
@@ -22505,9 +22664,14 @@ What would you like to find?`;
      * "Stop" button in the COMMS tab. Also called from handleTerminalClosed
      * when the monitor terminal dies so the loop stops and the status flips.
      */
-    public async stopMcpMonitorTerminal(): Promise<void> {
-        const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME));
-        const suffixedKey = this._suffixedName(TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME);
+    public async stopMcpMonitorTerminal(jobId?: string): Promise<void> {
+        const resolvedJobId = jobId || COMMS_JOB_ID;
+        const sched = await GlobalIntegrationConfigService.getSchedulerConfig();
+        const job = sched.jobs.find(j => j.id === resolvedJobId);
+        const isComms = !job || job.source === 'comms';
+        const targetName = isComms ? TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME : this._schedulerTerminalName(job!);
+        const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(targetName));
+        const suffixedKey = this._suffixedName(targetName);
         const live = (vscode.window.terminals || []).find(t => {
             const tName = this._normalizeAgentKey(this._stripIdeSuffix(t.name));
             return tName === strippedTarget && t.exitStatus === undefined;
@@ -22515,10 +22679,13 @@ What would you like to find?`;
         if (live) {
             live.dispose();
         }
-        // Clean up in-memory dispatch map
+        // Clean up in-memory dispatch map + terminal→jobId index
         this._registeredTerminals?.delete(suffixedKey);
-        // Reset visibility so createAgentGrid no longer includes the monitor
-        await this.setVisibleAgent('mcp_monitor', false);
+        this._schedulerTerminalToJobId.delete(targetName);
+        if (isComms) {
+            // Reset visibility so createAgentGrid no longer includes the monitor
+            await this.setVisibleAgent('mcp_monitor', false);
+        }
         // Clean up persistent state entry
         await this.updateState(async (state: any) => {
             if (state.terminals && state.terminals[suffixedKey]) {
@@ -22526,9 +22693,13 @@ What would you like to find?`;
             }
         });
         this.clearTerminalAgentInfo(suffixedKey);
-        await GlobalIntegrationConfigService.setMcpMonitorConfig({ pollingEnabled: false });
-        this._stopMcpMonitorLoop();
-        await this._postMcpMonitorConfig();
+        if (isComms) {
+            await GlobalIntegrationConfigService.setMcpMonitorConfig({ pollingEnabled: false });
+        }
+        this._stopSchedulerJobLoop(resolvedJobId);
+        if (isComms) {
+            await this._postMcpMonitorConfig();
+        }
         this.refresh();
     }
 
