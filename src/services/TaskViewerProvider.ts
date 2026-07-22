@@ -1801,25 +1801,27 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             serveStatic: (() => {
                 const repoRoot = this._context.extensionUri.fsPath;
                 const wsRoot = effectiveRoot;
-                const hasSecret = (key: string) => {
-                    try {
-                        const val = this._context.secrets.get(key);
-                        return typeof val === 'string' && val.trim().length > 0;
-                    } catch { return false; }
-                };
-                const hostCapabilities = {
+                // secrets.get() is async (returns Promise<string|undefined>), so
+                // integrationsConfigured must be computed inside the async getters,
+                // not captured synchronously at IIFE-evaluation time.
+                const baseHostCapabilities = {
                     terminalDispatch: true,
                     automation: true,
                     orchestrator: true,
                     terminalFleet: false,
                     mcpTerminals: false,
                     secretsEntry: false,
-                    integrationsConfigured: {
-                        clickup: hasSecret('switchboard.clickup.apiToken'),
-                        linear: hasSecret('switchboard.linear.apiToken'),
-                        notion: hasSecret('switchboard.notion.apiToken'),
-                        stitch: hasSecret('switchboard.stitch.apiKey'),
-                    },
+                };
+                const computeIntegrationsConfigured = async () => {
+                    try {
+                        const [clickup, linear, notion, stitch] = await Promise.all([
+                            this._context.secrets.get('switchboard.clickup.apiToken').then(t => !!(t && t.trim().length > 0)),
+                            this._context.secrets.get('switchboard.linear.apiToken').then(t => !!(t && t.trim().length > 0)),
+                            this._context.secrets.get('switchboard.notion.apiToken').then(t => !!(t && t.trim().length > 0)),
+                            this._context.secrets.get('switchboard.stitch.apiKey').then(t => !!(t && t.trim().length > 0)),
+                        ]);
+                        return { clickup, linear, notion, stitch };
+                    } catch { return { clickup: false, linear: false, notion: false, stitch: false }; }
                 };
                 const getTheme = () => {
                     try {
@@ -1829,12 +1831,19 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     }
                 };
                 return {
-                    getBoardHtml: async () => sharedGetBoardHtml(repoRoot, wsRoot, hostCapabilities, getTheme()),
-                    getProjectHtml: async () => sharedGetProjectHtml(repoRoot, wsRoot, hostCapabilities, getTheme()),
+                    getBoardHtml: async () => {
+                        const caps = { ...baseHostCapabilities, integrationsConfigured: await computeIntegrationsConfigured() };
+                        return sharedGetBoardHtml(repoRoot, wsRoot, caps, getTheme());
+                    },
+                    getProjectHtml: async () => {
+                        const caps = { ...baseHostCapabilities, integrationsConfigured: await computeIntegrationsConfigured() };
+                        return sharedGetProjectHtml(repoRoot, wsRoot, caps, getTheme());
+                    },
                     getShellHtml: async () => sharedGetShellHtml(repoRoot, getTheme()),
                     getPanelsManifest: () => sharedGetPanelsManifest({ design: true, setup: true, planning: true }),
                     getPanelHtml: async (id: string) => {
-                        const result = sharedGetPanelHtmlById(id, repoRoot, wsRoot, hostCapabilities, getTheme());
+                        const caps = { ...baseHostCapabilities, integrationsConfigured: await computeIntegrationsConfigured() };
+                        const result = sharedGetPanelHtmlById(id, repoRoot, wsRoot, caps, getTheme());
                         return result || null;
                     },
                     staticRoutes: {

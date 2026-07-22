@@ -21,6 +21,7 @@ import {
     getPanelsManifest as sharedGetPanelsManifest,
     getPanelHtmlById as sharedGetPanelHtmlById,
     resolveRepoRootFromDir,
+    type HostCapabilities,
 } from '../services/headlessPanelHtml';
 import { PlanIngestionEngine } from '../services/PlanIngestionEngine';
 import { createStandalonePlanIngestionHost, readPlanScannerCustomSourceDirs } from './planIngestionHost';
@@ -381,30 +382,35 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     };
 
     const repoRoot = resolveRepoRoot();
-    const secretsAdapter = createStandaloneSecretsAdapter();
-    const hasSecret = (key: string) => {
-        try {
-            const val = secretsAdapter.get(key);
-            return typeof val === 'string' && val.trim().length > 0;
-        } catch { return false; }
-    };
-    const standaloneCapabilities: HostCapabilities = {
+    // secretStorage is already created above (line 252) with createStandaloneSecretStorage.
+    // Its get() is async (returns Promise<string|undefined>), so integrationsConfigured
+    // must be computed inside the async getters, not captured synchronously.
+    const baseStandaloneCapabilities: HostCapabilities = {
         terminalDispatch: false,
         automation: false,
         orchestrator: false,
         terminalFleet: false,
         mcpTerminals: false,
         secretsEntry: false,
-        integrationsConfigured: {
-            clickup: hasSecret('switchboard.clickup.apiToken'),
-            linear: hasSecret('switchboard.linear.apiToken'),
-            notion: hasSecret('switchboard.notion.apiToken'),
-            stitch: hasSecret('switchboard.stitch.apiKey'),
-        },
     };
+    const computeIntegrationsConfigured = async () => {
+        try {
+            const [clickup, linear, notion, stitch] = await Promise.all([
+                secretStorage.get('switchboard.clickup.apiToken').then((t: string | undefined) => !!(t && t.trim().length > 0)),
+                secretStorage.get('switchboard.linear.apiToken').then((t: string | undefined) => !!(t && t.trim().length > 0)),
+                secretStorage.get('switchboard.notion.apiToken').then((t: string | undefined) => !!(t && t.trim().length > 0)),
+                secretStorage.get('switchboard.stitch.apiKey').then((t: string | undefined) => !!(t && t.trim().length > 0)),
+            ]);
+            return { clickup, linear, notion, stitch };
+        } catch { return { clickup: false, linear: false, notion: false, stitch: false }; }
+    };
+    const getStandaloneCaps = async (): Promise<HostCapabilities> => ({
+        ...baseStandaloneCapabilities,
+        integrationsConfigured: await computeIntegrationsConfigured(),
+    });
 
-    const getBoardHtml = async () => sharedGetBoardHtml(repoRoot, workspaceRoot, standaloneCapabilities);
-    const getProjectHtml = async () => sharedGetProjectHtml(repoRoot, workspaceRoot, standaloneCapabilities);
+    const getBoardHtml = async () => sharedGetBoardHtml(repoRoot, workspaceRoot, await getStandaloneCaps());
+    const getProjectHtml = async () => sharedGetProjectHtml(repoRoot, workspaceRoot, await getStandaloneCaps());
     const getShellHtml = async () => sharedGetShellHtml(repoRoot);
 
     // Standalone now wires the Design/Setup/TaskViewer/Planning verb routers
@@ -416,7 +422,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // passes no availability override.
     const getPanelsManifest = () => sharedGetPanelsManifest({ design: true, setup: true });
     const getPanelHtml = async (id: string): Promise<{ html: string; csp?: string } | null> => {
-        const result = sharedGetPanelHtmlById(id, repoRoot, workspaceRoot, standaloneCapabilities);
+        const result = sharedGetPanelHtmlById(id, repoRoot, workspaceRoot, await getStandaloneCaps());
         if (!result) { return null; }
         return result;
     };
