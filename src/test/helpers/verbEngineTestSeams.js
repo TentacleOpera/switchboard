@@ -190,11 +190,24 @@ function createHeadlessTestSeams(opts = {}) {
         workspace: {
             getWorkspaceRoots: () => opts.roots || [],
         },
+        pathConfig: {
+            getConfigString: (key, def = '') => opts.configStrings?.[key] ?? def,
+            getConfigBoolean: (key, def = false) => opts.configBooleans?.[key] ?? def,
+            getConfigNumber: (key, def = 0) => opts.configNumbers?.[key] ?? def,
+            updateConfig: async () => {},
+        },
         watcher: {
             watchFolder: (folderPath, _listener) => {
                 recorders.watchedFolders.push(folderPath);
                 return {
                     dispose: () => recorders.disposedWatchers.push(folderPath),
+                };
+            },
+            watchFile: (filePath, _listener) => {
+                recorders.watchedFiles = recorders.watchedFiles || [];
+                recorders.watchedFiles.push(filePath);
+                return {
+                    dispose: () => {},
                 };
             },
         },

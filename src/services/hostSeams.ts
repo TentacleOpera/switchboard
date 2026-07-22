@@ -400,7 +400,7 @@ export interface HostWorkspace {
 
 export class VscodeHostWorkspace implements HostWorkspace {
     getWorkspaceRoots(): string[] {
-        return (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
+        return (vscode.workspace?.workspaceFolders || []).map(folder => folder.uri.fsPath);
     }
 }
 

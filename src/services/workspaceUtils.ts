@@ -72,7 +72,7 @@ export function buildWorkspaceItems(openRoots: string[]): Array<{ label: string;
         // Independent context or mappings disabled: display standard workspace folders
         for (const root of openRoots) {
             const resolvedRoot = path.resolve(root);
-            const folder = (vscode.workspace.workspaceFolders || []).find(
+            const folder = (vscode.workspace?.workspaceFolders || []).find(
                 f => path.resolve(f.uri.fsPath) === resolvedRoot
             );
             items.push({

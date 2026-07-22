@@ -123,7 +123,7 @@ export class PlanningPanelProvider {
         // void); read verbs emit their result over the WS hub (see plan).
         // `type` is set LAST so a payload `type` field can never override the
         // allowlist-checked verb, regardless of caller.
-        return this._handleMessage({ ...(payload ?? {}), type: verb });
+        return await this._handleMessage({ ...(payload ?? {}), type: verb });
     }
 
 
@@ -1702,18 +1702,22 @@ Start by checking which documents exist, then present the menu.`;
             // Convert raw markdown to HTML for preview pane
             const renderedHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', content);
 
-            sendResponse({
+            const payload = {
                 type: 'kanbanPlanPreviewReady',
                 requestId,
                 filePath,
                 content: renderedHtml,
                 rawContent: content,
                 isAutoRefreshed: this._isAutoRefreshing
-            });
+            };
+            sendResponse(payload);
+            return { success: true, ...payload };
         } catch (err) {
-            sendResponse({
+            const errPayload = {
                 type: 'kanbanPlanPreviewReady', requestId, filePath, content: '', error: String(err)
-            });
+            };
+            sendResponse(errPayload);
+            return { success: false, ...errPayload };
         }
     }
 
@@ -2146,10 +2150,7 @@ Start by checking which documents exist, then present the menu.`;
     }
 
     private _getWorkspaceRoots(): string[] {
-        if (this._hostSeams) {
-            return this._hostSeams.workspace.getWorkspaceRoots();
-        }
-        return (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
+        return this._seams().workspace.getWorkspaceRoots();
     }
 
     private async _getIntegrationWorkspaces(): Promise<Array<{ workspaceRoot: string; provider: 'clickup' | 'linear' }>> {
@@ -2485,7 +2486,7 @@ Start by checking which documents exist, then present the menu.`;
         if (allRoots.length === 0) {
             const errorPanel = isProject ? this._projectPanel : this._panel;
             this._pushTo(errorPanel, 'planning', { type: 'error', message: 'No workspace open' });
-            return;
+            return { success: false, error: 'No workspace open' };
         }
 
         // Use active workspace root if available, otherwise use first root
@@ -3648,7 +3649,7 @@ Start by checking which documents exist, then present the menu.`;
             case 'fetchKanbanPlans': {
                 const requestId = typeof msg.requestId === 'number' ? msg.requestId : 0;
                 const guardKey = 'kanban-plans';
-                if (requestId <= (this._latestRequestIds.get(guardKey) || 0)) { break; }
+                if (requestId <= (this._latestRequestIds.get(guardKey) || 0)) { return { success: false, error: 'Stale request' }; }
                 this._latestRequestIds.set(guardKey, requestId);
                 this._fullKanbanPlansSent = false;
                 try {
@@ -3715,26 +3716,27 @@ Start by checking which documents exist, then present the menu.`;
                         } catch (err) { /* root has no kanban DB, skip */ }
                     }
                     if (requestId !== this._latestRequestIds.get(guardKey)) {
+                        allPlans.sort((a, b) => b.mtime - a.mtime);
+                        mergedColumns.sort((a, b) => a.order - b.order);
+                        const stalePayload = {
+                            type: 'kanbanPlansReady',
+                            plans: allPlans,
+                            workspaceItems,
+                            allWorkspaceProjects,
+                            allWorkspaceProjectPaths,
+                            columns: mergedColumns,
+                            kanbanWorkspaceRoot: this._kanbanProvider?.getCurrentWorkspaceRoot() || null,
+                            requestId
+                        };
                         if (!this._fullKanbanPlansSent) {
-                            allPlans.sort((a, b) => b.mtime - a.mtime);
-                            mergedColumns.sort((a, b) => a.order - b.order);
-                            this._postToBothPanels({
-                                type: 'kanbanPlansReady',
-                                plans: allPlans,
-                                workspaceItems,
-                                allWorkspaceProjects,
-                                allWorkspaceProjectPaths,
-                                columns: mergedColumns,
-                                kanbanWorkspaceRoot: this._kanbanProvider?.getCurrentWorkspaceRoot() || null,
-                                requestId
-                            });
+                            this._postToBothPanels(stalePayload);
                             this._fullKanbanPlansSent = true;
                         }
-                        break;
+                        return { success: true, ...stalePayload };
                     }
                     allPlans.sort((a, b) => b.mtime - a.mtime);
                     mergedColumns.sort((a, b) => a.order - b.order);
-                    this._postToBothPanels({
+                    const resultPayload = {
                         type: 'kanbanPlansReady',
                         plans: allPlans,
                         workspaceItems,
@@ -3743,14 +3745,16 @@ Start by checking which documents exist, then present the menu.`;
                         columns: mergedColumns,
                         kanbanWorkspaceRoot: this._kanbanProvider?.getCurrentWorkspaceRoot() || null,
                         requestId
-                    });
+                    };
+                    this._postToBothPanels(resultPayload);
                     this._fullKanbanPlansSent = true;
-                } catch (err) {
+                    return { success: true, ...resultPayload };
+                } catch (err: any) {
                     if (requestId === this._latestRequestIds.get(guardKey)) {
                         this._postToBothPanels({ type: 'kanbanPlansReady', plans: [], columns: [], requestId, error: String(err) });
                     }
+                    return { success: false, error: String(err) };
                 }
-                break;
             }
             case 'openKanbanPlan': {
                 const filePath: string = msg.filePath || '';
@@ -3771,8 +3775,7 @@ Start by checking which documents exist, then present the menu.`;
             case 'fetchKanbanPlanPreview': {
                 const filePath: string = msg.filePath || '';
                 const requestId = typeof msg.requestId === 'number' ? msg.requestId : 0;
-                await this._handleFetchKanbanPlanPreview(filePath, requestId);
-                break;
+                return await this._handleFetchKanbanPlanPreview(filePath, requestId);
             }
 
             case 'copyKanbanPlanPrompt': {
@@ -3852,7 +3855,7 @@ Start by checking which documents exist, then present the menu.`;
                 if (sessionId) {
                     await this._seams().commands.executeCommand('switchboard.selectSession', sessionId);
                 }
-                break;
+                return { success: true, sessionId };
             }
             case 'setKanbanPlanComplexity': {
                 const planId = String(msg.planId || '');
@@ -3962,8 +3965,9 @@ Start by checking which documents exist, then present the menu.`;
                 const sessionId = String(msg.sessionId || '');
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 if (!sessionId || !wsRoot) {
-                    this.postMessageToProjectWebview({ type: 'kanbanPlanLogReady', entries: [], error: 'Missing sessionId or workspaceRoot' });
-                    break;
+                    const errRes = { type: 'kanbanPlanLogReady', entries: [], error: 'Missing sessionId or workspaceRoot' };
+                    this.postMessageToProjectWebview(errRes);
+                    return { success: false, ...errRes };
                 }
                 try {
                     const { SessionActionLog } = require('./SessionActionLog');
@@ -3971,28 +3975,35 @@ Start by checking which documents exist, then present the menu.`;
                     const sheet = await log.getRunSheet(sessionId);
                     const events: any[] = Array.isArray(sheet?.events) ? sheet.events : [];
                     const entries = formatReviewLogEntries(events);
-                    this.postMessageToProjectWebview({ type: 'kanbanPlanLogReady', entries });
+                    const okRes = { type: 'kanbanPlanLogReady', entries };
+                    this.postMessageToProjectWebview(okRes);
+                    return { success: true, ...okRes };
                 } catch (err) {
-                    this.postMessageToProjectWebview({ type: 'kanbanPlanLogReady', entries: [], error: String(err) });
+                    const errRes = { type: 'kanbanPlanLogReady', entries: [], error: String(err) };
+                    this.postMessageToProjectWebview(errRes);
+                    return { success: false, ...errRes };
                 }
-                break;
             }
             case 'getFeatureDetails': {
                 const sessionId = String(msg.sessionId || '');
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 if (!sessionId || !wsRoot) {
-                    this.postMessageToProjectWebview({ type: 'featureDetails', feature: null, subtasks: [] });
-                    break;
+                    const errRes = { type: 'featureDetails', feature: null, subtasks: [] };
+                    this.postMessageToProjectWebview(errRes);
+                    return { success: false, ...errRes };
                 }
                 try {
                     const db = KanbanDatabase.forWorkspace(wsRoot);
                     const feature = await db.getPlanByPlanId(sessionId);
                     const subtasks = feature && feature.isFeature ? await db.getSubtasksByFeatureId(feature.planId) : [];
-                    this.postMessageToProjectWebview({ type: 'featureDetails', feature, subtasks });
+                    const okRes = { type: 'featureDetails', feature, subtasks };
+                    this.postMessageToProjectWebview(okRes);
+                    return { success: true, ...okRes };
                 } catch (err) {
-                    this.postMessageToProjectWebview({ type: 'featureDetails', feature: null, subtasks: [], error: String(err) });
+                    const errRes = { type: 'featureDetails', feature: null, subtasks: [], error: String(err) };
+                    this.postMessageToProjectWebview(errRes);
+                    return { success: false, ...errRes };
                 }
-                break;
             }
             case 'addSubtaskToFeature': {
                 const featureSessionId = String(msg.featureSessionId || '');
@@ -4301,8 +4312,9 @@ Start by checking which documents exist, then present the menu.`;
                 const enabled = (wsRoot && this._kanbanProvider)
                     ? await this._kanbanProvider.getProjectContextEnabled(wsRoot)
                     : false;
-                this._postToBothPanels({ type: 'projectContextEnabled', enabled, workspaceRoot: wsRoot });
-                break;
+                const okRes = { type: 'projectContextEnabled', enabled, workspaceRoot: wsRoot };
+                this._postToBothPanels(okRes);
+                return { success: true, ...okRes };
             }
             case 'setProjectContextEnabled': {
                 // Per-project PRD master toggle (per-workspace). KanbanProvider's dispatch path
@@ -7384,15 +7396,18 @@ Read the current content above. Determine what's missing. Produce a complete fea
             case 'getSyncConfig': {
                 try {
                     const { config } = await this._resolveSyncConfig();
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'syncConfigReady',
                         uploadLocations: config.uploadLocations || {},
                         docMappings: config.docMappings || {}
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 } catch (err) {
-                    this.postMessageToWebview({ type: 'syncConfigReady', uploadLocations: {}, docMappings: {} });
+                    const errRes = { type: 'syncConfigReady', uploadLocations: {}, docMappings: {} };
+                    this.postMessageToWebview(errRes);
+                    return { success: false, ...errRes };
                 }
-                break;
             }
             case 'loadInsights': {
                 const wsRoot = String(msg.workspaceRoot || '');

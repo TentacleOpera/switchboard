@@ -57,3 +57,6 @@ The Project feature's own 2026-07-17 review found ·6's arm-level seam migration
 - Headless Planning suite exists and **asserts payload fields, not just `success`** for this family.
 - `parity:check` / `push-routing:check` / `compile-tests` green.
 - Manual: `POST /project/verb/fetchKanbanPlans` (and a feature-detail read) return data in-body; a `createPlan`/`createFeature` write round-trips and a malformed payload is rejected.
+
+## Completion Summary
+Successfully implemented Layer-1 Plan & Feature verb conversions for `PlanningPanelProvider`. Converted all read arms in the Plans & Features verb family to return in-body payloads while preserving additive webview push calls. Added strict Zod schema validation entries for untrusted write operations under `PLANNING_VERB_SCHEMAS`. Built and verified the headless test harness (`src/test/verb-engine-planning-headless.test.js`) with 9/9 passing tests under seam isolation and `vscode` traps, confirming 0 read-arm break regressions with `analyze-verb-migration2.js`.

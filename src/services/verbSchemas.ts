@@ -281,7 +281,11 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             workspaceRoot: { type: 'string' },
         },
     },
-    sendToBacklog: {
+};
+
+export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
+    // Features
+    addSubtaskToFeature: {
         fields: {
             planId: { type: 'string' },
             sessionId: { type: 'string' },
@@ -461,6 +465,73 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
     getFeatureDetails: {
         fields: {
             sessionId: { type: 'string', required: true },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    createPlan: {
+        fields: {
+            topic: { type: 'string' },
+            project: { type: 'string' },
+            description: { type: 'string' },
+            targetColumn: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    importPlansFromClipboard: {
+        fields: {
+            content: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+            project: { type: 'string' },
+        },
+    },
+    deleteKanbanPlan: {
+        fields: {
+            planId: { type: 'string' },
+            sessionId: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    moveKanbanPlanColumn: {
+        fields: {
+            planId: { type: 'string' },
+            sessionId: { type: 'string' },
+            column: { type: 'string', required: true },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    setKanbanPlanComplexity: {
+        fields: {
+            planId: { type: 'string' },
+            sessionId: { type: 'string' },
+            complexity: { type: ['string', 'number'], required: true },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    convertToSubtask: {
+        fields: {
+            subtaskSessionId: { type: 'string', required: true },
+            featureSessionId: { type: 'string', required: true },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    refineFeature: {
+        fields: {
+            sessionId: { type: 'string', required: true },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    updateFeatureConfig: {
+        fields: {
+            key: { type: 'string', required: true },
+            value: { type: ['string', 'number', 'boolean', 'object', 'array'] },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    resolveDuplicate: {
+        fields: {
+            duplicatePlanId: { type: 'string', required: true },
+            canonicalPlanId: { type: 'string' },
+            action: { type: 'string', required: true },
             workspaceRoot: { type: 'string' },
         },
     },
@@ -959,7 +1030,7 @@ export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
 
 export const VERB_SCHEMAS: Record<ProviderKey, Record<string, VerbSchema>> = {
     kanban: KANBAN_VERB_SCHEMAS,
-    planning: {},
+    planning: PLANNING_VERB_SCHEMAS,
     design: DESIGN_VERB_SCHEMAS,
     setup: SETUP_VERB_SCHEMAS,
     taskViewer: TASK_VIEWER_VERB_SCHEMAS,
