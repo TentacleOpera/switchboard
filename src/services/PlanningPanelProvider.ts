@@ -6891,7 +6891,6 @@ Write the resulting markdown directly to the local file path, preserving any YAM
                     this._seams().ui.showErrorMessage(`Failed to copy improve-feature prompt: ${String(err)}`);
                     return { success: false, error: String(err) };
                 }
-                break;
             }
             case 'changeTicketStatus': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);

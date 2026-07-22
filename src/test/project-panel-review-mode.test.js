@@ -16,9 +16,14 @@ async function run() {
     assert.ok(htmlSource.includes('id="review-copy-prompt"'), 'popup Copy Prompt button present');
     assert.ok(htmlSource.includes('id="review-submit-comment"'), 'popup Send to Planner button present');
 
-    // One Review Mode button per eligible tab
-    assert.ok(htmlSource.includes('id="btn-review-kanban"'), 'kanban review button');
-    assert.ok(htmlSource.includes('id="btn-review-features"'), 'features review button');
+    // Review Mode buttons: kanban/features were moved from static HTML into
+    // dynamic JS (meta-bar re-render) by the button-ui-overhaul plan. The
+    // remaining tabs (projects/constitution/system) are still in the static
+    // global strip. Check each in the correct source.
+    const jsPathForButtons = path.join(process.cwd(), 'src', 'webview', 'project.js');
+    const jsSourceForButtons = await fs.promises.readFile(jsPathForButtons, 'utf8');
+    assert.ok(jsSourceForButtons.includes('id="btn-review-kanban"'), 'kanban review button (dynamic in project.js)');
+    assert.ok(jsSourceForButtons.includes('id="btn-review-features"'), 'features review button (dynamic in project.js)');
     assert.ok(htmlSource.includes('id="btn-review-projects"'), 'projects review button');
     assert.ok(htmlSource.includes('id="btn-review-constitution"'), 'constitution review button');
     assert.ok(htmlSource.includes('id="btn-review-system"'), 'system review button');

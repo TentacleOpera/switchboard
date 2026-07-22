@@ -281,6 +281,14 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             workspaceRoot: { type: 'string' },
         },
     },
+    improvePlan: {
+        fields: {
+            planId: { type: 'string' },
+            planFile: { type: 'string', required: true },
+            topic: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
 };
 
 export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
@@ -1280,14 +1288,6 @@ export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
             sessionId: { type: 'string' },
             planId: { type: 'string' },
             column: { type: 'string' },
-            workspaceRoot: { type: 'string' },
-        },
-    },
-    improvePlan: {
-        fields: {
-            planId: { type: 'string' },
-            planFile: { type: 'string', required: true },
-            topic: { type: 'string' },
             workspaceRoot: { type: 'string' },
         },
     },
