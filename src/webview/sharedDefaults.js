@@ -10,7 +10,6 @@ const DEFAULT_VISIBLE_AGENTS = {
     jules: false,
     ticket_updater: false,
     researcher: false,
-    mcp_monitor: false,
     claude_designer: false,
     phone_a_friend: false,
     project_manager: true
@@ -48,7 +47,6 @@ const BUILT_IN_AGENT_LABELS = [
     { key: 'researcher', label: 'Researcher' },
     { key: 'claude_designer', label: 'Claude Designer' },
     { key: 'jules', label: 'Jules' },
-    { key: 'mcp_monitor', label: 'Comms Monitor' },
     { key: 'phone_a_friend', label: 'Phone-a-Friend' },
     { key: 'project_manager', label: 'Project Manager' }
 ];

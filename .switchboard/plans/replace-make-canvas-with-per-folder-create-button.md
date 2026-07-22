@@ -149,3 +149,11 @@ Send to Intern
 Removed the batch selection Make Canvas machinery (checkboxes, selection state Map, counter, and dead handlers) from the HTML Previews tab. Replaced it with a per-folder `+` button in the sidebar folder headers via `folderActionsFn`. Clicking `+` generates a prompt that instructs the agent to create a new inline HTML canvas file in that folder and explicitly ask the user what content to include.
 Files changed: [design.html](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/webview/design.html), [design.js](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/webview/design.js), and this plan file.
 No issues encountered during refactoring; verification passed cleanly.
+
+## Review Findings
+
+Reviewed the implementation in commit `914c389` against the plan. The Make Canvas removal and per-folder `+` button wiring match the plan exactly: checkbox CSS deleted, selection-state fields/functions/handlers removed, `renderDocCard` `selectable` parameter dropped, `composeCreateCanvasPrompt` added with mandatory "ASK ME" wording, and `htmlFolderActions` wired as the 8th arg to `renderFolderGroupedDocs` (propagates to subfolders via `renderSubfolderGroups`). `Copy upload prompt` button and `sendHtmlTweakPrompt` verb left intact as specified.
+
+**CRITICAL regression found and fixed:** the implementation accidentally deleted the `sorted` variable declaration in `populateStitchHtmlProjectSelect` (design.js:1065, unrelated to the Make Canvas scope) while leaving the `sorted.forEach` reference intact — a runtime ReferenceError that would crash the Stitch HTML project dropdown. Restored the declaration. `node --check` passes; grep verification confirms zero remaining references to any removed Make Canvas identifier in `src/webview/`. No CI gate-wiring gap: the plan's `### Automated` checks are one-off manual verification commands (syntax check + grep), not persistent CI gates, and CI's `npm run compile` (webpack) covers bundling.
+
+Verification was static-only — the plan's automated checks (`node --check`, grep) were executed; no runtime/UI tests were run. Remaining risk: the `+` button's clipboard-copy path depends on the existing `copyHtmlTweakPrompt` handler in `DesignPanelProvider.ts:2485`, which was not modified and is assumed working.

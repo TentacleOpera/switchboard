@@ -1082,7 +1082,7 @@ export class KanbanProvider implements vscode.Disposable {
             const featureWorktrees = allWorktrees
                 .filter((w: any) => w.feature_id !== null && w.status === 'active')
                 .reduce((acc: Record<string, { branch: string; path: string; id: number }>, w: any) => { acc[w.feature_id] = { branch: w.branch, path: w.path, id: w.id }; return acc; }, {} as Record<string, { branch: string; path: string; id: number }>);
-            const workspaceItems = [{ value: root, label: path.basename(root) }];
+            const workspaceItems = this._getWorkspaceItems();
             const allWorkspaceProjects: Record<string, string[]> = { [root]: projects };
             return [
                 { type: 'updateColumns', columns: filteredColumns },

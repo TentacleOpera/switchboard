@@ -259,44 +259,75 @@
                 document.body.classList.add('host-secrets-entry-false');
                 const style = document.createElement('style');
                 style.textContent = `
-.host-secrets-entry-false .secret-key-entry-row,
-.host-secrets-entry-false .secret-input-container,
-/* Setup panel: transport.js runs ONLY in the browser, so secretsEntry===false ⟺
-   browser-served. Hide integration (secret) tabs, host-authority substrate tabs
-   (database / control-plane / mappings — they repoint the DB/config the editor is
-   bound to), and the editor-only status-bar tab. Default tab is data-tab="setup"
-   (not gated), so no blank-panel. plan-scanner + theme remain. */
-.host-secrets-entry-false .shared-tab-btn[data-tab="clickup"],
-.host-secrets-entry-false .shared-tab-btn[data-tab="linear"],
-.host-secrets-entry-false .shared-tab-btn[data-tab="notion"],
-.host-secrets-entry-false .shared-tab-btn[data-tab="remote"],
-.host-secrets-entry-false .shared-tab-btn[data-tab="database"],
-.host-secrets-entry-false .shared-tab-btn[data-tab="control-plane"],
-.host-secrets-entry-false .shared-tab-btn[data-tab="mappings"],
-.host-secrets-entry-false .shared-tab-btn[data-tab="status-bar"],
-.host-secrets-entry-false [data-tab-content="clickup"],
-.host-secrets-entry-false [data-tab-content="linear"],
-.host-secrets-entry-false [data-tab-content="notion"],
-.host-secrets-entry-false [data-tab-content="remote"],
-.host-secrets-entry-false [data-tab-content="database"],
-.host-secrets-entry-false [data-tab-content="control-plane"],
-.host-secrets-entry-false [data-tab-content="mappings"],
-.host-secrets-entry-false [data-tab-content="status-bar"],
+.host-secrets-entry-false #btn-apply-clickup-config,
+.host-secrets-entry-false #btn-apply-linear-config,
+.host-secrets-entry-false #btn-apply-notion-config,
+.host-secrets-entry-false #stitch-save-key-btn {
+    display: none !important;
+}
 .host-secrets-entry-false #clickup-token-input,
 .host-secrets-entry-false #linear-token-input,
 .host-secrets-entry-false #notion-token-input,
 .host-secrets-entry-false #multi-repo-pat,
-.host-secrets-entry-false #btn-apply-clickup-config,
-.host-secrets-entry-false #btn-apply-linear-config,
-.host-secrets-entry-false #btn-apply-notion-config,
-/* Artifacts (planning): the docs tab browses LOCAL docs too (source filter is
-   Local/ClickUp/Notion), so it STAYS visible — only its online push/sync controls are
-   secret. The tickets tab is fully online (ClickUp/Linear), so it is hidden. */
-.host-secrets-entry-false .shared-tab-btn[data-tab="tickets"] {
-    display: none !important;
+.host-secrets-entry-false #stitch-api-key-input {
+    opacity: 0.6;
+    cursor: not-allowed;
 }
 `;
                 document.head.appendChild(style);
+
+                const disableInputsAndHint = () => {
+                    const selectors = [
+                        '#clickup-token-input',
+                        '#linear-token-input',
+                        '#notion-token-input',
+                        '#multi-repo-pat',
+                        '#stitch-api-key-input'
+                    ];
+                    selectors.forEach(sel => {
+                        const el = document.querySelector(sel);
+                        if (el) {
+                            el.disabled = true;
+                            el.placeholder = 'Set this in the editor...';
+                            if (el.parentNode && !el.parentNode.querySelector('.host-secrets-hint')) {
+                                const hint = document.createElement('div');
+                                hint.className = 'host-secrets-hint';
+                                hint.style.cssText = 'font-size: 11px; color: var(--text-secondary, #888); margin-top: 4px; font-style: italic;';
+                                hint.textContent = 'Keys are entered in the editor and used from there — open this workspace in VS Code to set it.';
+                                el.parentNode.appendChild(hint);
+                            }
+                        }
+                    });
+                };
+                if (document.readyState === 'loading') {
+                    document.addEventListener('DOMContentLoaded', disableInputsAndHint);
+                } else {
+                    disableInputsAndHint();
+                }
+                setTimeout(disableInputsAndHint, 500);
+            }
+
+            // Per-provider integration configured gating & hints
+            if (caps.integrationsConfigured) {
+                const iconfig = caps.integrationsConfigured;
+                const style = document.createElement('style');
+                let css = '';
+                if (iconfig.clickup === false) {
+                    css += `.provider-gated-clickup { position: relative; opacity: 0.6; pointer-events: none; }\n`;
+                }
+                if (iconfig.linear === false) {
+                    css += `.provider-gated-linear { position: relative; opacity: 0.6; pointer-events: none; }\n`;
+                }
+                if (iconfig.notion === false) {
+                    css += `.provider-gated-notion { position: relative; opacity: 0.6; pointer-events: none; }\n`;
+                }
+                if (iconfig.stitch === false) {
+                    css += `.provider-gated-stitch { position: relative; opacity: 0.6; pointer-events: none; }\n`;
+                }
+                if (css) {
+                    style.textContent = css;
+                    document.head.appendChild(style);
+                }
             }
         } catch (err) {
             console.warn('[transport] Capability gating failed:', err);

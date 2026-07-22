@@ -76,7 +76,7 @@ export interface McpMonitorConfig {
 export const DEFAULT_MCP_MONITOR_CONFIG: McpMonitorConfig = {
     enabled: false,
     pollingEnabled: false,
-    targetRole: 'mcp_monitor',
+    targetRole: 'scheduler',
     sources: ['slack'],
     customInstruction: '',
     sourceIntervals: { slack: 5, gmail: 5, gcal: 5, custom: 5 },

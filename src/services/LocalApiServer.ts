@@ -1516,6 +1516,15 @@ export class LocalApiServer {
             this._sendUnauthorized(res);
             return;
         }
+        const SECRET_WRITE_VERBS = new Set([
+            'stitchSaveApiKey',
+            'stitchSaveAuthConfig',
+        ]);
+        if (SECRET_WRITE_VERBS.has(verb)) {
+            res.writeHead(403, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: `Secret-write verb '${verb}' is editor-only and denied over HTTP.` }));
+            return;
+        }
         const designVerb = this._options.designVerb;
         if (!designVerb) {
             res.writeHead(503, { 'Content-Type': 'application/json' });
@@ -1547,9 +1556,7 @@ export class LocalApiServer {
             'applyClickUpConfig',
             'applyLinearConfig',
             'applyNotionConfig',
-            'runNotionRemoteSetup',
-            'setRemoteConfig',
-            'startRemoteControl',
+            'enableTriagePipeline',
             'setApiToken',
             'setClickUpToken',
             'setLinearToken',

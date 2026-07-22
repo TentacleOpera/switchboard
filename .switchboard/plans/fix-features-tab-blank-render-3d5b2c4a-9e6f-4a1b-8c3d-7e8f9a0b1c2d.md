@@ -97,3 +97,7 @@ Send to Intern
 
 Moved `_optimisticNextColumn` helper function from the nested `forEach` scope inside `renderKanbanPlans` to module scope directly before `renderKanbanPlans` in `src/webview/project.js`. This resolves the `ReferenceError` previously raised when `_featureCopyPromptLabel` called `_optimisticNextColumn` during feature list rendering. Modified file: `src/webview/project.js`. No issues encountered.
 
+## Review Findings
+
+Reviewed implementation against plan: the move is mechanically correct — identical function body, placed at module scope (line 1633) before `renderKanbanPlans`, `node --check` passes. All three call sites (lines 1783, 2398, 2497) resolve via closure; the plan listed only two but a third call site at line 2497 (`featureCopyPromptBtn` handler in `renderFeaturesList`) was also broken and is now fixed. No CRITICAL or MAJOR findings; one NIT (pre-existing 4-space indentation of the copyPromptBtn block at lines 1779-1799, exposed by the removal but not introduced by it). No code fixes applied. Verification was static-only (`node --check` PASS) — SKIP COMPILATION directive active, plan's automated tests skipped per session directive; a subsequent pass with compilation enabled is needed for full confidence. Remaining risk: low — the fix is a pure visibility change with no logic modification.
+

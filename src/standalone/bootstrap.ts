@@ -381,8 +381,30 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     };
 
     const repoRoot = resolveRepoRoot();
-    const getBoardHtml = async () => sharedGetBoardHtml(repoRoot, workspaceRoot);
-    const getProjectHtml = async () => sharedGetProjectHtml(repoRoot, workspaceRoot);
+    const secretsAdapter = createStandaloneSecretsAdapter();
+    const hasSecret = (key: string) => {
+        try {
+            const val = secretsAdapter.get(key);
+            return typeof val === 'string' && val.trim().length > 0;
+        } catch { return false; }
+    };
+    const standaloneCapabilities: HostCapabilities = {
+        terminalDispatch: false,
+        automation: false,
+        orchestrator: false,
+        terminalFleet: false,
+        mcpTerminals: false,
+        secretsEntry: false,
+        integrationsConfigured: {
+            clickup: hasSecret('switchboard.clickup.apiToken'),
+            linear: hasSecret('switchboard.linear.apiToken'),
+            notion: hasSecret('switchboard.notion.apiToken'),
+            stitch: hasSecret('switchboard.stitch.apiKey'),
+        },
+    };
+
+    const getBoardHtml = async () => sharedGetBoardHtml(repoRoot, workspaceRoot, standaloneCapabilities);
+    const getProjectHtml = async () => sharedGetProjectHtml(repoRoot, workspaceRoot, standaloneCapabilities);
     const getShellHtml = async () => sharedGetShellHtml(repoRoot);
 
     // Standalone now wires the Design/Setup/TaskViewer/Planning verb routers
@@ -394,7 +416,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // passes no availability override.
     const getPanelsManifest = () => sharedGetPanelsManifest({ design: true, setup: true });
     const getPanelHtml = async (id: string): Promise<{ html: string; csp?: string } | null> => {
-        const result = sharedGetPanelHtmlById(id, repoRoot, workspaceRoot);
+        const result = sharedGetPanelHtmlById(id, repoRoot, workspaceRoot, standaloneCapabilities);
         if (!result) { return null; }
         return result;
     };
@@ -403,6 +425,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         webview: [path.join(repoRoot, 'dist', 'webview'), path.join(repoRoot, 'src', 'webview')],
         icons: [path.join(repoRoot, 'icons')],
         designs: [path.join(repoRoot, 'designs')],
+        stitch: [path.join(workspaceRoot, '.switchboard', 'stitch')],
     };
 
     // ─── Headless panel providers (B1: wire Design/Setup/TaskViewer/Planning verbs) ─

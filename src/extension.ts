@@ -2905,16 +2905,12 @@ export async function activate(context: vscode.ExtensionContext) {
                 }
             }
         }
-        const includeMcpMonitor = visibleAgents.mcp_monitor !== false;
         for (const agent of customAgents) {
             if (visibleAgents[agent.role] === false) { continue; }
             agents.push({ name: agent.name, role: agent.role });
         }
         if (includeJulesMonitor) {
             agents.push({ name: 'Jules Monitor', role: 'jules_monitor' });
-        }
-        if (includeMcpMonitor) {
-            agents.push({ name: TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME, role: 'mcp_monitor' });
         }
 
         // Open worktree terminals if configured
@@ -2973,7 +2969,6 @@ export async function activate(context: vscode.ExtensionContext) {
             const clearGridBlockers = async () => {
                 const agentNames = new Set(agents.map(a => a.name));
                 if (!includeJulesMonitor) { agentNames.add('Jules Monitor'); }
-                if (!includeMcpMonitor) { agentNames.add(TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME); }
                 for (const [name, terminal] of Array.from(registeredTerminals.entries())) {
                     const bareName = stripIdeSuffix(name);
                     if ((agentNames.has(name) || agentNames.has(bareName)) && terminal.exitStatus !== undefined) {
@@ -2988,15 +2983,6 @@ export async function activate(context: vscode.ExtensionContext) {
                     }
                     registeredTerminals.delete('Jules Monitor');
                     registeredTerminals.delete(suffixedName('Jules Monitor'));
-                }
-                if (!includeMcpMonitor) {
-                    const mcpMatches = vscode.window.terminals.filter(t => t.exitStatus === undefined && matchesGridAgentName(t, TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME));
-                    for (const terminal of mcpMatches) {
-                        outputChannel?.appendLine(`[Extension] Disposing hidden grid terminal '${terminal.name}' for agent '${TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME}'`);
-                        terminal.dispose();
-                    }
-                    registeredTerminals.delete(TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME);
-                    registeredTerminals.delete(suffixedName(TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME));
                 }
                 for (const agent of agents) {
                     const matches = vscode.window.terminals.filter(t => t.exitStatus === undefined && matchesGridAgentName(t, agent.name));

@@ -1801,6 +1801,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             serveStatic: (() => {
                 const repoRoot = this._context.extensionUri.fsPath;
                 const wsRoot = effectiveRoot;
+                const hasSecret = (key: string) => {
+                    try {
+                        const val = this._context.secrets.get(key);
+                        return typeof val === 'string' && val.trim().length > 0;
+                    } catch { return false; }
+                };
                 const hostCapabilities = {
                     terminalDispatch: true,
                     automation: true,
@@ -1808,6 +1814,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     terminalFleet: false,
                     mcpTerminals: false,
                     secretsEntry: false,
+                    integrationsConfigured: {
+                        clickup: hasSecret('switchboard.clickup.apiToken'),
+                        linear: hasSecret('switchboard.linear.apiToken'),
+                        notion: hasSecret('switchboard.notion.apiToken'),
+                        stitch: hasSecret('switchboard.stitch.apiKey'),
+                    },
                 };
                 const getTheme = () => {
                     try {
@@ -1829,6 +1841,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         webview: [path.join(repoRoot, 'dist', 'webview'), path.join(repoRoot, 'src', 'webview')],
                         icons: [path.join(repoRoot, 'icons')],
                         designs: [path.join(repoRoot, 'designs')],
+                        stitch: [path.join(wsRoot, '.switchboard', 'stitch')],
                     },
                 };
             })(),
@@ -5077,14 +5090,6 @@ Each plan file must include:
             console.log(`[TaskViewerProvider] Applied jules_monitor fallback command: ${cmd}`);
         }
 
-        // Fallback: mcp_monitor defaults to claude command with haiku model and MCP-only tools.
-        // dontAsk is intentionally omitted — some MCP servers (e.g. Google Calendar) require
-        // interactive permission prompts for first-time access or OAuth token refresh. The
-        // monitor runs in a visible terminal the user is managing, so Claude can ask.
-        if (role === 'mcp_monitor' && (!cmd || cmd.trim() === '')) {
-            cmd = 'claude --model claude-haiku-4-5 --allowedTools "mcp__*"';
-            console.log(`[TaskViewerProvider] Applied mcp_monitor fallback command: ${cmd}`);
-        }
 
         // Fallback: claude_artifacts defaults to 'claude' when configured command is missing/blank
         if (role === 'claude_artifacts' && (!cmd || cmd.trim() === '')) {
@@ -5136,7 +5141,6 @@ Each plan file must include:
             jules: false,
             ticket_updater: false,
             researcher: false,
-            mcp_monitor: false,
             claude_artifacts: false,
             phone_a_friend: false,
             project_manager: true
@@ -17826,19 +17830,13 @@ What would you like to find?`;
             // than string-matching the terminal name, so the right loop stops.
             const closedJobId = this._jobIdForTerminalName(terminal.name);
             if (closedJobId) {
-                const isComms = closedJobId === COMMS_JOB_ID;
-                if (isComms) {
+                if (closedJobId === COMMS_JOB_ID) {
                     await GlobalIntegrationConfigService.setMcpMonitorConfig({ pollingEnabled: false });
-                    // Reset visibility so the monitor doesn't reappear in the agent grid
-                    await this.setVisibleAgent('mcp_monitor', false);
                 }
                 this._stopSchedulerJobLoop(closedJobId);
                 // Clean up in-memory dispatch map + index entry
                 this._registeredTerminals?.delete(this._suffixedName(terminal.name));
                 this._schedulerTerminalToJobId.delete(terminal.name);
-                if (isComms) {
-                    await this._postMcpMonitorConfig();
-                }
             }
 
             this._refreshTerminalStatuses();
@@ -17901,14 +17899,6 @@ What would you like to find?`;
             this._registeredTerminals?.clear();
             this._terminalAgentInfo.clear();
         });
-
-        // Reset the MCP monitor visibility flag so a dead monitor column doesn't
-        // reappear in the agent grid after a full reset.
-        try {
-            await this.setVisibleAgent('mcp_monitor', false);
-        } catch (e) {
-            console.warn('[TaskViewerProvider] Failed to reset mcp_monitor visibility during deregister-all:', e);
-        }
 
         // 2. Orphan Sweep: close unregistered terminals matching Switchboard-created patterns.
         // Only prefix patterns for names Switchboard explicitly creates — never broad
@@ -18305,11 +18295,10 @@ What would you like to find?`;
 
         const planFileAbsolute = path.resolve(resolvedWorkspaceRoot, planFileRelative);
 
-        // Safety invariant: jules_monitor and mcp_monitor are monitor-only and cannot receive execute dispatches.
-        if (role === 'jules_monitor' || role === 'mcp_monitor') {
+        // Safety invariant: jules_monitor and scheduler are monitor-only/scheduled and cannot receive execute dispatches.
+        if (role === 'jules_monitor' || role === 'scheduler') {
             clearDispatchLock();
-            const displayName = role === 'jules_monitor' ? "Jules Monitor" : TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME;
-            this._seams().ui.showWarningMessage(`The '${displayName}' terminal is monitor-only and cannot receive agent actions.`);
+            this._seams().ui.showWarningMessage(`The '${role}' terminal cannot receive direct agent dispatches.`);
             this.postMessage({ type: 'actionTriggered', role, success: false });
             return false;
         }
@@ -22058,17 +22047,6 @@ What would you like to find?`;
         }
     }
 
-    /**
-     * The Comms Monitor terminal name. This is BOTH the user-visible terminal
-     * label AND a de-facto lookup key consumed by two matching mechanisms
-     * (normalize-based in TaskViewerProvider, regex-based in extension.ts) and
-     * it derives the `state.terminals` map key. Every creation + lookup site
-     * MUST route through this constant so the name stays consistent — a missed
-     * site silently orphans/disposes the monitor terminal. The internal role
-     * key `mcp_monitor` and config field `mcpMonitor` are unchanged.
-     */
-    public static readonly MCP_MONITOR_TERMINAL_NAME = 'Comms Monitor';
-
     public static readonly SOURCE_PRESETS: Record<string, string> = {
         slack: "Slack: unread direct messages and @-mentions across my channels.",
         gmail: "Gmail: unread or important emails in my inbox.",
@@ -22095,12 +22073,10 @@ What would you like to find?`;
     //   - Sub-hourly niche: minute-granularity intervals; the only target that
     //     can poll faster than hourly.
 
-    /** Derive the terminal name for a job. Comms keeps 'Comms Monitor' verbatim for backward compatibility if label is omitted. */
+    /** Derive the terminal name for a job. Formatted as Scheduler: <label> (<short-id>). */
     private _schedulerTerminalName(job: ScheduledJob): string {
-        if (job.source === 'comms' && (!job.label || job.label === 'Comms Monitor')) {
-            return TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME;
-        }
-        return `Scheduler: ${job.label} (${job.id.slice(0, 8)})`;
+        const label = job.label || (job.source === 'comms' ? 'Comms Monitor' : 'Job');
+        return `Scheduler: ${label} (${job.id.slice(0, 8)})`;
     }
 
     /** Resolve the jobId that owns a given terminal name (closed-terminal handler). */
@@ -22477,7 +22453,7 @@ What would you like to find?`;
         const full: McpMonitorConfig = {
             enabled: cfg.enabled ?? false,
             pollingEnabled: cfg.pollingEnabled ?? false,
-            targetRole: cfg.targetRole ?? 'mcp_monitor',
+            targetRole: cfg.targetRole ?? 'scheduler',
             sources: cfg.sources ?? [],
             customInstruction: cfg.customInstruction ?? '',
             sourceIntervals: cfg.sourceIntervals ?? { slack: 5, gmail: 5, gcal: 5, custom: 5 },
@@ -22513,7 +22489,7 @@ What would you like to find?`;
     private async _postMcpMonitorConfig() {
         const config = await GlobalIntegrationConfigService.getMcpMonitorConfig();
         const isMonitorRunning = this._isMcpMonitorTerminalRunning(config.targetRole);
-        const resolvedStartupCommand = await this.getAgentStartupCommand('mcp_monitor');
+        const resolvedStartupCommand = await this.getAgentStartupCommand('coder');
         const message = {
             type: 'updateMcpMonitorConfig',
             config,
@@ -22549,8 +22525,12 @@ What would you like to find?`;
         const resolvedJobId = jobId || COMMS_JOB_ID;
         const sched = await GlobalIntegrationConfigService.getSchedulerConfig();
         const job = sched.jobs.find(j => j.id === resolvedJobId);
-        const isComms = !job || job.source === 'comms';
-        const targetName = isComms ? TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME : this._schedulerTerminalName(job!);
+        if (!job) {
+            this._seams().ui.showWarningMessage(`Scheduler job '${resolvedJobId}' not found. Add it in the Automation tab first.`);
+            return;
+        }
+        const isComms = job.source === 'comms';
+        const targetName = this._schedulerTerminalName(job);
         const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(targetName));
 
         // Dispose any zombie (exited) terminal with the same name
@@ -22578,11 +22558,6 @@ What would you like to find?`;
             return;
         }
 
-        // Auto-enable mcp_monitor visibility so createAgentGrid doesn't dispose it
-        if (isComms) {
-            await this.setVisibleAgent('mcp_monitor', true);
-        }
-
         // Create the terminal
         const terminal = vscode.window.createTerminal({
             name: targetName,
@@ -22606,7 +22581,7 @@ What would you like to find?`;
             const key = this._suffixedName(targetName);
             if (!state.terminals[key]) state.terminals[key] = {};
             state.terminals[key].purpose = 'agent-grid';
-            state.terminals[key].role = isComms ? 'mcp_monitor' : 'scheduler';
+            state.terminals[key].role = 'scheduler';
             state.terminals[key].friendlyName = targetName;
             state.terminals[key].lastSeen = new Date().toISOString();
             state.terminals[key].ideName = vscode.env.appName;
@@ -22615,7 +22590,7 @@ What would you like to find?`;
 
         // Wait for shell readiness, then send startup command
         const customStartup = job?.startupCommand;
-        const cmd = customStartup && customStartup.trim() ? customStartup.trim() : await this.getAgentStartupCommand(isComms ? 'mcp_monitor' : 'coder');
+        const cmd = customStartup && customStartup.trim() ? customStartup.trim() : await this.getAgentStartupCommand('coder');
         if (cmd && cmd.trim()) {
             const shellReady = new Promise<void>((resolve) => {
                 const disposable = vscode.window.onDidStartTerminalShellExecution((e) => {
@@ -22644,13 +22619,20 @@ What would you like to find?`;
      * Non-blocking, no confirm gate.
      */
     public async checkMcpMonitorAuth(): Promise<void> {
-        const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME));
+        const sched = await GlobalIntegrationConfigService.getSchedulerConfig();
+        const comms = sched.jobs.find(j => j.source === 'comms');
+        if (!comms) {
+            this._seams().ui.showWarningMessage('No comms job configured. Add one in the scheduler first.');
+            return;
+        }
+        const targetName = this._schedulerTerminalName(comms);
+        const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(targetName));
         const terminal = (vscode.window.terminals || []).find(t => {
             const tName = this._normalizeAgentKey(this._stripIdeSuffix(t.name));
             return tName === strippedTarget && t.exitStatus === undefined;
         });
         if (!terminal) {
-            this._seams().ui.showWarningMessage('No Comms Monitor terminal running. Start the terminal first.');
+            this._seams().ui.showWarningMessage('No comms terminal running. Start the terminal first.');
             return;
         }
         const cfg = await GlobalIntegrationConfigService.getMcpMonitorConfig();
@@ -22702,8 +22684,13 @@ What would you like to find?`;
         const resolvedJobId = jobId || COMMS_JOB_ID;
         const sched = await GlobalIntegrationConfigService.getSchedulerConfig();
         const job = sched.jobs.find(j => j.id === resolvedJobId);
-        const isComms = !job || job.source === 'comms';
-        const targetName = isComms ? TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME : this._schedulerTerminalName(job!);
+        if (!job) {
+            // Job was deleted; just stop any lingering loop and clean up index.
+            this._stopSchedulerJobLoop(resolvedJobId);
+            return;
+        }
+        const isComms = job.source === 'comms';
+        const targetName = this._schedulerTerminalName(job);
         const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(targetName));
         const suffixedKey = this._suffixedName(targetName);
         const live = (vscode.window.terminals || []).find(t => {
@@ -22716,10 +22703,6 @@ What would you like to find?`;
         // Clean up in-memory dispatch map + terminal→jobId index
         this._registeredTerminals?.delete(suffixedKey);
         this._schedulerTerminalToJobId.delete(targetName);
-        if (isComms) {
-            // Reset visibility so createAgentGrid no longer includes the monitor
-            await this.setVisibleAgent('mcp_monitor', false);
-        }
         // Clean up persistent state entry
         await this.updateState(async (state: any) => {
             if (state.terminals && state.terminals[suffixedKey]) {
@@ -22768,14 +22751,20 @@ What would you like to find?`;
         await this.mergeVisibleAgentsToGlobalFile({ [role]: visible });
     }
 
-    private _isMcpMonitorTerminalRunning(targetRole: string): boolean {
+    private _isMcpMonitorTerminalRunning(_targetRole: string): boolean {
         const openTerminals = vscode.window.terminals || [];
-        const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME));
-        const found = openTerminals.find(t => {
-            const tName = this._normalizeAgentKey(this._stripIdeSuffix(t.name));
-            return tName === strippedTarget;
-        });
-        return !!found && found.exitStatus === undefined;
+        // Check if any scheduler terminal for the comms job is running.
+        for (const [rawName, jobId] of this._schedulerTerminalToJobId.entries()) {
+            if (jobId === COMMS_JOB_ID) {
+                const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(rawName));
+                const found = openTerminals.find(t => {
+                    const tName = this._normalizeAgentKey(this._stripIdeSuffix(t.name));
+                    return tName === strippedTarget;
+                });
+                if (found && found.exitStatus === undefined) return true;
+            }
+        }
+        return false;
     }
 
     /**

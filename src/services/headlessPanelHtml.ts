@@ -20,6 +20,7 @@ export interface HostCapabilities {
     terminalFleet?: boolean;
     mcpTerminals?: boolean;
     secretsEntry?: boolean;
+    integrationsConfigured?: { clickup?: boolean; linear?: boolean; notion?: boolean; stitch?: boolean };
 }
 
 const DEFAULT_HOST_CAPABILITIES: HostCapabilities = {
@@ -171,7 +172,14 @@ export function getProjectHtml(repoRoot: string, workspaceRoot: string, capabili
     const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; frame-src 'self' http: https: about:srcdoc blob: data:;`;
     content = content.replace(/\{\{NONCE\}\}/g, nonce);
     content = content.replace(/{{WEBVIEW_CSP_SOURCE}}/g, "'self'");
+    // Browser cockpit: the shared template's meta CSP hardcodes `connect-src https:`
+    // (written for the VS Code webview). In a plain browser that blocks the local
+    // server's verb fetches (http://127.0.0.1) AND the WebSocket (ws://127.0.0.1),
+    // so every panel comes up empty. Widen it to the loopback API/WS origins.
+    content = content.replace('connect-src https:', "connect-src 'self' https: http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*");
     content = content.replace(/{{PROJECT_JS_URI}}/g, '/static/webview/project.js');
+    content = content.replace(/{{HANKEN_FONT_URI}}/g, '/static/designs/HankenGrotesk-Variable.woff2');
+    content = content.replace(/{{GEIST_PIXEL_FONT_URI}}/g, '/static/designs/GeistPixel-Square.woff2');
     content = content.replace(/{{SHARED_UTILS_URI}}/g, '/static/webview/sharedUtils.js');
     content = content.replace(/{{MARKDOWN_EDITOR_URI}}/g, '/static/webview/markdownEditor.js');
     const firstScript = `<script nonce="${nonce}" src="/static/webview/sharedUtils.js"></script>`;
@@ -197,6 +205,11 @@ export function getPlanningHtml(repoRoot: string, workspaceRoot: string, capabil
     const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; frame-src 'self' http: https: about:srcdoc blob: data:;`;
     content = content.replace(/\{\{NONCE\}\}/g, nonce);
     content = content.replace(/{{WEBVIEW_CSP_SOURCE}}/g, "'self'");
+    // Browser cockpit: the shared template's meta CSP hardcodes `connect-src https:`
+    // (written for the VS Code webview). In a plain browser that blocks the local
+    // server's verb fetches (http://127.0.0.1) AND the WebSocket (ws://127.0.0.1),
+    // so every panel comes up empty. Widen it to the loopback API/WS origins.
+    content = content.replace('connect-src https:', "connect-src 'self' https: http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*");
     content = content.replace(/{{PLANNING_JS_URI}}/g, '/static/webview/planning.js');
     content = content.replace(/{{SHARED_UTILS_URI}}/g, '/static/webview/sharedUtils.js');
     content = content.replace(/{{MARKDOWN_EDITOR_URI}}/g, '/static/webview/markdownEditor.js');
@@ -225,6 +238,11 @@ export function getDesignHtml(repoRoot: string, workspaceRoot: string, capabilit
     const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; frame-src 'self' http: https: about:srcdoc blob: data:;`;
     content = content.replace(/\{\{NONCE\}\}/g, nonce);
     content = content.replace(/{{WEBVIEW_CSP_SOURCE}}/g, "'self'");
+    // Browser cockpit: the shared template's meta CSP hardcodes `connect-src https:`
+    // (written for the VS Code webview). In a plain browser that blocks the local
+    // server's verb fetches (http://127.0.0.1) AND the WebSocket (ws://127.0.0.1),
+    // so every panel comes up empty. Widen it to the loopback API/WS origins.
+    content = content.replace('connect-src https:', "connect-src 'self' https: http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*");
     content = content.replace(/{{DESIGN_JS_URI}}/g, '/static/webview/design.js');
     content = content.replace(/{{SHARED_UTILS_URI}}/g, '/static/webview/sharedUtils.js');
     content = content.replace(/{{MARKDOWN_EDITOR_URI}}/g, '/static/webview/markdownEditor.js');
@@ -281,15 +299,13 @@ export interface PanelAvailability {
 export function getPanelsManifest(availability?: PanelAvailability): PanelManifestEntry[] {
     const setupEnabled = availability?.setup !== false;
     const planningEnabled = availability?.planning !== false;
+    const designEnabled = availability?.design !== false;
     const iconDir = '/static/icons';
     return [
         { id: 'board', label: 'Board', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-78.png`, route: '/board', enabled: true },
         { id: 'project', label: 'Project', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-24.png`, route: '/project', enabled: true },
         { id: 'planning', label: 'Artifacts', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-42.png`, route: '/planning', enabled: planningEnabled },
-        // Design panel is intentionally omitted from the browser cockpit (redundant —
-        // build-via-planner is terminal, publish-artifact prompts are editor/claude-bound).
-        // getDesignHtml / the /design route remain for the editor's own webview; the
-        // browser nav simply does not surface it.
+        { id: 'design', label: 'Design', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-42.png`, route: '/design', enabled: designEnabled },
         { id: 'setup', label: 'Setup', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-55.png`, route: '/setup', enabled: setupEnabled },
     ];
 }

@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 import { showTemporaryNotification } from '../utils/showTemporaryNotification';
 import { SwitchboardCommandRegistry, switchboardCommandRegistry } from './commandRegistry';
 
@@ -50,8 +51,55 @@ export class VscodeHostPathConfigProvider implements HostPathConfigProvider {
         return vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this.workspaceRoot));
     }
 
+    private _configPath(): string {
+        return path.join(this.workspaceRoot, '.switchboard', 'config.json');
+    }
+
+    private _readConfigFile(): Record<string, any> {
+        try {
+            const p = this._configPath();
+            if (fs.existsSync(p)) {
+                const raw = fs.readFileSync(p, 'utf8');
+                return JSON.parse(raw) || {};
+            }
+        } catch {}
+        return {};
+    }
+
+    private _readConfigValue(key: string): any {
+        const fileConfig = this._readConfigFile();
+        if (fileConfig[key] !== undefined) return fileConfig[key];
+        const prefixed = `switchboard.${key}`;
+        if (fileConfig[prefixed] !== undefined) return fileConfig[prefixed];
+        return undefined;
+    }
+
+    private _writeConfigFile(key: string, value: any): void {
+        try {
+            const p = this._configPath();
+            const dir = path.dirname(p);
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+            }
+            let cfg: Record<string, any> = {};
+            try {
+                if (fs.existsSync(p)) {
+                    cfg = JSON.parse(fs.readFileSync(p, 'utf8')) || {};
+                }
+            } catch {}
+            cfg[`switchboard.${key}`] = value;
+            fs.writeFileSync(p, JSON.stringify(cfg, null, 2), 'utf8');
+        } catch (err) {
+            console.error('[VscodeHostPathConfigProvider] Failed to write config.json:', err);
+        }
+    }
+
     getConfigString(key: string): string {
         try {
+            const fileVal = this._readConfigValue(key);
+            if (fileVal !== undefined && fileVal !== null) {
+                return String(fileVal).trim();
+            }
             return String(this._config().get(key) || '').trim();
         } catch {
             return '';
@@ -60,6 +108,10 @@ export class VscodeHostPathConfigProvider implements HostPathConfigProvider {
 
     getConfigStringWithDefault(key: string, defaultValue: string): string {
         try {
+            const fileVal = this._readConfigValue(key);
+            if (fileVal !== undefined && fileVal !== null && fileVal !== '') {
+                return String(fileVal);
+            }
             const v = this._config().get<string>(key);
             return v !== undefined ? v : defaultValue;
         } catch {
@@ -69,22 +121,40 @@ export class VscodeHostPathConfigProvider implements HostPathConfigProvider {
 
     getConfigBoolean(key: string, defaultValue: boolean): boolean {
         try {
+            const fileVal = this._readConfigValue(key);
+            if (fileVal !== undefined && fileVal !== null) {
+                if (typeof fileVal === 'boolean') return fileVal;
+                return String(fileVal).toLowerCase() === 'true';
+            }
             const v = this._config().get<boolean>(key);
             return v !== undefined ? v : defaultValue;
         } catch {
             return defaultValue;
         }
     }
+
     getConfigNumber(key: string, defaultValue: number): number {
         try {
+            const fileVal = this._readConfigValue(key);
+            if (fileVal !== undefined && fileVal !== null) {
+                if (typeof fileVal === 'number') return fileVal;
+                const parsed = Number(fileVal);
+                if (!isNaN(parsed)) return parsed;
+            }
             const v = this._config().get<number>(key);
             return v !== undefined ? v : defaultValue;
         } catch {
             return defaultValue;
         }
     }
+
     getConfigJson<T>(key: string, defaultValue: T): T {
         try {
+            const fileVal = this._readConfigValue(key);
+            if (fileVal !== undefined && fileVal !== null) {
+                if (typeof fileVal === 'object') return fileVal as T;
+                try { return JSON.parse(String(fileVal)) as T; } catch { return defaultValue; }
+            }
             const v = this._config().get<T>(key);
             return v !== undefined ? v : defaultValue;
         } catch {
@@ -93,9 +163,11 @@ export class VscodeHostPathConfigProvider implements HostPathConfigProvider {
     }
 
     async updateConfigGlobal(key: string, value: any): Promise<void> {
+        this._writeConfigFile(key, value);
         await vscode.workspace.getConfiguration('switchboard').update(key, value, true);
     }
     async updateConfigWorkspace(key: string, value: any): Promise<void> {
+        this._writeConfigFile(key, value);
         await vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this.workspaceRoot)).update(key, value, false);
     }
 }

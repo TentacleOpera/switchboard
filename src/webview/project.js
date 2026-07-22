@@ -43,7 +43,6 @@
                 hydrateProjectsTab();
             } else if (activeTab === 'features') {
                 vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
-                updateActiveFeatureBanner();
             } else if (activeTab === 'constitution') {
                 vscode.postMessage({ type: 'loadConstitutionFiles' });
             } else if (activeTab === 'system') {

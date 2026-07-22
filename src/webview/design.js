@@ -1065,6 +1065,11 @@
     function populateStitchHtmlProjectSelect(projects) {
         const select = document.getElementById('stitch-html-project-select');
         if (!select) return;
+        const sorted = [...projects].sort((a, b) => {
+            const ta = a.updateTime ? new Date(a.updateTime).getTime() : 0;
+            const tb = b.updateTime ? new Date(b.updateTime).getTime() : 0;
+            return tb - ta;
+        });
         const current = state.selectedStitchHtmlProjectId || '';
         select.innerHTML = '<option value="">Select Project...</option>';
         sorted.forEach(p => {

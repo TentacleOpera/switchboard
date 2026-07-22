@@ -7035,7 +7035,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         }
         let lastAntigravityBatchSize = 5;
         let managedTerminalPools = {};
-        let mcpMonitorConfig = { enabled: false, pollingEnabled: false, targetRole: 'mcp_monitor', sources: ['slack'], customInstruction: '', sourceIntervals: { slack: 5, gmail: 5, gcal: 5, custom: 5 }, sourceLastCheckAt: {} };
+        let mcpMonitorConfig = { enabled: false, pollingEnabled: false, targetRole: 'scheduler', sources: ['slack'], customInstruction: '', sourceIntervals: { slack: 5, gmail: 5, gcal: 5, custom: 5 }, sourceLastCheckAt: {} };
         let isMcpMonitorTerminalRunning = false;
         let isMcpMonitorPolling = false;
         let mcpMonitorPresets = {};
@@ -10368,14 +10368,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const commsHeader = document.createElement('div');
             commsHeader.className = 'subsection-header';
             const commsHeaderSpan = document.createElement('span');
-            commsHeaderSpan.textContent = 'COMMS MONITOR';
+            commsHeaderSpan.textContent = 'COMMS SOURCES CONFIG';
             commsHeader.appendChild(commsHeaderSpan);
             container.appendChild(commsHeader);
 
             // Intro text
             const introText = document.createElement('div');
             introText.style.cssText = 'padding:0 8px 8px 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); line-height:1.4;';
-            introText.textContent = 'The Comms Monitor periodically pings a dedicated Claude terminal to check your Slack, Gmail, and Google Calendar for new messages and events — so you don\'t have to open those apps manually. Results appear in the monitor terminal pane.';
+            introText.textContent = 'Periodically checks Slack, Gmail, and Google Calendar for new messages and events. Results appear in the job terminal pane.';
             container.appendChild(introText);
 
             // ─── Dependency Notice (claude + MCP servers prerequisite) ───
@@ -10719,9 +10719,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             statusLine.style.cssText = 'margin-top:8px; padding-top:6px; border-top:1px dashed var(--border-color); font-size:9px; line-height:1.3;';
             if (isMcpMonitorTerminalRunning) {
                 const pollTag = isMcpMonitorPolling ? ' (polling)' : ' (idle)';
-                statusLine.innerHTML = '🟢 <strong>Comms Monitor terminal:</strong> running' + pollTag;
+                statusLine.innerHTML = '🟢 <strong>Comms terminal:</strong> running' + pollTag;
             } else {
-                statusLine.innerHTML = '🔴 <strong>No Comms Monitor terminal running.</strong>';
+                statusLine.innerHTML = '🔴 <strong>No comms terminal running.</strong>';
             }
             mcpConfigPanel.appendChild(statusLine);
 
@@ -10744,7 +10744,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             container.appendChild(mcpConfigPanel);
 
-            // ─── saveMonitorConfig (sends the new schema fields) ───
+            // ─── saveMonitorConfig (writes through setSchedulerConfig, not setMcpMonitorConfig) ───
+            // Comms is just another source. Its config lives in the comms job's
+            // sourceConfig and saves through the same setSchedulerConfig path as
+            // every other job. No separate privileged write path.
             const saveMonitorConfig = () => {
                 const enabled = mcpSelect.value === 'on';
                 const customInstruction = customInstructionTextarea.value;
@@ -10755,19 +10758,34 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const gmailLabel = gmailLabelInput.value;
                 const promptOverride = previewIsOverride ? previewTextarea.value : '';
                 mcpMonitorConfig = { ...mcpMonitorConfig, enabled, sources, customInstruction, slackChannels, slackDmOnly, slackChannelOnly, gmailLabel, promptOverride };
+                // Update the comms job's sourceConfig in the scheduler config,
+                // then save through setSchedulerConfig — the same path every
+                // other source uses. No setMcpMonitorConfig call.
+                const schedCfg = window.__schedulerConfig || { schemaVersion: 1, jobs: [] };
+                const jobs = (schedCfg.jobs || []).map(j => {
+                    if (j.source !== 'comms') return j;
+                    return {
+                        ...j,
+                        enabled: enabled,
+                        sourceConfig: {
+                            ...j.sourceConfig,
+                            enabled,
+                            pollingEnabled: enabled,
+                            sources,
+                            customInstruction,
+                            sourceIntervals: mcpMonitorConfig.sourceIntervals,
+                            slackChannels,
+                            slackDmOnly,
+                            slackChannelOnly,
+                            gmailLabel,
+                            promptOverride
+                        }
+                    };
+                });
+                window.__schedulerConfig = { ...schedCfg, jobs };
                 postKanbanMessage({
-                    type: 'setMcpMonitorConfig',
-                    config: {
-                        enabled,
-                        sources,
-                        customInstruction,
-                        sourceIntervals: mcpMonitorConfig.sourceIntervals,
-                        slackChannels,
-                        slackDmOnly,
-                        slackChannelOnly,
-                        gmailLabel,
-                        promptOverride
-                    }
+                    type: 'setSchedulerConfig',
+                    config: { schemaVersion: schedCfg.schemaVersion || 1, jobs }
                 });
                 if (!previewIsOverride) renderPreview();
             };

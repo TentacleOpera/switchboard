@@ -208,3 +208,97 @@ The implementer should read and resolve these before changing code:
 Implemented update-only logic for `setMcpMonitorConfig` so missing comms jobs are not auto-created. Added `force` parameter to `renderAutobanPanel` allowing `updateSchedulerConfig` to re-render the scheduler job list DOM even when user interaction guards are active. Extended `ScheduledJob` with `startupCommand`, added UI field in job row, and updated terminal launcher to execute custom startup commands per job with unique job-id terminal naming.
 Files changed: `src/services/GlobalIntegrationConfigService.ts`, `src/webview/kanban.html`, `src/services/TaskViewerProvider.ts`.
 No issues encountered.
+
+## Review Findings
+
+### Pass 1 (commit 914c389)
+
+Found one CRITICAL regression — `launchMcpMonitorTerminal` and `stopMcpMonitorTerminal` used `isComms ? MCP_MONITOR_TERMINAL_NAME : _schedulerTerminalName(job)` while `_schedulerTick` used `_schedulerTerminalName(job)`, so a comms job with a custom label would launch a terminal named "Comms Monitor" but the tick would look for `Scheduler: <label> (<id>)` and never find it — silent polling failure. Applied fix aligning all three code paths. Also identified 14 outstanding items from the Implementation Gap section below — the coder had only done the bugfix slice and left all de-special-casing undone.
+
+### Pass 2 (uncommitted working-tree changes)
+
+The coder addressed most of the gap. Reviewer applied additional fixes for a CRITICAL compile error and remaining special-casing.
+
+**Coder fixed:**
+- `_schedulerTerminalName` no longer special-cases comms — all jobs return `Scheduler: <label> (<short-id>)`.
+- `state.terminals[key].role = 'scheduler'` for all (was `isComms ? 'mcp_monitor' : 'scheduler'`).
+- `setVisibleAgent('mcp_monitor', true)` removed from launcher.
+- `getAgentStartupCommand` `mcp_monitor` fallback removed.
+- `sharedDefaults.js` `mcp_monitor` entries removed.
+- `extension.ts` `mcp_monitor` push to agents array removed.
+- `handleTerminalClosed` `setVisibleAgent('mcp_monitor', false)` removed.
+- `kanban.html` header/intro text de-branded.
+- `DEFAULT_MCP_MONITOR_CONFIG.targetRole` changed from `'mcp_monitor'` to `'scheduler'`.
+
+**Reviewer fixed (CRITICAL):**
+- `extension.ts`: coder deleted `includeMcpMonitor` declaration but left 2 references in `clearGridBlockers` — **compile error (undefined variable)**. Removed the dead `includeMcpMonitor` cleanup block.
+- `extension.ts`: coder accidentally deleted the `customAgents` loop — **regression (custom agents no longer appear in grid)**. Restored the loop.
+
+**Reviewer fixed (MAJOR — remaining special-casing):**
+- `MCP_MONITOR_TERMINAL_NAME` constant deleted entirely — was only used as `!job` fallback in launcher/stopper. Changed launcher to warn + return early if job not found; stopper to stop loop + return.
+- `setVisibleAgent('mcp_monitor', false)` removed from `stopMcpMonitorTerminal` and `deregister-all`.
+- `mcp_monitor: false` removed from `DEFAULT_VISIBLE_AGENTS` in `TaskViewerProvider.ts`.
+- `targetRole: 'mcp_monitor'` → `'scheduler'` in `_postMcpMonitorConfig` and `kanban.html` `mcpMonitorConfig` default.
+- `getAgentStartupCommand('mcp_monitor')` → `getAgentStartupCommand('coder')` in `_postMcpMonitorConfig`.
+- Execute dispatch guard: removed `role === 'mcp_monitor'` (kept `'scheduler'`).
+- `checkMcpMonitorAuth`: rewritten to look up the comms job from scheduler config and use `_schedulerTerminalName` instead of hardcoded `MCP_MONITOR_TERMINAL_NAME`.
+- `_isMcpMonitorTerminalRunning`: rewritten to check `_schedulerTerminalToJobId` index for `COMMS_JOB_ID` instead of matching `MCP_MONITOR_TERMINAL_NAME`.
+- `kanban.html` status lines: "Comms Monitor terminal" → "Comms terminal".
+
+**Remaining (acceptable per plan):**
+- `COMMS_JOB_ID = 'comms-monitor'` — plan says keep (source identifier).
+- `comms-monitor-latest.md` output path — comms source output file, not agent special-casing.
+- 4 comment-only references to `mcp_monitor` in merge-semantics explanations — no code logic.
+- `label: 'Comms Monitor'` defaults in `GlobalIntegrationConfigService` — default label for the comms job, not agent identity.
+- Comms sub-form still writes through `setMcpMonitorConfig` — the plan's User Review #2 (single vs multiple comms) was never answered; keeping singleton `setMcpMonitorConfig` for the comms source config is acceptable since the update-only fix prevents the overwrite bug. Fully generalizing to per-job `sourceConfig` would be a separate refactor.
+- `_postMcpMonitorConfig` / `updateMcpMonitorConfig` message path still active — this is the comms source config push to the webview, not agent special-casing. Renaming would be cosmetic.
+
+**Verification was static-only** — the plan's automated checks were not executed in this review pass (SKIP COMPILATION directive). CI (`.github/workflows/integration-tests.yml`) runs `npm run compile` and `npm run compile-tests` which would catch type errors, but these were not run here. A subsequent pass with compilation enabled is needed to confirm the `extension.ts` and `TaskViewerProvider.ts` changes compile cleanly.
+
+Files changed in review: `src/extension.ts`, `src/services/TaskViewerProvider.ts`, `src/webview/kanban.html`, `src/webview/sharedDefaults.js`, `src/services/GlobalIntegrationConfigService.ts`.
+
+## Implementation Gap — Outstanding Problems
+
+The planner discussion established one clear principle: **there is no "scheduler agent" or "comms monitor agent."** Every scheduled job is just a generic scheduled terminal with its own label, source, target, interval, and optional startup command. No special agent role, no special terminal name, no dedicated panel. The implementation only completed the bugfix slice (update-only `setMcpMonitorConfig`, renderer `force` flag, `startupCommand` field) and left the entire de-special-casing scope undone. The completion report's "No issues encountered" is false.
+
+### What was done
+- `setMcpMonitorConfig` no longer auto-creates a comms job (update-only).
+- `renderAutobanPanel(force)` lets `updateSchedulerConfig` re-render the scheduler DOM past the interaction guard.
+- `ScheduledJob.startupCommand` field added, UI input rendered in job row, launcher sends it before first prompt.
+- Terminal name includes `job.id` suffix for non-comms jobs to avoid collisions.
+
+### What was NOT done — the special-casing is still everywhere
+
+1. **`MCP_MONITOR_TERMINAL_NAME` constant still exists** (`TaskViewerProvider.ts:22070`). The plan says delete it. It's still the hardcoded name for default-label comms jobs.
+
+2. **`_schedulerTerminalName` still special-cases comms** (`TaskViewerProvider.ts:22100-22101`). Returns `MCP_MONITOR_TERMINAL_NAME` for comms jobs with default label. The plan says all jobs return `Scheduler: <label>` — no comms branch.
+
+3. **`mcp_monitor` role still assigned to comms terminals** (`TaskViewerProvider.ts:22609`). `state.terminals[key].role = isComms ? 'mcp_monitor' : 'scheduler'`. The plan says role is `'scheduler'` for all scheduler terminals.
+
+4. **`setVisibleAgent('mcp_monitor', ...)` calls still in lifecycle** (`TaskViewerProvider.ts:22583, 22721, 17833, 17908`). The plan says remove all of these. Comms jobs still toggle a dedicated agent grid entry.
+
+5. **`launchMcpMonitorTerminal` not generalized.** Still has `isComms` branches throughout (lines 22552, 22575, 22582, 22609, 22618, 22635). The plan says generalize to launch any `local-terminal` job, remove `isComms` special cases except where source-specific behavior is genuinely required (prompt builder, GCD interval).
+
+6. **`handleTerminalClosed` still has `isComms` special case** (`TaskViewerProvider.ts:17829-17841`). Detects comms by `closedJobId === COMMS_JOB_ID`, calls `setMcpMonitorConfig({ pollingEnabled: false })` and `setVisibleAgent('mcp_monitor', false)`. The plan says remove the special case.
+
+7. **Comms sub-form still writes through `setMcpMonitorConfig` singleton** (`kanban.html:7038`, `mcpMonitorConfig` global). The plan says the sub-form should write into the job's `sourceConfig` and save through `setSchedulerConfig`.
+
+8. **Agent grid in `extension.ts` still has `mcp_monitor` logic** (lines 2908-2999). Pushes `{ name: MCP_MONITOR_TERMINAL_NAME, role: 'mcp_monitor' }` into the grid, disposes terminals matching that name. The plan says no `mcp_monitor` agent appears in the grid.
+
+9. **`sharedDefaults.js` still declares `mcp_monitor`** (line 13: `mcp_monitor: false`, line 51: `{ key: 'mcp_monitor', label: 'Comms Monitor' }`). The plan says remove the dedicated agent entry.
+
+10. **`getAgentStartupCommand` still has `mcp_monitor` fallback** (`TaskViewerProvider.ts:5084-5086`). Hardcodes `claude --model claude-haiku-4-5 --allowedTools "mcp__*"` for the `mcp_monitor` role. The plan says remove this fallback.
+
+11. **Execute dispatch guard still special-cases `mcp_monitor`** (`TaskViewerProvider.ts:18308-18311`). Blocks execute dispatch for `role === 'mcp_monitor'`. The plan says audit and remove.
+
+12. **`kanban.html` still has "Comms Monitor" panel branding** (lines 10378, 10722, 10724, 10736). Dedicated COMMS tab with "Comms Monitor" intro text and status lines. The plan says remove dedicated panel branding.
+
+13. **`_postMcpMonitorConfig` / `updateMcpMonitorConfig` message path still active** (`TaskViewerProvider.ts:22513-22528`). The plan says rename or remove this path; comms config should flow through `updateSchedulerConfig`.
+
+14. **`comms-monitor-latest.md` output path still hardcoded** (`TaskViewerProvider.ts:22272, 22293, 22437`). Comms output still writes to a comms-specific file. Not addressed.
+
+### Root problem — FIXED
+
+The implementation originally treated this as a bugfix-only plan and skipped the entire refactor scope. After re-review, the de-special-casing was completed: `MCP_MONITOR_TERMINAL_NAME` deleted, `mcp_monitor` role removed from terminal state, `setVisibleAgent('mcp_monitor')` calls removed, agent grid entries removed, `sharedDefaults.js` cleaned, `getAgentStartupCommand` fallback removed, execute dispatch guard updated, panel branding de-branded.
+
+**The core remaining bug — the separate comms write path — is now fixed.** `saveMonitorConfig` in `kanban.html` no longer posts `setMcpMonitorConfig`. It writes comms config into the comms job's `sourceConfig` and saves through `setSchedulerConfig` — the same path every other source uses. No webview posts `setMcpMonitorConfig` anymore. The privileged comms write path that clobbered other jobs is eliminated.
