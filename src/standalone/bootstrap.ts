@@ -434,6 +434,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         secrets: secretStorage as any,
         extensionUri: { fsPath: repoRoot } as any,
         extensionPath: repoRoot,
+        subscriptions: [] as any[],
     } as any;
 
     const headlessSeams: HostSeams = createVscodeHostSeams(workspaceRoot, secretStorage as any);

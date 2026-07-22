@@ -399,8 +399,17 @@ export interface HostWorkspace {
 }
 
 export class VscodeHostWorkspace implements HostWorkspace {
+    // `fallbackRoot` is the headless (npx) configured root. It is used ONLY when
+    // `vscode.workspace.workspaceFolders` is empty — i.e. under the standalone
+    // vscode shim, where no folders are registered. In the extension the folder
+    // list is always populated, so the fallback never fires and multi-root hosts
+    // still report every folder.
+    constructor(private readonly fallbackRoot?: string) {}
+
     getWorkspaceRoots(): string[] {
-        return (vscode.workspace?.workspaceFolders || []).map(folder => folder.uri.fsPath);
+        const folders = (vscode.workspace?.workspaceFolders || []).map(folder => folder.uri.fsPath);
+        if (folders.length > 0) { return folders; }
+        return this.fallbackRoot ? [this.fallbackRoot] : [];
     }
 }
 
@@ -480,7 +489,7 @@ export function createVscodeHostSeams(workspaceRoot: string, secrets?: vscode.Se
         editor: new VscodeHostEditor(),
         secrets: secrets ? new VscodeHostSecrets(secrets) : new UnavailableHostSecrets(),
         clipboard: new VscodeHostClipboard(),
-        workspace: new VscodeHostWorkspace(),
+        workspace: new VscodeHostWorkspace(workspaceRoot),
         watcher: new VscodeHostFileWatcher(),
     };
 }
