@@ -956,6 +956,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             </div>
                             <div>
                                 <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="clickup-option-inbound-delete" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Reconcile inbound deletes from ClickUp</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    When enabled, deleting a task in ClickUp will tombstone the mapped local plan
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
                                     <input id="clickup-option-complete-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
                                     <span>Sync completed status to ClickUp</span>
                                 </label>
@@ -1157,6 +1166,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                 </label>
                                 <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
                                     When enabled, deleting a plan in Switchboard will archive the corresponding issue in Linear
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="linear-option-inbound-delete" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Reconcile inbound deletes from Linear</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    When enabled, deleting/archiving an issue in Linear will tombstone the mapped local plan
                                 </div>
                             </div>
 
@@ -1523,6 +1541,40 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             Comments" databases, backs up the selected boards' cards, and matches the
                             <code>Kanban Column</code> options to your board.
                         </div>
+
+                        <div class="subsection-header" style="margin-bottom:6px; margin-top:10px;">
+                            <span>Notion Remote Sync Options</span>
+                        </div>
+                        <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:12px;">
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="notion-option-realtime-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Enable realtime Notion push sync for mapped plans</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Automatically push plan changes to Notion as you move cards between columns
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="notion-option-delete-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Archive Notion pages when plans are deleted in Switchboard</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    When enabled, deleting a plan in Switchboard will archive the corresponding page in Notion
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="notion-option-inbound-delete" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Reconcile inbound deletes from Notion</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    When enabled, archiving a page in Notion will tombstone the mapped local plan
+                                </div>
+                            </div>
+                        </div>
+
                         <button id="btn-notion-remote-setup" class="action-btn">Run Notion setup sync</button>
                         <span id="remote-notion-setup-status" style="display:block; margin-top:6px; font-size:10px; color:var(--text-secondary);"></span>
                     </div>
@@ -2796,6 +2848,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 enableRealtimeSync: document.getElementById('clickup-option-enable-realtime-sync')?.checked === true,
                 enableAutoPull: document.getElementById('clickup-option-enable-auto-pull')?.checked === true,
                 deleteSyncEnabled: document.getElementById('clickup-option-delete-sync')?.checked === true,
+                inboundDeleteEnabled: document.getElementById('clickup-option-inbound-delete')?.checked === true,
                 completeSyncEnabled: document.getElementById('clickup-option-complete-sync')?.checked === true,
                 excludeBacklog: document.getElementById('clickup-option-exclude-backlog')?.checked === true
             };
@@ -2816,8 +2869,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 enableRealtimeSync: document.getElementById('linear-option-enable-realtime-sync')?.checked === true,
                 enableAutoPull: document.getElementById('linear-option-enable-auto-pull')?.checked === true,
                 deleteSyncEnabled: document.getElementById('linear-option-delete-sync')?.checked === true,
+                inboundDeleteEnabled: document.getElementById('linear-option-inbound-delete')?.checked === true,
                 enableCompleteSync: document.getElementById('linear-option-enable-complete-sync')?.checked === true,
                 excludeBacklog: document.getElementById('linear-option-exclude-backlog')?.checked === true
+            };
+        }
+
+        function collectNotionRemoteSetupOptions() {
+            return {
+                realTimeSyncEnabled: document.getElementById('notion-option-realtime-sync')?.checked === true,
+                deleteSyncEnabled: document.getElementById('notion-option-delete-sync')?.checked === true,
+                inboundDeleteEnabled: document.getElementById('notion-option-inbound-delete')?.checked === true
             };
         }
 
@@ -2837,6 +2899,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             setCheckboxState('clickup-option-enable-realtime-sync', state.realTimeSyncEnabled);
             setCheckboxState('clickup-option-enable-auto-pull', state.autoPullEnabled);
             setCheckboxState('clickup-option-delete-sync', state.deleteSyncEnabled === true);
+            setCheckboxState('clickup-option-inbound-delete', state.inboundDeleteEnabled === true);
             setCheckboxState('clickup-option-complete-sync', state.completeSyncEnabled === true);
             setCheckboxState('clickup-option-exclude-backlog', state.excludeBacklog === true);
 
@@ -2848,6 +2911,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 `Auto-pull: ${state.autoPullEnabled ? 'enabled' : 'disabled'}`
             ];
             if (state.deleteSyncEnabled) parts.push('Delete sync: ON');
+            if (state.inboundDeleteEnabled) parts.push('Inbound delete: ON');
             if (state.completeSyncEnabled) parts.push('Complete sync: ON');
             if (state.excludeBacklog) parts.push('Backlog filter: ON');
 
@@ -2879,6 +2943,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             setCheckboxState('linear-option-enable-auto-pull', state.autoPullEnabled);
             setCheckboxState('linear-option-enable-complete-sync', state.completeSyncEnabled !== false);
             setCheckboxState('linear-option-delete-sync', state.deleteSyncEnabled === true);
+            setCheckboxState('linear-option-inbound-delete', state.inboundDeleteEnabled === true);
             setCheckboxState('linear-option-exclude-backlog', state.excludeBacklog !== false);
 
             const includeCount = Array.isArray(state.includeProjectNames) ? state.includeProjectNames.length : 0;
@@ -2891,7 +2956,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 `Realtime sync: ${state.realTimeSyncEnabled ? 'enabled' : 'disabled'}`,
                 `Auto-pull: ${state.autoPullEnabled ? 'enabled' : 'disabled'}`,
                 `Complete sync: ${state.completeSyncEnabled !== false ? 'enabled' : 'disabled'}`,
-                `Delete sync: ${state.deleteSyncEnabled === true ? 'enabled' : 'disabled'}`
+                `Delete sync: ${state.deleteSyncEnabled === true ? 'enabled' : 'disabled'}`,
+                `Inbound delete: ${state.inboundDeleteEnabled === true ? 'enabled' : 'disabled'}`
             ];
             summaryEl.style.display = 'block';
             summaryEl.textContent = parts.join(' · ');
@@ -3332,6 +3398,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         }
 
         function renderNotionSetupState() {
+            if (lastNotionSetupState) {
+                setCheckboxState('notion-option-realtime-sync', lastNotionSetupState.realTimeSyncEnabled === true);
+                setCheckboxState('notion-option-delete-sync', lastNotionSetupState.deleteSyncEnabled === true);
+                setCheckboxState('notion-option-inbound-delete', lastNotionSetupState.inboundDeleteEnabled === true);
+            }
             setApplyButtonBusy('notion', false);
         }
 
@@ -5505,7 +5576,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const wsSel = document.getElementById('remote-workspace');
             const statusEl = document.getElementById('remote-notion-setup-status');
             if (statusEl) statusEl.textContent = 'Running setup sync…';
-            vscode.postMessage({ type: 'runNotionRemoteSetup', workspaceRoot: wsSel ? wsSel.value : undefined });
+            vscode.postMessage({
+                type: 'runNotionRemoteSetup',
+                workspaceRoot: wsSel ? wsSel.value : undefined,
+                options: collectNotionRemoteSetupOptions()
+            });
         });
 
         let _remoteFreqTimer;

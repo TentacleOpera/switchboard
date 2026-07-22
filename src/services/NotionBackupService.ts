@@ -282,7 +282,8 @@ export class NotionBackupService {
     async setupRemoteControl(
         workspaceRoot: string,
         boards: string[],
-        columnNames: string[]
+        columnNames: string[],
+        options?: { realTimeSyncEnabled?: boolean; deleteSyncEnabled?: boolean; inboundDeleteEnabled?: boolean }
     ): Promise<{ success: boolean; backedUp?: number; plansDatabaseUrl?: string; commentsDatabaseId?: string; error?: string }> {
         const kanbanDb = KanbanDatabase.forWorkspace(workspaceRoot);
         await kanbanDb.ensureReady();
@@ -367,7 +368,14 @@ export class NotionBackupService {
 
         // 5. Cache ids + bot id; seed cursors to "now" so history is not replayed.
         const botId = (await this._notionFetchService.getBotId()) || existingSetup?.botId || '';
-        await saveNotionRemoteSetup(kanbanDb, { plansDatabaseId, commentsDatabaseId, botId });
+        await saveNotionRemoteSetup(kanbanDb, {
+            plansDatabaseId,
+            commentsDatabaseId,
+            botId,
+            ...(options?.realTimeSyncEnabled !== undefined ? { realTimeSyncEnabled: options.realTimeSyncEnabled } : {}),
+            ...(options?.deleteSyncEnabled !== undefined ? { deleteSyncEnabled: options.deleteSyncEnabled } : {}),
+            ...(options?.inboundDeleteEnabled !== undefined ? { inboundDeleteEnabled: options.inboundDeleteEnabled } : {})
+        });
 
         const now = new Date().toISOString();
         // Cursor + seen keys MUST match RemoteControlService's `remote.{state,comment}Cursor.notion`.

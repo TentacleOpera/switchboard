@@ -7,6 +7,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { getConstitutionPath } from './constitutionUtils';
 import { stateFs as fs, stateLockfile as lockfile, getWorkspaceRootFromStatePath } from './stateConfigBridge';
+import { loadNotionRemoteSetup } from './remote/notionRemoteConfig';
 import { applyThemeBodyClass, getEffectiveColourKanbanIcons } from './themeBodyClass';
 import {
     getShellHtml as sharedGetShellHtml,
@@ -204,6 +205,8 @@ type ClickUpSetupState = {
     customFieldsReady: boolean;
     realTimeSyncEnabled: boolean;
     autoPullEnabled: boolean;
+    deleteSyncEnabled?: boolean;
+    inboundDeleteEnabled?: boolean;
     columns: ClickUpSetupColumnState[];
     availableLists: Array<{ id: string; name: string }>;
     mappedCount: number;
@@ -227,6 +230,8 @@ type LinearSetupState = {
     realTimeSyncEnabled: boolean;
     autoPullEnabled: boolean;
     completeSyncEnabled: boolean;
+    deleteSyncEnabled?: boolean;
+    inboundDeleteEnabled?: boolean;
     columns: LinearSetupColumnState[];
     availableLabels: Array<{ id: string; name: string }>;
     availableStates: Array<{ id: string; name: string; type: string }>;
@@ -236,6 +241,9 @@ type LinearSetupState = {
 
 type NotionSetupState = {
     setupComplete: boolean;
+    realTimeSyncEnabled?: boolean;
+    deleteSyncEnabled?: boolean;
+    inboundDeleteEnabled?: boolean;
 };
 
 type LinearImportNode = {
@@ -5804,12 +5812,13 @@ Each plan file must include:
             };
         }
 
-        const [clickupConfig, linearConfig, notionConfig, kanbanStructure, notionBackupConfig] = await Promise.all([
+        const [clickupConfig, linearConfig, notionConfig, kanbanStructure, notionBackupConfig, notionRemoteSetup] = await Promise.all([
             this._getClickUpService(resolvedRoot).loadConfig(),
             this._getLinearService(resolvedRoot).loadConfig(),
             this._getNotionService(resolvedRoot).loadConfig(),
             this.handleGetKanbanStructure(resolvedRoot),
-            this._getNotionBackupService(resolvedRoot).loadConfig()
+            this._getNotionBackupService(resolvedRoot).loadConfig(),
+            loadNotionRemoteSetup(KanbanDatabase.forWorkspace(resolvedRoot))
         ]);
 
         const currentColumns = kanbanStructure
@@ -5818,7 +5827,10 @@ Each plan file must include:
         let clickupState: ClickUpSetupState | undefined;
         let linearState: LinearSetupState | undefined;
         const notionState: NotionSetupState = {
-            setupComplete: notionConfig?.setupComplete === true
+            setupComplete: notionConfig?.setupComplete === true,
+            realTimeSyncEnabled: notionRemoteSetup?.realTimeSyncEnabled === true,
+            deleteSyncEnabled: notionRemoteSetup?.deleteSyncEnabled === true,
+            inboundDeleteEnabled: notionRemoteSetup?.inboundDeleteEnabled === true
         };
 
         if (clickupConfig) {
@@ -5843,6 +5855,8 @@ Each plan file must include:
                     customFieldsReady,
                     realTimeSyncEnabled: clickupConfig.realTimeSyncEnabled === true,
                     autoPullEnabled: clickupConfig.autoPullEnabled === true,
+                    deleteSyncEnabled: clickupConfig.deleteSyncEnabled === true,
+                    inboundDeleteEnabled: clickupConfig.inboundDeleteEnabled === true,
                     columns: mappingState.mappings.map((mapping) => ({
                         columnId: mapping.columnId,
                         label: labelByColumn.get(mapping.columnId) || mapping.columnId,
@@ -5864,6 +5878,8 @@ Each plan file must include:
                     customFieldsReady,
                     realTimeSyncEnabled: clickupConfig.realTimeSyncEnabled === true,
                     autoPullEnabled: clickupConfig.autoPullEnabled === true,
+                    deleteSyncEnabled: clickupConfig.deleteSyncEnabled === true,
+                    inboundDeleteEnabled: clickupConfig.inboundDeleteEnabled === true,
                     columns: currentColumns.map((column) => ({
                         columnId: column.id,
                         label: column.label,
@@ -5894,6 +5910,8 @@ Each plan file must include:
                 realTimeSyncEnabled: linearConfig.realTimeSyncEnabled === true,
                 autoPullEnabled: linearConfig.autoPullEnabled === true,
                 completeSyncEnabled: linearConfig.completeSyncEnabled !== false,
+                deleteSyncEnabled: linearConfig.deleteSyncEnabled === true,
+                inboundDeleteEnabled: linearConfig.inboundDeleteEnabled === true,
                 columns: currentColumns.map((column) => ({
                     columnId: column.id,
                     label: column.label

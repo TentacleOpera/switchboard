@@ -2353,7 +2353,10 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     /** One-time Notion remote setup: creates plans + comments DBs, backs up selected boards. */
-    public async remoteRunNotionSetup(workspaceRoot?: string): Promise<{ success: boolean; backedUp?: number; error?: string }> {
+    public async remoteRunNotionSetup(
+        workspaceRoot?: string,
+        options?: { realTimeSyncEnabled?: boolean; deleteSyncEnabled?: boolean; inboundDeleteEnabled?: boolean }
+    ): Promise<{ success: boolean; backedUp?: number; error?: string }> {
         const resolved = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolved) { return { success: false, error: 'No workspace' }; }
         const rc = this._getRemoteControl(resolved);
@@ -2364,7 +2367,8 @@ export class KanbanProvider implements vscode.Disposable {
             const result = await backup.setupRemoteControl(
                 this.resolveEffectiveWorkspaceRoot(resolved),
                 config.boards,
-                columns
+                columns,
+                options
             );
             return { success: result.success, backedUp: result.backedUp, error: result.error };
         } catch (e) {
@@ -2659,6 +2663,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             setupComplete: config?.setupComplete ?? false,
             realTimeSyncEnabled: config?.realTimeSyncEnabled ?? false,
             autoPullEnabled: config?.autoPullEnabled ?? false,
+            deleteSyncEnabled: config?.deleteSyncEnabled ?? false,
+            inboundDeleteEnabled: config?.inboundDeleteEnabled ?? false,
             pullIntervalMinutes: config?.pullIntervalMinutes ?? 60,
             syncError,
             mappingWarning,
@@ -2673,6 +2679,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             setupComplete: config?.setupComplete ?? false,
             realTimeSyncEnabled: config?.realTimeSyncEnabled ?? false,
             autoPullEnabled: config?.autoPullEnabled ?? false,
+            deleteSyncEnabled: config?.deleteSyncEnabled ?? false,
+            inboundDeleteEnabled: config?.inboundDeleteEnabled ?? false,
             pullIntervalMinutes: config?.pullIntervalMinutes ?? 60,
             syncError
         };

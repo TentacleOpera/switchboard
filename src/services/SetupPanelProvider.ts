@@ -1359,7 +1359,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         this.postMessage({ type: 'notionRemoteSetupResult', success: false, error: 'Kanban provider unavailable' });
                         return { success: true };
                     }
-                    const result = await this._kanbanProvider.remoteRunNotionSetup(message.workspaceRoot);
+                    const result = await this._kanbanProvider.remoteRunNotionSetup(message.workspaceRoot, message.options);
                     this.postMessage({ type: 'notionRemoteSetupResult', ...result });
                     return { success: true };
                 }

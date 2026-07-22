@@ -181,3 +181,7 @@ Key risks: (1) the ClickUp `deleteSyncEnabled` repair activates a previously-dor
 **Send to Coder** (Complexity 5). Pattern-following webview + handler wiring across eight files, with one confirmed bugfix (ClickUp `deleteSyncEnabled`) on a shipped path and a 3-hop Notion boolean thread. The risk is byte-compat on the shipped ClickUp/Linear setup path, not novelty. Ship independently of the Provider Sync feature — it unblocks that feature's dormant engine — and **after** A2b's Setup/TaskViewer verb-engine burndown (already in flight); the coder must re-resolve exact line numbers against the post-A2b source, since the arms this plan extends will have been seam-injected in-place.
 
 **Stage Complete:** CREATED
+
+## Completion Report
+
+Implemented setup UI opt-in toggles and state round-trip wiring for Provider Sync capabilities (`realTimeSyncEnabled`, `deleteSyncEnabled`, and `inboundDeleteEnabled`) across Notion, ClickUp, and Linear. Repaired ClickUp `deleteSyncEnabled` option drop bug at interface boundary and added `inboundDeleteEnabled` support. Modified files: `src/services/ClickUpSyncService.ts`, `src/services/LinearSyncService.ts`, `src/webview/setup.html`, `src/services/SetupPanelProvider.ts`, `src/services/KanbanProvider.ts`, `src/services/NotionBackupService.ts`, `src/services/TaskViewerProvider.ts`. No unexpected issues encountered.

@@ -46,6 +46,7 @@ export interface LinearApplyOptions {
   enableRealtimeSync: boolean;
   enableAutoPull: boolean;
   deleteSyncEnabled?: boolean;
+  inboundDeleteEnabled?: boolean;
   enableCompleteSync?: boolean;
   excludeBacklog?: boolean;  // NEW: exclude backlog issues from sync
 }
@@ -2144,6 +2145,7 @@ export class LinearSyncService {
       config.realTimeSyncEnabled = options.enableRealtimeSync === true;
       config.autoPullEnabled = options.enableAutoPull === true;
       config.deleteSyncEnabled = options.deleteSyncEnabled === true;
+      config.inboundDeleteEnabled = options.inboundDeleteEnabled === true;
       config.completeSyncEnabled = options.enableCompleteSync !== false;
       config.excludeBacklog = options.excludeBacklog !== false;  // default true
       config.setupComplete = true;

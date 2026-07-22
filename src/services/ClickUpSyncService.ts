@@ -127,6 +127,8 @@ export interface ClickUpApplyOptions {
   createCustomFields: boolean;
   enableRealtimeSync: boolean;
   enableAutoPull: boolean;
+  deleteSyncEnabled?: boolean;
+  inboundDeleteEnabled?: boolean;
   columns?: string[];
 }
 
@@ -2679,6 +2681,8 @@ export class ClickUpSyncService {
 
       config.realTimeSyncEnabled = options.enableRealtimeSync === true;
       config.autoPullEnabled = options.enableAutoPull === true;
+      config.deleteSyncEnabled = options.deleteSyncEnabled === true;
+      config.inboundDeleteEnabled = options.inboundDeleteEnabled === true;
       config.setupComplete = true;
       await this.saveConfig(config);
       return { success: true };
