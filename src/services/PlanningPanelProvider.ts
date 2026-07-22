@@ -1973,7 +1973,7 @@ Start by checking which documents exist, then present the menu.`;
         docId: string;
         requestId: number;
         isAutoRefreshed?: boolean;
-    }): Promise<void> {
+    }): Promise<any> {
         const { sourceId, sourceFolder, docId, requestId, isAutoRefreshed } = opts;
         try {
             if (!sourceFolder) throw new Error('sourceFolder is required');
@@ -2001,14 +2001,19 @@ Start by checking which documents exist, then present the menu.`;
             const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(fileExt);
             const isHtmlFile = fileExt === '.html' || fileExt === '.htm';
 
+            // The webviewUri rewrite needs a live webview (vscode.Uri + asWebviewUri).
+            // Headless callers have none — skip it and return the filePath ref instead.
+            const panelWebview = this._panel?.webview;
             let fileContent = '';
             let webviewUri: string | undefined;
             if (isImage) {
-                webviewUri = this._panel?.webview.asWebviewUri(vscode.Uri.file(absPath)).toString();
+                if (panelWebview) {
+                    webviewUri = panelWebview.asWebviewUri(vscode.Uri.file(absPath)).toString();
+                }
             } else {
                 fileContent = await fs.promises.readFile(absPath, 'utf8');
-                if (isHtmlFile) {
-                    webviewUri = this._panel?.webview.asWebviewUri(vscode.Uri.file(absPath)).toString();
+                if (isHtmlFile && panelWebview) {
+                    webviewUri = panelWebview.asWebviewUri(vscode.Uri.file(absPath)).toString();
                 }
             }
 
@@ -2029,7 +2034,7 @@ Start by checking which documents exist, then present the menu.`;
             };
             const fileType = isImage ? 'image' : (fileTypeMap[fileExt] || 'text');
 
-            this.postMessageToWebview({
+            const res = {
                 type: 'previewReady',
                 sourceId,
                 requestId,
@@ -2042,15 +2047,19 @@ Start by checking which documents exist, then present the menu.`;
                 iframeSrc,
                 htmlContent: isHtmlFile ? this._injectLocalCsp(this._injectIntoHead(fileContent, DesignPanelProvider._INSPECTOR_SCRIPT)) : undefined,
                 isAutoRefreshed: isAutoRefreshed || undefined
-            });
+            };
+            this.postMessageToWebview(res);
+            return { success: true, ...res };
         } catch (err: any) {
-            if (requestId === -1) return;
-            this.postMessageToWebview({
+            if (requestId === -1) return { success: false, error: err.message || String(err) };
+            const res = {
                 type: 'previewError',
                 sourceId,
                 requestId,
                 error: err.message || String(err)
-            });
+            };
+            this.postMessageToWebview(res);
+            return { success: false, ...res };
         }
     }
 
@@ -2510,30 +2519,33 @@ Start by checking which documents exist, then present the menu.`;
                         }
                     }
                     const html = await this._seams().commands.executeCommand<string>('markdown.api.render', content);
-                    const targetPanel = isProject ? this._projectPanel : this._panel;
-                    this._pushTo(targetPanel, 'planning', {
+                    const okRes = {
                         type: 'markdownLiveRendered',
                         requestId: msg.requestId,
                         html: html,
                         htmlContent: html
-                    });
-                } catch (err) {
+                    };
                     const targetPanel = isProject ? this._projectPanel : this._panel;
-                    this._pushTo(targetPanel, 'planning', {
+                    this._pushTo(targetPanel, 'planning', okRes);
+                    return { success: true, ...okRes };
+                } catch (err) {
+                    const errRes = {
                         type: 'markdownLiveRendered',
                         requestId: msg.requestId,
                         html: '',
                         htmlContent: '',
                         error: String(err)
-                    });
+                    };
+                    const targetPanel = isProject ? this._projectPanel : this._panel;
+                    this._pushTo(targetPanel, 'planning', errRes);
+                    return { success: false, ...errRes };
                 }
-                break;
             }
             case 'fetchRoots': {
                 console.log('[PlanningPanel] Received fetchRoots, _panel exists:', !!this._panel);
                 const sources = this._researchImportService.getAvailableSources();
                 console.log('[PlanningPanel] Available sources at fetchRoots:', sources);
-                
+
                 // Send workspaceItems and restoredTabState
                 const items = buildWorkspaceItems(allRoots);
                 const tabKeys = ['local', 'online', 'kanban', 'tickets', 'research', 'notebook', 'localDocs.root', 'onlineDocs.root', 'kanban.root', 'kanban.project', 'tickets.root', 'research.root', 'notebook.root'];
@@ -2557,6 +2569,7 @@ Start by checking which documents exist, then present the menu.`;
                 await this._handleFetchRoots(true);
 
                 // Send integration provider preference
+                let integrationProviderStates: any = { clickupSetupComplete: false, linearSetupComplete: false, provider: null, ticketsAutoSync: false };
                 try {
                     const [clickUpConfig, linearConfig] = await Promise.all([
                         this._adapterFactories.getClickUpSyncService(workspaceRoot).loadConfig(),
@@ -2580,17 +2593,20 @@ Start by checking which documents exist, then present the menu.`;
                     const provider = activeProvider || null;
                     const ticketsAutoSync = await this._getTicketsAutoSync(workspaceRoot);
                     if (provider) { this._updateTicketsAutoSyncWatcher(workspaceRoot, ticketsAutoSync); }
-                    this.postMessageToWebview({
-                        type: 'integrationProviderStates',
-                        clickupSetupComplete,
-                        linearSetupComplete,
-                        provider,
-                        ticketsAutoSync
-                    });
+                    integrationProviderStates = { clickupSetupComplete, linearSetupComplete, provider, ticketsAutoSync };
+                    this.postMessageToWebview({ type: 'integrationProviderStates', ...integrationProviderStates });
                 } catch (err) {
                     console.warn('[PlanningPanel] Failed to determine integration provider states:', err);
                 }
-                break;
+                return {
+                    success: true,
+                    type: 'fetchRootsComplete',
+                    sources,
+                    workspaceItems: items,
+                    restoredTabState: statePayload,
+                    integrationWorkspaces,
+                    integrationProviderStates
+                };
             }
             case 'persistTabState': {
                 const { tabKey, workspaceRoot: root, state } = msg;
@@ -2811,12 +2827,10 @@ Start by checking which documents exist, then present the menu.`;
                 break;
             }
             case 'fetchChildren': {
-                await this._handleFetchChildren(workspaceRoot, msg.sourceId, msg.parentId);
-                break;
+                return await this._handleFetchChildren(workspaceRoot, msg.sourceId, msg.parentId);
             }
             case 'fetchPreview': {
-                await this._handleFetchPreview(workspaceRoot, msg.sourceId, msg.docId, msg.requestId, msg.sourceFolder);
-                break;
+                return await this._handleFetchPreview(workspaceRoot, msg.sourceId, msg.docId, msg.requestId, msg.sourceFolder);
             }
             case 'appendToPlannerPrompt': {
                 await this._handleAppendToPlannerPrompt(workspaceRoot, msg.sourceId, msg.docId, msg.docName, msg.content, msg.sourceFolder);
@@ -2827,8 +2841,7 @@ Start by checking which documents exist, then present the menu.`;
                 break;
             }
             case 'fetchPageContent': {
-                await this._handleFetchPageContent(workspaceRoot, msg.sourceId, msg.docId, msg.pageId, msg.requestId);
-                break;
+                return await this._handleFetchPageContent(workspaceRoot, msg.sourceId, msg.docId, msg.pageId, msg.requestId);
             }
             case 'fetchAntigravityArtifact': {
                 const artifactPath = msg.artifactPath;
@@ -2837,22 +2850,25 @@ Start by checking which documents exist, then present the menu.`;
                 const service = this._getLocalFolderService(allRoots[0] || '');
                 const result = await service.fetchAntigravityArtifact(artifactPath);
                 if (result.success) {
-                    this.postMessageToWebview({
+                    const okRes = {
                         type: 'previewReady',
                         sourceId: 'antigravity',
                         requestId,
                         content: result.content || '',
                         docName: path.basename(artifactPath, '.md')
-                    });
+                    };
+                    this.postMessageToWebview(okRes);
+                    return { success: true, ...okRes };
                 } else {
-                    this.postMessageToWebview({
+                    const errRes = {
                         type: 'previewError',
                         sourceId: 'antigravity',
                         requestId,
                         error: result.error || 'Failed to load artifact'
-                    });
+                    };
+                    this.postMessageToWebview(errRes);
+                    return { success: false, ...errRes };
                 }
-                break;
             }
             case 'addLocalFolder': {
                 const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
@@ -2884,8 +2900,9 @@ Start by checking which documents exist, then present the menu.`;
                 const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
                 const service = this._getLocalFolderService(root);
                 const paths = service.getFolderPaths();
-                this.postMessageToWebview({ type: 'localFoldersListed', paths, workspaceRoot: root });
-                break;
+                const res = { type: 'localFoldersListed', paths, workspaceRoot: root };
+                this.postMessageToWebview(res);
+                return { success: true, ...res };
             }
             case 'addTicketsFolder': {
                 const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
@@ -2961,8 +2978,9 @@ Start by checking which documents exist, then present the menu.`;
                 const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
                 const service = this._getLocalFolderService(root);
                 const paths = service.getPlanningHtmlFolderPaths();
-                this.postMessageToWebview({ type: 'planningHtmlFoldersListed', paths, workspaceRoot: root });
-                break;
+                const res = { type: 'planningHtmlFoldersListed', paths, workspaceRoot: root };
+                this.postMessageToWebview(res);
+                return { success: true, ...res };
             }
             case 'addPlanningHtmlFolder': {
                 const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
@@ -3026,24 +3044,26 @@ Start by checking which documents exist, then present the menu.`;
                 const sourceId = msg.sourceId;
                 const adapter = this._researchImportService.getAdapter(sourceId);
                 if (!adapter) {
-                    this.postMessageToWebview({ type: 'containersReady', sourceId, containers: [] });
-                    break;
+                    const res = { type: 'containersReady', sourceId, containers: [] };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 }
                 try {
                     const containers = await adapter.listContainers();
-                    this.postMessageToWebview({ type: 'containersReady', sourceId, containers });
+                    const res = { type: 'containersReady', sourceId, containers };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 } catch {
-                    this.postMessageToWebview({ type: 'containersReady', sourceId, containers: [] });
+                    const res = { type: 'containersReady', sourceId, containers: [] };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
-                break;
             }
             case 'fetchImportedDocs': {
-                await this._handleFetchImportedDocs(workspaceRoot);
-                break;
+                return await this._handleFetchImportedDocs(workspaceRoot);
             }
             case 'fetchDocsFile': {
-                await this._handleFetchDocsFile(workspaceRoot, msg.slugPrefix, msg.requestId);
-                break;
+                return await this._handleFetchDocsFile(workspaceRoot, msg.slugPrefix, msg.requestId);
             }
             case 'syncToSource': {
                 await this._handleSyncToSource(workspaceRoot, msg.slugPrefix);
@@ -3055,13 +3075,14 @@ Start by checking which documents exist, then present the menu.`;
                 const requestId = typeof msg.requestId === 'number' ? msg.requestId : 0;
                 // Race guard — same Map, namespaced key
                 const filterKey = `filter:${sourceId}`;
-                if (requestId <= (this._latestRequestIds.get(filterKey) || 0)) { break; }
+                if (requestId <= (this._latestRequestIds.get(filterKey) || 0)) { return { success: false, error: 'Stale request' }; }
                 this._latestRequestIds.set(filterKey, requestId);
 
                 const adapter = this._researchImportService.getAdapter(sourceId);
                 if (!adapter) {
-                    this.postMessageToWebview({ type: 'filteredDocsReady', sourceId, nodes: [], requestId });
-                    break;
+                    const res = { type: 'filteredDocsReady', sourceId, nodes: [], requestId };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 }
                 try {
                     let nodes: TreeNode[];
@@ -3079,14 +3100,18 @@ Start by checking which documents exist, then present the menu.`;
                         nodes = await adapter.listDocumentsByContainer(containerId);
                     }
                     // Drop if stale
-                    if (requestId !== this._latestRequestIds.get(filterKey)) { break; }
-                    this.postMessageToWebview({ type: 'filteredDocsReady', sourceId, nodes, requestId });
+                    if (requestId !== this._latestRequestIds.get(filterKey)) { return { success: false, error: 'Stale request' }; }
+                    const res = { type: 'filteredDocsReady', sourceId, nodes, requestId };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 } catch {
                     if (requestId === this._latestRequestIds.get(filterKey)) {
-                        this.postMessageToWebview({ type: 'filteredDocsReady', sourceId, nodes: [], requestId });
+                        const res = { type: 'filteredDocsReady', sourceId, nodes: [], requestId };
+                        this.postMessageToWebview(res);
+                        return { success: false, ...res };
                     }
+                    return { success: false, error: 'Stale request' };
                 }
-                break;
             }
             case 'fetchDocPages': {
                 const sourceId = msg.sourceId;
@@ -3094,27 +3119,32 @@ Start by checking which documents exist, then present the menu.`;
                 const requestId = typeof msg.requestId === 'number' ? msg.requestId : 0;
                 // Race guard
                 const pagesKey = `pages:${sourceId}:${docId}`;
-                if (requestId <= (this._latestRequestIds.get(pagesKey) || 0)) { break; }
+                if (requestId <= (this._latestRequestIds.get(pagesKey) || 0)) { return { success: false, error: 'Stale request' }; }
                 this._latestRequestIds.set(pagesKey, requestId);
 
                 const adapter = this._researchImportService.getAdapter(sourceId);
 
                 if (!adapter || !adapter.listDocPages) {
-                    this.postMessageToWebview({ type: 'docPagesReady', sourceId, docId, pages: [], requestId });
-                    break;
+                    const res = { type: 'docPagesReady', sourceId, docId, pages: [], requestId };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 }
 
                 try {
                     const pages = await adapter.listDocPages(docId);
                     // Drop if stale
-                    if (requestId !== this._latestRequestIds.get(pagesKey)) { break; }
-                    this.postMessageToWebview({ type: 'docPagesReady', sourceId, docId, pages, requestId });
+                    if (requestId !== this._latestRequestIds.get(pagesKey)) { return { success: false, error: 'Stale request' }; }
+                    const res = { type: 'docPagesReady', sourceId, docId, pages, requestId };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 } catch {
                     if (requestId === this._latestRequestIds.get(pagesKey)) {
-                        this.postMessageToWebview({ type: 'docPagesReady', sourceId, docId, pages: [], requestId });
+                        const res = { type: 'docPagesReady', sourceId, docId, pages: [], requestId };
+                        this.postMessageToWebview(res);
+                        return { success: false, ...res };
                     }
+                    return { success: false, error: 'Stale request' };
                 }
-                break;
             }
             case 'fetchPageContent': {
                 const sourceId = msg.sourceId;
@@ -3122,29 +3152,36 @@ Start by checking which documents exist, then present the menu.`;
                 const pageId = msg.pageId;
                 const requestId = typeof msg.requestId === 'number' ? msg.requestId : 0;
                 // Race guard — reuse source-keyed tracking from fetchPreview
-                if (requestId <= (this._latestRequestIds.get(sourceId) || 0)) { break; }
+                if (requestId <= (this._latestRequestIds.get(sourceId) || 0)) { return { success: false, error: 'Stale request' }; }
                 this._latestRequestIds.set(sourceId, requestId);
 
                 const adapter = this._researchImportService.getAdapter(sourceId);
                 if (!adapter || !adapter.fetchPageContent) {
-                    this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: 'Adapter does not support page content' });
-                    break;
+                    const res = { type: 'previewError', sourceId, requestId, error: 'Adapter does not support page content' };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
 
                 try {
                     const result = await adapter.fetchPageContent(docId, pageId);
-                    if (requestId !== this._latestRequestIds.get(sourceId)) { break; }
+                    if (requestId !== this._latestRequestIds.get(sourceId)) { return { success: false, error: 'Stale request' }; }
                     if (result.success) {
-                        this.postMessageToWebview({ type: 'previewReady', sourceId, requestId, content: result.content, docName: result.docName });
+                        const res = { type: 'previewReady', sourceId, requestId, content: result.content, docName: result.docName };
+                        this.postMessageToWebview(res);
+                        return { success: true, ...res };
                     } else {
-                        this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: result.error });
+                        const res = { type: 'previewError', sourceId, requestId, error: result.error };
+                        this.postMessageToWebview(res);
+                        return { success: false, ...res };
                     }
                 } catch (err) {
                     if (requestId === this._latestRequestIds.get(sourceId)) {
-                        this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: String(err) });
+                        const res = { type: 'previewError', sourceId, requestId, error: String(err) };
+                        this.postMessageToWebview(res);
+                        return { success: false, ...res };
                     }
+                    return { success: false, error: 'Stale request' };
                 }
-                break;
             }
             case 'importPlansFromClipboard': {
                 await this._handleImportPlansFromClipboard(workspaceRoot);
@@ -4174,12 +4211,13 @@ Start by checking which documents exist, then present the menu.`;
                         hasConstitution: governance[0].exists /* keep legacy field */
                     };
                 });
-                this.postMessageToProjectWebview({
+                const res = {
                     type: 'constitutionFilesLoaded',
                     workspaces,
                     kanbanWorkspaceRoot: this._kanbanProvider?.getCurrentWorkspaceRoot() || null
-                });
-                break;
+                };
+                this.postMessageToProjectWebview(res);
+                return { success: true, ...res };
             }
             case 'getConstitutionStatus': {
                 // project.js (project panel) requests constitution status for the meta bar.
@@ -4198,28 +4236,30 @@ Start by checking which documents exist, then present the menu.`;
                 if (enabled && exists) { status = path.basename(filePath); }
                 else if (enabled) { status = 'File not found'; }
                 else { status = 'Disabled'; }
-                this.postMessageToProjectWebview({ type: 'constitutionStatus', status, planFile: msg.planFile, enabled, workspaceRoot: wr });
-                break;
+                const res = { type: 'constitutionStatus', status, planFile: msg.planFile, enabled, workspaceRoot: wr };
+                this.postMessageToProjectWebview(res);
+                return { success: true, ...res };
             }
             case 'readConstitutionFile': {
                 const wsRoot = msg.workspaceRoot;
                 const key = msg.governanceFile ?? 'constitution';
                 if (!allRoots.includes(wsRoot)) {
-                    this._postToBothPanels({
+                    const errRes = {
                         type: 'constitutionFileRead',
                         workspaceRoot: wsRoot,
                         governanceFile: key,
                         exists: false,
                         error: 'Invalid workspace root'
-                    });
-                    break;
+                    };
+                    this._postToBothPanels(errRes);
+                    return { success: false, ...errRes };
                 }
                 const filePath = this._getGovernanceFilePath(wsRoot, key);
                 if (fs.existsSync(filePath)) {
                     try {
                         const content = fs.readFileSync(filePath, 'utf8');
                         const renderedHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', content);
-                        this._postToBothPanels({
+                        const okRes = {
                             type: 'constitutionFileRead',
                             workspaceRoot: wsRoot,
                             governanceFile: key,
@@ -4227,25 +4267,30 @@ Start by checking which documents exist, then present the menu.`;
                             exists: true,
                             content,
                             renderedHtml
-                        });
+                        };
+                        this._postToBothPanels(okRes);
+                        return { success: true, ...okRes };
                     } catch (err) {
-                        this._postToBothPanels({
+                        const errRes = {
                             type: 'constitutionFileRead',
                             workspaceRoot: wsRoot,
                             governanceFile: key,
                             exists: false,
                             error: String(err)
-                        });
+                        };
+                        this._postToBothPanels(errRes);
+                        return { success: false, ...errRes };
                     }
                 } else {
-                    this._postToBothPanels({
+                    const res = {
                         type: 'constitutionFileRead',
                         workspaceRoot: wsRoot,
                         governanceFile: key,
                         exists: false
-                    });
+                    };
+                    this._postToBothPanels(res);
+                    return { success: true, ...res };
                 }
-                break;
             }
             case 'saveConstitutionFile': {
                 const wsRoot = msg.workspaceRoot;
@@ -4345,7 +4390,7 @@ Start by checking which documents exist, then present the menu.`;
                     try {
                         renderedHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', rawContent) ?? '';
                     } catch { renderedHtml = ''; }
-                    this._postToBothPanels({
+                    const res = {
                         type: 'projectPrdContent',
                         projectName: msg.projectName,
                         workspaceRoot: wsRoot,
@@ -4353,9 +4398,11 @@ Start by checking which documents exist, then present the menu.`;
                         rawContent,               // raw markdown for editor
                         exists,
                         path: filePath
-                    });
+                    };
+                    this._postToBothPanels(res);
+                    return { success: true, ...res };
                 }
-                break;
+                return { success: false, error: 'Missing workspaceRoot or projectName' };
             }
             case 'saveProjectPrd': {
                 // Write a project's PRD file (creating .switchboard/projects/<slug>/).
@@ -4623,14 +4670,15 @@ Please format the updated output document strictly as follows:
             }
             case 'getConstitutionPaths': {
                 const wsRoot = msg.workspaceRoot;
-                if (!allRoots.includes(wsRoot)) { break; }
-                this.postMessageToProjectWebview({
+                if (!allRoots.includes(wsRoot)) { return { success: false, error: 'Invalid workspace root' }; }
+                const res = {
                     type: 'constitutionPaths',
                     workspaceRoot: wsRoot,
                     paths: this._getConstitutionPathList(wsRoot),
                     active: this._activeConstitutionRel(wsRoot),
-                });
-                break;
+                };
+                this.postMessageToProjectWebview(res);
+                return { success: true, ...res };
             }
             case 'addConstitutionPath': {
                 const wsRoot = msg.workspaceRoot;
@@ -6864,24 +6912,27 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         'switchboard.downloadAttachment',
                         { workspaceRoot, provider, url, filename, ticketId, ticketTitle }
                     );
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'attachmentDownloaded',
                         success: result.success,
                         url,
                         filePath: result.filePath,
                         error: result.error,
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: !!result.success, ...res };
                 } catch (error) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'attachmentDownloaded',
                         success: false,
                         url,
                         error: error instanceof Error ? error.message : String(error),
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
-                break;
             }
             case 'viewAttachments': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
@@ -6892,7 +6943,10 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         { workspaceRoot, provider, ticketId, attachmentsArray: attachments }
                     );
                     const targetPanel = isProject ? this._projectPanel : this._panel;
-                    if (Array.isArray(result) && targetPanel) {
+                    // The webviewUri rewrite requires a live webview (vscode.Uri + webview.asWebviewUri).
+                    // Headless / HTTP callers have no webview — skip the rewrite and return the stored
+                    // localPath ref shape so the arm stays host-agnostic (contract #3).
+                    if (Array.isArray(result) && targetPanel && targetPanel.webview) {
                         const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp'];
                         result = result.map((att: any) => {
                             if (att.isDownloaded && att.localPath) {
@@ -6905,25 +6959,28 @@ Read the current content above. Determine what's missing. Produce a complete fea
                             return att;
                         });
                     }
-                    this._pushTo(targetPanel, 'planning', {
+                    const okRes = {
                         type: 'attachmentsListResult',
                         success: true,
                         ticketId,
                         attachments: result,
                         workspaceRoot
-                    });
+                    };
+                    this._pushTo(targetPanel, 'planning', okRes);
+                    return { success: true, ...okRes };
                 } catch (error) {
                     const targetPanel = isProject ? this._projectPanel : this._panel;
-                    this._pushTo(targetPanel, 'planning', {
+                    const errRes = {
                         type: 'attachmentsListResult',
                         success: false,
                         ticketId,
                         attachments: [],
                         error: error instanceof Error ? error.message : String(error),
                         workspaceRoot
-                    });
+                    };
+                    this._pushTo(targetPanel, 'planning', errRes);
+                    return { success: false, ...errRes };
                 }
-                break;
             }
             case 'openAttachment': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
@@ -7411,9 +7468,9 @@ Read the current content above. Determine what's missing. Produce a complete fea
             }
             case 'loadInsights': {
                 const wsRoot = String(msg.workspaceRoot || '');
+                let insights: any[];
                 if (wsRoot) {
-                    const insights = InsightManager.listInsights(wsRoot);
-                    this.postMessageToProjectWebview({ type: 'insightsLoaded', insights });
+                    insights = InsightManager.listInsights(wsRoot);
                 } else {
                     const workspaceItems = buildWorkspaceItems(allRoots);
                     const allInsights: any[] = [];
@@ -7425,30 +7482,35 @@ Read the current content above. Determine what's missing. Produce a complete fea
                             console.warn('[PlanningPanel] Failed to list insights for', ws.workspaceRoot, err);
                         }
                     }
-                    this.postMessageToProjectWebview({ type: 'insightsLoaded', insights: allInsights });
+                    insights = allInsights;
                 }
-                break;
+                const res = { type: 'insightsLoaded', insights };
+                this.postMessageToProjectWebview(res);
+                return { success: true, ...res };
             }
             case 'readInsight': {
                 const wsRoot = String(msg.workspaceRoot || '');
                 const filename = String(msg.filename || '');
-                if (!wsRoot || !filename) { break; }
+                if (!wsRoot || !filename) { return { success: false, error: 'Missing workspaceRoot or filename' }; }
                 try {
                     const content = InsightManager.readInsight(wsRoot, filename);
                     if (content) {
                         const renderedHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', content);
-                        this.postMessageToProjectWebview({
+                        const res = {
                             type: 'insightContent',
                             filename,
                             workspaceRoot: wsRoot,
                             content,
                             renderedHtml
-                        });
+                        };
+                        this.postMessageToProjectWebview(res);
+                        return { success: true, ...res };
                     }
+                    return { success: true, type: 'insightContent', filename, workspaceRoot: wsRoot, content: '' };
                 } catch (err) {
                     console.error('[PlanningPanel] Failed to read insight:', err);
+                    return { success: false, error: String(err) };
                 }
-                break;
             }
             case 'runTuningExtract': {
                 const wsRoot = String(msg.workspaceRoot || '');
@@ -8226,7 +8288,13 @@ Read the current content above. Determine what's missing. Produce a complete fea
         const { config } = await this._resolveSyncConfig();
         const browseFilterContainers = config.browseFilterContainers || {};
 
-        if (!this._panel) { throw new Error('[PlanningPanel] _panel is undefined — cannot send onlineDocsReady'); }
+        if (!this._panel) {
+            // Headless / HTTP caller: no webview to push to. The fetchRoots arm
+            // returns the aggregate payload in-body, so the push is additive —
+            // skip it rather than throwing (host-agnostic contract).
+            console.warn('[PlanningPanel] _panel is undefined — skipping onlineDocsReady push');
+            return;
+        }
         console.log('[PlanningPanel] Sending onlineDocsReady, roots count:', roots.length, 'roots:', roots);
         const allRoots = this._getWorkspaceRoots();
         const workspaceRoot = this._getWorkspaceRoot() || (allRoots.length > 0 ? allRoots[0] : undefined);
@@ -8259,7 +8327,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
         this.postMessageToWebview({ type: 'switchboardThemeNameSetting', theme: currentTheme });
     }
 
-    private async _handleFetchChildren(workspaceRoot: string, sourceId: string, parentId?: string): Promise<void> {
+    private async _handleFetchChildren(workspaceRoot: string, sourceId: string, parentId?: string): Promise<any> {
         // Handle local-folder directly without adapter
         if (sourceId === 'local-folder') {
             const localFolderService = this._getLocalFolderService(workspaceRoot);
@@ -8267,26 +8335,34 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 const files = await localFolderService.listFiles();
                 const nodes = this._mapLocalFilesToTreeNodes(files)
                     .filter(node => node.parentId === parentId || (!parentId && !node.parentId));
-                this.postMessageToWebview({ type: 'childrenReady', sourceId, parentId, nodes });
+                const res = { type: 'childrenReady', sourceId, parentId, nodes };
+                this.postMessageToWebview(res);
+                return { success: true, ...res };
             } catch (err) {
                 console.error(`Failed to fetch children for ${sourceId}:`, err);
-                this.postMessageToWebview({ type: 'childrenReady', sourceId, parentId, nodes: [] });
+                const res = { type: 'childrenReady', sourceId, parentId, nodes: [] };
+                this.postMessageToWebview(res);
+                return { success: false, ...res };
             }
-            return;
         }
 
         const adapter = this._researchImportService.getAdapter(sourceId);
         if (!adapter) {
-            this.postMessageToWebview({ type: 'childrenReady', sourceId, parentId, nodes: [] });
-            return;
+            const res = { type: 'childrenReady', sourceId, parentId, nodes: [] };
+            this.postMessageToWebview(res);
+            return { success: true, ...res };
         }
 
         try {
             const nodes = await adapter.fetchChildren(parentId);
-            this.postMessageToWebview({ type: 'childrenReady', sourceId, parentId, nodes });
+            const res = { type: 'childrenReady', sourceId, parentId, nodes };
+            this.postMessageToWebview(res);
+            return { success: true, ...res };
         } catch (err) {
             console.error(`Failed to fetch children for ${sourceId}:`, err);
-            this.postMessageToWebview({ type: 'childrenReady', sourceId, parentId, nodes: [] });
+            const res = { type: 'childrenReady', sourceId, parentId, nodes: [] };
+            this.postMessageToWebview(res);
+            return { success: false, ...res };
         }
     }
 
@@ -8294,7 +8370,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
         return `${sourceId}:${docId}:${sourceFolder || ''}`;
     }
 
-    private async _handleFetchPreview(workspaceRoot: string, sourceId: string, docId: string, requestId: number, sourceFolder?: string): Promise<void> {
+    private async _handleFetchPreview(workspaceRoot: string, sourceId: string, docId: string, requestId: number, sourceFolder?: string): Promise<any> {
         // Race guard — track latest request per source
         this._latestRequestIds.set(sourceId, requestId);
 
@@ -8310,8 +8386,9 @@ Read the current content above. Determine what's missing. Produce a complete fea
         // Handle planning-html-folder: iframe-based HTML preview with localhost server
         if (sourceId === 'planning-html-folder') {
             if (!sourceFolder) {
-                this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: 'sourceFolder is required' });
-                return;
+                const res = { type: 'previewError', sourceId, requestId, error: 'sourceFolder is required' };
+                this.postMessageToWebview(res);
+                return { success: false, ...res };
             }
             this._activePlanningHtmlPreview = { sourceFolder, docId, sourceId };
             this._activePreviewSourceId = 'planning-html-folder';
@@ -8323,15 +8400,15 @@ Read the current content above. Determine what's missing. Produce a complete fea
             this._activePreviewPath = resolvedPreviewPath;
             this._setupActiveDocWatcher(resolvedPreviewPath);
             this._registerSaveTextDocListener();
-            await this._buildAndSendPlanningHtmlPreview({ sourceId, sourceFolder, docId, requestId });
-            return;
+            return await this._buildAndSendPlanningHtmlPreview({ sourceId, sourceFolder, docId, requestId });
         }
 
         // Handle local-folder directly without adapter
         if (sourceId === 'local-folder') {
             if (!sourceFolder) {
-                this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: 'sourceFolder is required' });
-                return;
+                const res = { type: 'previewError', sourceId, requestId, error: 'sourceFolder is required' };
+                this.postMessageToWebview(res);
+                return { success: false, ...res };
             }
             const localFolderService = this._getLocalFolderServiceForFolder(sourceFolder, workspaceRoot, 'local-folder')
                 || this._getLocalFolderService(workspaceRoot);
@@ -8354,7 +8431,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     if (result.content === lastContent) {
                         // Cache hit — notify frontend for user-initiated requests only
                         if (requestId >= 0) {
-                            this.postMessageToWebview({
+                            const res = {
                                 type: 'previewReady',
                                 sourceId,
                                 requestId,
@@ -8362,35 +8439,43 @@ Read the current content above. Determine what's missing. Produce a complete fea
                                 docName: result.docTitle,
                                 isAutoRefreshed: false,
                                 filePath: resolvedPath
-                            });
+                            };
+                            this.postMessageToWebview(res);
+                            return { success: true, ...res };
                         }
-                        return;
+                        return { success: true, type: 'previewReady', sourceId, requestId, content: result.content || '', docName: result.docTitle };
                     }
                     this._lastPreviewContentByPath.set(cacheKey, result.content || '');
 
-                    this.postMessageToWebview({ 
-                        type: 'previewReady', 
-                        sourceId, 
-                        requestId, 
-                        content: result.content || '', 
+                    const res = {
+                        type: 'previewReady',
+                        sourceId,
+                        requestId,
+                        content: result.content || '',
                         docName: result.docTitle,
                         isAutoRefreshed: this._isAutoRefreshing,
                         filePath: resolvedPath
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 } else {
-                    this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: result.error || 'Failed to fetch document' });
+                    const res = { type: 'previewError', sourceId, requestId, error: result.error || 'Failed to fetch document' };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
             } catch (err) {
                 console.error('[PlanningPanel] Error fetching local doc:', err);
-                this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: String(err) });
+                const res = { type: 'previewError', sourceId, requestId, error: String(err) };
+                this.postMessageToWebview(res);
+                return { success: false, ...res };
             }
-            return;
         }
 
         const adapter = this._researchImportService.getAdapter(sourceId);
         if (!adapter) {
-            this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: 'Adapter not found' });
-            return;
+            const res = { type: 'previewError', sourceId, requestId, error: 'Adapter not found' };
+            this.postMessageToWebview(res);
+            return { success: false, ...res };
         }
 
         // Initialize cache service via shared factory (one instance per workspace root)
@@ -8412,7 +8497,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                     // Strip front-matter for display
                     const content = cachedContent.replace(/^---\n[\s\S]*?\n---\n/, '');
                     const isImported = await this._cacheService.isDocumentImported(sourceId, docId);
-                    
+
                     const workspaceId = await this._getWorkspaceId(workspaceRoot);
                     const resolvedPath = await this._cacheService.resolveImportedDocPath(docId, workspaceId);
                     if (resolvedPath) {
@@ -8422,19 +8507,20 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         this._setupActiveDocWatcher(resolvedPath);
                     }
 
-                    this.postMessageToWebview({ 
-                        type: 'previewReady', 
-                        sourceId, 
-                        requestId, 
-                        content, 
-                        docName, 
-                        isCached: true, 
+                    const res = {
+                        type: 'previewReady',
+                        sourceId,
+                        requestId,
+                        content,
+                        docName,
+                        isCached: true,
                         isImported,
                         isAutoRefreshed: this._isAutoRefreshing
-                    });
+                    };
+                    this.postMessageToWebview(res);
                     // Refresh cache in background after returning cached content
                     this._refreshCacheInBackground(sourceId, docId, adapter);
-                    return;
+                    return { success: true, ...res };
                 }
             }
 
@@ -8448,7 +8534,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 const docResult = await (adapter as any).fetchDocContent(cleanDocId, 'summary');
                 if (docResult.success) {
                     if (docResult.pages) {
-                        this.postMessageToWebview({
+                        const res = {
                             type: 'previewReady',
                             sourceId,
                             requestId,
@@ -8457,14 +8543,16 @@ Read the current content above. Determine what's missing. Produce a complete fea
                             pages: docResult.pages,
                             totalPages: docResult.totalPages,
                             isAutoRefreshed: this._isAutoRefreshing
-                        });
-                        return;
+                        };
+                        this.postMessageToWebview(res);
+                        return { success: true, ...res };
                     }
                     content = docResult.content || '';
                     docName = docResult.docTitle;
                 } else {
-                    this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: docResult.error || 'Failed to fetch ClickUp document' });
-                    return;
+                    const res = { type: 'previewError', sourceId, requestId, error: docResult.error || 'Failed to fetch ClickUp document' };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
             } else if ('fetchContent' in adapter) {
                 content = await adapter.fetchContent(docId);
@@ -8477,7 +8565,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
             }
 
             const isImported = this._cacheService ? await this._cacheService.isDocumentImported(sourceId, docId) : false;
-            
+
             if (this._cacheService) {
                 const workspaceId = await this._getWorkspaceId(workspaceRoot);
                 const resolvedPath = await this._cacheService.resolveImportedDocPath(docId, workspaceId);
@@ -8489,21 +8577,26 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 }
             }
 
-            this.postMessageToWebview({ 
-                type: 'previewReady', 
-                sourceId, 
-                requestId, 
-                content, 
-                docName, 
-                isCached: true, 
+            const res = {
+                type: 'previewReady',
+                sourceId,
+                requestId,
+                content,
+                docName,
+                isCached: true,
                 isImported,
                 isAutoRefreshed: this._isAutoRefreshing
-            });
+            };
+            this.postMessageToWebview(res);
+            return { success: true, ...res };
         } catch (err) {
             const currentRequestId = this._latestRequestIds.get(sourceId);
             if (currentRequestId === requestId) {
-                this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: String(err) });
+                const res = { type: 'previewError', sourceId, requestId, error: String(err) };
+                this.postMessageToWebview(res);
+                return { success: false, ...res };
             }
+            return { success: false, error: 'Stale request' };
         }
     }
 
@@ -8627,7 +8720,7 @@ Read the current content above. Determine what's missing. Produce a complete fea
         return crypto.createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 16);
     }
 
-    private async _handleFetchImportedDocs(workspaceRoot: string): Promise<void> {
+    private async _handleFetchImportedDocs(workspaceRoot: string): Promise<any> {
         try {
             const allRoots = this._getWorkspaceRoots();
             const allDocs: any[] = [];
@@ -8668,14 +8761,18 @@ Read the current content above. Determine what's missing. Produce a complete fea
                 }
             }
 
-            this.postMessageToWebview({ type: 'importedDocsReady', docs: allDocs });
+            const res = { type: 'importedDocsReady', docs: allDocs };
+            this.postMessageToWebview(res);
+            return { success: true, ...res };
         } catch (err) {
             console.error('[PlanningPanelProvider] Error fetching imported docs:', err);
-            this.postMessageToWebview({ type: 'importedDocsReady', docs: [], error: String(err) });
+            const res = { type: 'importedDocsReady', docs: [], error: String(err) };
+            this.postMessageToWebview(res);
+            return { success: false, ...res };
         }
     }
 
-    private async _handleFetchDocsFile(workspaceRoot: string, slugPrefix: string, requestId: number): Promise<void> {
+    private async _handleFetchDocsFile(workspaceRoot: string, slugPrefix: string, requestId: number): Promise<any> {
         try {
             // Search all workspace roots via their DBs first (handles hash-based filenames)
             let filePath: string | null = null;
@@ -8700,13 +8797,14 @@ Read the current content above. Determine what's missing. Produce a complete fea
             }
 
             if (!filePath || !fs.existsSync(filePath)) {
-                this.postMessageToWebview({
+                const res = {
                     type: 'previewError',
                     sourceId: 'local-folder',
                     requestId,
                     error: 'File not found'
-                });
-                return;
+                };
+                this.postMessageToWebview(res);
+                return { success: false, ...res };
             }
 
             const content = fs.readFileSync(filePath, 'utf-8');
@@ -8758,26 +8856,30 @@ Read the current content above. Determine what's missing. Produce a complete fea
 
             const cacheKey = this._getPreviewCacheKey('local-folder', slugPrefix, undefined);
             if (requestId === -1 && this._lastPreviewContentByPath.get(cacheKey) === displayContent) {
-                return;
+                return { success: true, type: 'previewReady', sourceId: 'local-folder', requestId, content: displayContent, docName };
             }
             this._lastPreviewContentByPath.set(cacheKey, displayContent);
 
-            this.postMessageToWebview({
+            const res = {
                 type: 'previewReady',
                 sourceId: 'local-folder',
                 requestId,
                 content: displayContent,
                 docName,
                 isAutoRefreshed: this._isAutoRefreshing
-            });
+            };
+            this.postMessageToWebview(res);
+            return { success: true, ...res };
         } catch (err) {
             console.error('[PlanningPanelProvider] Error fetching docs file:', err);
-            this.postMessageToWebview({
+            const res = {
                 type: 'previewError',
                 sourceId: 'local-folder',
                 requestId,
                 error: String(err)
-            });
+            };
+            this.postMessageToWebview(res);
+            return { success: false, ...res };
         }
     }
 
@@ -9088,28 +9190,35 @@ Read the current content above. Determine what's missing. Produce a complete fea
         }
     }
 
-    private async _handleFetchPageContent(workspaceRoot: string, sourceId: string, docId: string, pageId: string, requestId: number): Promise<void> {
+    private async _handleFetchPageContent(workspaceRoot: string, sourceId: string, docId: string, pageId: string, requestId: number): Promise<any> {
         try {
             const adapter = this._researchImportService.getAdapter(sourceId);
             if (!adapter || !('fetchPageContent' in adapter)) {
-                this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: 'Adapter does not support page content' });
-                return;
+                const res = { type: 'previewError', sourceId, requestId, error: 'Adapter does not support page content' };
+                this.postMessageToWebview(res);
+                return { success: false, ...res };
             }
 
             const result = await (adapter as any).fetchPageContent(docId, pageId);
             if (result.success) {
-                this.postMessageToWebview({
+                const res = {
                     type: 'previewReady',
                     sourceId,
                     requestId,
                     content: result.content,
                     docName: result.docName
-                });
+                };
+                this.postMessageToWebview(res);
+                return { success: true, ...res };
             } else {
-                this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: result.error || 'Failed to fetch page content' });
+                const res = { type: 'previewError', sourceId, requestId, error: result.error || 'Failed to fetch page content' };
+                this.postMessageToWebview(res);
+                return { success: false, ...res };
             }
         } catch (err) {
-            this.postMessageToWebview({ type: 'previewError', sourceId, requestId, error: String(err) });
+            const res = { type: 'previewError', sourceId, requestId, error: String(err) };
+            this.postMessageToWebview(res);
+            return { success: false, ...res };
         }
     }
 

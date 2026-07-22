@@ -535,6 +535,198 @@ export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
             workspaceRoot: { type: 'string' },
         },
     },
+    // ─── P2: Docs / PRD / Constitution / Insights / Previews / Attachments ───
+    // Permissive + field-accurate: only the fields the arm dereferences are
+    // declared; `required` is reserved for fields the arm hard-requires (an
+    // HTTP caller omitting them gets a deterministic rejection instead of a
+    // silent no-op). The webview postMessage path bypasses validation.
+    saveFileContent: {
+        fields: {
+            filePath: { type: 'string', required: true },
+            content: { type: 'string' },
+            originalContent: { type: 'string' },
+            tab: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    saveProjectPrd: {
+        fields: {
+            projectName: { type: 'string', required: true },
+            content: { type: 'string', required: true },
+            mode: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    createLocalDoc: {
+        fields: {
+            folderPath: { type: 'string' },
+            name: { type: 'string' },
+            description: { type: 'string' },
+            withAgent: { type: 'boolean' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    deleteLocalDoc: {
+        fields: {
+            docId: { type: 'string', required: true },
+            docName: { type: 'string' },
+            sourceFolder: { type: 'string', required: true },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    saveConstitutionFile: {
+        fields: {
+            workspaceRoot: { type: 'string', required: true },
+            content: { type: 'string' },
+            governanceFile: { type: 'string' },
+            mode: { type: 'string' },
+        },
+    },
+    deleteConstitutionFile: {
+        fields: {
+            workspaceRoot: { type: 'string', required: true },
+            governanceFile: { type: 'string' },
+        },
+    },
+    addConstitutionPath: {
+        fields: {
+            workspaceRoot: { type: 'string', required: true },
+        },
+    },
+    removeConstitutionPath: {
+        fields: {
+            workspaceRoot: { type: 'string', required: true },
+            relativePath: { type: 'string', required: true },
+        },
+    },
+    setConstitutionPath: {
+        fields: {
+            workspaceRoot: { type: 'string', required: true },
+            relativePath: { type: 'string', required: true },
+        },
+    },
+    createOnlineDocument: {
+        fields: {
+            sourceId: { type: 'string', required: true },
+            parentId: { type: 'string' },
+            title: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    saveOnlineDocFile: {
+        fields: {
+            slugPrefix: { type: 'string', required: true },
+            content: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    syncDocToOnline: {
+        fields: {
+            localDocPath: { type: 'string', required: true },
+            sourceId: { type: 'string', required: true },
+            parentId: { type: 'string' },
+            mode: { type: 'string' },
+            rememberLocation: { type: 'boolean' },
+            docName: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    importFullDoc: {
+        fields: {
+            sourceId: { type: 'string' },
+            docId: { type: 'string' },
+            docName: { type: 'string' },
+            sourceFolder: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    importResearchDoc: {
+        fields: {
+            docTitle: { type: 'string' },
+            folderPath: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    deleteImportedDoc: {
+        fields: {
+            slugPrefix: { type: 'string', required: true },
+            docName: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    updateInsightStatus: {
+        fields: {
+            workspaceRoot: { type: 'string', required: true },
+            filename: { type: 'string', required: true },
+            status: { type: 'string', required: true },
+        },
+    },
+    deleteInsight: {
+        fields: {
+            workspaceRoot: { type: 'string', required: true },
+            filename: { type: 'string', required: true },
+        },
+    },
+    uploadPlanAttachment: {
+        fields: {
+            planFile: { type: 'string', required: true },
+            topic: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    setUploadLocation: {
+        fields: {
+            sourceId: { type: 'string', required: true },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    linkToDocument: {
+        fields: {
+            sourceId: { type: 'string' },
+            docId: { type: 'string' },
+            docName: { type: 'string' },
+            sourceFolder: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    linkToFolder: {
+        fields: {
+            folderPath: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    addLocalFolder: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            // Optional direct path — when present the arm skips the host folder
+            // picker (an HTTP client has no dialog to answer).
+            folderPath: { type: 'string' },
+        },
+    },
+    removeLocalFolder: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            folderPath: { type: 'string', required: true },
+        },
+    },
+    addPlanningHtmlFolder: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            folderPath: { type: 'string' },
+        },
+    },
+    removePlanningHtmlFolder: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            folderPath: { type: 'string', required: true },
+        },
+    },
+    setProjectContextEnabled: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            enabled: { type: 'boolean' },
+        },
+    },
 };
 
 export const SETUP_VERB_SCHEMAS: Record<string, VerbSchema> = {

@@ -57,3 +57,34 @@ Same root cause as P1 (see `a2b-verb-engine-layer1-completion-planning.md`): Pla
 - Headless Planning suite extended and **asserts payload fields** for this family.
 - `parity:check` / `push-routing:check` / `compile-tests` green.
 - Manual: `POST /project/verb/getProjectPrd` / `loadConstitutionFiles` return data in-body; a PRD/doc save round-trips; malformed payload rejected.
+
+## Completion Summary
+
+**Status:** ✅ Complete — all DoD checks green.
+
+### Read arms converted to return-in-body (23 arms)
+
+**Inline arms (17):** `renderMarkdownLive`, `fetchAntigravityArtifact`, `listLocalFolders`, `listPlanningHtmlFolders`, `fetchContainers`, `fetchFilteredDocs`, `fetchDocPages`, `fetchPageContent` (inline), `loadConstitutionFiles`, `getConstitutionStatus`, `readConstitutionFile`, `getProjectPrd`, `getConstitutionPaths`, `loadInsights`, `readInsight`, `downloadAttachment`, `viewAttachments`.
+
+**Delegated arms (6):** `fetchChildren` → `_handleFetchChildren`, `fetchPreview` → `_handleFetchPreview` (+ `_buildAndSendPlanningHtmlPreview`), `fetchPageContent` (delegated) → `_handleFetchPageContent`, `fetchImportedDocs` → `_handleFetchImportedDocs`, `fetchDocsFile` → `_handleFetchDocsFile`, `fetchRoots` (aggregate return).
+
+### Host-agnostic guards added
+- `viewAttachments`: webviewUri rewrite skipped when no panel webview (headless).
+- `_buildAndSendPlanningHtmlPreview`: webviewUri rewrite skipped when no panel webview.
+- `_sendOnlineDocsReady`: softened `throw` to `console.warn` + `return` when no `_panel` (return-in-body carries the data).
+- `buildWorkspaceItems` (`workspaceUtils.ts`): `vscode.workspace.workspaceFolders` access wrapped in try/catch — headless callers fall back to `path.basename` labels.
+
+### Write schemas appended to PLANNING_VERB_SCHEMAS (22 verbs)
+`saveFileContent`, `saveProjectPrd`, `createLocalDoc`, `deleteLocalDoc`, `saveConstitutionFile`, `deleteConstitutionFile`, `addConstitutionPath`, `removeConstitutionPath`, `setConstitutionPath`, `createOnlineDocument`, `saveOnlineDocFile`, `syncDocToOnline`, `importFullDoc`, `importResearchDoc`, `deleteImportedDoc`, `updateInsightStatus`, `deleteInsight`, `uploadPlanAttachment`, `setUploadLocation`, `linkToDocument`, `linkToFolder`, `addLocalFolder`/`removeLocalFolder`, `addPlanningHtmlFolder`/`removePlanningHtmlFolder`, `setProjectContextEnabled`.
+
+### Ratchet ceiling
+Planning break count: **319 → 283** (lowered by 36). `verb-return-contract-baseline.json` updated.
+
+### Test suite
+`verb-engine-planning-headless.test.js`: **25 passed, 0 failed** (16 new P2 tests covering read-arm return-in-body, push-additive, host-agnostic guards, and schema validation rejection).
+
+### DoD checks
+- `verb-returns:check` ✅ (Planning 283 ≤ ceiling 283)
+- `parity:check` ✅ (allowlist ≡ catalog)
+- `push-routing:check` ✅ (all providers at baseline)
+- `compile-tests` ✅ (tsc -p tsconfig.test.json — 0 errors in PlanningPanelProvider/verbSchemas/workspaceUtils; pre-existing KanbanProvider errors unchanged)

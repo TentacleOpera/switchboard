@@ -69,10 +69,16 @@ export function buildWorkspaceItems(openRoots: string[]): Array<{ label: string;
             }
         }
     } else {
-        // Independent context or mappings disabled: display standard workspace folders
+        // Independent context or mappings disabled: display standard workspace folders.
+        // The vscode.workspace lookup is wrapped so headless / HTTP callers (no vscode
+        // host) fall back to basename labels instead of throwing.
+        let workspaceFolders: Array<{ name: string; uri: { fsPath: string } }> = [];
+        try {
+            workspaceFolders = (vscode.workspace?.workspaceFolders || []) as any;
+        } catch { /* headless: no vscode host */ }
         for (const root of openRoots) {
             const resolvedRoot = path.resolve(root);
-            const folder = (vscode.workspace?.workspaceFolders || []).find(
+            const folder = workspaceFolders.find(
                 f => path.resolve(f.uri.fsPath) === resolvedRoot
             );
             items.push({

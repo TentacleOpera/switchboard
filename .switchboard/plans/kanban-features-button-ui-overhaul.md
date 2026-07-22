@@ -73,11 +73,15 @@ Restore sanity to the button layout in `project.html`'s Kanban Plans and Feature
 - **File:** `project.html` (line 1318 area) — add `<select id="features-complexity-filter">` with the same options as `kanban-complexity-filter` (lines 1239-1245).
 - **File:** `project.js` — add `featuresComplexityFilter` element reference, wire change event to filter `_featuresCache` by aggregate complexity, re-render list. Mirror the kanban complexity filter logic (lines 1614-1621).
 
-#### 2c. Rename Refine → Improve, change to improve-feature workflow
+#### 2c. Rename Refine → Improve (context-aware: improve-feature or refine_feature)
 - **File:** `project.js`, `renderFeatureMetaBar()` (line 2561) — change button label from "Refine" to "Improve", change id from `btn-feature-refine` to `btn-feature-improve`, change title to "Copy the improve-feature workflow prompt to clipboard."
-- **File:** `project.js` (lines 2576-2589) — change message type from `'refineFeature'` to `'improveFeature'`.
-- **File:** `src/services/PlanningPanelProvider.ts` (lines 6674-6723) — add `case 'improveFeature'` handler (or repurpose `refineFeature`): read `.agents/skills/improve-feature/SKILL.md` (with embedded fallback), build prompt with feature details, copy to clipboard, show notification "Improve-feature prompt copied to clipboard."
-- **Note:** The old `refineFeature` handler and `refine_feature.md` skill remain for backend/extension dispatch. The UI button now copies the improve-feature workflow instead.
+- **File:** `project.js` (lines 2576-2589) — change message type from `'refineFeature'` to `'improveFeature'`. Include `subtaskCount` in the message payload (already present at line 2586).
+- **File:** `src/services/PlanningPanelProvider.ts` (lines 6674-6723) — repurpose the `refineFeature` case into `improveFeature` with **context-aware skill selection**:
+  - If `subtaskCount > 0`: read `.agents/skills/improve-feature/SKILL.md`, build prompt, copy to clipboard, notification "Improve-feature prompt copied to clipboard."
+  - If `subtaskCount === 0`: read `.agents/skills/refine_feature.md`, build prompt, copy to clipboard, notification "Improve-feature prompt copied to clipboard." (The button label stays "Improve" — the user doesn't see the skill name; the backend picks the right one silently.)
+  - Both branches use the same embedded-fallback pattern as the existing handler.
+- **Why context-aware:** improve-feature requires existing subtasks (Step 1 expands the feature into its subtasks; an empty set has nothing to improve or reconcile). refine_feature is for features with zero subtasks — it fleshes out the description and proposes a subtask breakdown. The user sees one "Improve" button; the backend routes to the correct skill based on subtask count.
+- **Note:** The `refine_feature.md` skill file stays in `.agents/skills/` for this context-aware path and for backend/extension dispatch. The old `refineFeature` message type is replaced by `improveFeature` (which subsumes both cases).
 
 #### 2d. Move Review from global strip to feature meta bar
 - **File:** `project.html` (line 1320) — remove `<button id="btn-review-features">` from the global controls strip.
@@ -144,7 +148,8 @@ Both tabs' meta bars should have:
 
 3. **Functional checks:**
    - Click Improve in kanban global strip → clipboard contains improve-plan workflow prompt with plan details.
-   - Click Improve in feature meta bar → clipboard contains improve-feature workflow prompt with feature details.
+   - Click Improve in feature meta bar on a feature WITH subtasks → clipboard contains improve-feature workflow prompt with feature details.
+   - Click Improve in feature meta bar on a feature with ZERO subtasks → clipboard contains refine_feature workflow prompt (fleshes out description + proposes subtasks). Button label is "Improve" in both cases.
    - Copy Prompt button on a feature subtask in CODE REVIEWED with no ACCEPTANCE TESTED column → button shows the correct label for the actual next column (or no button if terminal).
    - Copy Prompt button on a plan at the last column before COMPLETED → no copy-prompt button rendered.
    - Column dropdown: only one COMPLETED entry, styled correctly.

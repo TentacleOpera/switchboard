@@ -192,9 +192,13 @@ function createHeadlessTestSeams(opts = {}) {
         },
         pathConfig: {
             getConfigString: (key, def = '') => opts.configStrings?.[key] ?? def,
+            getConfigStringWithDefault: (key, def = '') => opts.configStrings?.[key] ?? def,
             getConfigBoolean: (key, def = false) => opts.configBooleans?.[key] ?? def,
             getConfigNumber: (key, def = 0) => opts.configNumbers?.[key] ?? def,
+            getConfigJson: (key, def = undefined) => opts.configJson?.[key] ?? def,
             updateConfig: async () => {},
+            updateConfigGlobal: async () => {},
+            updateConfigWorkspace: async () => {},
         },
         watcher: {
             watchFolder: (folderPath, _listener) => {
