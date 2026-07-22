@@ -7859,7 +7859,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     window.__schedulerConfig = msg.config || { schemaVersion: 1, jobs: [] };
                     // Re-render the scheduler panel if it is the active mode.
                     if (currentAutomationMode === 'scheduler') {
-                        renderAutobanPanel();
+                        renderAutobanPanel(true);
                     }
                     break;
                 }
@@ -10074,6 +10074,21 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     batchConfigRow.appendChild(batchBatchSizeInput);
                     row.appendChild(batchConfigRow);
 
+                    // Startup command (for local-terminal target).
+                    const startupCmdRow = document.createElement('div');
+                    startupCmdRow.style.cssText = 'display:flex; gap:6px; align-items:center; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
+                    const startupCmdLabel = document.createElement('span');
+                    startupCmdLabel.textContent = 'STARTUP:';
+                    const startupCmdInput = document.createElement('input');
+                    startupCmdInput.type = 'text';
+                    startupCmdInput.dataset.field = 'startupCommand';
+                    startupCmdInput.value = job.startupCommand || '';
+                    startupCmdInput.placeholder = 'Optional shell command to run on terminal creation before prompt';
+                    startupCmdInput.style.cssText = 'flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px;';
+                    startupCmdRow.appendChild(startupCmdLabel);
+                    startupCmdRow.appendChild(startupCmdInput);
+                    row.appendChild(startupCmdRow);
+
                     // Prompt override (for custom / board-batch-with-override).
                     const promptRow = document.createElement('div');
                     promptRow.style.cssText = 'display:flex; gap:6px; align-items:flex-start; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
@@ -10139,6 +10154,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         renderSchedulerPrereq(targetSelect.value);
                         // Show/hide start-stop vs copy-prompt based on target.
                         const isLocal = targetSelect.value === 'local-terminal';
+                        startupCmdRow.style.display = isLocal ? 'flex' : 'none';
                         startBtn.style.display = isLocal ? '' : 'none';
                         stopBtn.style.display = isLocal ? '' : 'none';
                         copyBtn.style.display = isLocal ? 'none' : '';
@@ -10172,6 +10188,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const batchAgentEl = rowEl.querySelector('input[data-field="batchAgent"]');
                     const batchColumnEl = rowEl.querySelector('input[data-field="batchColumn"]');
                     const batchSizeEl = rowEl.querySelector('input[data-field="batchSize"]');
+                    const startupCmdEl = rowEl.querySelector('input[data-field="startupCommand"]');
                     if (source === 'board-batch') {
                         if (batchAgentEl) sourceConfig.agent = batchAgentEl.value || 'coder';
                         if (batchColumnEl) sourceConfig.column = batchColumnEl.value || 'CREATED';
@@ -10185,6 +10202,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         target: selects[1] ? selects[1].value : 'local-terminal',
                         intervalMinutes: intervalInput ? parseInt(intervalInput.value, 10) || 10 : 10,
                         promptOverride: textarea ? textarea.value : '',
+                        startupCommand: startupCmdEl ? startupCmdEl.value : '',
                         sourceConfig: sourceConfig
                     };
                 }
@@ -10297,11 +10315,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             return container;
         }
 
-        function renderAutobanPanel() {
+        function renderAutobanPanel(force = false) {
             try {
                 const root = document.getElementById('automation-panel-root');
                 if (!root) return;
-                if (isAutobanPanelInteracting) {
+                if (isAutobanPanelInteracting && !force) {
                     console.log('[kanban] Skipping autoban panel re-render: user interaction guard active');
                     return;
                 }

@@ -279,7 +279,6 @@ export interface PanelAvailability {
 }
 
 export function getPanelsManifest(availability?: PanelAvailability): PanelManifestEntry[] {
-    const designEnabled = availability?.design !== false;
     const setupEnabled = availability?.setup !== false;
     const planningEnabled = availability?.planning !== false;
     const iconDir = '/static/icons';
@@ -287,7 +286,10 @@ export function getPanelsManifest(availability?: PanelAvailability): PanelManife
         { id: 'board', label: 'Board', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-78.png`, route: '/board', enabled: true },
         { id: 'project', label: 'Project', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-24.png`, route: '/project', enabled: true },
         { id: 'planning', label: 'Artifacts', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-42.png`, route: '/planning', enabled: planningEnabled },
-        { id: 'design', label: 'Design', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-90.png`, route: '/design', enabled: designEnabled },
+        // Design panel is intentionally omitted from the browser cockpit (redundant —
+        // build-via-planner is terminal, publish-artifact prompts are editor/claude-bound).
+        // getDesignHtml / the /design route remain for the editor's own webview; the
+        // browser nav simply does not surface it.
         { id: 'setup', label: 'Setup', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-55.png`, route: '/setup', enabled: setupEnabled },
     ];
 }

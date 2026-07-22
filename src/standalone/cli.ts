@@ -106,7 +106,7 @@ async function main() {
             }
             const { StandaloneHostSecrets } = require('./hostServices');
             const secrets = new StandaloneHostSecrets(workspaceRoot);
-            await secrets.storeSecret(secretKey, secretValue);
+            await secrets.store(secretKey, secretValue);
             console.log(`[switchboard] Secret '${secretKey}' saved securely to standalone store.`);
             process.exit(0);
         }

@@ -8,7 +8,7 @@ import * as path from 'path';
 import { getConstitutionPath } from './constitutionUtils';
 import { stateFs as fs, stateLockfile as lockfile, getWorkspaceRootFromStatePath } from './stateConfigBridge';
 import { loadNotionRemoteSetup } from './remote/notionRemoteConfig';
-import { applyThemeBodyClass, getEffectiveColourKanbanIcons } from './themeBodyClass';
+import { applyThemeBodyClass, getEffectiveColourKanbanIcons, getThemeBodyClass } from './themeBodyClass';
 import {
     getShellHtml as sharedGetShellHtml,
     getBoardHtml as sharedGetBoardHtml,
@@ -22095,12 +22095,12 @@ What would you like to find?`;
     //   - Sub-hourly niche: minute-granularity intervals; the only target that
     //     can poll faster than hourly.
 
-    /** Derive the terminal name for a job. Comms keeps 'Comms Monitor' verbatim. */
+    /** Derive the terminal name for a job. Comms keeps 'Comms Monitor' verbatim for backward compatibility if label is omitted. */
     private _schedulerTerminalName(job: ScheduledJob): string {
-        if (job.source === 'comms') {
+        if (job.source === 'comms' && (!job.label || job.label === 'Comms Monitor')) {
             return TaskViewerProvider.MCP_MONITOR_TERMINAL_NAME;
         }
-        return `Scheduler: ${job.label}`;
+        return `Scheduler: ${job.label} (${job.id.slice(0, 8)})`;
     }
 
     /** Resolve the jobId that owns a given terminal name (closed-terminal handler). */
@@ -22614,7 +22614,8 @@ What would you like to find?`;
         this.refresh();
 
         // Wait for shell readiness, then send startup command
-        const cmd = await this.getAgentStartupCommand(isComms ? 'mcp_monitor' : 'coder');
+        const customStartup = job?.startupCommand;
+        const cmd = customStartup && customStartup.trim() ? customStartup.trim() : await this.getAgentStartupCommand(isComms ? 'mcp_monitor' : 'coder');
         if (cmd && cmd.trim()) {
             const shellReady = new Promise<void>((resolve) => {
                 const disposable = vscode.window.onDidStartTerminalShellExecution((e) => {

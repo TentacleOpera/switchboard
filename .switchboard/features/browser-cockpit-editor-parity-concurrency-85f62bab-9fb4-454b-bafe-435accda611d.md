@@ -17,12 +17,12 @@ Finish the browser cockpit to editor parity and make it run in a browser concurr
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [B2 · Browser Cockpit — Serve From the Extension's LocalApiServer (Concurrent With the Editor)](../plans/b2-cockpit-serve-from-extension-server-concurrent.md) — **LEAD CODED**
-- [ ] [B2 · Browser Cockpit — Live Data Delivery to Panel Iframes (Empty Board Fix)](../plans/b2-cockpit-live-data-delivery-empty-board.md) — **LEAD CODED**
-- [ ] [B2 · Browser Cockpit — Real Nav Icons + Claudify Theming Parity](../plans/b2-cockpit-real-icons-and-claudify-theming.md) — **LEAD CODED**
-- [ ] [B2 · Browser Cockpit — Surface Scope (Per-Control Capability Matrix, Not Panel Mirroring)](../plans/b2-cockpit-complete-panel-set-artifacts-implementation.md) — **LEAD CODED**
-- [ ] [B2 · Browser Cockpit — Standalone Settings Persistence](../plans/b2-cockpit-standalone-settings-persistence.md) — **LEAD CODED**
-- [ ] [B2 · Browser Cockpit — Secrets Are Editor-Only (Capability Gating + Server Guard)](../plans/b2-cockpit-secrets-editor-only.md) — **LEAD CODED**
+- [ ] [B2 · Browser Cockpit — Serve From the Extension's LocalApiServer (Concurrent With the Editor)](../plans/b2-cockpit-serve-from-extension-server-concurrent.md) — **CODE REVIEWED**
+- [ ] [B2 · Browser Cockpit — Live Data Delivery to Panel Iframes (Empty Board Fix)](../plans/b2-cockpit-live-data-delivery-empty-board.md) — **CODE REVIEWED**
+- [ ] [B2 · Browser Cockpit — Real Nav Icons + Claudify Theming Parity](../plans/b2-cockpit-real-icons-and-claudify-theming.md) — **CODE REVIEWED**
+- [ ] [B2 · Browser Cockpit — Surface Scope (Per-Control Capability Matrix, Not Panel Mirroring)](../plans/b2-cockpit-complete-panel-set-artifacts-implementation.md) — **CODE REVIEWED**
+- [ ] [B2 · Browser Cockpit — Standalone Settings Persistence](../plans/b2-cockpit-standalone-settings-persistence.md) — **CODE REVIEWED**
+- [ ] [B2 · Browser Cockpit — Secrets Are Editor-Only (Capability Gating + Server Guard)](../plans/b2-cockpit-secrets-editor-only.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -62,3 +62,6 @@ These six subtasks pile onto shared files. Per the PRD's "one agent stream per p
 ## Completion Report
 Executed feature "Browser Cockpit — Editor Parity & Concurrency" comprising 6 subtasks. Implemented concurrent browser cockpit serving from extension LocalApiServer with one-time token minter and `switchboard.openInBrowser` command. Delivered live board data on WebSocket initial connect via `KanbanProvider.getFullStateMessages()`. Added real panel icon assets and App-Shell header theme switcher with live postMessage theme sync. Refactored capability gating into per-control CSS rules for `terminalDispatch` and `secretsEntry` policy, added `/planning` route, and backed standalone Mementos with disk storage. Restricted secret write verbs over HTTP to 403 and added CLI secret entry. Files changed: `src/services/TaskViewerProvider.ts`, `src/services/KanbanProvider.ts`, `src/services/headlessPanelHtml.ts`, `src/services/LocalApiServer.ts`, `src/extension.ts`, `package.json`, `src/webview/shell.html`, `src/webview/shell.js`, `src/webview/transport.js`, `src/standalone/bootstrap.ts`, `src/standalone/cli.ts`. No issues encountered.
 
+## Review Findings (feature-level)
+
+Reviewer pass over the implemented code (commit `10362ec`, 13 code files). **1 CRITICAL + 3 MAJOR fixed; 4 gaps flagged.** CRITICAL: standalone `secrets set` CLI called a non-existent `storeSecret` → fixed to `store` (`cli.ts`). MAJOR: (a) Design panel not dropped from the browser manifest → removed; (b) `secretsEntry` UI gating was a no-op (phantom selectors) → retargeted to real setup token ids + `data-tab-content`; (c) Setup reduction (secret + host-authority substrate + status-bar tabs) unimplemented → now gated. Files fixed: `headlessPanelHtml.ts`, `transport.js`, `cli.ts`. **Verified sound without fixes:** the server-side secret-write HTTP-rail deny (complete + the real security boundary), `getFullState`→`getFullStateMessages` wiring, `HOST_CAPABILITIES` per-host parameterization, real icons + theme switcher, `fileBackedMemento` persistence. **Flagged for follow-up (need JS + runtime; SKIP COMPILATION blocked verification):** empty-board render is runtime-unverified; docs is the default-active Artifacts tab so hiding it needs a JS switch to create-plans + the in-content docs/tickets write controls aren't gated; drag-drop→copy-prompt lock absent (standalone-only); standalone theme may not persist across reload (`getThemeBodyClass` reads the shim config, not the persisted `config.json`).

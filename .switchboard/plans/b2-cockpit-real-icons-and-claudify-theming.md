@@ -66,3 +66,7 @@ Two confirmed defects:
 ## Completion Report
 Replaced placeholder letter icons in `getPanelsManifest()` with real per-panel Sci-Fi icon asset URLs and updated `shell.js` to render `<img>` tags. Injected `getThemeBodyClass()` onto all panel HTML `<body>` elements on first paint and added a theme toggle button to the App-Shell header that broadcasts `switchboardThemeChanged` live to all iframe panels. Files changed: `src/services/headlessPanelHtml.ts`, `src/webview/shell.js`. No issues encountered.
 
+
+## Review Findings
+
+Reviewer pass — **no CRITICAL/MAJOR; no fixes needed here.** Verified: manifest now carries real `/static/icons` PNGs (letter placeholders gone) and shell.js renders them as `<img>` with a glyph fallback; `applyThemeClass` injects the theme body class at generation (mirrors the editor's own `shell.js` full-className replace + `themeBodyClass.applyThemeBodyClass`, and `getThemeBodyClass()` returns `cyber-theme-enabled` for afterburner so nothing is lost); the App-Shell theme switcher (🎨) POSTs the real `setThemeSetting` verb (exists, SetupPanelProvider:270) and `applyThemeToAll` broadcasts `switchboardThemeChanged` to every iframe. NITs: `applyThemeClass` duplicates `themeBodyClass.applyThemeBodyClass`; the toggle is binary claudify↔afterburner. Files changed by review: none. Remaining risk: live per-iframe theme update relies on each webview handling the `switchboardThemeChanged` window-message (runtime-unverified).

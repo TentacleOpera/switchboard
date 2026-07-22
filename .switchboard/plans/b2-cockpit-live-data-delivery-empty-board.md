@@ -74,3 +74,7 @@ The browser board runs the real `kanban.html` unchanged, talking through the tra
 ## Completion Report
 Fixed empty browser board issue by adding `getFullStateMessages()` to `KanbanProvider` and delegating `getFullState` in `TaskViewerProvider` to construct the full webview state message array (`updateColumns`, `updateWorkspaceSelection`, `updateBoard`, etc.) delivered on WebSocket connection. Verified websocket clients now receive full board state payload on initial connection. Files changed: `src/services/KanbanProvider.ts`, `src/services/TaskViewerProvider.ts`. No issues encountered.
 
+
+## Review Findings
+
+Reviewer pass — **no CRITICAL/MAJOR; no fixes needed here.** Verified the correction held: `wsHub.ts:137-141` already resyncs `getFullState` on connect, and `getFullState` now delegates to `KanbanProvider.getFullStateMessages(effectiveRoot)` (exists, KanbanProvider:1912) instead of the ad-hoc snapshot — the right target per the reaimed root-cause. Files changed by review: none. **Remaining risk (load-bearing):** the empty-board DoD is runtime-only — SKIP COMPILATION means I could not confirm `getFullStateMessages` returns a populated `updateBoard` nor that the board iframe renders the `__resync`-delivered payload; a live boot against a real DB is required before calling this fixed.

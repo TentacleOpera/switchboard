@@ -1865,15 +1865,6 @@
             flex-direction: column;
             gap: 2px;
         }
-        .tree-node .card-checkbox {
-            flex: 0 0 auto;
-            align-self: center;
-            accent-color: var(--accent-teal);
-            cursor: pointer;
-        }
-        .tree-node:not([data-selectable="html"]) .card-checkbox {
-            display: none;
-        }
 
         details.planning-card summary.planning-card-header {
             border-bottom: none;
@@ -3889,8 +3880,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <button id="html-btn-inspect" class="preview-overlay-btn" title="Toggle hover-to-select element mode">Inspect Mode</button>
                 <input type="text" id="html-docs-search" class="sidebar-search-input" placeholder="Search previews..." />
                 <button id="btn-copy-design-html-artifact-prompt" class="strip-btn" title="Copy a prompt to publish the selected HTML file to claude.ai as an Artifact">Copy upload prompt</button>
-                <button id="btn-make-canvas-copy" class="strip-btn" title="Copy a prompt to flatten the selected HTML files into one inline board" disabled>Make Canvas — Copy Prompt</button>
-                <span id="html-selection-count" style="margin-left: auto; font-size: 12px; color: var(--text-secondary);">0 selected</span>
             </div>
             <div class="content-row">
                 <div id="tree-pane-html">

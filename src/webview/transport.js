@@ -179,6 +179,13 @@
                             console.warn('[transport] Clipboard write failed:', err);
                         });
                     }
+                    // Re-dispatch the in-body response as a MessageEvent so request/response
+                    // verbs (fetchKanbanPlans -> kanbanPlansReady, updateWorkspaceSelection, etc.)
+                    // reach the UI's message handlers. In the editor the provider pushes these
+                    // back via the webview; in the browser the HTTP response body IS that push.
+                    if (result && typeof result === 'object') {
+                        dispatchMessage(result);
+                    }
                 })
                 .catch(function (err) {
                     console.error('[transport] postMessage fetch failed:', err);
@@ -254,10 +261,38 @@
                 style.textContent = `
 .host-secrets-entry-false .secret-key-entry-row,
 .host-secrets-entry-false .secret-input-container,
-.host-secrets-entry-false .shared-tab-btn[data-tab="docs"],
-.host-secrets-entry-false .shared-tab-btn[data-tab="tickets"],
-.host-secrets-entry-false #docs-tab-content,
-.host-secrets-entry-false #tickets-tab-content {
+/* Setup panel: transport.js runs ONLY in the browser, so secretsEntry===false ⟺
+   browser-served. Hide integration (secret) tabs, host-authority substrate tabs
+   (database / control-plane / mappings — they repoint the DB/config the editor is
+   bound to), and the editor-only status-bar tab. Default tab is data-tab="setup"
+   (not gated), so no blank-panel. plan-scanner + theme remain. */
+.host-secrets-entry-false .shared-tab-btn[data-tab="clickup"],
+.host-secrets-entry-false .shared-tab-btn[data-tab="linear"],
+.host-secrets-entry-false .shared-tab-btn[data-tab="notion"],
+.host-secrets-entry-false .shared-tab-btn[data-tab="remote"],
+.host-secrets-entry-false .shared-tab-btn[data-tab="database"],
+.host-secrets-entry-false .shared-tab-btn[data-tab="control-plane"],
+.host-secrets-entry-false .shared-tab-btn[data-tab="mappings"],
+.host-secrets-entry-false .shared-tab-btn[data-tab="status-bar"],
+.host-secrets-entry-false [data-tab-content="clickup"],
+.host-secrets-entry-false [data-tab-content="linear"],
+.host-secrets-entry-false [data-tab-content="notion"],
+.host-secrets-entry-false [data-tab-content="remote"],
+.host-secrets-entry-false [data-tab-content="database"],
+.host-secrets-entry-false [data-tab-content="control-plane"],
+.host-secrets-entry-false [data-tab-content="mappings"],
+.host-secrets-entry-false [data-tab-content="status-bar"],
+.host-secrets-entry-false #clickup-token-input,
+.host-secrets-entry-false #linear-token-input,
+.host-secrets-entry-false #notion-token-input,
+.host-secrets-entry-false #multi-repo-pat,
+.host-secrets-entry-false #btn-apply-clickup-config,
+.host-secrets-entry-false #btn-apply-linear-config,
+.host-secrets-entry-false #btn-apply-notion-config,
+/* Artifacts (planning): the docs tab browses LOCAL docs too (source filter is
+   Local/ClickUp/Notion), so it STAYS visible — only its online push/sync controls are
+   secret. The tickets tab is fully online (ClickUp/Linear), so it is hidden. */
+.host-secrets-entry-false .shared-tab-btn[data-tab="tickets"] {
     display: none !important;
 }
 `;

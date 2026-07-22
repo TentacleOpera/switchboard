@@ -97,6 +97,7 @@ export interface ScheduledJob {
     target: 'local-terminal' | 'antigravity' | 'cloud';
     intervalMinutes: number;
     promptOverride?: string;
+    startupCommand?: string;
     sourceConfig: Record<string, unknown>;
 }
 
@@ -529,7 +530,11 @@ export class GlobalIntegrationConfigService {
         const resolved = this._ensureSchedulerMigration(globalConfig);
         const jobs = [...resolved.jobs];
         const idx = jobs.findIndex(j => j.source === 'comms');
-        const current = idx >= 0 ? this._unpackCommsJob(jobs[idx]) : { ...DEFAULT_MCP_MONITOR_CONFIG, sourceLastCheckAt: {} };
+        if (idx < 0) {
+            // Update-only: do not auto-create a comms job if none exists
+            return;
+        }
+        const current = this._unpackCommsJob(jobs[idx]);
         const merged: McpMonitorConfig = {
             enabled: config.enabled ?? current.enabled,
             pollingEnabled: config.pollingEnabled ?? current.pollingEnabled,
@@ -545,12 +550,13 @@ export class GlobalIntegrationConfigService {
             gmailLabel: config.gmailLabel ?? current.gmailLabel,
         };
         const job: ScheduledJob = {
-            id: COMMS_JOB_ID,
-            label: 'Comms Monitor',
+            ...jobs[idx],
+            id: jobs[idx].id || COMMS_JOB_ID,
+            label: jobs[idx].label || 'Comms Monitor',
             enabled: merged.pollingEnabled,
             source: 'comms',
-            target: 'local-terminal',
-            intervalMinutes: 5,
+            target: jobs[idx].target || 'local-terminal',
+            intervalMinutes: jobs[idx].intervalMinutes || 5,
             promptOverride: merged.promptOverride,
             sourceConfig: {
                 enabled: merged.enabled,
@@ -567,11 +573,7 @@ export class GlobalIntegrationConfigService {
                 gmailLabel: merged.gmailLabel,
             },
         };
-        if (idx >= 0) {
-            jobs[idx] = job;
-        } else {
-            jobs.push(job);
-        }
+        jobs[idx] = job;
         globalConfig.scheduler = { schemaVersion: resolved.schemaVersion, jobs };
         await this.saveGlobal(globalConfig);
     }

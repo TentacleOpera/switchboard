@@ -1052,6 +1052,51 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     /**
+     * Full-state message list for a browser WS resync (cockpit). Returns the same
+     * updateColumns/updateWorkspaceSelection/cliTriggersState/updateBoard messages
+     * the editor webview receives, built from the real board-cards builder.
+     */
+    public async getFullStateMessages(wsRoot?: string): Promise<any[]> {
+        const root = wsRoot || this.getCurrentWorkspaceRoot();
+        if (!root) return [];
+        try {
+            const db = this._getKanbanDb(root);
+            if (!db || !(await db.ensureReady())) return [];
+            const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+            if (!wsId) return [];
+            const allPlans = await db.getAllPlans(wsId);
+            const sessionIds = allPlans.map(p => p.sessionId).filter((s): s is string => typeof s === 'string' && s.length > 0);
+            const cards = await this._buildCardsFromDbSessionIds(root, sessionIds);
+            // Columns must reflect the user's CONFIGURED + filtered set (mirror the editor
+            // refresh path) — NOT the raw built-in DEFAULT_KANBAN_COLUMNS, which shows
+            // columns for agents the user hasn't configured.
+            const [customAgents, customKanbanColumns] = await Promise.all([
+                this._getCustomAgents(root),
+                this._getCustomKanbanColumns(root),
+            ]);
+            const builtColumns = await this._buildKanbanColumns(customAgents, customKanbanColumns);
+            const visibleAgents = await this._getVisibleAgents(root);
+            const filteredColumns = this._filterDynamicColumns(builtColumns, visibleAgents, cards);
+            const projects = await db.getProjects(wsId);
+            const allWorktrees = await db.getWorktrees();
+            const featureWorktrees = allWorktrees
+                .filter((w: any) => w.feature_id !== null && w.status === 'active')
+                .reduce((acc: Record<string, { branch: string; path: string; id: number }>, w: any) => { acc[w.feature_id] = { branch: w.branch, path: w.path, id: w.id }; return acc; }, {} as Record<string, { branch: string; path: string; id: number }>);
+            const workspaceItems = [{ value: root, label: path.basename(root) }];
+            const allWorkspaceProjects: Record<string, string[]> = { [root]: projects };
+            return [
+                { type: 'updateColumns', columns: filteredColumns },
+                { type: 'updateWorkspaceSelection', workspaceRoot: root, workspaces: workspaceItems, activeFilter: null, projectFilter: this._projectFilter ?? null, projects, allWorkspaceProjects, controlPlaneMode: 'none', controlPlaneRoot: null, effectiveControlPlaneRoot: root, explicitControlPlaneRoot: root, pendingCandidate: null, repoScopeFilter: null, projectContextEnabled: false },
+                { type: 'cliTriggersState', enabled: this._cliTriggersEnabled },
+                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig, featureWorktrees },
+            ];
+        } catch (err) {
+            console.error('[KanbanProvider] getFullStateMessages error:', err);
+            return [];
+        }
+    }
+
+    /**
      * Arms the root-recovery retry for other providers that detect the kanban
      * board has no resolvable workspace root. Minimal cross-provider touch.
      */
@@ -1908,36 +1953,6 @@ export class KanbanProvider implements vscode.Disposable {
             } catch { /* non-critical */ }
             this.postMessage({ type: 'updateAgentNames', agentNames });
             this.postMessage({ type: 'visibleAgents', agents: visibleAgents });
-
-    public async getFullStateMessages(wsRoot?: string): Promise<any[]> {
-        const root = wsRoot || this.getCurrentWorkspaceRoot();
-        if (!root) return [];
-        try {
-            const db = await this.getKanbanDb(root);
-            if (!db) return [];
-            const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
-            if (!wsId) return [];
-            const cards = await this._buildBoardCardsForWorkspace(root, db, wsId);
-            const projects = await db.getProjects(wsId);
-            const allWorktrees = await db.getWorktrees();
-            const featureWorktrees = allWorktrees
-                .filter(w => w.feature_id !== null && w.status === 'active')
-                .reduce((acc, w) => { acc[w.feature_id!] = { branch: w.branch, path: w.path, id: w.id }; return acc; }, {} as Record<string, { branch: string; path: string; id: number }>);
-            const workspaceItems = [{ value: root, label: path.basename(root) }];
-            const allWorkspaceProjects: Record<string, string[]> = { [root]: projects };
-            return [
-                { type: 'updateColumns', columns: DEFAULT_KANBAN_COLUMNS },
-                { type: 'updateWorkspaceSelection', workspaceRoot: root, workspaces: workspaceItems, activeFilter: null, projectFilter: this._projectFilter ?? null, projects, allWorkspaceProjects, controlPlaneMode: 'none', controlPlaneRoot: null, effectiveControlPlaneRoot: root, explicitControlPlaneRoot: root, pendingCandidate: null, repoScopeFilter: null, projectContextEnabled: false },
-                { type: 'cliTriggersState', enabled: this._cliTriggersEnabled },
-                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig, featureWorktrees },
-            ];
-        } catch (err) {
-            console.error('[KanbanProvider] getFullStateMessages error:', err);
-            return [];
-        }
-    }
-
-
 
             const effectiveModes: Record<string, 'cli' | 'prompt' | 'disabled'> = {};
             for (const col of columns) {

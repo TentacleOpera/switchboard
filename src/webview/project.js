@@ -1630,6 +1630,18 @@
         });
     }
 
+    function _optimisticNextColumn(currentColumn) {
+        if (currentColumn === 'PLAN REVIEWED') return null;
+        const idx = _kanbanAvailableColumns.findIndex(c => c.id === currentColumn);
+        if (idx < 0 || idx >= _kanbanAvailableColumns.length - 1) return null;
+        for (let i = idx + 1; i < _kanbanAvailableColumns.length; i++) {
+            const col = _kanbanAvailableColumns[i];
+            if (col.featureOnly || col.dragDropMode === 'disabled') continue;
+            return col.id;
+        }
+        return null;
+    }
+
     function renderKanbanPlans() {
         if (!kanbanListPane) return;
 
@@ -1763,18 +1775,6 @@
                     });
                 });
             }
-
-    function _optimisticNextColumn(currentColumn) {
-        if (currentColumn === 'PLAN REVIEWED') return null;
-        const idx = _kanbanAvailableColumns.findIndex(c => c.id === currentColumn);
-        if (idx < 0 || idx >= _kanbanAvailableColumns.length - 1) return null;
-        for (let i = idx + 1; i < _kanbanAvailableColumns.length; i++) {
-            const col = _kanbanAvailableColumns[i];
-            if (col.featureOnly || col.dragDropMode === 'disabled') continue;
-            return col.id;
-        }
-        return null;
-    }
 
     const copyPromptBtn = itemDiv.querySelector('.kanban-plan-copy-prompt');
     if (copyPromptBtn) {

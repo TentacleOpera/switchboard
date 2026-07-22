@@ -85,3 +85,7 @@ Because a repo is **single-writer** (`bootstrap.ts` refuses to start a second in
 ## Completion Report
 Implemented serving browser cockpit directly from extension's `LocalApiServer` with token store (`mintBrowserToken`, single-use TTL token validation) and added the `switchboard.openInBrowser` command. Updated host capabilities, static routes, and manifest serving so editor and browser run concurrently against one single-writer server. Files changed: `src/services/TaskViewerProvider.ts`, `src/services/headlessPanelHtml.ts`, `src/extension.ts`, `package.json`. No issues encountered.
 
+
+## Review Findings
+
+Reviewer pass — **no CRITICAL/MAJOR; no fixes needed here.** Verified: `switchboard.openInBrowser` command (extension.ts) mints via `mintBrowserToken()` / `consumeBrowserToken()` (single-use + 5-min TTL, wired as `consumeOneTimeToken`), calls `getLocalApiServerPort()` (exists, TaskViewerProvider:2038) + `vscode.env.openExternal(Uri.parse(...))` per the research (no `asExternalUri`); serveStatic passes the extension's real `hostCapabilities` (`terminalDispatch/automation/orchestrator:true, secretsEntry:false`) and `repoRoot = context.extensionUri.fsPath` (install dir, not dev tree). NIT: the token is unencoded but hex (URL-safe), so moot. Files changed by review: none. Remaining risk: the live "Open in Browser" → asset-resolution-from-install-dir path is runtime-unverified (SKIP COMPILATION) — smoke it before publish.

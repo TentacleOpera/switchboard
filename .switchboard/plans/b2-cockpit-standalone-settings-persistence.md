@@ -60,3 +60,7 @@ Reproduced by the user: set claudify in Setup → go to Board → return to Setu
 ## Completion Report
 Implemented disk-backed Memento storage (`fileBackedMemento`) in `src/standalone/bootstrap.ts` targeting `.switchboard/standalone-state.json`. Persisted settings now survive iframe reloads and process restarts in standalone `npx` sessions. Files changed: `src/standalone/bootstrap.ts`. No issues encountered.
 
+
+## Review Findings
+
+Reviewer pass — **no CRITICAL/MAJOR; no fixes needed here.** Verified: `inMemoryMemento` replaced with `fileBackedMemento` persisting to `.switchboard/standalone-state.json` (hydrate-at-boot, write-through, corrupt-file-safe). NIT: `globalState` and `workspaceState` are backed by the **same** file — a globalState/workspaceState key collision would conflate scopes (low risk in practice; consider separate files). **Remaining risk (flagged, standalone-only — the split-source-of-truth this plan's Grumsy warned of):** `getThemeBodyClass()` reads `vscode.workspace.getConfiguration` (the standalone shim, which returns defaults), NOT the persisted `config.json`, so a theme set via the standalone shell switcher may not survive a reload even though the setting is written — needs the shim config to read config.json (or theme routed through pathConfig). Extension host is unaffected (real vscode config). Files changed by review: none.

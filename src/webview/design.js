@@ -65,8 +65,6 @@
         stitchSelectedElement: null,
         htmlActiveFilePath: null,
         htmlSelectedElement: null,
-        htmlSelectedFiles: new Map(),
-        htmlCanvasInFlight: false,
     };
 
     function populateWorkspaceDropdown(selectElOrId, workspaceItems, selectedValue, includeAllOption = true) {
@@ -154,13 +152,6 @@
                 content.classList.remove('active');
             }
         });
-
-        // Clear HTML multi-select when leaving the HTML Previews tab — ghost
-        // selections (enabled Make Canvas button, invisible selection) are the
-        // failure mode this prevents.
-        if (tabName !== 'html-preview') {
-            clearHtmlSelection();
-        }
 
         // Trigger updates if needed
         if (tabName === 'stitch') {
@@ -1024,10 +1015,6 @@
             const ext = d.name.substring(d.name.lastIndexOf('.')).toLowerCase();
             return ['.html', '.htm'].includes(ext);
         });
-        // Universe of selectable files — used to reconcile selection state.
-        // Search-filtered files are still "present" (just hidden), so reconcile
-        // against the pre-search set, not the filtered view.
-        const selectableDocNodes = docNodes;
 
         const search = String(state.htmlDocsSearch || '').trim().toLowerCase();
         if (search) {
@@ -1036,52 +1023,28 @@
 
         if (docNodes.length === 0 && (search || !folderPaths || folderPaths.length === 0)) {
             docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No matching HTML preview files found.</div>';
-            reconcileHtmlSelection(selectableDocNodes, sourceId);
             return;
         }
 
-        renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, (doc) => createHtmlDocCard(doc, sourceId), 'html-previews');
-        reconcileHtmlSelection(selectableDocNodes, sourceId);
-    }
-
-    function reconcileHtmlSelection(selectableDocNodes, sourceId) {
-        const presentKeys = new Set(selectableDocNodes.map(d => `${sourceId}::${d.id}`));
-        let changed = false;
-        for (const key of Array.from(state.htmlSelectedFiles.keys())) {
-            if (!presentKeys.has(key)) {
-                state.htmlSelectedFiles.delete(key);
-                changed = true;
+        const htmlFolderActions = (fp) => [
+            {
+                label: 'Link',
+                title: 'Copy folder path to clipboard',
+                onClick: () => vscode.postMessage({ type: 'linkToFolder', folderPath: fp })
+            },
+            {
+                label: '+',
+                title: 'Create canvas',
+                className: 'folder-create-btn',
+                onClick: () => {
+                    const prompt = composeCreateCanvasPrompt(fp);
+                    if (!prompt) return;
+                    vscode.postMessage({ type: 'copyHtmlTweakPrompt', prompt });
+                }
             }
-        }
-        // Re-check boxes for still-present selections (renderDocCard already sets
-        // checked state at create time, but re-renders via search/filter recreate
-        // nodes, so this is a defensive pass for any cached nodes).
-        const pane = document.getElementById('tree-pane-html');
-        if (pane) {
-            pane.querySelectorAll('.tree-node[data-selectable="html"]').forEach(node => {
-                const cb = node.querySelector('.card-checkbox');
-                if (!cb) return;
-                const key = `${node.dataset.sourceId || ''}::${node.dataset.nodeId || ''}`;
-                cb.checked = state.htmlSelectedFiles.has(key);
-            });
-        }
-        updateHtmlSelectionCount();
-    }
+        ];
 
-    function updateHtmlSelectionCount() {
-        const count = state.htmlSelectedFiles.size;
-        const countEl = document.getElementById('html-selection-count');
-        if (countEl) countEl.textContent = `${count} selected`;
-        const enabled = count >= 2 && !state.htmlCanvasInFlight;
-        const sendBtn = document.getElementById('btn-make-canvas-send');
-        const copyBtn = document.getElementById('btn-make-canvas-copy');
-        if (sendBtn) sendBtn.disabled = !enabled;
-        if (copyBtn) copyBtn.disabled = !enabled;
-    }
-
-    function clearHtmlSelection() {
-        state.htmlSelectedFiles.clear();
-        updateHtmlSelectionCount();
+        renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, (doc) => createHtmlDocCard(doc, sourceId), 'html-previews', htmlFolderActions);
     }
 
     function createHtmlDocCard(doc, sourceId) {
@@ -1093,7 +1056,6 @@
             nodeMetadata: doc.metadata,
             actions: ['Serve & Open', 'Link Doc'],
             isSelected: state.activeSource === sourceId && state.activeDocId === doc.id,
-            selectable: true,
             clickHandler: () => {
                 loadDocumentPreview(sourceId, doc.id, doc.name);
             }
@@ -1103,11 +1065,6 @@
     function populateStitchHtmlProjectSelect(projects) {
         const select = document.getElementById('stitch-html-project-select');
         if (!select) return;
-        const sorted = [...projects].sort((a, b) => {
-            const ta = a.updateTime ? new Date(a.updateTime).getTime() : 0;
-            const tb = b.updateTime ? new Date(b.updateTime).getTime() : 0;
-            return tb - ta;
-        });
         const current = state.selectedStitchHtmlProjectId || '';
         select.innerHTML = '<option value="">Select Project...</option>';
         sorted.forEach(p => {
@@ -1243,7 +1200,7 @@
         });
     }
 
-    function renderDocCard({ title, subtitle, sourceId, nodeId, nodeMetadata, actions, isSelected, clickHandler, selectable = false }) {
+    function renderDocCard({ title, subtitle, sourceId, nodeId, nodeMetadata, actions, isSelected, clickHandler }) {
         const wrapper = document.createElement('div');
         wrapper.className = 'tree-node';
         if (isSelected) {
@@ -1254,42 +1211,10 @@
         wrapper.dataset.docId = nodeId || '';
         wrapper.dataset.kind = 'document';
         wrapper.dataset.name = title;
-        wrapper.dataset.selectable = selectable ? 'html' : '';
         if (nodeMetadata) {
             if (nodeMetadata.root) wrapper.dataset.root = nodeMetadata.root;
             if (nodeMetadata.sourceFolder) wrapper.dataset.sourceFolder = nodeMetadata.sourceFolder;
             if (nodeMetadata.absolutePath) wrapper.dataset.absolutePath = nodeMetadata.absolutePath;
-        }
-
-        if (selectable) {
-            const checkbox = document.createElement('input');
-            checkbox.type = 'checkbox';
-            checkbox.className = 'card-checkbox';
-            checkbox.title = 'Select for Make Canvas';
-            const selKey = `${sourceId || ''}::${nodeId || ''}`;
-            if (state.htmlSelectedFiles.has(selKey)) {
-                checkbox.checked = true;
-            }
-            checkbox.addEventListener('change', (e) => {
-                e.stopPropagation();
-                const key = `${sourceId || ''}::${nodeId || ''}`;
-                const absolutePath = nodeMetadata?.absolutePath || '';
-                const folder = absolutePath ? absolutePath.replace(/[\\/][^\\/]+$/, '') : (nodeMetadata?.sourceFolder || '');
-                if (checkbox.checked) {
-                    state.htmlSelectedFiles.set(key, {
-                        sourceId: sourceId || '',
-                        nodeId: nodeId || '',
-                        absolutePath,
-                        name: title,
-                        folder
-                    });
-                } else {
-                    state.htmlSelectedFiles.delete(key);
-                }
-                updateHtmlSelectionCount();
-            });
-            checkbox.addEventListener('click', (e) => { e.stopPropagation(); });
-            wrapper.appendChild(checkbox);
         }
 
         const cardText = document.createElement('div');
@@ -5075,62 +5000,20 @@
         state.htmlSelectedElement = null;
     });
 
-    // ── Make Canvas: flatten selected HTML files into one inline board ──
-    function composeCanvasFromFilesPrompt() {
-        const files = Array.from(state.htmlSelectedFiles.values());
-        if (files.length < 2) return '';
-        const first = files[0];
-        const firstStem = (first.name || 'canvas').replace(/\.[^.]+$/, '');
-        const targetPath = `${first.folder}/${firstStem}-canvas.html`;
-        const fileList = files.map((f, i) => `${i + 1}. ${f.absolutePath}`).join('\n');
+    // ── Create Canvas: prompt agent to build a new self-contained HTML canvas ──
+    function composeCreateCanvasPrompt(folderPath) {
+        if (!folderPath) return '';
         return [
-            'Flatten multiple HTML files into ONE self-contained inline board.',
-            '',
-            'Selected files (in order):',
-            fileList,
-            '',
-            'Target output path: ' + targetPath,
+            'Create a new flat, self-contained inline HTML canvas document in folder: ' + folderPath,
             '',
             'Requirements (all mandatory):',
-            '1. Read each listed HTML file and extract its rendered screen (body content + scoped styles).',
-            '2. Compose ONE self-contained HTML document containing every screen. All CSS must be inlined. All local assets (<img>, fonts, CSS url(), <link rel=stylesheet href="./...">) must be embedded as data: URIs.',
-            '3. NO <iframe> elements anywhere. NO external or relative references — every <link rel=stylesheet href="https://..."> and remote <script src="https://..."> must be either inlined (fetch and embed) or stripped. Claude Artifacts CSP blocks remote refs, so leaving any remote ref breaks the upload.',
-            '4. Lay the screens out on a board (grid or sections), one caption per screen (the source filename), and leave clearly-marked slots for commentary (scope-notes, before/after spec tables) between/around screens.',
-            '5. Reference shape: daily-diary-designs.artifact.html — same structure: zero iframes, screens inline, commentary woven in. Match that pattern.',
-            '6. Write the result to the target output path so it appears in the HTML Previews list on refresh.',
-            '',
-            'The output must be a single inline doc that zooms, supports Inspect-Mode element edits, and publishes to Claude Artifacts without modification. Do not create a plan file — write the HTML file directly.'
+            '1. Create a new self-contained inline HTML file inside ' + folderPath + '.',
+            '2. Start with a minimal blank canvas/board structure (full-viewport container, ready for content).',
+            '3. ASK ME what screens, content, layout, or components to place on the canvas before generating.',
+            '4. All CSS must be inlined. NO <iframe> elements anywhere. NO external or relative references — every asset (<img>, fonts, CSS) must be embedded as data: URIs, publish-ready for Claude Artifacts.',
+            '5. Write the file to ' + folderPath + ' with a clear, descriptive filename (or ask me for a name).'
         ].join('\n');
     }
-
-    document.getElementById('btn-make-canvas-send')?.addEventListener('click', () => {
-        if (state.htmlCanvasInFlight) return;
-        const prompt = composeCanvasFromFilesPrompt();
-        if (!prompt) return;
-        state.htmlCanvasInFlight = true;
-        updateHtmlSelectionCount();
-        vscode.postMessage({
-            type: 'sendHtmlTweakPrompt',
-            prompt,
-            workspaceRoot: state.designWorkspaceRootFilter
-        });
-        // Release guard on next tick — the transport is fire-and-forget; the
-        // agent writes the file asynchronously and the watcher refreshes the list.
-        setTimeout(() => {
-            state.htmlCanvasInFlight = false;
-            updateHtmlSelectionCount();
-        }, 1500);
-    });
-
-    document.getElementById('btn-make-canvas-copy')?.addEventListener('click', () => {
-        if (state.htmlCanvasInFlight) return;
-        const prompt = composeCanvasFromFilesPrompt();
-        if (!prompt) return;
-        vscode.postMessage({
-            type: 'copyHtmlTweakPrompt',
-            prompt
-        });
-    });
 
     document.getElementById('stitch-html-btn-edit')?.addEventListener('click', () => {
         if (state.stitchBusy) return;
@@ -5754,16 +5637,6 @@
     document.getElementById('btn-copy-design-html-artifact-prompt')?.addEventListener('click', () => {
         const { prompt, error } = buildDesignHtmlArtifactPrompt();
         vscode.postMessage({ type: 'copyClaudeArtifactPrompt', prompt, error });
-    });
-
-    document.getElementById('btn-send-design-html-artifact-prompt')?.addEventListener('click', () => {
-        const { prompt, error } = buildDesignHtmlArtifactPrompt();
-        vscode.postMessage({
-            type: 'sendClaudeArtifactPrompt',
-            prompt,
-            error,
-            workspaceRoot: state.htmlWorkspaceRootFilter || undefined
-        });
     });
 
     function applySidebarState() {
