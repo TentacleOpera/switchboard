@@ -58,3 +58,39 @@ Same root cause as P1/P2: arms push then `break`; `planning: {}` empty. The tick
 - Headless Planning suite covers this family and **asserts payload fields**.
 - `parity:check` / `push-routing:check` / `compile-tests` green.
 - Manual: `POST /project/verb/clickupLoadLists` / `linearLoadProjects` return data in-body; a ticket create + move + comment round-trips via `POST /project/verb/*` identically to the webview; a malformed ticket payload is rejected.
+
+## Completion Summary
+
+**Status:** ✅ Complete — Planning Layer-1 read-arm conversion done (P3 is the final slice; `planning` ratchet at its true residual floor).
+
+### Read arms converted to return-in-body (20 arms)
+`listTicketsFolders`, `browseTicketsFolder`, `linearLoadProject`, `linearLoadProjects`, `linearLoadTaskDetails`, `clickupLoadSpaces`, `clickupLoadFolders`, `clickupLoadLists`, `clickupLoadProject`, `clickupLoadTaskDetails`, `loadTicketAssignees`, `loadTicketMembers`, `linearLoadAutomationCatalog`, `clickupLoadSpaceTags`, `clickupLoadListStatuses`, `listLocalTicketFiles`, `getTicketSyncStatuses`, `readLocalTicketFile`, `fetchMoveTargets`, `loadTicketComments`, `importAllTickets`, `refreshTicketsDelta`, `importTicketSubtasks`. Each keeps its webview push additive and returns the pushed fields in-body; failure/error paths return `{success:false, error, …}`. The auto-sync/delta-pull state transitions (`_ticketsCurrentSelection`, cursor `setMeta`) and timer lifecycle are untouched — only the terminal `break` became `return`.
+
+### Write schemas appended to PLANNING_VERB_SCHEMAS (30 verbs)
+`clickupCreateTask`, `clickupUpdateTaskAssignees`/`Priority`/`Tags`, `clickupSaveSpaceSelection`/`FolderSelection`/`ListSelection`, `linearCreateIssue`, `linearUpdateIssueAssignee`/`Priority`/`Labels`, `linearSaveProjectSelection`, `editTicket`, `moveTicket`, `changeTicketStatus`, `deleteTicketConfirmed`, `postTicketComment`/`postTicketReply`/`submitComment`, `pushTicket`, `syncAllTickets`/`syncToSource`, `saveTicketsFolder`/`saveTicketsFolderPaths`, `setupTicketsWatcher`, `switchTicketsProvider`, `ticketAttachImage`, `saveLocalTicketFile`, `addTicketsFolder`/`removeTicketsFolder`. Permissive/field-accurate — `required` only on fields the arm strictly dereferences. (`saveTicketsAutoSync` has no case/allowlist entry — skipped.)
+
+### Ratchet ceiling
+Planning break count: **283 → 231** (lowered by 52). `verb-return-contract-baseline.json` updated. The 7 residual "read-arm breaks" the analyzer reports are write/action arms whose names match the read regex (`createPlansDownloadZip`, `uploadPlanAttachment`, `setPlanAutoFetchEnabled`, `planAutoFetchRunNow`, `clickupSaveListSelection`, `changeTicketStatus`, `setUploadLocation`) — all legitimate writes that keep `break` and now carry schemas. No nested-control-flow read breaks remain; 231 is the true residual floor.
+
+### Test suite
+`verb-engine-planning-headless.test.js`: 16 new P3 tests (11 read-arm return-in-body + push + host-agnostic guards, 5 schema-validation rejection tests). Total suite now 41 tests. Not executed here per SKIP TESTS / SKIP COMPILATION directives; asserts payload fields, push-additive, and schema rejection.
+
+### DoD checks
+- `verb-returns:check` ✅ (Planning 231 ≤ ceiling 231)
+- `parity:check` ✅ (allowlist ≡ catalog)
+- `push-routing:check` ✅ (Planning 3 = baseline 3)
+- `compile-tests` ⏭ skipped per directive
+- Manual ticket create/move/comment round-trip ⏭ not executed (requires live ClickUp/Linear tokens + B1 HTTP wiring)
+
+### Files changed
+- `src/services/PlanningPanelProvider.ts` — 20 read arms converted to return-in-body.
+- `src/services/verbSchemas.ts` — 30 tickets write schemas appended to `PLANNING_VERB_SCHEMAS`.
+- `src/test/verb-engine-planning-headless.test.js` — 16 P3 tests added.
+- `scripts/verb-return-contract-baseline.json` — Planning ceiling 283 → 231.
+- `.switchboard/plans/a2b-verb-engine-06-planning-panel.md` — Review Findings updated (Layer-1 complete).
+- `.switchboard/features/verb-engine-project-panel-planning-burndown-browser-73713928-ef30-4893-aba5-61bb25fccddf.md` — feature Review Findings updated.
+
+### Issues encountered
+- `saveTicketsAutoSync` (listed in plan scope) has no `case` label and no allowlist entry — skipped (not a regression; the verb doesn't exist).
+- `importTicketSubtasks` was a silent best-effort arm with no push; converted its `break` paths to `return { success:true, enriched:false, reason }` (webview path ignores the return; no push before or after — byte-compat preserved).
+- `loadTicketComments`/`importAllTickets`/`refreshTicketsDelta` return `{ success: !!result.success, ...res }` with `success` removed from `res` to avoid the spread overriding the coerced boolean (push preserves the original `result.success` value for byte-compat).

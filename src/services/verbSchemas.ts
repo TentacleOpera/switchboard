@@ -727,6 +727,231 @@ export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
             enabled: { type: 'boolean' },
         },
     },
+    // ─── Tickets family (P3) — ClickUp / Linear writes + provider config ───
+    clickupCreateTask: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            listId: { type: ['string', 'number'] },
+            parentId: { type: ['string', 'number'] },
+            title: { type: 'string' },
+            description: { type: 'string' },
+            status: { type: 'string' },
+            priority: { type: 'number' },
+            assignees: { type: 'array' },
+        },
+    },
+    clickupUpdateTaskAssignees: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            taskId: { type: ['string', 'number'], required: true },
+            currentAssigneeIds: { type: 'array' },
+            desiredAssigneeIds: { type: 'array' },
+        },
+    },
+    clickupUpdateTaskPriority: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            taskId: { type: ['string', 'number'], required: true },
+            priority: { type: 'number' },
+        },
+    },
+    clickupUpdateTaskTags: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            taskId: { type: ['string', 'number'], required: true },
+            tags: { type: 'array' },
+        },
+    },
+    clickupSaveSpaceSelection: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            spaceId: { type: ['string', 'number'] },
+            spaceName: { type: 'string' },
+        },
+    },
+    clickupSaveFolderSelection: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            folderId: { type: ['string', 'number'] },
+            folderName: { type: 'string' },
+        },
+    },
+    clickupSaveListSelection: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            listId: { type: ['string', 'number'] },
+            listName: { type: 'string' },
+            spaceId: { type: ['string', 'number'] },
+            spaceName: { type: 'string' },
+            folderId: { type: ['string', 'number'] },
+            folderName: { type: 'string' },
+        },
+    },
+    linearCreateIssue: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            projectName: { type: 'string' },
+            title: { type: 'string' },
+            description: { type: 'string' },
+            parentId: { type: 'string' },
+            status: { type: 'string' },
+            priority: { type: 'number' },
+            assigneeId: { type: 'string' },
+        },
+    },
+    linearUpdateIssueAssignee: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            issueId: { type: 'string', required: true },
+            assigneeId: { type: 'string' },
+        },
+    },
+    linearUpdateIssuePriority: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            issueId: { type: 'string', required: true },
+            priority: { type: 'number' },
+        },
+    },
+    linearUpdateIssueLabels: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            issueId: { type: 'string', required: true },
+            labelIds: { type: 'array' },
+        },
+    },
+    linearSaveProjectSelection: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            projectName: { type: 'string' },
+        },
+    },
+    editTicket: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            provider: { type: 'string', required: true },
+            id: { type: 'string', required: true },
+        },
+    },
+    moveTicket: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            provider: { type: 'string', required: true },
+            ticketId: { type: 'string', required: true },
+            targetId: { type: ['string', 'number'], required: true },
+        },
+    },
+    changeTicketStatus: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            provider: { type: 'string', required: true },
+            id: { type: 'string', required: true },
+            statusId: { type: ['string', 'number'], required: true },
+        },
+    },
+    deleteTicketConfirmed: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            provider: { type: 'string', required: true },
+            id: { type: 'string', required: true },
+        },
+    },
+    postTicketComment: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            provider: { type: 'string', required: true },
+            id: { type: 'string', required: true },
+            comment: { type: 'string' },
+            mentions: { type: 'array' },
+        },
+    },
+    postTicketReply: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            provider: { type: 'string', required: true },
+            id: { type: 'string', required: true },
+            commentId: { type: 'string', required: true },
+            commentText: { type: 'string' },
+            mentions: { type: 'array' },
+        },
+    },
+    submitComment: {
+        fields: {
+            sessionId: { type: 'string' },
+            topic: { type: 'string' },
+            planFileAbsolute: { type: 'string' },
+            selectedText: { type: 'string' },
+            comment: { type: 'string' },
+        },
+    },
+    pushTicket: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            provider: { type: 'string', required: true },
+            id: { type: 'string', required: true },
+        },
+    },
+    syncAllTickets: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            provider: { type: 'string' },
+        },
+    },
+    syncToSource: {
+        fields: {
+            slugPrefix: { type: 'string', required: true },
+        },
+    },
+    saveTicketsFolder: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            folderPath: { type: 'string' },
+        },
+    },
+    saveTicketsFolderPaths: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            paths: { type: 'array' },
+        },
+    },
+    setupTicketsWatcher: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    switchTicketsProvider: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            provider: { type: 'string', required: true },
+        },
+    },
+    ticketAttachImage: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            provider: { type: 'string', required: true },
+            id: { type: 'string', required: true },
+            requestId: { type: ['string', 'number'] },
+        },
+    },
+    saveLocalTicketFile: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            provider: { type: 'string', required: true },
+            id: { type: 'string', required: true },
+            content: { type: 'string' },
+        },
+    },
+    addTicketsFolder: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    removeTicketsFolder: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            folderPath: { type: 'string', required: true },
+        },
+    },
 };
 
 export const SETUP_VERB_SCHEMAS: Record<string, VerbSchema> = {

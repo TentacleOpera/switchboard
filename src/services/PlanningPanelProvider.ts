@@ -2932,8 +2932,9 @@ Start by checking which documents exist, then present the menu.`;
                 const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
                 const service = this._getLocalFolderService(root);
                 const paths = service.getTicketsFolderPaths();
-                this.postMessageToWebview({ type: 'ticketsFoldersListed', paths, workspaceRoot: root });
-                break;
+                const res = { type: 'ticketsFoldersListed', paths, workspaceRoot: root };
+                this.postMessageToWebview(res);
+                return { success: true, ...res };
             }
             case 'saveTicketsFolderPaths': {
                 const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
@@ -2954,9 +2955,11 @@ Start by checking which documents exist, then present the menu.`;
                     openLabel: 'Select Tickets Folder'
                 });
                 if (result && result.length > 0) {
-                    this.postMessageToWebview({ type: 'browseTicketsFolderResult', path: result[0], workspaceRoot: root });
+                    const res = { type: 'browseTicketsFolderResult', path: result[0], workspaceRoot: root };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 }
-                break;
+                return { success: true, type: 'browseTicketsFolderResult', path: null, workspaceRoot: root };
             }
             case 'saveTicketsFolder': {
                 const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
@@ -4912,27 +4915,29 @@ Please format the updated output document strictly as follows:
             case 'linearLoadProject': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'linearProjectLoaded',
                         status: 'error',
                         issues: [],
                         message: 'No workspace open.',
                         workspaceRoot: msg.workspaceRoot || undefined
-                    });
-                    break;
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
 
                 const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
                 const config = await linear.loadConfig();
                 if (!config?.setupComplete) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'linearProjectLoaded',
                         status: 'setup-required',
                         issues: [],
                         message: 'Set up Linear in Setup before using the Project tab.',
                         workspaceRoot
-                    });
-                    break;
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
 
                 try {
@@ -4948,79 +4953,88 @@ Please format the updated output document strictly as follows:
                         : includeNames.length > 0
                             ? `${includeNames.slice(0, 2).join(', ')}${includeNames.length > 2 ? '...' : ''}`
                             : `${config.teamName || 'Configured Linear Team'} (team-wide)`;
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'linearProjectLoaded',
                         status: 'loaded',
                         issues,
                         projectName,
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 } catch (error) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'linearError',
                         scope: 'project',
                         error: error instanceof Error ? error.message : String(error),
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
-                break;
             }
             case 'linearLoadProjects': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'linearProjectsLoaded',
                         status: 'error',
                         projects: [],
                         message: 'No workspace open.',
                         workspaceRoot: msg.workspaceRoot || undefined
-                    });
-                    break;
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
 
                 const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
                 const config = await linear.loadConfig();
                 if (!config?.setupComplete) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'linearProjectsLoaded',
                         status: 'setup-required',
                         projects: [],
                         message: 'Set up Linear in Setup before using the Project tab.',
                         workspaceRoot
-                    });
-                    break;
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
 
                 try {
                     const projects = await linear.getAvailableProjects();
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'linearProjectsLoaded',
                         status: 'loaded',
                         projects,
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 } catch (error) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'linearError',
                         scope: 'project',
                         error: error instanceof Error ? error.message : String(error),
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
-                break;
             }
             case 'linearLoadTaskDetails': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const issueId = String(msg.issueId || '').trim();
                 if (!workspaceRoot || !issueId) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'linearError',
                         scope: 'task',
                         issueId,
                         error: 'Select a Linear issue first.',
                         workspaceRoot: workspaceRoot || msg.workspaceRoot || undefined
-                    });
-                    break;
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
 
                 try {
@@ -5042,15 +5056,16 @@ Please format the updated output document strictly as follows:
                     }
 
                     if (!issue) {
-                        this.postMessageToWebview({
+                        const res = {
                             type: 'linearError',
                             scope: 'task',
                             issueId,
                             error: `This Linear issue could not be found. It may have been deleted, or your token may lack access to it.`,
                             kind: 'deleted',
                             workspaceRoot
-                        });
-                        break;
+                        };
+                        this.postMessageToWebview(res);
+                        return { success: false, ...res };
                     }
 
                     let renderedDescriptionHtml = '';
@@ -5061,7 +5076,7 @@ Please format the updated output document strictly as follows:
                         renderedDescriptionHtml = '';
                     }
 
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'linearTaskDetailsLoaded',
                         issue,
                         subtasks,
@@ -5069,7 +5084,9 @@ Please format the updated output document strictly as follows:
                         attachments,
                         renderedDescriptionHtml,
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 } catch (error: any) {
                     const errMsg = error?.message || String(error);
                     const statusMatch = errMsg.match(/HTTP (\d{3})/);
@@ -5077,16 +5094,17 @@ Please format the updated output document strictly as follows:
                         ? error.statusCode
                         : (statusMatch ? Number(statusMatch[1]) : null);
                     const kind = statusCode != null ? classifyHttpError(statusCode) : 'generic';
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'linearError',
                         scope: 'task',
                         issueId,
                         error: errMsg,
                         kind,
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
-                break;
             }
             case 'linearSaveProjectSelection': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
@@ -5109,96 +5127,109 @@ Please format the updated output document strictly as follows:
             case 'clickupLoadSpaces': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'clickupError',
                         scope: 'hierarchy',
                         error: 'No workspace folder found',
                         workspaceRoot: msg.workspaceRoot || undefined
-                    });
-                    break;
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
                 const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
 
                 try {
                     const spaces = await clickUp.getSpaces();
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'clickupSpacesLoaded',
                         spaces,
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 } catch (error) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'clickupError',
                         scope: 'hierarchy',
                         error: error instanceof Error ? error.message : 'Failed to load Spaces',
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
-                break;
             }
             case 'clickupLoadFolders': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'clickupError',
                         scope: 'hierarchy',
                         error: 'No workspace folder found',
                         workspaceRoot: msg.workspaceRoot || undefined
-                    });
-                    break;
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
                 const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
 
                 try {
                     const folders = await clickUp.getFolders(msg.spaceId);
-                    this.postMessageToWebview({
+                    const directLists = await clickUp.getLists(msg.spaceId);
+                    const res = {
                         type: 'clickupFoldersLoaded',
                         spaceId: msg.spaceId,
                         folders,
-                        directLists: await clickUp.getLists(msg.spaceId),
+                        directLists,
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 } catch (error) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'clickupError',
                         scope: 'hierarchy',
                         error: error instanceof Error ? error.message : 'Failed to load Folders',
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
-                break;
             }
             case 'clickupLoadLists': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'clickupError',
                         scope: 'hierarchy',
                         error: 'No workspace folder found',
                         workspaceRoot: msg.workspaceRoot || undefined
-                    });
-                    break;
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
                 const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
 
                 try {
                     const lists = await clickUp.getLists(msg.spaceId, msg.folderId);
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'clickupListsLoaded',
                         spaceId: msg.spaceId,
                         folderId: msg.folderId,
                         lists,
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 } catch (error) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'clickupError',
                         scope: 'hierarchy',
                         error: error instanceof Error ? error.message : 'Failed to load Lists',
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
-                break;
             }
             case 'invalidateClickUpCache': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
@@ -5213,40 +5244,43 @@ Please format the updated output document strictly as follows:
                 const loadSeq = msg.loadSeq;
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'clickupProjectLoaded',
                         status: 'error',
                         message: 'No workspace open.',
                         loadSeq,
                         workspaceRoot: msg.workspaceRoot || undefined
-                    });
-                    break;
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
 
                 const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
                 const config = await clickUp.loadConfig();
 
                 if (!config?.setupComplete) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'clickupProjectLoaded',
                         status: 'setup-required',
                         message: 'ClickUp setup is incomplete. Please complete setup in the Setup panel.',
                         loadSeq,
                         workspaceRoot
-                    });
-                    break;
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
 
                 const listId = msg.listId || config.selectedListId;
                 if (!listId) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'clickupProjectLoaded',
                         status: 'setup-required',
                         message: 'No list selected. Please select a Space, Folder, and List to view tasks.',
                         loadSeq,
                         workspaceRoot
-                    });
-                    break;
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
 
                 try {
@@ -5258,35 +5292,39 @@ Please format the updated output document strictly as follows:
                         archived: false
                     });
 
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'clickupProjectLoaded',
                         status: 'loaded',
                         tasks: tasks.map((t: any) => this._mapClickUpTaskToSidebar(t)),
                         listName: config.selectedListName || 'Unknown List',
                         loadSeq,
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 } catch (error) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'clickupError',
                         scope: 'project',
                         error: error instanceof Error ? error.message : 'Failed to load ClickUp project',
                         loadSeq,
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
-                break;
             }
             case 'clickupLoadTaskDetails': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'clickupError',
                         scope: 'task',
                         error: 'No workspace folder found',
                         workspaceRoot: msg.workspaceRoot || undefined
-                    });
-                    break;
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
                 const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
 
@@ -5301,7 +5339,7 @@ Please format the updated output document strictly as follows:
                         renderedDescriptionHtml = '';
                     }
 
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'clickupTaskDetailsLoaded',
                         task: this._mapClickUpTaskToSidebar(details.task),
                         subtasks: details.subtasks.map((s: any) => this._mapClickUpTaskToSidebar(s)),
@@ -5309,7 +5347,9 @@ Please format the updated output document strictly as follows:
                         attachments: details.attachments.map((a: any) => this._mapClickUpAttachment(a)),
                         renderedDescriptionHtml,
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 } catch (error: any) {
                     const errMsg = error?.message || String(error);
                     const statusMatch = errMsg.match(/HTTP (\d{3})/);
@@ -5317,16 +5357,17 @@ Please format the updated output document strictly as follows:
                         ? error.statusCode
                         : (statusMatch ? Number(statusMatch[1]) : null);
                     const kind = statusCode != null ? classifyHttpError(statusCode) : 'generic';
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'clickupError',
                         scope: 'task',
                         taskId: msg.taskId,
                         error: errMsg,
                         kind,
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
-                break;
             }
             case 'linearUpdateIssueLabels': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
@@ -5408,14 +5449,15 @@ Please format the updated output document strictly as follows:
                 let listId = msg.listId ? String(msg.listId).trim() : '';
 
                 if (!workspaceRoot || !id || !provider) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'ticketAssigneesError',
                         id,
                         provider,
                         error: 'Invalid request parameters.',
                         workspaceRoot
-                    });
-                    break;
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
 
                 try {
@@ -5435,36 +5477,40 @@ Please format the updated output document strictly as follows:
                             members = await clickup.getListMembers(listId);
                         }
                     }
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'ticketAssigneesLoaded',
                         provider,
                         id,
                         members,
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 } catch (error) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'ticketAssigneesError',
                         provider,
                         id,
                         error: error instanceof Error ? error.message : String(error),
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
-                break;
             }
             case 'loadTicketMembers': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const provider = msg.provider;
                 let listId = msg.listId ? String(msg.listId).trim() : '';
                 if (!workspaceRoot || !provider) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'ticketMembersError',
                         provider,
                         error: 'Invalid request parameters.',
                         workspaceRoot
-                    });
-                    break;
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
                 try {
                     let members: any[] = [];
@@ -5480,21 +5526,24 @@ Please format the updated output document strictly as follows:
                             members = [];
                         }
                     }
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'ticketMembersLoaded',
                         provider,
                         members,
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 } catch (error) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'ticketMembersError',
                         provider,
                         error: error instanceof Error ? error.message : String(error),
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
-                break;
             }
             case 'linearUpdateIssueAssignee': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
@@ -5657,70 +5706,79 @@ Please format the updated output document strictly as follows:
             }
             case 'linearLoadAutomationCatalog': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (!workspaceRoot) { break; }
+                if (!workspaceRoot) { return { success: false, error: 'No workspace folder found' }; }
                 try {
                     const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
                     const catalog = await linear.getAutomationCatalog();
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'linearAutomationCatalogLoaded',
                         labels: catalog.labels,
                         states: catalog.states,
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 } catch (error) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'linearError',
                         scope: 'task',
                         error: error instanceof Error ? error.message : String(error),
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
-                break;
             }
             case 'clickupLoadSpaceTags': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const spaceId = String(msg.spaceId || '').trim();
-                if (!workspaceRoot || !spaceId) { break; }
+                if (!workspaceRoot || !spaceId) { return { success: false, error: 'Invalid workspace or space id' }; }
                 try {
                     const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
                     const tags = await clickUp.getSpaceTags(spaceId);
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'clickupSpaceTagsLoaded',
                         tags,
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 } catch (error) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'clickupError',
                         scope: 'task',
                         error: error instanceof Error ? error.message : String(error),
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
-                break;
             }
             case 'clickupLoadListStatuses': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const listId = String(msg.listId || '').trim();
-                if (!workspaceRoot || !listId) { break; }
+                if (!workspaceRoot || !listId) { return { success: false, error: 'Invalid workspace or list id' }; }
                 try {
                     const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
                     const statuses = await clickUp.getListStatuses(listId);
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'clickupListStatusesLoaded',
                         statuses,
                         listId,
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 } catch (error) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'clickupError',
                         scope: 'task',
                         error: error instanceof Error ? error.message : String(error),
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
-                break;
             }
             case 'clickupSaveSpaceSelection': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
@@ -5881,7 +5939,9 @@ Please format the updated output document strictly as follows:
             case 'importAllTickets': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const { provider, ids, listId, projectId, workspaceId, page, append, importMode } = msg;
-                if (!workspaceRoot) break;
+                if (!workspaceRoot) {
+                    return { success: false, error: 'No workspace root resolved', type: 'importAllTicketsComplete', importMode, provider, listId, projectId, page };
+                }
                 // Track the current selection so the auto-sync delta-pull timer
                 // knows what to poll.
                 if (importMode === 'document' && !ids) {
@@ -5920,9 +5980,8 @@ Please format the updated output document strictly as follows:
                     } else if ((result.failCount || 0) > 0) {
                         this._seams().ui.showWarningMessage(`Import all (${importMode}): ${result.successCount} imported, ${result.failCount} failed — ${errDetail}`);
                     }
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'importAllTicketsComplete',
-                        success: result.success,
                         successCount: result.successCount,
                         failCount: result.failCount,
                         errors: result.errors,
@@ -5932,13 +5991,14 @@ Please format the updated output document strictly as follows:
                         listId,
                         projectId,
                         page
-                    });
+                    };
+                    this.postMessageToWebview({ ...res, success: result.success });
+                    return { success: !!result.success, ...res };
                 } catch (error) {
                     const errMsg = error instanceof Error ? error.message : String(error);
                     this._seams().ui.showErrorMessage(`Import all (${importMode}) failed: ${errMsg}`);
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'importAllTicketsComplete',
-                        success: false,
                         error: errMsg,
                         importMode,
                         workspaceRoot,
@@ -5946,14 +6006,17 @@ Please format the updated output document strictly as follows:
                         listId,
                         projectId,
                         page
-                    });
+                    };
+                    this.postMessageToWebview({ ...res, success: false });
+                    return { success: false, ...res };
                 }
-                break;
             }
             case 'refreshTicketsDelta': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const { provider, listId, projectId } = msg;
-                if (!workspaceRoot) break;
+                if (!workspaceRoot) {
+                    return { success: false, error: 'No workspace root resolved', type: 'importAllTicketsComplete', importMode: 'document', provider, listId, projectId };
+                }
                 // Track the current selection so the auto-sync delta-pull timer
                 // knows what to poll.
                 this._ticketsCurrentSelection.set(workspaceRoot, { provider, listId, projectId });
@@ -6029,9 +6092,8 @@ Please format the updated output document strictly as follows:
                         this._seams().ui.showWarningMessage(`Refresh: ${result.successCount} updated, ${result.failCount} failed — ${errDetail}`);
                     }
 
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'importAllTicketsComplete',
-                        success: result.success,
                         successCount: result.successCount,
                         failCount: result.failCount,
                         deletedCount: result.deletedCount,
@@ -6042,22 +6104,24 @@ Please format the updated output document strictly as follows:
                         listId,
                         projectId,
                         isDelta: isDeltaRefresh
-                    });
+                    };
+                    this.postMessageToWebview({ ...res, success: result.success });
+                    return { success: !!result.success, ...res };
                 } catch (error) {
                     const errMsg = error instanceof Error ? error.message : String(error);
                     this._seams().ui.showErrorMessage(`Refresh failed: ${errMsg}`);
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'importAllTicketsComplete',
-                        success: false,
                         error: errMsg,
                         importMode: 'document',
                         workspaceRoot,
                         provider,
                         listId,
                         projectId
-                    });
+                    };
+                    this.postMessageToWebview({ ...res, success: false });
+                    return { success: false, ...res };
                 }
-                break;
             }
             case 'openExternalUrl': {
                 const url = msg.url as string;
@@ -6201,8 +6265,9 @@ Please format the updated output document strictly as follows:
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const provider = (msg.provider as 'clickup' | 'linear') || 'clickup';
                 if (!workspaceRoot) {
-                    this.postMessageToWebview({ type: 'localTicketFilesListed', provider, tickets: [] });
-                    break;
+                    const res = { type: 'localTicketFilesListed', provider, tickets: [] };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
                 const ticketDirs = this._getTicketDocumentDirs(workspaceRoot, provider);
                 const tickets: any[] = [];
@@ -6374,18 +6439,23 @@ Please format the updated output document strictly as follows:
                     }
                 }
 
-                this.postMessageToWebview({ type: 'localTicketFilesListed', provider, tickets });
-                break;
+                const res = { type: 'localTicketFilesListed', provider, tickets };
+                this.postMessageToWebview(res);
+                return { success: true, ...res };
             }
             case 'getTicketSyncStatuses': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const provider = (msg.provider as 'clickup' | 'linear') || 'clickup';
                 const ids: string[] = msg.ids || [];
-                if (!workspaceRoot || ids.length === 0) break;
+                if (!workspaceRoot || ids.length === 0) {
+                    return { success: false, error: 'Missing workspaceRoot or ids', type: 'ticketSyncStatusesLoaded', provider, statuses: {} };
+                }
                 if (!this._cacheService && workspaceRoot) {
                     this._cacheService = this._adapterFactories.getCacheService(workspaceRoot);
                 }
-                if (!this._cacheService) break;
+                if (!this._cacheService) {
+                    return { success: false, error: 'No cache service', type: 'ticketSyncStatusesLoaded', provider, statuses: {} };
+                }
                 const statuses: Record<string, 'synced' | 'modified' | 'local-only'> = {};
                 try {
                     const dbTickets = await this._cacheService.getImportedTickets();
@@ -6399,21 +6469,24 @@ Please format the updated output document strictly as follows:
                 } catch (err) {
                     console.error('[PlanningPanelProvider] getTicketSyncStatuses error:', err);
                 }
-                this.postMessageToWebview({ type: 'ticketSyncStatusesLoaded', provider, statuses });
-                break;
+                const res = { type: 'ticketSyncStatusesLoaded', provider, statuses };
+                this.postMessageToWebview(res);
+                return { success: true, ...res };
             }
             case 'readLocalTicketFile': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const provider = msg.provider as 'clickup' | 'linear';
                 const id = msg.id;
                 if (!workspaceRoot || !provider || !id) {
-                    this.postMessageToWebview({ type: 'localTicketFileRead', provider, id, success: false });
-                    break;
+                    const res = { type: 'localTicketFileRead', provider, id, success: false };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
                 const filePath = await this._findTicketFilePath(workspaceRoot, provider, id);
                 if (!filePath) {
-                    this.postMessageToWebview({ type: 'localTicketFileRead', provider, id, success: false });
-                    break;
+                    const res = { type: 'localTicketFileRead', provider, id, success: false };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
                 try {
                     const raw = fs.readFileSync(filePath, 'utf8');
@@ -6423,11 +6496,14 @@ Please format the updated output document strictly as follows:
                     // Rewrite local image paths to webview-accessible URIs for display only.
                     // rawContent preserves original local paths for edit mode + push flow.
                     const displayContent = this._rewriteLocalImagePaths(content, path.dirname(filePath));
-                    this.postMessageToWebview({ type: 'localTicketFileRead', provider, id, success: true, title, content: displayContent, rawContent: content });
+                    const res = { type: 'localTicketFileRead', provider, id, success: true, title, content: displayContent, rawContent: content };
+                    this.postMessageToWebview(res);
+                    return { success: true, ...res };
                 } catch {
-                    this.postMessageToWebview({ type: 'localTicketFileRead', provider, id, success: false });
+                    const res = { type: 'localTicketFileRead', provider, id, success: false };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
-                break;
             }
             case 'ticketAttachImage': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
@@ -6484,9 +6560,9 @@ Please format the updated output document strictly as follows:
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const provider = msg.provider as 'clickup' | 'linear';
                 const id = msg.id;
-                if (!workspaceRoot || !provider || !id) { break; }
+                if (!workspaceRoot || !provider || !id) { return { success: true, enriched: false, reason: 'missing-params' }; }
                 const filePath = await this._findTicketFilePath(workspaceRoot, provider, id);
-                if (!filePath) { break; } // parent isn't a local file yet — nothing to enrich
+                if (!filePath) { return { success: true, enriched: false, reason: 'no-parent-file' }; } // parent isn't a local file yet — nothing to enrich
                 try {
                     if (!this._cacheService) {
                         this._cacheService = this._adapterFactories.getCacheService(workspaceRoot);
@@ -6494,7 +6570,7 @@ Please format the updated output document strictly as follows:
                     const dbTickets = await this._cacheService.getImportedTickets();
                     const entry = dbTickets.find((t: any) => t.slugPrefix === `${provider}_${id}`);
                     if (entry && this._ticketSyncStatusFromTimestamps(filePath, entry.lastSyncedAt) === 'modified') {
-                        break; // locally modified — leave it alone (subtasks still show in the live detail view)
+                        return { success: true, enriched: false, reason: 'locally-modified' }; // locally modified — leave it alone (subtasks still show in the live detail view)
                     }
                 } catch { /* fall through and attempt the enrich */ }
                 try {
@@ -6502,10 +6578,11 @@ Please format the updated output document strictly as follows:
                         'switchboard.importTaskAsDocument',
                         { workspaceRoot, provider, id, includeSubtasks: true }
                     );
+                    return { success: true, enriched: true };
                 } catch (e) {
                     console.warn('[PlanningPanel] importTicketSubtasks failed:', e);
+                    return { success: false, enriched: false, error: e instanceof Error ? e.message : String(e) };
                 }
-                break;
             }
             case 'syncAllTickets': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
@@ -6668,8 +6745,9 @@ Please format the updated output document strictly as follows:
                     const { provider, ticketId, refresh } = msg;
                     const cached = this._moveTargetsCache.get(provider);
                     if (!refresh && cached && Date.now() - cached.at < PlanningPanelProvider.MOVE_TARGETS_TTL_MS) {
-                        this.postMessageToWebview({ type: 'moveTargetsResult', provider, ticketId, targets: cached.targets });
-                        break;
+                        const res = { type: 'moveTargetsResult', provider, ticketId, targets: cached.targets };
+                        this.postMessageToWebview(res);
+                        return { success: true, ...res };
                     }
                     if (provider === 'clickup') {
                         const clickUpService = this._adapterFactories.getClickUpSyncService(workspaceRoot);
@@ -6689,19 +6767,24 @@ Please format the updated output document strictly as follows:
                             }
                         }
                         this._moveTargetsCache.set('clickup', { at: Date.now(), targets });
-                        this.postMessageToWebview({ type: 'moveTargetsResult', provider, ticketId, targets });
+                        const res = { type: 'moveTargetsResult', provider, ticketId, targets };
+                        this.postMessageToWebview(res);
+                        return { success: true, ...res };
                     } else {
                         const linearService = this._adapterFactories.getLinearSyncService(workspaceRoot);
                         const projects = await linearService.getAvailableProjects();
                         const targets = projects.map((p: { id: string; name: string }) => ({ id: p.id, name: p.name, path: p.name }));
                         this._moveTargetsCache.set('linear', { at: Date.now(), targets });
-                        this.postMessageToWebview({ type: 'moveTargetsResult', provider, ticketId, targets });
+                        const res = { type: 'moveTargetsResult', provider, ticketId, targets };
+                        this.postMessageToWebview(res);
+                        return { success: true, ...res };
                     }
                 } catch (err) {
                     console.error('[PlanningPanelProvider] Failed to fetch move targets:', err);
-                    this.postMessageToWebview({ type: 'moveTargetsResult', provider: msg.provider, ticketId: msg.ticketId, targets: [], error: String(err) });
+                    const res = { type: 'moveTargetsResult', provider: msg.provider, ticketId: msg.ticketId, targets: [], error: String(err) };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
-                break;
             }
             case 'moveTicket': {
                 try {
@@ -6851,9 +6934,8 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         'switchboard.loadTicketComments',
                         { workspaceRoot, provider, id }
                     );
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'ticketCommentsLoaded',
-                        success: result.success,
                         id,
                         provider,
                         threads: result.threads || [],
@@ -6861,9 +6943,11 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         threadingSupported: result.threadingSupported,
                         error: result.error,
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview({ ...res, success: result.success });
+                    return { success: !!result.success, ...res };
                 } catch (error) {
-                    this.postMessageToWebview({
+                    const res = {
                         type: 'ticketCommentsLoaded',
                         success: false,
                         id,
@@ -6872,9 +6956,10 @@ Read the current content above. Determine what's missing. Produce a complete fea
                         members: [],
                         error: error instanceof Error ? error.message : String(error),
                         workspaceRoot
-                    });
+                    };
+                    this.postMessageToWebview(res);
+                    return { success: false, ...res };
                 }
-                break;
             }
             case 'postTicketReply': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
