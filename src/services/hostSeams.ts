@@ -21,6 +21,8 @@ import { SwitchboardCommandRegistry, switchboardCommandRegistry } from './comman
 // Abstracts the 3 config-read `require('vscode')` sites in KanbanDatabase.ts
 // (:914-918, :6897-6901, :6911-6921) + workspace root resolution.
 
+export type ConfigChangeListener = (key: string, value: any, originatorId?: string) => void;
+
 export interface HostPathConfigProvider {
     /** The workspace root this provider is scoped to. */
     readonly workspaceRoot: string;
@@ -35,16 +37,30 @@ export interface HostPathConfigProvider {
     /** Read a `switchboard.*` config setting as JSON. */
     getConfigJson<T>(key: string, defaultValue: T): T;
     /** Write a `switchboard.*` config setting at the user (global) scope. */
-    updateConfigGlobal(key: string, value: any): Promise<void>;
+    updateConfigGlobal(key: string, value: any, originatorId?: string): Promise<void>;
     /** Write a `switchboard.*` config setting at the workspace scope. */
-    updateConfigWorkspace(key: string, value: any): Promise<void>;
+    updateConfigWorkspace(key: string, value: any, originatorId?: string): Promise<void>;
+    /** Register listener for config mutations. */
+    onConfigChanged?(listener: ConfigChangeListener): { dispose: () => void };
 }
 
 export class VscodeHostPathConfigProvider implements HostPathConfigProvider {
     readonly workspaceRoot: string;
+    private _listeners: Set<ConfigChangeListener> = new Set();
 
     constructor(workspaceRoot: string) {
         this.workspaceRoot = workspaceRoot;
+    }
+
+    onConfigChanged(listener: ConfigChangeListener): { dispose: () => void } {
+        this._listeners.add(listener);
+        return { dispose: () => this._listeners.delete(listener) };
+    }
+
+    private _notifyListeners(key: string, value: any, originatorId?: string): void {
+        for (const listener of this._listeners) {
+            try { listener(key, value, originatorId); } catch {}
+        }
     }
 
     private _config(): vscode.WorkspaceConfiguration {
@@ -162,13 +178,15 @@ export class VscodeHostPathConfigProvider implements HostPathConfigProvider {
         }
     }
 
-    async updateConfigGlobal(key: string, value: any): Promise<void> {
+    async updateConfigGlobal(key: string, value: any, originatorId?: string): Promise<void> {
         this._writeConfigFile(key, value);
         await vscode.workspace.getConfiguration('switchboard').update(key, value, true);
+        this._notifyListeners(key, value, originatorId);
     }
-    async updateConfigWorkspace(key: string, value: any): Promise<void> {
+    async updateConfigWorkspace(key: string, value: any, originatorId?: string): Promise<void> {
         this._writeConfigFile(key, value);
         await vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this.workspaceRoot)).update(key, value, false);
+        this._notifyListeners(key, value, originatorId);
     }
 }
 

@@ -95,6 +95,16 @@ export class SetupPanelProvider implements vscode.Disposable {
         } else {
             this._broadcaster.setWebview(this._panel?.webview);
         }
+        if (this._hostSeams?.pathConfig?.onConfigChanged) {
+            this._hostSeams.pathConfig.onConfigChanged((key, value, originatorId) => {
+                if (key.startsWith('theme.') || key === 'theme') {
+                    const theme = this._hostSeams?.pathConfig.getConfigStringWithDefault('theme.name', 'afterburner');
+                    this._broadcaster?.push({ type: 'switchboardThemeChanged', theme, key, value, originatorId });
+                } else {
+                    this._broadcaster?.push({ type: 'settingsChanged', key, value, originatorId });
+                }
+            });
+        }
         const ctx: SetupServiceContext = {
             workspaceRoot,
             seams: this._hostSeams,
@@ -269,7 +279,7 @@ export class SetupPanelProvider implements vscode.Disposable {
             switch (message?.type) {
                 case 'setThemeSetting': {
                     const theme = typeof message.theme === 'string' ? message.theme : 'afterburner';
-                    await this._taskViewerProvider.handleSetThemeSetting(theme);
+                    await this._taskViewerProvider.handleSetThemeSetting(theme, message.originatorId);
                     // Broadcast to all other active webviews
                     this._taskViewerProvider.broadcastToWebviews({ type: 'switchboardThemeChanged', theme });
                     // Also update the setup panel itself
@@ -860,7 +870,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     });
                     return { success: true };
                 case 'setCyberAnimationDisabledSetting':
-                    await this._taskViewerProvider.handleSetCyberAnimationDisabledSetting(message.enabled);
+                    await this._taskViewerProvider.handleSetCyberAnimationDisabledSetting(message.enabled, message.originatorId);
                     await this._taskViewerProvider.postSetupPanelState();
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
                     return { success: true };
@@ -871,7 +881,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     });
                     return { success: true };
                 case 'setCyberScanlinesDisabledSetting':
-                    await this._taskViewerProvider.handleSetCyberScanlinesDisabledSetting(message.enabled);
+                    await this._taskViewerProvider.handleSetCyberScanlinesDisabledSetting(message.enabled, message.originatorId);
                     await this._taskViewerProvider.postSetupPanelState();
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
                     return { success: true };
@@ -882,7 +892,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     });
                     return { success: true };
                 case 'setColourKanbanIconsSetting':
-                    await this._taskViewerProvider.handleSetColourKanbanIconsSetting(message.enabled);
+                    await this._taskViewerProvider.handleSetColourKanbanIconsSetting(message.enabled, message.originatorId);
                     this._taskViewerProvider.broadcastToWebviews({
                         type: 'colourKanbanIconsChanged',
                         enabled: message.enabled
@@ -897,7 +907,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     });
                     return { success: true };
                 case 'setUltracodeAnimationSetting':
-                    await this._taskViewerProvider.handleSetUltracodeAnimationSetting(message.enabled);
+                    await this._taskViewerProvider.handleSetUltracodeAnimationSetting(message.enabled, message.originatorId);
                     await this._taskViewerProvider.postSetupPanelState();
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
                     return { success: true };

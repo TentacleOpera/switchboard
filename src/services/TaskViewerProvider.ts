@@ -5391,40 +5391,60 @@ Each plan file must include:
         return vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
     }
 
-    public async handleSetCyberAnimationDisabledSetting(disabled: boolean): Promise<void> {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        await config.update('theme.disableCyberAnimation', disabled, vscode.ConfigurationTarget.Global);
-        await config.update('theme.disableCyberAnimation', undefined, vscode.ConfigurationTarget.Workspace);
+    public async handleSetCyberAnimationDisabledSetting(disabled: boolean, originatorId?: string): Promise<void> {
+        const pathConfig = this._seams?.()?.pathConfig;
+        if (pathConfig) {
+            await pathConfig.updateConfigWorkspace('theme.disableCyberAnimation', disabled, originatorId);
+        } else {
+            const config = vscode.workspace.getConfiguration('switchboard');
+            await config.update('theme.disableCyberAnimation', disabled, vscode.ConfigurationTarget.Global);
+            await config.update('theme.disableCyberAnimation', undefined, vscode.ConfigurationTarget.Workspace);
+        }
     }
 
     public handleGetCyberScanlinesDisabledSetting(): boolean {
         return vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberScanlines', false);
     }
 
-    public async handleSetCyberScanlinesDisabledSetting(disabled: boolean): Promise<void> {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        await config.update('theme.disableCyberScanlines', disabled, vscode.ConfigurationTarget.Global);
-        await config.update('theme.disableCyberScanlines', undefined, vscode.ConfigurationTarget.Workspace);
+    public async handleSetCyberScanlinesDisabledSetting(disabled: boolean, originatorId?: string): Promise<void> {
+        const pathConfig = this._seams?.()?.pathConfig;
+        if (pathConfig) {
+            await pathConfig.updateConfigWorkspace('theme.disableCyberScanlines', disabled, originatorId);
+        } else {
+            const config = vscode.workspace.getConfiguration('switchboard');
+            await config.update('theme.disableCyberScanlines', disabled, vscode.ConfigurationTarget.Global);
+            await config.update('theme.disableCyberScanlines', undefined, vscode.ConfigurationTarget.Workspace);
+        }
     }
 
     public handleGetColourKanbanIconsSetting(): boolean {
         return getEffectiveColourKanbanIcons();
     }
 
-    public async handleSetColourKanbanIconsSetting(enabled: boolean): Promise<void> {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        await config.update('theme.colourKanbanIcons', enabled, vscode.ConfigurationTarget.Global);
-        await config.update('theme.colourKanbanIcons', undefined, vscode.ConfigurationTarget.Workspace);
+    public async handleSetColourKanbanIconsSetting(enabled: boolean, originatorId?: string): Promise<void> {
+        const pathConfig = this._seams?.()?.pathConfig;
+        if (pathConfig) {
+            await pathConfig.updateConfigWorkspace('theme.colourKanbanIcons', enabled, originatorId);
+        } else {
+            const config = vscode.workspace.getConfiguration('switchboard');
+            await config.update('theme.colourKanbanIcons', enabled, vscode.ConfigurationTarget.Global);
+            await config.update('theme.colourKanbanIcons', undefined, vscode.ConfigurationTarget.Workspace);
+        }
     }
 
     public handleGetUltracodeAnimationSetting(): boolean {
         return vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.ultracodeAnimation', false);
     }
 
-    public async handleSetUltracodeAnimationSetting(enabled: boolean): Promise<void> {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        await config.update('theme.ultracodeAnimation', enabled, vscode.ConfigurationTarget.Global);
-        await config.update('theme.ultracodeAnimation', undefined, vscode.ConfigurationTarget.Workspace);
+    public async handleSetUltracodeAnimationSetting(enabled: boolean, originatorId?: string): Promise<void> {
+        const pathConfig = this._seams?.()?.pathConfig;
+        if (pathConfig) {
+            await pathConfig.updateConfigWorkspace('theme.ultracodeAnimation', enabled, originatorId);
+        } else {
+            const config = vscode.workspace.getConfiguration('switchboard');
+            await config.update('theme.ultracodeAnimation', enabled, vscode.ConfigurationTarget.Global);
+            await config.update('theme.ultracodeAnimation', undefined, vscode.ConfigurationTarget.Workspace);
+        }
     }
 
     public handleGetJulesAutoSyncSetting(): boolean {
@@ -5669,10 +5689,15 @@ Each plan file must include:
         return vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
     }
 
-    public async handleSetThemeSetting(theme: string): Promise<void> {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        await config.update('theme.name', theme, vscode.ConfigurationTarget.Global);
-        await config.update('theme.name', undefined, vscode.ConfigurationTarget.Workspace);
+    public async handleSetThemeSetting(theme: string, originatorId?: string): Promise<void> {
+        const pathConfig = this._seams?.()?.pathConfig;
+        if (pathConfig) {
+            await pathConfig.updateConfigWorkspace('theme.name', theme, originatorId);
+        } else {
+            const config = vscode.workspace.getConfiguration('switchboard');
+            await config.update('theme.name', theme, vscode.ConfigurationTarget.Global);
+            await config.update('theme.name', undefined, vscode.ConfigurationTarget.Workspace);
+        }
     }
 
     private _postSharedWebviewMessage(message: any): void {
@@ -10830,6 +10855,9 @@ Each plan file must include:
                         return { success: true };
                     case 'openProjectPanel':
                         this._seams().commands.executeCommand('switchboard.openProjectPanel');
+                        return { success: true };
+                    case 'openInBrowser':
+                        this._seams().commands.executeCommand('switchboard.openInBrowser');
                         return { success: true };
                     case 'linearLoadProject': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);

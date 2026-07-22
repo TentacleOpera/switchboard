@@ -1757,9 +1757,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         </div>
     </div>
 
-    <!-- SHARED_DEFAULTS_SCRIPT -->
     <script>
         const vscode = acquireVsCodeApi();
+        const clientOriginatorId = Math.random().toString(36).substring(2) + Date.now().toString(36);
+        const _origPostMessage = vscode.postMessage;
+        vscode.postMessage = function(msg) {
+            if (msg && typeof msg === 'object' && !msg.originatorId) {
+                msg.originatorId = clientOriginatorId;
+            }
+            return _origPostMessage.call(vscode, msg);
+        };
 
         const customPromptsModal = document.getElementById('custom-prompts-modal');
         const promptRoleTabs = document.getElementById('prompt-role-tabs');
@@ -4223,6 +4230,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         });
 
         document.getElementById('cyber-animation-toggle')?.addEventListener('change', (e) => {
+            if (window.__applyingBroadcast) return;
             const isDisabled = !e.target.checked;
             vscode.postMessage({ type: 'setCyberAnimationDisabledSetting', enabled: isDisabled });
             // Optimistically apply the body class immediately (idempotent with the inbound handlers below).
@@ -4237,6 +4245,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         });
 
         document.getElementById('cyber-scanlines-toggle')?.addEventListener('change', (e) => {
+            if (window.__applyingBroadcast) return;
             const isDisabled = !e.target.checked;
             vscode.postMessage({ type: 'setCyberScanlinesDisabledSetting', enabled: isDisabled });
             document.body.classList.toggle('cyber-scanlines-disabled', isDisabled);
@@ -4248,6 +4257,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         });
 
         document.getElementById('colour-kanban-icons-toggle')?.addEventListener('change', (e) => {
+            if (window.__applyingBroadcast) return;
             vscode.postMessage({ type: 'setColourKanbanIconsSetting', enabled: e.target.checked });
             const statusEl = document.getElementById('colour-kanban-icons-status');
             if (statusEl) {
@@ -4259,6 +4269,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         });
 
         document.getElementById('ultracode-animation-toggle')?.addEventListener('change', (e) => {
+            if (window.__applyingBroadcast) return;
             vscode.postMessage({ type: 'setUltracodeAnimationSetting', enabled: e.target.checked });
             document.body.classList.toggle('ultracode-animation-enabled', e.target.checked);
             const statusEl = document.getElementById('cyber-animation-status');
@@ -4499,7 +4510,38 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         window.addEventListener('message', (event) => {
             const message = event.data;
+            if (message && message.originatorId && message.originatorId === clientOriginatorId) {
+                return; // Layer (a): ignore own echo broadcast
+            }
             switch (message.type) {
+                case 'settingsChanged': {
+                    if (!message.key) break;
+                    window.__applyingBroadcast = true;
+                    try {
+                        if (message.key.includes('disableCyberAnimation')) {
+                            const toggle = document.getElementById('cyber-animation-toggle');
+                            if (toggle) toggle.checked = !message.value;
+                            document.body.classList.toggle('cyber-animation-disabled', !!message.value);
+                        } else if (message.key.includes('disableCyberScanlines')) {
+                            const toggle = document.getElementById('cyber-scanlines-toggle');
+                            if (toggle) toggle.checked = !message.value;
+                            document.body.classList.toggle('cyber-scanlines-disabled', !!message.value);
+                        } else if (message.key.includes('colourKanbanIcons')) {
+                            const toggle = document.getElementById('colour-kanban-icons-toggle');
+                            if (toggle) toggle.checked = !!message.value;
+                        } else if (message.key.includes('ultracodeAnimation')) {
+                            const toggle = document.getElementById('ultracode-animation-toggle');
+                            if (toggle) toggle.checked = !!message.value;
+                            document.body.classList.toggle('ultracode-animation-enabled', !!message.value);
+                        } else if (message.key.includes('controlPlaneRoot')) {
+                            const input = document.getElementById('control-plane-explicit-root-input');
+                            if (input) input.value = message.value || '';
+                        }
+                    } finally {
+                        window.__applyingBroadcast = false;
+                    }
+                    break;
+                }
                 case 'ticketsFoldersListed': {
                     if (message.provider === 'clickup') {
                         const input = document.getElementById('clickup-ticket-import-folder');

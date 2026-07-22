@@ -262,23 +262,7 @@
 .host-secrets-entry-false #btn-apply-clickup-config,
 .host-secrets-entry-false #btn-apply-linear-config,
 .host-secrets-entry-false #btn-apply-notion-config,
-.host-secrets-entry-false #btn-save-stitch-api-key,
 .host-secrets-entry-false #btn-save-stitch-auth {
-    display: none !important;
-}
-/* Editor-substrate tabs: these repoint the DB/config the editor is bound to —
-   not integration surfaces. They stay editor-only regardless of the entry-vs-use
-   split (plan §2, line 98). */
-.host-secrets-entry-false .shared-tab-btn[data-tab="remote"],
-.host-secrets-entry-false .shared-tab-btn[data-tab="database"],
-.host-secrets-entry-false .shared-tab-btn[data-tab="control-plane"],
-.host-secrets-entry-false .shared-tab-btn[data-tab="mappings"],
-.host-secrets-entry-false .shared-tab-btn[data-tab="status-bar"],
-.host-secrets-entry-false [data-tab-content="remote"],
-.host-secrets-entry-false [data-tab-content="database"],
-.host-secrets-entry-false [data-tab-content="control-plane"],
-.host-secrets-entry-false [data-tab-content="mappings"],
-.host-secrets-entry-false [data-tab-content="status-bar"] {
     display: none !important;
 }
 .host-secrets-entry-false #clickup-token-input,

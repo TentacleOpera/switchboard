@@ -4307,6 +4307,18 @@
                 setStitchStatus('Error: ' + msg.error, 'error');
                 break;
 
+            case 'settingsChanged':
+                if (msg.key) {
+                    if (msg.key.includes('disableCyberAnimation')) {
+                        document.body.classList.toggle('cyber-animation-disabled', !!msg.value);
+                    } else if (msg.key.includes('disableCyberScanlines')) {
+                        document.body.classList.toggle('cyber-scanlines-disabled', !!msg.value);
+                    } else if (msg.key.includes('ultracodeAnimation')) {
+                        document.body.classList.toggle('ultracode-animation-enabled', !!msg.value);
+                    }
+                }
+                break;
+
             case 'themeChanged':
             case 'switchboardThemeChanged':
                 // Mirrors planning.js handleThemeChanged: cyber CRT effects only for

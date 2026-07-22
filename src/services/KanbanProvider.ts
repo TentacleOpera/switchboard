@@ -1057,7 +1057,10 @@ export class KanbanProvider implements vscode.Disposable {
      * the editor webview receives, built from the real board-cards builder.
      */
     public async getFullStateMessages(wsRoot?: string): Promise<any[]> {
-        const root = wsRoot || this.getCurrentWorkspaceRoot();
+        // Prefer the editor board's ACTIVE selection so the browser mirrors what the
+        // editor is showing — not the primary/first workspace the caller passes.
+        // Fall back to the passed root (standalone, or before any selection).
+        const root = this.getCurrentWorkspaceRoot() || wsRoot;
         if (!root) return [];
         try {
             const db = this._getKanbanDb(root);
@@ -1083,7 +1086,12 @@ export class KanbanProvider implements vscode.Disposable {
                 .filter((w: any) => w.feature_id !== null && w.status === 'active')
                 .reduce((acc: Record<string, { branch: string; path: string; id: number }>, w: any) => { acc[w.feature_id] = { branch: w.branch, path: w.path, id: w.id }; return acc; }, {} as Record<string, { branch: string; path: string; id: number }>);
             const workspaceItems = this._getWorkspaceItems();
-            const allWorkspaceProjects: Record<string, string[]> = { [root]: projects };
+            // Canonical builder — keys projects by the SAME workspaceRoot values
+            // _getWorkspaceItems() produces, which is what the board dropdown looks up
+            // (allWorkspaceProjects[item.workspaceRoot]). A hand-built `{ [root]: projects }`
+            // mis-keys when the item root is normalized/mapped, leaving the dropdown
+            // stuck on the base workspace with no projects.
+            const allWorkspaceProjects = await this._getAllWorkspaceProjects();
             return [
                 { type: 'updateColumns', columns: filteredColumns },
                 { type: 'updateWorkspaceSelection', workspaceRoot: root, workspaces: workspaceItems, activeFilter: null, projectFilter: this._projectFilter ?? null, projects, allWorkspaceProjects, controlPlaneMode: 'none', controlPlaneRoot: null, effectiveControlPlaneRoot: root, explicitControlPlaneRoot: root, pendingCandidate: null, repoScopeFilter: null, projectContextEnabled: false },

@@ -1531,9 +1531,12 @@
                 <button id="btn-quick-design" class="secondary-btn is-teal">Design</button>
                 <button id="btn-quick-project" class="secondary-btn is-teal">Project</button>
             </div>
-            <button id="btn-quick-manage" class="secondary-btn is-teal w-full"
-              style="margin-top: 6px;"
-              title="Activate the Switchboard management console in a terminal agent (or copy the prompt if no PM terminal is registered). Onboards new users and drives the board — the single front door.">Manage</button>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:6px; margin-top: 6px;">
+                <button id="btn-quick-manage" class="secondary-btn is-teal"
+                  title="Activate the Switchboard management console in a terminal agent (or copy the prompt if no PM terminal is registered). Onboards new users and drives the board — the single front door.">Manage</button>
+                <button id="btn-quick-browser" class="secondary-btn is-teal"
+                  title="Open Switchboard in browser">Browser</button>
+            </div>
             <button id="btn-quick-setup" class="secondary-btn w-full" style="margin-top: 6px;">Setup</button>
         </div>
 
@@ -1798,6 +1801,8 @@
         if (btnQuickPlanning) btnQuickPlanning.addEventListener('click', () => vscode.postMessage({ type: 'openPlanningPanel' }));
         const btnQuickManage = document.getElementById('btn-quick-manage');
         if (btnQuickManage) btnQuickManage.addEventListener('click', () => vscode.postMessage({ type: 'dispatchProjectManager' }));
+        const btnQuickBrowser = document.getElementById('btn-quick-browser');
+        if (btnQuickBrowser) btnQuickBrowser.addEventListener('click', () => vscode.postMessage({ type: 'openInBrowser' }));
         const btnQuickSetup = document.getElementById('btn-quick-setup');
         if (btnQuickSetup) btnQuickSetup.addEventListener('click', () => vscode.postMessage({ type: 'openSetupPanel' }));
         const btnQuickDesign = document.getElementById('btn-quick-design');

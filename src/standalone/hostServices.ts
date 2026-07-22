@@ -21,10 +21,22 @@ function envKeyForSetting(settingKey: string): string {
 export class StandaloneHostPathConfigProvider implements HostPathConfigProvider {
     readonly workspaceRoot: string;
     private _config: Record<string, any> = {};
+    private _listeners: Set<(key: string, value: any, originatorId?: string) => void> = new Set();
 
     constructor(workspaceRoot: string) {
         this.workspaceRoot = workspaceRoot;
         this._load();
+    }
+
+    onConfigChanged(listener: (key: string, value: any, originatorId?: string) => void): { dispose: () => void } {
+        this._listeners.add(listener);
+        return { dispose: () => this._listeners.delete(listener) };
+    }
+
+    private _notifyListeners(key: string, value: any, originatorId?: string): void {
+        for (const listener of this._listeners) {
+            try { listener(key, value, originatorId); } catch {}
+        }
     }
 
     private _configPath(): string {
@@ -93,15 +105,17 @@ export class StandaloneHostPathConfigProvider implements HostPathConfigProvider 
         try { return JSON.parse(String(v)) as T; } catch { return defaultValue; }
     }
 
-    async updateConfigGlobal(key: string, value: any): Promise<void> {
+    async updateConfigGlobal(key: string, value: any, originatorId?: string): Promise<void> {
         this._config[`switchboard.${key}`] = value;
         this._save();
+        this._notifyListeners(key, value, originatorId);
     }
 
-    async updateConfigWorkspace(key: string, value: any): Promise<void> {
+    async updateConfigWorkspace(key: string, value: any, originatorId?: string): Promise<void> {
         // Standalone has no global/user split; treat workspace scope as local file config.
         this._config[`switchboard.${key}`] = value;
         this._save();
+        this._notifyListeners(key, value, originatorId);
     }
 }
 
