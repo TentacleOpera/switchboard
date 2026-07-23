@@ -1734,8 +1734,8 @@ export class KanbanProvider implements vscode.Disposable {
         projects?: string[],
         dataVersionAtRead?: number
     ) {
-        if (!this._panel) {
-            console.warn('[KanbanProvider] refreshWithData: no panel — skipping');
+        if (!this._panel && !this._broadcaster) {
+            console.warn('[KanbanProvider] refreshWithData: no panel and no broadcaster — skipping');
             return;
         }
 
@@ -7479,7 +7479,14 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 const workspaceRoot = this._currentWorkspaceRoot;
                 if (workspaceRoot && (msg.project === null || typeof msg.project === 'string')) {
                     await this.setProjectFilter(msg.project ?? KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
-                    await this._refreshBoard(workspaceRoot);
+                    // noRefresh: the board view filters cached cards client-side, so a
+                    // dropdown change only needs the cheap singleton + DB config write
+                    // (auto-stamping / dispatch scoping) that setProjectFilter already
+                    // performed. Skip the expensive full board refresh. Existing callers
+                    // without the flag still get the full refresh (backward compatible).
+                    if (!msg.noRefresh) {
+                        await this._refreshBoard(workspaceRoot);
+                    }
                     return { success: true };
                 }
                 return { success: false, error: 'No workspace root or invalid project' };

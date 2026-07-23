@@ -17422,11 +17422,17 @@ What would you like to find?`;
             const repoScope = this._kanbanProvider?.getRepoScopeFilter() ?? null;
             const projectFilter = this._kanbanProvider?.getProjectFilter() ?? null;
 
-            const activeRows = (projectFilter !== null || repoScope)
-                ? await db.getBoardFilteredByProject(workspaceId, projectFilter, repoScope)
+            // Project filtering moved client-side: the board view filters cached
+            // cards locally (boardProjectFilter in kanban.html) and the sidebar
+            // filters via filterByProjectScope below. Only repoScope remains a
+            // backend scoping concern — pass null for the project argument so a
+            // repo scope still applies without project pre-filtering. This keeps
+            // the single DB read but sends the unfiltered card set to the board.
+            const activeRows = repoScope
+                ? await db.getBoardFilteredByProject(workspaceId, null, repoScope)
                 : await db.getBoard(workspaceId);
-            const completedRows = (projectFilter !== null || repoScope)
-                ? await db.getCompletedPlansFilteredByProject(workspaceId, projectFilter, repoScope)
+            const completedRows = repoScope
+                ? await db.getCompletedPlansFilteredByProject(workspaceId, null, repoScope)
                 : await db.getCompletedPlans(workspaceId);
             // Log column distribution for debugging
             const colDist: Record<string, number> = {};
@@ -17464,8 +17470,15 @@ What would you like to find?`;
 
                 const excludeProjectPlans = projectFilter === null || projectFilter === '__unassigned__';
                 const filterByProjectScope = (row: import('./KanbanDatabase').KanbanPlanRecord) => {
-                    if (!excludeProjectPlans) return true;
-                    return !row.project && (row.projectId === null || row.projectId === undefined);
+                    if (excludeProjectPlans) {
+                        // null or __unassigned__: show only plans with no project
+                        return !row.project && (row.projectId === null || row.projectId === undefined);
+                    }
+                    // Specific project: filter client-side by project name. The DB
+                    // pre-filter was removed (project filtering moved client-side for
+                    // the board view), so the sidebar must apply its own project match
+                    // to keep showing only the selected project's plans.
+                    return row.project === projectFilter;
                 };
 
                 const visibleActiveRows = repoScope

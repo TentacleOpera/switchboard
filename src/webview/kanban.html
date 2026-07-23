@@ -4189,6 +4189,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let autobanCountdownTimer = null;
         let autobanColumns = columnDefinitions.filter(col => col.autobanEnabled).map(col => col.id);
         let lastBoardSignature = '';
+        // Signature of the unfiltered allCards cache. Tracked separately from the
+        // filtered board signature so a hidden-project card add (no visible change)
+        // still refreshes column occupancy counts without a full DOM rebuild.
+        let lastAllCardsSignature = '';
         // Map of cardId -> true while the card was last seen with its activity light on.
         // Used to detect the working -> idle edge and fire completion feedback.
         let previousWorking = new Map(); // id -> boolean
@@ -4216,6 +4220,24 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         } catch (_) {}
         let activeWorkspaceFilter = null;
         let activeProjectFilter = null;
+        // Board-owned view filter (independent of the backend singleton). The board
+        // caches ALL cards (all projects) in allCards and filters client-side, mirroring
+        // the project panel's kanban tab. activeProjectFilter remains the backend-state
+        // mirror (used to seed boardProjectFilter on first load / workspace switch);
+        // boardProjectFilter is the single source of truth for what the board renders.
+        // Semantics: null = no filter (show all); '__unassigned__' = only no-project
+        // cards; <name> = only cards whose project === <name>.
+        let boardProjectFilter = null;
+        let allCards = [];
+        // Apply the local project filter to a card set. Unassigned cards have
+        // project === '' (cards are built with `row.project || ''`).
+        function applyBoardProjectFilter(cards) {
+            if (boardProjectFilter === null) return cards;
+            if (boardProjectFilter === '__unassigned__') {
+                return cards.filter(c => !c.project);
+            }
+            return cards.filter(c => c.project === boardProjectFilter);
+        }
         let workspaceItems = [];
         let currentControlPlaneMode = 'none';
         let columnDragDropModes = {};
@@ -4254,7 +4276,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         });
 
         document.getElementById('btn-suggest-features')?.addEventListener('click', () => {
-            postKanbanMessage({ type: 'suggestFeatures', workspaceRoot: getActiveWorkspaceRoot(), projectFilter: activeProjectFilter ?? null });
+            postKanbanMessage({ type: 'suggestFeatures', workspaceRoot: getActiveWorkspaceRoot(), projectFilter: boardProjectFilter ?? null });
         });
 
         document.getElementById('btn-create-worktree')?.addEventListener('click', () => {
@@ -4282,10 +4304,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             const size = selectedCards.size;
             if (size === 0) {
-                if (activeProjectFilter && activeProjectFilter !== '__unassigned__') {
+                if (boardProjectFilter && boardProjectFilter !== '__unassigned__') {
                     postKanbanMessage({
                         type: 'createWorktreeForProject',
-                        project: activeProjectFilter,
+                        project: boardProjectFilter,
                         workspaceRoot: currentWorkspaceRoot,
                         repoName: selectedWorktreeRepo || undefined
                     });
@@ -4754,8 +4776,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             // Restore selection logic (preserved from original workspace/project selectors)
             if (explicitRoot && workspaceItems.some(item => item.workspaceRoot === explicitRoot)) {
-                // If the backend explicitly changed workspace, honor that
-                const targetProject = activeProjectFilter ?? '';
+                // If the backend explicitly changed workspace, honor that. boardProjectFilter
+                // was re-seeded from the backend mirror in updateWorkspaceSelection.
+                const targetProject = boardProjectFilter ?? '';
                 const targetValue = explicitRoot + '|' + targetProject;
                 if ([...select.options].some(o => o.value === targetValue)) {
                     select.value = targetValue;
@@ -4772,12 +4795,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 return;
             }
 
-            // Priority 1: If activeProjectFilter is set and matches an option, use it.
-            // This ensures the dropdown follows the backend filter (e.g., after project creation
+            // Priority 1: If boardProjectFilter is set and matches an option, use it.
+            // The dropdown follows the board-owned view filter (e.g., after project creation
             // where setProjectFilter was called but the workspace root didn't change).
-            if (activeProjectFilter && activeProjectFilter !== '__unassigned__') {
+            if (boardProjectFilter && boardProjectFilter !== '__unassigned__') {
                 const filterRoot = currentWorkspaceRoot;
-                const filterValue = filterRoot + '|' + activeProjectFilter;
+                const filterValue = filterRoot + '|' + boardProjectFilter;
                 if ([...select.options].some(o => o.value === filterValue)) {
                     select.value = filterValue;
                     // Sync delete button state
@@ -4796,7 +4819,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (savedValue && [...select.options].some(o => o.value === savedValue)) {
                 select.value = savedValue;
             } else {
-                // Priority 3: Fall back to current workspace + active project filter (existing behavior)
+                // Priority 3: Fall back to current workspace + board project filter (existing behavior)
                 let fallbackRoot = activeWorkspaceFilter
                     ? ((workspaceItems.find(item => getWorkspaceItemRepoScope(item) === activeWorkspaceFilter) || {}).workspaceRoot || currentWorkspaceRoot)
                     : currentWorkspaceRoot;
@@ -4804,7 +4827,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     fallbackRoot = workspaceItems[0]?.workspaceRoot || '';
                 }
                 if (fallbackRoot) {
-                    const fallbackProject = activeProjectFilter ?? '';
+                    const fallbackProject = boardProjectFilter ?? '';
                     const fallbackValue = fallbackRoot + '|' + fallbackProject;
                     if ([...select.options].some(o => o.value === fallbackValue)) {
                         select.value = fallbackValue;
@@ -5873,8 +5896,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
 
             // 2. Active project filter with a project-scoped worktree.
-            if (activeProjectFilter && activeProjectFilter !== '__unassigned__') {
-                const projWt = worktrees.find(w => w.project && w.project === activeProjectFilter);
+            if (boardProjectFilter && boardProjectFilter !== '__unassigned__') {
+                const projWt = worktrees.find(w => w.project && w.project === boardProjectFilter);
                 if (projWt && projWt.path) {
                     updateWorktreeIndicator(projWt.path);
                     return;
@@ -5944,13 +5967,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             // 3. Nothing selected + active project filter has a worktree → merge mode.
             if (size === 0) {
-                if (activeProjectFilter && activeProjectFilter !== '__unassigned__') {
-                    const projWt = worktrees.find(w => w.project && w.project === activeProjectFilter);
+                if (boardProjectFilter && boardProjectFilter !== '__unassigned__') {
+                    const projWt = worktrees.find(w => w.project && w.project === boardProjectFilter);
                     if (projWt) {
                         btn.classList.add('merge-mode');
                         btn.disabled = false;
                         btn.dataset.mergeWorktreeId = projWt.id != null ? String(projWt.id) : '';
-                        btn.setAttribute('data-tooltip', `Merge & clean up worktree for ${activeProjectFilter}`);
+                        btn.setAttribute('data-tooltip', `Merge & clean up worktree for ${boardProjectFilter}`);
                         btn.title = '';
                         return;
                     }
@@ -5989,6 +6012,50 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
 
 
+        // Compute per-column occupancy from the UNFILTERED allCards cache so columns
+        // that hold cards only in other (hidden) projects still show their true counts.
+        // Applies the same backlog-view + subtask-hiding display rules as renderBoard so
+        // the count matches what would render if the project filter were off.
+        function computeColumnOccupancy(cards) {
+            const counts = {};
+            [...columns, ...CODED_IDS].forEach(c => { counts[c] = 0; });
+            if (!Array.isArray(cards) || cards.length === 0) return counts;
+            let displayCards = cards;
+            if (!showingBacklog) {
+                displayCards = cards.filter(card => card.column !== 'BACKLOG');
+            } else {
+                displayCards = cards.filter(card => card.column !== 'CREATED');
+            }
+            displayCards = displayCards.filter(card => !card.featureId);
+            displayCards.forEach(card => {
+                const effectiveCol = (showingBacklog && card.column === 'BACKLOG') ? 'CREATED' : card.column;
+                const col = columns.includes(effectiveCol) ? effectiveCol : (CODED_IDS.includes(effectiveCol) ? effectiveCol : null);
+                if (!col) return;
+                counts[col] = (counts[col] || 0) + 1;
+            });
+            return counts;
+        }
+
+        // Lightweight count-only refresh: updates column count badges from the
+        // unfiltered allCards cache without rebuilding card DOM. Used when the
+        // filtered board signature is unchanged but allCards changed (e.g. a card
+        // added to a hidden project) so occupancy counts stay accurate.
+        function refreshColumnCounts() {
+            const counts = computeColumnOccupancy(allCards.length ? allCards : currentCards);
+            if (collapseCodersEnabled) {
+                const autoCountEl = document.getElementById('count-CODED_AUTO');
+                if (autoCountEl) {
+                    const coderOccupancy = CODED_IDS.reduce((sum, c) => sum + (counts[c] || 0), 0);
+                    autoCountEl.textContent = String(coderOccupancy);
+                }
+            }
+            columns.forEach(col => {
+                if (collapseCodersEnabled && CODED_IDS.includes(col) && document.getElementById('col-CODED_AUTO')) return;
+                const countEl = document.getElementById('count-' + col);
+                if (countEl) countEl.textContent = String(counts[col] || 0);
+            });
+        }
+
         function renderBoard(cards, justFinishedIds = new Set()) {
             hideTooltip();
             unrenderedColumnRefreshRequested = false;
@@ -6007,10 +6074,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
                 // If the card belongs to the current workspace but a different project than
                 // the active filter, do NOT prune it — it's filtered out of the board view
-                // but still tracked for cross-project ASSIGN.
-                if (val && typeof val === 'object' && activeProjectFilter) {
+                // but still tracked for cross-project ASSIGN. Uses the board-owned
+                // boardProjectFilter (not the backend singleton mirror) so the view's own
+                // filter governs pruning.
+                if (val && typeof val === 'object' && boardProjectFilter) {
                     const cardProject = val.project || '';
-                    const filterProject = activeProjectFilter === '__unassigned__' ? '' : activeProjectFilter;
+                    const filterProject = boardProjectFilter === '__unassigned__' ? '' : boardProjectFilter;
                     if (cardProject !== filterProject) {
                         continue;
                     }
@@ -6057,6 +6126,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 buckets[col].push(card);
             });
 
+            // Column occupancy is computed from the unfiltered allCards cache so hidden
+            // columns (cards in other projects) still show their true counts. Falls back
+            // to the passed-in cards before the first updateBoard populates allCards.
+            const occupancyCounts = computeColumnOccupancy(allCards.length ? allCards : cards);
+
             if (collapseCodersEnabled) {
                 // Render all coder-column cards into the synthetic CODED_AUTO container
                 const coderItems = [];
@@ -6069,7 +6143,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const autoContainer = document.getElementById('col-CODED_AUTO');
                 const autoCountEl = document.getElementById('count-CODED_AUTO');
                 if (autoContainer && autoCountEl) {
-                    autoCountEl.textContent = String(coderItems.length);
+                    // Count badge reflects unfiltered occupancy across the three coder
+                    // columns; the DOM renders only the project-filtered subset.
+                    const coderOccupancy = CODED_IDS.reduce((sum, c) => sum + (occupancyCounts[c] || 0), 0);
+                    autoCountEl.textContent = String(coderOccupancy);
                     autoContainer.innerHTML = coderItems.length === 0
                         ? '<div class="empty-state">No plans</div>'
                         : sortedCoderItems.map(card => createCardHtml(card)).join('');
@@ -6096,7 +6173,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (isNaN(createdB)) createdB = 0;
                     return createdB - createdA;
                 });
-                countEl.textContent = items.length;
+                countEl.textContent = String(occupancyCounts[col] || 0);
 
                 if (items.length === 0) {
                     container.innerHTML = '<div class="empty-state">No plans</div>';
@@ -7113,6 +7190,20 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     currentWorkspaceRoot = msg.workspaceRoot || '';
                     activeWorkspaceFilter = msg.activeFilter || null;
                     activeProjectFilter = msg.projectFilter ?? null;
+                    // The board owns its view filter (boardProjectFilter) independently of
+                    // the backend singleton. Only re-seed it from the backend-reported
+                    // filter when the workspace itself changes (the user switched
+                    // workspaces, not projects). On same-workspace refreshes the local
+                    // filter is preserved so browser and webview never reset each other.
+                    const workspaceChanged = previousRoot !== '' && previousRoot !== currentWorkspaceRoot;
+                    if (workspaceChanged) {
+                        boardProjectFilter = activeProjectFilter;
+                        allCards = []; // new workspace → drop the stale unfiltered cache
+                    } else if (boardProjectFilter === null && allCards.length === 0) {
+                        // First hydration before any updateBoard: seed from backend so the
+                        // board starts in sync, then own it locally.
+                        boardProjectFilter = activeProjectFilter;
+                    }
                     workspaceItems = Array.isArray(msg.workspaces) ? msg.workspaces : [];
                     currentControlPlaneMode = msg.controlPlaneMode || msg.mode || 'none';
 
@@ -7124,8 +7215,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         saveWebviewState();
                     }
 
-                    const explicitChange = previousRoot !== '' && previousRoot !== currentWorkspaceRoot;
-                    updateWorkspaceProjectDropdown(explicitChange ? currentWorkspaceRoot : null);
+                    updateWorkspaceProjectDropdown(workspaceChanged ? currentWorkspaceRoot : null);
                     updateWorkspaceFilterBadge();
 
                     // Keep the worktrees tab's "CREATE NEW WORKTREE IN <workspace>" header in sync
@@ -7159,14 +7249,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const targetCol = msg.targetColumn;
                     if (!idsToMove.size || !targetCol) break;
                     let changed = false;
-                    currentCards = currentCards.map(card => {
+                    const moveCard = (card) => {
                         const cardKey = card.planId || card.sessionId;        // planId-primary, mirrors backend _cardMatchesIds
                         if (idsToMove.has(cardKey) || (card.sessionId && idsToMove.has(card.sessionId))) {
                             changed = true;
                             return { ...card, column: targetCol };
                         }
                         return card;
-                    });
+                    };
+                    currentCards = currentCards.map(moveCard);
+                    // Keep the unfiltered cache in sync so occupancy counts track the move.
+                    allCards = allCards.map(moveCard);
                     if (changed) {
                         lastBoardSignature = buildBoardSignature(currentCards);
                         renderBoard(currentCards);
@@ -7178,12 +7271,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (!failed.length) break;
                     const byId = new Map(failed.map(f => [f.id, f]));
                     let changed = false;
-                    currentCards = currentCards.map(card => {
+                    const revertCard = (card) => {
                         const key = card.planId || card.sessionId;
                         const f = byId.get(key) || (card.sessionId && byId.get(card.sessionId));
                         if (f) { changed = true; return { ...card, column: f.sourceColumn }; }
                         return card;
-                    });
+                    };
+                    currentCards = currentCards.map(revertCard);
+                    // Keep the unfiltered cache in sync so occupancy counts track the revert.
+                    allCards = allCards.map(revertCard);
                     if (changed) {
                         lastBoardSignature = buildBoardSignature(currentCards);
                         renderBoard(currentCards);
@@ -7192,7 +7288,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     break;
                 }
                 case 'updateBoard': {
-                    const nextCards = Array.isArray(msg.cards) ? msg.cards : [];
+                    // Cache the full unfiltered card set (all projects) and apply the
+                    // local boardProjectFilter client-side, mirroring the project panel's
+                    // kanban tab. The backend now sends unfiltered cards; the board owns
+                    // its view filter so browser and webview never reset each other.
+                    allCards = Array.isArray(msg.cards) ? msg.cards : [];
+                    const nextCards = applyBoardProjectFilter(allCards);
                     const nextFeatureWorktrees = msg.featureWorktrees || {};
                     const featureWorktreesChanged = JSON.stringify(currentFeatureWorktrees) !== JSON.stringify(nextFeatureWorktrees);
                     currentFeatureWorktrees = nextFeatureWorktrees;
@@ -7221,6 +7322,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     previousWorking = nextWorking; // advance every tick so the edge stays accurate
 
                     const nextBoardSignature = buildBoardSignature(nextCards);
+                    // Track the unfiltered cache signature so a hidden-project card add
+                    // (filtered signature unchanged) still refreshes occupancy counts.
+                    const nextAllCardsSignature = buildBoardSignature(allCards);
                     const dbWarningBanner = document.getElementById('db-warning-banner');
                     if (dbWarningBanner) {
                         dbWarningBanner.style.display = msg.dbUnavailable ? '' : 'none';
@@ -7251,9 +7355,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             // when the window expires.
                             currentCards = nextCards;
                             lastBoardSignature = buildBoardSignature(currentCards);
+                            lastAllCardsSignature = nextAllCardsSignature;
                             if (justFinished.length) pendingFinished.push(...justFinished); // carry forward
                         } else {
                             lastBoardSignature = nextBoardSignature;
+                            lastAllCardsSignature = nextAllCardsSignature;
                             console.log('[Kanban WV] signature changed, calling renderBoard with', nextCards.length, 'cards');
                             const activeFinished = justFinished.length
                                 ? justFinished.concat(pendingFinished.splice(0)) // drain carry + new
@@ -7266,6 +7372,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             console.log('[Kanban WV] featureWorktrees changed, calling renderBoard with', nextCards.length, 'cards');
                             const activeFinished = pendingFinished.length ? pendingFinished.splice(0) : [];
                             renderBoard(currentCards, new Set(activeFinished.map(f => f.id)));
+                            lastAllCardsSignature = nextAllCardsSignature;
+                        } else if (nextAllCardsSignature !== lastAllCardsSignature) {
+                            // Filtered view unchanged but the unfiltered cache changed (e.g.
+                            // a card added to a hidden project): refresh occupancy counts
+                            // without a full DOM rebuild.
+                            refreshColumnCounts();
+                            lastAllCardsSignature = nextAllCardsSignature;
                         }
                     }
                     break;
@@ -8135,6 +8248,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 // Post-assignment: switch workspace context to the target workspace so the user sees their moved cards
                 currentWorkspaceRoot = targetWorkspaceRoot;
                 activeProjectFilter = targetProject === '__unassigned__' ? '__unassigned__' : targetProject;
+                boardProjectFilter = activeProjectFilter; // workspace switch → re-seed view filter
                 lastBoardSignature = '';  // Ensure the refresh triggered by selectWorkspace is not short-circuited
                 postKanbanMessage({
                     type: 'selectWorkspace',
@@ -8151,6 +8265,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                 // Post-assignment: switch project filter to the target project so the user sees their moved cards
                 activeProjectFilter = targetProject === '__unassigned__' ? '__unassigned__' : targetProject;
+                boardProjectFilter = activeProjectFilter; // keep the board-owned view filter in sync
                 postKanbanMessage({
                     type: 'setProjectFilter',
                     project: targetProject
@@ -8187,16 +8302,22 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     project: selectedProject
                 });
             } else {
-                // Same workspace, post the project filter change unconditionally.
-                // The backend write is idempotent, and the previous no-op guard
-                // (selectedProject !== activeProjectFilter) swallowed the user's
-                // real click when the webview-local replica was desynced from the
-                // authoritative DB config. Re-selecting the already-displayed
-                // option fires no `change` event at all (browser behavior), so
-                // unconditional posting is safe.
+                // Same workspace: the board owns its view filter. Update the local
+                // boardProjectFilter and re-render instantly from the cached allCards
+                // (no 5-second backend round-trip), then post a lightweight
+                // setProjectFilter with noRefresh: true so the cheap singleton + DB
+                // config write still fires (auto-stamping / dispatch scoping) without
+                // the expensive full board refresh. Re-selecting the already-displayed
+                // option fires no `change` event at all (browser behavior), so this is
+                // only reached on a genuine selection change.
+                boardProjectFilter = selectedProject ? selectedProject : null;
+                currentCards = applyBoardProjectFilter(allCards);
+                lastBoardSignature = buildBoardSignature(currentCards);
+                renderBoard(currentCards);
                 postKanbanMessage({
                     type: 'setProjectFilter',
-                    project: selectedProject
+                    project: selectedProject,
+                    noRefresh: true
                 });
             }
 
