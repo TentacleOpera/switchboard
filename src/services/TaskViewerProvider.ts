@@ -512,7 +512,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _sessionLogs = new Map<string, SessionActionLog>();
     private _kanbanProvider?: KanbanProvider;
     private _setupPanelProvider?: SetupPanelProvider;
-    private _designPanelProvider?: { postMessage(message: any): void; handleServiceVerb(verb: string, payload: any): Promise<any> };
+    private _designPanelProvider?: { postMessage(message: any): void; handleServiceVerb(verb: string, payload: any): Promise<any>; getDesignAssetRoots?(workspaceRoot: string): string[] };
     private _planningPanelProvider?: { postMessage(message: any): void; handleServiceVerb(verb: string, payload: any): Promise<any> };
     private _kanbanDbs = new Map<string, KanbanDatabase>();
     private _lastKanbanDbWarnings = new Map<string, string | null>();
@@ -1774,6 +1774,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     : payload;
                 return await this._designPanelProvider.handleServiceVerb(verb, p);
             },
+            getDesignAssetRoots: (wsRoot: string) =>
+                this._designPanelProvider?.getDesignAssetRoots?.(wsRoot) ?? [],
             setupVerb: async (verb, payload, wsRoot) => {
                 if (!this._setupPanelProvider) {
                     return { success: false, error: 'Setup provider not available' };
@@ -1850,7 +1852,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         webview: [path.join(repoRoot, 'dist', 'webview'), path.join(repoRoot, 'src', 'webview')],
                         icons: [path.join(repoRoot, 'icons')],
                         designs: [path.join(repoRoot, 'designs')],
-                        stitch: [path.join(wsRoot, '.switchboard', 'stitch')],
+                        // Every root, not just the primary one: the Stitch tab has its own
+                        // workspace selector, and the cached-screenshot URLs the provider
+                        // now emits (/static/stitch/<projectFolder>/<screenId>.png) carry
+                        // no root — _handleServeStatic tries each candidate in order.
+                        stitch: Array.from(new Set([wsRoot, ...allRoots].filter(Boolean)))
+                            .map(r => path.join(r, '.switchboard', 'stitch')),
                     },
                 };
             })(),

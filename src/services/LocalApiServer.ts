@@ -179,6 +179,15 @@ interface LocalApiServerOptions {
     }>;
     planningVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     designVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
+    /**
+     * Allow-list source for `GET /design/asset` — the headless replacement for
+     * `webview.asWebviewUri` on local design/image assets. Returns the absolute
+     * Design/HTML/Claude/Briefs/Images folder paths the DesignPanelProvider has
+     * configured for `workspaceRoot`. The provider owns this list so the HTTP route
+     * cannot drift from the provider's own preview-path validation. Absent ⇒ the
+     * route answers 503 rather than guessing a looser rule.
+     */
+    getDesignAssetRoots?: (workspaceRoot: string) => string[];
     setupVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     taskViewerVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     cleanupWorktree?: (
@@ -796,68 +805,106 @@ export class LocalApiServer {
         res.end('Static file not found');
     }
 
+    /**
+     * Extensions the design-asset route will serve. Deliberately narrow: this route
+     * hands out files from arbitrary, possibly out-of-workspace folders the user
+     * configured, so it must never be usable to read source, config or secrets, and
+     * must never serve `text/html` from the cockpit's own origin (that would let a
+     * design file script the panel it is previewed in).
+     */
+    private static readonly DESIGN_ASSET_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico', '.avif']);
+
+    /**
+     * `GET /design/asset?root=<workspaceRoot>&path=<absPath>` — the headless
+     * counterpart to `webview.asWebviewUri` for local design/image assets.
+     *
+     * Security posture (this is the load-bearing check — do not loosen):
+     *  - The allow-list is the union over the server's OWN known roots. A
+     *    caller-supplied `root` is never consulted: honouring it would let the
+     *    caller choose whose config to read. The union also makes multi-root
+     *    workspaces work — a preview built for a secondary root cannot know which
+     *    root to name, and naming the wrong one would 403 a legitimate image.
+     *  - `path` must resolve inside one of the provider's configured
+     *    Design/HTML/Claude/Briefs/Images folders. The allow-list is produced by
+     *    the provider itself so the route can't drift from the provider's own
+     *    preview validation.
+     *  - Both the requested path and each allowed folder are realpath'd before the
+     *    prefix compare, so a symlink inside an allowed folder cannot point out.
+     *  - Only image extensions are served, with `nosniff` + a null CSP.
+     */
     private async _handleDesignAsset(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        const deny = (code: number, msg: string) => {
+            res.writeHead(code, { 'Content-Type': 'text/plain' });
+            res.end(msg);
+        };
         try {
             const url = new URL(req.url || '', `http://${req.headers.host}`);
-            const targetRoot = url.searchParams.get('root');
             const targetPath = url.searchParams.get('path');
             if (!targetPath) {
-                res.writeHead(400, { 'Content-Type': 'text/plain' });
-                res.end('path parameter is required');
+                deny(400, 'path parameter is required');
                 return;
             }
 
-            const workspaceRoots = targetRoot ? [targetRoot] : [this._options.workspaceRoot];
-            const allowedFolders = new Set<string>();
-            for (const root of workspaceRoots) {
-                try {
-                    const localFolderService = this._options.designPanelProvider?.getLocalFolderService(root);
-                    if (localFolderService) {
-                        localFolderService.getDesignFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
-                        localFolderService.getHtmlFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
-                        localFolderService.getClaudeFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
-                        localFolderService.getBriefsFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
-                        localFolderService.getImagesFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
-                    }
-                    const db = KanbanDatabase.forWorkspace(root);
-                    await db.ensureReady();
-                    const projects = await db.getStitchProjects();
-                    for (const p of projects) {
-                        allowedFolders.add(path.resolve(path.join(root, '.switchboard', 'stitch', p.id)));
-                    }
-                } catch {}
+            const getRoots = this._options.getDesignAssetRoots;
+            if (!getRoots) {
+                deny(503, 'Design asset serving not configured');
+                return;
             }
 
-            const resolvedPath = path.resolve(targetPath);
-            let isAllowed = false;
-            for (const folder of allowedFolders) {
-                if (resolvedPath === folder || resolvedPath.startsWith(folder + path.sep)) {
-                    isAllowed = true;
-                    break;
+            const realpath = (p: string): string | null => {
+                try { return fsSync.realpathSync(p); } catch { return null; }
+            };
+
+            // Union over the server's own roots — the `root` query param is carried by
+            // the URL for readability but deliberately NOT trusted as an input here.
+            const knownRoots = Array.from(new Set(
+                [this._options.workspaceRoot, ...(this._options.allRoots || [])]
+                    .filter(Boolean)
+                    .map(r => path.resolve(r))
+            ));
+            const allowedFolders: string[] = [];
+            for (const root of knownRoots) {
+                for (const folder of getRoots(root) || []) {
+                    if (!folder) continue;
+                    const real = realpath(path.resolve(folder));
+                    if (real) allowedFolders.push(real);
                 }
             }
 
+            const realTarget = realpath(path.resolve(targetPath));
+            const isAllowed = !!realTarget && allowedFolders.some(folder =>
+                realTarget === folder || realTarget.startsWith(folder + path.sep)
+            );
+
             if (!isAllowed) {
-                res.writeHead(403, { 'Content-Type': 'text/plain' });
-                res.end('Access denied: target path is not in configured design folders');
+                deny(403, 'Access denied: target path is not in a configured design folder');
+                return;
+            }
+            if (!LocalApiServer.DESIGN_ASSET_EXTENSIONS.has(path.extname(realTarget!).toLowerCase())) {
+                deny(403, 'Access denied: unsupported asset type');
                 return;
             }
 
-            if (!fsSync.existsSync(resolvedPath) || !fsSync.statSync(resolvedPath).isFile()) {
-                res.writeHead(404, { 'Content-Type': 'text/plain' });
-                res.end('Asset not found');
+            let data: Buffer;
+            try {
+                const stat = await fs.stat(realTarget!);
+                if (!stat.isFile()) { deny(404, 'Asset not found'); return; }
+                data = await fs.readFile(realTarget!);
+            } catch {
+                deny(404, 'Asset not found');
                 return;
             }
 
             res.writeHead(200, {
-                'Content-Type': this._serveStaticMimeType(resolvedPath),
-                'Cache-Control': 'public, max-age=3600',
+                'Content-Type': this._serveStaticMimeType(realTarget!),
+                'Cache-Control': 'no-cache',
+                'X-Content-Type-Options': 'nosniff',
+                'Content-Security-Policy': "default-src 'none'; sandbox",
             });
-            res.end(fsSync.readFileSync(resolvedPath));
+            res.end(data);
         } catch (err) {
             console.error('[LocalApiServer] _handleDesignAsset error:', err);
-            res.writeHead(500, { 'Content-Type': 'text/plain' });
-            res.end('Internal server error');
+            deny(500, 'Internal server error');
         }
     }
 

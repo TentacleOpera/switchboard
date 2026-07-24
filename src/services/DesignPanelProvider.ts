@@ -112,6 +112,28 @@ export class DesignPanelProvider implements vscode.Disposable {
     }
 
     /**
+     * Absolute folder paths the `GET /design/asset` route is allowed to serve from
+     * for `workspaceRoot` — exactly the user-configured Design/HTML/Claude/Briefs/
+     * Images folders this provider previews from. The allow-list lives here (not in
+     * LocalApiServer) so the HTTP route and the provider's own preview validation
+     * can never drift apart.
+     */
+    public getDesignAssetRoots(workspaceRoot: string): string[] {
+        try {
+            const service = this._getLocalFolderService(workspaceRoot);
+            return [
+                ...service.getDesignFolderPaths(),
+                ...service.getHtmlFolderPaths(),
+                ...service.getClaudeFolderPaths(),
+                ...service.getBriefsFolderPaths(),
+                ...service.getImagesFolderPaths(),
+            ].filter(Boolean);
+        } catch {
+            return [];
+        }
+    }
+
+    /**
      * Seam bundle accessor for migrated _handleMessage arms. Lazily builds the
      * vscode-backed bundle when the provider is driven before `_initDesignService`
      * ran (or when no workspace root resolved — seams still work; path-scoped
@@ -123,10 +145,6 @@ export class DesignPanelProvider implements vscode.Disposable {
             this._hostSeams = createVscodeHostSeams(this._getWorkspaceRoot() || '', this._context.secrets);
         }
         return this._hostSeams;
-    }
-
-    public setApiServer(server: any): void {
-        this._broadcaster?.setApiServer(server);
     }
 
     private _hostSeams?: HostSeams;
@@ -921,14 +939,14 @@ setTimeout(reportDims, 0);
                 for (const p of paths) {
                     if (fs.existsSync(p)) {
                         const watcher = this._seams().watcher.watchFolder(p, (event, filePath) => {
-                            this._sendHtmlDocsReady();
+                            this._scheduleHtmlDocsReady();
                             if (event !== 'delete') {
                                 this._autoRefreshHtmlPreview(filePath);
                             }
                         });
                         this._htmlFolderWatchers.push(watcher);
                         this._setupNativeFolderWatchFallback(p, this._htmlFolderNativeWatchers, (filePath) => {
-                            this._sendHtmlDocsReady();
+                            this._scheduleHtmlDocsReady();
                             this._autoRefreshHtmlPreview(filePath);
                         });
                     }
@@ -990,7 +1008,7 @@ setTimeout(reportDims, 0);
                 for (const p of paths) {
                     if (fs.existsSync(p)) {
                         const watcher = this._seams().watcher.watchFolder(p, (event, filePath) => {
-                            this._sendClaudeDocsReady();
+                            this._scheduleClaudeDocsReady();
                             // _autoRefreshHtmlPreview already checks _activeClaudePreview, so it
                             // covers Claude-tab auto-refresh too.
                             if (event !== 'delete') {
@@ -999,7 +1017,7 @@ setTimeout(reportDims, 0);
                         });
                         this._claudeFolderWatchers.push(watcher);
                         this._setupNativeFolderWatchFallback(p, this._claudeFolderNativeWatchers, (filePath) => {
-                            this._sendClaudeDocsReady();
+                            this._scheduleClaudeDocsReady();
                             this._autoRefreshHtmlPreview(filePath);
                         });
                     }
@@ -1018,7 +1036,7 @@ setTimeout(reportDims, 0);
                 const paths = service.getDesignFolderPaths();
                 for (const p of paths) {
                     if (fs.existsSync(p)) {
-                        const watcher = this._seams().watcher.watchFolder(p, () => this._sendDesignDocsReady());
+                        const watcher = this._seams().watcher.watchFolder(p, () => this._scheduleDesignDocsReady());
                         this._designFolderWatchers.push(watcher);
                     }
                 }
@@ -1026,59 +1044,79 @@ setTimeout(reportDims, 0);
         }
     }
 
-    private async _sendHtmlDocsReady(): Promise<void> {
+    /**
+     * Debounced watcher entry point — coalesces folder churn (a watched folder fires
+     * many times a second on content edits). Fire-and-forget: push only, no payload
+     * for a caller. Verb arms must use `_sendHtmlDocsReady` instead, which returns.
+     */
+    private _scheduleHtmlDocsReady(): void {
         if (this._htmlDocsDebounce) {
             clearTimeout(this._htmlDocsDebounce);
         }
-        this._htmlDocsDebounce = setTimeout(async () => {
+        this._htmlDocsDebounce = setTimeout(() => {
             this._htmlDocsDebounce = undefined;
-            try {
-                const allRoots = this._getWorkspaceRoots();
-                const allFiles: any[] = [];
-                const seenFilePaths = new Set<string>();
-                const configuredFolderPathsByRoot: Record<string, string[]> = {};
-
-                for (const root of allRoots) {
-                    try {
-                        const localFolderService = this._getLocalFolderService(root);
-                        const folderPaths = localFolderService.getHtmlFolderPaths();
-                        configuredFolderPathsByRoot[root] = folderPaths;
-
-                        const files = await localFolderService.listHtmlFiles();
-                        for (const f of files) {
-                            const absPath = path.resolve(f.sourceFolder, f.relativePath);
-                            if (!seenFilePaths.has(absPath)) {
-                                seenFilePaths.add(absPath);
-                                allFiles.push({ ...f, _root: root });
-                            }
-                        }
-                    } catch {}
-                }
-
-                this._updateWebviewRoots();
-
-                const payload = {
-                    type: 'htmlDocsReady',
-                    sourceId: 'html-folder',
-                    folderPathsByRoot: configuredFolderPathsByRoot,
-                    nodes: this._mapLocalFilesToTreeNodes(allFiles),
-                    workspaceItems: this._buildKanbanWorkspaceItems()
-                };
-                this.postMessage(payload);
-                return payload;
-            } catch (err) {
-                const errPayload = {
-                    type: 'htmlDocsReady',
-                    sourceId: 'html-folder',
-                    folderPathsByRoot: {},
-                    nodes: [],
-                    workspaceItems: this._buildKanbanWorkspaceItems(),
-                    error: String(err)
-                };
-                this.postMessage(errPayload);
-                return errPayload;
-            }
+            void this._sendHtmlDocsReady();
         }, 300);
+    }
+
+    /**
+     * Build + push + RETURN the HTML doc tree. Verb arms await this so the HTTP
+     * response body carries a renderable `htmlDocsReady` payload (return-contract:
+     * the browser cockpit has no webview to push to). Deliberately NOT debounced —
+     * a `return` inside a setTimeout callback resolves the callback, not this
+     * function, so a debounced body always hands the caller `undefined`.
+     */
+    private async _sendHtmlDocsReady(): Promise<any> {
+        if (this._htmlDocsDebounce) {
+            clearTimeout(this._htmlDocsDebounce);
+            this._htmlDocsDebounce = undefined;
+        }
+        try {
+            const allRoots = this._getWorkspaceRoots();
+            const allFiles: any[] = [];
+            const seenFilePaths = new Set<string>();
+            const configuredFolderPathsByRoot: Record<string, string[]> = {};
+
+            for (const root of allRoots) {
+                try {
+                    const localFolderService = this._getLocalFolderService(root);
+                    const folderPaths = localFolderService.getHtmlFolderPaths();
+                    configuredFolderPathsByRoot[root] = folderPaths;
+
+                    const files = await localFolderService.listHtmlFiles();
+                    for (const f of files) {
+                        const absPath = path.resolve(f.sourceFolder, f.relativePath);
+                        if (!seenFilePaths.has(absPath)) {
+                            seenFilePaths.add(absPath);
+                            allFiles.push({ ...f, _root: root });
+                        }
+                    }
+                } catch {}
+            }
+
+            this._updateWebviewRoots();
+
+            const payload = {
+                type: 'htmlDocsReady',
+                sourceId: 'html-folder',
+                folderPathsByRoot: configuredFolderPathsByRoot,
+                nodes: this._mapLocalFilesToTreeNodes(allFiles),
+                workspaceItems: this._buildKanbanWorkspaceItems()
+            };
+            this.postMessage(payload);
+            return payload;
+        } catch (err) {
+            const errPayload = {
+                type: 'htmlDocsReady',
+                sourceId: 'html-folder',
+                folderPathsByRoot: {},
+                nodes: [],
+                workspaceItems: this._buildKanbanWorkspaceItems(),
+                error: String(err)
+            };
+            this.postMessage(errPayload);
+            return errPayload;
+        }
     }
 
     private async _sendStitchHtmlDocsReady(workspaceRoot: string, projectId: string): Promise<void> {
@@ -1119,114 +1157,134 @@ setTimeout(reportDims, 0);
         }
     }
 
-    private async _sendClaudeDocsReady(): Promise<void> {
+    /** Debounced watcher entry point — see _scheduleHtmlDocsReady. */
+    private _scheduleClaudeDocsReady(): void {
         if (this._claudeDocsDebounce) {
             clearTimeout(this._claudeDocsDebounce);
         }
-        this._claudeDocsDebounce = setTimeout(async () => {
+        this._claudeDocsDebounce = setTimeout(() => {
             this._claudeDocsDebounce = undefined;
-            try {
-                const allRoots = this._getWorkspaceRoots();
-                const allFiles: any[] = [];
-                const seenFilePaths = new Set<string>();
-                const configuredFolderPathsByRoot: Record<string, string[]> = {};
-
-                for (const root of allRoots) {
-                    try {
-                        const localFolderService = this._getLocalFolderService(root);
-                        const folderPaths = localFolderService.getClaudeFolderPaths();
-                        configuredFolderPathsByRoot[root] = folderPaths;
-
-                        const files = await localFolderService.listClaudeFiles();
-                        for (const f of files) {
-                            const absPath = path.resolve(f.sourceFolder, f.relativePath);
-                            if (!seenFilePaths.has(absPath)) {
-                                seenFilePaths.add(absPath);
-                                allFiles.push({ ...f, _root: root });
-                            }
-                        }
-                    } catch {}
-                }
-
-                this._updateWebviewRoots();
-
-                const payload = {
-                    type: 'claudeDocsReady',
-                    sourceId: 'claude-folder',
-                    folderPathsByRoot: configuredFolderPathsByRoot,
-                    nodes: this._mapLocalFilesToTreeNodes(allFiles),
-                    workspaceItems: this._buildKanbanWorkspaceItems()
-                };
-                this.postMessage(payload);
-                return payload;
-            } catch (err) {
-                const errPayload = {
-                    type: 'claudeDocsReady',
-                    sourceId: 'claude-folder',
-                    folderPathsByRoot: {},
-                    nodes: [],
-                    workspaceItems: this._buildKanbanWorkspaceItems(),
-                    error: String(err)
-                };
-                this.postMessage(errPayload);
-                return errPayload;
-            }
+            void this._sendClaudeDocsReady();
         }, 300);
     }
 
-    private async _sendDesignDocsReady(): Promise<any> {
+    /** Build + push + RETURN the Claude doc tree — see _sendHtmlDocsReady. */
+    private async _sendClaudeDocsReady(): Promise<any> {
+        if (this._claudeDocsDebounce) {
+            clearTimeout(this._claudeDocsDebounce);
+            this._claudeDocsDebounce = undefined;
+        }
+        try {
+            const allRoots = this._getWorkspaceRoots();
+            const allFiles: any[] = [];
+            const seenFilePaths = new Set<string>();
+            const configuredFolderPathsByRoot: Record<string, string[]> = {};
+
+            for (const root of allRoots) {
+                try {
+                    const localFolderService = this._getLocalFolderService(root);
+                    const folderPaths = localFolderService.getClaudeFolderPaths();
+                    configuredFolderPathsByRoot[root] = folderPaths;
+
+                    const files = await localFolderService.listClaudeFiles();
+                    for (const f of files) {
+                        const absPath = path.resolve(f.sourceFolder, f.relativePath);
+                        if (!seenFilePaths.has(absPath)) {
+                            seenFilePaths.add(absPath);
+                            allFiles.push({ ...f, _root: root });
+                        }
+                    }
+                } catch {}
+            }
+
+            this._updateWebviewRoots();
+
+            const payload = {
+                type: 'claudeDocsReady',
+                sourceId: 'claude-folder',
+                folderPathsByRoot: configuredFolderPathsByRoot,
+                nodes: this._mapLocalFilesToTreeNodes(allFiles),
+                workspaceItems: this._buildKanbanWorkspaceItems()
+            };
+            this.postMessage(payload);
+            return payload;
+        } catch (err) {
+            const errPayload = {
+                type: 'claudeDocsReady',
+                sourceId: 'claude-folder',
+                folderPathsByRoot: {},
+                nodes: [],
+                workspaceItems: this._buildKanbanWorkspaceItems(),
+                error: String(err)
+            };
+            this.postMessage(errPayload);
+            return errPayload;
+        }
+    }
+
+    /** Debounced watcher entry point — see _scheduleHtmlDocsReady. */
+    private _scheduleDesignDocsReady(): void {
         if (this._designDocsDebounce) {
             clearTimeout(this._designDocsDebounce);
         }
-        this._designDocsDebounce = setTimeout(async () => {
+        this._designDocsDebounce = setTimeout(() => {
             this._designDocsDebounce = undefined;
-            try {
-                const allRoots = this._getWorkspaceRoots();
-                const allFiles: any[] = [];
-                const seenFilePaths = new Set<string>();
-                const configuredFolderPathsByRoot: Record<string, string[]> = {};
-
-                for (const root of allRoots) {
-                    try {
-                        const localFolderService = this._getLocalFolderService(root);
-                        const folderPaths = localFolderService.getDesignFolderPaths();
-                        configuredFolderPathsByRoot[root] = folderPaths;
-
-                        const files = await localFolderService.listDesignFiles();
-                        for (const f of files) {
-                            const absPath = path.resolve(f.sourceFolder, f.relativePath);
-                            if (!seenFilePaths.has(absPath)) {
-                                seenFilePaths.add(absPath);
-                                allFiles.push({ ...f, _root: root });
-                            }
-                        }
-                    } catch {}
-                }
-
-                this._updateWebviewRoots();
-
-                const payload = {
-                    type: 'designDocsReady',
-                    sourceId: 'design-folder',
-                    folderPathsByRoot: configuredFolderPathsByRoot,
-                    nodes: this._mapLocalFilesToTreeNodes(allFiles),
-                    workspaceItems: this._buildKanbanWorkspaceItems()
-                };
-                this.postMessage(payload);
-                return payload;
-            } catch (err) {
-                const errPayload = {
-                    type: 'designDocsReady',
-                    sourceId: 'design-folder',
-                    folderPathsByRoot: {},
-                    nodes: [],
-                    workspaceItems: this._buildKanbanWorkspaceItems(),
-                    error: String(err)
-                };
-                this.postMessage(errPayload);
-                return errPayload;
-            }
+            void this._sendDesignDocsReady();
         }, 300);
+    }
+
+    /** Build + push + RETURN the Design doc tree — see _sendHtmlDocsReady. */
+    private async _sendDesignDocsReady(): Promise<any> {
+        if (this._designDocsDebounce) {
+            clearTimeout(this._designDocsDebounce);
+            this._designDocsDebounce = undefined;
+        }
+        try {
+            const allRoots = this._getWorkspaceRoots();
+            const allFiles: any[] = [];
+            const seenFilePaths = new Set<string>();
+            const configuredFolderPathsByRoot: Record<string, string[]> = {};
+
+            for (const root of allRoots) {
+                try {
+                    const localFolderService = this._getLocalFolderService(root);
+                    const folderPaths = localFolderService.getDesignFolderPaths();
+                    configuredFolderPathsByRoot[root] = folderPaths;
+
+                    const files = await localFolderService.listDesignFiles();
+                    for (const f of files) {
+                        const absPath = path.resolve(f.sourceFolder, f.relativePath);
+                        if (!seenFilePaths.has(absPath)) {
+                            seenFilePaths.add(absPath);
+                            allFiles.push({ ...f, _root: root });
+                        }
+                    }
+                } catch {}
+            }
+
+            this._updateWebviewRoots();
+
+            const payload = {
+                type: 'designDocsReady',
+                sourceId: 'design-folder',
+                folderPathsByRoot: configuredFolderPathsByRoot,
+                nodes: this._mapLocalFilesToTreeNodes(allFiles),
+                workspaceItems: this._buildKanbanWorkspaceItems()
+            };
+            this.postMessage(payload);
+            return payload;
+        } catch (err) {
+            const errPayload = {
+                type: 'designDocsReady',
+                sourceId: 'design-folder',
+                folderPathsByRoot: {},
+                nodes: [],
+                workspaceItems: this._buildKanbanWorkspaceItems(),
+                error: String(err)
+            };
+            this.postMessage(errPayload);
+            return errPayload;
+        }
     }
 
     private _setupImagesFolderWatchers(): void {
@@ -1239,7 +1297,7 @@ setTimeout(reportDims, 0);
                 const paths = service.getImagesFolderPaths();
                 for (const p of paths) {
                     if (fs.existsSync(p)) {
-                        const watcher = this._seams().watcher.watchFolder(p, () => this._sendImagesDocsReady());
+                        const watcher = this._seams().watcher.watchFolder(p, () => this._scheduleImagesDocsReady());
                         this._imagesFolderWatchers.push(watcher);
                     }
                 }
@@ -1247,12 +1305,24 @@ setTimeout(reportDims, 0);
         }
     }
 
-    private async _sendImagesDocsReady(): Promise<any> {
+    /** Debounced watcher entry point — see _scheduleHtmlDocsReady. */
+    private _scheduleImagesDocsReady(): void {
         if (this._imagesDocsDebounce) {
             clearTimeout(this._imagesDocsDebounce);
         }
-        this._imagesDocsDebounce = setTimeout(async () => {
+        this._imagesDocsDebounce = setTimeout(() => {
             this._imagesDocsDebounce = undefined;
+            void this._sendImagesDocsReady();
+        }, 300);
+    }
+
+    /** Build + push + RETURN the Images doc tree — see _sendHtmlDocsReady. */
+    private async _sendImagesDocsReady(): Promise<any> {
+        if (this._imagesDocsDebounce) {
+            clearTimeout(this._imagesDocsDebounce);
+            this._imagesDocsDebounce = undefined;
+        }
+        {
             try {
                 const allRoots = this._getWorkspaceRoots();
                 const allFiles: any[] = [];
@@ -1299,7 +1369,7 @@ setTimeout(reportDims, 0);
                 this.postMessage(errPayload);
                 return errPayload;
             }
-        }, 300);
+        }
     }
 
     private _setupBriefsFolderWatchers(): void {
@@ -1312,7 +1382,7 @@ setTimeout(reportDims, 0);
                 const paths = service.getBriefsFolderPaths();
                 for (const p of paths) {
                     if (fs.existsSync(p)) {
-                        const watcher = this._seams().watcher.watchFolder(p, () => this._sendBriefsDocsReady());
+                        const watcher = this._seams().watcher.watchFolder(p, () => this._scheduleBriefsDocsReady());
                         this._briefsFolderWatchers.push(watcher);
                     }
                 }
@@ -1320,12 +1390,24 @@ setTimeout(reportDims, 0);
         }
     }
 
-    private async _sendBriefsDocsReady(): Promise<any> {
+    /** Debounced watcher entry point — see _scheduleHtmlDocsReady. */
+    private _scheduleBriefsDocsReady(): void {
         if (this._briefsDocsDebounce) {
             clearTimeout(this._briefsDocsDebounce);
         }
-        this._briefsDocsDebounce = setTimeout(async () => {
+        this._briefsDocsDebounce = setTimeout(() => {
             this._briefsDocsDebounce = undefined;
+            void this._sendBriefsDocsReady();
+        }, 300);
+    }
+
+    /** Build + push + RETURN the Briefs doc tree — see _sendHtmlDocsReady. */
+    private async _sendBriefsDocsReady(): Promise<any> {
+        if (this._briefsDocsDebounce) {
+            clearTimeout(this._briefsDocsDebounce);
+            this._briefsDocsDebounce = undefined;
+        }
+        {
             try {
                 const allRoots = this._getWorkspaceRoots();
                 const allFiles: any[] = [];
@@ -1372,7 +1454,7 @@ setTimeout(reportDims, 0);
                 this.postMessage(errPayload);
                 return errPayload;
             }
-        }, 300);
+        }
     }
 
     private _updateWebviewRoots(): void {
@@ -2246,7 +2328,12 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const imagesDocs = await this._sendImagesDocsReady();
                 const briefsDocs = await this._sendBriefsDocsReady();
                 await this._sendActiveDesignDocState();
-                return { success: true, items, statePayload, htmlDocs, claudeDocs, designDocs, imagesDocs, briefsDocs };
+                // `type` is mandatory for the browser return-contract: transport.js only
+                // re-dispatches a body that carries one (and it dispatches the body as a
+                // SINGLE MessageEvent — an array body would not be fanned out). design.js
+                // handles 'designReadyComplete' by re-dispatching each nested *DocsReady
+                // payload, so the existing per-tab render cases stay the only render path.
+                return { success: true, type: 'designReadyComplete', items, statePayload, htmlDocs, claudeDocs, designDocs, imagesDocs, briefsDocs };
             }
 
             case 'persistTabState': {
@@ -3459,21 +3546,25 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             }
 
             case 'refreshDocsForTab': {
-                let payload: any = null;
-                switch (message.tab) {
-                    case 'html-preview':
-                        payload = await this._sendHtmlDocsReady();
-                        break;
-                    case 'claude':
-                        payload = await this._sendClaudeDocsReady();
-                        break;
-                    case 'images':
-                        payload = await this._sendImagesDocsReady();
-                        break;
-                    case 'briefs':
-                        payload = await this._sendBriefsDocsReady();
-                        break;
-                }
+                // A tab→sender map rather than a nested switch: the senders now RETURN
+                // their `*DocsReady` payload (the browser return-contract), and a map
+                // keeps this arm free of nested `break` control flow so the Design
+                // return-contract ratchet stays honest.
+                //
+                // design.js only posts this for html-preview / images / briefs; 'design'
+                // is here so the map is total over the local tabs if DESIGN SYSTEM ever
+                // gains refresh-on-entry like its siblings. 'claude' has no tab in
+                // design.html at all — the entry (and _sendClaudeDocsReady itself) is
+                // dead, kept only because removing it is separate dead-code cleanup.
+                const tabSenders: Record<string, () => Promise<any>> = {
+                    'html-preview': () => this._sendHtmlDocsReady(),
+                    'claude': () => this._sendClaudeDocsReady(),
+                    'images': () => this._sendImagesDocsReady(),
+                    'briefs': () => this._sendBriefsDocsReady(),
+                    'design': () => this._sendDesignDocsReady(),
+                };
+                const tabSender = tabSenders[message.tab as string];
+                const payload = tabSender ? await tabSender() : null;
                 return { success: true, ...(payload || {}) };
             }
 
@@ -4262,7 +4353,13 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             } else {
                 fileContent = await fs.promises.readFile(absPath, 'utf8');
                 if (isHtmlFile) {
-                    webviewUri = getAssetUrl(absPath);
+                    // HTML keeps the webview-URI path only. Headless, the browser renders
+                    // HTML through the localhost `iframeSrc` below (a real directory-rooted
+                    // origin, so relative asset refs resolve); /design/asset is an
+                    // image-only route and would be a dead base href here.
+                    webviewUri = this._panel
+                        ? this._panel.webview.asWebviewUri(vscode.Uri.file(absPath)).toString()
+                        : undefined;
                 }
             }
 

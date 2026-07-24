@@ -1111,6 +1111,16 @@ export class KanbanProvider implements vscode.Disposable {
                 { type: 'updateWorkspaceSelection', workspaceRoot: root, workspaces: workspaceItems, activeFilter: null, projectFilter: this._projectFilter ?? null, projects, allWorkspaceProjects, controlPlaneMode: 'none', controlPlaneRoot: null, effectiveControlPlaneRoot: root, explicitControlPlaneRoot: root, pendingCandidate: null, repoScopeFilter: null, projectContextEnabled: false },
                 { type: 'cliTriggersState', enabled: this._cliTriggersEnabled },
                 { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig, featureWorktrees },
+                // Automation tab state rides the connect-time resync too, so the tab is
+                // populated even before its on-open getAutobanConfig verb returns.
+                // Omitted entirely when the sidebar hasn't relayed a state yet — pushing
+                // `state: undefined` would leave the UI on its loading placeholder.
+                ...(this._autobanState
+                    ? [
+                        { type: 'updateAutobanConfig', state: this._autobanState },
+                        { type: 'updatePairProgrammingMode', mode: this._autobanState.pairProgrammingMode },
+                    ]
+                    : []),
             ];
         } catch (err) {
             console.error('[KanbanProvider] getFullStateMessages error:', err);
@@ -6138,7 +6148,10 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
     public updateAutobanConfig(state: AutobanConfigState): void {
         this._autobanState = state;
         this._markConfigDirty();
-        if (!this._panel) { return; }
+        // No `_panel` guard: `postMessage` routes through the broadcaster, which fans
+        // out to the webview when one exists AND mirrors to the WS hub for the browser
+        // cockpit (where the panel is opened in the browser, so `_panel` is never set).
+        // Gating here made the cockpit's Automation tab stale until a full reload.
         this.postMessage({ type: 'updateAutobanConfig', state });
         this.postMessage({ type: 'updatePairProgrammingMode', mode: state.pairProgrammingMode });
     }

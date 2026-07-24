@@ -957,6 +957,7 @@ Each plan file must include:
         planningVerb,
         designVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
             designProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),
+        getDesignAssetRoots: (wsRoot: string) => designProvider.getDesignAssetRoots(wsRoot),
         setupVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
             setupProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),
         taskViewerVerb: (verb: string, payload: any, workspaceRootArg?: string) =>

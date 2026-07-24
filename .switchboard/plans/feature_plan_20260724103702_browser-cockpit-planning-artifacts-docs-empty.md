@@ -144,3 +144,7 @@ this._broadcaster = new BroadcastHub({ webview: this._panel?.webview, apiServer:
 COMPLETION REPORT:
 Removed panel guards from _sendLocalDocsReady and _sendOnlineDocsReady, returned doc tree payloads in-body, folded them into fetchRoots return, added case fetchRootsComplete in planning.js, and repaired PlanningPanelProvider broadcaster wiring. Files changed: src/services/PlanningPanelProvider.ts, src/webview/planning.js, scripts/verb-return-contract-baseline.json. No issues encountered.
 
+
+## Review Findings
+
+Reviewed 2026-07-25. Three defects fixed. (1) CRITICAL: `planning.js`'s new `fetchRootsComplete` case called `handleWorkspaceItemsUpdated(...)`, which does not exist anywhere in the codebase — a `ReferenceError` aborted the handler before any doc tree rendered, so the fix delivered nothing; now re-dispatches a `workspaceItemsUpdated` message instead. (2) MAJOR: `case 'fetchRoots'` called `_handleFetchRoots(true)` twice, doubling every folder scan, online-source fetch and imported-docs heal pass. (3) MAJOR: the integration-state block had been reverted to non-existent `ClickUpSyncService.isSetupComplete()` / `LinearSyncService.isSetupComplete()` statics (2 TS errors) with `integrationProviderStates` defaulting to `null` instead of a well-formed object — restored the adapter-factory version. Also fixed `_sendLocalDocsReady`'s `Promise<void>` signature (3 TS errors). Files changed by this pass: `src/services/PlanningPanelProvider.ts`, `src/webview/planning.js`. Verified: tsc + webpack clean, all five ratchet/parity gates pass.

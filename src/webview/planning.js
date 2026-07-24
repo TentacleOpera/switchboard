@@ -5212,7 +5212,15 @@
                 console.error('[PlanningPanel Webview] Backend error:', msg.message);
                 break;
             case 'fetchRootsComplete': {
-                if (msg.workspaceItems)   handleWorkspaceItemsUpdated({ items: msg.workspaceItems });
+                // Browser return-contract: fetchRoots' HTTP body carries the doc-tree
+                // payloads that the VS Code webview receives as separate pushes.
+                // workspaceItems is re-dispatched as its own message rather than handled
+                // inline so the dropdown-refresh logic lives in exactly one place.
+                if (msg.workspaceItems) {
+                    window.dispatchEvent(new MessageEvent('message', {
+                        data: { type: 'workspaceItemsUpdated', items: msg.workspaceItems }
+                    }));
+                }
                 if (msg.restoredTabState) {
                     _restoredPanelState.panel = msg.restoredTabState.panel || {};
                     _restoredPanelState.byRoot = msg.restoredTabState.byRoot || {};

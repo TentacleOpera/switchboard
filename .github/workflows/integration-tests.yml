@@ -43,6 +43,9 @@ jobs:
       - name: Claude mirror drift check
         run: npm run mirror:check
 
+      - name: Design asset route security contract
+        run: npm run test:contract:design-asset
+
       - name: Run integration suite
         run: npm run test:integration:all
 

@@ -182,6 +182,14 @@ const DESIGN_VERB_SCHEMAS: Record<string, VerbSchema> = {
 // external endpoints (/kanban/move, /kanban/dispatch route through them).
 
 const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
+    // Read verb backing the browser Automation tab. The arm dereferences nothing off
+    // `msg`, so every field is optional — a stricter schema would reject valid
+    // webview payloads on shipped installs (PRD contract #5).
+    getAutobanConfig: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
     // Dispatch hot path
     triggerAction: {
         fields: {
@@ -1447,11 +1455,6 @@ export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
     },
     queryArchives: {},
     resetDatabase: {},
-    getAutobanConfig: {
-        fields: {
-            workspaceRoot: { type: 'string' },
-        },
-    },
 };
 
 export const VERB_SCHEMAS: Record<ProviderKey, Record<string, VerbSchema>> = {

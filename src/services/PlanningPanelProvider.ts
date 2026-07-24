@@ -2572,19 +2572,26 @@ Start by checking which documents exist, then present the menu.`;
                     workspaces: integrationWorkspaces
                 });
 
-                await this._handleFetchRoots(true);
-
-                // Send integration provider preference
+                // ONE scan only. The doc-tree payloads are captured here and folded into
+                // the fetchRootsComplete return body below (browser HTTP rail); the same
+                // call already pushed them to the webview/WS. Calling this twice doubles
+                // every folder scan, online-source fetch and imported-docs heal pass.
                 const docTreeRoots = await this._handleFetchRoots(true);
 
-                let integrationProviderStates: any = null;
+                // Send integration provider preference
+                let integrationProviderStates: any = { clickupSetupComplete: false, linearSetupComplete: false, provider: null, ticketsAutoSync: false };
                 try {
-                    const workspaceRoot = this._getWorkspaceRoot() || (allRoots.length > 0 ? allRoots[0] : '');
-                    const clickupSetupComplete = await ClickUpSyncService.isSetupComplete();
-                    const linearSetupComplete = await LinearSyncService.isSetupComplete();
+                    const [clickUpConfig, linearConfig] = await Promise.all([
+                        this._adapterFactories.getClickUpSyncService(workspaceRoot).loadConfig(),
+                        this._adapterFactories.getLinearSyncService(workspaceRoot).loadConfig()
+                    ]);
+                    const clickupSetupComplete = clickUpConfig?.setupComplete === true;
+                    const linearSetupComplete = linearConfig?.setupComplete === true;
                     let activeProvider = this._activeTicketsProvider;
                     if (!activeProvider) {
-                        if (clickupSetupComplete) {
+                        if (clickupSetupComplete && linearSetupComplete) {
+                            activeProvider = 'clickup';
+                        } else if (clickupSetupComplete) {
                             activeProvider = 'clickup';
                         } else if (linearSetupComplete) {
                             activeProvider = 'linear';
@@ -8270,7 +8277,7 @@ Write the resulting markdown directly to the local file path, preserving any YAM
         }));
     }
 
-    private async _sendLocalDocsReady(force: boolean = false): Promise<void> {
+    private async _sendLocalDocsReady(force: boolean = false): Promise<any> {
         try {
             const allRoots = this._getWorkspaceRoots();
             const allFiles: Array<{ id: string; name: string; relativePath: string; isFolder?: boolean; parentId?: string; _root?: string; sourceFolder?: string; title?: string; createdMs?: number; mtimeMs?: number }> = [];
@@ -8340,6 +8347,12 @@ Write the resulting markdown directly to the local file path, preserving any YAM
             const mappedNodes = this._mapLocalFilesToTreeNodes(allFiles);
             const workspaceItems = this._buildKanbanWorkspaceItems();
 
+            // Content dedup: watched folders (e.g. an active Claude/Cursor projects dir)
+            // can churn many times a second from file CONTENT edits that don't change the
+            // list of docs. Re-posting an identical list re-renders the tree, flashes
+            // "loading local docs", and steals the active tab. Skip the PUSH when nothing
+            // changed — but still RETURN the payload so the HTTP return-contract (browser
+            // cockpit) always gets a renderable body, never an empty one.
             const signature = JSON.stringify({
                 folderPathsByRoot: configuredFolderPathsByRoot,
                 ticketsFolderPathsByRoot,

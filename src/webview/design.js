@@ -3248,6 +3248,19 @@
         }
 
         switch (msg.type) {
+            case 'designReadyComplete': {
+                // Browser return-contract: the `ready` verb's HTTP body carries the five
+                // local-tab doc trees that the VS Code webview receives as separate
+                // pushes. Re-dispatch each as its own message so the existing per-tab
+                // render cases below stay the single render path.
+                [msg.htmlDocs, msg.claudeDocs, msg.designDocs, msg.imagesDocs, msg.briefsDocs]
+                    .forEach(function (p) {
+                        if (p && p.type) {
+                            window.dispatchEvent(new MessageEvent('message', { data: p }));
+                        }
+                    });
+                break;
+            }
             case 'workspaceItemsUpdated': {
                 _workspaceItems = msg.items || [];
                 _registeredDropdowns.forEach(d => {
