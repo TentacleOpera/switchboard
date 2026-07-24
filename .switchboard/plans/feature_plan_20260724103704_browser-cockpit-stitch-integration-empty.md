@@ -125,3 +125,7 @@ Only if uncached (CDN) screens must render before the local cache warms: add `ht
 5. Live update (broadcaster fix): trigger a background project refresh → the dropdown updates without reload (WS `stitchProjectsReady` frame arrives).
 6. Unconfigured-key case: with no key, the tab shows the "API key not configured" banner (not a silent blank) — expected.
 7. VS Code webview regression: open the Design panel in the editor; Stitch projects, screens, and screenshots work exactly as before (assets still via `asWebviewUri`).
+
+COMPLETION REPORT:
+Added type 'stitchProjectsReady' and 'stitchScreensReady' to return bodies of stitchListProjects and stitchGetProjectScreens arms in DesignPanelProvider, and emitted served static URLs (/static/stitch/...) for cached screenshots when running headlessly. Files changed: src/services/DesignPanelProvider.ts. No issues encountered.
+

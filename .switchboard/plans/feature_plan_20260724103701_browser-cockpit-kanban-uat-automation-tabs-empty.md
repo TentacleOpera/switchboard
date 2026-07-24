@@ -135,3 +135,7 @@ Add `{ type:'updateAutobanConfig', state: this._autobanState }` (and pair mode i
 4. Live update check (broadcaster fix): change autoban state in the editor (or via API) → the cockpit Automation tab updates without reload; the board also live-updates. Confirm a `updateAutobanConfig` / `updateBoard` frame arrives over `/ws`.
 5. Fresh-session root check: open the cockpit before selecting a workspace in the browser; the UAT tab still populates (validates `_resolveWorkspaceRoot`).
 6. VS Code webview regression: open the board in the editor; UAT and Automation tabs still work exactly as before.
+
+COMPLETION REPORT:
+Implemented type 'uatData' in getUATData return body with workspace root resolution hardening, added getAutobanConfig read verb returning type 'updateAutobanConfig', and repaired KanbanProvider broadcaster wiring to store and attach _apiServer. Files changed: src/services/KanbanProvider.ts, protocol-catalog.json, src/services/verbSchemas.ts, src/generated/verbAllowlist.ts. No issues encountered; all parity and ratchet gates passed cleanly.
+

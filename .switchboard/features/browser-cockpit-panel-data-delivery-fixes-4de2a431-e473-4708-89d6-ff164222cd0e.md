@@ -27,9 +27,13 @@ Fix the four browser-cockpit bugs where panels render no content: Kanban UAT/Aut
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Browser Cockpit — Kanban UAT & Automation Tabs Render No Content](../plans/feature_plan_20260724103701_browser-cockpit-kanban-uat-automation-tabs-empty.md) — **PLAN REVIEWED**
-- [ ] [Browser Cockpit — Planning / Artifacts Tab Loads No Docs](../plans/feature_plan_20260724103702_browser-cockpit-planning-artifacts-docs-empty.md) — **PLAN REVIEWED**
-- [ ] [Browser Cockpit — Design View Renders No Content (Doc Trees, Images, Previews)](../plans/feature_plan_20260724103703_browser-cockpit-design-view-no-content.md) — **PLAN REVIEWED**
-- [ ] [Browser Cockpit — Stitch Integration Shows No Projects or Screens](../plans/feature_plan_20260724103704_browser-cockpit-stitch-integration-empty.md) — **PLAN REVIEWED**
+- [ ] [Browser Cockpit — Kanban UAT & Automation Tabs Render No Content](../plans/feature_plan_20260724103701_browser-cockpit-kanban-uat-automation-tabs-empty.md) — **CODER CODED**
+- [ ] [Browser Cockpit — Planning / Artifacts Tab Loads No Docs](../plans/feature_plan_20260724103702_browser-cockpit-planning-artifacts-docs-empty.md) — **CODER CODED**
+- [ ] [Browser Cockpit — Design View Renders No Content (Doc Trees, Images, Previews)](../plans/feature_plan_20260724103703_browser-cockpit-design-view-no-content.md) — **CODER CODED**
+- [ ] [Browser Cockpit — Stitch Integration Shows No Projects or Screens](../plans/feature_plan_20260724103704_browser-cockpit-stitch-integration-empty.md) — **CODER CODED**
 <!-- END SUBTASKS -->
+
+COMPLETION REPORT:
+Fixed empty panel rendering across Kanban UAT/Automation, Planning/Artifacts Docs, Design View local tabs & assets, and Stitch integration. Implemented typed HTTP return bodies, removed panel guards on headless doc senders, added GET /design/asset route for local asset delivery, and attached _apiServer on lazy provider init across Kanban, Planning, and Design providers. Files changed: src/services/KanbanProvider.ts, src/services/PlanningPanelProvider.ts, src/services/DesignPanelProvider.ts, src/services/LocalApiServer.ts, src/webview/planning.js, protocol-catalog.json, src/services/verbSchemas.ts, src/generated/verbAllowlist.ts, scripts/verb-return-contract-baseline.json. All parity and ratchet verification gates passed cleanly.
+
 

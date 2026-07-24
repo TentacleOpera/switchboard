@@ -140,3 +140,7 @@ this._broadcaster = new BroadcastHub({ webview: this._panel?.webview, apiServer:
 3. Standalone regression: run `npx switchboard` against a repo with docs; confirm the DOCS tree now shows local + online docs (previously only imported), proving the guard removal + return-contract works host-agnostically.
 4. Live update (broadcaster fix): add a file to a watched local doc folder → the tree updates in the cockpit without reload (WS `localDocsReady` frame arrives).
 5. VS Code webview regression: open the Planning panel in the editor; the DOCS tree loads and live-updates exactly as before (no double-render, no missing sub-trees).
+
+COMPLETION REPORT:
+Removed panel guards from _sendLocalDocsReady and _sendOnlineDocsReady, returned doc tree payloads in-body, folded them into fetchRoots return, added case fetchRootsComplete in planning.js, and repaired PlanningPanelProvider broadcaster wiring. Files changed: src/services/PlanningPanelProvider.ts, src/webview/planning.js, scripts/verb-return-contract-baseline.json. No issues encountered.
+

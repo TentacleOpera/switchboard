@@ -1067,9 +1067,23 @@ export class KanbanProvider implements vscode.Disposable {
             if (!db || !(await db.ensureReady())) return [];
             const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
             if (!wsId) return [];
-            const allPlans = await db.getAllPlans(wsId);
-            const sessionIds = allPlans.map(p => p.sessionId).filter((s): s is string => typeof s === 'string' && s.length > 0);
-            const cards = await this._buildCardsFromDbSessionIds(root, sessionIds);
+            // Source cards through the SAME pipeline the editor live-refresh path
+            // (refreshWithData) uses — getBoard (status='active') + getCompletedPlans,
+            // scoped by repoScope, then the shared _buildBoardCards helper. This kills
+            // the phantom-features bug (soft-deleted rows resurrecting via getAllPlans,
+            // which has no status clause) and the "FEATURE: 0 SUBTASKS" bug (the legacy
+            // _buildCardsFromDbSessionIds helper never set subtaskCount). Mirrors
+            // TaskViewerProvider._refreshRunSheetsImpl's query branch exactly: project
+            // filter stays client-side (pass null), only repoScope is a backend concern.
+            const repoScope = this.getRepoScopeFilter() ?? null;
+            const activeRows = repoScope
+                ? await db.getBoardFilteredByProject(wsId, null, repoScope)
+                : await db.getBoard(wsId);
+            const completedRows = repoScope
+                ? await db.getCompletedPlansFilteredByProject(wsId, null, repoScope)
+                : await db.getCompletedPlans(wsId);
+            const timeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
+            const cards = await this._buildBoardCards(db, wsId, root, activeRows, completedRows, timeoutMs);
             // Columns must reflect the user's CONFIGURED + filtered set (mirror the editor
             // refresh path) — NOT the raw built-in DEFAULT_KANBAN_COLUMNS, which shows
             // columns for agents the user hasn't configured.
@@ -1723,6 +1737,107 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     /**
+     * Filter out ghost plans: ACTIVE plan rows whose planFile no longer exists on disk.
+     * Completed plans bypass this (DB is source of truth for completed state — the file
+     * may have been archived/moved). Plans reassigned from another workspace may carry
+     * planFile paths outside the current workspaceRoot — those are legitimate and must
+     * NOT be filtered out. Shared by refreshWithData (column-occupancy computation) and
+     * _buildBoardCards (card pipeline) so the two paths cannot drift on the ghost rule.
+     */
+    private _filterGhostPlans(rows: KanbanPlanRecord[], resolvedWorkspaceRoot: string): KanbanPlanRecord[] {
+        return rows.filter(row => {
+            const planFile = row.planFile || '';
+            if (!planFile) return false;
+            let planPath = planFile;
+            if (planPath.startsWith('file://')) {
+                try {
+                    planPath = require('url').fileURLToPath(planPath);
+                } catch (e) {
+                    planPath = planPath.replace(/^file:\/\/\/?/, '');
+                    if (process.platform !== 'win32' && !planPath.startsWith('/')) {
+                        planPath = '/' + planPath;
+                    }
+                }
+            }
+            const resolvedPath = path.isAbsolute(planPath) ? planPath : path.resolve(resolvedWorkspaceRoot, planPath);
+            const exists = fs.existsSync(resolvedPath);
+            if (!exists) {
+                console.log(`[KanbanProvider] filterGhostPlans (activeRows): file does not exist: planFile=${planFile}, resolvedPath=${resolvedPath}`);
+            }
+            return exists;
+        });
+    }
+
+    /**
+     * Shared row→card pipeline used by BOTH the editor refresh (refreshWithData)
+     * and the browser WS resync (getFullStateMessages). Applies the ghost-plan
+     * file-existence filter to active rows, computes workspace-wide subtask
+     * counts and feature working states, and forces completed rows into the
+     * COMPLETED column. Keyed on plan_id throughout — sessionId is never used.
+     *
+     * `timeoutMs` is passed in by the caller (read from vscode config in
+     * refreshWithData, or from the standalone config provider) so the helper
+     * has no vscode dependency — keeping it pure and safe for standalone reuse.
+     */
+    private async _buildBoardCards(
+        db: KanbanDatabase,
+        workspaceId: string,
+        workspaceRoot: string,
+        activeRows: KanbanPlanRecord[],
+        completedRows: KanbanPlanRecord[],
+        timeoutMs: number
+    ): Promise<KanbanCard[]> {
+        const activeRowsFiltered = this._filterGhostPlans(activeRows, workspaceRoot);
+        // Completed plans intentionally bypass file-existence check — DB is source of truth for completed state
+        const completedRowsFiltered = completedRows.filter(row => !!row.planFile);
+
+        // Subtask counts must be computed workspace-wide (unfiltered), NOT from the
+        // project-filtered rows above — otherwise subtasks in a different project (or
+        // any assigned project while the board shows "__unassigned__") are excluded and
+        // every feature renders "0 SUBTASKS". See getSubtaskCountsByFeature.
+        const subtaskCountMap = await db.getSubtaskCountsByFeature(workspaceId);
+        const featureWorkingMap = await db.getFeatureWorkingStates(workspaceId, timeoutMs);
+
+        // Build cards directly from DB rows — no _resolveWorkspaceRoot that could return null
+        const cards: KanbanCard[] = activeRowsFiltered.map(row => {
+            return {
+                planId: row.planId,
+                sessionId: row.sessionId,
+                topic: row.topic || row.planFile || 'Untitled',
+                planFile: row.planFile || '',
+                column: this._normalizeLegacyKanbanColumn(row.kanbanColumn) || 'CREATED',
+                lastActivity: row.updatedAt || row.createdAt || '',
+                createdAt: row.createdAt || '',
+                complexity: row.complexity || 'Unknown',
+                workspaceRoot: workspaceRoot,
+                project: row.project || '',
+                isFeature: !!row.isFeature,
+                featureId: row.featureId || undefined,
+                subtaskCount: row.isFeature ? (subtaskCountMap.get(row.planId) || 0) : undefined,
+                working: row.isFeature ? (featureWorkingMap.get(row.planId) ?? false) : isWorkingState(row.dispatchedAt)
+            };
+        });
+
+        cards.push(...completedRowsFiltered.map(rec => ({
+            planId: rec.planId,
+            sessionId: rec.sessionId,
+            topic: rec.topic || rec.planFile || 'Untitled',
+            planFile: rec.planFile || '',
+            column: 'COMPLETED',
+            lastActivity: rec.updatedAt || rec.createdAt || '',
+            createdAt: rec.createdAt || '',
+            complexity: rec.complexity || 'Unknown',
+            workspaceRoot: workspaceRoot,
+            project: rec.project || '',
+            isFeature: !!rec.isFeature,
+            featureId: rec.featureId || undefined,
+            subtaskCount: rec.isFeature ? (subtaskCountMap.get(rec.planId) || 0) : undefined
+        })));
+
+        return cards;
+    }
+
+    /**
      * Refresh the board using pre-fetched DB rows (shared with sidebar).
      * This ensures sidebar and kanban render from the exact same DB snapshot.
      * Builds cards and posts DIRECTLY to webview — no intermediary that could silently fail.
@@ -1777,28 +1892,7 @@ export class KanbanProvider implements vscode.Disposable {
             // and should still appear in the COMPLETED column; the DB is the source of truth.
             // Note: plans reassigned from another workspace may have planFile paths outside
             // the current workspaceRoot — those are legitimate and must NOT be filtered out.
-            const filterGhostPlans = (rows: import('./KanbanDatabase').KanbanPlanRecord[]) => rows.filter(row => {
-                const planFile = row.planFile || '';
-                if (!planFile) return false;
-                let planPath = planFile;
-                if (planPath.startsWith('file://')) {
-                    try {
-                        planPath = require('url').fileURLToPath(planPath);
-                    } catch (e) {
-                        planPath = planPath.replace(/^file:\/\/\/?/, '');
-                        if (process.platform !== 'win32' && !planPath.startsWith('/')) {
-                            planPath = '/' + planPath;
-                        }
-                    }
-                }
-                const resolvedPath = path.isAbsolute(planPath) ? planPath : path.resolve(resolvedWorkspaceRoot, planPath);
-                const exists = fs.existsSync(resolvedPath);
-                if (!exists) {
-                    console.log(`[KanbanProvider] filterGhostPlans (activeRows): file does not exist: planFile=${planFile}, resolvedPath=${resolvedPath}`);
-                }
-                return exists;
-            });
-            const activeRowsFiltered = filterGhostPlans(activeRows);
+            const activeRowsFiltered = this._filterGhostPlans(activeRows, resolvedWorkspaceRoot);
             // Completed plans intentionally bypass file-existence check — DB is source of truth for completed state
             const completedRowsFiltered = completedRows.filter(row => !!row.planFile);
 
@@ -1809,56 +1903,15 @@ export class KanbanProvider implements vscode.Disposable {
             const allActiveRows = filterActive && workspaceId && typeof (db as any).getBoard === 'function'
                 ? await db.getBoard(workspaceId)
                 : activeRows;
-            const allActiveRowsFiltered = filterActive ? filterGhostPlans(allActiveRows) : activeRowsFiltered;
+            const allActiveRowsFiltered = filterActive ? this._filterGhostPlans(allActiveRows, resolvedWorkspaceRoot) : activeRowsFiltered;
             const allCards: Array<{ column: string }> = allActiveRowsFiltered.map(row => ({
                 column: this._normalizeLegacyKanbanColumn(row.kanbanColumn) || 'CREATED'
             }));
 
-            // Subtask counts must be computed workspace-wide (unfiltered), NOT from the
-            // project-filtered rows above — otherwise subtasks in a different project (or
-            // any assigned project while the board shows "__unassigned__") are excluded and
-            // every feature renders "0 SUBTASKS". See getSubtaskCountsByFeature.
-            const subtaskCountMap = await db.getSubtaskCountsByFeature(workspaceId ?? '');
-            const featureWorkingMap = await db.getFeatureWorkingStates(
-                workspaceId ?? '',
-                vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS)
-            );
-
-            // Build cards directly from DB rows — no _resolveWorkspaceRoot that could return null
-            const cards: KanbanCard[] = activeRowsFiltered.map(row => {
-                return {
-                    planId: row.planId,
-                    sessionId: row.sessionId,
-                    topic: row.topic || row.planFile || 'Untitled',
-                    planFile: row.planFile || '',
-                    column: this._normalizeLegacyKanbanColumn(row.kanbanColumn) || 'CREATED',
-                    lastActivity: row.updatedAt || row.createdAt || '',
-                    createdAt: row.createdAt || '',
-                    complexity: row.complexity || 'Unknown',
-                    workspaceRoot: resolvedWorkspaceRoot,
-                    project: row.project || '',
-                    isFeature: !!row.isFeature,
-                    featureId: row.featureId || undefined,
-                    subtaskCount: row.isFeature ? (subtaskCountMap.get(row.planId) || 0) : undefined,
-                    working: row.isFeature ? (featureWorkingMap.get(row.planId) ?? false) : isWorkingState(row.dispatchedAt)
-                };
-            });
-
-            cards.push(...completedRowsFiltered.map(rec => ({
-                planId: rec.planId,
-                sessionId: rec.sessionId,
-                topic: rec.topic || rec.planFile || 'Untitled',
-                planFile: rec.planFile || '',
-                column: 'COMPLETED',
-                lastActivity: rec.updatedAt || rec.createdAt || '',
-                createdAt: rec.createdAt || '',
-                complexity: rec.complexity || 'Unknown',
-                workspaceRoot: resolvedWorkspaceRoot,
-                project: rec.project || '',
-                isFeature: !!rec.isFeature,
-                featureId: rec.featureId || undefined,
-                subtaskCount: rec.isFeature ? (subtaskCountMap.get(rec.planId) || 0) : undefined
-            })));
+            // Build cards via the shared row→card pipeline (also used by the browser WS
+            // resync in getFullStateMessages) so the editor and browser cannot drift.
+            const timeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
+            const cards = await this._buildBoardCards(db, workspaceId ?? '', resolvedWorkspaceRoot, activeRows, completedRows, timeoutMs);
 
             this._lastCards = cards;
 
@@ -6862,9 +6915,12 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
         }
         this._hostSeams = createVscodeHostSeams(workspaceRoot, this._context.secrets);
         if (!this._broadcaster) {
-            this._broadcaster = new BroadcastHub({ webview: this._panel?.webview, apiServer: null });
+            this._broadcaster = new BroadcastHub({ webview: this._panel?.webview, apiServer: this._apiServer ?? null });
         } else {
             this._broadcaster.setWebview(this._panel?.webview);
+            if (this._apiServer) {
+                this._broadcaster.setApiServer(this._apiServer);
+            }
         }
         const provider = this;
         const ctx: KanbanServiceContext = {
@@ -6898,7 +6954,10 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
         }
     }
 
+    private _apiServer?: any;
+
     public setApiServer(server: any): void {
+        this._apiServer = server;
         this._broadcaster?.setApiServer(server);
     }
 
@@ -7022,6 +7081,15 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
 
 
 
+    /**
+     * @deprecated Legacy sessionId-keyed card lookup. Sole remaining caller is the
+     * `promptSelected` `_lastCards`-miss fallback (~line 8867), which receives
+     * planId-or-sessionId values from a webview message contract and already falls
+     * back to getPlanByPlanId. Never use this for board/resync data — it never sets
+     * subtaskCount (so features render "0 SUBTASKS"), drops rows with empty
+     * session_id, and re-looks-up every plan one SELECT at a time. Board and WS
+     * resync now route through the shared _buildBoardCards pipeline instead.
+     */
     private async _buildCardsFromDbSessionIds(workspaceRoot: string, sessionIds: string[]): Promise<KanbanCard[]> {
         const db = (this as any)._getKanbanDb(workspaceRoot);
         if (!db || !(await db.ensureReady())) {
@@ -7633,6 +7701,9 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                     return { success: true, config };
                 }
                 return { success: false, error: 'config is required' };
+            }
+            case 'getAutobanConfig': {
+                return { success: true, type: 'updateAutobanConfig', state: this._autobanState };
             }
             case 'updateAutobanConfig': {
                 if (this._taskViewerProvider && msg.state) {
@@ -10039,7 +10110,7 @@ ${FOCUS_DIRECTIVE}`;
                 }
             }
             case 'getUATData': {
-                const workspaceRoot = this._currentWorkspaceRoot;
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (workspaceRoot) {
                     const db = this._getKanbanDb(workspaceRoot);
                     const workspaceId = await this._readWorkspaceId(workspaceRoot) || await db.getWorkspaceId() || await db.getDominantWorkspaceId();
@@ -10098,7 +10169,7 @@ ${FOCUS_DIRECTIVE}`;
                             }
                         }
                         this.postMessage({ type: 'uatData', plans: plansWithSteps });
-                        return { success: true, plans: plansWithSteps };
+                        return { success: true, type: 'uatData', plans: plansWithSteps };
                     }
                 }
                 return { success: false, error: 'No workspace root or workspace id resolved' };

@@ -1447,6 +1447,11 @@ export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
     },
     queryArchives: {},
     resetDatabase: {},
+    getAutobanConfig: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
 };
 
 export const VERB_SCHEMAS: Record<ProviderKey, Record<string, VerbSchema>> = {

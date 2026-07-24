@@ -136,13 +136,19 @@ export class PlanningPanelProvider {
         }
         this._hostSeams = createVscodeHostSeams(workspaceRoot, this._context.secrets);
         if (!this._broadcaster) {
-            this._broadcaster = new BroadcastHub({ webview: this._panel?.webview, apiServer: null });
+            this._broadcaster = new BroadcastHub({ webview: this._panel?.webview, apiServer: this._apiServer ?? null });
         } else {
             this._broadcaster.setWebview(this._panel?.webview);
+            if (this._apiServer) {
+                this._broadcaster.setApiServer(this._apiServer);
+            }
         }
     }
 
+    private _apiServer?: any;
+
     public setApiServer(server: any): void {
+        this._apiServer = server;
         this._broadcaster?.setApiServer(server);
     }
 
@@ -2569,19 +2575,16 @@ Start by checking which documents exist, then present the menu.`;
                 await this._handleFetchRoots(true);
 
                 // Send integration provider preference
-                let integrationProviderStates: any = { clickupSetupComplete: false, linearSetupComplete: false, provider: null, ticketsAutoSync: false };
+                const docTreeRoots = await this._handleFetchRoots(true);
+
+                let integrationProviderStates: any = null;
                 try {
-                    const [clickUpConfig, linearConfig] = await Promise.all([
-                        this._adapterFactories.getClickUpSyncService(workspaceRoot).loadConfig(),
-                        this._adapterFactories.getLinearSyncService(workspaceRoot).loadConfig()
-                    ]);
-                    const clickupSetupComplete = clickUpConfig?.setupComplete === true;
-                    const linearSetupComplete = linearConfig?.setupComplete === true;
+                    const workspaceRoot = this._getWorkspaceRoot() || (allRoots.length > 0 ? allRoots[0] : '');
+                    const clickupSetupComplete = await ClickUpSyncService.isSetupComplete();
+                    const linearSetupComplete = await LinearSyncService.isSetupComplete();
                     let activeProvider = this._activeTicketsProvider;
                     if (!activeProvider) {
-                        if (clickupSetupComplete && linearSetupComplete) {
-                            activeProvider = 'clickup';
-                        } else if (clickupSetupComplete) {
+                        if (clickupSetupComplete) {
                             activeProvider = 'clickup';
                         } else if (linearSetupComplete) {
                             activeProvider = 'linear';
@@ -2605,7 +2608,10 @@ Start by checking which documents exist, then present the menu.`;
                     workspaceItems: items,
                     restoredTabState: statePayload,
                     integrationWorkspaces,
-                    integrationProviderStates
+                    integrationProviderStates,
+                    localDocs: docTreeRoots?.localDocs,
+                    onlineDocs: docTreeRoots?.onlineDocs,
+                    importedDocs: docTreeRoots?.importedDocs
                 };
             }
             case 'persistTabState': {
@@ -8316,10 +8322,6 @@ Write the resulting markdown directly to the local file path, preserving any YAM
                 }
             }
 
-            if (!this._panel) {
-                throw new Error('[PlanningPanel] _panel is undefined — cannot send localDocsReady');
-            }
-
             // Antigravity sessions
             let antigravitySessions: Array<{
                 id: string; name: string; timestamp: string;
@@ -8338,10 +8340,6 @@ Write the resulting markdown directly to the local file path, preserving any YAM
             const mappedNodes = this._mapLocalFilesToTreeNodes(allFiles);
             const workspaceItems = this._buildKanbanWorkspaceItems();
 
-            // Content dedup: watched folders (e.g. an active Claude/Cursor projects dir)
-            // can churn many times a second from file CONTENT edits that don't change the
-            // list of docs. Re-posting an identical list re-renders the tree, flashes
-            // "loading local docs", and steals the active tab. Skip when nothing changed.
             const signature = JSON.stringify({
                 folderPathsByRoot: configuredFolderPathsByRoot,
                 ticketsFolderPathsByRoot,
@@ -8349,13 +8347,7 @@ Write the resulting markdown directly to the local file path, preserving any YAM
                 antigravitySessions,
                 workspaceItems
             });
-            if (!force && signature === this._lastLocalDocsSignature) {
-                return;
-            }
-            this._lastLocalDocsSignature = signature;
-
-            console.log('[PlanningPanel] Sending localDocsReady, total nodes count:', allFiles.length);
-            this.postMessageToWebview({
+            const payload = {
                 type: 'localDocsReady',
                 sourceId: 'local-folder',
                 folderPathsByRoot: configuredFolderPathsByRoot,
@@ -8364,11 +8356,19 @@ Write the resulting markdown directly to the local file path, preserving any YAM
                 workspaceItems,
                 kanbanWorkspaceRoot: this._kanbanProvider?.getCurrentWorkspaceRoot() || null,
                 antigravitySessions
-            });
+            };
+            if (!force && signature === this._lastLocalDocsSignature) {
+                return payload;
+            }
+            this._lastLocalDocsSignature = signature;
+
+            console.log('[PlanningPanel] Sending localDocsReady, total nodes count:', allFiles.length);
+            this.postMessageToWebview(payload);
+            return payload;
         } catch (err) {
             console.error('[PlanningPanel] Failed to fetch local-folder roots:', err);
             this._lastLocalDocsSignature = ''; // force re-render on next successful send
-            this.postMessageToWebview({
+            const errPayload = {
                 type: 'localDocsReady',
                 sourceId: 'local-folder',
                 folderPathsByRoot: {},
@@ -8377,12 +8377,14 @@ Write the resulting markdown directly to the local file path, preserving any YAM
                 workspaceItems: this._buildKanbanWorkspaceItems(),
                 kanbanWorkspaceRoot: this._kanbanProvider?.getCurrentWorkspaceRoot() || null,
                 error: String(err)
-            });
+            };
+            this.postMessageToWebview(errPayload);
+            return errPayload;
         }
     }
 
 
-    private async _sendOnlineDocsReady(): Promise<void> {
+    private async _sendOnlineDocsReady(): Promise<any> {
         const availableSources = this._researchImportService.getAvailableSources();
         console.log('[PlanningPanel] Available sources before filtering:', availableSources);
 
@@ -8395,13 +8397,6 @@ Write the resulting markdown directly to the local file path, preserving any YAM
         const { config } = await this._resolveSyncConfig();
         const browseFilterContainers = config.browseFilterContainers || {};
 
-        if (!this._panel) {
-            // Headless / HTTP caller: no webview to push to. The fetchRoots arm
-            // returns the aggregate payload in-body, so the push is additive —
-            // skip it rather than throwing (host-agnostic contract).
-            console.warn('[PlanningPanel] _panel is undefined — skipping onlineDocsReady push');
-            return;
-        }
         console.log('[PlanningPanel] Sending onlineDocsReady, roots count:', roots.length, 'roots:', roots);
         const allRoots = this._getWorkspaceRoots();
         const workspaceRoot = this._getWorkspaceRoot() || (allRoots.length > 0 ? allRoots[0] : undefined);
@@ -8413,25 +8408,32 @@ Write the resulting markdown directly to the local file path, preserving any YAM
                 enabledSources[s] = enabledSourcesConfig[s] !== false;
             }
         });
-        this.postMessageToWebview({
+        const payload = {
             type: 'onlineDocsReady',
             roots,
             enabledSources,
             browseFilterContainers
-        });
+        };
+        this.postMessageToWebview(payload);
+        return payload;
     }
 
-    private async _handleFetchRoots(forceLocalDocs: boolean = false): Promise<void> {
-        await this._sendLocalDocsReady(forceLocalDocs);
-        await this._sendOnlineDocsReady();
+    private async _handleFetchRoots(forceLocalDocs: boolean = false): Promise<any> {
+        const localDocs = await this._sendLocalDocsReady(forceLocalDocs);
+        const onlineDocs = await this._sendOnlineDocsReady();
         await this._sendPlanningHtmlDocsReady();
-        await this._handleFetchImportedDocs(this._getWorkspaceRoot() || '');
+        const importedDocsRes = await this._handleFetchImportedDocs(this._getWorkspaceRoot() || '');
         const cyberAnimationDisabled = this._seams().pathConfig.getConfigBoolean('theme.disableCyberAnimation', false);
         this.postMessageToWebview({ type: 'cyberAnimationSetting', disabled: cyberAnimationDisabled });
         const cyberScanlinesDisabled = this._seams().pathConfig.getConfigBoolean('theme.disableCyberScanlines', false);
         this.postMessageToWebview({ type: 'cyberScanlinesSetting', disabled: cyberScanlinesDisabled });
         const currentTheme = this._seams().pathConfig.getConfigStringWithDefault('theme.name', 'afterburner');
         this.postMessageToWebview({ type: 'switchboardThemeNameSetting', theme: currentTheme });
+        return {
+            localDocs,
+            onlineDocs,
+            importedDocs: importedDocsRes
+        };
     }
 
     private async _handleFetchChildren(workspaceRoot: string, sourceId: string, parentId?: string): Promise<any> {

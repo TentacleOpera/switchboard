@@ -95,10 +95,20 @@ export class DesignPanelProvider implements vscode.Disposable {
         }
         this._hostSeams = createVscodeHostSeams(workspaceRoot, this._context.secrets);
         if (!this._broadcaster) {
-            this._broadcaster = new BroadcastHub({ webview: this._panel?.webview, apiServer: null });
+            this._broadcaster = new BroadcastHub({ webview: this._panel?.webview, apiServer: this._apiServer ?? null });
         } else {
             this._broadcaster.setWebview(this._panel?.webview);
+            if (this._apiServer) {
+                this._broadcaster.setApiServer(this._apiServer);
+            }
         }
+    }
+
+    private _apiServer?: any;
+
+    public setApiServer(server: any): void {
+        this._apiServer = server;
+        this._broadcaster?.setApiServer(server);
     }
 
     /**
@@ -1045,25 +1055,28 @@ setTimeout(reportDims, 0);
                     } catch {}
                 }
 
-                if (!this._panel) return;
                 this._updateWebviewRoots();
 
-                this.postMessage({
+                const payload = {
                     type: 'htmlDocsReady',
                     sourceId: 'html-folder',
                     folderPathsByRoot: configuredFolderPathsByRoot,
                     nodes: this._mapLocalFilesToTreeNodes(allFiles),
                     workspaceItems: this._buildKanbanWorkspaceItems()
-                });
+                };
+                this.postMessage(payload);
+                return payload;
             } catch (err) {
-                this.postMessage({
+                const errPayload = {
                     type: 'htmlDocsReady',
                     sourceId: 'html-folder',
                     folderPathsByRoot: {},
                     nodes: [],
                     workspaceItems: this._buildKanbanWorkspaceItems(),
                     error: String(err)
-                });
+                };
+                this.postMessage(errPayload);
+                return errPayload;
             }
         }, 300);
     }
@@ -1135,30 +1148,33 @@ setTimeout(reportDims, 0);
                     } catch {}
                 }
 
-                if (!this._panel) return;
                 this._updateWebviewRoots();
 
-                this.postMessage({
+                const payload = {
                     type: 'claudeDocsReady',
                     sourceId: 'claude-folder',
                     folderPathsByRoot: configuredFolderPathsByRoot,
                     nodes: this._mapLocalFilesToTreeNodes(allFiles),
                     workspaceItems: this._buildKanbanWorkspaceItems()
-                });
+                };
+                this.postMessage(payload);
+                return payload;
             } catch (err) {
-                this.postMessage({
+                const errPayload = {
                     type: 'claudeDocsReady',
                     sourceId: 'claude-folder',
                     folderPathsByRoot: {},
                     nodes: [],
                     workspaceItems: this._buildKanbanWorkspaceItems(),
                     error: String(err)
-                });
+                };
+                this.postMessage(errPayload);
+                return errPayload;
             }
         }, 300);
     }
 
-    private async _sendDesignDocsReady(): Promise<void> {
+    private async _sendDesignDocsReady(): Promise<any> {
         if (this._designDocsDebounce) {
             clearTimeout(this._designDocsDebounce);
         }
@@ -1187,25 +1203,28 @@ setTimeout(reportDims, 0);
                     } catch {}
                 }
 
-                if (!this._panel) return;
                 this._updateWebviewRoots();
 
-                this.postMessage({
+                const payload = {
                     type: 'designDocsReady',
                     sourceId: 'design-folder',
                     folderPathsByRoot: configuredFolderPathsByRoot,
                     nodes: this._mapLocalFilesToTreeNodes(allFiles),
                     workspaceItems: this._buildKanbanWorkspaceItems()
-                });
+                };
+                this.postMessage(payload);
+                return payload;
             } catch (err) {
-                this.postMessage({
+                const errPayload = {
                     type: 'designDocsReady',
                     sourceId: 'design-folder',
                     folderPathsByRoot: {},
                     nodes: [],
                     workspaceItems: this._buildKanbanWorkspaceItems(),
                     error: String(err)
-                });
+                };
+                this.postMessage(errPayload);
+                return errPayload;
             }
         }, 300);
     }
@@ -1228,7 +1247,7 @@ setTimeout(reportDims, 0);
         }
     }
 
-    private async _sendImagesDocsReady(): Promise<void> {
+    private async _sendImagesDocsReady(): Promise<any> {
         if (this._imagesDocsDebounce) {
             clearTimeout(this._imagesDocsDebounce);
         }
@@ -1257,25 +1276,28 @@ setTimeout(reportDims, 0);
                     } catch {}
                 }
 
-                if (!this._panel) return;
                 this._updateWebviewRoots();
 
-                this.postMessage({
+                const payload = {
                     type: 'imagesDocsReady',
                     sourceId: 'images-folder',
                     folderPathsByRoot: configuredFolderPathsByRoot,
                     nodes: this._mapLocalFilesToTreeNodes(allFiles),
                     workspaceItems: this._buildKanbanWorkspaceItems()
-                });
+                };
+                this.postMessage(payload);
+                return payload;
             } catch (err) {
-                this.postMessage({
+                const errPayload = {
                     type: 'imagesDocsReady',
                     sourceId: 'images-folder',
                     folderPathsByRoot: {},
                     nodes: [],
                     workspaceItems: this._buildKanbanWorkspaceItems(),
                     error: String(err)
-                });
+                };
+                this.postMessage(errPayload);
+                return errPayload;
             }
         }, 300);
     }
@@ -1298,7 +1320,7 @@ setTimeout(reportDims, 0);
         }
     }
 
-    private async _sendBriefsDocsReady(): Promise<void> {
+    private async _sendBriefsDocsReady(): Promise<any> {
         if (this._briefsDocsDebounce) {
             clearTimeout(this._briefsDocsDebounce);
         }
@@ -1327,25 +1349,28 @@ setTimeout(reportDims, 0);
                     } catch {}
                 }
 
-                if (!this._panel) return;
                 this._updateWebviewRoots();
 
-                this.postMessage({
+                const payload = {
                     type: 'briefsDocsReady',
                     sourceId: 'briefs-folder',
                     folderPathsByRoot: configuredFolderPathsByRoot,
                     nodes: this._mapLocalFilesToTreeNodes(allFiles),
                     workspaceItems: this._buildKanbanWorkspaceItems()
-                });
+                };
+                this.postMessage(payload);
+                return payload;
             } catch (err) {
-                this.postMessage({
+                const errPayload = {
                     type: 'briefsDocsReady',
                     sourceId: 'briefs-folder',
                     folderPathsByRoot: {},
                     nodes: [],
                     workspaceItems: this._buildKanbanWorkspaceItems(),
                     error: String(err)
-                });
+                };
+                this.postMessage(errPayload);
+                return errPayload;
             }
         }, 300);
     }
@@ -1483,12 +1508,19 @@ setTimeout(reportDims, 0);
         deviceType: string; status: string; statusMessage: string;
         summary?: string; suggestionsJson?: string;
     }, workspaceRoot: string): Promise<any> {
-        const filePath = path.join(this._getImageCacheDir(workspaceRoot, cached.projectId), `${path.basename(cached.id)}.png`);
+        const screenId = path.basename(cached.id);
+        const projectDir = this._getImageCacheDir(workspaceRoot, cached.projectId);
+        const filePath = path.join(projectDir, `${screenId}.png`);
         let imageUrl = '';
         let imagePath = '';
         try {
             await fs.promises.stat(filePath);
-            imageUrl = this._panel?.webview.asWebviewUri(vscode.Uri.file(filePath)).toString() || '';
+            if (this._panel) {
+                imageUrl = this._panel.webview.asWebviewUri(vscode.Uri.file(filePath)).toString();
+            } else {
+                const projectFolder = path.basename(projectDir);
+                imageUrl = `/static/stitch/${encodeURIComponent(projectFolder)}/${encodeURIComponent(screenId)}.png`;
+            }
             imagePath = filePath;
         } catch {}
         let suggestions: Array<{ label: string; prompt: string }> = [];
@@ -1554,8 +1586,14 @@ setTimeout(reportDims, 0);
         if (filePath) {
             try {
                 await fs.promises.stat(filePath);
-                const uri = this._panel?.webview.asWebviewUri(vscode.Uri.file(filePath)).toString() || '';
-                if (uri) return uri;
+                if (this._panel) {
+                    const uri = this._panel.webview.asWebviewUri(vscode.Uri.file(filePath)).toString();
+                    if (uri) return uri;
+                } else {
+                    const projectFolder = path.basename(cacheDir);
+                    const screenId = path.basename(screen.id);
+                    return `/static/stitch/${encodeURIComponent(projectFolder)}/${encodeURIComponent(screenId)}.png`;
+                }
             } catch { /* not cached yet */ }
         }
 
@@ -2202,13 +2240,13 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 this.postMessage({ type: 'switchboardThemeChanged', theme: pathConfig.getConfigStringWithDefault('theme.name', 'afterburner') });
                 this.postMessage({ type: 'cyberAnimationSetting', disabled: pathConfig.getConfigBoolean('theme.disableCyberAnimation', false) });
                 this.postMessage({ type: 'cyberScanlinesSetting', disabled: pathConfig.getConfigBoolean('theme.disableCyberScanlines', false) });
-                await this._sendHtmlDocsReady();
-                await this._sendClaudeDocsReady();
-                await this._sendDesignDocsReady();
-                await this._sendImagesDocsReady();
-                await this._sendBriefsDocsReady();
+                const htmlDocs = await this._sendHtmlDocsReady();
+                const claudeDocs = await this._sendClaudeDocsReady();
+                const designDocs = await this._sendDesignDocsReady();
+                const imagesDocs = await this._sendImagesDocsReady();
+                const briefsDocs = await this._sendBriefsDocsReady();
                 await this._sendActiveDesignDocState();
-                return { success: true, items, statePayload };
+                return { success: true, items, statePayload, htmlDocs, claudeDocs, designDocs, imagesDocs, briefsDocs };
             }
 
             case 'persistTabState': {
@@ -2902,13 +2940,13 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         if (changed) {
                             this.postMessage({ type: 'stitchProjectsReady', projects, defaultProjectId, defaultModelId, defaultCreativeRange, workspaceRoot });
                         }
-                        return { success: true, projects, defaultProjectId, defaultModelId, defaultCreativeRange };
+                        return { success: true, type: 'stitchProjectsReady', projects, defaultProjectId, defaultModelId, defaultCreativeRange };
                     } catch (refreshErr: any) {
                         // Cache was already served — a failed background refresh shouldn't
                         // paint an error over a working dropdown.
                         if (!servedFromCache) throw refreshErr;
                         console.error('Stitch background project refresh failed:', refreshErr);
-                        return { success: true, projects: dbProjects, defaultProjectId, defaultModelId, defaultCreativeRange };
+                        return { success: true, type: 'stitchProjectsReady', projects: dbProjects, defaultProjectId, defaultModelId, defaultCreativeRange };
                     }
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
@@ -3007,7 +3045,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     // signed URL expires. Covers screens served purely from cache above,
                     // which never pass through _formatScreen.
                     void this._backfillStitchHtmlCache(list, workspaceRoot);
-                    return { success: true, screens: resultScreens };
+                    return { success: true, type: 'stitchScreensReady', screens: resultScreens };
                 } catch (err: any) {
                     this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
                     return { success: false, error: err.message || String(err) };
@@ -3421,21 +3459,22 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             }
 
             case 'refreshDocsForTab': {
+                let payload: any = null;
                 switch (message.tab) {
                     case 'html-preview':
-                        await this._sendHtmlDocsReady();
+                        payload = await this._sendHtmlDocsReady();
                         break;
                     case 'claude':
-                        await this._sendClaudeDocsReady();
+                        payload = await this._sendClaudeDocsReady();
                         break;
                     case 'images':
-                        await this._sendImagesDocsReady();
+                        payload = await this._sendImagesDocsReady();
                         break;
                     case 'briefs':
-                        await this._sendBriefsDocsReady();
+                        payload = await this._sendBriefsDocsReady();
                         break;
                 }
-                return { success: true };
+                return { success: true, ...(payload || {}) };
             }
 
             case 'listImagesFolders': {
@@ -4208,14 +4247,22 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(fileExt);
             const isHtmlFile = fileExt === '.html' || fileExt === '.htm';
 
+            const workspaceRoot = this._getWorkspaceRoot() || '';
+            const getAssetUrl = (p: string) => {
+                if (this._panel) {
+                    return this._panel.webview.asWebviewUri(vscode.Uri.file(p)).toString();
+                }
+                return `/design/asset?root=${encodeURIComponent(workspaceRoot)}&path=${encodeURIComponent(p)}`;
+            };
+
             let fileContent = '';
             let webviewUri: string | undefined;
             if (isImage) {
-                webviewUri = this._panel?.webview.asWebviewUri(vscode.Uri.file(absPath)).toString();
+                webviewUri = getAssetUrl(absPath);
             } else {
                 fileContent = await fs.promises.readFile(absPath, 'utf8');
                 if (isHtmlFile) {
-                    webviewUri = this._panel?.webview.asWebviewUri(vscode.Uri.file(absPath)).toString();
+                    webviewUri = getAssetUrl(absPath);
                 }
             }
 

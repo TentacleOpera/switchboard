@@ -796,6 +796,71 @@ export class LocalApiServer {
         res.end('Static file not found');
     }
 
+    private async _handleDesignAsset(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        try {
+            const url = new URL(req.url || '', `http://${req.headers.host}`);
+            const targetRoot = url.searchParams.get('root');
+            const targetPath = url.searchParams.get('path');
+            if (!targetPath) {
+                res.writeHead(400, { 'Content-Type': 'text/plain' });
+                res.end('path parameter is required');
+                return;
+            }
+
+            const workspaceRoots = targetRoot ? [targetRoot] : [this._options.workspaceRoot];
+            const allowedFolders = new Set<string>();
+            for (const root of workspaceRoots) {
+                try {
+                    const localFolderService = this._options.designPanelProvider?.getLocalFolderService(root);
+                    if (localFolderService) {
+                        localFolderService.getDesignFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
+                        localFolderService.getHtmlFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
+                        localFolderService.getClaudeFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
+                        localFolderService.getBriefsFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
+                        localFolderService.getImagesFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
+                    }
+                    const db = KanbanDatabase.forWorkspace(root);
+                    await db.ensureReady();
+                    const projects = await db.getStitchProjects();
+                    for (const p of projects) {
+                        allowedFolders.add(path.resolve(path.join(root, '.switchboard', 'stitch', p.id)));
+                    }
+                } catch {}
+            }
+
+            const resolvedPath = path.resolve(targetPath);
+            let isAllowed = false;
+            for (const folder of allowedFolders) {
+                if (resolvedPath === folder || resolvedPath.startsWith(folder + path.sep)) {
+                    isAllowed = true;
+                    break;
+                }
+            }
+
+            if (!isAllowed) {
+                res.writeHead(403, { 'Content-Type': 'text/plain' });
+                res.end('Access denied: target path is not in configured design folders');
+                return;
+            }
+
+            if (!fsSync.existsSync(resolvedPath) || !fsSync.statSync(resolvedPath).isFile()) {
+                res.writeHead(404, { 'Content-Type': 'text/plain' });
+                res.end('Asset not found');
+                return;
+            }
+
+            res.writeHead(200, {
+                'Content-Type': this._serveStaticMimeType(resolvedPath),
+                'Cache-Control': 'public, max-age=3600',
+            });
+            res.end(fsSync.readFileSync(resolvedPath));
+        } catch (err) {
+            console.error('[LocalApiServer] _handleDesignAsset error:', err);
+            res.writeHead(500, { 'Content-Type': 'text/plain' });
+            res.end('Internal server error');
+        }
+    }
+
     private async _parseJsonBody(req: http.IncomingMessage): Promise<any> {
         return new Promise((resolve, reject) => {
             let body = '';
@@ -3252,8 +3317,9 @@ export class LocalApiServer {
                 await this._handleServePanelById('design', req, res);
             } else if ((pathname === '/setup' || pathname === '/setup.html') && req.method === 'GET') {
                 await this._handleServePanelById('setup', req, res);
-            }
- else if (pathname.startsWith('/static/') && req.method === 'GET') {
+            } else if (pathname === '/design/asset' && req.method === 'GET') {
+                await this._handleDesignAsset(req, res);
+            } else if (pathname.startsWith('/static/') && req.method === 'GET') {
                 await this._handleServeStatic(req, res);
             } else {
                 res.writeHead(404, { 'Content-Type': 'application/json' });

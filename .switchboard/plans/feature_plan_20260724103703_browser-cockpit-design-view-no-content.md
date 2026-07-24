@@ -139,3 +139,7 @@ public setApiServer(server: any): void { this._apiServer = server; this._broadca
 4. Security: manually request `/design/asset?root=<ws>&path=/etc/passwd` (and a `..` traversal) → rejected, no file content.
 5. Live update (broadcaster fix): add an image to a watched Images folder → it appears in the tree without reload.
 6. VS Code webview regression: open the Design panel in the editor; trees, images, and previews work exactly as before (assets still via `asWebviewUri`).
+
+COMPLETION REPORT:
+Removed panel guards from all five _send*DocsReady senders, returned doc tree payloads in-body for ready and refreshDocsForTab, added GET /design/asset route in LocalApiServer with strict path traversal allow-list validation, and repaired DesignPanelProvider broadcaster wiring. Files changed: src/services/DesignPanelProvider.ts, src/services/LocalApiServer.ts. No issues encountered.
+

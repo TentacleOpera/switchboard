@@ -5211,6 +5211,17 @@
             case 'error':
                 console.error('[PlanningPanel Webview] Backend error:', msg.message);
                 break;
+            case 'fetchRootsComplete': {
+                if (msg.workspaceItems)   handleWorkspaceItemsUpdated({ items: msg.workspaceItems });
+                if (msg.restoredTabState) {
+                    _restoredPanelState.panel = msg.restoredTabState.panel || {};
+                    _restoredPanelState.byRoot = msg.restoredTabState.byRoot || {};
+                }
+                if (msg.localDocs)        handleLocalDocsReady(msg.localDocs);
+                if (msg.onlineDocs)       handleOnlineDocsReady(msg.onlineDocs);
+                if (msg.importedDocs)     handleImportedDocsReady(msg.importedDocs);
+                break;
+            }
             case 'workspaceItemsUpdated': {
                 _workspaceItems = msg.items || [];
                 _registeredDropdowns.forEach(d => {
@@ -11112,15 +11123,40 @@ Instructions:
         return `<div class="ticket-status-group">${headerHtml}${bodyHtml}</div>`;
     }
 
-    // Header shown atop the sidebar when in subtask drill-down mode.
-    function _renderDrillDownHeader(parentTitle) {
+    // Header (and parent card) shown atop the sidebar when in subtask drill-down
+    // mode. The parent's OWN card is rendered here — not just its title — so its
+    // card actions (To kanban, Link, Open, Move) stay reachable while drilled into
+    // the subtask list. Clicking it re-selects the parent WITHOUT leaving drill-down
+    // (the card-click handler skips drill-down entry once _sidebarDrillDownParentId
+    // is set). The parent detail is guaranteed cached: _maybeEnterDrillDown only
+    // activates after details (incl. subtasks) have been fetched.
+    function _renderDrillDownHeader(parentTitle, provider) {
+        const parentId = _sidebarDrillDownParentId;
+        let parentCard = '';
+        if (parentId) {
+            if (provider === 'linear') {
+                const detail = linearIssueDetailCache.get(parentId);
+                if (detail && detail.issue) parentCard = _renderLinearTicketCard(detail.issue);
+            } else if (provider === 'clickup') {
+                const detail = clickUpTaskDetailCache.get(parentId);
+                if (detail && detail.task) parentCard = _renderClickUpTicketCard(detail.task);
+            }
+        }
+        const parentSection = parentCard
+            ? `<div style="padding:6px 10px;font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-secondary);border-bottom:1px solid var(--border-color);">Parent ticket</div>${parentCard}`
+            : '';
+        // With the parent card present its title is already visible, so the subtask
+        // divider is just "Subtasks"; fall back to naming the parent only when the
+        // card could not be rendered (cache miss).
+        const subtasksLabel = parentCard ? 'Subtasks' : `Subtasks of: ${escapeHtml(parentTitle || '')}`;
         return `
             <div class="sidebar-drilldown-header" style="display:flex;align-items:center;gap:6px;padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--border-color);background:var(--panel-bg2,#1a1a2e);font-size:11px;font-weight:600;color:var(--accent-teal,#00ffcc);user-select:none;">
                 <span style="font-size:14px;">←</span>
                 <span>Back to all tickets</span>
             </div>
-            <div style="padding:6px 10px;font-size:10px;color:var(--text-secondary);border-bottom:1px solid var(--border-color);">
-                Subtasks of: ${escapeHtml(parentTitle || '')}
+            ${parentSection}
+            <div style="padding:6px 10px;font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-secondary);border-bottom:1px solid var(--border-color);">
+                ${subtasksLabel}
             </div>
         `;
     }
@@ -11302,7 +11338,7 @@ Instructions:
         if (_isDrillDownActive('linear')) {
             emptyState.style.display = 'none';
             const subtasks = _drillDownSubtasks || [];
-            const drillHtml = _renderDrillDownHeader(_drillDownParentTitle) + (subtasks.length === 0
+            const drillHtml = _renderDrillDownHeader(_drillDownParentTitle, 'linear') + (subtasks.length === 0
                 ? `<div class="empty-state">No subtasks found for this ticket.</div>`
                 : subtasks.map(_renderLinearTicketCard).join(''));
             if (_lastTicketsIssuesContainerHtml !== drillHtml) {
@@ -11882,7 +11918,7 @@ Instructions:
         if (_isDrillDownActive('clickup')) {
             // Drill-down mode: show the selected parent's subtasks as full cards.
             const subtasks = _drillDownSubtasks || [];
-            html = _renderDrillDownHeader(_drillDownParentTitle) + (subtasks.length === 0
+            html = _renderDrillDownHeader(_drillDownParentTitle, 'clickup') + (subtasks.length === 0
                 ? `<div class="empty-state">No subtasks found for this ticket.</div>`
                 : subtasks.map(_renderClickUpTicketCard).join(''));
         } else {
