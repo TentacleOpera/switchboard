@@ -36,7 +36,7 @@
             --accent-red: #da3633;
             --accent-orange: #d29922;
             --font-family: 'Hanken Grotesk', var(--vscode-font-family, 'Segoe UI', 'Roboto', sans-serif);
-            --font-mono: var(--vscode-editor-font-family, 'Consolas', 'Courier New', monospace);
+            --font-mono: var(--vscode-editor-font-family, 'SF Mono', Monaco, 'Cascadia Code', 'Consolas', monospace);
         }
         body.theme-claudify {
             --accent-primary: #D97757;
@@ -6260,6 +6260,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         column: cardData?.column || '',
                         isFeature: cardData?.isFeature || false
                     });
+                    // Browser cockpit: panels are iframes inside the shell, so switching to
+                    // the Project panel is a client-side move — the backend deliberately
+                    // does NOT open the editor's Project panel for a browser-originated
+                    // reviewPlan (it would pull focus into VS Code). The helper is defined
+                    // only by the browser transport shim, so this is absent in the webview,
+                    // where the backend opens/reveals the editor panel instead.
+                    if (typeof window.__switchboardSwitchPanel === 'function') {
+                        window.__switchboardSwitchPanel('project');
+                    }
                 });
             });
 
@@ -7969,9 +7978,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     break;
                 }
                 case 'updateSchedulerConfig': {
-                    window.__schedulerConfig = msg.config || { schemaVersion: 1, jobs: [] };
-                    // Re-render the scheduler panel if it is the active mode.
-                    if (currentAutomationMode === 'scheduler') {
+                    const incoming = msg.config || { schemaVersion: 1, jobs: [] };
+                    // Re-render only on a REAL change. Every browser client receives this
+                    // push, and a request is answered both in-body and over the WS mirror,
+                    // so identical payloads arrive repeatedly; rebuilding the panel for
+                    // each one was the second half of the render/fetch feedback loop (the
+                    // first is the unconditional fetch in createAutobanPanel).
+                    let changed = true;
+                    try {
+                        changed = JSON.stringify(window.__schedulerConfig) !== JSON.stringify(incoming);
+                    } catch { /* uncomparable — fall through and re-render */ }
+                    window.__schedulerConfig = incoming;
+                    if (changed && currentAutomationMode === 'scheduler') {
                         renderAutobanPanel(true);
                     }
                     break;
@@ -10345,10 +10363,24 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     existingJobs.forEach(j => jobListRoot.appendChild(createSchedulerJobRow(j)));
                 }
 
-                // Request the target contracts + scheduler config from the host
-                // so the prerequisites blocks and job list populate.
-                postKanbanMessage({ type: 'getSchedulerTargetContracts' });
-                postKanbanMessage({ type: 'getSchedulerConfig' });
+                // Request the target contracts + scheduler config from the host so the
+                // prerequisites blocks and job list populate — but ONLY when we don't
+                // already hold them.
+                //
+                // Unconditional fetching here was an infinite render loop: this panel
+                // fetches → the host answers `updateSchedulerConfig` → that handler calls
+                // `renderAutobanPanel(true)` → which rebuilds this panel → which fetches
+                // again. In the browser cockpit each request is answered TWICE (once in
+                // the HTTP response body, once via the WS mirror), so each turn doubled:
+                // ~960 requests/second, 800k DOM nodes, heap climbing past 290 MB, and a
+                // wedged browser. The host pushes `updateSchedulerConfig` whenever the
+                // config actually changes, so a re-render never needs to re-ask.
+                if (!window.__schedulerTargetContracts) {
+                    postKanbanMessage({ type: 'getSchedulerTargetContracts' });
+                }
+                if (!window.__schedulerConfig) {
+                    postKanbanMessage({ type: 'getSchedulerConfig' });
+                }
             } else if (currentAutomationMode === 'orchestration') {
                 const orchSection = document.createElement('div');
                 orchSection.className = 'db-subsection';

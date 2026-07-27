@@ -112,6 +112,23 @@ export class DesignPanelProvider implements vscode.Disposable {
     }
 
     /**
+     * Absolutise a root-relative API URL against the loopback server, or undefined when
+     * no server is listening.
+     *
+     * Every asset URL this provider emits is pushed to BOTH clients at once (the editor
+     * webview and every browser-cockpit tab share one `postMessage` fan-out), so a
+     * host-detected URL is wrong for one of them whenever both are open: an
+     * `asWebviewUri` result is unresolvable in a browser, and a root-relative
+     * `/design/asset…` path is unresolvable in a webview. An absolute loopback URL is
+     * the only form both hosts can load, so prefer it and keep the host-specific
+     * branches only as the no-server fallback.
+     */
+    private _absoluteApiUrl(relativeUrl: string): string | undefined {
+        const port: number | undefined = this._apiServer?.getPort?.();
+        return port ? `http://127.0.0.1:${port}${relativeUrl}` : undefined;
+    }
+
+    /**
      * Absolute folder paths the `GET /design/asset` route is allowed to serve from
      * for `workspaceRoot` — exactly the user-configured Design/HTML/Claude/Briefs/
      * Images folders this provider previews from. The allow-list lives here (not in
@@ -1597,12 +1614,10 @@ setTimeout(reportDims, 0);
         let imagePath = '';
         try {
             await fs.promises.stat(filePath);
-            if (this._panel) {
-                imageUrl = this._panel.webview.asWebviewUri(vscode.Uri.file(filePath)).toString();
-            } else {
-                const projectFolder = path.basename(projectDir);
-                imageUrl = `/static/stitch/${encodeURIComponent(projectFolder)}/${encodeURIComponent(screenId)}.png`;
-            }
+            const projectFolder = path.basename(projectDir);
+            const relative = `/static/stitch/${encodeURIComponent(projectFolder)}/${encodeURIComponent(screenId)}.png`;
+            imageUrl = this._absoluteApiUrl(relative)
+                ?? (this._panel ? this._panel.webview.asWebviewUri(vscode.Uri.file(filePath)).toString() : relative);
             imagePath = filePath;
         } catch {}
         let suggestions: Array<{ label: string; prompt: string }> = [];
@@ -1668,13 +1683,16 @@ setTimeout(reportDims, 0);
         if (filePath) {
             try {
                 await fs.promises.stat(filePath);
+                const projectFolder = path.basename(cacheDir);
+                const screenId = path.basename(screen.id);
+                const relative = `/static/stitch/${encodeURIComponent(projectFolder)}/${encodeURIComponent(screenId)}.png`;
+                const absolute = this._absoluteApiUrl(relative);
+                if (absolute) { return absolute; }
                 if (this._panel) {
                     const uri = this._panel.webview.asWebviewUri(vscode.Uri.file(filePath)).toString();
                     if (uri) return uri;
                 } else {
-                    const projectFolder = path.basename(cacheDir);
-                    const screenId = path.basename(screen.id);
-                    return `/static/stitch/${encodeURIComponent(projectFolder)}/${encodeURIComponent(screenId)}.png`;
+                    return relative;
                 }
             } catch { /* not cached yet */ }
         }
@@ -4340,10 +4358,9 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
 
             const workspaceRoot = this._getWorkspaceRoot() || '';
             const getAssetUrl = (p: string) => {
-                if (this._panel) {
-                    return this._panel.webview.asWebviewUri(vscode.Uri.file(p)).toString();
-                }
-                return `/design/asset?root=${encodeURIComponent(workspaceRoot)}&path=${encodeURIComponent(p)}`;
+                const relative = `/design/asset?root=${encodeURIComponent(workspaceRoot)}&path=${encodeURIComponent(p)}`;
+                return this._absoluteApiUrl(relative)
+                    ?? (this._panel ? this._panel.webview.asWebviewUri(vscode.Uri.file(p)).toString() : relative);
             };
 
             let fileContent = '';

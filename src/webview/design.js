@@ -540,6 +540,17 @@
             .replace(/'/g, '&#39;');
     }
 
+    // Cache-bust a URL that may ALREADY carry a query string. In the editor an asset
+    // URL is a bare `vscode-webview://…/file.png`, so a naive `+ '?t=…'` worked; in the
+    // browser cockpit it is `/design/asset?root=…&path=…`, and a second `?` folds the
+    // timestamp into the `path` parameter's value — the route then realpaths
+    // "/abs/file.svg?t=123", finds nothing, and 403s every image. Always pick the
+    // separator from the URL.
+    function withCacheBust(url) {
+        if (!url) return url;
+        return url + (url.indexOf('?') === -1 ? '?' : '&') + 't=' + Date.now();
+    }
+
     // srcdoc previews lose their file origin — a <base> tag pointed at the
     // file's webview URI lets relative asset paths resolve.
     function injectBaseTag(html, baseUri) {
@@ -1488,7 +1499,7 @@
                 if (iframe) {
                     iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
                     iframe.removeAttribute('srcdoc');
-                    iframe.src = isAutoRefreshed ? msg.iframeSrc + '?t=' + Date.now() : msg.iframeSrc;
+                    iframe.src = isAutoRefreshed ? withCacheBust(msg.iframeSrc) : msg.iframeSrc;
                 }
                 const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
                 if (iframeViewport) applyZoom('html', iframeViewport);
@@ -1561,7 +1572,7 @@
                 if (iframe) {
                     iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
                     iframe.removeAttribute('srcdoc');
-                    iframe.src = isAutoRefreshed ? msg.iframeSrc + '?t=' + Date.now() : msg.iframeSrc;
+                    iframe.src = isAutoRefreshed ? withCacheBust(msg.iframeSrc) : msg.iframeSrc;
                 }
                 const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
                 if (iframeViewport) applyZoom('stitchHtml', iframeViewport);
@@ -1611,7 +1622,7 @@
                 if (imgViewport) applyZoom('images', imgViewport);
                 if (imageImg) {
                     imageImg.dataset.filePath = filePath || '';
-                    imageImg.src = webviewUri + '?t=' + Date.now();
+                    imageImg.src = withCacheBust(webviewUri);
                     imageImg.onload = () => {
                         const container = document.getElementById('image-preview-container-images');
                         const viewport = container ? container.querySelector('.zoomable-viewport') : null;
@@ -1650,7 +1661,7 @@
                 if (imgCont) imgCont.style.display = 'flex';
                 if (imgImg) {
                     imgImg.dataset.filePath = filePath || '';
-                    imgImg.src = webviewUri + '?t=' + Date.now();
+                    imgImg.src = withCacheBust(webviewUri);
                 }
                 const designImgViewport = imgCont ? imgCont.querySelector('.zoomable-viewport') : null;
                 if (designImgViewport) applyZoom('design', designImgViewport);

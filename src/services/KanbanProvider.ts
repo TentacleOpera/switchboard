@@ -1753,8 +1753,15 @@ export class KanbanProvider implements vscode.Disposable {
      * planFile paths outside the current workspaceRoot — those are legitimate and must
      * NOT be filtered out. Shared by refreshWithData (column-occupancy computation) and
      * _buildBoardCards (card pipeline) so the two paths cannot drift on the ghost rule.
+     *
+     * `existsCache` (optional) memoizes the `existsSync` result per resolved path for
+     * the duration of ONE refresh. refreshWithData filters overlapping row sets twice
+     * (its workspace-wide occupancy set, then the card set inside _buildBoardCards);
+     * without the cache that path pays a full extra syscall sweep per board refresh —
+     * on the hottest path in the extension. Never share a cache across refreshes: it
+     * would go stale the moment a plan file is created or deleted.
      */
-    private _filterGhostPlans(rows: KanbanPlanRecord[], resolvedWorkspaceRoot: string): KanbanPlanRecord[] {
+    private _filterGhostPlans(rows: KanbanPlanRecord[], resolvedWorkspaceRoot: string, existsCache?: Map<string, boolean>): KanbanPlanRecord[] {
         return rows.filter(row => {
             const planFile = row.planFile || '';
             if (!planFile) return false;
@@ -1770,7 +1777,10 @@ export class KanbanProvider implements vscode.Disposable {
                 }
             }
             const resolvedPath = path.isAbsolute(planPath) ? planPath : path.resolve(resolvedWorkspaceRoot, planPath);
+            const cached = existsCache?.get(resolvedPath);
+            if (cached !== undefined) return cached;
             const exists = fs.existsSync(resolvedPath);
+            existsCache?.set(resolvedPath, exists);
             if (!exists) {
                 console.log(`[KanbanProvider] filterGhostPlans (activeRows): file does not exist: planFile=${planFile}, resolvedPath=${resolvedPath}`);
             }
@@ -1788,6 +1798,10 @@ export class KanbanProvider implements vscode.Disposable {
      * `timeoutMs` is passed in by the caller (read from vscode config in
      * refreshWithData, or from the standalone config provider) so the helper
      * has no vscode dependency — keeping it pure and safe for standalone reuse.
+     *
+     * `existsCache` (optional) lets a caller that already ran _filterGhostPlans over
+     * an overlapping row set in the same refresh share the file-existence results —
+     * see the note on _filterGhostPlans. Omit it for a one-shot build (WS resync).
      */
     private async _buildBoardCards(
         db: KanbanDatabase,
@@ -1795,9 +1809,10 @@ export class KanbanProvider implements vscode.Disposable {
         workspaceRoot: string,
         activeRows: KanbanPlanRecord[],
         completedRows: KanbanPlanRecord[],
-        timeoutMs: number
+        timeoutMs: number,
+        existsCache?: Map<string, boolean>
     ): Promise<KanbanCard[]> {
-        const activeRowsFiltered = this._filterGhostPlans(activeRows, workspaceRoot);
+        const activeRowsFiltered = this._filterGhostPlans(activeRows, workspaceRoot, existsCache);
         // Completed plans intentionally bypass file-existence check — DB is source of truth for completed state
         const completedRowsFiltered = completedRows.filter(row => !!row.planFile);
 
@@ -1902,7 +1917,11 @@ export class KanbanProvider implements vscode.Disposable {
             // and should still appear in the COMPLETED column; the DB is the source of truth.
             // Note: plans reassigned from another workspace may have planFile paths outside
             // the current workspaceRoot — those are legitimate and must NOT be filtered out.
-            const activeRowsFiltered = this._filterGhostPlans(activeRows, resolvedWorkspaceRoot);
+            // One existence cache for this whole refresh: the occupancy set below and the
+            // card set inside _buildBoardCards overlap heavily, and each sweep is a real
+            // syscall per row. Scoped to this call so it can never serve a stale answer.
+            const ghostExistsCache = new Map<string, boolean>();
+            const activeRowsFiltered = this._filterGhostPlans(activeRows, resolvedWorkspaceRoot, ghostExistsCache);
             // Completed plans intentionally bypass file-existence check — DB is source of truth for completed state
             const completedRowsFiltered = completedRows.filter(row => !!row.planFile);
 
@@ -1913,7 +1932,7 @@ export class KanbanProvider implements vscode.Disposable {
             const allActiveRows = filterActive && workspaceId && typeof (db as any).getBoard === 'function'
                 ? await db.getBoard(workspaceId)
                 : activeRows;
-            const allActiveRowsFiltered = filterActive ? this._filterGhostPlans(allActiveRows, resolvedWorkspaceRoot) : activeRowsFiltered;
+            const allActiveRowsFiltered = filterActive ? this._filterGhostPlans(allActiveRows, resolvedWorkspaceRoot, ghostExistsCache) : activeRowsFiltered;
             const allCards: Array<{ column: string }> = allActiveRowsFiltered.map(row => ({
                 column: this._normalizeLegacyKanbanColumn(row.kanbanColumn) || 'CREATED'
             }));
@@ -1921,7 +1940,7 @@ export class KanbanProvider implements vscode.Disposable {
             // Build cards via the shared row→card pipeline (also used by the browser WS
             // resync in getFullStateMessages) so the editor and browser cannot drift.
             const timeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
-            const cards = await this._buildBoardCards(db, workspaceId ?? '', resolvedWorkspaceRoot, activeRows, completedRows, timeoutMs);
+            const cards = await this._buildBoardCards(db, workspaceId ?? '', resolvedWorkspaceRoot, activeRows, completedRows, timeoutMs, ghostExistsCache);
 
             this._lastCards = cards;
 
@@ -7089,14 +7108,19 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
         // Genuine service methods (selectPlan, openPlanByPath, refresh, etc.) are
         // called from _handleMessage arms — the passthrough reaches them via the
         // same path webview clicks take.
-        return this._handleMessage({ ...(payload ?? {}), type: verb });
+        // `__viaHttp` marks the origin: this entry point is reached ONLY over the
+        // HTTP verb rail (the browser cockpit's transport shim and API clients);
+        // editor webview clicks call _handleMessage directly. Arms that would focus
+        // an editor panel use it to degrade to a WS push instead — an HTTP caller has
+        // no editor panel to look at. Set after the spread so a payload key can't spoof it.
+        return this._handleMessage({ ...(payload ?? {}), type: verb, __viaHttp: true });
     }
 
 
 
     /**
      * @deprecated Legacy sessionId-keyed card lookup. Sole remaining caller is the
-     * `promptSelected` `_lastCards`-miss fallback (~line 8867), which receives
+     * `promptSelected` `_lastCards`-miss fallback, which receives
      * planId-or-sessionId values from a webview message contract and already falls
      * back to getPlanByPlanId. Never use this for board/resync data — it never sets
      * subtaskCount (so features render "0 SUBTASKS"), drops rows with empty
@@ -9348,7 +9372,43 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             }
             case 'reviewPlan': {
                 const reviewId = this._resolveSessionId(msg.planId, msg.sessionId);
-                if (reviewId && this._planningPanelProvider) {
+                if (!reviewId) {
+                    return { success: false, error: 'Could not resolve session id' };
+                }
+                // Resolve through the effective root so the value the
+                // Project panel receives matches what _getKanbanPlans tags
+                // plans with. Guards against the empty data-workspace-root
+                // fallback in kanban.html and child-workspace selections.
+                const reviewRawRoot = msg.workspaceRoot || this.getCurrentWorkspaceRoot() || '';
+                let reviewEffectiveRoot = reviewRawRoot ? this.resolveEffectiveWorkspaceRoot(reviewRawRoot) : '';
+                if (!reviewEffectiveRoot && reviewRawRoot) {
+                    reviewEffectiveRoot = path.resolve(reviewRawRoot);
+                }
+                const reviewActivateMsg = {
+                    type: 'activateKanbanTabAndSelectPlan',
+                    planId: msg.planId || '',
+                    sessionId: reviewId,
+                    planFile: msg.planFile || '',
+                    workspaceRoot: reviewEffectiveRoot,
+                    project: msg.project || '',
+                    column: msg.column || '',
+                    isFeature: msg.isFeature === true
+                };
+                if (msg.__viaHttp === true) {
+                    // Browser cockpit: the click happened in a browser tab, where the shell
+                    // switches to ITS OWN Project panel client-side (kanban.html posts
+                    // switchPanel alongside this verb). Opening/revealing the editor's
+                    // Project panel here would pull focus into VS Code for a click that
+                    // happened outside it — the reported bug. WS-only push, so the browser's
+                    // Project panel receives the selection and the editor is left alone.
+                    if (this._planningPanelProvider) {
+                        this._planningPanelProvider.pushProjectMessageToWsOnly(reviewActivateMsg);
+                    } else {
+                        this._broadcaster?.mirrorToWs('project', reviewActivateMsg);
+                    }
+                    return { success: true, sessionId: reviewId };
+                }
+                if (this._planningPanelProvider) {
                     // The Kanban tab now lives in the Project panel (project.html), so
                     // "Review Plan" must open/target the project panel, not planning.html.
                     // Only open a new panel if none exists. If it exists in another window,
@@ -9358,28 +9418,10 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                     } else if (this._planningPanelProvider.isProjectInCurrentWindow()) {
                         this._planningPanelProvider.revealProject();
                     }
-                    // Resolve through the effective root so the value the
-                    // Project panel receives matches what _getKanbanPlans tags
-                    // plans with. Guards against the empty data-workspace-root
-                    // fallback in kanban.html and child-workspace selections.
-                    const reviewRawRoot = msg.workspaceRoot || this.getCurrentWorkspaceRoot() || '';
-                    let reviewEffectiveRoot = reviewRawRoot ? this.resolveEffectiveWorkspaceRoot(reviewRawRoot) : '';
-                    if (!reviewEffectiveRoot && reviewRawRoot) {
-                        reviewEffectiveRoot = path.resolve(reviewRawRoot);
-                    }
-                    this._planningPanelProvider.postMessageToProjectWebview({
-                        type: 'activateKanbanTabAndSelectPlan',
-                        planId: msg.planId || '',
-                        sessionId: reviewId,
-                        planFile: msg.planFile || '',
-                        workspaceRoot: reviewEffectiveRoot,
-                        project: msg.project || '',
-                        column: msg.column || '',
-                        isFeature: msg.isFeature === true
-                    });
+                    this._planningPanelProvider.postMessageToProjectWebview(reviewActivateMsg);
                     return { success: true, sessionId: reviewId };
                 }
-                return { success: false, error: 'Could not resolve session id or no planning panel' };
+                return { success: false, error: 'No planning panel' };
             }
             case 'pauseLiveSync':
                 if (msg.sessionId && this._continuousSync) {

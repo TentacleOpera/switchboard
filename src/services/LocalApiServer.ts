@@ -188,6 +188,14 @@ interface LocalApiServerOptions {
      * route answers 503 rather than guessing a looser rule.
      */
     getDesignAssetRoots?: (workspaceRoot: string) => string[];
+    /**
+     * Second allow-list source for the same `GET /design/asset` route — the Planning
+     * panel's ticket/doc folders, whose markdown carries embedded local screenshots.
+     * Unioned with `getDesignAssetRoots`; same provider-owns-the-list rule. Absent ⇒
+     * only the Design folders are served (the route does not 503 on this one, since
+     * Design asset serving may still be configured).
+     */
+    getPlanningAssetRoots?: (workspaceRoot: string) => string[];
     setupVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     taskViewerVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     cleanupWorktree?: (
@@ -792,9 +800,16 @@ export class LocalApiServer {
             const candidate = path.resolve(root, safeRest);
             if (!candidate.startsWith(path.resolve(root))) { continue; }
             if (fsSync.existsSync(candidate) && fsSync.statSync(candidate).isFile()) {
+                // The panel HTML is served `no-store`, but its scripts live at unversioned
+                // URLs (`/static/webview/planning.js`). A long max-age therefore pinned an
+                // open cockpit tab to the PREVIOUS extension build's JS for an hour after a
+                // rebuild+reinstall — a soft reload re-fetched the fresh HTML and paired it
+                // with stale, cached scripts, so fixes appeared not to land. Code must
+                // revalidate every load; static art can still be cached hard.
+                const isCode = prefix === 'webview';
                 res.writeHead(200, {
                     'Content-Type': this._serveStaticMimeType(candidate),
-                    'Cache-Control': 'public, max-age=3600',
+                    'Cache-Control': isCode ? 'no-cache' : 'public, max-age=3600',
                 });
                 res.end(fsSync.readFileSync(candidate));
                 return;
@@ -846,8 +861,11 @@ export class LocalApiServer {
             }
 
             const getRoots = this._options.getDesignAssetRoots;
-            if (!getRoots) {
-                deny(503, 'Design asset serving not configured');
+            const getPlanningRoots = this._options.getPlanningAssetRoots;
+            // 503 only when NO allow-list provider is wired at all — never fall back to a
+            // looser rule. Either provider alone is enough to answer for its own folders.
+            if (!getRoots && !getPlanningRoots) {
+                deny(503, 'Local asset serving not configured');
                 return;
             }
 
@@ -864,7 +882,11 @@ export class LocalApiServer {
             ));
             const allowedFolders: string[] = [];
             for (const root of knownRoots) {
-                for (const folder of getRoots(root) || []) {
+                const folders = [
+                    ...(getRoots?.(root) || []),
+                    ...(getPlanningRoots?.(root) || [])
+                ];
+                for (const folder of folders) {
                     if (!folder) continue;
                     const real = realpath(path.resolve(folder));
                     if (real) allowedFolders.push(real);

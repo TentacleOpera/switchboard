@@ -809,6 +809,30 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     }
                 }
 
+                case 'reviewPlan': {
+                    // Board "Review Plan" hands the clicked card to the Project panel's
+                    // Kanban tab. There is no editor panel in standalone mode: the shell
+                    // switches to the Project panel client-side (kanban.html) and this arm
+                    // only delivers the selection over the WS rail — the same
+                    // 'activateKanbanTabAndSelectPlan' push the extension mirrors.
+                    const planId = payload.planId || '';
+                    let sessionId = payload.sessionId || '';
+                    if (!sessionId && planId) {
+                        const plan = await db.getPlanByPlanId(planId);
+                        sessionId = plan?.sessionId || '';
+                    }
+                    server.broadcastWs('activateKanbanTabAndSelectPlan', {
+                        planId,
+                        sessionId,
+                        planFile: payload.planFile || '',
+                        workspaceRoot: root,
+                        project: payload.project || '',
+                        column: payload.column || '',
+                        isFeature: payload.isFeature === true,
+                    }, 'project');
+                    return { success: true, sessionId };
+                }
+
                 default:
                     return { success: false, error: `Verb '${verb}' not implemented in standalone mode` };
             }
@@ -958,6 +982,7 @@ Each plan file must include:
         designVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
             designProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),
         getDesignAssetRoots: (wsRoot: string) => designProvider.getDesignAssetRoots(wsRoot),
+        getPlanningAssetRoots: (wsRoot: string) => planningProvider.getPlanningAssetRoots(wsRoot),
         setupVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
             setupProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),
         taskViewerVerb: (verb: string, payload: any, workspaceRootArg?: string) =>

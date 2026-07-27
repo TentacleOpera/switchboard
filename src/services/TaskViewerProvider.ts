@@ -1776,6 +1776,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             },
             getDesignAssetRoots: (wsRoot: string) =>
                 this._designPanelProvider?.getDesignAssetRoots?.(wsRoot) ?? [],
+            getPlanningAssetRoots: (wsRoot: string) =>
+                (this._planningPanelProvider as any)?.getPlanningAssetRoots?.(wsRoot) ?? [],
             setupVerb: async (verb, payload, wsRoot) => {
                 if (!this._setupPanelProvider) {
                     return { success: false, error: 'Setup provider not available' };

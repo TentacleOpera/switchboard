@@ -180,6 +180,40 @@ export class PlanningPanelProvider {
     private _projectPanelRestoring = false;
     private _disposables: vscode.Disposable[] = [];
     private _latestRequestIds: Map<string, number> = new Map();
+
+    /** Provider-assigned push tickets, keyed like `_latestRequestIds` but never client-supplied. */
+    private _pushTickets: Map<string, number> = new Map();
+
+    /**
+     * Race guard for request/response verbs, as a PUSH gate only. Takes a provider-side
+     * ticket for `key` and returns a predicate that reports whether this call is still
+     * the most recent one for that key once its async work finishes — i.e. whether an
+     * unsolicited push would be overwriting fresher data with staler data.
+     *
+     * Two rules make it safe, and both matter:
+     *
+     * 1. It must never reject the request. Client `requestId`s are per-client counters
+     *    starting at 1, while the guard map is provider-global — so rejecting on them
+     *    starved whichever client counted lower. With an editor panel open (or after any
+     *    browser reload) every cockpit `fetchFilteredDocs` returned
+     *    `{success:false, error:'Stale request'}` and the Notion/Linear/ClickUp sections
+     *    sat on "Loading..." forever. Callers now always get their own answer in-body.
+     *
+     * 2. The ticket is assigned HERE, not read from the payload. Gating on client ids
+     *    would just invert the starvation — a browser tab sitting at id 30 would suppress
+     *    every push for an editor panel still at id 5, silently freezing the editor.
+     *    A provider-side counter means "the newest arrival for this key wins", whoever
+     *    sent it, which is the actual intent.
+     *
+     * Per-client ordering is unaffected: each client already drops replies whose
+     * requestId it did not issue (e.g. `handleFilteredDocsReady` in planning.js).
+     */
+    private _isFreshRequest(key: string): () => boolean {
+        const ticket = (this._pushTickets.get(key) || 0) + 1;
+        this._pushTickets.set(key, ticket);
+        return () => this._pushTickets.get(key) === ticket;
+    }
+
     private _registeredRootsKey: string | null = null;
     private _cacheService: PlanningPanelCacheService | undefined;
     private _periodicSyncTimer: NodeJS.Timeout | undefined;
@@ -1079,6 +1113,24 @@ export class PlanningPanelProvider {
         } else {
             this._pendingProjectMessages.push(message);
         }
+    }
+
+    /**
+     * WS-only project push — for messages whose CLICK happened in the browser cockpit,
+     * not in the editor. Deliberately skips the editor's Project panel entirely: no
+     * open, no reveal, and no `_pendingProjectMessages` queue. Opening/revealing it
+     * would yank focus into VS Code for an action the user took in a browser tab, and
+     * queueing the message would replay that action (e.g. a tab jump + plan selection)
+     * the next time the editor's Project panel happens to open.
+     */
+    public pushProjectMessageToWsOnly(message: any): void {
+        // Lazy-init like handleServiceVerb: this can be the FIRST thing that touches
+        // the provider in a session where no editor panel was ever opened (exactly the
+        // browser-only case), and an unbuilt broadcaster would silently drop the push.
+        if (!this._broadcaster) {
+            this._initPlanningService();
+        }
+        this._broadcaster?.mirrorToWs('project', message);
     }
 
     private _flushPendingProjectMessages(): void {
@@ -2098,8 +2150,12 @@ Start by checking which documents exist, then present the menu.`;
                     } catch {}
                 }
 
-                if (!this._panel) return;
-
+                // No `if (!this._panel) return` gate here. `postMessageToWebview` fans out
+                // to the WS hub as well as the editor webview, and the browser cockpit has
+                // no editor panel — gating on one meant the HTML tab's file tree was never
+                // sent to the browser at all, leaving it stuck on "Configure a folder to
+                // browse HTML files" with nothing to click (so no preview could ever open).
+                // postMessage is a safe no-op when neither target exists.
                 this.postMessageToWebview({
                     type: 'planningHtmlDocsReady',
                     sourceId: 'planning-html-folder',
@@ -2395,6 +2451,61 @@ Start by checking which documents exist, then present the menu.`;
         return null;
     }
 
+    /**
+     * Absolute folder paths the local-asset HTTP route may serve on this panel's behalf —
+     * the ticket folders whose markdown carries embedded screenshots, plus each root's
+     * `.switchboard/` (the default tickets/attachments location). Same contract as
+     * `DesignPanelProvider.getDesignAssetRoots`: the provider owns the allow-list so the
+     * route can never drift from what the panel actually previews.
+     */
+    public getPlanningAssetRoots(workspaceRoot: string): string[] {
+        const roots: string[] = [];
+        try {
+            const service = this._getLocalFolderService(workspaceRoot);
+            roots.push(...service.getTicketsFolderPaths());
+            roots.push(...service.getFolderPaths());
+        } catch { /* config unreadable — fall through to the default tickets dir */ }
+        if (workspaceRoot) {
+            // `getTicketsFolderPaths()` returns only EXPLICITLY configured folders, so the
+            // default ticket location has to be listed here or its screenshots 403.
+            // Scoped to `.switchboard/tickets`, not all of `.switchboard/`.
+            roots.push(path.join(workspaceRoot, '.switchboard', 'tickets'));
+        }
+        return roots.filter(Boolean);
+    }
+
+    /**
+     * Loopback URL for a local image, or undefined when the file is outside the
+     * allow-list / no API server is listening.
+     *
+     * Why an absolute `http://127.0.0.1:<port>` URL and not `asWebviewUri`: the rewritten
+     * markdown is ONE string delivered to BOTH clients (the editor webview and every
+     * browser-cockpit tab, via `postMessageToWebview`'s two-target fan-out). A
+     * `vscode-webview:` URI is unresolvable in a browser, and a root-relative
+     * `/design/asset?…` path is unresolvable in a webview — so neither form can serve
+     * both. The loopback URL resolves in both hosts (webviews can load localhost; the
+     * panel CSPs allow `http://127.0.0.1:*` for img-src).
+     */
+    private _buildLocalAssetUrl(absPath: string): string | undefined {
+        const port: number | undefined = this._apiServer?.getPort?.();
+        if (!port) { return undefined; }
+        const realOf = (p: string): string | null => {
+            try { return fs.realpathSync(p); } catch { return null; }
+        };
+        const realTarget = realOf(absPath);
+        if (!realTarget) { return undefined; }
+        const allowed = this._getWorkspaceRoots()
+            .flatMap(root => this.getPlanningAssetRoots(root))
+            .map(folder => realOf(path.resolve(folder)))
+            .filter((f): f is string => !!f);
+        const isAllowed = allowed.some(folder =>
+            realTarget === folder || realTarget.startsWith(folder + path.sep)
+        );
+        if (!isAllowed) { return undefined; }
+        const root = this._getWorkspaceRoot() || '';
+        return `http://127.0.0.1:${port}/design/asset?root=${encodeURIComponent(root)}&path=${encodeURIComponent(realTarget)}`;
+    }
+
     private _rewriteLocalImagePaths(markdown: string, baseDir: string): string {
         return markdown.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, url) => {
             const trimmed = url.trim();
@@ -2410,7 +2521,12 @@ Start by checking which documents exist, then present the menu.`;
                     absPath = path.resolve(baseDir, trimmed);
                 }
                 if (!fs.existsSync(absPath)) { return match; } // don't rewrite missing files
-                if (!this._panel) { return match; } // headless — no webview URI rewriting
+                // Host-neutral form first — works in the editor webview AND the browser.
+                const assetUrl = this._buildLocalAssetUrl(absPath);
+                if (assetUrl) { return `![${alt}](${assetUrl})`; }
+                // No API server listening: keep the editor working via the webview URI.
+                // (Headless with no server has no way to serve the file at all.)
+                if (!this._panel) { return match; }
                 const webviewUri = this._panel.webview.asWebviewUri(vscode.Uri.file(absPath));
                 if (!webviewUri) { return match; }
                 return `![${alt}](${webviewUri.toString()})`;
@@ -3089,15 +3205,15 @@ Start by checking which documents exist, then present the menu.`;
                 const sourceId = msg.sourceId;
                 const containerId = msg.containerId;
                 const requestId = typeof msg.requestId === 'number' ? msg.requestId : 0;
-                // Race guard — same Map, namespaced key
+                // Race guard — same Map, namespaced key. PUSH-ONLY (see _isFreshRequest):
+                // the answer is always computed and returned to the caller.
                 const filterKey = `filter:${sourceId}`;
-                if (requestId <= (this._latestRequestIds.get(filterKey) || 0)) { return { success: false, error: 'Stale request' }; }
-                this._latestRequestIds.set(filterKey, requestId);
+                const fresh = this._isFreshRequest(filterKey);
 
                 const adapter = this._researchImportService.getAdapter(sourceId);
                 if (!adapter) {
                     const res = { type: 'filteredDocsReady', sourceId, nodes: [], requestId };
-                    this.postMessageToWebview(res);
+                    if (fresh()) { this.postMessageToWebview(res); }
                     return { ...res, success: true };
                 }
                 try {
@@ -3115,51 +3231,40 @@ Start by checking which documents exist, then present the menu.`;
                     } else {
                         nodes = await adapter.listDocumentsByContainer(containerId);
                     }
-                    // Drop if stale
-                    if (requestId !== this._latestRequestIds.get(filterKey)) { return { success: false, error: 'Stale request' }; }
                     const res = { type: 'filteredDocsReady', sourceId, nodes, requestId };
-                    this.postMessageToWebview(res);
+                    if (fresh()) { this.postMessageToWebview(res); }
                     return { ...res, success: true };
                 } catch {
-                    if (requestId === this._latestRequestIds.get(filterKey)) {
-                        const res = { type: 'filteredDocsReady', sourceId, nodes: [], requestId };
-                        this.postMessageToWebview(res);
-                        return { ...res, success: false };
-                    }
-                    return { success: false, error: 'Stale request' };
+                    const res = { type: 'filteredDocsReady', sourceId, nodes: [], requestId };
+                    if (fresh()) { this.postMessageToWebview(res); }
+                    return { ...res, success: false };
                 }
             }
             case 'fetchDocPages': {
                 const sourceId = msg.sourceId;
                 const docId = msg.docId;
                 const requestId = typeof msg.requestId === 'number' ? msg.requestId : 0;
-                // Race guard
+                // Race guard — push-only (see _isFreshRequest).
                 const pagesKey = `pages:${sourceId}:${docId}`;
-                if (requestId <= (this._latestRequestIds.get(pagesKey) || 0)) { return { success: false, error: 'Stale request' }; }
-                this._latestRequestIds.set(pagesKey, requestId);
+                const fresh = this._isFreshRequest(pagesKey);
 
                 const adapter = this._researchImportService.getAdapter(sourceId);
 
                 if (!adapter || !adapter.listDocPages) {
                     const res = { type: 'docPagesReady', sourceId, docId, pages: [], requestId };
-                    this.postMessageToWebview(res);
+                    if (fresh()) { this.postMessageToWebview(res); }
                     return { ...res, success: true };
                 }
 
                 try {
                     const pages = await adapter.listDocPages(docId);
-                    // Drop if stale
-                    if (requestId !== this._latestRequestIds.get(pagesKey)) { return { success: false, error: 'Stale request' }; }
                     const res = { type: 'docPagesReady', sourceId, docId, pages, requestId };
-                    this.postMessageToWebview(res);
+                    if (fresh()) { this.postMessageToWebview(res); }
                     return { ...res, success: true };
                 } catch {
-                    if (requestId === this._latestRequestIds.get(pagesKey)) {
-                        const res = { type: 'docPagesReady', sourceId, docId, pages: [], requestId };
-                        this.postMessageToWebview(res);
-                        return { ...res, success: false };
-                    }
-                    return { success: false, error: 'Stale request' };
+                    const res = { type: 'docPagesReady', sourceId, docId, pages: [], requestId };
+                    if (fresh()) { this.postMessageToWebview(res); }
+                    return { ...res, success: false };
                 }
             }
             case 'fetchPageContent': {
@@ -3167,36 +3272,32 @@ Start by checking which documents exist, then present the menu.`;
                 const docId = msg.docId;
                 const pageId = msg.pageId;
                 const requestId = typeof msg.requestId === 'number' ? msg.requestId : 0;
-                // Race guard — reuse source-keyed tracking from fetchPreview
-                if (requestId <= (this._latestRequestIds.get(sourceId) || 0)) { return { success: false, error: 'Stale request' }; }
-                this._latestRequestIds.set(sourceId, requestId);
+                // Race guard — reuse source-keyed tracking from fetchPreview; push-only
+                // (see _isFreshRequest).
+                const fresh = this._isFreshRequest(sourceId);
 
                 const adapter = this._researchImportService.getAdapter(sourceId);
                 if (!adapter || !adapter.fetchPageContent) {
                     const res = { type: 'previewError', sourceId, requestId, error: 'Adapter does not support page content' };
-                    this.postMessageToWebview(res);
+                    if (fresh()) { this.postMessageToWebview(res); }
                     return { ...res, success: false };
                 }
 
                 try {
                     const result = await adapter.fetchPageContent(docId, pageId);
-                    if (requestId !== this._latestRequestIds.get(sourceId)) { return { success: false, error: 'Stale request' }; }
                     if (result.success) {
                         const res = { type: 'previewReady', sourceId, requestId, content: result.content, docName: result.docName };
-                        this.postMessageToWebview(res);
+                        if (fresh()) { this.postMessageToWebview(res); }
                         return { ...res, success: true };
                     } else {
                         const res = { type: 'previewError', sourceId, requestId, error: result.error };
-                        this.postMessageToWebview(res);
+                        if (fresh()) { this.postMessageToWebview(res); }
                         return { ...res, success: false };
                     }
                 } catch (err) {
-                    if (requestId === this._latestRequestIds.get(sourceId)) {
-                        const res = { type: 'previewError', sourceId, requestId, error: String(err) };
-                        this.postMessageToWebview(res);
-                        return { ...res, success: false };
-                    }
-                    return { success: false, error: 'Stale request' };
+                    const res = { type: 'previewError', sourceId, requestId, error: String(err) };
+                    if (fresh()) { this.postMessageToWebview(res); }
+                    return { ...res, success: false };
                 }
             }
             case 'importPlansFromClipboard': {

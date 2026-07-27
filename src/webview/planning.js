@@ -57,6 +57,12 @@
     let _registeredDropdowns = []; // Array of { selectElOrId, tabKey, includeAllOption }
     let _workspaceItems = [];
     let _integrationWorkspaces = [];
+    // Has the host actually told us about integrations yet? Distinguishes
+    // "no integrations configured" from "the answer hasn't arrived", so the
+    // tickets picker never claims un-configured while still loading. Also gates
+    // the fetchRootsComplete body fallback so a WS push isn't handled twice.
+    let _integrationWorkspacesReceived = false;
+    let _integrationProviderStatesReceived = false;
 
     // Helper to register a dropdown for updates
     function registerWorkspaceDropdown(selectElOrId, tabKey, includeAllOption = true) {
@@ -4317,7 +4323,8 @@
             const { wrapper } = renderNode(node, sourceId);
             childContainer.appendChild(wrapper);
         });
-        applyOnlineDocsSearchFilter();
+        // Online and local nodes share one tree now — the unified filter covers both.
+        applyUnifiedDocsSearchFilter();
     }
 
 
@@ -4538,7 +4545,10 @@
             });
 
             if (!content) {
-                if (targetBtnAppend) targetBtnAppend.disabled = true;
+                // (No global append button any more — "Set Context" is a per-card button
+                // rendered in the tree. The old `targetBtnAppend` reference was never
+                // declared, so touching it threw a ReferenceError right here and aborted
+                // the rest of this handler on every online-doc page render.)
                 if (btnImportFullDoc) btnImportFullDoc.disabled = true;
             }
             if (msg.isAutoRefreshed) {
@@ -4588,7 +4598,6 @@
 
         targetPreview.innerHTML = renderMarkdown(content || '');
 
-        if (targetBtnAppend) targetBtnAppend.disabled = false;
         if (btnImportFullDoc) btnImportFullDoc.disabled = false;
         
         if (msg.isAutoRefreshed) {
@@ -4807,7 +4816,7 @@
             const { wrapper } = renderNode(node, sourceId);
             docList.appendChild(wrapper);
         });
-        if (isOnline) applyOnlineDocsSearchFilter();
+        if (isOnline) applyUnifiedDocsSearchFilter();
     }
 
     function handleLocalFolderPathUpdated(msg) {
@@ -5228,6 +5237,24 @@
                 if (msg.localDocs)        handleLocalDocsReady(msg.localDocs);
                 if (msg.onlineDocs)       handleOnlineDocsReady(msg.onlineDocs);
                 if (msg.importedDocs)     handleImportedDocsReady(msg.importedDocs);
+                // Integration state: the editor gets these as separate pushes DURING the
+                // fetchRoots handler. In the browser that push is broadcast while this
+                // client is still inside its WS resync window (wsHub subscribes a
+                // connection only AFTER the snapshot is on the wire), so the very first
+                // fetchRoots — the one at page load — loses the race and the tickets tab
+                // stayed permanently stuck on "Configure ClickUp or Linear...". The body
+                // is the fallback; the flags keep it from double-handling a push that
+                // did land.
+                if (msg.integrationWorkspaces && !_integrationWorkspacesReceived) {
+                    window.dispatchEvent(new MessageEvent('message', {
+                        data: { type: 'integrationWorkspaces', workspaces: msg.integrationWorkspaces }
+                    }));
+                }
+                if (msg.integrationProviderStates && !_integrationProviderStatesReceived) {
+                    window.dispatchEvent(new MessageEvent('message', {
+                        data: { type: 'integrationProviderStates', ...msg.integrationProviderStates }
+                    }));
+                }
                 break;
             }
             case 'workspaceItemsUpdated': {
@@ -5239,6 +5266,7 @@
             }
             case 'integrationWorkspaces': {
                 _integrationWorkspaces = msg.workspaces || [];
+                _integrationWorkspacesReceived = true;
                 updateTicketsWorkspacePicker();
                 break;
             }
@@ -7169,6 +7197,7 @@
             }
             case 'integrationProviderStates':
                 {
+                    _integrationProviderStatesReceived = true;
                     const clickupSetup = msg.clickupSetupComplete === true;
                     const linearSetup = msg.linearSetupComplete === true;
                     const tabBtn = document.getElementById('tickets-tab-btn');
@@ -9462,8 +9491,15 @@ Return ONLY the drafted prompt with no additional commentary.`;
         const count = _integrationWorkspaces.length;
 
         if (count === 0) {
-            // No integrations — show static "Configure Integration" prompt
+            // Silent until the host has actually answered. initTicketsTab() runs this
+            // at page load, long before fetchRoots returns — claiming "not configured"
+            // there is a guess, and in the browser it used to be a permanent one.
             select.style.display = 'none';
+            if (!_integrationWorkspacesReceived) {
+                staticLabel.style.display = 'none';
+                return;
+            }
+            // Genuinely no integrations — show the static "Configure Integration" prompt
             staticLabel.style.display = '';
             staticLabel.textContent = 'Configure ClickUp or Linear in workspace settings to browse tickets.';
             return;
