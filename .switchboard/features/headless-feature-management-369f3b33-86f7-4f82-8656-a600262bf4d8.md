@@ -1,6 +1,6 @@
 # Headless Feature Management
 
-**Complexity:** 7
+**Complexity:** 6
 
 ## Goal
 
@@ -8,46 +8,69 @@ Make feature management work in the standalone (npx switchboard) host, and stop 
 
 Feature management is extension-only: six LocalApiServerOptions hooks are supplied solely by TaskViewerProvider, and the three UI verbs fall through standalone's kanbanVerb switch. The browser board ships the full feature UI anyway — PROMOTE TO FEATURE renders, enables, opens a modal, accepts a name, and does nothing. The failure is invisible because transport.js discards every {success:false} response without surfacing it.
 
-This is a live violation of PRD contract #6 (capability-gating honesty) and contract #7 (two-layer completion, migrated-but-unreachable). The set fixes it in four steps: make failures visible, make the control honest, extract the logic host-agnostically, then wire it into the standalone host.
+This is a live violation of PRD contract #6 (capability-gating honesty) and contract #7 (two-layer completion, migrated-but-unreachable). The set fixes it in three steps: make failures visible, make the control honest, then give the standalone host the provider it was missing.
+
+### Reconciled design decision (2026-07-28)
+
+The set originally carried a fourth subtask that **extracted** the six feature operations out of `KanbanProvider` into a host-agnostic `FeatureManagementService`, on the premise that the standalone host cannot construct that provider. Auditing the code disproved the premise: `bootstrap.ts` already constructs `DesignPanelProvider` (`:502`), `SetupPanelProvider` (`:513`), `TaskViewerProvider` (`:519`) and `PlanningPanelProvider` (`:553`) under `vscodeShim` + `createVscodeHostSeams`, and routes each one's verbs through its real `handleServiceVerb`. **Kanban is the only panel the bootstrap hand-rolls** — and that outlier, not any inherent coupling, is the actual root cause.
+
+The extraction plan was therefore deleted and the wiring plan rewritten around constructing the provider. This is what PRD contract #7 literally prescribes for Layer 2 (*"the standalone bootstrap constructs the provider and wires its verb router into `LocalApiServer`"*), and it is strictly better on four counts the extraction could not match:
+
+1. **`KanbanProvider.ts` changes by zero lines**, so byte-compatibility with the ~4,000 shipped installs (contract #2) holds by construction rather than by golden fixture. The feature no longer contains any subtask that can break the extension.
+2. **It actually covers the UI verbs.** Two of the three — `promoteToFeature` (`KanbanProvider.ts:10656-10730`) and `addSubtaskToFeature` (`:10623-10655`) — are substantial `_handleMessage` arms, *not* members of the six extracted methods. `promoteToFeature` moves a plan's own file into `.switchboard/features/` and flips `is_feature` on that row; the superseded plan proposed normalising it to `createFeature`'s array signature, which would have created a *new* feature with the plan as a subtask instead of promoting it.
+3. **It avoids a third copy of the feature-file regenerator.** `src/standalone/headlessFeatureCallbacks.ts` already mirrors `_regenerateFeatureFile` and `recomputeFeatureColumnFromSubtasks` for the ingestion engine — and already cites stale provider line numbers in its header, evidence that mirrored copies drift.
+4. **It makes schema validation real.** `validateVerbPayload` is called only inside the five providers' `handleServiceVerb`; `bootstrap.ts` never imports it. Schemas added for verbs dispatched by the hand-rolled switch would have satisfied contract #5 on paper and validated nothing.
+
+It also removed the feature's only cross-feature file contention (see below).
 
 ## How the Subtasks Achieve This
 
-- **Surface Verb Failures in the Browser Transport** (Cx 2): Adds the missing `result.success === false` branch to `transport.js`'s verb response handler. Today a failure is re-dispatched as a typeless `MessageEvent` no UI handler consumes, so the server's honest *"Verb 'X' not implemented in standalone mode"* never reaches a human. Scope is deliberately wider than features — this makes **every** failing or unimplemented verb diagnosable, and it is the reason this gap went unnoticed for as long as it did.
-- **Capability-Gate Feature Management in the Browser** (Cx 4): Adds a `featureManagement` capability *derived* from whether all six `LocalApiServerOptions` hooks are actually supplied, and disables `#btn-feature-action` with an explanatory tooltip when false. Restores PRD contract #6 immediately, without waiting for the wiring. The derivation is all-six by design: a flag that overstates what is wired turns a dead button into a lying one.
-- **Extract a Host-Agnostic FeatureManagementService** (Cx 7): Moves the six operations off the ~12,000-line `KanbanProvider` — which the standalone host never constructs — into an injectable service with no `vscode` dependency, leaving thin forwarders behind. Wires nothing new; it exists to make the logic reachable. This is the only subtask that can affect the ~4,000 shipped installs, so it is gated on golden fixtures captured before any code moves.
-- **Wire Feature Management into the Standalone Host** (Cx 5): Constructs the service in `bootstrap.ts`, supplies all six hooks so the seven existing routes stop returning 503, and adds the three UI verbs to the `kanbanVerb` switch so the browser board's button works. Completes PRD contract #7's Layer 2 and flips the capability flag to true.
+- **Surface Verb Failures in the Browser Transport** (Cx 2): Adds the missing `result.success === false` branch to `transport.js`'s verb response handler. Today a failure is re-dispatched as a typeless `MessageEvent` no UI handler consumes, so the server's honest *"Verb 'X' not implemented in standalone mode"* never reaches a human. Because `showStatusMessage` is handled by `kanban.html` **only**, the plan pairs that dispatch with a transport-owned fallback toast so the other three panels are not silently left out. Scope is deliberately wider than features — this makes **every** failing or unimplemented verb diagnosable in **every** panel, and it is the reason this gap went unnoticed for as long as it did.
+- **Capability-Gate Feature Management in the Browser** (Cx 4): Adds a `featureManagement` capability *derived* from whether all six `LocalApiServerOptions` hooks are actually supplied, threads it through `HostCapabilities` and both hosts' assembly sites, and disables `#btn-feature-action` with an explanatory tooltip when false. Restores PRD contract #6 immediately, without waiting for the wiring. The derivation is all-six by design (a flag that overstates what is wired turns a dead button into a lying one) and must be **late-bound** — both capability literals are evaluated before their `LocalApiServer` exists, so a captured read would disable the button in VS Code too.
+- **Construct KanbanProvider in the Standalone Host and Wire Feature Management** (Cx 6): Constructs `KanbanProvider` in `bootstrap.ts` the way the other four providers are already constructed, attaches it via the public `taskViewerProvider.setKanbanProvider()`, supplies the six hooks so the seven routes stop returning 503, and routes the three UI verbs to the provider's real `handleServiceVerb` — which brings allowlisting, schema validation, and byte-identical behaviour with it. Completes PRD contract #7's Layer 2 and flips the capability flag to true. Deliberately routes only those three verbs; blanket-routing all ~151 kanban arms is the A2b burndown, not this.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
 - [ ] [Surface Verb Failures in the Browser Transport](../plans/browser-surface-verb-failures.md) — **PLAN REVIEWED**
 - [ ] [Capability-Gate Feature Management in the Browser](../plans/capability-gate-feature-management.md) — **PLAN REVIEWED**
-- [ ] [Extract a Host-Agnostic FeatureManagementService](../plans/extract-feature-management-service.md) — **PLAN REVIEWED**
-- [ ] [Wire Feature Management into the Standalone Host](../plans/wire-feature-management-standalone.md) — **PLAN REVIEWED**
+- [ ] [Construct KanbanProvider in the Standalone Host and Wire Feature Management](../plans/wire-feature-management-standalone.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
 
-**One hard dependency; the rest is recommended order.**
+**No hard dependencies remain.** Removing the extraction subtask removed the set's only blocking edge — every subtask is now independently shippable, and the ordering below is preference, not constraint.
 
 | # | Subtask | Constraint |
 |---|---|---|
-| 1 | Surface Verb Failures | None — fully independent, touches only `transport.js`. |
-| 2 | Capability-Gate | None hard. Best after #1 so anything slipping the gate reports itself. |
-| 3 | Extract Service | None. **Must precede #4.** |
-| 4 | Wire Standalone | **Hard: requires #3.** There is nothing to wire until the service exists. |
+| 1 | Surface Verb Failures | None — fully independent. |
+| 2 | Capability-Gate | None. Best after #1 so anything slipping the gate reports itself. |
+| 3 | Construct KanbanProvider + Wire | None. Previously blocked on the extraction; now self-contained. |
 
-**Ship #1 first.** It is a few lines, independently shippable, and converts this entire class of failure from silent to diagnosable — including any residual gap the later subtasks leave behind. Working on #3 or #4 before it means debugging blind.
+**Ship #1 first.** It is a few lines, independently shippable, and converts this entire class of failure from silent to diagnosable — including any residual gap the later subtasks leave behind. Bringing up #3 before it means debugging the provider construction blind, which is exactly the step most likely to surprise.
 
-**#2 before #4 is preferred**, so the button is never enabled-and-inert: #2 disables it honestly while unwired, #4 flips the capability and enables it. Reversing them leaves a window where the control works only for operations that happen to be wired.
+**#2 before #3 is preferred**, so the button is never enabled-and-inert: #2 disables it honestly while unwired, #3 flips the capability and enables it. Reversing them leaves a window where the control works only for operations that happen to be wired. Note the window is now short — #3 no longer waits on an extraction — so this is a small win, not a gating concern.
 
-**#1 and #2 can run in parallel with #3** — different files (`transport.js` / `kanban.html` vs `KanbanProvider.ts` + the new service), so no stream collision.
+### Shared-file serialisation (within this feature)
 
-### Cross-feature serialisation
+Two files are touched by more than one subtask. Neither is a logical conflict; both are merge contention and must be serialised:
 
-Subtask #3 edits `src/services/KanbanProvider.ts`, which the **Cross-Client Project Scope Independence** feature also edits. Per the PRD's one-stream-per-provider-file discipline, #3 must not run concurrently with that feature's subtasks. They touch different methods and share no helper, so there is no logical conflict — only file contention.
+| File | Subtasks | Contended surface |
+|---|---|---|
+| `src/webview/transport.js` | #1, #2 | #1 edits the verb response handler (`:176-192`); #2 edits `applyCapabilityGating` (`:225-335`). Different functions. |
+| `src/standalone/bootstrap.ts` | #2, #3 | #2 edits `getStandaloneCaps` (`:388-409`); #3 adds the provider construction, the six hooks, and three verb arms. Different regions — but #2 needs a `server` binding that #3's work sits near, so land #2's one-line change first or rebase it onto #3. |
 
-Subtask #4 edits `verbSchemas.ts`, shared across all provider work; serialise concurrent edits there.
+`src/webview/kanban.html` is touched by #2 only. `src/services/verbSchemas.ts` is touched by #3 only, but it is shared across **all** provider work repo-wide — serialise concurrent edits there per the PRD's orchestration discipline.
+
+### Cross-feature dependencies
+
+**None.** This is a direct consequence of the restructure. The deleted extraction subtask edited `src/services/KanbanProvider.ts`, which the **Cross-Client Project Scope Independence** feature also edits, forcing the two features to serialise under the PRD's one-stream-per-provider-file rule. The replacement subtask does not touch `KanbanProvider.ts` at all, so **this feature and Cross-Client Project Scope Independence can now run fully concurrently.**
+
+Nothing from any other feature must land first.
 
 ### Where the risk actually is
 
-Three of the four subtasks are additive or browser-only. **#3 is the only one that can break shipped installs**, because it moves live, mutating code — including operations that abandon worktrees and unlink external trackers — out of the provider the extension depends on. Its golden fixtures are the merge gate, and its end state is deliberately "extension unchanged, standalone still 503".
+**No subtask in this set can break the ~4,000 shipped installs.** #1 and #2 are browser-only (`transport.js` is not loaded inside the VS Code webview) plus one additive capability field; #3 changes only `bootstrap.ts`, `verbSchemas.ts`, and adds tests. That is the single biggest gain from the restructure — the previous set's #3 was explicitly "the one that can break shipped installs" and needed golden fixtures across seven routes as a merge gate.
+
+The residual risk moved rather than vanished, and it is now concentrated in one place: **constructing `KanbanProvider` under the shim**. Four providers prove the pattern, but kanban is the heaviest and the only one whose constructor fires async work (`_reconcileStaleWorktreeMode`). The plan's step-1 smoke gate exists to surface that in minutes. The other trap is the workspace root: the shim's `workspaceFolders` is `[]`, so the root must be assigned post-construction or every routed verb throws *"Kanban service unavailable"*.
+
+Two shared-input risks carry across the set and are pinned by tests in their owning plans: an over-strict verb schema is a shipped-install regression (these verbs also arrive from the extension's webview through the same validated path), and a `featureManagement` flag read too early disables the button in VS Code as well as standalone.
