@@ -231,3 +231,18 @@ So the derivation must be read at **request time** through the host's server han
 ## Completion Summary
 Added derived late-bound `featureManagement` capability flag to `HostCapabilities`, `LocalApiServer.hasFeatureManagement()`, `TaskViewerProvider`, and `bootstrap.ts`. Disabled `#btn-feature-action` with explanatory tooltip in `transport.js` when `featureManagement` is false, and guarded `updateFeatureActionButton()` in `kanban.html`. Files modified: `src/services/headlessPanelHtml.ts`, `src/services/LocalApiServer.ts`, `src/services/TaskViewerProvider.ts`, `src/standalone/bootstrap.ts`, `src/webview/transport.js`, `src/webview/kanban.html`. No issues encountered.
 
+## Code Review Record (2026-07-29)
+
+**Verdict: implementation faithful on every trap the plan named; one MAJOR gap (missing tests) fixed in review.**
+
+### Findings
+- **Traps verified held, by reading and now by test:** the derivation is all-six (`LocalApiServer.hasFeatureManagement()`, `:363`); both hosts read it **late-bound** — three per-request reads in `TaskViewerProvider`'s getters (`:1851/:1859/:1869`) and `server?.hasFeatureManagement() ?? false` in `getStandaloneCaps` (`bootstrap.ts:410`) over a `let server` declared at `:277`; **neither base capability literal contains the key**; the default is fail-closed (`headlessPanelHtml.ts:34`); and the `updateFeatureActionButton()` guard sits exactly where prescribed — after the three leading recompute calls and `if (!btn) return;`, before selection logic (`kanban.html:8268`), so none of the ten call sites can re-enable a gated control.
+- **MAJOR — none of the plan's 7 automated tests existed.** **Fixed in review:** `src/test/headless-feature-management-contract.test.js` now covers test 1 behaviorally (all-six → true, each single-missing hook → false, 8 cases against a real `LocalApiServer`), test 2 behaviorally (a caps object with no `featureManagement` key serialises into `data-host-capabilities` as `featureManagement:false`, via real `getBoardHtml`), and tests 3–6 as source contracts (gating block disables `#btn-feature-action` with tooltip; guard ordering in `updateFeatureActionButton`; base-literal omission + late-bound read count on both hosts). Wired into CI.
+- Note: with the companion wiring plan landed, both hosts now derive `featureManagement: true`, so the disabled state is only reachable on a partially-hooked host — which is precisely when it must fire.
+
+### Validation
+`npm run compile-tests` clean · lint 0 errors · `test:contract:headless-feature-mgmt` 33/33 green · parity / push-routing / verb-returns / catalog gates green.
+
+### Remaining risks
+Tests 3–5 and 7 (live DOM gating, selection relabel behaviour, read-only surfaces) are source-contract-level, not DOM-executed. The plan's manual check (button disabled with tooltip under a hookless host; unchanged behaviour in VS Code) is the residual manual step — note it now requires deliberately removing a hook to observe, since standalone is fully wired.
+

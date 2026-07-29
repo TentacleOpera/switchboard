@@ -176,10 +176,14 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
     // view filter; the arm prefers it over the last-writer-wins DB row. The
     // validator accepts an explicit null for non-required fields, which is a
     // meaningful sentinel here ("no project"), so `type: 'string'` is correct.
+    // `name` required: createFeatureFromPlanIds rejects an empty name, so the
+    // schema mirrors the arm's real requirement. `subtaskPlanIds` optional: the
+    // arm defaults a missing value to [] (the blank-feature contract), so
+    // requiring it would reject a valid API payload (PRD contract #5).
     createFeature: {
         fields: {
             name: { type: 'string', required: true },
-            subtaskPlanIds: { type: 'array', required: true },
+            subtaskPlanIds: { type: 'array' },
             description: { type: 'string' },
             workspaceRoot: { type: 'string' },
             initiatorProject: { type: 'string' },
@@ -192,10 +196,14 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             initiatorProject: { type: 'string' },
         },
     },
+    // `name` optional: the arm falls back to the plan's existing topic when no
+    // custom name is supplied (KanbanProvider promoteToFeature arm), matching
+    // the planning-panel schema for the same verb. Requiring it would reject a
+    // valid keep-the-title API payload the arm handles fine (PRD contract #5).
     promoteToFeature: {
         fields: {
             planId: { type: 'string', required: true },
-            name: { type: 'string', required: true },
+            name: { type: 'string' },
             workspaceRoot: { type: 'string' },
         },
     },

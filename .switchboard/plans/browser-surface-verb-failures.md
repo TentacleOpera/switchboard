@@ -197,3 +197,18 @@ This is the smallest change in the feature set and the one with the widest blast
 ## Completion Summary
 Implemented explicit failure handling in `src/webview/transport.js` for failed verb responses (`result.success === false`). Dispatches `showStatusMessage` on the `kanban` panel and renders a transport-owned fallback toast element (`#sb-transport-error`) on other panels. Files modified: `src/webview/transport.js`. No issues encountered.
 
+## Code Review Record (2026-07-29)
+
+**Verdict: implementation faithful; one MAJOR gap (missing tests) fixed in review; one deliberate deviation ratified.**
+
+### Findings
+- **MAJOR — none of the plan's 6 automated tests existed.** The plan's own Complexity Audit calls the strict-equality detail "the whole correctness risk", and no test guarded it. **Fixed in review:** `src/test/headless-feature-management-contract.test.js` now asserts (as source contracts, since the repo has no DOM harness): strict `result.success === false` keying with a guard that `!result.success` never reappears; `STATUS_MESSAGE_PANELS = { kanban: true }`; `showStatusMessage`+`isError:true` dispatch shape; the `#sb-transport-error` fallback path; textContent-only rendering (no `innerHTML` anywhere in transport.js — covers plan test 6); the untyped-failure no-redispatch guard; and kanban.html's `showStatusBarMessage` consumer. Wired into CI (`test:contract:headless-feature-mgmt` in `.github/workflows/integration-tests.yml`).
+- **Ratified deviation from the "do not fall through" edge case:** the shipped code re-dispatches a failure body **only when it carries a `type` field** (`transport.js` — `typeof result.type !== 'string'` guard). This is correct and better than the plan's absolute rule: a *typed* failure (e.g. `previewError`) is an addressed reply whose panel handler owns recovery UI (hiding a spinner); swallowing it would leave that state stuck behind a transient toast. The plan's actual bug — the *untyped* phantom `MessageEvent` — is still fully closed, and plan test 1's semantics (typeless failure never re-dispatched) hold.
+- **NIT (left as-is):** the clipboard-write branch runs before the failure check, so a hypothetical `{success:false, prompt}` body would copy before toasting. No server path emits that shape.
+
+### Validation
+`npm run compile-tests` (tsc) clean · `npm run lint` 0 errors · `test:contract:headless-feature-mgmt` 33/33 green · parity / push-routing / verb-returns / catalog gates all green.
+
+### Remaining risks
+Fallback-toast rendering and the DOMContentLoaded early-failure path are asserted as source contracts, not executed in a real DOM (no jsdom harness in this repo). The plan's manual check (trigger an unimplemented verb in board + Project panel) remains worth one pass at next `npx switchboard` session.
+

@@ -31,9 +31,9 @@ It also removed the feature's only cross-feature file contention (see below).
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Surface Verb Failures in the Browser Transport](../plans/browser-surface-verb-failures.md) — **CODER CODED**
-- [ ] [Capability-Gate Feature Management in the Browser](../plans/capability-gate-feature-management.md) — **CODER CODED**
-- [ ] [Construct KanbanProvider in the Standalone Host and Wire Feature Management](../plans/wire-feature-management-standalone.md) — **CODER CODED**
+- [ ] [Surface Verb Failures in the Browser Transport](../plans/browser-surface-verb-failures.md) — **CODE REVIEWED**
+- [ ] [Capability-Gate Feature Management in the Browser](../plans/capability-gate-feature-management.md) — **CODE REVIEWED**
+- [ ] [Construct KanbanProvider in the Standalone Host and Wire Feature Management](../plans/wire-feature-management-standalone.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -77,4 +77,7 @@ Two shared-input risks carry across the set and are pinned by tests in their own
 
 ## Completion Summary
 Implemented all subtasks for headless feature management. Surfaced verb failure messages in `src/webview/transport.js` via `showStatusMessage` or fallback toast. Capability-gated feature management controls via a derived, late-bound `featureManagement` flag across `HostCapabilities`, `LocalApiServer`, `TaskViewerProvider`, `bootstrap.ts`, `transport.js`, and `kanban.html`. Constructed `KanbanProvider` in `bootstrap.ts`, supplied all six `LocalApiServerOptions` feature hooks, routed `createFeature`/`promoteToFeature`/`addSubtaskToFeature` UI verbs to `kanbanProvider.handleServiceVerb`, and added schemas in `verbSchemas.ts`. Files modified: `src/webview/transport.js`, `src/services/headlessPanelHtml.ts`, `src/services/LocalApiServer.ts`, `src/services/TaskViewerProvider.ts`, `src/standalone/bootstrap.ts`, `src/webview/kanban.html`, `src/services/verbSchemas.ts`. No issues encountered.
+
+## Code Review Completion (2026-07-29)
+Reviewed all three subtasks in-place (Grumpy → Balanced → fix → verify). The implementation was faithful on every trap the plans named (strict-equality failure keying, late-bound all-six capability derivation, re-enable guard placement, zero changes to `KanbanProvider.ts`), but shipped with **no tests at all** — the set-wide MAJOR. Fixed in review: loosened two over-strict kanban verb schemas (`createFeature.subtaskPlanIds`, `promoteToFeature.name`) that would have rejected payloads the arms handle (PRD contract #5), and added `src/test/headless-feature-management-contract.test.js` (33 tests: capability derivation, fail-closed serialisation, schema liveness/field-accuracy, standalone `KanbanProvider` construction smoke under the vscodeShim, in-body `createFeature`, promote-not-create semantics, transport/gating source contracts), wired as `test:contract:headless-feature-mgmt` in `package.json` and `.github/workflows/integration-tests.yml`. Verification: tsc clean, lint 0 errors, 33/33 new tests green, parity/push-routing/verb-returns/catalog gates green; one pre-existing unrelated red (`verb-engine-kanban` `getDbPath`, dates to 00d6a94). Residual: destructive/convergence paths (delete, split, reconcile, watcher exclusion) remain manual-verify.
 
