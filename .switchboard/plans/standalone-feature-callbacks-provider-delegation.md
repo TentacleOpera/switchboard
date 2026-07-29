@@ -17,7 +17,10 @@ description: "src/standalone/headlessFeatureCallbacks.ts reimplements KanbanProv
 Since the *Headless Feature Management* feature landed (2026-07-29), that premise is false: `bootstrap.ts:536-545` constructs the real `KanbanProvider` under the shim, and the six feature hooks plus three UI verbs already run its real code. The mirror is now the **second of two writers** regenerating the same feature files in one process, and it exhibits exactly the drift the feature's design record predicted ("mirrored copies drift", cited as reason #3 against ever adding a third copy):
 
 1. **Stale citations:** the header pins behaviour to `KanbanProvider.ts:6213` (recompute) and `:10971` (regen); the real locations are `:6619` and `:11581`.
-2. **Column-model divergence:** `headlessFeatureCallbacks.ts:26/:37` builds its column ordinal map from hardcoded `DEFAULT_KANBAN_COLUMNS`, while the provider's regenerator consults the workspace's **custom** kanban columns. With custom columns configured, the two writers can produce different subtask status labels for the same DB state. Both carry a no-op-skip guard, so they don't fight in a loop — but each divergent rewrite advances the feature file's mtime, and **plan-file mtime advance is the board's completion signal**, so the drift isn't cosmetic.
+2. **Column-model divergence:**
+   > **Superseded:** "the provider's regenerator consults the workspace's **custom** kanban columns. With custom columns configured, the two writers can produce different subtask status labels for the same DB state… each divergent rewrite advances the feature file's mtime, and plan-file mtime advance is the board's completion signal."
+   > **Reason:** Verified against the code 2026-07-29: the custom-columns lookup lives in the **recomputer**, not the regenerator. `recomputeFeatureColumnFromSubtasks` builds its ordinal map from `_getCustomKanbanColumns(workspaceRoot)` + `_buildKanbanColumns` (`KanbanProvider.ts:6633-6636`); the mirror hardcodes `DEFAULT_KANBAN_COLUMNS` (`headlessFeatureCallbacks.ts:26/:35-42`) and its own doc admits it ("minus the custom-columns lookup"). The regenerator halves are byte-mirrored today — subtask labels come from the stored `st.kanbanColumn` in **both** writers (`KanbanProvider.ts:11598-11603` vs mirror `:99-104`), so no label/mtime divergence exists at present.
+   > **Replaced with:** The live behavioural divergence is **feature-column resolution under custom columns**: a subtask sitting in a custom column gets ordinal `Infinity` in the mirror's `DEFAULT_KANBAN_COLUMNS` map, so the mirror can resolve a different "least-progressed" column than the provider and write a different `kanban_column` for the feature (board position, not file bytes). The regenerator's risk is **structural drift** — the stale citations prove the mirror rots — and any *future* regen drift would hit the mtime/completion signal; deleting the mirror forecloses the whole class.
 
 The extension already solved this exact wiring problem, and its shape is the template. `extension.ts:749-761`:
 
@@ -37,7 +40,9 @@ Both provider methods are **public** with the right signatures: `recomputeFeatur
 
 Bootstrap currently wires the mirror callbacks at `:270-271`, **before** the provider exists (`:536`). The fix is to move the two `ingestionEngine.setFeatureColumnRecomputer/setFeatureFileRegenerator` calls to after the provider's construction. Between engine initialization and that point there is a window where feature-file ingestion could fire a callback:
 
-- If the engine's initial scan starts before `:536`, either delay `ingestionEngine.initialize()` until after the provider is constructed, or accept the window with null-guarded lambdas exactly like the extension's (`kanbanProvider?.… ?? Promise.resolve()`). Read the bootstrap's actual initialize timing before choosing; prefer whichever preserves the current startup sequence with the smallest diff.
+> **Superseded:** "either delay `ingestionEngine.initialize()` until after the provider is constructed, or accept the window with null-guarded lambdas exactly like the extension's… Read the bootstrap's actual initialize timing before choosing."
+> **Reason:** Timing read 2026-07-29: `await ingestionEngine.initialize()` runs at `bootstrap.ts:357` — after the mirror wiring (`:270-271`), before provider construction (`:536`). The extension itself accepts this exact window: it constructs the provider (`extension.ts:643`), runs the watcher's **entire boot scan** (`await globalPlanWatcher.initialize()`, `:725`), and only wires the feature callbacks afterwards (`:749`/`:759`). The engine's callback fields are optional (`_recomputeFeatureColumn?` in `PlanIngestionEngine.ts`), so unset callbacks no-op — there is no crash path, and callback-less boot-scan events are shipped, accepted extension semantics.
+> **Replaced with:** **Move the two setter calls from `:270-271` to immediately after the provider construction block (`:536-544`).** Boot-scan feature events run callback-less exactly as they do in the shipped extension; every live event thereafter reaches the real provider. No TDZ hazard (the lambdas are created after `const kanbanProvider` initialises, so no null-guards are needed), `initialize()` timing unchanged, smallest possible diff.
 
 ## Metadata
 - **Tags:** refactor, reliability, backend
@@ -51,8 +56,11 @@ Bootstrap currently wires the mirror callbacks at `:270-271`, **before** the pro
 
 ### ✅ IN SCOPE
 1. In `bootstrap.ts`: wire `setFeatureColumnRecomputer` / `setFeatureFileRegenerator` to `kanbanProvider.recomputeFeatureColumnFromSubtasks` / `kanbanProvider.regenerateFeatureFile`, after provider construction, resolving the ordering wrinkle above.
-2. Delete `src/standalone/headlessFeatureCallbacks.ts` and its imports (`bootstrap.ts:29-30`). Grep confirms bootstrap is the only consumer.
-3. A regression test pinning the delegation: with custom kanban columns configured in the temp workspace DB, a watcher-driven regeneration produces subtask labels from the **custom** columns (the exact divergence the mirror had), and the bootstrap source no longer references `headlessFeatureCallbacks`.
+2. Delete `src/standalone/headlessFeatureCallbacks.ts` and its imports (`bootstrap.ts:28-31`). Grep re-confirmed 2026-07-29: bootstrap is the only consumer.
+3. A regression test pinning the delegation:
+   > **Superseded:** "with custom kanban columns configured in the temp workspace DB, a watcher-driven regeneration produces subtask labels from the **custom** columns (the exact divergence the mirror had)"
+   > **Reason:** The label path never diverged — both writers print the stored `st.kanbanColumn`. The mirror's real divergence is the recompute ordinal map (see the corrected root-cause analysis in the Goal).
+   > **Replaced with:** With custom kanban columns seeded, the wired **recompute** callback resolves the feature's column via the custom ordinal map — a result the mirror's hardcoded map provably cannot produce — plus the source contract: bootstrap wires the provider-delegating setters after provider construction, never references `headlessFeatureCallbacks`, and the file is gone. Test design details in the Verification Plan.
 
 ### ⚙️ OUT OF SCOPE
 - **Any change to `src/services/KanbanProvider.ts`** — both needed methods are already public.
@@ -62,11 +70,10 @@ Bootstrap currently wires the mirror callbacks at `:270-271`, **before** the pro
 
 ## Implementation Steps
 
-1. Read `bootstrap.ts`'s engine initialization sequence around `:250-271` and determine whether the initial scan can fire before `:536`; choose the ordering resolution accordingly (move setters vs. null-guarded early wiring).
-2. Replace the two callback wirings with provider-delegating lambdas (extension shape).
-3. Delete `headlessFeatureCallbacks.ts` and the imports.
-4. Add the regression test (extend `src/test/headless-feature-management-contract.test.js` — it already constructs the provider and seeds a DB; one custom-columns case and one source contract).
-5. Run the full verification battery below.
+1. Move the two `ingestionEngine.setFeatureColumnRecomputer` / `setFeatureFileRegenerator` calls from `:270-271` to immediately after the provider construction block (`:536-545`), wiring them to `kanbanProvider.recomputeFeatureColumnFromSubtasks` / `kanbanProvider.regenerateFeatureFile` (ordering decision resolved — see the superseded callout in the Goal; no null-guards needed).
+2. Delete `headlessFeatureCallbacks.ts` and the imports (`bootstrap.ts:28-31`).
+3. Add the regression test (extend `src/test/headless-feature-management-contract.test.js` — it already constructs the provider and seeds a DB; one custom-columns recompute case and one source contract).
+4. Run the full verification battery below.
 
 ## Proposed Changes
 
@@ -87,7 +94,7 @@ Bootstrap currently wires the mirror callbacks at `:270-271`, **before** the pro
       (ws, fid) => kanbanProvider.regenerateFeatureFile(ws, fid)
   );
   ```
-- **Edge cases.** The provider methods resolve their DB via `KanbanDatabase.forWorkspace` — the same process-wide instance the engine uses, so no dual-instance hazard (verified during the feature's planning). The provider's regenerator registers watcher suppression via the `PlanIngestionEngine` static, so engine-driven regeneration cannot re-trigger itself.
+- **Edge cases.** The provider methods resolve their DB via `KanbanDatabase.forWorkspace` — the same process-wide instance the engine uses, so no dual-instance hazard (verified during the feature's planning). The provider's regenerator registers watcher suppression via `GlobalPlanWatcherService.registerPendingCreation` (`KanbanProvider.ts:11740`), which delegates to the `PlanIngestionEngine` class static (`GlobalPlanWatcherService.ts:72-73`) — same static the engine's own watcher consults — so engine-driven regeneration cannot re-trigger itself. The no-op-skip guard runs **before** the suppression registration, so skipped writes leave no stale pending entry. Placement of the moved setters: after `:544` (`_currentWorkspaceRoot` assignment) and before `taskViewerProvider.setKanbanProvider(kanbanProvider)` at `:545` is fine — any point after the `const` initialises.
 
 ### `src/standalone/headlessFeatureCallbacks.ts`
 
@@ -113,13 +120,17 @@ Bootstrap currently wires the mirror callbacks at `:270-271`, **before** the pro
 
 ## Dependencies
 
-- **None hard.** Best landed before or alongside *Headless Feature Management — Destructive & Convergence Path Tests*, which assumes a single writer (it dropped the byte-identity pin on this plan's promise).
+- **None hard.** Best landed before or alongside *Headless Feature Management — Destructive & Convergence Path Tests*, which assumes a single writer (it dropped the byte-identity pin on this plan's promise). That plan's test harness mirrors `bootstrap.ts`'s wiring order — landing this plan first means it mirrors the final (post-delegation) order.
+
+## Adversarial Synthesis
+
+Key risks: (1) boot-scan feature events now run callback-less in the pre-provider window — accepted deliberately, since it is the shipped extension's exact semantics (`extension.ts:725` scan before `:749` wiring) and the engine no-ops unset callbacks; (2) custom-columns workspaces see a *changed* (corrected) feature-column resolution after ingestion-driven recompute — that is the fix, flagged for the completion summary; (3) deleting the mirror is safe — bootstrap is the sole consumer and the module holds no persisted state. Mitigations: setters placed after the provider `const` initialises (no TDZ path exists), and the recompute regression test pins the custom-ordinal resolution against the surviving implementation.
 
 ## Verification Plan
 
 ### Automated Tests
 1. Source contract: `bootstrap.ts` contains the two provider-delegating setter calls and no reference to `headlessFeatureCallbacks`; the file itself is gone.
-2. Behavioral: with custom kanban columns in the DB, `regenerateFeatureFile` output labels subtasks by the custom columns (the mirror's divergence case, now asserted against the single remaining writer).
+2. Behavioral: seed `.switchboard/state.json` with `customKanbanColumns` in the temp workspace — the provider's headless fallback read when no `_taskViewerProvider` is attached (`KanbanProvider.ts:840-856`), which is exactly the standalone shape. Seed a feature in `CREATED` with one subtask in a custom column and one in `LEAD CODED`; invoke the wired recompute callback; assert the feature's `kanban_column` resolves per the **custom** ordinal map (the mirror's hardcoded map assigns the custom column ordinal `Infinity` and would resolve differently — the exact divergence class, now asserted against the single remaining implementation).
 3. Existing suites stay green: `test:contract:headless-feature-mgmt`, `npm run compile-tests`, lint, parity/push-routing/verb-returns/catalog gates.
 
 ### Manual
@@ -127,6 +138,6 @@ Bootstrap currently wires the mirror callbacks at `:270-271`, **before** the pro
 
 ---
 
-**Recommendation:** Complexity 3 → **Send to Coder.**
+**Recommendation:** Complexity 3 → **Send to Intern.** (Corrected from "Send to Coder" — the 1-3 band routes to Intern, and the one genuinely risky decision, the wiring order, is now resolved in-plan.)
 
 **Stage Complete:** CREATED

@@ -34,7 +34,7 @@ The harness ingredients all have proven in-repo precedent: the `vscode → out/s
 
 ### ✅ IN SCOPE
 1. New test file `src/test/headless-feature-management-destructive.test.js`, reusing the review suite's patterns: shim-mapped `vscode`, bootstrap-shaped `KanbanProvider` construction, seeded temp-workspace `kanban.db` (empty-file + `ensureReady()`, mirroring `bootstrap.ts:230-241`).
-2. `reconcileFeatures` convergence: one manifest call that creates a feature, assigns an existing plan by path, and removes an unmentioned one — asserting the in-body result and the converged DB rows.
+2. `reconcileFeatures` convergence: one manifest call that creates a feature, assigns an existing plan by path, and converges removals — asserting the in-body result and the converged DB rows. **Clarification (contract read 2026-07-29, `KanbanProvider.ts:12358-12376`):** the manifest is `Array<{name, description?, subtasks: Array<string | {slug, title, body?}>}>` plus `options?: {removeUnmentionedFeatures?: boolean}`; the result is `{success, features?: [{name, featurePlanId, subtasks: [{planId, planFile, topic}]}], mutations?: [{action, detail}], warnings?, error?}`. Omitting a subtask from a *mentioned* feature detaches it; an entire *unmentioned* feature is removed **only** when `removeUnmentionedFeatures: true` — assert both behaviours, including that the flag-off default leaves the unmentioned feature intact. String refs resolve via `resolvePlanIdentifier` (path/slug/planId); inline refs dedupe on the deterministic `.switchboard/plans/<slug>.md` path (retry is a no-op).
 3. `deleteFeature` with `deleteSubtasks` **both ways**: feature row gone, subtasks deleted vs detached, seeded worktree rows abandoned, feature file removed.
 4. `removeSubtaskFromFeature`: subtask detached, parent feature file's `## Subtasks` block regenerated without it, subtask worktree row abandoned.
 5. `splitFeature`: kept/second membership correct, two new feature files, original feature deleted.
@@ -53,10 +53,13 @@ The harness ingredients all have proven in-repo precedent: the `vscode → out/s
 ## Implementation Steps
 
 1. Scaffold the suite from `headless-feature-management-contract.test.js`: shim mapping, `kanbanColumnDerivationImpl.js` copy-gap workaround, temp root, DB seeding, provider construction, `unhandledRejection` capture, `process.exit` at end (provider/DB timers keep the process alive otherwise).
-2. Build small seed helpers: `seedPlan(db, {planId, planFile, column, featureId?})` via `insertFileDerivedPlan` (plan_file stored relative, **resolved to absolute at read time** — assert with `.includes('.switchboard/…')`, never prefix equality), and `seedWorktreeRow(db, …)` via `KanbanDatabase`'s worktree APIs (read the current method names before writing — do not guess).
+2. Build small seed helpers: `seedPlan(db, {planId, planFile, column, featureId?})` via `insertFileDerivedPlan` (plan_file stored relative, **resolved to absolute at read time** — assert with `.includes('.switchboard/…')`, never prefix equality), and `seedWorktreeRow(db, …)` via `KanbanDatabase`'s worktree APIs. **Clarification (API names pinned 2026-07-29):** seed with `addWorktree(branch, wtPath, featureId?, project?, subtaskPlanId?, baseBranch?, tier?)` (`KanbanDatabase.ts:3673`); read back with `getWorktrees()` (`:3645`); abandonment lands as `updateWorktreeStatus(id, 'abandoned')` (`:3700`). `_removeWorktreeRow` logs-and-continues when terminal cleanup or worktree-dir removal fails (`KanbanProvider.ts:11267-11284`), so seeding fake paths is safe — the status flip to `abandoned` is the assertable contract.
 3. Implement tests 2–5 (scope items) against `kp.handleServiceVerb(verb, {...})` and the public methods the six hooks call (`reconcileFeatures`, `_deleteFeature`, `_removeSubtaskFromFeature`, `splitFeature` — all public, verified in review).
-4. Implement the watcher-exclusion test: initialize `PlanIngestionEngine` on the temp root exactly as `bootstrap.ts` does, create a feature through the provider, wait past the suppression window (~3s per the `registerPendingCreation` contract), assert exactly one DB row for the feature file with `is_feature=1`.
-5. Implement the server-backed tests (7, 8): construct `LocalApiServer` with the six provider-delegating hooks and `kanbanVerb` routing the three feature verbs (mirroring `bootstrap.ts:853-859` and `:1015-1056`), `start()` on port 0, connect `ws`, assert push frames and route responses. Reuse the auth pattern `cross-client-scope-contract.test.js` uses for `/ws` and `_checkAuth`.
+4. Implement the watcher-exclusion test: initialize `PlanIngestionEngine` on the temp root exactly as `bootstrap.ts` does (discovered-plan subscription, then `await initialize()` — `bootstrap.ts:354-357`), create a feature through the provider, assert exactly one DB row for the feature file with `is_feature=1`.
+   > **Superseded:** "wait past the suppression window (~3s per the `registerPendingCreation` contract)"
+   > **Reason:** The window is **10 seconds**, not ~3s — `registerPendingCreation` arms a 10000ms TTL (`PlanIngestionEngine.ts:119-125`; the extension comment citing 3000ms is stale). Sleeping it out would be slow and pointless: the suppression set is consulted at **event-processing time** (`PlanIngestionEngine.ts:625`), and the file-create event lands within milliseconds of the write.
+   > **Replaced with:** Poll the DB for a duplicate (plain, non-feature) row for the feature file with a 3-5s deadline — long enough for the watcher to have processed the create event, no fixed sleep, and never outwait the 10s TTL. If the suppression delegation were broken, the duplicate import appears as soon as the event is handled.
+5. Implement the server-backed tests (7, 8): construct `LocalApiServer` with the six provider-delegating hooks (`createFeature`/`assignToFeature`/`removeSubtaskFromFeature`/`deleteFeature`/`splitFeature`/`reconcileFeatures` — exact shapes at `bootstrap.ts:1015-1056`) and `kanbanVerb` routing the three feature verbs (mirroring `bootstrap.ts:853-859`), `start()` on port 0, connect `ws`, assert push frames and route responses. Reuse the auth pattern `cross-client-scope-contract.test.js` uses for `/ws` and `_checkAuth` (it constructs the server with `getAuthToken: async () => ''` at `:230` — the proven in-repo harness shape; keep whatever `_checkAuth` behaviour that produces, don't hand-roll a bypass).
 6. Wire the npm script and the CI step.
 
 ## Proposed Changes
@@ -81,7 +84,7 @@ The harness ingredients all have proven in-repo precedent: the `vscode → out/s
 - Seed helpers, dispatch calls, file/DB assertions — all patterns proven in the two existing contract suites.
 
 ### Complex / Risky
-- **The ingestion engine and the WS server are the two genuinely new harness pieces.** Both have in-repo precedent but not in combination with a live provider; expect the first run to surface ordering issues (engine initialized before/after provider, server started before `setApiServer`). Mirror bootstrap's order exactly: engine → provider → server → `setApiServer`.
+- **The ingestion engine and the WS server are the two genuinely new harness pieces.** Both have in-repo precedent but not in combination with a live provider; expect the first run to surface ordering issues (engine initialized before/after provider, server started before `setApiServer`). Mirror bootstrap's order exactly: engine → provider → server → `setApiServer`. **Note:** the companion delegation plan moves the feature-callback wiring from before engine-init to after provider construction — mirror whatever order `bootstrap.ts` has **at coding time** (post-delegation: engine constructed → provider constructed → callbacks wired → server → `setApiServer`).
 - **Flakiness budget:** watcher suppression and WS delivery are both time-based. Poll with deadlines; never assert on a single `setTimeout`.
 - **Worktree seeding** touches DB tables whose API names were not verified in review — step 2's read-first instruction is load-bearing.
 
@@ -96,7 +99,11 @@ The harness ingredients all have proven in-repo precedent: the `vscode → out/s
 
 ## Dependencies
 
-- None hard. Pairs with *Standalone Ingestion Feature Callbacks — Delegate to the Real Provider* (that plan removes the second file-writer this plan would otherwise have had to pin); land in either order.
+- None hard. Pairs with *Standalone Ingestion Feature Callbacks — Delegate to the Real Provider* (that plan removes the second file-writer this plan would otherwise have had to pin); land in either order — preferably after it, so the harness mirrors the final bootstrap wiring order.
+
+## Adversarial Synthesis
+
+Key risks: time-based flake in the watcher-exclusion and WS tests (mitigated: poll-with-deadline everywhere, no fixed sleeps, and the 10s suppression TTL is never waited out); sql.js WASM heap exhaustion if the suite creates per-test workspaces (mitigated: one temp workspace, one DB, close at exit); harness-order drift once the delegation plan moves callback wiring (mitigated: mirror `bootstrap.ts` as-of coding time). CI-file edits are serialised with the verb-engine seam-harness plan, which appends steps to the same workflow.
 
 ## Verification Plan
 
