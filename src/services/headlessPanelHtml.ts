@@ -51,7 +51,18 @@ function makeNonce(): string {
     return crypto.randomBytes(16).toString('base64');
 }
 
-function injectTransportShim(content: string, nonce: string, marker: string, firstScript: string): string {
+/**
+ * Inject `sharedDefaults.js` + `transport.js` ahead of a panel's own scripts.
+ *
+ * `expectMarker` says whether THIS panel is one of the marker-shaped ones
+ * (kanban.html / setup.html — an inline `<script>` preceded by the comment).
+ * Only those may warn on the fallback: project.html / planning.html /
+ * design.html have never carried the marker, so for them the first-script
+ * anchor IS the designed path. Warning there would fire on every render of
+ * three panels and bury the one case worth hearing about — the accidental
+ * marker deletion that shipped a dead Setup panel in 1.7.13.
+ */
+function injectTransportShim(content: string, nonce: string, marker: string, firstScript: string, expectMarker = false): string {
     const shim = `<script src="/static/webview/sharedDefaults.js" nonce="${nonce}"></script>\n<script src="/static/webview/transport.js" nonce="${nonce}"></script>`;
     // If a marker comment exists (kanban.html / setup.html shape), replace it.
     if (content.includes(marker)) {
@@ -62,7 +73,9 @@ function injectTransportShim(content: string, nonce: string, marker: string, fir
         console.error('[headlessPanelHtml] transport shim NOT injected: no marker and no first-script anchor. The panel will throw on acquireVsCodeApi().');
         return content;
     }
-    console.warn('[headlessPanelHtml] SHARED_DEFAULTS_SCRIPT marker missing — injected the shim before the first script instead.');
+    if (expectMarker) {
+        console.warn('[headlessPanelHtml] SHARED_DEFAULTS_SCRIPT marker missing — injected the shim before the first script instead.');
+    }
     return content.replace(firstScript, `${shim}\n${firstScript}`);
 }
 
@@ -118,7 +131,8 @@ export function getBoardHtml(repoRoot: string, workspaceRoot: string, capabiliti
     const nonce = makeNonce();
     const csp = `default-src 'self'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; frame-src 'self';`;
     content = content.replace(/<script>/g, `<script nonce="${nonce}">`);
-    content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', `<script nonce="${nonce}">`);
+    // kanban.html carries the marker — pass expectMarker so its deletion warns.
+    content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', `<script nonce="${nonce}">`, true);
     const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
     const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="kanban" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
     content = content.replace(/<body/, `<body ${bodyAttr}`);
@@ -286,7 +300,9 @@ export function getSetupHtml(repoRoot: string, workspaceRoot: string, capabiliti
     const nonce = makeNonce();
     const csp = `default-src 'self'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval' 'unsafe-inline'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; frame-src 'self';`;
     content = content.replace(/<script>/g, `<script nonce="${nonce}">`);
-    content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', `<script nonce="${nonce}">`);
+    // setup.html carries the marker — pass expectMarker so its deletion warns.
+    // (It was deleted once, by 3224366, and shipped a dead Setup panel in 1.7.13.)
+    content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', `<script nonce="${nonce}">`, true);
     content = content.replace(/\{\{HANKEN_FONT_URI\}\}/g, '/static/designs/HankenGrotesk-Variable.woff2');
     content = content.replace(/\{\{GEIST_PIXEL_FONT_URI\}\}/g, '/static/designs/GeistPixel-Square.woff2');
     const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };

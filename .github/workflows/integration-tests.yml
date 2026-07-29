@@ -64,6 +64,9 @@ jobs:
       - name: STITCH HTML tab contract (preview failure in body, docs in body, spinner-lowering table)
         run: npm run test:contract:stitch-html-tab
 
+      - name: Webview shim injection contract (SHARED_DEFAULTS_SCRIPT marker, shim-before-consumer ordering)
+        run: npm run test:contract:shim-injection
+
       - name: Run integration suite
         run: npm run test:integration:all
 

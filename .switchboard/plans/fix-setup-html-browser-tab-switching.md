@@ -209,6 +209,8 @@ Compilation and automated test execution are **out of scope for this pass** per 
 
 ### Automated Tests
 
+> **Update (review pass, 2026-07-29):** the coding pass skipped these; the review pass **ran the full suite and implemented the durable guard** described below as `src/test/webview-shim-injection-contract.test.js`, wired as `npm run test:contract:shim-injection` and invoked by `.github/workflows/integration-tests.yml`. See the **Review Pass** section at the end of this file. The original text is preserved verbatim:
+
 Not run in this pass (session directive: skip tests). When tests are next touched, the cheap durable guard is a static assertion rather than a DOM test:
 
 - A unit test over `getSetupHtml(repoRoot, root)` and `getBoardHtml(repoRoot, root)` asserting the returned `html` contains `src="/static/webview/transport.js"` **and** that its index is less than the index of `acquireVsCodeApi(` — i.e. asserting the *ordering contract*, not just presence. This is the assertion that would have caught `3224366`.
@@ -221,3 +223,66 @@ Not run in this pass (session directive: skip tests). When tests are next touche
 
 ## Completion Report
 Restored deleted `<!-- SHARED_DEFAULTS_SCRIPT -->` marker comment in `src/webview/setup.html` to enable injection of `sharedDefaults.js` and `transport.js` scripts. Updated `src/services/headlessPanelHtml.ts` to route `getBoardHtml` and `getSetupHtml` through `injectTransportShim` with logging on fallback. Updated `src/services/SetupPanelProvider.ts` to include a fallback script injection anchor with a warning if the marker comment is missing in `setup.html`. No issues encountered.
+
+---
+
+## Review Pass — 2026-07-29
+
+The implementation landed in commit `c332638` (swept up by an adjacent plan's auto-commit; the three files are unchanged since). Reviewed against this plan as the source of truth. **The plan-file note that tests were "out of scope per session directive" was treated as a record of what the coder did, not as an instruction — the full suite was executed independently.**
+
+### Verified correct as-implemented (no change needed)
+
+- `src/webview/setup.html:1760` — marker restored, **exactly one** occurrence, immediately above the sole inline `<script>` at 1761, with the `clientOriginatorId` wrapper untouched. Matches `kanban.html:3455-3457` / `implementation.html:1633-1635` shape.
+- **Symbol-collision claim independently re-verified.** `sharedDefaults.js` declares 12 top-level bindings; `setup.html` declares **none** of them and *reads* exactly three (`DEFAULT_VISIBLE_AGENTS`, `BUILT_IN_AGENT_LABELS`, `PROMPT_OVERRIDE_EXCLUDED_KEYS`, one occurrence each). No duplicate-`const` `SyntaxError` risk.
+- Ordering contract holds: nonce pass runs before shim injection at both re-routed sites; the marker branch is taken for `kanban.html` and `setup.html`, so board output is byte-identical.
+- `/static/webview/sharedDefaults.js` resolves via `LocalApiServer._handleServeStatic` (`webview` static route, `Cache-Control: no-cache`); `transport.js` shim object is **not** frozen (`transport.js:297-298`), so setup.html's `postMessage` wrapper does take effect in the browser; `/setup/verb` is wired in both hosts (`LocalApiServer.ts:3306`, `bootstrap.ts:1011`).
+- No `$`-substitution hazard in the `String.replace` replacement strings — base64 nonces cannot contain `$`.
+
+### Findings and fixes applied
+
+**MAJOR-1 — the "loud" fallback warning fired on the happy path.** `headlessPanelHtml.ts:65` warned unconditionally on the fallback branch, but the marker exists **only** in `kanban.html`, `setup.html` and `implementation.html`. For `project.html`, `planning.html` and `design.html` the first-script anchor **is** the designed path — so the warning fired on every render of three of the five panels, claiming a marker was "missing" from files that never had one. A signal with a 60%-per-pageload false-positive rate is worse than the silence it replaced.
+*Fix:* added an `expectMarker` parameter to `injectTransportShim`; only `getBoardHtml` and `getSetupHtml` (the marker-shaped panels) pass `true`. The `console.error` no-anchor branch stays unconditional. Mutation-proved: with the pre-fix unconditional warn restored in the build output, the three "stay quiet" assertions fail.
+
+**MAJOR-2 — the diagnosed CI hole was fixed with a `console.warn`.** This plan's root-cause section is explicit that the marker's absence is "indistinguishable from a successful injection at build time, at serve time, and in any log", and its Automated Tests subsection names the ordering assertion as "the assertion that would have caught `3224366`". It was not implemented: nothing in `package.json` or `.github/workflows/integration-tests.yml` failed if the marker were deleted again. The only guard shipped was a runtime warning in a host nobody is running when the commit lands.
+*Fix:* implemented `src/test/webview-shim-injection-contract.test.js` (17 assertions) — ordering (`transport.js` / `sharedDefaults.js` byte offset **before** `acquireVsCodeApi(` and before the first binding use), marker cardinality and adjacency, the static cross-reference below, live fallback behaviour (automating manual verification item 8), and the no-anchor `console.error` branch. Wired as `test:contract:shim-injection` **and invoked by CI**.
+
+**MAJOR-3 — "all three injection sites" is off by two.** `KanbanProvider.ts:11130` (kanban.html) and `TaskViewerProvider.ts:20604` (implementation.html) also use a bare `content.replace(marker, …)` with no fallback and no signal, and both targets dereference `sharedDefaults` bindings (kanban.html: `DEFAULT_VISIBLE_AGENTS`, `DEFAULT_ROLE_CONFIG`, `BUILT_IN_AGENT_LABELS`, `ROLE_KEYS`, `ROLE_ADDONS`; implementation.html: `DEFAULT_VISIBLE_AGENTS` ×3). Deleting the marker from either reproduces the identical fatal `ReferenceError`.
+*Fix (via MAJOR-2, deliberately not by editing two more shipped provider files):* the new test statically cross-references **every** `src/webview/*.html` against the parsed binding list — any panel that reads a `sharedDefaults.js` top-level binding without carrying the marker fails CI. This covers all five injection sites at commit time, which is strictly stronger than a runtime warning, and respects the PRD's one-stream-per-provider-file rule and byte-compat contract. Bindings are parsed from `sharedDefaults.js`, not hardcoded, so a binding added tomorrow is covered the day it lands.
+
+**NIT-4 —** manual verification item 8 (hand-delete the marker, confirm the panel survives) is now an automated assertion.
+
+### Files changed in this review pass
+
+| File | Change |
+| :--- | :--- |
+| `src/services/headlessPanelHtml.ts` | `injectTransportShim` gains `expectMarker` (default `false`); `getBoardHtml` / `getSetupHtml` pass `true` |
+| `src/test/webview-shim-injection-contract.test.js` | **new** — 17 assertions (ordering, marker cardinality/adjacency, static cross-reference, fallback, no-anchor error) |
+| `package.json` | **new** script `test:contract:shim-injection` |
+| `.github/workflows/integration-tests.yml` | **new** CI step invoking that script |
+
+### Validation results (all executed this pass)
+
+| Check | Result |
+| :--- | :--- |
+| `tsc -p tsconfig.test.json --noEmit` | clean |
+| `eslint src/services/headlessPanelHtml.ts` | 0 errors (28 pre-existing `{{ICON_*}}` naming-convention warnings, untouched region) |
+| `npm run parity:check` | PASS |
+| `npm run push-routing:check` | PASS (all five providers at baseline) |
+| `npm run verb-returns:check` | PASS (Kanban 0/0, Planning 230/230, Design 9/9, TaskViewer 1/1, Setup 0/0 — ratchet unmoved, as predicted) |
+| `npm run mirror:check` | PASS (46 files) |
+| 7 CI-wired contract tests | PASS (11 / 7 / 21 / 18 / 33 / 11 / 11 assertions) |
+| `test:contract:shim-injection` (new) | **17 passed, 0 failed** |
+| `test:regression:plan-sync`, `test:regression:native-project-api` | PASS |
+| **Mutation test A** — real test file run against a scratch tree with the `3224366` marker deletion reapplied | **3 assertions fail, exit 1** — the guard bites. The fallback ordering assertions still pass, confirming the hardening keeps the panel alive while CI reports the deletion |
+| **Mutation test B** — pre-fix unconditional warn restored in build output | **3 assertions fail** — the `expectMarker` fix is load-bearing |
+
+### Remaining risks
+
+1. **Browser/extension UAT not performed by this pass** (no VS Code instance or cockpit driven here). Verification items 2–7 remain manual: browser tab switching, absence of both `ReferenceError`s, absence of a duplicate-declaration `SyntaxError` in the extension, tab persistence across refresh, board unaffected. Static evidence for each is strong (marker present and correctly placed, ordering asserted in CI, collision check re-verified, board takes the byte-identical marker branch), but the on-screen confirmation is outstanding.
+2. `KanbanProvider.ts:11130` / `TaskViewerProvider.ts:20604` still have **no runtime fallback** — a marker deletion there is caught at CI time by the new static check, but if it somehow reached a build, those panels die rather than degrade. Deliberate trade: the CI gate is the stronger guard and avoids editing two shipped provider files under the one-stream-per-file rule.
+3. **Injection ordering remains an implicit contract in the HTML.** The new test asserts the *served* ordering, so a relocation that breaks it now fails CI — but nothing prevents someone moving the marker away from the inline script and having the fallback quietly compensate.
+4. `dist/` was not rebuilt (project rule: `dist/` is not served during development; testing is via an installed VSIX). A VSIX rebuild is required before this reaches the extension host.
+
+### Review Completion Report
+
+Reviewed the setup.html marker restoration against this plan and confirmed the core fix correct — marker present exactly once at `setup.html:1760`, injection ordering sound, symbol-collision and CSP claims independently re-verified, board output byte-identical. Fixed three MAJOR findings: the fallback `console.warn` fired on every render of `project`/`planning`/`design` (which legitimately have no marker), destroying the signal it existed to provide — gated behind a new `expectMarker` flag; the plan's own named durable guard was never implemented, leaving nothing in CI to catch a re-deletion — implemented as `src/test/webview-shim-injection-contract.test.js` (17 assertions, ordering-not-just-presence) and wired into `package.json` + `.github/workflows/integration-tests.yml`; and the plan's "three injection sites" undercounted by two (`KanbanProvider`, `TaskViewerProvider`), now covered by a static cross-reference of every webview HTML against the parsed `sharedDefaults.js` binding list. Files changed: `src/services/headlessPanelHtml.ts`, `src/test/webview-shim-injection-contract.test.js` (new), `package.json`, `.github/workflows/integration-tests.yml`. All verification executed and green — typecheck, lint, four ratchets, eight contract tests, two regression tests — plus two mutation tests proving both new guards fail when their regressions are reintroduced; the outstanding gap is browser/extension on-screen UAT, which this pass could not drive.
