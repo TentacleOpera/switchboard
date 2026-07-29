@@ -17,8 +17,8 @@ The set closes that in two passes: request-scoped state is threaded per initiato
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Kanban Project Filter — Client-Local View, Per-Initiator Authoring Scope](../plans/kanban-project-filter-client-local.md) — **LEAD CODED**
-- [ ] [Per-Connection Client Identity and Scoped Push Rendering](../plans/per-connection-scoped-push-rendering.md) — **LEAD CODED**
+- [ ] [Kanban Project Filter — Client-Local View, Per-Initiator Authoring Scope](../plans/kanban-project-filter-client-local.md) — **CODE REVIEWED**
+- [ ] [Per-Connection Client Identity and Scoped Push Rendering](../plans/per-connection-scoped-push-rendering.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

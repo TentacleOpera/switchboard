@@ -1061,7 +1061,7 @@ export class KanbanProvider implements vscode.Disposable {
      * updateColumns/updateWorkspaceSelection/cliTriggersState/updateBoard messages
      * the editor webview receives, built from the real board-cards builder.
      */
-    public async getFullStateMessages(wsRoot?: string): Promise<any[]> {
+    public async getFullStateMessages(wsRoot?: string, scope?: string | null): Promise<any[]> {
         // Prefer the editor board's ACTIVE selection so the browser mirrors what the
         // editor is showing — not the primary/first workspace the caller passes.
         // Fall back to the passed root (standalone, or before any selection).
@@ -1111,11 +1111,19 @@ export class KanbanProvider implements vscode.Disposable {
             // mis-keys when the item root is normalized/mapped, leaving the dropdown
             // stuck on the base workspace with no projects.
             const allWorkspaceProjects = await this._getAllWorkspaceProjects();
+
+            // Render the two scope-dependent fields for THIS connection's declared
+            // scope. `scope` is passed raw — the accessors own the `!== undefined`
+            // precedence (an explicitly-null/unassigned scope must resolve to NO
+            // project tier, never inherit the singleton).
+            const cliEnabled = this._cliTriggersForScope(scope);
+            const routingConfig = this._routingMapForScope(scope);
+
             return [
                 { type: 'updateColumns', columns: filteredColumns },
                 { type: 'updateWorkspaceSelection', workspaceRoot: root, workspaces: workspaceItems, activeFilter: null, projectFilter: this._projectFilter ?? null, projects, allWorkspaceProjects, controlPlaneMode: 'none', controlPlaneRoot: null, effectiveControlPlaneRoot: root, explicitControlPlaneRoot: root, pendingCandidate: null, repoScopeFilter: null, projectContextEnabled: false },
-                { type: 'cliTriggersState', enabled: this._cliTriggersEnabled },
-                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig, featureWorktrees },
+                { type: 'cliTriggersState', enabled: cliEnabled },
+                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig, featureWorktrees },
                 // Automation tab state rides the connect-time resync too, so the tab is
                 // populated even before its on-open getAutobanConfig verb returns.
                 // Omitted entirely when the sidebar hasn't relayed a state yet — pushing
@@ -1264,14 +1272,19 @@ export class KanbanProvider implements vscode.Disposable {
      * routing map (if configured) and the pair-programming intern→coder bypass.
      * This is the single source of truth for score→role resolution.
      */
-    public resolveRoutedRole(score: number): 'lead' | 'coder' | 'intern' {
+    public resolveRoutedRole(score: number, initiatorProject?: string | null): 'lead' | 'coder' | 'intern' {
         let role: 'lead' | 'coder' | 'intern';
 
+        // No initiator → the cached singleton map, exactly as before C1 (also keeps
+        // this hot path free of per-call scoped reads). With an initiator, resolve
+        // through the accessor — passed RAW, never pre-resolved via _projectTier.
+        const routingMap = this._routingMapForScope(initiatorProject);
+
         // Apply custom routing map if configured
-        if (this._routingMapConfig) {
-            if (this._routingMapConfig.intern.includes(score)) {
+        if (routingMap) {
+            if (routingMap.intern.includes(score)) {
                 role = 'intern';
-            } else if (this._routingMapConfig.coder.includes(score)) {
+            } else if (routingMap.coder.includes(score)) {
                 role = 'coder';
             } else {
                 role = 'lead';
@@ -2007,7 +2020,14 @@ export class KanbanProvider implements vscode.Disposable {
             this._lastBoardSnapshotKey = snapshotKey;
             this._lastBoardSnapshotHash = snapshotHash;
             if (!snapshotUnchanged) {
-                this.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig, featureWorktrees });
+                this.postMessage((scope: string | null | undefined) => ({
+                    type: 'updateBoard',
+                    cards,
+                    dbUnavailable: false,
+                    showingBacklog: this._showingBacklog,
+                    routingConfig: this._routingMapForScope(scope),
+                    featureWorktrees
+                }));
             }
 
             // Hydrate worktree state (indicator + WORKTREES tab) on every board refresh so it
@@ -2016,7 +2036,10 @@ export class KanbanProvider implements vscode.Disposable {
             // is idempotent, so this is safe to run unconditionally here.
             await this._sendWorktreeConfig(resolvedWorkspaceRoot);
 
-            this.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
+            this.postMessage((scope: string | null | undefined) => ({
+                type: 'cliTriggersState',
+                enabled: this._cliTriggersForScope(scope)
+            }));
             this._postOverrideState();
             await this._postFeatureWorkflowModeState(resolvedWorkspaceRoot);
 
@@ -2042,15 +2065,10 @@ export class KanbanProvider implements vscode.Disposable {
             this.postMessage({ type: 'updateAgentNames', agentNames });
             this.postMessage({ type: 'visibleAgents', agents: visibleAgents });
 
-            const effectiveModes: Record<string, 'cli' | 'prompt' | 'disabled'> = {};
-            for (const col of columns) {
-                // Built-in 'disabled' is a hard constraint — never let a persisted override
-                // reinstate CLI dispatch for built-in columns that disable it.
-                effectiveModes[col.id] = col.dragDropMode === 'disabled'
-                    ? 'disabled'
-                    : (this._columnDragDropModes[col.id] || col.dragDropMode || 'cli');
-            }
-            this.postMessage({ type: 'updateColumnDragDropModes', modes: effectiveModes });
+            this.postMessage((scope: string | null | undefined) => ({
+                type: 'updateColumnDragDropModes',
+                modes: this._columnDragDropModesForScope(scope, columns)
+            }));
 
             if (this._autobanState) {
                 this.postMessage({ type: 'updateAutobanConfig', state: this._autobanState });
@@ -2089,10 +2107,15 @@ export class KanbanProvider implements vscode.Disposable {
         if (this._broadcaster) {
             this._broadcaster.push(message);
         } else if (this._panel) {
+            // No broadcaster → no per-connection fan-out. A scoped-payload factory
+            // must still be rendered here (a bare function fails the webview's
+            // structured clone and is silently dropped). undefined scope → the
+            // singleton fallback, i.e. the pre-scoping payload.
+            const rendered = typeof message === 'function' ? message(undefined) : message;
             if (this._webviewReady) {
-                this._panel.webview.postMessage(message);
+                this._panel.webview.postMessage(rendered);
             } else {
-                this._pendingWebviewMessages.push(message);
+                this._pendingWebviewMessages.push(rendered);
             }
         }
     }
@@ -3510,15 +3533,18 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const featureWorktrees = allWorktrees
                 .filter(w => w.feature_id !== null && w.status === 'active')
                 .reduce((acc, w) => { acc[w.feature_id!] = { branch: w.branch, path: w.path, id: w.id }; return acc; }, {} as Record<string, { branch: string; path: string; id: number }>);
-            this.postMessage({
+            this.postMessage((scope: string | null | undefined) => ({
                 type: 'updateBoard',
                 cards,
                 dbUnavailable,
                 showingBacklog: this._showingBacklog,
-                routingConfig: this._routingMapConfig,
+                routingConfig: this._routingMapForScope(scope),
                 featureWorktrees
-            });
-            this.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
+            }));
+            this.postMessage((scope: string | null | undefined) => ({
+                type: 'cliTriggersState',
+                enabled: this._cliTriggersForScope(scope)
+            }));
             this._postOverrideState();
             await this._postFeatureWorkflowModeState(resolvedWorkspaceRoot);
             this.postMessage({
@@ -3534,15 +3560,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             this.postMessage({ type: 'updateAgentNames', agentNames });
             this.postMessage({ type: 'visibleAgents', agents: visibleAgents });
 
-            const effectiveModes: Record<string, 'cli' | 'prompt' | 'disabled'> = {};
-            for (const col of columns) {
-                // Built-in 'disabled' is a hard constraint — never let a persisted override
-                // reinstate CLI dispatch for built-in columns that disable it.
-                effectiveModes[col.id] = col.dragDropMode === 'disabled'
-                    ? 'disabled'
-                    : (this._columnDragDropModes[col.id] || col.dragDropMode || 'cli');
-            }
-            this.postMessage({ type: 'updateColumnDragDropModes', modes: effectiveModes });
+            this.postMessage((scope: string | null | undefined) => ({
+                type: 'updateColumnDragDropModes',
+                modes: this._columnDragDropModesForScope(scope, columns)
+            }));
 
             if (this._autobanState) {
                 this.postMessage({ type: 'updateAutobanConfig', state: this._autobanState });
@@ -3682,8 +3703,17 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 projectContextEnabled: await this._resolveProjectContextEnabled(resolvedWorkspaceRoot)
             });
             this._lastCards = cards;
-            this.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig });
-            this.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
+            this.postMessage((scope: string | null | undefined) => ({
+                type: 'updateBoard',
+                cards,
+                dbUnavailable: false,
+                showingBacklog: this._showingBacklog,
+                routingConfig: this._routingMapForScope(scope)
+            }));
+            this.postMessage((scope: string | null | undefined) => ({
+                type: 'cliTriggersState',
+                enabled: this._cliTriggersForScope(scope)
+            }));
             this._postOverrideState();
             await this._postFeatureWorkflowModeState(resolvedWorkspaceRoot);
             this.postMessage({
@@ -3693,15 +3723,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             this.postMessage({ type: 'updateAgentNames', agentNames });
             this.postMessage({ type: 'visibleAgents', agents: visibleAgents });
 
-            const effectiveModes: Record<string, 'cli' | 'prompt' | 'disabled'> = {};
-            for (const col of columns) {
-                // Built-in 'disabled' is a hard constraint — never let a persisted override
-                // reinstate CLI dispatch for built-in columns that disable it.
-                effectiveModes[col.id] = col.dragDropMode === 'disabled'
-                    ? 'disabled'
-                    : (this._columnDragDropModes[col.id] || col.dragDropMode || 'cli');
-            }
-            this.postMessage({ type: 'updateColumnDragDropModes', modes: effectiveModes });
+            this.postMessage((scope: string | null | undefined) => ({
+                type: 'updateColumnDragDropModes',
+                modes: this._columnDragDropModesForScope(scope, columns)
+            }));
 
             if (this._autobanState) {
                 this.postMessage({ type: 'updateAutobanConfig', state: this._autobanState });
@@ -4159,13 +4184,14 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     }
 
     private async _getDefaultPromptOverrides(
-        workspaceRoot: string
+        workspaceRoot: string,
+        initiatorProject?: string | null
     ): Promise<Partial<Record<string, import('./agentConfig').DefaultPromptOverride>>> {
         // Route through TaskViewerProvider so globalState (global scope) is the primary
         // source of truth, with DB as fallback. This prevents prompt overrides from
         // switching on workspace change.
         if (this._taskViewerProvider) {
-            return this._taskViewerProvider.handleGetDefaultPromptOverrides(workspaceRoot);
+            return this._taskViewerProvider.handleGetDefaultPromptOverrides(workspaceRoot, initiatorProject);
         }
 
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
@@ -4603,7 +4629,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         }
 
         const promptsConfig = await this._getPromptsConfig(workspaceRoot);
-        const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
+        // Same initiator the routingMapConfig below resolves with — prompt overrides
+        // baked into a generated prompt must follow the INITIATING client's project,
+        // or C1 is defeated at the last hop (the plan's named silent-failure mode).
+        const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot, overrides?.initiatorProject);
         const config = vscode.workspace.getConfiguration('switchboard');
 
         const resolvedOptions: PromptBuilderOptions = {
@@ -4640,7 +4669,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             plannerFeatureWorkflowPath: promptsConfig.plannerFeatureWorkflowPath || '',
             defaultPromptOverrides,
             workspaceRoot,
-            routingMapConfig: this._routingMapConfig,
+            routingMapConfig: this._routingMapForScope(overrides?.initiatorProject),
             // §11 — per-board gating: the remote-mode directive must only reach agents
             // dispatched on a board under remote control, not every dispatch in the
             // workspace (a local board worked at the desk while another is phone-driven
@@ -5924,7 +5953,8 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
 
     private async _resolveKanbanDispatchSpec(
         workspaceRoot: string,
-        targetColumn: string
+        targetColumn: string,
+        initiatorProject?: string | null
     ): Promise<KanbanDispatchSpec | null> {
         const [customAgents, customKanbanColumns] = await Promise.all([
             this._getCustomAgents(workspaceRoot),
@@ -5944,7 +5974,13 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             return null;
         }
 
-        const effectiveMode = this._columnDragDropModes[column.id] || column.dragDropMode || 'cli';
+        // Decision read (C1 stage 4): the effective drag-drop mode resolves against
+        // the INITIATING client's project when one is supplied; no initiator → the
+        // cached singleton map, exactly as before.
+        const dragDropModes = (initiatorProject === undefined
+            ? this._columnDragDropModes
+            : this._getScopedSetting<Record<string, 'cli' | 'prompt' | 'disabled'>>('kanban.columnDragDropModes', {}, initiatorProject)) || {};
+        const effectiveMode = dragDropModes[column.id] || column.dragDropMode || 'cli';
 
         // For prompt mode, infer role from column ID if no custom agent is assigned
         // Clarification: Prompt mode only needs a role for template selection, not for CLI dispatch
@@ -6475,25 +6511,71 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
     }
 
     // ── Global Override: UI push helper (plan 03) ─────────────────────────
-    /** Push the current override state to the webview so toggles/indicator stay synced.
-     *  Called from toggle handlers, setProjectFilter, and the refresh push cluster. */
-    private _postOverrideState(): void {
-        if (!this._panel) return;
-        const projectSwitchEnabled = !!this._projectFilter && this._projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
-        const activeProjectName = projectSwitchEnabled ? this._projectFilter : null;
+    /** Pure builder for the overrideState payload, rendered for one connection's
+     *  scope. `scope === undefined` (no declaration) falls back to the singleton
+     *  `_projectFilter` and is byte-identical to the pre-scoping payload — that is
+     *  the ~4,000-install guard. `projectSwitchEnabled` must NOT be gated on
+     *  `_projectOverrideEnabled`: it drives the Project-override toggle's
+     *  enablement in the webview, and gating it on the flag it enables would make
+     *  the toggle impossible to turn on. */
+    public _buildOverrideState(scope?: string | null | undefined): any {
+        const raw = scope !== undefined ? scope : this._projectFilter;
+        const project = (!raw || raw === KanbanDatabase.UNASSIGNED_PROJECT_FILTER) ? null : raw;
+        const projectSwitchEnabled = !!project;
         const activeScope = this._projectOverrideEnabled && projectSwitchEnabled
-            ? `Project '${this._projectFilter}'`
+            ? `Project '${project}'`
             : this._workspaceOverrideEnabled
                 ? 'Workspace'
                 : 'Global (default)';
-        this.postMessage({
+        return {
             type: 'overrideState',
             workspaceOverride: this._workspaceOverrideEnabled,
             projectOverride: this._projectOverrideEnabled,
             projectSwitchEnabled,
             activeScope,
-            activeProjectName
-        });
+            activeProjectName: project
+        };
+    }
+
+    // ── Per-connection scoped push renderers ────────────────────────────────
+    // Contract shared by all three: `scope === undefined` (connection declared
+    // nothing) returns the SAME cached singleton value the pre-scoping code
+    // embedded — byte-identical payloads for undeclared connections, and no
+    // per-broadcast DB reads on the common path. A DECLARED scope (a project
+    // name, null, or '__unassigned__') is passed RAW to the scoped accessor,
+    // which owns the `!== undefined` precedence — pre-resolving it through
+    // `_projectTier` here would collapse an explicit null into the singleton.
+
+    public _routingMapForScope(scope?: string | null): any {
+        if (scope === undefined) return this._routingMapConfig;
+        return this._getScopedSetting<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null, scope);
+    }
+
+    public _cliTriggersForScope(scope?: string | null): boolean {
+        if (scope === undefined) return this._cliTriggersEnabled;
+        return this._getScopedSetting<boolean>('kanban.cliTriggersEnabled', true, scope);
+    }
+
+    public _columnDragDropModesForScope(scope?: string | null, columns: any[] = []): Record<string, 'cli' | 'prompt' | 'disabled'> {
+        const scopedModes = (scope === undefined
+            ? this._columnDragDropModes
+            : this._getScopedSetting<Record<string, 'cli' | 'prompt' | 'disabled'>>('kanban.columnDragDropModes', {}, scope)) || {};
+        const effectiveModes: Record<string, 'cli' | 'prompt' | 'disabled'> = {};
+        for (const col of columns) {
+            // Built-in 'disabled' is a hard constraint — never let a persisted override
+            // reinstate CLI dispatch for built-in columns that disable it.
+            effectiveModes[col.id] = col.dragDropMode === 'disabled'
+                ? 'disabled'
+                : (scopedModes[col.id] || col.dragDropMode || 'cli');
+        }
+        return effectiveModes;
+    }
+
+    /** Push the current override state to the webview so toggles/indicator stay synced.
+     *  Called from toggle handlers, setProjectFilter, and the refresh push cluster. */
+    private _postOverrideState(): void {
+        if (!this._panel && !this._broadcaster) return;
+        this.postMessage((scope: string | null | undefined) => this._buildOverrideState(scope));
     }
 
     /**
@@ -7623,6 +7705,11 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 }
                 return { success: false, error: 'workspaceRoot and projectName are required' };
             }
+            case 'setPushScope': {
+                const scope = msg.project !== undefined ? msg.project : null;
+                this._broadcaster?.setWebviewScope(scope);
+                return { success: true };
+            }
             case 'setProjectFilter': {
                 const workspaceRoot = this._currentWorkspaceRoot;
                 if (workspaceRoot && (msg.project === null || typeof msg.project === 'string')) {
@@ -7635,7 +7722,12 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                     if (!msg.noRefresh) {
                         await this._refreshBoard(workspaceRoot);
                     }
-                    return { success: true };
+                    // Return-in-body (PRD contract #4): spread the overrideState payload
+                    // into the response so the browser transport's re-dispatch reaches the
+                    // webview's existing 'overrideState' handler (type rides along), and
+                    // HTTP callers see the state their switch produced. msg.project ?? null
+                    // — an explicit null is a declared "no project", never the singleton.
+                    return { success: true, ...this._buildOverrideState(msg.project ?? null) };
                 }
                 return { success: false, error: 'No workspace root or invalid project' };
             }
@@ -7873,7 +7965,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 const { sessionId, targetColumn } = msg;
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const dispatchSpec = workspaceRoot
-                    ? await this._resolveKanbanDispatchSpec(workspaceRoot, targetColumn)
+                    ? await this._resolveKanbanDispatchSpec(workspaceRoot, targetColumn, msg.initiatorProject)
                     : null;
                 const role = dispatchSpec?.role || this._columnToRole(targetColumn);
                 if (!role) {
@@ -8072,7 +8164,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 const { sessionIds, targetColumn } = msg;
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const dispatchSpec = workspaceRoot
-                    ? await this._resolveKanbanDispatchSpec(workspaceRoot, targetColumn)
+                    ? await this._resolveKanbanDispatchSpec(workspaceRoot, targetColumn, msg.initiatorProject)
                     : null;
                 const role = dispatchSpec?.role || this._columnToRole(targetColumn);
                 if (dispatchSpec?.source === 'custom-user' && role && Array.isArray(sessionIds) && sessionIds.length > 0 && this._taskViewerProvider) {
@@ -8521,7 +8613,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                     return { success: false, error: 'No matching cards found' };
                 }
 
-                const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, targetColumn);
+                const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, targetColumn, msg.initiatorProject);
                 const isPromptModeBuiltIn = dispatchSpec?.source === 'built-in' && dispatchSpec?.dragDropMode === 'prompt';
                 if ((dispatchSpec?.source === 'custom-user' || isPromptModeBuiltIn) && this._taskViewerProvider && dispatchSpec?.role) {
                     const instruction = dispatchSpec.role === 'planner' ? 'improve-plan' : undefined;
@@ -8746,7 +8838,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 } else {
                     const nextCol = await this._getNextColumnId(column, workspaceRoot);
                     if (!nextCol) { return { success: false, error: `No next column after '${column}'` }; }
-                    const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol);
+                    const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol, msg.initiatorProject);
                     if (dispatchSpec?.source === 'custom-user' && this._taskViewerProvider) {
                         const allMovedIds: string[] = [];
                         for (const sid of msg.sessionIds) {
@@ -8890,7 +8982,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 } else {
                     const nextCol = await this._getNextColumnId(column, workspaceRoot);
                     if (!nextCol) { return { success: false, error: `No next column after '${column}'` }; }
-                    const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol);
+                    const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol, msg.initiatorProject);
                     if (dispatchSpec?.source === 'custom-user' && this._taskViewerProvider) {
                         const allMovedIds: string[] = [];
                         for (const sid of sessionIds) {
@@ -9041,7 +9133,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                     return { success: true, prompt, advanced: 0 };
                 }
 
-                const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol);
+                const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol, msg.initiatorProject);
                 // CHANGED: Removed `column !== 'PLAN REVIEWED'` condition — custom columns should
                 // be dispatched regardless of source column. When destination is custom-user and
                 // source is PLAN REVIEWED, the custom column's role should take precedence.
@@ -9153,7 +9245,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
 
                 const sessionIds = sourceCards.map(card => this._cardId(card));
 
-                const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol);
+                const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol, msg.initiatorProject);
                 if (dispatchSpec?.source === 'custom-user' && this._taskViewerProvider) {
                     const instruction = dispatchSpec.role === 'planner' ? 'improve-plan' : undefined;
                     const dispatched = await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(dispatchSpec.role, sessionIds, {
@@ -9829,7 +9921,7 @@ ${FOCUS_DIRECTIVE}`;
             case 'getDefaultPromptOverrides': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
-                const overrides = await this._getDefaultPromptOverrides(workspaceRoot);
+                const overrides = await this._getDefaultPromptOverrides(workspaceRoot, msg.initiatorProject);
                 this.postMessage({ type: 'defaultPromptOverrides', overrides });
                 return { success: true, overrides };
             }
@@ -9875,9 +9967,9 @@ ${FOCUS_DIRECTIVE}`;
                 }
                 if (key.startsWith('roleConfig_')) {
                     const roleName = key.replace('roleConfig_', '');
-                    await this.updateScopedRoleConfig(roleName, value);
+                    await this.updateScopedRoleConfig(roleName, value, msg.initiatorProject);
                 } else {
-                    await this._updateScopedSetting(fullKey, value);
+                    await this._updateScopedSetting(fullKey, value, msg.initiatorProject);
                 }
                 return { success: true };
             }

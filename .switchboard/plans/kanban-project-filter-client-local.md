@@ -553,3 +553,37 @@ The de-risking the split was reaching for is delivered instead by the **staging 
 Eleven emit sites for the first three, plus three for `overrideState`. The `overrideState` conversion is what makes *this* plan's step 6 actually hold end-to-end — until it lands, step 6 is correct but immediately overwritten by the next refresh. Note also that `_postOverrideState` (`:6437`) opens with `if (!this._panel) return;`, so it is currently a no-op for browser-only sessions; the successor must decide whether to relax that guard when routing through the broadcaster, or the per-connection render is dead code for exactly the clients the feature targets.
 
 **Stage Complete:** PLAN REVIEWED
+
+---
+
+## Code Review Record (reviewer pass, 2026-07-29)
+
+**Verdict: implemented with material defects — all CRITICAL/MAJOR findings fixed in-review. Two review rounds: the first found the client side entirely absent (review bounced, coder re-dispatched); this record covers the post-redo pass.**
+
+### Findings and dispositions
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| 1 | CRITICAL | No webview sent `initiatorProject` — all nine backend authoring sites received `undefined` and fell back to the last-writer-wins DB row, so bug 1 was unfixed end-to-end while every backend site *looked* threaded | **Fixed**: `postKanbanMessage` (kanban.html) now stamps `initiatorProject: boardProjectFilter` centrally on every board verb (message-supplied value wins), so no sender can be missed by a sweep — the same enforce-by-structure rationale as the successor's `setBoardProjectFilter` helper |
+| 2 | CRITICAL | `_buildOverrideState` gated `projectSwitchEnabled` on `_projectOverrideEnabled`; the webview uses that flag to enable the Project-override toggle, so once the override was OFF it could never be turned on again (chicken-and-egg) | **Fixed**: project derives from scope→singleton fallback only; `scope === undefined` is byte-identical to the pre-change payload |
+| 3 | MAJOR | `verbSchemas.ts` carried no `initiatorProject` anywhere (PRD contract #5) | **Fixed**: added optional `initiatorProject` to kanban+planning `createFeature`, new minimal schemas for `chatCopyPrompt` and `createPlansPasteBack` |
+| 4 | MAJOR | `generateUnifiedPrompt` resolved `defaultPromptOverrides` without the initiator — C1 defeated at the last hop for exactly the settings the plan calls its silent-failure mode | **Fixed**: threaded `overrides?.initiatorProject` through `_getDefaultPromptOverrides` → `handleGetDefaultPromptOverrides`; `getDefaultPromptOverrides` verb arm threads `msg.initiatorProject` |
+| 5 | MAJOR | Prompt-overrides cache keyed by raw initiator: `undefined` (singleton content) collided with explicit-null under the `' none'` key | **Fixed**: all four keying sites key by the resolved `_projectTier(initiator)`. Note: the map has **no readers** — resolution is live per call (which is why C1 holds); the map is write-only dead weight and a cleanup candidate |
+| 6 | MAJOR | `saveSetting` arm's non-service fallback path dropped `msg.initiatorProject` (the KanbanService path threaded it) | **Fixed** |
+| 7 | MAJOR | Stage-4 decision read `_resolveKanbanDispatchSpec` (effective drag-drop mode) read the singleton cache | **Fixed**: optional trailing `initiatorProject`, threaded at the seven arm-level call sites; internal callers (auto-advance, catalog) stay on the singleton by omission |
+| 8 | MAJOR | `resolveRoutedRole` and the ForScope helpers pre-resolved via `_projectTier(scope)` then passed the TIER as the accessors' initiator argument — double resolution collapsed explicit null/`'__unassigned__'` into the singleton (the plan's named most-likely-wrong contract) and put a per-call scoped read on dispatch hot paths | **Fixed**: `undefined` → cached singleton field (byte-identical, no reads); declared value passed RAW to `_getScopedSetting` |
+| 9 | NIT | Step 6 deviation: `setProjectFilter` kept its `_postOverrideState()` broadcast instead of removing it | **Accepted deliberately**: the successor landed in the same delivery, so the broadcast is per-connection rendered and no longer clobbers anyone — this is the end-state both plans converge on (test 7/17 flip). The verb also returns the overrideState in-body (flattened, typed) per PRD contract #4 |
+
+### Validation
+`npm run compile-tests` (tsc) clean; webpack `compile` clean; `parity:check` / `push-routing:check` / `verb-returns:check` / catalog regeneration clean; eslint 0 errors. New CI-wired suite `test:contract:cross-client-scope` 18/18 green (precedence contracts = plan tests 3–5; scoped accessor threading ≈ tests 9/12/16 at unit level). Existing design-* contract suites green. verb-engine suites show 5 failures that are **pre-existing at HEAD** (byte-identical `vscode.window` instance initializers at `TaskViewerProvider.ts:415-416`; `getDbPath` assertion) — unrelated to this feature.
+
+### Remaining risks
+- Sidebar/Planning-originated authoring (memo, draft ticket, orchestrator kickoff, ticket imports, paste-back, prompt-settings export) still resolves via the DB-row fallback: those panels have no project-scoped view of their own to declare. This is the plan's designed fallback, not a regression — but it means bug 1 is closed for board-initiated authoring only.
+- Test 14's table-driven nine-site runtime enumeration was not implemented as specified; coverage is the central webview stamp + unit-level precedence tests + a manual read of all nine arms.
+- Tests 9/15's cross-project `project_config` interleaving is verified at the accessor-contract level, not against a live two-project DB.
+
+## Completion Report (2026-07-29)
+
+Reviewed the redone implementation against this plan, applied fixes for one CRITICAL and six MAJOR findings, and verified. The headline gap was that no webview ever sent `initiatorProject` — fixed centrally in `postKanbanMessage` so the board's view filter now rides every verb; also fixed the override-toggle enablement regression in `_buildOverrideState`, threaded the missed prompt-overrides and dispatch-spec reads, corrected the tier-double-resolution that broke the explicit-null contract, and added the missing verb schemas. Files changed: `KanbanProvider.ts`, `TaskViewerProvider.ts`, `verbSchemas.ts`, `kanban.html`, plus a new CI-wired contract suite (`src/test/cross-client-scope-contract.test.js`, 18/18 green; typecheck/webpack/parity/push-routing/verb-returns all clean). Remaining risk: non-board panels still author under the DB-row fallback by design, and the five pre-existing verb-engine test failures at HEAD are untouched.
+
+**Stage Complete:** CODE REVIEWED

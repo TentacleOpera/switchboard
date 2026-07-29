@@ -62,14 +62,39 @@
     let intentionallyClosed = false;
 
     let isReconnecting = false;
+    let pushScope = null;
+    // Distinguishes "never declared" (no ?scope= on reconnect → server falls back
+    // to the singleton) from "explicitly declared null" (?scope= empty → server
+    // stores null, i.e. no project filter). Without this flag an all-projects
+    // client silently reverts to the singleton scope on every reconnect.
+    let pushScopeDeclared = false;
+
+    window.__switchboardSetPushScope = function (p) {
+        pushScope = p;
+        pushScopeDeclared = true;
+        if (ws && ws.readyState === 1) {
+            try {
+                ws.send(JSON.stringify({ type: '__scope', project: p === undefined ? null : p }));
+            } catch (e) { /* silent catch */ }
+        }
+    };
 
     function wsUrl() {
         const loc = window.location;
         const protocol = loc.protocol === 'https:' ? 'wss:' : 'ws:';
         let url = `${protocol}//${loc.host}/ws`;
+        const params = [];
         const originatorId = window.__sbClientOriginatorId;
         if (originatorId) {
-            url += `?originatorId=${encodeURIComponent(originatorId)}`;
+            params.push(`originatorId=${encodeURIComponent(originatorId)}`);
+        }
+        if (pushScopeDeclared) {
+            // Empty value = declared-null ("no project filter"); the server maps it
+            // back to null. wsUrl() reads the LIVE scope so reconnects re-declare.
+            params.push(`scope=${encodeURIComponent(pushScope ?? '')}`);
+        }
+        if (params.length > 0) {
+            url += `?${params.join('&')}`;
         }
         return url;
     }

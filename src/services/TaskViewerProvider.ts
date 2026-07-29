@@ -853,7 +853,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             try {
                 if (project === undefined) {
                     this._cachedDefaultPromptOverrides.clear();
-                    const key = ' none';
+                    // "Everything changed" — rebuild the singleton-scope entry under its
+                    // RESOLVED tier key (see handleGetDefaultPromptOverrides).
+                    const key = this._kanbanProvider?._projectTier(undefined) ?? ' none';
                     const overrides = await this._getDefaultPromptOverrides(workspaceRoot);
                     this._cachedDefaultPromptOverrides.set(key, overrides);
                 } else {
@@ -1940,10 +1942,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }
                 return null;
             },
-            getFullState: async () => {
+            getFullState: async (scope?: string | null) => {
                 if (this._kanbanProvider) {
                     try {
-                        return await this._kanbanProvider.getFullStateMessages(effectiveRoot);
+                        return await this._kanbanProvider.getFullStateMessages(effectiveRoot, scope);
                     } catch (e) {
                         console.error('[TaskViewerProvider] getFullState error from kanbanProvider:', e);
                     }
@@ -5500,7 +5502,10 @@ Each plan file must include:
         workspaceRoot?: string,
         initiatorProject?: string | null
     ): Promise<Partial<Record<string, DefaultPromptOverride>>> {
-        const key = initiatorProject ?? ' none';
+        // Key by the RESOLVED project tier, not the raw initiator: undefined means
+        // "resolve via the singleton", so its content belongs under the singleton's
+        // tier — keying it ' none' would collide with an explicit no-project scope.
+        const key = this._kanbanProvider?._projectTier(initiatorProject) ?? ' none';
         const overrides = await this._getDefaultPromptOverrides(workspaceRoot, initiatorProject);
         this._cachedDefaultPromptOverrides.set(key, overrides);
         return overrides;
@@ -10002,7 +10007,7 @@ Each plan file must include:
             await this.updateState((state: any) => {
                 state.defaultPromptOverrides = data.overrides;
             });
-            const key = data.initiatorProject ?? ' none';
+            const key = this._kanbanProvider?._projectTier(data.initiatorProject) ?? ' none';
             this._cachedDefaultPromptOverrides.set(key, parseDefaultPromptOverrides(data.overrides));
         }
         this._postSharedWebviewMessage({ type: 'saveDefaultPromptOverridesResult', success: true });

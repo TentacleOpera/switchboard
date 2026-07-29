@@ -52,6 +52,9 @@ jobs:
       - name: Design system contract (tokens, block framing, binding)
         run: npm run test:contract:design-system
 
+      - name: Cross-client project scope contract (initiator threading, scoped push rendering)
+        run: npm run test:contract:cross-client-scope
+
       - name: Run integration suite
         run: npm run test:integration:all
 

@@ -31,18 +31,29 @@ export interface WsHubOptions {
     getAuthToken: () => Promise<string>;
     /**
      * Full-state snapshot provider — called on every new connection (and
-     * reconnect) to push a resync. The result is sent as a single
+     * reconnect) to push a resync, rendered for that connection's declared
+     * project scope. The result is sent as a single
      * `{type:'__resync', seq:0, payload}` message before any broadcast
      * pushes, so the client converges to the current state.
      */
-    getFullState?: () => Promise<any>;
+    getFullState?: (scope?: string | null) => Promise<any>;
 }
+
+/** A push payload: either a plain message object (composed once, sent to every
+ *  connection) or a `(scope) => message` factory rendered per distinct declared
+ *  scope. Only scope-dependent push types pay the factory cost. */
+export type ScopedPayload = any | ((scope: string | null | undefined) => any);
 
 interface ConnectionMeta {
     ws: WebSocket;
     seq: number; // last sent sequence number on this connection
     originatorId?: string;
     isAlive?: boolean;
+    /** This connection's declared project scope. `undefined` = never declared →
+     *  host renders with the workspace singleton (pre-scoping behaviour);
+     *  `null` = explicitly declared "no project filter". The distinction is
+     *  load-bearing — do not collapse the two. */
+    project?: string | null;
 }
 
 export class WsHub {
@@ -147,10 +158,28 @@ export class WsHub {
         // All checks passed — complete the upgrade.
         this._wss!.handleUpgrade(req, socket, head, async (ws) => {
             const originatorId = reqUrl.searchParams.get('originatorId') || undefined;
-            const meta: ConnectionMeta = { ws, seq: 0, originatorId, isAlive: true };
+            // `?scope=` absent → undefined (never declared → singleton fallback).
+            // `?scope=` present but empty → null (explicitly "no project filter") —
+            // this is how a reconnecting all-projects client re-declares itself.
+            const initialScope = reqUrl.searchParams.has('scope')
+                ? (reqUrl.searchParams.get('scope') || null)
+                : undefined;
+            const meta: ConnectionMeta = { ws, seq: 0, originatorId, isAlive: true, project: initialScope };
 
             ws.on('pong', () => {
                 meta.isAlive = true;
+            });
+
+            ws.on('message', (raw) => {
+                if (typeof raw !== 'string' && !Buffer.isBuffer(raw)) return;
+                const text = raw.toString();
+                if (text.length > 4096) return;
+                let msg: any;
+                try { msg = JSON.parse(text); } catch { return; }
+                if (!msg || msg.type !== '__scope') return;
+                const p = msg.project;
+                if (p !== null && typeof p !== 'string') return;
+                meta.project = p;
             });
 
             // Subscribe-AFTER-snapshot. The full-state resync (seq 0) is sent BEFORE
@@ -163,7 +192,7 @@ export class WsHub {
             // increments strictly monotonically from the snapshot baseline.
             if (this._options.getFullState) {
                 try {
-                    const state = await this._options.getFullState();
+                    const state = await this._options.getFullState(meta.project);
                     this._safeSend(ws, {
                         type: '__resync',
                         seq: meta.seq, // 0 — the baseline; broadcasts increment from here
@@ -233,9 +262,24 @@ export class WsHub {
     /**
      * Broadcast a push message to all connected clients. Each connection
      * gets its own monotonic sequence number so clients can detect gaps.
+     * A factory payload is rendered once per DISTINCT declared scope —
+     * undefined (never declared → singleton fallback) and null (declared
+     * "no project") are DIFFERENT scopes and must never share a render.
      */
-    broadcast(verb: string, payload?: any, surface?: string): void {
+    broadcast(verb: string, payload?: ScopedPayload, surface?: string): void {
+        const isFactory = typeof payload === 'function';
+        const rendered = new Map<string, any>();
         for (const meta of this._connections) {
+            let body = payload;
+            if (isFactory) {
+                const key = meta.project === undefined ? ' undeclared'
+                    : meta.project === null ? ' null'
+                        : `p:${meta.project}`;
+                if (!rendered.has(key)) {
+                    rendered.set(key, (payload as Function)(meta.project));
+                }
+                body = rendered.get(key);
+            }
             meta.seq += 1;
             this._safeSend(meta.ws, {
                 type: verb,
@@ -244,7 +288,7 @@ export class WsHub {
                 // 'planning', 'devDocs') so a remote client can route/filter a single
                 // WS stream that carries pushes from every panel. Omitted → undefined.
                 surface,
-                payload,
+                payload: body,
             });
         }
     }

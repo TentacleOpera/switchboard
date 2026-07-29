@@ -319,7 +319,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         }
     };
 
-    const getFullState = async () => {
+    const getFullState = async (scope?: string | null) => {
         const workspaceId = await getWorkspaceId();
         if (!workspaceId) return [];
         const cards = await buildBoardCards(db, workspaceId, workspaceRoot, configProvider);

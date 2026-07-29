@@ -52,6 +52,10 @@ suite('KanbanProvider', () => {
     });
 
     suite('_generatePromptForDestinationRole', () => {
+        setup(() => {
+            sandbox.stub(fs, 'existsSync').callsFake((p: any) => p === workspaceRoot || p.toString().startsWith(workspaceRoot));
+        });
+
         test('researcher role calls buildKanbanBatchPrompt with deep-research directive', async () => {
             const cards = makeCards(1);
             const mockDb = {
@@ -473,9 +477,13 @@ Manual verification steps:
             await provider.refreshWithData(activeRows, completedRows, workspaceRoot);
 
             // Verify updateBoard message
-            const updateBoardCall = postMessageStub.getCalls().find((call: any) => call.args[0].type === 'updateBoard');
+            const updateBoardCall = postMessageStub.getCalls().find((call: any) => {
+                const msg = typeof call.args[0] === 'function' ? call.args[0](null) : call.args[0];
+                return msg?.type === 'updateBoard';
+            });
             assert.ok(updateBoardCall, 'Should have sent updateBoard message');
-            const cards = updateBoardCall.args[0].cards;
+            const msg = typeof updateBoardCall.args[0] === 'function' ? updateBoardCall.args[0](null) : updateBoardCall.args[0];
+            const cards = msg.cards;
             
             assert.strictEqual(cards.length, 3, 'Should have 3 cards (active-1, comp-1, and comp-2)');
             assert.ok(cards.find((c: any) => c.planId === 'active-1'), 'Should contain active-1');

@@ -32,9 +32,14 @@ export interface BroadcastTarget {
 export class BroadcastHub {
     private _target: BroadcastTarget;
     private _pendingWebviewMessages: any[] = [];
+    private _webviewScope: string | null | undefined;
 
     constructor(target: BroadcastTarget) {
         this._target = target;
+    }
+
+    setWebviewScope(scope: string | null | undefined): void {
+        this._webviewScope = scope;
     }
 
     /** Update the webview target (called when the panel is created/ready). */
@@ -58,17 +63,20 @@ export class BroadcastHub {
      * Push a message to both fan-out targets. If the webview is not ready,
      * the message is queued in `_pendingWebviewMessages` (flushed on
      * `setWebview`). The wsHub broadcast is always attempted (no-op if no
-     * WS clients are connected).
+     * WS clients are connected). Accepts either a static message object or
+     * a (scope) => message factory for per-connection rendering.
      */
-    push(msg: any, surface?: string): void {
+    push(msg: any, surface?: string, verbHint?: string): void {
+        const isFactory = typeof msg === 'function';
+        const webviewMsg = isFactory ? (msg as Function)(this._webviewScope) : msg;
         // Fan-out 1: the BOUND webview (with pending queue for initial-load ordering).
         if (this._target.webview) {
-            this._target.webview.postMessage(msg).then(undefined, () => { /* panel closed */ });
+            this._target.webview.postMessage(webviewMsg).then(undefined, () => { /* panel closed */ });
         } else {
-            this._pendingWebviewMessages.push(msg);
+            this._pendingWebviewMessages.push(webviewMsg);
         }
         // Fan-out 2: wsHub, tagged with `surface`.
-        this.mirrorToWs(surface, msg);
+        this.mirrorToWs(surface, msg, verbHint || webviewMsg?.type);
     }
 
     /**
@@ -77,9 +85,9 @@ export class BroadcastHub {
      * NOT re-delivered to the BOUND webview, which would misdeliver to the wrong panel
      * in a multi-panel provider). No-op when no LocalApiServer/wsHub is wired.
      */
-    mirrorToWs(surface: string | undefined, msg: any): void {
+    mirrorToWs(surface: string | undefined, msg: any, explicitVerb?: string): void {
         if (this._target.apiServer) {
-            const verb = msg?.type ?? '__unknown';
+            const verb = explicitVerb ?? (typeof msg === 'function' ? '__unknown' : (msg?.type ?? '__unknown'));
             this._target.apiServer.broadcastWs(verb, msg, surface);
         }
     }
@@ -91,11 +99,13 @@ export class BroadcastHub {
      * panels without cross-delivering to the main panel. No pending-queue for
      * secondary panels — a closed panel simply drops its webview copy; WS still gets it.
      */
-    pushTo(webview: { postMessage(msg: any): Thenable<boolean> } | null | undefined, surface: string, msg: any): void {
+    pushTo(webview: { postMessage(msg: any): Thenable<boolean> } | null | undefined, surface: string, msg: any, verbHint?: string): void {
+        const isFactory = typeof msg === 'function';
+        const webviewMsg = isFactory ? (msg as Function)(this._webviewScope) : msg;
         if (webview) {
-            webview.postMessage(msg).then(undefined, () => { /* panel closed */ });
+            webview.postMessage(webviewMsg).then(undefined, () => { /* panel closed */ });
         }
-        this.mirrorToWs(surface, msg);
+        this.mirrorToWs(surface, msg, verbHint || webviewMsg?.type);
     }
 
     /**
@@ -103,10 +113,12 @@ export class BroadcastHub {
      * webview-internal (e.g. `switchToTab`) and should not go to external clients.
      */
     pushWebviewOnly(msg: any): void {
+        const isFactory = typeof msg === 'function';
+        const webviewMsg = isFactory ? (msg as Function)(this._webviewScope) : msg;
         if (this._target.webview) {
-            this._target.webview.postMessage(msg).then(undefined, () => { /* panel closed */ });
+            this._target.webview.postMessage(webviewMsg).then(undefined, () => { /* panel closed */ });
         } else {
-            this._pendingWebviewMessages.push(msg);
+            this._pendingWebviewMessages.push(webviewMsg);
         }
     }
 

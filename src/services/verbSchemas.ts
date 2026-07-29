@@ -165,12 +165,31 @@ const DESIGN_VERB_SCHEMAS: Record<string, VerbSchema> = {
 // external endpoints (/kanban/move, /kanban/dispatch route through them).
 
 const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
+    setPushScope: {
+        fields: {
+            project: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    // `initiatorProject` (optional, never required — a required field would reject
+    // valid payloads from shipped webview builds) is the initiating client's own
+    // view filter; the arm prefers it over the last-writer-wins DB row. The
+    // validator accepts an explicit null for non-required fields, which is a
+    // meaningful sentinel here ("no project"), so `type: 'string'` is correct.
     createFeature: {
         fields: {
             name: { type: 'string', required: true },
             subtaskPlanIds: { type: 'array', required: true },
             description: { type: 'string' },
             workspaceRoot: { type: 'string' },
+            initiatorProject: { type: 'string' },
+        },
+    },
+    chatCopyPrompt: {
+        fields: {
+            sessionIds: { type: 'array' },
+            workspaceRoot: { type: 'string' },
+            initiatorProject: { type: 'string' },
         },
     },
     promoteToFeature: {
@@ -467,6 +486,14 @@ export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
             subtaskPlanIds: { type: 'array' },
             description: { type: 'string' },
             workspaceRoot: { type: 'string' },
+            initiatorProject: { type: 'string' },
+        },
+    },
+    createPlansPasteBack: {
+        fields: {
+            markdown: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+            initiatorProject: { type: 'string' },
         },
     },
     deleteFeature: {

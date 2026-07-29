@@ -352,3 +352,39 @@ None. Every mechanism in this plan was verified by reading `wsHub.ts`, `broadcas
 *Dispatch only after `kanban-project-filter-client-local.md` has merged — the two plans edit the same three files, this one reuses that plan's `_projectTier` precedence helper and its `_buildOverrideState` extraction, and it flips two contracts that plan pins deliberately.*
 
 **Stage Complete:** PLAN REVIEWED
+
+---
+
+## Code Review Record (reviewer pass, 2026-07-29)
+
+**Verdict: implemented with material defects — all CRITICAL/MAJOR findings fixed in-review. Two review rounds: at the first pass this plan had zero lines of implementation (review bounced, coder re-dispatched); this record covers the post-redo pass.**
+
+The mechanism landed as designed: `ConnectionMeta.project`, `?scope=` at upgrade before the resync, a strict one-message inbound `__scope` handler, factory-aware `WsHub.broadcast` with per-scope memoisation, the webview pseudo-connection in `BroadcastHub` (rendered-at-enqueue), the `setPushScope` verb, `getFullState(scope)` in both hosts, and all **fourteen** emit sites converted (4 `updateBoard`, 3 `updateColumnDragDropModes`, 4 `cliTriggersState`, 3 `overrideState` via the single `_postOverrideState` conversion — the toggle emitters get scoped rendering for free). The `!this._panel` guard is relaxed to `!this._panel && !this._broadcaster` as specified.
+
+### Findings and dispositions
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| 1 | CRITICAL | `getFullStateMessages` regression: the repoScope-filtered `activeRows`/`completedRows` were computed then DISCARDED — cards were rebuilt from an unconditional `db.getBoard()`/`getCompletedPlans()`, silently dropping repo-scope filtering from every WS resync (plus duplicate full-board queries) | **Fixed**: restored `_buildBoardCards(db, wsId, root, activeRows, completedRows, …)` |
+| 2 | CRITICAL | Scoped renderers read the WRONG KEYS with wrong defaults — `'switchboard.cliTriggersEnabled'` (default `false`) and `'switchboard.columnDragDropModes'` vs the canonical `'kanban.cliTriggersEnabled'` (default `true`) / `'kanban.columnDragDropModes'` that every writer uses. Every declared-scope client (and the resync path) would render CLI triggers OFF and lose all drag-drop overrides | **Fixed**: canonical keys + correct defaults, plus a `scope === undefined` fast path returning the cached singleton fields (byte-identical undeclared-connection payloads, no per-broadcast DB reads) |
+| 3 | CRITICAL | `setBoardProjectFilter` (kanban.html) declared through BOTH paths unconditionally — in the browser, the `setPushScope` verb travels over HTTP and overwrites the EDITOR webview\'s scope: the exact cross-client clobber this feature removes, reintroduced through the new mechanism (masked only by the then-stale verb allowlist) | **Fixed**: exclusive branch — browser → `__switchboardSetPushScope` (WS `__scope`), editor → `setPushScope` verb |
+| 4 | MAJOR | Helpers passed `_projectTier(scope)` as the accessors\' initiator argument — double resolution collapsed a declared-null/`'__unassigned__'` scope into the singleton (the `!== undefined` contract both plans flag as the most-likely-wrong line) | **Fixed**: scope passed RAW |
+| 5 | MAJOR | `broadcast()` memo key `meta.project ?? '__none__'` collapsed declared-null with undeclared — the two scopes shared whichever render came first (caught by the new live-hub test) | **Fixed**: distinct memo keys for undeclared / null / named |
+| 6 | MAJOR | `postMessage` panel-only path (no broadcaster) forwarded the raw factory to `webview.postMessage`/the pending queue — structured clone fails and the message is silently dropped | **Fixed**: rendered with `undefined` (singleton) scope on that path |
+| 7 | MAJOR | `transport.js` could not re-declare an explicit-null scope on reconnect (`?scope=` omitted unless truthy) — an all-projects browser client silently reverted to the singleton on every reconnect, the failure the plan names verbatim | **Fixed**: `pushScopeDeclared` flag; declared-null serialises as an empty `scope=` param; `wsHub` maps param-present-but-empty → null, param-absent → undefined |
+| 8 | NIT | Duplicated `getFullState` docstring in `WsHubOptions`; `ConnectionMeta.project` lacked the null-vs-undefined contract comment | **Fixed** |
+| 9 | NIT | `standalone/bootstrap.ts` accepts but ignores `scope` | **Accepted**: the headless host embeds static `enabled: false` / `routingConfig: {}` — nothing scope-dependent to render |
+
+### Validation
+New CI-wired contract suite `test:contract:cross-client-scope` (18/18 green) covers: a live WsHub over a real HTTP server + ws clients — `?scope=Y`, declared-null `?scope=`, and undeclared connections each receiving their own resync and broadcast rendering from ONE emit with per-scope memoisation (plan tests 1–3, 8, 9); the inbound handler ignoring junk/oversized/non-`__scope` frames and never dispatching verbs (test 7); webview parity + rendered-at-enqueue queueing in BroadcastHub (test 4); `_postOverrideState` emitting with a broadcaster and no panel (test 10) and byte-identical singleton rendering (test 11); and source contracts pinning the exclusive declaration branch, the all-assignments-through-helper rule (test 12, structural form), and the reconnect re-declaration. tsc, webpack, parity/push-routing/verb-returns checks, catalog regeneration and eslint all clean; the 5 verb-engine failures are pre-existing at HEAD and unrelated.
+
+### Remaining risks
+- Plan test 6 (full drop-and-reconnect loop) is covered by the declared-null hub test + a transport source contract, not a driven reconnect simulation.
+- `updateWorkspaceSelection.projectFilter` in the resync remains the singleton mirror — display seed only, per the predecessor\'s design; the client-owned filter is authoritative.
+- One browser user holds several per-panel sockets; only the kanban panel declares scope today, which is correct (scope is per-panel) but worth remembering before any panel other than the board embeds scoped settings in a push.
+
+## Completion Report (2026-07-29)
+
+Reviewed the redone implementation against this plan: the per-connection architecture (scope on ConnectionMeta, `__scope` channel, factory broadcast, webview pseudo-connection, fourteen emit-site conversions, guard relaxation) landed faithfully, but carried three CRITICAL defects — a repoScope regression in the resync card source, wrong scoped-setting keys/defaults that would render CLI triggers off and drop drag-drop overrides for scoped clients, and a double-path scope declaration that let a browser project switch clobber the editor webview\'s scope. All were fixed in-review along with four MAJOR contract bugs (tier double-resolution, null/undeclared memo collapse, unrendered factories on the panel-only path, reconnect losing declared-null). Files changed: `wsHub.ts`, `broadcastHub.ts`, `KanbanProvider.ts`, `transport.js`, `kanban.html`, plus the new CI-wired `src/test/cross-client-scope-contract.test.js` (18/18) and regenerated protocol catalog/allowlist (`setPushScope` now allowlisted). Typecheck, webpack, parity, push-routing and verb-returns checks are all green; residual risks are documented above.
+
+**Stage Complete:** CODE REVIEWED

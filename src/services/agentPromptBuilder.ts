@@ -237,6 +237,8 @@ export interface PromptBuilderOptions {
     useWorktreesPerPlanEnabled?: boolean;
     /** The feature doc's path/link. */
     featureDocLink?: string;
+    /** The project filter key associated with the initiating client/request. */
+    initiatorProject?: string | null;
 
     /** Controls ticket update behavior: disabled, comment-only, refine-ticket, or research-and-refine */
     ticketUpdateMode?: 'disabled' | 'comment-only' | 'refine-ticket' | 'research-and-refine';

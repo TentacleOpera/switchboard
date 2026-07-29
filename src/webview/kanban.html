@@ -4227,10 +4227,24 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // caches ALL cards (all projects) in allCards and filters client-side, mirroring
         // the project panel's kanban tab. activeProjectFilter remains the backend-state
         // mirror (used to seed boardProjectFilter on first load / workspace switch);
-        // boardProjectFilter is the single source of truth for what the board renders.
         // Semantics: null = no filter (show all); '__unassigned__' = only no-project
         // cards; <name> = only cards whose project === <name>.
         let boardProjectFilter = null;
+        // Single choke point for boardProjectFilter assignment: assigns the variable
+        // AND declares the connection's push scope, so what the board renders and
+        // what the host renders FOR this connection can never diverge. The two
+        // declaration paths are EXCLUSIVE: in the browser, __switchboardSetPushScope
+        // (transport.js) declares this WS connection's scope; posting the
+        // setPushScope verb from the browser would travel over HTTP and clobber the
+        // EDITOR webview's scope — the exact cross-client bleed this feature removes.
+        function setBoardProjectFilter(next) {
+            boardProjectFilter = next;
+            if (typeof window.__switchboardSetPushScope === 'function') {
+                window.__switchboardSetPushScope(next);
+            } else {
+                postKanbanMessage({ type: 'setPushScope', project: next });
+            }
+        }
         let allCards = [];
         // Apply the local project filter to a card set. Unassigned cards have
         // project === '' (cards are built with `row.project || ''`).
@@ -4482,7 +4496,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         function postKanbanMessage(message) {
             vscode.postMessage({
                 ...message,
-                workspaceRoot: message.workspaceRoot || getActiveWorkspaceRoot()
+                workspaceRoot: message.workspaceRoot || getActiveWorkspaceRoot(),
+                // The initiating client's own view filter rides on EVERY board verb —
+                // the host's resolveAuthoringProject/_projectTier prefer it over the
+                // last-writer-wins DB row, so authoring scope, settings scope, and
+                // dispatch decisions follow THIS board, not the other client's switch.
+                // Sent verbatim (null and '__unassigned__' are meaningful sentinels);
+                // stamped centrally so no sender can be missed by a sweep.
+                initiatorProject: message.initiatorProject !== undefined ? message.initiatorProject : boardProjectFilter
             });
         }
 
@@ -7274,12 +7295,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // filter is preserved so browser and webview never reset each other.
                     const workspaceChanged = previousRoot !== '' && previousRoot !== currentWorkspaceRoot;
                     if (workspaceChanged) {
-                        boardProjectFilter = activeProjectFilter;
+                        setBoardProjectFilter(activeProjectFilter);
                         allCards = []; // new workspace → drop the stale unfiltered cache
                     } else if (boardProjectFilter === null && allCards.length === 0) {
                         // First hydration before any updateBoard: seed from backend so the
                         // board starts in sync, then own it locally.
-                        boardProjectFilter = activeProjectFilter;
+                        setBoardProjectFilter(activeProjectFilter);
                     }
                     workspaceItems = Array.isArray(msg.workspaces) ? msg.workspaces : [];
                     currentControlPlaneMode = msg.controlPlaneMode || msg.mode || 'none';
@@ -8339,7 +8360,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 // Post-assignment: switch workspace context to the target workspace so the user sees their moved cards
                 currentWorkspaceRoot = targetWorkspaceRoot;
                 activeProjectFilter = targetProject === '__unassigned__' ? '__unassigned__' : targetProject;
-                boardProjectFilter = activeProjectFilter; // workspace switch → re-seed view filter
+                setBoardProjectFilter(activeProjectFilter); // workspace switch → re-seed view filter
                 lastBoardSignature = '';  // Ensure the refresh triggered by selectWorkspace is not short-circuited
                 postKanbanMessage({
                     type: 'selectWorkspace',
@@ -8356,7 +8377,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                 // Post-assignment: switch project filter to the target project so the user sees their moved cards
                 activeProjectFilter = targetProject === '__unassigned__' ? '__unassigned__' : targetProject;
-                boardProjectFilter = activeProjectFilter; // keep the board-owned view filter in sync
+                setBoardProjectFilter(activeProjectFilter); // keep the board-owned view filter in sync
                 postKanbanMessage({
                     type: 'setProjectFilter',
                     project: targetProject
@@ -8401,7 +8422,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 // the expensive full board refresh. Re-selecting the already-displayed
                 // option fires no `change` event at all (browser behavior), so this is
                 // only reached on a genuine selection change.
-                boardProjectFilter = selectedProject ? selectedProject : null;
+                setBoardProjectFilter(selectedProject ? selectedProject : null);
                 currentCards = applyBoardProjectFilter(allCards);
                 lastBoardSignature = buildBoardSignature(currentCards);
                 renderBoard(currentCards);
