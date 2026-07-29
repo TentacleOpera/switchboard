@@ -20,6 +20,7 @@ export interface CustomAgentAddons {
     advancedReviewerEnabled?: boolean;
     reviewerConciseModeEnabled?: boolean;
     reviewerCompactPlanUpdateEnabled?: boolean;
+    noSeparateReviewArtifactsEnabled?: boolean; // Default ON: prohibit creating separate .md review artifacts
     researchEnabled?: boolean; // NEW: enable deep research mode
     complexityScoringSkill?: boolean; // NEW: invoke complexity scoring before split
     ticketUpdateMode?: 'disabled' | 'comment-only' | 'refine-ticket' | 'research-and-refine';
@@ -198,6 +199,7 @@ export function parseCustomAgentAddons(raw: unknown): CustomAgentAddons | undefi
     if (s.advancedReviewerEnabled === true) a.advancedReviewerEnabled = true;
     if (s.reviewerConciseModeEnabled === true) a.reviewerConciseModeEnabled = true;
     if (s.reviewerCompactPlanUpdateEnabled === true) a.reviewerCompactPlanUpdateEnabled = true;
+    if (s.noSeparateReviewArtifactsEnabled === false) a.noSeparateReviewArtifactsEnabled = false;
     if (s.researchEnabled === true) a.researchEnabled = true;
     if (s.complexityScoringSkill === true) a.complexityScoringSkill = true;
     if (s.ticketUpdateMode && ['disabled', 'comment-only', 'refine-ticket', 'research-and-refine'].includes(s.ticketUpdateMode as string)) {

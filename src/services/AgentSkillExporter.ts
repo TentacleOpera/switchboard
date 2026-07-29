@@ -7,7 +7,8 @@ import {
     NO_SUBAGENTS_DIRECTIVE,
     WORKTREES_PER_PLAN_DIRECTIVE,
     CAVEMAN_OUTPUT_DIRECTIVE,
-    SUPPRESS_WALKTHROUGH_DIRECTIVE
+    SUPPRESS_WALKTHROUGH_DIRECTIVE,
+    NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE
 } from './agentPromptBuilder';
 
 export class AgentSkillExporter {
@@ -90,6 +91,7 @@ export class AgentSkillExporter {
         if (builtinAddons.advancedRegression !== undefined) out.advancedReviewerEnabled = !!builtinAddons.advancedRegression;
         if (builtinAddons.reviewerConciseMode !== undefined) out.reviewerConciseModeEnabled = !!builtinAddons.reviewerConciseMode;
         if (builtinAddons.reviewerCompactPlanUpdate !== undefined) out.reviewerCompactPlanUpdateEnabled = !!builtinAddons.reviewerCompactPlanUpdate;
+        out.noSeparateReviewArtifactsEnabled = builtinAddons.noSeparateReviewArtifacts ?? true;
         if (builtinAddons.leadChallenge !== undefined) out.includeInlineChallenge = !!builtinAddons.leadChallenge;
         if (builtinAddons.accurateCoding !== undefined) out.accurateCodingEnabled = !!builtinAddons.accurateCoding;
         if (builtinAddons.pairProgramming !== undefined) out.pairProgrammingEnabled = !!builtinAddons.pairProgramming;
@@ -248,6 +250,13 @@ export class AgentSkillExporter {
         if (addons.reviewerCompactPlanUpdateEnabled) {
             lines.push('### Reviewer Compact Plan Update');
             lines.push('- When updating plans, use compact format.');
+            lines.push('');
+        }
+        if (addons.noSeparateReviewArtifactsEnabled) {
+            lines.push('### No Separate Review Artifacts');
+            lines.push('```');
+            lines.push(NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE);
+            lines.push('```');
             lines.push('');
         }
         if (addons.researchEnabled) {

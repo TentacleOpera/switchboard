@@ -84,6 +84,9 @@ jobs:
       - name: Webview shim injection contract (SHARED_DEFAULTS_SCRIPT marker, shim-before-consumer ordering)
         run: npm run test:contract:shim-injection
 
+      - name: Reviewer prompt anti-artifact contract (directive presence, completion handshake co-existence)
+        run: npm run test:contract:reviewer-prompt
+
       - name: Kanban card-button drag guard contract
         run: npm run test:contract:drag-guard
 

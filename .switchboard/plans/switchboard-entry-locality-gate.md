@@ -464,3 +464,118 @@ ready-to-run research prompt was supplied in chat.
 
 Implemented remote-session locality check and dual-branch fallback messaging for `/switchboard` entry protocol. Added Step 0 locality check and updated port/health failure branch in `.agents/workflows/switchboard.md`. Regenerated generated mirror `.claude/skills/switchboard/SKILL.md` via temp-root script and validated parity using `node scripts/check-claude-mirror.js` (`mirror:check`). Files changed: `.agents/workflows/switchboard.md` and `.claude/skills/switchboard/SKILL.md`. No issues encountered.
 
+---
+
+## Code Review Pass — 2026-07-30
+
+Verification was **executed**, not static-only: no `SKIP TESTS:` / `SKIP COMPILATION:` line
+was present in the review dispatch. (The plan's own "*Not executed during this improve
+pass*" note under Automated Tests was a record of the improve session, not a directive to
+this pass — it was correctly overridden.)
+
+### Findings
+
+| Sev | Location | Finding |
+| :-- | :--- | :--- |
+| **CRITICAL** | `.agents/workflows/switchboard.md:33` (pre-fix) | Step 0's branch-1 target, "**Remote fallback** below", was a **dangling reference** — `grep -n "Remote fallback"` returned exactly one hit: the reference itself. No block in the file carried that label. The only fallback-shaped block below was the dual-branch bullet whose *first* line is "*On the machine running VS Code?* Open this workspace in VS Code…". A branch-1 (remote) agent resolving the nearest match would therefore **lead with the "open VS Code" advice** — the precise sentence this plan exists to eliminate (Desired behaviour, plan line 76). The plan's logic table (lines 251–253) specifies two distinct message shapes — "Remote fallback" (branch 1) and "Dual-branch fallback" (branch 3); only the latter was implemented. |
+| **MAJOR** | `.agents/workflows/switchboard.md:32` (pre-fix) vs `:8` | Branch 1's trigger list named **"a CI runner"**, contradicting the skill's own unchanged persona paragraph 25 lines above: *"You are a Switchboard project manager operating from another UI (a terminal agent, a browser board, **a CI runner**)."* One document asserted both "a CI runner is a supported console host" and "a CI runner must skip the console entirely". This is the *same* false-remote-verdict failure the plan guarded against for sniffed markers (superseded block, plan lines 81–97: "*a false 'remote' verdict makes the console refuse to work on the user's own machine — strictly worse than the bug being fixed*"), arriving instead through branch 1's example list. |
+| **MAJOR** | `.agents/workflows/switchboard.md:52` (pre-fix) | The ordering-hint example `[ -d /root/.ccr ] \|\| [ -n "${CLAUDE_CODE_REMOTE:-}" ]` emits **zero stdout and exits 1** on the common local path (verified: `/root` absent, var unset on this host). It surfaces to the agent as a failed command carrying no information, with no way to distinguish "local" from "the read broke" — violating the plan's own edge case at line 303: "*Marker read fails or is unavailable → treat as 'no hint' … **Never error out on the hint**.*" Reached most often on the local-but-closed path (Manual verification step 4). |
+| NIT | `.agents/workflows/switchboard.md:32–34, 49–52` (pre-fix) | Four inserted lines ran 397/241/262/340 chars in a file that wraps prose at ~90. Cosmetic; markdown renders identically. |
+| NIT | commit `4d335c3` | **Report-only, not fixable.** This plan's two-file change was swept into the auto-commit for a *different* plan ("Headless Feature Management — Hardening") alongside 19 unrelated files, contrary to the plan's Commit section (line 355). The contribution is not independently revertable. Correcting this would require history rewriting, which the review's git policy forbids. Parity is nonetheless clean, so there is no functional consequence. |
+
+### Verified correct (no action)
+
+- **Temp-root regeneration procedure was followed exactly.** `4d335c3` modified
+  `.claude/skills/switchboard/SKILL.md` and **not** `.claude/settings.json`, **not**
+  `.claude/.switchboard-generated.json` — the ledger/settings churn trap the improve pass
+  flagged was avoided. Verification step 5's hygiene assertion holds.
+- **Scope discipline exact.** Two hunks only. Lines 53–59 (`health.roots` cross-check,
+  `terminals` handling), Command B, §1.2 snapshot format, and the §3 snippet are untouched,
+  as required by Implementation step 3.
+- **Frontmatter `description:` survived and propagated** — present at `SKILL.md:3`; mirror
+  rebuilt `name`/`description`/`allowed-tools` from `MIRROR_MANIFEST` as designed.
+- **Branch 1 skipping Command B is correct** (checked, not assumed): `.gitignore`'s
+  `.switchboard/*` allow-list does **not** re-include `kanban-state-*.md`, so those files
+  are absent from a remote clone. Conversely `plans/` and `features/` **are** tracked — the
+  read-only offer in the Remote fallback is real.
+- **Both landing targets exist** in source and mirror: `switchboard-remote.md`,
+  `switchboard-cloud.md` (+ their `.claude/skills/*/SKILL.md`).
+
+### Gate-wiring audit
+
+The plan's `### Automated Tests` subsection names one check: `npm run compile-tests &&
+npm run mirror:check`.
+
+- `mirror:check` — defined `package.json` (`node scripts/check-claude-mirror.js`);
+  **invoked by CI** at `.github/workflows/integration-tests.yml:43–44` ("Claude mirror
+  drift check"). ✅ Genuinely gated, not merely defined.
+- `compile-tests` — defined `package.json` (`tsc -p tsconfig.test.json`); **invoked by CI**
+  at `integration-tests.yml:28–29`. ✅ Gated.
+- No "green while incomplete" hole for this plan's named checks. (Unrelated pre-existing
+  note: `test:contract:verb-engine` and `test:contract:verb-engine-planning` remain
+  deliberately unwired at `integration-tests.yml:67–76`, documented as red-for-predating
+  causes; out of scope here.)
+
+### Fixes applied
+
+1. **CRITICAL fix** — `.agents/workflows/switchboard.md:63,65`: labelled the two halves
+   `**Local fallback**` and `**Remote fallback**`, giving Step 0's reference a real anchor.
+   `:36–39` now states branch 1 presents the Remote fallback bullet "**on its own**, without
+   the Local fallback line". `:69` cross-links back. `grep` now returns a reference *and* an
+   anchor.
+2. **MAJOR fix** — `:40–42`: removed "a CI runner" from branch 1's trigger list (now
+   "Claude Code on the web, a Claude Code Remote container" + "with no local machine in the
+   loop") and stated explicitly that a CI runner or browser board answers "no", probes
+   first, and lands on the remote-safe fallback if the probe fails. Coverage is not lost —
+   the plan's stated design is that "correctness never depends on detection firing".
+3. **MAJOR fix** — `:73–78`: ordering-hint example is now
+   `{ [ -d /root/.ccr ] || [ -n "${CLAUDE_CODE_REMOTE:-}" ]; } && echo remote-hint || echo local-hint`,
+   which prints a verdict and exits 0 either way, plus an explicit "no output, or anything
+   other than `remote-hint`, means no hint" rule.
+4. **NIT fix** — all edited lines rewrapped to the file's ~90-column convention.
+
+### Validation results
+
+| Check | Result |
+| :--- | :--- |
+| `npm run compile-tests` | ✅ clean (tsc, no output) |
+| `npm run mirror:check` | ✅ `.claude/skills matches generateClaudeMirror(.agents)` — 46 files, v1.7.13 |
+| Mirror regeneration (temp-root script, plan lines 317–333) | ✅ `regenerated: generated 46`; only `.claude/skills/switchboard/SKILL.md` copied back |
+| Diff hygiene (Manual verification 5) | ✅ `git status` = exactly 2 modified files — `.agents/workflows/switchboard.md`, `.claude/skills/switchboard/SKILL.md`. No `.claude/settings.json`, no `.claude/.switchboard-generated.json` |
+| Ordering-hint snippet, local host | ✅ prints `local-hint`, exit 0 |
+| Ordering-hint snippet, `CLAUDE_CODE_REMOTE=1` | ✅ prints `remote-hint`, exit 0 |
+| Cross-reference resolution | ✅ `Remote fallback` = 1 reference + 1 anchor; mirror carries both |
+| Marker absence on this host (plan Uncertain Assumption 1) | ✅ re-confirmed: `/root` absent, `CLAUDE_CODE_REMOTE` unset — no local false-positive |
+
+### Remaining risks
+
+1. **Manual verification steps 2, 3, 4, 6 are unrun and unrunnable here** — they require a
+   real remote/cloud session, a live extension, and an Antigravity host. This is inherent to
+   the change (plan: "*There is no harness that executes skill prose*"), not a review gap.
+   Step 3 (local happy-path regression) is the one that would catch a mis-scoped gate; the
+   diff shows the happy path untouched, but that is static evidence, not execution.
+2. **Prompt-behaviour is still unverified by any automated gate.** `mirror:check` proves
+   parity, never behaviour — the goal-vs-appearance risk the plan's Adversarial Synthesis
+   names. Green CI on this change means "the mirror is not stale", nothing more.
+3. **Uncertain Assumptions 1–3 remain open** (whether `/root/.ccr` or
+   `$CLAUDE_CODE_REMOTE` exist in the real target hosts). Unchanged by this pass, and by
+   design non-load-bearing: they now feed only an ordering hint whose failure mode is one
+   line of reading. Do **not** promote the hint to a gate without answering them.
+4. **`4d335c3` commit-hygiene damage is permanent** (NIT above) — history rewriting is
+   forbidden. Future passes should expect this plan's source change to appear under an
+   unrelated commit subject.
+
+### Review completion
+
+Reviewed the implementation against the plan, found one CRITICAL dangling cross-reference
+that would have re-emitted the exact "open VS Code" advice to remote sessions the plan set
+out to remove, plus two MAJOR issues (a CI-runner self-contradiction against the skill's own
+persona paragraph, and an ordering-hint command that exits non-zero with no output on the
+common local path). All three were fixed in `.agents/workflows/switchboard.md`, the mirror
+was regenerated with the plan's temp-root procedure, and `compile-tests` + `mirror:check`
+are green with a clean two-file diff. Files changed by this pass:
+`.agents/workflows/switchboard.md` and `.claude/skills/switchboard/SKILL.md`. The
+implementer's temp-root regeneration, scope discipline, and frontmatter handling were all
+correct and needed no changes; the only unfixable item is that the original change landed
+inside another plan's auto-commit.
+

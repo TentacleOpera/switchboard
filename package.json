@@ -776,6 +776,7 @@
     "test:regression:native-project-api": "node src/test/native-project-api-commands-regression.test.js",
     "test:contract:research-modal": "node src/test/research-modal-contract.test.js",
     "test:contract:request-id-wire": "node src/test/research-modal-request-id-wire-contract.test.js",
+    "test:contract:reviewer-prompt": "node src/test/autoban-reviewer-prompt-regression.test.js",
     "test:contract:verb-engine": "node src/test/verb-engine-headless-seams.test.js",
     "test:contract:verb-engine-kanban": "node src/test/verb-engine-kanban-headless.test.js",
     "test:contract:verb-engine-planning": "node src/test/verb-engine-planning-headless.test.js",

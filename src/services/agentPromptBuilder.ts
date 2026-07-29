@@ -167,6 +167,8 @@ export interface PromptBuilderOptions {
     reviewerConciseModeEnabled?: boolean;
     /** When true, reviewer appends a brief summary to the plan file instead of reproducing full sections. */
     reviewerCompactPlanUpdateEnabled?: boolean;
+    /** When true (default), the reviewer prompt forbids creating separate .md review artifact files. */
+    noSeparateReviewArtifactsEnabled?: boolean;
 
     /** Path to the workflow file for the planner role. Defaults to .agents/skills/improve-plan/SKILL.md */
     plannerWorkflowPath?: string;
@@ -754,6 +756,7 @@ export const WRITE_FEATURE_DESCRIPTION_IF_EMPTY_DIRECTIVE = `FEATURE DESCRIPTION
 If all three sections already exist with substantive content, leave them untouched. If only some are missing, backfill only the missing ones. Treat a section titled "## Dependencies" (without "& sequencing") as present — do not duplicate it. Do NOT modify the auto-generated "<!-- BEGIN SUBTASKS -->" block or the "<!-- BEGIN WORKTREES -->" block — write your sections between the title/complexity and the BEGIN SUBTASKS marker. Read each subtask plan file to ground the Goal, How bullets, and dependency analysis in the actual plan content, not just titles.`;
 export const CAVEMAN_OUTPUT_DIRECTIVE = `CAVEMAN MODE: Talk like caveman. Drop filler, keep substance. Use fragments. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step].`;
 export const SUPPRESS_WALKTHROUGH_DIRECTIVE = `SUPPRESS WALKTHROUGH: Do NOT generate a walkthrough.md artifact at the end of this task. Omit the walkthrough creation step entirely.`;
+export const NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE = `NO SEPARATE REVIEW ARTIFACTS: Do NOT create separate review artifact files (review.md, review_notes.md, review_artifact.md, grumpy_critique.md, balanced_review.md, or any similarly-named new file) at any point in this task. Omit the review-artifact creation step entirely. Record your findings in your response and in the existing target plan file, per the COMPLETION REPORT step. A new .md file in the workspace is imported as a duplicate card on the kanban board.`;
 export const STAGGERED_IMPLEMENTATION_DIRECTIVE = `STAGGERED IMPLEMENTATION: After completing each subtask, append a brief summary (3-5 sentences) to a ## Implementation Notes section at the END of the feature overview file — the feature file is the entry tagged [FEATURE: ...] Plan File: in PLANS TO PROCESS above. Place the ## Implementation Notes section AFTER the auto-generated Subtasks and Worktrees blocks; if it does not exist, create it. For each subtask note include: what you implemented, files changed, and any issues or decisions the next subtask's agent needs to know. These notes are a context relay — they let the next subtask pick up where you left off without re-reading your code changes. If you are handling subtasks in parallel via subagents/worktrees, do NOT have parallel subtasks append individually — instead, after all subtasks complete and their worktrees merge back, append a single consolidated note for the batch. If the feature file is not present, skip this step. This is in addition to the per-plan completion report (which still goes to each subtask's own plan file); do not skip either. Do NOT skip this step.`;
 // CODING_COMPLETION_REPORT_DIRECTIVE is the completion-protocol handshake. It is the
 // sole signal the completion-detection chain keys on: the activity-light OFF-switch
@@ -1036,6 +1039,7 @@ export function buildKanbanBatchPrompt(
     const advancedReviewerEnabled = options?.advancedReviewerEnabled ?? false;
     const reviewerConciseModeEnabled = options?.reviewerConciseModeEnabled ?? false;
     const reviewerCompactPlanUpdateEnabled = options?.reviewerCompactPlanUpdateEnabled ?? false;
+    const noSeparateReviewArtifactsEnabled = options?.noSeparateReviewArtifactsEnabled ?? true;
     const gitProhibitionEnabled = options?.gitProhibitionEnabled ?? true;
     // Granular git policy strategies. The config layer (KanbanProvider._getPromptsConfig)
     // owns the work-on-main defaults for built-in code roles; `undefined` here means
@@ -1352,6 +1356,10 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
 
+        const noSeparateReviewArtifactsBlock = noSeparateReviewArtifactsEnabled
+            ? NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE
+            : '';
+
         const promptParts = [
             reviewerExecutionBlock,
             safeguardsBlock,
@@ -1359,7 +1367,8 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
             baseInstructions,
             suffixBlock,
             featureDirectiveBlock,
-            `PLANS TO PROCESS:\n${planList}`
+            `PLANS TO PROCESS:\n${planList}`,
+            noSeparateReviewArtifactsBlock
         ].filter(Boolean).join('\n\n');
 
         return normalizeNewlines(promptParts);

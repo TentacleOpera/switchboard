@@ -67,6 +67,19 @@ async function run() {
         'Expected anti-leakage rule to forbid inheriting constraints from plan content.'
     );
 
+    assert.ok(
+        builderSource.includes('NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE'),
+        'Expected the no-separate-review-artifacts directive constant to exist.'
+    );
+    assert.ok(
+        builderSource.includes('NO SEPARATE REVIEW ARTIFACTS: Do NOT create separate review artifact files'),
+        'Expected the reviewer prompt to forbid creating separate review artifact files.'
+    );
+    assert.ok(
+        builderSource.includes('per the COMPLETION REPORT step'),
+        'Expected the directive to redirect findings to the existing plan file via the COMPLETION REPORT step.'
+    );
+
     console.log('autoban reviewer prompt regression test passed');
 }
 

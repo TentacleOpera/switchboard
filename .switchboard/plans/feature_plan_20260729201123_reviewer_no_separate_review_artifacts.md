@@ -350,3 +350,6 @@ The deterministic complement, which the codebase already precedents on its *othe
 ---
 
 **Recommendation:** Complexity 5 → **Send to Coder.**
+
+## Completion Report
+Implemented default-ON reviewer prompt directive `NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE` prohibiting creation of separate review `.md` artifact files. Updated `agentPromptBuilder.ts`, `agentConfig.ts`, `KanbanProvider.ts`, `AgentSkillExporter.ts`, `sharedDefaults.js`, `agentPromptBuilder.test.ts`, `autoban-reviewer-prompt-regression.test.js`, `package.json`, `.vscode-test.mjs`, and `.github/workflows/integration-tests.yml`. No issues encountered during implementation.

@@ -4727,6 +4727,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             resolvedOptions.advancedReviewerEnabled = promptsConfig.advancedReviewerEnabled;
             resolvedOptions.reviewerConciseModeEnabled = promptsConfig.reviewerConciseModeEnabled;
             resolvedOptions.reviewerCompactPlanUpdateEnabled = promptsConfig.reviewerCompactPlanUpdateEnabled;
+            resolvedOptions.noSeparateReviewArtifactsEnabled = promptsConfig.noSeparateReviewArtifactsEnabled;
         } else if (role === 'tester') {
             // The acceptance tester needs an authoritative requirements baseline. The
             // active project's PRD (resolved above into resolvedOptions.prdReferences
@@ -4900,6 +4901,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             advancedReviewerEnabled: reviewerConfig?.addons?.advancedRegression ?? config.get<boolean>('reviewer.advancedMode', false),
             reviewerConciseModeEnabled: reviewerConfig?.addons?.reviewerConciseMode ?? false,
             reviewerCompactPlanUpdateEnabled: reviewerConfig?.addons?.reviewerCompactPlanUpdate ?? false,
+            noSeparateReviewArtifactsEnabled: reviewerConfig?.addons?.noSeparateReviewArtifacts ?? true,
             leadChallengeEnabled: leadConfig?.addons?.leadChallenge ?? config.get<boolean>('leadCoder.inlineChallenge', false),
             aggressivePairProgramming: plannerConfig?.addons?.aggressivePairProgramming ?? (() => {
                 const newInspect = config.inspect<boolean>('pairProgramming.aggressive');

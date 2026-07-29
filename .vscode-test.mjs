@@ -5,6 +5,7 @@ export default defineConfig({
                'out/test/pair-programming-*.test.js',
                'out/services/__tests__/KanbanProvider.test.js',
                'out/services/__tests__/GlobalPlanWatcherService.test.js',
+               'out/services/__tests__/agentPromptBuilder.test.js',
                'out/test/kanban-complexity.test.js',
        ],
 });

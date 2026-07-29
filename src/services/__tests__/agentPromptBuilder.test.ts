@@ -142,6 +142,42 @@ suite('agentPromptBuilder', () => {
             assert.ok(prompt.includes('ADVANCED REGRESSION ANALYSIS'), 'Should include advanced reviewer directive');
         });
 
+        test('noSeparateReviewArtifacts directive is injected by default for reviewer', () => {
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
+                switchboardSafeguardsEnabled: false,
+                gitProhibitionEnabled: false
+            });
+            assert.ok(prompt.includes('NO SEPARATE REVIEW ARTIFACTS'), 'Should include noSeparateReviewArtifacts directive by default');
+        });
+
+        test('noSeparateReviewArtifactsEnabled: false omits noSeparateReviewArtifacts directive', () => {
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
+                noSeparateReviewArtifactsEnabled: false,
+                switchboardSafeguardsEnabled: false,
+                gitProhibitionEnabled: false
+            });
+            assert.ok(!prompt.includes('NO SEPARATE REVIEW ARTIFACTS'), 'Should omit noSeparateReviewArtifacts directive when disabled');
+        });
+
+        test('noSeparateReviewArtifacts directive survives replace mode prompt override', () => {
+            const overrideText = 'Custom replace instructions.';
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
+                defaultPromptOverrides: { reviewer: { text: overrideText, mode: 'replace' } },
+                switchboardSafeguardsEnabled: false,
+                gitProhibitionEnabled: false
+            });
+            assert.ok(prompt.includes('NO SEPARATE REVIEW ARTIFACTS'), 'Should include noSeparateReviewArtifacts directive even in replace mode');
+        });
+
+        test('noSeparateReviewArtifacts directive coexists with completion report directive', () => {
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
+                switchboardSafeguardsEnabled: false,
+                gitProhibitionEnabled: false
+            });
+            assert.ok(prompt.includes('NO SEPARATE REVIEW ARTIFACTS'), 'Should include noSeparateReviewArtifacts directive');
+            assert.ok(prompt.includes('COMPLETION REPORT:'), 'Should include completion report directive');
+        });
+
         test('cavemanOutputEnabled: true injects caveman directive', () => {
             const prompt = buildKanbanBatchPrompt('coder', makePlans(1), {
                 cavemanOutputEnabled: true
