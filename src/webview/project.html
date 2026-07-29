@@ -1509,35 +1509,6 @@
         </div>
     </div>
 
-    <!-- Auto-Fetch Plans Modal -->
-    <div id="autofetch-modal" class="kanban-log-overlay" style="display: none;">
-        <div class="kanban-log-modal" style="width: 480px;">
-            <div style="padding: 12px 16px; font-weight: bold; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
-                <span>Auto-Fetch Plans</span>
-                <button id="btn-close-autofetch-modal" class="strip-btn" style="padding: 2px 8px;" aria-label="Close">&times;</button>
-            </div>
-            <div style="padding: 16px; display: flex; flex-direction: column; gap: 14px;">
-                <!-- Explanation -->
-                <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.6; background: var(--panel-bg2); border: 1px solid var(--border-color); border-radius: 4px; padding: 10px;">
-                    <strong style="color: var(--text-primary);">What this does:</strong><br/>
-                    Periodically fetches the default branch from the <code>origin</code> remote and fast-forwards your local <code>.switchboard/plans/</code> directory to pull in plan files authored by teammates. Only runs when you're on the default branch with a clean working tree. Only applies changes from <strong>trusted authors</strong> (defaults to your git <code>user.email</code>; configurable in VS Code settings under <code>switchboard.planAutoFetch.trustedAuthors</code>). Skips silently on feature branches or dirty trees. Uses exponential backoff on repeated fetch failures.
-                </div>
-                <!-- Enable toggle -->
-                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; font-size: 12px;">
-                    <input type="checkbox" id="kanban-auto-fetch-enabled" style="margin: 0; cursor: pointer;" />
-                    <span>Enable auto-fetch from <strong id="kanban-auto-fetch-branch">default branch</strong></span>
-                </label>
-                <!-- Fetch now + status -->
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <button id="btn-plan-auto-fetch-now" class="strip-btn" style="padding: 4px 12px; font-size: 11px;" title="Fetch and fast-forward now">Fetch now</button>
-                    <span id="kanban-auto-fetch-status" style="opacity: 0.8; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></span>
-                </div>
-                <!-- Settings hint -->
-                <div style="font-size: 10px; color: var(--text-secondary); border-top: 1px solid var(--border-color); padding-top: 10px;">
-                    Interval (default 300s), remote, default branch, and trusted authors are configurable in VS Code Settings → Switchboard → Plan Auto Fetch.
-                </div>
-            </div>
-        </div>
     </div>
 
 

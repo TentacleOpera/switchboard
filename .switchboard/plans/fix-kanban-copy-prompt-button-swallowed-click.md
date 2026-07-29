@@ -392,3 +392,36 @@ Settled by spec-and-source-level web research (WHATWG HTML §7.9, W3C UI Events 
 
 ## Completion Summary
 Implemented Stages 1, 2, 4 and source regression testing for Kanban card Copy Prompt button activation. Implemented dynamic `draggable = false` disarming on `pointerdown` for card action buttons alongside `handleDragStart` guard in [kanban.html](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/webview/kanban.html). Refactored Copy Prompt button activation to use `setPointerCapture` with synthesised pointerup bounds check (extracting `runCopyPrompt` and removing direct `click` binding), raised `.card-btn` hit target min-height to 22px (re-squaring `.icon-btn`), removed `pointer-events: none` on copied state, and wired `copyPlanLinkResult` postMessage signals after `moveCards` in [KanbanProvider.ts](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/services/KanbanProvider.ts). Added source regression assertions in [kanban-card-button-drag-guard.test.js](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/test/kanban-card-button-drag-guard.test.js). No issues encountered.
+
+## Review Pass
+
+### Findings
+
+| Severity | Finding | File:Line | Status |
+| :--- | :--- | :--- | :--- |
+| CRITICAL | `btn.disabled = true` left in `copyPlanLinkResult` handler — blocks `pointerdown`, reintroducing swallowed-click on second activation | [kanban.html:7837](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/webview/kanban.html#L7837) | **FIXED** |
+| CRITICAL | Test assertion 8 fails at HEAD — 4500-char slice too narrow, regex doesn't handle no-next-column branch | [kanban-card-button-drag-guard.test.js:69-74](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/test/kanban-card-button-drag-guard.test.js#L69-L74) | **FIXED** |
+| MAJOR | `dispatchFailedPromptReady` removeGlow bound to `click` — never fires under pointer capture | [kanban.html:7872](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/webview/kanban.html#L7872) | **FIXED** (→ `pointerdown`) |
+| MAJOR | Test not wired into CI — no `package.json` script, no workflow step | [package.json](file:///Users/patrickvuleta/Documents/GitHub/switchboard/package.json), [integration-tests.yml](file:///Users/patrickvuleta/Documents/GitHub/switchboard/.github/workflows/integration-tests.yml) | **FIXED** |
+| NIT | `onCleanup` is unnecessary indirection over `cleanup` | [kanban.html:6392-6394](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/webview/kanban.html#L6392-L6394) | Deferred |
+| NIT | Test module exports `testKanbanCardButtonDragGuard` instead of `run()` (pattern mismatch with other tests) | [kanban-card-button-drag-guard.test.js](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/test/kanban-card-button-drag-guard.test.js) | Deferred |
+
+### Fixes Applied
+
+1. **kanban.html** — Removed `btn.disabled = true` (line 7837), `btn.disabled = false` (lines 7843, 7859) from `copyPlanLinkResult` handler. Changed `dispatchFailedPromptReady` glow removal from `click` to `pointerdown` (line 7872).
+2. **kanban-card-button-drag-guard.test.js** — Increased `promptSelected` slice window to 8000 chars. Split assertion 8 into two: regex match for custom-dispatch branch, lastIndexOf ordering check for plain-advance branch. Added assertion 7b: `copyPlanLinkResult` handler must not set `btn.disabled`.
+3. **package.json** — Added `test:contract:drag-guard` script.
+4. **integration-tests.yml** — Added CI step for drag-guard contract test.
+
+### Validation Results
+
+- `npm run test:contract:drag-guard` — **PASS** (all assertions green).
+- No compilation performed (webview HTML + standalone JS test; no TypeScript touched in this review pass).
+
+### Remaining Risks
+
+- The `dispatchFailedPromptReady` glow timeout (30s) now serves as the only fallback for glow removal if the user doesn't interact; unchanged from pre-fix behaviour for `click`, now applies to `pointerdown`.
+- Stage 3 (mid-gesture DOM replacement) remains unimplemented per plan. Not implicated by any confirmed reproduction.
+
+## Review Completion Summary
+Reviewer pass found 2 CRITICAL and 2 MAJOR issues; all 4 fixed in-place. CRITICAL-1: `btn.disabled = true` survived in `copyPlanLinkResult` handler, silently blocking the Stage 2 `pointerdown` activation for 1.5–2s after each successful copy — removed. CRITICAL-2: test assertion 8 was red at HEAD due to a 4500-char window truncating before the `moveCards`→`copyPlanLinkResult` pair — widened window and restructured assertions. MAJOR-1: `dispatchFailedPromptReady` removeGlow used `click` which no longer fires under pointer capture — changed to `pointerdown`. MAJOR-2: test had no `package.json` script and no CI workflow step — wired both. Files changed: [kanban.html](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/webview/kanban.html), [kanban-card-button-drag-guard.test.js](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/test/kanban-card-button-drag-guard.test.js), [package.json](file:///Users/patrickvuleta/Documents/GitHub/switchboard/package.json), [integration-tests.yml](file:///Users/patrickvuleta/Documents/GitHub/switchboard/.github/workflows/integration-tests.yml). All tests pass.

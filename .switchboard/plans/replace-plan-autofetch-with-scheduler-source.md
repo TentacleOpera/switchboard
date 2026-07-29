@@ -527,3 +527,8 @@ ready-to-run research prompt was supplied in chat.
 ---
 
 **Recommendation: Send to Coder** (complexity 6).
+
+## Completion Report
+
+Implemented removal of PlanAutoFetchService and added the dedicated "fetch-plans" Scheduler source. Removed `PlanAutoFetchService.ts`, UI modal elements in `project.html`/`project.js`, provider handlers in `PlanningPanelProvider.ts`/`extension.ts`, and settings in `package.json`. Added shared prompt builder `src/services/schedulerPresets.ts`, updated `ScheduledJob.source` in `GlobalIntegrationConfigService.ts`, wired UI inputs in `kanban.html`, and connected the preset prompt to both `KanbanProvider.ts` (COPY PROMPT) and `TaskViewerProvider.ts` (local terminal tick). Regenerated protocol catalog and verb allowlist clean via `npm run catalog:generate`.
+

@@ -459,3 +459,8 @@ ready-to-run research prompt was supplied in chat.
 ---
 
 **Recommendation: Send to Coder** (complexity 4).
+
+## Completion Report
+
+Implemented remote-session locality check and dual-branch fallback messaging for `/switchboard` entry protocol. Added Step 0 locality check and updated port/health failure branch in `.agents/workflows/switchboard.md`. Regenerated generated mirror `.claude/skills/switchboard/SKILL.md` via temp-root script and validated parity using `node scripts/check-claude-mirror.js` (`mirror:check`). Files changed: `.agents/workflows/switchboard.md` and `.claude/skills/switchboard/SKILL.md`. No issues encountered.
+

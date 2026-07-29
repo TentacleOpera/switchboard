@@ -86,14 +86,14 @@ export const DEFAULT_MCP_MONITOR_CONFIG: McpMonitorConfig = {
 /**
  * A single scheduled job. `source` picks the prompt preset; `target` picks the
  * execution surface. `sourceConfig` is an untyped bag whose shape is owned by
- * the source (comms packs the legacy McpMonitorConfig fields; other sources
- * pack their own). Downstream consumers cast based on `source`.
+ * the source (comms packs the legacy McpMonitorConfig fields; fetch-plans packs
+ * remote/branchGlob; other sources pack their own). Downstream consumers cast based on `source`.
  */
 export interface ScheduledJob {
     id: string;
     label: string;
     enabled: boolean;
-    source: 'comms' | 'board-batch' | 'reconcile' | 'custom';
+    source: 'comms' | 'board-batch' | 'reconcile' | 'custom' | 'fetch-plans';
     target: 'local-terminal' | 'antigravity' | 'cloud';
     intervalMinutes: number;
     promptOverride?: string;

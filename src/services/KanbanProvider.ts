@@ -25,6 +25,7 @@ import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, pa
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow } from './KanbanDatabase';
 import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (is_feature clobber) — remove with the probes
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
+import { buildFetchPlansPrompt } from './schedulerPresets';
 import { KanbanMigration } from './KanbanMigration';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
@@ -5433,6 +5434,8 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             const result = await this._buildBoardBatchPromptCore(agent, workspaceRoot, column, effectiveBatch);
             body = result.prompt;
             error = result.error;
+        } else if (source === 'fetch-plans') {
+            body = buildFetchPlansPrompt(job);
         } else if (source === 'reconcile') {
             body = this._buildReconcilePrompt();
         } else {

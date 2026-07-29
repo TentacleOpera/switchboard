@@ -29,6 +29,10 @@ board move, so they are always current — no staleness check, no timestamp read
 separate plans-existence probe. Everything the entry report needs comes from these
 two commands.
 
+0. **Locality check (one line, no network).** Before Command A, answer: *does my own runtime context state that I am running in a managed remote/cloud execution environment (Claude Code on the web, a Claude Code Remote container, a CI runner)?*
+   - **Yes, stated explicitly** → skip Command A and Command B; go to the **Remote fallback** below and stop. Do not read `api-server-port.txt`, do not curl `/health`, do not advise opening VS Code.
+   - **No, or unstated** → proceed to Command A as normal. Never guess "remote" from a sniffed marker alone — a wrong "remote" verdict locks a local user out of their own console. Marker hints are used only to order the message in the fallback below.
+
 1. **Resolve ROOT + liveness + board state — two commands total.**
 
    **Command A — liveness (the only network call):**
@@ -42,8 +46,10 @@ two commands.
      ```bash
      CUR="$PWD"; while [ "$CUR" != "/" ] && [ ! -f "$CUR/.switchboard/api-server-port.txt" ]; do CUR=$(dirname "$CUR"); done; ROOT="$CUR"
      ```
-   - If the port file is missing, tell the user to open the workspace in VS Code with the
-     Switchboard extension active. Do not fall back to direct DB access.
+   - If the port file is missing, or `/health` does not answer — the API is not reachable from here. Present **both** possibilities in one short message, then **stop** (do not retry, do not fall back to direct DB access):
+     - *On the machine running VS Code?* Open this workspace in VS Code with the Switchboard extension active, then re-run `/switchboard`.
+     - *In a remote or cloud session?* The API server lives on the user's local machine and cannot be reached from here. Use **`/switchboard-remote`** to drive plans via Linear or Notion, **`/switchboard-cloud`** to plan without auto-coding in a VM, or work read-only against the on-disk `.switchboard/plans/` and `.switchboard/features/`.
+     - **Ordering hint (optional, never a gate):** if the environment looks remote, lead with the remote options; otherwise lead with the VS Code line. A single cheap read is enough — e.g. `[ -d /root/.ccr ] || [ -n "${CLAUDE_CODE_REMOTE:-}" ]`. Getting the order wrong costs the user one line of reading; it must never remove either option.
    - Cross-check that `ROOT` appears in `health.roots`; if not, warn the user they are
      outside a registered Switchboard workspace and stop.
    - **Save the `terminals` field** — `terminalCount > 0` means a terminal agent is live.

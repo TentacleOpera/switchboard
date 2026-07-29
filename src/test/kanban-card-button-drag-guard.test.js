@@ -63,15 +63,46 @@ function testKanbanCardButtonDragGuard() {
         '.card-btn.copy.copied must not disable pointer events'
     );
 
-    // Assertion 8: In KanbanProvider.ts, copyPlanLinkResult postMessage occurs after moveCards / no nextCol returns in promptSelected
+    // Assertion 7b: copyPlanLinkResult handler does NOT set btn.disabled = true
+    // The disabled attribute blocks pointerdown, which is the Stage 2 activation path.
+    const copyResultIdx = kanbanHtml.indexOf("case 'copyPlanLinkResult':");
+    assert.strictEqual(copyResultIdx !== -1, true, "case 'copyPlanLinkResult': must exist");
+    const copyResultEnd = kanbanHtml.indexOf('break;', copyResultIdx);
+    const copyResultBody = kanbanHtml.slice(copyResultIdx, copyResultEnd);
+    assert.strictEqual(
+        copyResultBody.includes('btn.disabled = true'),
+        false,
+        'copyPlanLinkResult handler must NOT set btn.disabled (blocks pointerdown activation)'
+    );
+    assert.strictEqual(
+        copyResultBody.includes('btn.disabled = false'),
+        false,
+        'copyPlanLinkResult handler must NOT toggle btn.disabled at all'
+    );
+
+    // Assertion 8: In KanbanProvider.ts, copyPlanLinkResult postMessage occurs after moveCards
+    // on branches that DO have moveCards. The no-next-column branch correctly sends
+    // copyPlanLinkResult without moveCards (no card movement), so we test the
+    // custom-dispatch and plain-advance branches specifically.
     const promptSelectedIdx = kanbanProvider.indexOf("case 'promptSelected':");
     assert.strictEqual(promptSelectedIdx !== -1, true, "case 'promptSelected': must exist");
-    const promptSelectedBody = kanbanProvider.slice(promptSelectedIdx, promptSelectedIdx + 4500);
+    // Use a generous window to cover all branches including PLAN REVIEWED complexity routing
+    const promptSelectedBody = kanbanProvider.slice(promptSelectedIdx, promptSelectedIdx + 8000);
+
+    // Custom-dispatch branch: moveCards then copyPlanLinkResult
     assert.match(
         promptSelectedBody,
-        /this\.postMessage\(\{\s*type:\s*'moveCards'[\s\S]*?\}\);[\s\S]*?this\.postMessage\(\{\s*type:\s*'copyPlanLinkResult'/,
-        'copyPlanLinkResult postMessage must follow moveCards postMessage'
+        /this\.postMessage\(\{\s*type:\s*'moveCards',\s*sessionIds:\s*allMovedIds,\s*targetColumn:\s*nextCol\s*\}\);[\s\S]*?this\.postMessage\(\{\s*type:\s*'copyPlanLinkResult'/,
+        'Custom-dispatch branch: copyPlanLinkResult must follow moveCards'
     );
+
+    // Plain-advance branch: also has moveCards then copyPlanLinkResult.
+    // Verify by checking that the LAST moveCards in the handler is followed by copyPlanLinkResult.
+    const lastMoveCards = promptSelectedBody.lastIndexOf("type: 'moveCards'");
+    const lastCopyResult = promptSelectedBody.lastIndexOf("type: 'copyPlanLinkResult'");
+    assert.ok(lastMoveCards > 0, 'Plain-advance branch must have a moveCards postMessage');
+    assert.ok(lastCopyResult > lastMoveCards,
+        'Plain-advance branch: copyPlanLinkResult must appear after the last moveCards');
 
     console.log('testKanbanCardButtonDragGuard passed all assertions successfully.');
 }

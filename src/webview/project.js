@@ -413,33 +413,6 @@
             case 'ultracodeAnimationSetting':
                 document.body.classList.toggle('ultracode-animation-enabled', msg.enabled === true);
                 break;
-            case 'planAutoFetchState': {
-                const autoFetchEnabledCb = document.getElementById('kanban-auto-fetch-enabled');
-                const autoFetchBranchLabel = document.getElementById('kanban-auto-fetch-branch');
-                const autoFetchStatusText = document.getElementById('kanban-auto-fetch-status');
-                
-                if (autoFetchEnabledCb) {
-                    autoFetchEnabledCb.checked = !!msg.enabled;
-                }
-                if (autoFetchBranchLabel) {
-                    autoFetchBranchLabel.textContent = msg.resolvedBranch || 'default branch';
-                }
-                if (autoFetchStatusText) {
-                    let text = msg.lastReason || '';
-                    if (msg.lastTimestamp) {
-                        const time = new Date(msg.lastTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                        text += ` (at ${time})`;
-                    }
-                    autoFetchStatusText.textContent = text;
-                    autoFetchStatusText.title = text;
-                }
-                const btnPlanAutoFetchNow = document.getElementById('btn-plan-auto-fetch-now');
-                if (btnPlanAutoFetchNow && msg.lastReason !== 'Fetching now...') {
-                    btnPlanAutoFetchNow.disabled = false;
-                    btnPlanAutoFetchNow.textContent = 'Fetch now';
-                }
-                break;
-            }
             case 'cyberScanlinesSetting':
                 document.body.classList.toggle('cyber-scanlines-disabled', msg.disabled);
                 break;
@@ -1945,8 +1918,6 @@
                     <button class="strip-btn" id="kanban-meta-upload-btn" ${uploadingPlanAttachment ? 'disabled' : ''}>
                         ${uploadingPlanAttachment ? 'Uploading...' : 'Upload'}
                     </button>
-                ` : ''}
-                <button class="strip-btn" id="kanban-meta-autofetch-btn" title="Configure auto-fetch of plans from the default branch">⚙ AutoFetch</button>
                 <button class="strip-btn" id="kanban-meta-log-btn">Log</button>
                 <button class="strip-btn" id="kanban-meta-delete-btn">Delete</button>
             </div>
@@ -2048,10 +2019,6 @@
                 });
             });
         }
-        const dynamicAutofetchBtn = document.getElementById('kanban-meta-autofetch-btn');
-        if (dynamicAutofetchBtn) {
-            dynamicAutofetchBtn.addEventListener('click', openAutofetchModal);
-        }
     }
 
     if (btnImportKanbanPlans) {
@@ -2095,38 +2062,6 @@
                 planFile: p.planFile,
                 topic: p.topic || '(untitled)',
                 workspaceRoot: p.workspaceRoot
-            });
-        });
-    }
-    const autofetchModal = document.getElementById('autofetch-modal');
-    const btnCloseAutofetchModal = document.getElementById('btn-close-autofetch-modal');
-
-    function openAutofetchModal() {
-        if (autofetchModal) autofetchModal.style.display = 'flex';
-    }
-    function closeAutofetchModal() {
-        if (autofetchModal) autofetchModal.style.display = 'none';
-    }
-
-    // AutoFetch button is now dynamic in the meta bar — listener attached after render
-    if (btnCloseAutofetchModal) {
-        btnCloseAutofetchModal.addEventListener('click', closeAutofetchModal);
-    }
-
-    const btnPlanAutoFetchNow = document.getElementById('btn-plan-auto-fetch-now');
-    if (btnPlanAutoFetchNow) {
-        btnPlanAutoFetchNow.addEventListener('click', () => {
-            btnPlanAutoFetchNow.disabled = true;
-            btnPlanAutoFetchNow.textContent = 'Fetching…';
-            vscode.postMessage({ type: 'planAutoFetchRunNow' });
-        });
-    }
-    const kanbanAutoFetchEnabled = document.getElementById('kanban-auto-fetch-enabled');
-    if (kanbanAutoFetchEnabled) {
-        kanbanAutoFetchEnabled.addEventListener('change', () => {
-            vscode.postMessage({
-                type: 'setPlanAutoFetchEnabled',
-                enabled: kanbanAutoFetchEnabled.checked
             });
         });
     }

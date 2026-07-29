@@ -29,6 +29,7 @@ import { KanbanProvider } from './KanbanProvider';
 import { OversightPassService } from './OversightPassService';
 import type { SetupPanelProvider } from './SetupPanelProvider';
 import { sendRobustText, getAntigravityHash, pasteTextViaClipboard, withTerminalSendLock } from './terminalUtils';
+import { buildFetchPlansPrompt } from './schedulerPresets';
 import { PipelineOrchestrator } from './PipelineOrchestrator';
 import {
     CustomAgentConfig,
@@ -22302,6 +22303,9 @@ What would you like to find?`;
         // dispatch; until then promptOverride is the carrier). promptOverride
         // precedence is preserved exactly — an empty override skips the tick.
         prompt = (job.promptOverride || '').trim();
+        if (!prompt && job.source === 'fetch-plans') {
+            prompt = buildFetchPlansPrompt(job);
+        }
         if (!prompt) return;
         this._schedulerInFlight.set(jobId, true);
         try {

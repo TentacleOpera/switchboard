@@ -38,7 +38,6 @@ import { PlannerPromptWriter } from './services/PlannerPromptWriter';
 import { PlanningPanelCacheService } from './services/PlanningPanelCacheService';
 import { ResearchImportService } from './services/ResearchImportService';
 import { showTemporaryNotification } from './utils/showTemporaryNotification';
-import { PlanAutoFetchService } from './services/PlanAutoFetchService';
 import { MigrationService } from './services/MigrationService';
 import { switchboardCommandRegistry } from './services/commandRegistry';
 
@@ -725,13 +724,6 @@ export async function activate(context: vscode.ExtensionContext) {
     await globalPlanWatcher.initialize();
     context.subscriptions.push(globalPlanWatcher);
 
-    const planAutoFetchService = new PlanAutoFetchService(
-        () => kanbanProvider,
-        outputChannel
-    );
-    await planAutoFetchService.initialize();
-    context.subscriptions.push(planAutoFetchService);
-
     // Wire the watcher into the already-created KanbanProvider
     await kanbanProvider!.setGlobalPlanWatcher(globalPlanWatcher);
 
@@ -1181,7 +1173,6 @@ export async function activate(context: vscode.ExtensionContext) {
     kanbanProvider!.setPlanningPanelProvider(planningPanelProvider);
     planningPanelProvider.setKanbanProvider(kanbanProvider!);
     planningPanelProvider.setTaskViewerProvider(taskViewerProvider);
-    planningPanelProvider.setPlanAutoFetchService(planAutoFetchService);
 
     const designPanelProvider = new DesignPanelProvider(
         context.extensionUri,

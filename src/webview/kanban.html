@@ -7834,13 +7834,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         if (msg.success) {
                             btn.textContent = 'Copied!';
                             btn.classList.add('copied');
-                            btn.disabled = true;
 
                             let fallbackTimer = null;
                             const resetBtn = () => {
                                 btn.textContent = btn.dataset.copyLabel || 'Copy Prompt';
                                 btn.classList.remove('copied');
-                                btn.disabled = false;
                                 btn.removeEventListener('animationend', onAnimationEnd);
                                 if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
                             };
@@ -7851,12 +7849,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             btn.addEventListener('animationend', onAnimationEnd);
                             // Fallback: if animationend never fires (prefers-reduced-motion,
                             // or animation already completed before listener was attached),
-                            // reset the button after 2s to prevent it getting stuck disabled.
+                            // reset the button text after 2s.
                             fallbackTimer = setTimeout(resetBtn, 2000);
                         } else {
                             btn.textContent = btn.dataset.copyLabel || 'Copy Prompt';
                             btn.classList.remove('copied');
-                            btn.disabled = false;
                         }
                     }
                     break;
@@ -7867,9 +7864,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         || document.querySelector(`.card-btn.copy[data-session="${CSS.escape(msg.sessionId)}"]`);
                     if (btn) {
                         btn.classList.add('prompt-ready');
-                        // Remove the glow after 30 seconds or on click
+                        // Remove the glow after 30 seconds or on next activation
                         const removeGlow = () => btn.classList.remove('prompt-ready');
-                        btn.addEventListener('click', removeGlow, { once: true });
+                        btn.addEventListener('pointerdown', removeGlow, { once: true });
                         setTimeout(removeGlow, 30000);
                     }
                     // Show a status message
@@ -9023,7 +9020,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const modeDescriptions = {
                 'single-column': 'Automates a single workflow stage. For example, code all plans in the PLANNED column overnight, ready for review the next day.',
                 'multi-column': 'Automates multiple column transitions with per-role terminal pools. Best for full pipeline automation.',
-                'scheduler': 'Schedule any prompt on a recurring timer. Sources: board-batch, reconcile cloud work, custom prompt, or comms (Slack/Gmail/Calendar). Targets: local terminal (sub-hourly), Antigravity, or cloud (laptop-off). The successor to the standalone COMMS tab.',
+                'scheduler': 'Schedule any prompt on a recurring timer. Sources: board-batch, fetch cloud plans, reconcile cloud work, custom prompt, or comms (Slack/Gmail/Calendar). Targets: local terminal (sub-hourly), Antigravity, or cloud (laptop-off). The successor to the standalone COMMS tab.',
                 'antigravity-batch': 'Generates a one-shot batch prompt for Antigravity chat. No continuous automation — run manually as needed. (Legacy — use Scheduler with source=board-batch, target=antigravity instead.)',
                 'orchestration': 'A system-woken orchestrator agent batches plans into features, fans work out across per-feature worktrees, and merges results back feature by feature. Selecting this mode enables per-feature feature worktrees automatically (restored on switching away).'
             };
@@ -10231,9 +10228,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     midRow.style.cssText = 'display:flex; gap:6px; align-items:center;';
                     const sourceSelect = document.createElement('select');
                     sourceSelect.style.cssText = autobanSelectStyle + ' flex:1;';
-                    // Source dropdown ordering: board-batch → reconcile → custom → comms (last).
+                    // Source dropdown ordering: board-batch → fetch-plans → reconcile → custom → comms (last).
                     [
                         { value: 'board-batch', label: 'Board batch' },
+                        { value: 'fetch-plans', label: 'Fetch cloud plans' },
                         { value: 'reconcile', label: 'Reconcile cloud work' },
                         { value: 'custom', label: 'Custom prompt' },
                         { value: 'comms', label: 'Comms (Slack/Gmail/Calendar)' }
@@ -10307,6 +10305,29 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     batchConfigRow.appendChild(batchBatchSizeInput);
                     row.appendChild(batchConfigRow);
 
+                    // Fetch-plans source config (remote / branchGlob).
+                    // Shown only when source === 'fetch-plans'. Stored in sourceConfig.
+                    const fetchConfigRow = document.createElement('div');
+                    fetchConfigRow.style.cssText = 'display:flex; gap:6px; align-items:center; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
+                    const fetchRemoteInput = document.createElement('input');
+                    fetchRemoteInput.type = 'text';
+                    fetchRemoteInput.dataset.field = 'fetchRemote';
+                    fetchRemoteInput.value = (job.sourceConfig && job.sourceConfig.remote) || 'origin';
+                    fetchRemoteInput.placeholder = 'origin';
+                    fetchRemoteInput.style.cssText = 'flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px;';
+                    const fetchBranchGlobInput = document.createElement('input');
+                    fetchBranchGlobInput.type = 'text';
+                    fetchBranchGlobInput.dataset.field = 'fetchBranchGlob';
+                    fetchBranchGlobInput.value = (job.sourceConfig && job.sourceConfig.branchGlob) || '*';
+                    fetchBranchGlobInput.placeholder = '*';
+                    fetchBranchGlobInput.style.cssText = 'flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px;';
+                    const fetchLabel = document.createElement('span');
+                    fetchLabel.textContent = 'FETCH:';
+                    fetchConfigRow.appendChild(fetchLabel);
+                    fetchConfigRow.appendChild(fetchRemoteInput);
+                    fetchConfigRow.appendChild(fetchBranchGlobInput);
+                    row.appendChild(fetchConfigRow);
+
                     // Startup command (for local-terminal target).
                     const startupCmdRow = document.createElement('div');
                     startupCmdRow.style.cssText = 'display:flex; gap:6px; align-items:center; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
@@ -10329,7 +10350,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     promptLabel.textContent = 'PROMPT:';
                     const promptArea = document.createElement('textarea');
                     promptArea.value = job.promptOverride || '';
-                    promptArea.placeholder = 'Custom prompt (overrides the source preset). For board-batch/reconcile leave blank to use the preset.';
+                    promptArea.placeholder = 'Custom prompt (overrides the source preset). For board-batch/fetch-plans/reconcile leave blank to use the preset.';
                     promptArea.style.cssText = 'flex:1; min-height:40px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:4px; border-radius:3px; resize:vertical;';
                     promptRow.appendChild(promptLabel);
                     promptRow.appendChild(promptArea);
@@ -10379,11 +10400,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     function refreshSubForms() {
                         const isComms = sourceSelect.value === 'comms';
                         const isBatch = sourceSelect.value === 'board-batch';
+                        const isFetch = sourceSelect.value === 'fetch-plans';
                         commsRoot.style.display = isComms ? 'block' : 'none';
                         if (isComms && commsRoot.childElementCount === 0) {
                             renderCommsPanel();
                         }
                         batchConfigRow.style.display = isBatch ? 'flex' : 'none';
+                        fetchConfigRow.style.display = isFetch ? 'flex' : 'none';
                         renderSchedulerPrereq(targetSelect.value);
                         // Show/hide start-stop vs copy-prompt based on target.
                         const isLocal = targetSelect.value === 'local-terminal';
@@ -10416,16 +10439,22 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const intervalInput = numInputs[0]; // first number input is always the interval
                     const textarea = rowEl.querySelector('textarea');
                     const source = selects[0] ? selects[0].value : 'custom';
-                    // Build sourceConfig from data-field inputs (board-batch: agent/column/batchSize).
+                    // Build sourceConfig from data-field inputs (board-batch / fetch-plans).
                     const sourceConfig = {};
                     const batchAgentEl = rowEl.querySelector('input[data-field="batchAgent"]');
                     const batchColumnEl = rowEl.querySelector('input[data-field="batchColumn"]');
                     const batchSizeEl = rowEl.querySelector('input[data-field="batchSize"]');
+                    const fetchRemoteEl = rowEl.querySelector('input[data-field="fetchRemote"]');
+                    const fetchGlobEl = rowEl.querySelector('input[data-field="fetchBranchGlob"]');
                     const startupCmdEl = rowEl.querySelector('input[data-field="startupCommand"]');
                     if (source === 'board-batch') {
                         if (batchAgentEl) sourceConfig.agent = batchAgentEl.value || 'coder';
                         if (batchColumnEl) sourceConfig.column = batchColumnEl.value || 'CREATED';
                         if (batchSizeEl) sourceConfig.batchSize = parseInt(batchSizeEl.value, 10) || 5;
+                    }
+                    if (source === 'fetch-plans') {
+                        sourceConfig.remote = (fetchRemoteEl && fetchRemoteEl.value) || 'origin';
+                        sourceConfig.branchGlob = (fetchGlobEl && fetchGlobEl.value) || '*';
                     }
                     return {
                         id: rowEl.dataset.jobId,

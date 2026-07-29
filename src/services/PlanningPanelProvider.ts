@@ -39,7 +39,6 @@ import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import { InsightManager } from './InsightManager';
 import { GovernanceFileKey } from './constitutionUtils';
 import { getProjectPrdPath, sanitizeProjectSlug, buildPrdBuilderPrompt } from './prdUtils';
-import { PlanAutoFetchService } from './PlanAutoFetchService';
 import { classifyHttpError } from './errorMessages';
 import { bundleDocsContext, DocsBundleSource } from './ContextBundler';
 
@@ -274,7 +273,6 @@ export class PlanningPanelProvider {
     private _activeTicketsProvider: 'clickup' | 'linear' | null = null;
     // Type-only reference (avoids a runtime circular import with KanbanProvider).
     private _kanbanProvider?: import('./KanbanProvider').KanbanProvider;
-    private _planAutoFetchService?: PlanAutoFetchService;
     private _fullKanbanPlansSent = false;
     // Type-only reference (avoids a runtime circular import with TaskViewerProvider).
     // Used to dispatch constitution builder/updater + system builder prompts through the planner rotation.
@@ -313,10 +311,6 @@ export class PlanningPanelProvider {
 
     public setTaskViewerProvider(provider: import('./TaskViewerProvider').TaskViewerProvider): void {
         this._taskViewerProvider = provider;
-    }
-
-    public setPlanAutoFetchService(service: PlanAutoFetchService): void {
-        this._planAutoFetchService = service;
     }
 
     // Ensure adapters are registered for current workspace roots.
@@ -648,17 +642,6 @@ export class PlanningPanelProvider {
         this.postMessageToProjectWebview({ type: 'cyberAnimationSetting', disabled });
         const scanlinesDisabled = this._seams().pathConfig.getConfigBoolean('theme.disableCyberScanlines', false);
         this.postMessageToProjectWebview({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
-
-        if (this._planAutoFetchService) {
-            const wsRoot = this._getWorkspaceRoot() || (this._getWorkspaceRoots()[0]);
-            if (wsRoot) {
-                const status = this._planAutoFetchService.getStatus(wsRoot);
-                this.postMessageToProjectWebview({
-                    type: 'planAutoFetchState',
-                    ...status
-                });
-            }
-        }
     }
 
     private _registerProjectPanelConfigListener(): void {
@@ -681,13 +664,6 @@ export class PlanningPanelProvider {
             if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
                 const enabled = this._seams().pathConfig.getConfigBoolean('theme.ultracodeAnimation', false);
                 this.postMessageToProjectWebview({ type: 'ultracodeAnimationSetting', enabled });
-            }
-            if (e.affectsConfiguration('switchboard.planAutoFetch') && this._planAutoFetchService && this._projectPanel) {
-                const wsRoot = this._getWorkspaceRoot() || (this._getWorkspaceRoots()[0]);
-                if (wsRoot) {
-                    const status = this._planAutoFetchService.getStatus(wsRoot);
-                    this.postMessageToProjectWebview({ type: 'planAutoFetchState', ...status });
-                }
             }
         });
         this._disposables.push(this._projectPanelConfigDisposable);
@@ -3759,38 +3735,6 @@ Start by checking which documents exist, then present the menu.`;
                         error: errMsg,
                         planFile
                     });
-                }
-                break;
-            }
-            case 'setPlanAutoFetchEnabled': {
-                try {
-                    const wsRoot = this._getWorkspaceRoot() || (this._getWorkspaceRoots()[0]);
-                    if (wsRoot) {
-                        await this._seams().pathConfig.updateConfigWorkspace('planAutoFetch.enabled', msg.enabled);
-                    }
-                } catch (err) {
-                    console.error('[PlanningPanel] setPlanAutoFetchEnabled error:', err);
-                }
-                break;
-            }
-            case 'planAutoFetchRunNow': {
-                if (this._planAutoFetchService) {
-                    const wsRoot = this._getWorkspaceRoot() || (this._getWorkspaceRoots()[0]);
-                    if (wsRoot) {
-                        this.postMessageToProjectWebview({
-                            type: 'planAutoFetchState',
-                            enabled: this._planAutoFetchService.getStatus(wsRoot).enabled,
-                            lastOutcome: 'idle',
-                            lastReason: 'Fetching now...',
-                            resolvedBranch: this._planAutoFetchService.getStatus(wsRoot).resolvedBranch
-                        });
-                        await this._planAutoFetchService.runCycle();
-                        const status = this._planAutoFetchService.getStatus(wsRoot);
-                        this.postMessageToProjectWebview({
-                            type: 'planAutoFetchState',
-                            ...status
-                        });
-                    }
                 }
                 break;
             }
