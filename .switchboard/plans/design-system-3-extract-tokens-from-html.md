@@ -82,3 +82,6 @@ The dominant risk is the duplicate-token failure mode — it is not hypothetical
 - No migration concern: additive, and unstructured design systems keep working via fallback.
 
 **Recommendation:** Send to Coder
+
+## Completion Summary
+Implemented CSS custom property token extraction and HTML design system inventory parsing in `src/services/designSystemTokens.ts` (`extractTokensFromCss`, `extractDesignSystemTokens`). Updated `buildDesignSystemBlock` in `src/services/agentPromptBuilder.ts` to parse HTML/CSS design systems into formatted Markdown token tables (grouped by scheme e.g. light/dark) and section inventories. Files created: `src/services/designSystemTokens.ts`. Files changed: `src/services/agentPromptBuilder.ts`. No issues encountered.

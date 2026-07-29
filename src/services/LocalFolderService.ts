@@ -992,78 +992,7 @@ export class LocalFolderService {
         await this.saveFolderPathsConfig(cfg);
     }
 
-    getBriefsFolderPaths(): string[] {
-        const cfg = this._getOrLoadCachedConfig();
 
-
-        const seen = new Set<string>();
-        return (cfg.briefsFolderPaths || [])
-            .map(p => this.resolveFolderPath(p))
-            .filter(p => p && !seen.has(p) && seen.add(p) as unknown as boolean);
-    }
-
-    getBriefsFolderPath(): string {
-        const paths = this.getBriefsFolderPaths();
-        return paths[0] ?? '';
-    }
-
-    async addBriefsFolderPath(folderPath: string): Promise<void> {
-        const cfg = await this.loadFolderPathsConfig();
-        const currentPaths = cfg.briefsFolderPaths || [];
-        const resolvedInput = this.resolveFolderPath(folderPath);
-
-        const isDuplicate = currentPaths.some(p => this.resolveFolderPath(p) === resolvedInput);
-        if (!isDuplicate) {
-            cfg.briefsFolderPaths = [...currentPaths, folderPath];
-            await this.saveFolderPathsConfig(cfg);
-        }
-    }
-
-    async removeBriefsFolderPath(folderPath: string): Promise<void> {
-        const cfg = await this.loadFolderPathsConfig();
-        const currentPaths = cfg.briefsFolderPaths || [];
-        const resolvedToRemove = this.resolveFolderPath(folderPath);
-
-        cfg.briefsFolderPaths = currentPaths.filter(p => this.resolveFolderPath(p) !== resolvedToRemove);
-        await this.saveFolderPathsConfig(cfg);
-    }
-
-    async listBriefsFiles(): Promise<Array<{
-        id: string;
-        name: string;
-        relativePath: string;
-        isFolder?: boolean;
-        parentId?: string;
-        sourceFolder: string;
-        title?: string;
-    }>> {
-        const folderPaths = this.getBriefsFolderPaths();
-        if (folderPaths.length === 0) { return []; }
-
-        const items: Array<{
-            id: string;
-            name: string;
-            relativePath: string;
-            isFolder?: boolean;
-            parentId?: string;
-            sourceFolder: string;
-            title?: string;
-        }> = [];
-
-        const seenAbsolutePaths = new Set<string>();
-
-        for (let i = 0; i < folderPaths.length; i++) {
-            const folderPath = folderPaths[i];
-            try {
-                const stat = await fs.promises.stat(folderPath);
-                if (!stat.isDirectory()) { continue; }
-            } catch { continue; }
-
-            await this._scanFolder(folderPath, folderPath, items, null, i, seenAbsolutePaths, 0);
-        }
-
-        return items;
-    }
 
     async listDesignFiles(): Promise<Array<{
         id: string;
@@ -1202,7 +1131,9 @@ export class LocalFolderService {
             // Stylesheets
             '.css', '.scss', '.less', '.sass',
             // Config / markup
-            '.yaml', '.yml', '.xml'
+            '.yaml', '.yml', '.xml',
+            // Rendered design systems
+            '.html', '.htm'
         ].includes(ext);
     }
 

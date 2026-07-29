@@ -11,41 +11,68 @@ The Design Panel currently has six top-level tabs. Three of them — STITCH HTML
 - **Established precedent already in this file:** the **DESIGN SYSTEM** tab already implements exactly this pattern — a `#design-source-select` dropdown (Local / Stitch / Claude) that shows/hides `#design-local-panel` vs `#design-systems-panel`. The Planning panel does the same with `#docs-source-filter` inside a single DOCS tab. This plan reuses that pattern rather than inventing one.
 
 ## Metadata
-- **Tags:** frontend, ui, ux, refactor, cleanup
-- **Complexity:** 5
+- **Tags:** frontend, ui, ux, refactor
+- **Complexity:** 6
+
+> **Superseded:** Complexity: 5.
+> **Reason:** Code verification found a hidden functional dependency the original plan missed: the provider's per-seat protocol (`activeTabChanged` → `seat.activeTab` → `_isPolledTab` → external-file polling and preview auto-refresh) keys on the ORIGINAL tab ids. A naive collapse that reports `'previews'` silently kills folder polling and preview refresh for every collapsed surface. Handling this correctly (the effective-tab protocol below) adds coordination risk.
+> **Replaced with:** Complexity: 6 (medium — multi-file, one subtle cross-layer protocol to preserve; still "Send to Coder").
 
 ## User Review Required
 - Confirm the collapsed tab label: **PREVIEWS** (alternatives: OUTPUTS, GALLERY).
 - Confirm the dropdown default when no persisted selection exists: **Stitch HTML** (first option).
-- Confirm persistence scope: remember the last-selected source per panel session via `vscode.setState` (matches the existing `activeTab` / design-source persistence). This plan assumes **yes, persist**.
+- Confirm persistence scope: remember the last-selected source per panel via the provider-side tab-state store (`persistTab` → `persistTabState` → `_stateStore`), matching how `activeTab` is persisted today. This plan assumes **yes, persist**.
+
+> **Superseded:** "Confirm persistence scope: remember the last-selected source per panel session via `vscode.setState` (matches the existing `activeTab` / design-source persistence)."
+> **Reason:** Factually wrong about the existing mechanism. `activeTab` is NOT persisted via `vscode.setState` — it is persisted via `persistTab('activeTab', tabName)` (`design.js:209`) → `persistTabState` message → provider `_stateStore` (`DesignPanelProvider.ts:2497-2508`), and restored via the `restoredTabState` payload built from the `tabKeys` allowlist in the provider's `ready` handler (`:2460-2470`). `vscode.setState` is only used for minor webview-local bits (pane collapse states, folder-modal state) and does not reach browser-surface clients.
+> **Replaced with:** Persist via the tab-state store: `persistTab('previews.source', source)` on change, add `'previews.source'` to the provider's `tabKeys` array, read it back in the `restoredTabState` handler.
 
 ## Complexity Audit
 
 ### Routine
-- Replace the three tab buttons (`data-tab="stitch-html"`, `data-tab="html-preview"`, `data-tab="images"`) in `#research-tab-bar` with a single `data-tab="previews"` button.
-- Add a `#previews-content` `.shared-tab-content` wrapper containing a source dropdown (`#previews-source-select`) modeled on `#design-source-select`, and move the three existing content bodies inside it as sub-panels (`#stitch-html-content`, `#html-preview-content`, `#images-content`).
-- Add a `change` handler on `#previews-source-select` that shows the selected sub-panel and hides the others, and persists the choice.
+- Replace the three tab buttons (`data-tab="stitch-html"` at `design.html:3634`, `data-tab="html-preview"` at `:3636`, `data-tab="images"` at `:3637`) with a single `data-tab="previews"` button.
+- Add a `#previews-content` `.shared-tab-content` wrapper containing a source dropdown (`#previews-source-select`) modeled on `#design-source-select`, and move the three existing content subtrees (`#stitch-html-content` `:3784`, `#html-preview-content` `:3875`, `#images-content` `:3943`) inside it as sub-panels, preserving every inner element id.
+- Add a `change` handler on `#previews-source-select` that shows the selected sub-panel, hides the others, and persists the choice.
+- Add `'previews.source'` to the provider `tabKeys` allowlist (`DesignPanelProvider.ts:2460`) — one-line, additive.
 
 ### Complex / Risky
-- **Persistence + restore:** add `previewsSource` to the `vscode.setState` payload (mirror `saveState`/`getState` usage in `design.js`, e.g. ~lines 2070, 4585). On load, read the persisted value, set the dropdown, and reveal the matching sub-panel. If the persisted `activeTab` was one of the removed tab ids (`stitch-html` / `html-preview` / `images`), map it to `previews` and set the dropdown to the corresponding source.
-- **Programmatic tab navigation:** existing code jumps directly to removed tabs, e.g. `document.querySelector('[data-tab="stitch-html"]')?.click()` (`design.js` ~line 2554) after a Stitch generation completes. Every such call site must be redirected to: click the PREVIEWS tab, set `#previews-source-select` to the intended source, and fire the source-change handler.
-- **`validTabs` + restore guard:** update the `validTabs` array (`design.js` ~line 3399) to replace the three removed ids with `previews`, and ensure the restore path (~line 3398) tolerates legacy persisted ids by mapping them forward.
+- **Effective-tab protocol (the load-bearing change):** the provider's seat/polling machinery keys on original tab ids — `activeTabChanged` clears `seat.htmlPreview`/`seat.stitchHtmlPreview` when the reported tab differs (`DesignPanelProvider.ts:2539-2552`), `_isPolledTab` only polls for `'html-preview' | 'claude' | 'images' | 'briefs'` (`:4307-4309`), and the poll loop reads folder sets per tab id (`:4362-4394`). The webview must keep reporting the *effective surface* (`'stitch-html'`/`'html-preview'`/`'images'`) in `activeTabChanged` whenever the PREVIEWS tab is active, so the provider needs no seat/poll changes at all.
+- **Tab-switch loop vs nested sub-panels:** `switchTab` strips `.active` from EVERY `.shared-tab-content` whose id doesn't match the incoming tab (`design.js:154-172`). If the moved panes keep that class, entering PREVIEWS deactivates all three sub-panels and the pane goes blank. The moved panes must swap `shared-tab-content` for a new `previews-subpanel` class so the dropdown handler solely owns their visibility.
+- **CSS id-specificity:** `#html-preview-content` / `#images-content` appear in an id-based display block (`design.html:175-198`) whose `display:none` + `height: calc(100vh - 40px)` beat any class rule on specificity. Those two ids must be removed from that block so the new `.previews-subpanel` rules own display and height (nested panels must flex-fill under the source strip, not re-claim full viewport height).
+- **Restore + legacy mapping:** update `validTabs` (`design.js:3434`) and the restore path (`:3432-3440`) to map legacy persisted ids forward.
 
 ## Edge-Case & Dependency Audit
-- **Per-source sub-state must survive the move:** each sub-panel keeps its own workspace filter, search box, sidebar-collapse state, and (for Images) zoom/pan listeners. Moving the markup under `#previews-content` must not change element ids, so existing handlers (`initZoomListeners('image-preview-container-images', …)`, search/filter bindings, `toggleSidebarCollapsed` branches for `#tree-pane-html` / `#tree-pane-images` / `#tree-pane-stitch-html`) keep resolving. Prefer relocating the existing DOM subtrees verbatim rather than rewriting them.
-- **Message routing unchanged:** the provider broadcasts `htmlDocsReady`, image previews, and Stitch-HTML updates keyed by `sourceId`. Because sub-panel element ids are preserved, the webview message handlers need no routing changes — only the *visibility* toggle moves from tab-switch to dropdown-change.
-- **Hidden sub-panels still receive updates:** currently a background `htmlDocsReady` updates the HTML tree even when the tab is not active. Preserve that: the dropdown controls visibility only; data handlers still run for all three sub-panels so switching sources shows fresh content without a reload.
-- **CSS active-display rules:** the `#*-content.active { display: … }` rules that currently gate the three tabs must be reworked so the *outer* `#previews-content.active` governs the tab, and an inner mechanism (e.g. a `.previews-subpanel.active` class or inline `display`) governs which source shows. Update every theme group (default, `.cyber-theme-enabled`, `body.theme-claudify`) consistently.
-- **Interaction with the Briefs-cut plan:** independent of `cut-briefs-tab-design-panel.md`. If Briefs is still present, this collapse takes the panel from 6 tabs to 4; after both plans, to 3 (STITCH, PREVIEWS, DESIGN SYSTEM). Neither plan depends on the other; apply in either order.
+
+### Race Conditions
+- **Transport reconnect (browser surface):** `design.js:9-20` re-asserts `activeTabChanged` on `sbTransportReconnected`. This site must also report the effective tab (source id when PREVIEWS is active), or a reconnect would desync the seat and stop polling. (Pre-existing defect at this site, out of scope but note: it queries `.tab-button.active`, a class that doesn't exist in this webview — buttons use `shared-tab-btn` — so it always falls through to `state.activeTab || 'html-preview'`, and `state.activeTab` is never written. Flagged to the user in review; this plan only requires the site to route through the same effective-tab helper.)
+- **Restore vs default:** the initial `switchTab(initialTab)` at load (`design.js:219-220`) runs before `restoredTabState` arrives; the restore handler then switches if the persisted tab differs — same two-step as today, no new race. The persisted `previews.source` must be applied before (or atomically with) any restore-driven `switchTab('previews')` so the effective-tab report is correct on first activation.
+
+### Security
+- No new surface. No new verbs (persistTabState already exists in `DESIGN_VERB_SCHEMAS` with a free-form `tabKey`), no new routes, no new file access. The provider change is one string in an allowlist array.
+
+### Side Effects
+- **Hidden sub-panels still receive updates:** provider broadcasts (`htmlDocsReady`, image lists, Stitch-HTML updates) render into the DOM regardless of visibility today; because element ids are preserved and message handlers are untouched, this behavior survives. The dropdown governs visibility only.
+- **Per-source sub-state survives:** workspace filters (`html.root`, `images.root`, `stitchHtml.projectId` etc. in the tab-state store), search boxes, sidebar-collapse state, and image zoom/pan (`zoomState` keys at `design.js:223-228` are name-based, not tab-id-based) all keep working because ids and handlers are unchanged.
+- **Seat preview-clearing semantics preserved:** with the effective-tab protocol, `seat.stitchHtmlPreview`/`seat.htmlPreview` clearing on tab exit (`DesignPanelProvider.ts:2542-2550`) behaves exactly as before — switching the dropdown from Stitch HTML to Images reports `'images'` and clears `seat.stitchHtmlPreview`, matching today's tab-switch behavior.
+
+### Dependencies & Conflicts
+- **`cut-briefs-tab-design-panel.md`:** independent — neither plan depends on the other; apply in either order. Both edit `validTabs` (`design.js:3434`) and the tab bar (`design.html:3633-3638`); whichever lands second resolves a trivial merge conflict at those two sites. Panel goes 6→4 tabs with this plan alone, 6→3 after both (STITCH, PREVIEWS, DESIGN SYSTEM).
+- **Per-client view-state work (uncommitted, in-flight):** this plan builds ON that mechanism (`persistTab`/`_stateStore`/seats). Coordinate: this plan must be coded against the tree with that work present.
+
+## Dependencies
+- None
+
+## Adversarial Synthesis
+Key risks: (1) breaking external-file polling and preview auto-refresh by reporting `'previews'` to the seat protocol — eliminated by the effective-tab design, which keeps the provider untouched; (2) blank sub-panels from `switchTab`'s global `.shared-tab-content` deactivation loop — eliminated by re-classing the moved panes; (3) stranding returning users whose persisted `activeTab` is a removed id — covered by the forward-mapping in the restore path. Mitigations are structural (protocol/class design), not test-only.
 
 ## Proposed Changes
 
 ### `src/webview/design.html`
-1. In `#research-tab-bar`, replace the `stitch-html`, `html-preview`, and `images` buttons with a single:
+1. In the tab bar (`:3633-3638`), replace the `stitch-html`, `html-preview`, and `images` buttons with a single:
    ```html
    <button class="shared-tab-btn" data-tab="previews">PREVIEWS</button>
    ```
-2. Add a `#previews-content` `.shared-tab-content` wrapper. At its top, a source strip modeled on the Design System source selector:
+2. Add a `#previews-content` `.shared-tab-content` wrapper (flex column). At its top, a source strip modeled on the Design System source selector:
    ```html
    <div style="display:flex; gap:8px; padding:6px 12px; border-bottom:1px solid var(--border-color,#333); background:var(--panel-bg2,#1a1a1a);">
        <select id="previews-source-select" class="workspace-filter-select" style="max-width:220px;">
@@ -55,35 +82,90 @@ The Design Panel currently has six top-level tabs. Three of them — STITCH HTML
        </select>
    </div>
    ```
-3. Move the existing `#stitch-html-content`, `#html-preview-content`, and `#images-content` subtrees inside `#previews-content` as sub-panels, **preserving all inner element ids**. Give each a common class (e.g. `previews-subpanel`) for visibility toggling.
-4. Rework the active-display CSS: `#previews-content.active` gates the tab; `.previews-subpanel` defaults to `display:none` and the selected one gets shown (via `.active` class or inline style). Apply across default, cyber, and claudify theme groups.
+3. Move the existing `#stitch-html-content` (`:3784`), `#html-preview-content` (`:3875`), and `#images-content` (`:3943`) subtrees verbatim inside `#previews-content`, **preserving all inner element ids**. On each moved root, replace class `shared-tab-content` with `previews-subpanel`.
+
+> **Superseded:** "Give each a common class (e.g. `previews-subpanel`) for visibility toggling" [in addition to `shared-tab-content`] and "Rework the active-display CSS … Apply across default, cyber, and claudify theme groups."
+> **Reason:** Two verified code facts change the mechanism. (a) `switchTab` strips `.active` from every `.shared-tab-content` whose id isn't `${tabName}-content` (`design.js:154-172`), so sub-panels keeping that class would be force-deactivated whenever any tab switch happens — the class must be *replaced*, not supplemented. (b) The theme groups need almost no rework: cyber/claudify rules on these panes are id-based styling (`design.html:2230`, `:2313`) that keeps applying unchanged; only the id-based *display/height* block (`:175-198`) conflicts, because `#html-preview-content { display:none; height: calc(100vh - 40px) }` beats any class rule on specificity.
+> **Replaced with:** (i) moved panes swap `shared-tab-content` → `previews-subpanel`; (ii) remove `#html-preview-content` and `#images-content` (and their `.active` partners) from the id-based display block at `:175-198` (`#stitch-html-content` was never in it); (iii) add one new theme-agnostic block: `#previews-content .previews-subpanel { display:none; flex-direction:column; flex:1 1 auto; min-height:0; }` and `#previews-content .previews-subpanel.active { display:flex; }`; (iv) leave all id-based theme styling rules untouched.
 
 ### `src/webview/design.js`
-1. `validTabs` (~line 3399): replace `'stitch-html'`, `'html-preview'`, `'images'` with `'previews'`.
-2. Add a `#previews-source-select` `change` handler: hide all `.previews-subpanel`, show the selected one, then `saveState()`.
-3. Persistence: add `previewsSource` to the `vscode.setState` payload; on init, read it (default `'stitch-html'`), set the dropdown value, and apply the visibility toggle.
-4. Restore mapping: in the panel-state restore path (~line 3398), if `activeTab` is a legacy `stitch-html`/`html-preview`/`images`, set `activeTab='previews'` and `previewsSource` to that value.
-5. Redirect programmatic navigation: replace `document.querySelector('[data-tab="stitch-html"]')?.click()` (~line 2554) and any analogous `[data-tab="html-preview"]` / `[data-tab="images"]` clicks with a helper `selectPreviewsSource(source)` that clicks the PREVIEWS tab, sets the dropdown, and fires the change handler.
-6. Leave `initZoomListeners('image-preview-container-images', …)`, search/filter bindings, and `toggleSidebarCollapsed` branches unchanged (ids preserved).
+1. `validTabs` (`:3434`): current value is `['stitch', 'briefs', 'html-preview', 'images', 'design']` — replace `'html-preview'` and `'images'` with `'previews'` (keep `'briefs'` unless the briefs-cut plan has landed).
+
+> **Superseded:** "`validTabs` (~line 3399): replace `'stitch-html'`, `'html-preview'`, `'images'` with `'previews'`."
+> **Reason:** Verified: `'stitch-html'` is NOT in the current `validTabs` array (`design.js:3434`) — a pre-existing gap, meaning a persisted `activeTab` of `'stitch-html'` never restored anyway (it silently fell back to the default tab). There is nothing to remove for it; there IS a persisted-value population to map forward, since `switchTab` has been persisting `'stitch-html'` all along.
+> **Replaced with:** Replace `'html-preview'`/`'images'` with `'previews'`; the legacy-mapping step below handles all three old ids (including `'stitch-html'`, incidentally fixing the pre-existing restore gap).
+
+2. Add a helper owning source selection (the single choke point):
+   ```js
+   function selectPreviewsSource(source) {
+       // source: 'stitch-html' | 'html-preview' | 'images'
+       const sel = document.getElementById('previews-source-select');
+       if (sel && sel.value !== source) sel.value = source;
+       document.querySelectorAll('#previews-content .previews-subpanel').forEach(p => {
+           p.classList.toggle('active', p.id === source + '-content');
+       });
+       // Seat protocol: report the EFFECTIVE surface, never 'previews' —
+       // _isPolledTab / seat preview-clearing key on the original ids.
+       vscode.postMessage({ type: 'activeTabChanged', tab: source });
+       // Per-source tab-entry behavior, relocated from switchTab:
+       if (source === 'stitch-html') {
+           populateStitchHtmlProjectSelect(state.stitchProjects || []);
+           vscode.postMessage({ type: 'stitchListProjects', workspaceRoot: state.stitchWorkspaceRoot });
+       } else {
+           vscode.postMessage({ type: 'refreshDocsForTab', tab: source });
+       }
+       persistTab('previews.source', source);
+   }
+   ```
+   Wire it to the dropdown's `change` event; track the current source in `state.previewsSource` (default `'stitch-html'`).
+3. `switchTab` (`:156-210`): on `tabName === 'previews'`, call `selectPreviewsSource(state.previewsSource)` instead of the removed per-tab branches (the `'stitch-html'` branch at `:191-198` moves into the helper; the `refreshDocsForTab` gate at `:203` drops `'html-preview'`/`'images'`, which now refresh via the helper). `persistTab('activeTab', 'previews')` (`:209`) stays as-is — `activeTabChanged` reports the effective source; `activeTab` persistence records the outer tab.
+4. Restore path (`:3432-3440`): read `(msg.panel || {})['previews.source']` into `state.previewsSource` (default `'stitch-html'`); if the persisted `activeTab` is a legacy `'stitch-html'`/`'html-preview'`/`'images'`, map it to `'previews'` with `state.previewsSource` set to the legacy value before calling `switchTab`.
+5. Redirect the one programmatic navigation to a removed tab:
+
+> **Superseded:** "existing code jumps directly to removed tabs, e.g. `document.querySelector('[data-tab=\"stitch-html\"]')?.click()` (`design.js` ~line 2554) after a Stitch generation completes. Every such call site must be redirected…"
+> **Reason:** Verified: there is exactly ONE such call site, at `design.js:2589`, and it is not a post-generation jump — it is the "Open in HTML Tab" button handler in the Stitch screen preview (`:2565-2591`), which pre-selects the project, posts `stitchHtmlListDocs`, clicks the tab, then opens the screen's cached file. The `[data-tab="stitch"]` clicks at `:3485` and `:5240-5242` target a surviving tab and need no change; there are no `[data-tab="html-preview"]` or `[data-tab="images"]` programmatic clicks.
+> **Replaced with:** In that handler, replace the `.click()` line with: click the PREVIEWS tab button, then `selectPreviewsSource('stitch-html')`; keep the surrounding `stitchHtmlListDocs` post and `loadDocumentPreview` call unchanged.
+
+6. Reconnect handler (`:9-20`): report the effective tab — if the active tab is `'previews'`, send `state.previewsSource`; otherwise send the active tab id.
+7. Leave `initZoomListeners`, search/filter bindings, and `toggleSidebarCollapsed` branches (`:529`: `#tree-pane-html` / `#tree-pane-images` / `#tree-pane-stitch-html`) unchanged — ids preserved.
 
 ### `src/services/DesignPanelProvider.ts`
-- No functional change expected (routing is by preserved `sourceId`). If the provider persists/echoes `activeTab`, extend it to also round-trip `previewsSource`, and map legacy `activeTab` values forward on read.
+
+> **Superseded:** "No functional change expected (routing is by preserved `sourceId`). If the provider persists/echoes `activeTab`, extend it to also round-trip `previewsSource`, and map legacy `activeTab` values forward on read."
+> **Reason:** Half right, and the wrong half was dangerous. Routing needs no change, but the provider's seat/poll machinery (`activeTabChanged` handler `:2539-2552`, `_isPolledTab` `:4307-4309`, `_polledTabsAcrossSeats` `:4311-4322`, poll-signature loop `:4362-4394`, `checkAndRefresh` `:4684-4710`) keys on original tab ids. Without the webview-side effective-tab protocol, external-file polling and preview auto-refresh silently die for all three collapsed surfaces — the panel would LOOK collapsed-and-working while background refresh is gone. Legacy-mapping on the provider read side is unnecessary; the webview restore path owns the mapping.
+> **Replaced with:** Exactly one provider change: add `'previews.source'` to the `tabKeys` array in the `ready` handler (`:2460`) so the persisted source is included in the `restoredTabState` payload. All seat/poll code is untouched because the webview keeps reporting effective tab ids.
 
 ## Verification Plan
 
 ### Automated Tests
-- `npm run compile` to confirm the webview bundle builds; no schema/verb changes expected.
+- None — session directive: skip compilation and automated tests for this plan. (Per repo build rule, `dist/` is not used during development; no compile step is required to validate `src/` changes.)
+
+> **Superseded:** "`npm run compile` to confirm the webview bundle builds; no schema/verb changes expected."
+> **Reason:** Session directive forbids compilation in this plan's verification. The "no schema/verb changes" half stands (persistTabState's schema takes any `tabKey`).
+> **Replaced with:** Manual verification only, below.
 
 ### Manual Verification
 1. Open the Design Panel — confirm the tab bar shows STITCH, PREVIEWS, DESIGN SYSTEM (plus BRIEFS only if that cut plan hasn't been applied).
 2. In PREVIEWS, switch the dropdown across Stitch HTML / HTML Previews / Images and confirm each sub-panel renders correctly, including image zoom/pan and per-source search/filter.
 3. Confirm each sub-panel's sidebar-collapse state and workspace filter behave independently and persist across reloads.
-4. Select Images, reload the webview, and confirm PREVIEWS reopens with the Images source selected (persistence).
-5. Run a Stitch generation and confirm the post-generation navigation lands on PREVIEWS with the Stitch HTML source selected (redirected `.click()` path).
-6. Load a panel state persisted with a legacy `activeTab` of `stitch-html`/`html-preview`/`images` and confirm it opens PREVIEWS with the mapped source (forward-migration of persisted tab id).
-7. Verify no CSS regressions in default and cyber themes; confirm hidden sub-panels still receive background `htmlDocsReady` updates (switching sources shows current content without a manual refresh).
+4. Select Images, reload the webview, and confirm PREVIEWS reopens with the Images source selected (persistence via `previews.source`).
+5. In the Stitch tab, open a screen preview and click "Open in HTML Tab" — confirm it lands on PREVIEWS with the Stitch HTML source selected and the screen's cached HTML open (redirected `:2589` path).
+6. With a tab-state store carrying a legacy `activeTab` of `stitch-html` / `html-preview` / `images`, open the panel and confirm it opens PREVIEWS with the mapped source (forward-migration of persisted tab id).
+7. **Poll-preservation check (the regression this plan is most likely to cause):** with PREVIEWS active on HTML Previews, create a new `.html` file in a configured folder from OUTSIDE VS Code — confirm the tree picks it up without switching tabs (proves `_isPolledTab` still sees `'html-preview'`). Repeat for Images.
+8. While PREVIEWS shows Images, drop a new file into an HTML folder, then switch the dropdown to HTML Previews — confirm the new file is listed (hidden sub-panels still receive background updates).
+9. Verify no CSS regressions in default, cyber, and claudify themes — the moved panes' id-based theme rules must still apply inside the wrapper.
 
 ## Risk Assessment
-- **Medium.** The mechanical move of three subtrees under one wrapper is low-risk *if* element ids are preserved. The real risks are: (1) the active-display CSS rework regressing visibility in one theme; (2) missed programmatic `.click()` navigations to the removed tab ids leaving dead post-generation jumps; (3) forgetting to forward-map legacy persisted `activeTab` values, stranding returning users on a missing tab. All three are covered by the verification steps and mitigated by preserving ids and adding the legacy-id mapping.
+- **Medium.** The DOM move is low-risk with ids preserved. The real risks are: (1) any `activeTabChanged` path reporting `'previews'` to the provider, silently killing folder polling and preview auto-refresh — mitigated by routing every report through `selectPreviewsSource`/the effective-tab rule and by Manual Verification step 7; (2) sub-panel blanking via `switchTab`'s global `.shared-tab-content` deactivation — mitigated by re-classing the moved panes; (3) id-specificity fights in the legacy display block — mitigated by removing the two ids from that block. Legacy persisted tab ids are forward-mapped, incidentally fixing the pre-existing `'stitch-html'` restore gap.
 
 **Recommendation:** Send to Coder
+
+## Completion Report
+Implemented single PREVIEWS tab replacing STITCH HTML, HTML PREVIEWS, and IMAGES tabs in the Design Panel. Added `#previews-source-select` dropdown with state persistence (`previews.source`) and legacy tab forward mapping. Preserved seat/polling protocols by emitting effective surface tab IDs in `activeTabChanged`.
+
+Files modified:
+- `src/services/DesignPanelProvider.ts`: Added `'previews.source'` to `tabKeys` allowlist.
+- `src/webview/design.html`: Collapsed preview tab buttons into PREVIEWS tab, added `#previews-source-select` strip, wrapped subpanels with `previews-subpanel` class, and updated CSS rules.
+- `src/webview/design.js`: Added `selectPreviewsSource` helper, updated `switchTab`, `sbTransportReconnected`, `restoredTabState`, and redirected Stitch screen HTML button click.
+
+No issues encountered.

@@ -8,6 +8,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { DefaultPromptOverride, CustomAgentAddons } from './agentConfig';
+import { extractDesignSystemTokens, ExtractedDesignSystem } from './designSystemTokens';
 
 // One-time diagnostic for the ticket_updater mode collapse. Users who configured
 // 'refine-ticket' or 'research-and-refine' (modes that rewrote ticket descriptions)
@@ -290,6 +291,11 @@ export interface PromptBuilderOptions {
      * When empty/absent, no PRD block is emitted.
      */
     prdReferences?: Array<{ projectName: string; prdLink: string }>;
+    /**
+     * Per-project Design System links resolved from the plans' own project fields.
+     * When empty/absent, no design system block is emitted.
+     */
+    designSystemReferences?: Array<{ projectName: string; designSystemLink: string }>;
     /**
      * The feature's `feature_worktree_mode` snapshot ('none' | 'per-feature').
      * Only meaningful when featureMode is true. The per-subtask/high-low variants
@@ -625,6 +631,75 @@ function buildPrdReferenceBlockFromRefs(refs: Array<{ projectName: string; prdLi
 export function buildPrdReferenceBlock(options: PromptBuilderOptions | undefined, role: string): string {
     if (role === 'tester') return '';
     return buildPrdReferenceBlockFromRefs(options?.prdReferences);
+}
+
+export function buildDesignSystemReferencesBlockFromRefs(refs: Array<{ projectName: string; designSystemLink: string }> | undefined, role?: string): string {
+    if (!refs || refs.length === 0) return '';
+    const blocks: string[] = [];
+    for (const r of refs) {
+        if (!r.designSystemLink || !fs.existsSync(r.designSystemLink)) continue;
+        let content = '';
+        try {
+            content = fs.readFileSync(r.designSystemLink, 'utf8');
+        } catch {}
+        const block = buildDesignSystemBlock({
+            link: r.designSystemLink,
+            content,
+            mode: role === 'reviewer' ? 'review' : 'author'
+        });
+        if (block) {
+            blocks.push(refs.length > 1 ? `### Project "${r.projectName}" Design System:\n${block.trim()}` : block.trim());
+        }
+    }
+    return blocks.join('\n\n');
+}
+
+export function buildDesignSystemBlock(opts: {
+    link?: string;
+    content?: string;
+    mode?: 'author' | 'review';
+    tokens?: ExtractedDesignSystem;
+}): string {
+    const link = opts.link?.trim();
+    const content = opts.content?.trim();
+    if (!content && !link) return '';
+
+    const header = opts.mode === 'review' ? 'DESIGN SYSTEM REVIEW CONSTRAINTS' : 'DESIGN SYSTEM';
+    const description = opts.mode === 'review'
+        ? "The following design system rules, tokens, and visual conventions MUST be checked during review. Verify implementation conforms to these specifications."
+        : "The following is the project's design system — the visual and UI conventions (tokens, components, layout, interaction patterns) this work MUST conform to. It complements the PRD (which defines what to build); the design system defines how it must look and behave.";
+
+    let parsedTokens = opts.tokens;
+    if (!parsedTokens && content && (content.includes('<html') || content.includes('<style') || content.includes('--'))) {
+        parsedTokens = extractDesignSystemTokens(content);
+    }
+
+    if (parsedTokens && (parsedTokens.groups.length > 0 || parsedTokens.sections.length > 0)) {
+        let tokenTableText = '';
+        if (parsedTokens.groups.length > 0) {
+            tokenTableText += '\n\n### Extracted CSS Tokens:\n';
+            for (const group of parsedTokens.groups) {
+                tokenTableText += `\n**Scheme: ${group.scheme.toUpperCase()}**\n| Token Name | Value |\n| --- | --- |\n`;
+                for (const t of group.tokens) {
+                    tokenTableText += `| \`${t.name}\` | \`${t.value}\` |\n`;
+                }
+            }
+            if (parsedTokens.truncated) {
+                tokenTableText += '\n*(Token list capped due to size limits)*\n';
+            }
+        }
+
+        if (parsedTokens.sections.length > 0) {
+            tokenTableText += `\n\n### Component & Section Inventory:\n${parsedTokens.sections.map(s => `- ${s}`).join('\n')}\n`;
+        }
+
+        return `\n\n${header} (pre-fetched tokens & inventory):\n${description}${tokenTableText}\n\nFull Reference Doc:\n${content}`;
+    }
+
+    if (content) {
+        return `\n\n${header} (pre-fetched):\n${description}\n\n${content}`;
+    }
+    return `\n\n${header}:\n${description}\n${link}`;
 }
 
 export const INLINE_CHALLENGE_DIRECTIVE = `For each plan, before implementation:
@@ -1034,7 +1109,8 @@ export function buildKanbanBatchPrompt(
     // suffixBlock (planner, lead, coder, reviewer, tester, …) without
     // touching each role branch — same pattern as the §11 remote-mode block.
     const prdBlock = buildPrdReferenceBlock(options, role);
-    const dispatchPrefixCore = [dispatchContextBlock, worktreeBlock, remoteModeBlock, prdBlock].filter(Boolean).join('\n\n');
+    const dsReferencesBlock = buildDesignSystemReferencesBlockFromRefs(options?.designSystemReferences, role);
+    const dispatchPrefixCore = [dispatchContextBlock, worktreeBlock, remoteModeBlock, prdBlock, dsReferencesBlock].filter(Boolean).join('\n\n');
     const dispatchContextPrefix = dispatchPrefixCore ? `${dispatchPrefixCore}\n\n` : '';
     // §3 — Feature directive is separated from planList so it can be placed
     // before the PLANS TO PROCESS heading rather than under it.
@@ -1152,14 +1228,14 @@ export function buildKanbanBatchPrompt(
             plannerPrompt += `\n\nPROJECT CONSTITUTION:\nThe following are inviolate rules and invariants for this project:\n\n${constitutionContent}`;
         }
 
-        const designSystemDocLink = options?.designSystemDocLink?.trim();
-        if (designSystemDocLink) {
-            plannerPrompt += `\n\nPROJECT PRD REFERENCE:\nThe following project PRD provides the product requirements and design specifications. Use it as context for implementation decisions:\n${designSystemDocLink}`;
-        }
-
-        const designSystemDocContent = options?.designSystemDocContent?.trim();
-        if (designSystemDocContent) {
-            plannerPrompt += `\n\nPROJECT PRD REFERENCE (pre-fetched):\nThe following is the full content of the project's PRD. Use it as context for implementation decisions:\n\n${designSystemDocContent}`;
+        if (!options?.designSystemReferences || options.designSystemReferences.length === 0) {
+            const dsBlock = buildDesignSystemBlock({
+                link: options?.designSystemDocLink,
+                content: options?.designSystemDocContent
+            });
+            if (dsBlock) {
+                plannerPrompt += dsBlock;
+            }
         }
 
         return normalizeNewlines(plannerPrompt);
@@ -1851,10 +1927,17 @@ export function buildCustomAgentPrompt(
 
     if (addons?.researchEnabled) prompt += `\n\n${DEEP_RESEARCH_DIRECTIVE}`;
 
-    if (addons?.designSystemDocContent) {
-        prompt += `\n\nPROJECT PRD REFERENCE (pre-fetched):\n${addons.designSystemDocContent}`;
-    } else if (addons?.designSystemDocLink) {
-        prompt += `\n\nPROJECT PRD REFERENCE:\n${addons.designSystemDocLink}`;
+    const customDsRefsBlock = buildDesignSystemReferencesBlockFromRefs(addons?.designSystemReferences);
+    if (customDsRefsBlock) {
+        prompt += `\n\n${customDsRefsBlock}`;
+    } else {
+        const customDsBlock = buildDesignSystemBlock({
+            link: addons?.designSystemDocLink,
+            content: addons?.designSystemDocContent
+        });
+        if (customDsBlock) {
+            prompt += customDsBlock;
+        }
     }
 
     if (addons?.constitutionContent) {

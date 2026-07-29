@@ -56,7 +56,8 @@ suite('KanbanProvider', () => {
             const cards = makeCards(1);
             const mockDb = {
                 ensureReady: sandbox.stub().resolves(true),
-                getPlanBySessionId: sandbox.stub().resolves(undefined)
+                getPlanBySessionId: sandbox.stub().resolves(undefined),
+                getConfig: sandbox.stub().resolves(null)
             };
             sandbox.stub(provider as any, '_getKanbanDb').returns(mockDb);
             sandbox.stub(provider as any, '_getDefaultPromptOverrides').resolves({});
@@ -419,6 +420,8 @@ Manual verification steps:
 
     suite('refreshWithData', () => {
         test('filters out active ghost plans but preserves all completed plans', async () => {
+            (provider as any)._currentWorkspaceRoot = workspaceRoot;
+            sandbox.stub(provider as any, 'resolveEffectiveWorkspaceRoot').callsFake((r: any) => path.resolve(r));
             const resolvedWorkspaceRoot = path.resolve(workspaceRoot);
             const activeRows: any[] = [
                 { planId: 'active-1', sessionId: 's1', planFile: 'exists.md', kanbanColumn: 'CREATED' },
@@ -445,7 +448,10 @@ Manual verification steps:
                 getWorkspaceId: sandbox.stub().resolves('test-workspace'),
                 getDataVersion: sandbox.stub().returns(0),
                 getProjects: sandbox.stub().resolves([]),
-                getWorktrees: sandbox.stub().resolves([])
+                getWorktrees: sandbox.stub().resolves([]),
+                getConfig: sandbox.stub().resolves(null),
+                getSubtaskCountsByFeature: sandbox.stub().resolves(new Map()),
+                getFeatureWorkingStates: sandbox.stub().resolves(new Map())
             };
             sandbox.stub(provider as any, '_getKanbanDb').returns(mockDb);
 
@@ -462,6 +468,7 @@ Manual verification steps:
             sandbox.stub(provider as any, '_getCustomKanbanColumns').resolves([]);
             sandbox.stub(provider as any, '_getVisibleAgents').resolves({});
             sandbox.stub(provider as any, '_getWorkspaceItems').returns([]);
+            sandbox.stub(provider as any, '_getAllWorkspaceProjects').resolves({});
 
             await provider.refreshWithData(activeRows, completedRows, workspaceRoot);
 
@@ -491,7 +498,10 @@ Manual verification steps:
     suite('selectWorkspace filter reset', () => {
         test('clears projectFilter when switching workspaces via handleMessage', async () => {
             const provider = new KanbanProvider(vscode.Uri.file('/test'), mockContext);
-            sandbox.stub(provider as any, 'setCurrentWorkspaceRoot').returns(true);
+            sandbox.stub(provider as any, 'setCurrentWorkspaceRoot').callsFake((wsRoot: any) => {
+                (provider as any)._currentWorkspaceRoot = wsRoot;
+                return true;
+            });
             sandbox.stub(provider as any, '_setupSessionWatcher').returns(undefined);
             sandbox.stub(provider as any, '_refreshBoard').resolves();
 
@@ -546,40 +556,15 @@ Manual verification steps:
     });
 
     suite('project filter persistence', () => {
-        test('constructor restores persisted project filter for resolved workspace', () => {
+        test('resolveAuthoringProject restores persisted project filter from DB config', async () => {
             const testRoot = '/test/workspace';
-            const resolvedRoot = path.resolve(testRoot);
-
-            sandbox.stub(KanbanProvider.prototype as any, '_getWorkspaceRoots').returns([testRoot]);
-
-            const customContext = {
-                extensionUri: vscode.Uri.file('/test'),
-                workspaceState: {
-                    get: sandbox.stub().callsFake((key: string, def: any) => {
-                        if (key === 'kanban.lastSelectedWorkspace') {
-                            return { index: 0, name: 'workspace', pathSegments: ['test', 'workspace'] };
-                        }
-                        if (key === `kanban.projectFilter.${resolvedRoot}`) {
-                            return 'MyProject';
-                        }
-                        return def;
-                    }),
-                    update: sandbox.stub().resolves()
-                },
-                globalState: {
-                    get: sandbox.stub().callsFake((_key: string, def: any) => def),
-                    update: sandbox.stub().resolves()
-                },
-                secrets: {
-                    get: sandbox.stub().resolves(''),
-                    store: sandbox.stub().resolves(),
-                    delete: sandbox.stub().resolves()
-                }
+            const mockDb = {
+                getConfig: sandbox.stub().withArgs('kanban.activeProjectFilter').resolves('MyProject')
             };
+            sandbox.stub(provider as any, '_getKanbanDb').returns(mockDb);
 
-            const restoreProvider = new KanbanProvider(vscode.Uri.file('/test'), customContext as any);
-            assert.strictEqual(restoreProvider.getProjectFilter(), 'MyProject');
-            assert.strictEqual((restoreProvider as any)._projectFilterNeedsValidation, true);
+            const project = await provider.resolveAuthoringProject(testRoot);
+            assert.strictEqual(project, 'MyProject');
         });
 
         test('invalid persisted project filter falls back to UNASSIGNED_PROJECT_FILTER on first refresh', async () => {

@@ -223,7 +223,17 @@
                         } else {
                             showTransportError(text);
                         }
-                        return;
+                        // A TYPED failure body is an ADDRESSED reply, not just a status
+                        // line: the panel's own handler owns the recovery UI (e.g.
+                        // `previewError` hides the preview loading state and restores the
+                        // initial state — design.js). Returning here would leave that
+                        // spinner running forever behind a transient toast, so a typed
+                        // body still falls through to dispatchMessage below (which is also
+                        // the pre-existing behaviour for every failure body). Only an
+                        // UNTYPED failure — which no handler could route — stops here.
+                        if (typeof result.type !== 'string') {
+                            return;
+                        }
                     }
                     // Re-dispatch the in-body response as a MessageEvent so request/response
                     // verbs (fetchKanbanPlans -> kanbanPlansReady, updateWorkspaceSelection, etc.)

@@ -356,6 +356,14 @@ export class AgentSkillExporter {
             lines.push('(Ask the user to paste the relevant PRD content if you cannot access a file.)');
             lines.push('');
         }
+        if (addons.designSystemReferences && addons.designSystemReferences.length > 0) {
+            lines.push('### Per-Project Design System References');
+            for (const ref of addons.designSystemReferences) {
+                lines.push(`- **${ref.projectName}**: ${ref.designSystemLink}`);
+            }
+            lines.push('(Ask the user to paste the relevant Design System content if you cannot access a file.)');
+            lines.push('');
+        }
         if (addons.workflowFilePathEnabled && addons.workflowFilePath) {
             lines.push('### Workflow File');
             lines.push(`Follow the workflow defined in: ${addons.workflowFilePath}`);

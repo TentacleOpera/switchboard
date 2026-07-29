@@ -182,7 +182,7 @@ interface LocalApiServerOptions {
     /**
      * Allow-list source for `GET /design/asset` — the headless replacement for
      * `webview.asWebviewUri` on local design/image assets. Returns the absolute
-     * Design/HTML/Claude/Briefs/Images folder paths the DesignPanelProvider has
+     * Design/HTML/Claude/Images folder paths the DesignPanelProvider has
      * configured for `workspaceRoot`. The provider owns this list so the HTTP route
      * cannot drift from the provider's own preview-path validation. Absent ⇒ the
      * route answers 503 rather than guessing a looser rule.
@@ -849,7 +849,7 @@ export class LocalApiServer {
      *    workspaces work — a preview built for a secondary root cannot know which
      *    root to name, and naming the wrong one would 403 a legitimate image.
      *  - `path` must resolve inside one of the provider's configured
-     *    Design/HTML/Claude/Briefs/Images folders. The allow-list is produced by
+     *    Design/HTML/Claude/Images folders. The allow-list is produced by
      *    the provider itself so the route can't drift from the provider's own
      *    preview validation.
      *  - Both the requested path and each allowed folder are realpath'd before the

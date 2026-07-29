@@ -77,3 +77,6 @@ Key risks: (1) drifting into building a CSS-inference engine in TypeScript — h
 - No migration concern: additive second entry point into an additive feature.
 
 **Recommendation:** Send to Coder
+
+## Completion Summary
+Extended `.agents/skills/design-system-builder/SKILL.md` with derivation protocol from existing apps, stylesheets, and screenshots. Implemented fast-path custom property detection using `extractTokensFromCss`, near-duplicate color/spacing clustering, visual approximation flagging for screenshots, and user confirmation before writing into `design-system.html`. Files changed: `.agents/skills/design-system-builder/SKILL.md`. No issues encountered.

@@ -71,3 +71,6 @@ Key risks: (1) accidentally renaming the addon carrier fields and rippling into 
 > **Superseded:** Recommendation: Send to Coder.
 > **Reason:** Complexity is 3, and the routing rubric maps 1–3 to Intern. The work is a specified-signature helper extraction plus two call-site swaps in one file; the signature contract is already written down above.
 > **Replaced with:** Send to Intern.
+
+## Completion Summary
+Extracted `buildDesignSystemBlock` helper in `src/services/agentPromptBuilder.ts` with signature `{ link?, content?, mode?, tokens? }` and framing text for `DESIGN SYSTEM`. Replaced mislabeled `PROJECT PRD REFERENCE` injections in both planner prompt builder and custom-agent prompt builder paths with `buildDesignSystemBlock`. Files changed: `src/services/agentPromptBuilder.ts`. No issues encountered.

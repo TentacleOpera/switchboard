@@ -89,6 +89,10 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
         source: 'skills/create-feature-from-plans', name: 'create-feature-from-plans', invocation: 'default',
         descriptionFallback: 'Create a Switchboard feature from a known set of plans — no discovery, just mechanics. Use when the user already knows which plans to group.'
     },
+    {
+        source: 'skills/design-system-builder', name: 'design-system-builder', invocation: 'default',
+        descriptionFallback: 'Interactively build or refine a project\'s HTML design system via an agent interview'
+    },
 
     // Side-effecting proxy skills → disable-model-invocation (explicit /name only).
     {

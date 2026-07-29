@@ -1058,6 +1058,10 @@
             cursor: pointer;
             border-radius: 2px;
             transition: all 0.15s;
+            min-height: 22px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
         }
 
         .card-btn:hover {
@@ -1079,8 +1083,8 @@
 
         .card-btn.icon-btn {
             padding: 4px;
-            width: 20px;
-            height: 20px;
+            width: 22px;
+            height: 22px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -1094,7 +1098,6 @@
         }
         .card-btn.copy.copied {
             animation: copyFlash 1.5s ease-out forwards;
-            pointer-events: none;
         }
 
         /* Card Copy Button — dispatch failed, prompt ready */
@@ -6288,62 +6291,106 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 });
             });
 
-            document.querySelectorAll('.card-btn.copy').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const column = btn.dataset.column || btn.closest('.kanban-column')?.dataset?.column;
-                    const sessionId = btn.dataset.planId || btn.dataset.session || '';
-                    
-                    // Optimistic UI: highlight target column and move card immediately
-                    let nextCol = null;
-                    let backendColumn = column;
-                    if (column) {
-                        // Handle coded columns: resolve to last visible coded column before calling getNextColumn
-                        // Pattern matches column header handler (lines 3815-3820) and card rendering (lines 4293-4301)
-                        // CRITICAL: Do NOT resolve to 'CODED_AUTO' — it is not in the `columns` array
-                        let nextColSource = column;
-                        if (CODED_IDS.includes(column) || column === 'CODED_AUTO') {
-                            const visibleCodedIds = CODED_IDS.filter(id => columns.includes(id));
-                            nextColSource = visibleCodedIds[visibleCodedIds.length - 1] || 'CODER CODED';
-                            backendColumn = (column === 'CODED_AUTO') ? (columnDefinitions.find(d => d.kind === 'coded')?.id || 'LEAD CODED') : column;
-                        }
-                        nextCol = getNextColumn(nextColSource);
+            function runCopyPrompt(btn) {
+                const column = btn.dataset.column || btn.closest('.kanban-column')?.dataset?.column;
+                const sessionId = btn.dataset.planId || btn.dataset.session || '';
+                
+                // Optimistic UI: highlight target column and move card immediately
+                let nextCol = null;
+                let backendColumn = column;
+                if (column) {
+                    // Handle coded columns: resolve to last visible coded column before calling getNextColumn
+                    // Pattern matches column header handler (lines 3815-3820) and card rendering (lines 4293-4301)
+                    // CRITICAL: Do NOT resolve to 'CODED_AUTO' — it is not in the `columns` array
+                    let nextColSource = column;
+                    if (CODED_IDS.includes(column) || column === 'CODED_AUTO') {
+                        const visibleCodedIds = CODED_IDS.filter(id => columns.includes(id));
+                        nextColSource = visibleCodedIds[visibleCodedIds.length - 1] || 'CODER CODED';
+                        backendColumn = (column === 'CODED_AUTO') ? (columnDefinitions.find(d => d.kind === 'coded')?.id || 'LEAD CODED') : column;
+                    }
+                    nextCol = getNextColumn(nextColSource);
 
-                        // PLAN REVIEWED advances are routed by the BACKEND (_partitionByComplexityRoute).
-                        // The optimistic move must either predict that exactly or not move at all —
-                        // otherwise the backend's moveCards delta bounces the card to the real column.
-                        if (column === 'PLAN REVIEWED' && dynamicComplexityRoutingEnabled) {
-                            const card = currentCards.find(c => (c.planId || c.sessionId) === sessionId);
-                            const score = parseInt(card?.complexity, 10);
-                            const pairModeActive =
-                                (document.getElementById('pairProgrammingModeSelect')?.value || 'off') !== 'off';
-                            if (isNaN(score) || pairModeActive || score < 1 || score > 10) {
-                                // Not confident the FE prediction matches the BE. Suppress the optimistic
-                                // cross-stage move; the backend moveCards delta is authoritative.
-                                nextCol = null;
-                            } else {
-                                // Confident: mirror the backend's complexity route so there is one clean move.
-                                const routedTarget = resolveCodedAutoTarget(card);
-                                if (routedTarget) nextCol = routedTarget;
-                            }
-                        }
-
-                        if (nextCol) {
-                            const domNextCol = resolveDomColumn(nextCol);
-                            const targetBody = document.getElementById('col-' + domNextCol);
-                            if (targetBody) {
-                                targetBody.classList.add('highlight');
-                                targetBody.addEventListener('animationend', () => targetBody.classList.remove('highlight'), { once: true });
-                            }
-                            moveCardsOptimistically([sessionId], column, nextCol);
+                    // PLAN REVIEWED advances are routed by the BACKEND (_partitionByComplexityRoute).
+                    // The optimistic move must either predict that exactly or not move at all —
+                    // otherwise the backend's moveCards delta bounces the card to the real column.
+                    if (column === 'PLAN REVIEWED' && dynamicComplexityRoutingEnabled) {
+                        const card = currentCards.find(c => (c.planId || c.sessionId) === sessionId);
+                        const score = parseInt(card?.complexity, 10);
+                        const pairModeActive =
+                            (document.getElementById('pairProgrammingModeSelect')?.value || 'off') !== 'off';
+                        if (isNaN(score) || pairModeActive || score < 1 || score > 10) {
+                            // Not confident the FE prediction matches the BE. Suppress the optimistic
+                            // cross-stage move; the backend moveCards delta is authoritative.
+                            nextCol = null;
+                        } else {
+                            // Confident: mirror the backend's complexity route so there is one clean move.
+                            const routedTarget = resolveCodedAutoTarget(card);
+                            if (routedTarget) nextCol = routedTarget;
                         }
                     }
-                    
-                    postKanbanMessage({
-                        type: 'promptSelected',
-                        column: backendColumn,
-                        sessionIds: [sessionId],
-                        workspaceRoot: btn.dataset.workspaceRoot
-                    });
+
+                    if (nextCol) {
+                        const domNextCol = resolveDomColumn(nextCol);
+                        const targetBody = document.getElementById('col-' + domNextCol);
+                        if (targetBody) {
+                            targetBody.classList.add('highlight');
+                            targetBody.addEventListener('animationend', () => targetBody.classList.remove('highlight'), { once: true });
+                        }
+                        moveCardsOptimistically([sessionId], column, nextCol);
+                    }
+                }
+                
+                postKanbanMessage({
+                    type: 'promptSelected',
+                    column: backendColumn,
+                    sessionIds: [sessionId],
+                    workspaceRoot: btn.dataset.workspaceRoot
+                });
+            }
+
+            document.querySelectorAll('.card-btn.copy').forEach(btn => {
+                btn.addEventListener('pointerdown', (e) => {
+                    if (e.button !== 0) return;
+                    try {
+                        btn.setPointerCapture(e.pointerId);
+                    } catch (_) {}
+                    let activePointerId = e.pointerId;
+
+                    const cleanup = () => {
+                        btn.removeEventListener('pointerup', onPointerUp);
+                        btn.removeEventListener('pointercancel', onCleanup);
+                        btn.removeEventListener('lostpointercapture', onCleanup);
+                        try {
+                            if (activePointerId !== null && btn.hasPointerCapture(activePointerId)) {
+                                btn.releasePointerCapture(activePointerId);
+                            }
+                        } catch (_) {}
+                        activePointerId = null;
+                    };
+
+                    const onCleanup = () => {
+                        cleanup();
+                    };
+
+                    const onPointerUp = (upEvt) => {
+                        if (upEvt.pointerId !== activePointerId) return;
+                        const rect = btn.getBoundingClientRect();
+                        const slop = 8;
+                        const inBounds =
+                            upEvt.clientX >= rect.left - slop &&
+                            upEvt.clientX <= rect.right + slop &&
+                            upEvt.clientY >= rect.top - slop &&
+                            upEvt.clientY <= rect.bottom + slop;
+
+                        cleanup();
+                        if (inBounds) {
+                            runCopyPrompt(btn);
+                        }
+                    };
+
+                    btn.addEventListener('pointerup', onPointerUp);
+                    btn.addEventListener('pointercancel', onCleanup);
+                    btn.addEventListener('lostpointercapture', onCleanup);
                 });
             });
 
@@ -6676,8 +6723,29 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         // Drag & Drop handlers
         let draggedSessionId = null;
+        let buttonPressCardEl = null;
+
+        document.addEventListener('pointerdown', (e) => {
+            const btn = e.target instanceof Element ? e.target.closest('button') : null;
+            if (!btn) return;
+            const card = btn.closest('.kanban-card');
+            if (!card) return;
+            card.draggable = false;
+            buttonPressCardEl = card;
+            const rearm = () => {
+                card.draggable = true;
+                buttonPressCardEl = null;
+                document.removeEventListener('pointerup', rearm, true);
+                document.removeEventListener('pointercancel', rearm, true);
+                document.removeEventListener('dragend', rearm, true);
+            };
+            document.addEventListener('pointerup', rearm, true);
+            document.addEventListener('pointercancel', rearm, true);
+            document.addEventListener('dragend', rearm, true);
+        }, true);
 
         function handleDragStart(e) {
+            if (buttonPressCardEl) { e.preventDefault(); return; }
             const draggedCardEl =
                 (e.currentTarget && e.currentTarget.classList && e.currentTarget.classList.contains('kanban-card'))
                     ? e.currentTarget

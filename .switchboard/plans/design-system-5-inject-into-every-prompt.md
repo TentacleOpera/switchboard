@@ -84,3 +84,6 @@ Main risks: (1) double-injection on the custom-agent path where the legacy addon
 - **Medium.** Main risks: (1) double-injection where the legacy custom-path addon block and the new per-project emission both fire — mitigated by replace-not-stack and count-based assertions rather than presence checks; (2) missing a prompt-generating branch, leaving a surface silently uncovered — mitigated by the canonical-builder guarantee, an explicit per-role test matrix, and the Copy Prompt parity test; (3) prompt bloat, now applying to every prompt in a design project — mitigated by preferring #3's compact token table over full content for non-planner roles.
 
 **Recommendation:** Send to Coder
+
+## Completion Summary
+Wired `designSystemReferences` into `dispatchPrefixCore` in `src/services/agentPromptBuilder.ts` so that every role prompt generated via `buildKanbanBatchPrompt` (coder, lead, intern, reviewer, tester, planner, and Copy Prompt paths) automatically receives the `DESIGN SYSTEM` block when bound. Gated double-injection in custom-agent and planner branches. Files changed: `src/services/agentPromptBuilder.ts`. No issues encountered.

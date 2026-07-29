@@ -15,6 +15,9 @@ import { LocalFolderService } from './LocalFolderService';
 import { TaskViewerProvider } from './TaskViewerProvider';
 import { PanelStateStore } from './PanelStateStore';
 import { buildWorkspaceItems } from './workspaceUtils';
+import { buildDesignSystemBlock } from './agentPromptBuilder';
+import { getProjectDesignSystemPath } from './designSystemUtils';
+import { STARTER_DESIGN_SYSTEM_HTML } from './designSystemStarterTemplate';
 
 // @google/stitch-sdk is ESM-only (its exports map has no "require" condition), so a
 // static import fails resolution in this CJS bundle. A dynamic import() resolves it via
@@ -174,7 +177,7 @@ export class DesignPanelProvider implements vscode.Disposable {
 
     /**
      * Absolute folder paths the `GET /design/asset` route is allowed to serve from
-     * for `workspaceRoot` — exactly the user-configured Design/HTML/Claude/Briefs/
+     * for `workspaceRoot` — exactly the user-configured Design/HTML/Claude/
      * Images folders this provider previews from. The allow-list lives here (not in
      * LocalApiServer) so the HTTP route and the provider's own preview validation
      * can never drift apart.
@@ -186,7 +189,6 @@ export class DesignPanelProvider implements vscode.Disposable {
                 ...service.getDesignFolderPaths(),
                 ...service.getHtmlFolderPaths(),
                 ...service.getClaudeFolderPaths(),
-                ...service.getBriefsFolderPaths(),
                 ...service.getImagesFolderPaths(),
             ].filter(Boolean);
         } catch {
@@ -218,7 +220,6 @@ export class DesignPanelProvider implements vscode.Disposable {
     private _claudeFolderWatchers: HostWatchHandle[] = [];
     private _designFolderWatchers: HostWatchHandle[] = [];
     private _imagesFolderWatchers: HostWatchHandle[] = [];
-    private _briefsFolderWatchers: HostWatchHandle[] = [];
     private _stitchHtmlFolderWatchers: HostWatchHandle[] = [];
     // Native fs.watch fallbacks for out-of-workspace folders where VS Code's
     // createFileSystemWatcher silently drops events (macOS fsevents, Linux
@@ -232,7 +233,6 @@ export class DesignPanelProvider implements vscode.Disposable {
     private _claudeDocsDebounce?: NodeJS.Timeout;
     private _designDocsDebounce?: NodeJS.Timeout;
     private _imagesDocsDebounce?: NodeJS.Timeout;
-    private _briefsDocsDebounce?: NodeJS.Timeout;
     private _seats = new Map<string, {
         activeTab: string;
         htmlPreview: { sourceFolder: string; docId: string; sourceId: string } | null;
@@ -610,6 +610,14 @@ setTimeout(reportDims, 0);
             this._disposables
         );
 
+        // MUST run after `_panel` is assigned and BEFORE any push. It constructs the
+        // BroadcastHub (or re-binds an existing one's webview target via setWebview,
+        // flushing anything queued while no panel was open). Without it: no WS fan-out
+        // at all, and — if an HTTP verb already lazily built the hub with no panel
+        // bound — every `pushWebviewOnly` reply rots in `_pendingWebviewMessages`
+        // and the editor panel goes silently dead. Do not remove.
+        this._initDesignService();
+
         this._panel.onDidDispose(() => {
             this._panel = undefined;
             this._broadcaster?.setWebview(null);
@@ -623,7 +631,6 @@ setTimeout(reportDims, 0);
         this._setupClaudeFolderWatchers();
         this._setupDesignFolderWatchers();
         this._setupImagesFolderWatchers();
-        this._setupBriefsFolderWatchers();
         this._registerSaveTextDocListener();
 
         this._disposables.push(
@@ -637,13 +644,11 @@ setTimeout(reportDims, 0);
                 this._setupClaudeFolderWatchers();
                 this._setupDesignFolderWatchers();
                 this._setupImagesFolderWatchers();
-                this._setupBriefsFolderWatchers();
                 void this._setupStitchHtmlFolderWatchers().catch(() => {});
                 await this._sendHtmlDocsReady();
                 await this._sendClaudeDocsReady();
                 await this._sendDesignDocsReady();
                 await this._sendImagesDocsReady();
-                await this._sendBriefsDocsReady();
             })
         );
 
@@ -690,9 +695,16 @@ setTimeout(reportDims, 0);
         // update those URIs point at the previous version's install dir (404 → blocked
         // scripts on the restored panel). Re-applying them keeps restored panels working
         // across updates. Mirrors the localResourceRoots set in open().
-        (this._panel as any).options = {
+        //
+        // This MUST be `webview.options` (a mutable `WebviewOptions`), never
+        // `panel.options`: `WebviewPanel.options` is a getter-only `WebviewPanelOptions`
+        // in the extension host, so assigning to it (even behind `as any`) throws
+        // TypeError under the strict-mode emit `strict: true` implies — killing the
+        // restore before `webview.html` is set. `retainContextWhenHidden` is a
+        // creation-time panel option, not a webview option; it is persisted from the
+        // original `createWebviewPanel` call and cannot be re-applied here.
+        this._panel.webview.options = {
             enableScripts: true,
-            retainContextWhenHidden: true,
             localResourceRoots: [
                 vscode.Uri.joinPath(this._extensionUri, 'dist'),
                 vscode.Uri.joinPath(this._extensionUri, 'webview'),
@@ -725,7 +737,6 @@ setTimeout(reportDims, 0);
         this._setupClaudeFolderWatchers();
         this._setupDesignFolderWatchers();
         this._setupImagesFolderWatchers();
-        this._setupBriefsFolderWatchers();
         this._registerSaveTextDocListener();
 
         // Replicate the workspace-folder-change listener from open() so restored
@@ -741,13 +752,11 @@ setTimeout(reportDims, 0);
                 this._setupClaudeFolderWatchers();
                 this._setupDesignFolderWatchers();
                 this._setupImagesFolderWatchers();
-                this._setupBriefsFolderWatchers();
                 void this._setupStitchHtmlFolderWatchers().catch(() => {});
                 await this._sendHtmlDocsReady();
                 await this._sendClaudeDocsReady();
                 await this._sendDesignDocsReady();
                 await this._sendImagesDocsReady();
-                await this._sendBriefsDocsReady();
             })
         );
 
@@ -785,19 +794,53 @@ setTimeout(reportDims, 0);
     }
 
 
+    /**
+     * The provider's ONE transport-internal raw send — the no-broadcaster fallback
+     * shared by `postMessage` and `_postReply`. Kept as a single site on purpose:
+     * `scripts/check-push-routing.js` ratchets this file at ONE raw webview send, and
+     * a second literal call site fails that CI gate
+     * (`.github/workflows/integration-tests.yml`). Route new sends through
+     * `postMessage` / `_postReply`, never through a fresh raw call. (The checker is a
+     * regex over source text, so do not spell the raw call out in prose either.)
+     */
+    private _postRawToWebview(message: any): void {
+        this._panel?.webview.postMessage(message);
+    }
+
     public postMessage(message: any): void {
         if (this._broadcaster) {
             this._broadcaster.push(message);
         } else {
-            this._panel?.webview.postMessage(message);
+            this._postRawToWebview(message);
         }
     }
 
+    /**
+     * Deliver a per-client REQUEST/RESPONSE reply on the channel its request arrived on.
+     * Contrast `postMessage`, which broadcasts — correct for shared data, wrong for a
+     * reply, which has exactly one legitimate recipient.
+     *
+     *  'http'      → no push at all. The arm RETURNS the payload; LocalApiServer writes it
+     *                to the response body and transport.js re-dispatches it as a
+     *                MessageEvent in the requesting tab only. The returned body MUST carry
+     *                a `type` — transport.js drops a body without one, silently.
+     *  'webview'   → the bound editor webview only, no WS mirror. The webview bridge
+     *                discards `_handleMessage`'s return value, so a push is the only
+     *                channel back to the editor.
+     *  undefined   → host-initiated (e.g. the save-watcher auto-refresh). Nobody asked,
+     *                every client is a legitimate recipient: broadcast, as today.
+     *
+     * NOTE: `pushWebviewOnly` queues into the hub's `_pendingWebviewMessages` when no
+     * webview is bound. Unreachable in normal flow (a 'webview' channel implies a live
+     * panel, and `open()`/`deserializeWebviewPanel` both bind via `_initDesignService`);
+     * a panel disposed mid-request leaves exactly one orphan entry. Bounded and
+     * harmless — already reviewed, do not re-litigate.
+     */
     private _postReply(message: any, channel: 'http' | 'webview' | undefined): void {
         if (channel === 'http') { return; }
         if (channel === 'webview') {
             if (this._broadcaster) { this._broadcaster.pushWebviewOnly(message); }
-            else { this._panel?.webview.postMessage(message); }
+            else { this._postRawToWebview(message); }
             return;
         }
         this.postMessage(message);
@@ -839,8 +882,6 @@ setTimeout(reportDims, 0);
         this._designFolderWatchers = [];
         this._imagesFolderWatchers.forEach(w => w.dispose());
         this._imagesFolderWatchers = [];
-        this._briefsFolderWatchers.forEach(w => w.dispose());
-        this._briefsFolderWatchers = [];
         this._stitchHtmlFolderWatchers.forEach(w => w.dispose());
         this._stitchHtmlFolderWatchers = [];
         for (const w of this._htmlFolderNativeWatchers) { try { w.close(); } catch {} }
@@ -1451,91 +1492,6 @@ setTimeout(reportDims, 0);
                 const errPayload = {
                     type: 'imagesDocsReady',
                     sourceId: 'images-folder',
-                    folderPathsByRoot: {},
-                    nodes: [],
-                    workspaceItems: this._buildKanbanWorkspaceItems(),
-                    error: String(err)
-                };
-                this.postMessage(errPayload);
-                return errPayload;
-            }
-        }
-    }
-
-    private _setupBriefsFolderWatchers(): void {
-        this._briefsFolderWatchers.forEach(w => w.dispose());
-        this._briefsFolderWatchers = [];
-        const roots = this._getWorkspaceRoots();
-        for (const root of roots) {
-            try {
-                const service = this._getLocalFolderService(root);
-                const paths = service.getBriefsFolderPaths();
-                for (const p of paths) {
-                    if (fs.existsSync(p)) {
-                        const watcher = this._seams().watcher.watchFolder(p, () => this._scheduleBriefsDocsReady());
-                        this._briefsFolderWatchers.push(watcher);
-                    }
-                }
-            } catch {}
-        }
-    }
-
-    /** Debounced watcher entry point — see _scheduleHtmlDocsReady. */
-    private _scheduleBriefsDocsReady(): void {
-        if (this._briefsDocsDebounce) {
-            clearTimeout(this._briefsDocsDebounce);
-        }
-        this._briefsDocsDebounce = setTimeout(() => {
-            this._briefsDocsDebounce = undefined;
-            void this._sendBriefsDocsReady();
-        }, 300);
-    }
-
-    /** Build + push + RETURN the Briefs doc tree — see _sendHtmlDocsReady. */
-    private async _sendBriefsDocsReady(): Promise<any> {
-        if (this._briefsDocsDebounce) {
-            clearTimeout(this._briefsDocsDebounce);
-            this._briefsDocsDebounce = undefined;
-        }
-        {
-            try {
-                const allRoots = this._getWorkspaceRoots();
-                const allFiles: any[] = [];
-                const seenFilePaths = new Set<string>();
-                const configuredFolderPathsByRoot: Record<string, string[]> = {};
-
-                for (const root of allRoots) {
-                    try {
-                        const localFolderService = this._getLocalFolderService(root);
-                        const folderPaths = localFolderService.getBriefsFolderPaths();
-                        configuredFolderPathsByRoot[root] = folderPaths;
-
-                        const files = await localFolderService.listBriefsFiles();
-                        for (const f of files) {
-                            const absPath = path.resolve(f.sourceFolder, f.relativePath);
-                            if (!seenFilePaths.has(absPath)) {
-                                seenFilePaths.add(absPath);
-                                allFiles.push({ ...f, _root: root });
-                            }
-                        }
-                    } catch {}
-                }
-
-                this._updateWebviewRoots();
-
-                const payload = {
-                    type: 'briefsDocsReady',
-                    sourceId: 'briefs-folder',
-                    folderPathsByRoot: configuredFolderPathsByRoot,
-                    nodes: this._mapLocalFilesToTreeNodes(allFiles),
-                    workspaceItems: this._buildKanbanWorkspaceItems()
-                };
-                this.postMessage(payload);
-                return payload;
-            } catch (err) {
-                const errPayload = {
-                    type: 'briefsDocsReady',
-                    sourceId: 'briefs-folder',
                     folderPathsByRoot: {},
                     nodes: [],
                     workspaceItems: this._buildKanbanWorkspaceItems(),
@@ -2457,7 +2413,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             case 'ready': {
                 const allRoots = this._getWorkspaceRoots();
                 const items = buildWorkspaceItems(allRoots);
-                const tabKeys = ['stitch', 'html-preview', 'images', 'design', 'html.root', 'claude.root', 'design.root', 'briefs', 'briefs.root', 'stitch.root', 'images.root', 'activeTab'];
+                const tabKeys = ['stitch', 'html-preview', 'images', 'design', 'html.root', 'claude.root', 'design.root', 'stitch.root', 'images.root', 'activeTab', 'previews.source'];
                 const statePayload = this._stateStore.getAllStates(tabKeys, allRoots);
                 this.postMessage({
                     type: 'workspaceItemsUpdated',
@@ -2484,14 +2440,13 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const claudeDocs = await this._sendClaudeDocsReady();
                 const designDocs = await this._sendDesignDocsReady();
                 const imagesDocs = await this._sendImagesDocsReady();
-                const briefsDocs = await this._sendBriefsDocsReady();
                 await this._sendActiveDesignDocState();
                 // `type` is mandatory for the browser return-contract: transport.js only
                 // re-dispatches a body that carries one (and it dispatches the body as a
                 // SINGLE MessageEvent — an array body would not be fanned out). design.js
                 // handles 'designReadyComplete' by re-dispatching each nested *DocsReady
                 // payload, so the existing per-tab render cases stay the only render path.
-                return { success: true, type: 'designReadyComplete', items, statePayload, htmlDocs, claudeDocs, designDocs, imagesDocs, briefsDocs };
+                return { success: true, type: 'designReadyComplete', items, statePayload, htmlDocs, claudeDocs, designDocs, imagesDocs };
             }
 
             case 'persistTabState': {
@@ -2760,6 +2715,69 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 await this._seams().clipboard.writeText(prompt);
                 this._seams().ui.showTemporaryNotification('Copied element tweak prompt to clipboard.');
                 return { success: true };
+            }
+
+            case 'copyDesignSystemPrompt': {
+                let docPath: string | null = null;
+                const activeProject = message.projectName || this._activeProjectName;
+                if (activeProject) {
+                    docPath = await getProjectDesignSystemPath(this._getWorkspaceRoot() || '', activeProject);
+                }
+                if (!docPath) {
+                    docPath = await this._resolveDesignDocPath(message.sourceFolder, String(message.docId || ''));
+                }
+                if (!docPath && message.filePath && fs.existsSync(message.filePath)) {
+                    docPath = message.filePath;
+                }
+                if (!docPath) {
+                    this.postMessage({ type: 'copyDesignSystemPromptResult', success: false, error: 'No active or selected design system document found' });
+                    return { success: false, error: 'No active or selected design system document found' };
+                }
+                try {
+                    const content = await fs.promises.readFile(docPath, 'utf8');
+                    const promptText = buildDesignSystemBlock({
+                        link: docPath,
+                        content,
+                        mode: 'author'
+                    });
+                    await this._seams().clipboard.writeText(promptText);
+                    this._seams().ui.showTemporaryNotification('Copied Design System Prompt to clipboard.');
+                    this.postMessage({ type: 'copyDesignSystemPromptResult', success: true, promptText, docId: message.docId });
+                    return { success: true, promptText };
+                } catch (err: any) {
+                    this.postMessage({ type: 'copyDesignSystemPromptResult', success: false, error: String(err) });
+                    return { success: false, error: String(err) };
+                }
+            }
+
+            case 'createDesignSystemTemplate': {
+                const root = this._getWorkspaceRoot();
+                if (!root) {
+                    return { success: false, error: 'No workspace root' };
+                }
+                const service = this._getLocalFolderService(root);
+                const folders = service.getDesignFolderPaths();
+                let targetFolder = folders[0];
+                if (!targetFolder) {
+                    targetFolder = path.join(root, '.switchboard', 'designs');
+                }
+                await fs.promises.mkdir(targetFolder, { recursive: true });
+
+                let candidate = path.join(targetFolder, 'design-system.html');
+                let count = 2;
+                while (fs.existsSync(candidate)) {
+                    candidate = path.join(targetFolder, `design-system-${count}.html`);
+                    count++;
+                }
+
+                await fs.promises.writeFile(candidate, STARTER_DESIGN_SYSTEM_HTML, 'utf8');
+                await this._sendDesignDocsReady();
+
+                const kickoffPrompt = `Please run the design-system-builder skill to interactively interview me and customize the design system template at ${candidate}.`;
+                await this._seams().clipboard.writeText(kickoffPrompt);
+                this._seams().ui.showTemporaryNotification('Created design system starter template and copied kickoff prompt to clipboard.');
+
+                return { success: true, createdPath: candidate, kickoffPrompt };
             }
 
             case 'sendStitchTweakPrompt': {
@@ -3723,7 +3741,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 // keeps this arm free of nested `break` control flow so the Design
                 // return-contract ratchet stays honest.
                 //
-                // design.js only posts this for html-preview / images / briefs; 'design'
+                // design.js only posts this for html-preview / images; 'design'
                 // is here so the map is total over the local tabs if DESIGN SYSTEM ever
                 // gains refresh-on-entry like its siblings. 'claude' has no tab in
                 // design.html at all — the entry (and _sendClaudeDocsReady itself) is
@@ -3732,7 +3750,6 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     'html-preview': () => this._sendHtmlDocsReady(),
                     'claude': () => this._sendClaudeDocsReady(),
                     'images': () => this._sendImagesDocsReady(),
-                    'briefs': () => this._sendBriefsDocsReady(),
                     'design': () => this._sendDesignDocsReady(),
                 };
                 const tabSender = tabSenders[message.tab as string];
@@ -3804,215 +3821,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 return { success: true, paths, workspaceRoot: root };
             }
 
-            case 'listBriefsFolders': {
-                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
-                const service = this._getLocalFolderService(root);
-                const paths = service.getBriefsFolderPaths();
-                this.postMessage({ type: 'briefsFoldersListed', paths, workspaceRoot: root });
-                return { success: true, paths, workspaceRoot: root };
-            }
-            case 'addBriefsFolder': {
-                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
-                const picked = (typeof message.folderPath === 'string' && message.folderPath.trim())
-                    ? message.folderPath.trim()
-                    : await this._seams().ui.pickFolder('Add Briefs Folder');
-                if (!picked) {
-                    return { success: false, error: 'No folder selected' };
-                }
-                const service = this._getLocalFolderService(root);
-                await service.addBriefsFolderPath(picked);
-                this._setupBriefsFolderWatchers();
-                await this._sendBriefsDocsReady();
-                const paths = service.getBriefsFolderPaths();
-                this.postMessage({ type: 'briefsFoldersListed', paths, workspaceRoot: root });
-                return { success: true, paths, workspaceRoot: root };
-            }
-            case 'removeBriefsFolder': {
-                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
-                const service = this._getLocalFolderService(root);
-                await service.removeBriefsFolderPath(message.folderPath);
-                this._setupBriefsFolderWatchers();
-                await this._sendBriefsDocsReady();
-                const paths = service.getBriefsFolderPaths();
-                this.postMessage({ type: 'briefsFoldersListed', paths, workspaceRoot: root });
-                return { success: true, paths, workspaceRoot: root };
-            }
-            case 'createBrief': {
-                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
-                const sourceFolder = message.sourceFolder;
-                const title = message.title;
-                if (!sourceFolder || !title) {
-                    this.postMessage({ type: 'briefCreated', success: false, error: 'Source folder and title are required' });
-                    return { success: false, error: 'Source folder and title are required' };
-                }
-                try {
-                    const service = this._getLocalFolderService(root);
-                    const resolvedSource = path.resolve(sourceFolder);
-                    const isAllowed = service.getBriefsFolderPaths().some(p => path.resolve(p) === resolvedSource);
-                    if (!isAllowed) {
-                        this.postMessage({ type: 'briefCreated', success: false, error: 'Source folder is not a configured briefs folder' });
-                        return { success: false, error: 'Source folder is not a configured briefs folder' };
-                    }
-                    let fileName = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-                    if (!fileName) {
-                        fileName = 'untitled';
-                    }
-                    fileName = fileName + '.md';
-                    const fullPath = path.join(sourceFolder, fileName);
-                    
-                    let finalPath = fullPath;
-                    let counter = 1;
-                    while (fs.existsSync(finalPath)) {
-                        finalPath = path.join(sourceFolder, `${path.basename(fileName, '.md')}-${counter}.md`);
-                        counter++;
-                    }
-                    
-                    const content = `# ${title}\n\n`;
-                    await fs.promises.mkdir(path.dirname(finalPath), { recursive: true });
-                    await fs.promises.writeFile(finalPath, content, 'utf8');
-                    
-                    const folderPaths = service.getBriefsFolderPaths();
-                    const folderIndex = folderPaths.findIndex(p => path.resolve(p) === resolvedSource);
-                    
-                    await this._sendBriefsDocsReady();
-                    const created = {
-                        success: true,
-                        docId: folderIndex >= 0 ? `${folderIndex}:${path.relative(sourceFolder, finalPath)}` : undefined,
-                        sourceFolder: sourceFolder
-                    };
-                    this.postMessage({ type: 'briefCreated', ...created });
-                    return created;
-                } catch (err: any) {
-                    this.postMessage({ type: 'briefCreated', success: false, error: String(err) });
-                    return { success: false, error: String(err) };
-                }
-            }
-            case 'deleteBrief': {
-                const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
-                const sourceFolder = message.sourceFolder;
-                const docId = message.docId;
-                if (!sourceFolder || !docId) {
-                    this.postMessage({ type: 'briefDeleted', success: false, error: 'Source folder and docId are required' });
-                    return { success: false, error: 'Source folder and docId are required' };
-                }
-                try {
-                    const relativePath = docId.includes(':')
-                        ? docId.substring(docId.indexOf(':') + 1)
-                        : docId;
-                    
-                    const resolvedFolder = path.resolve(sourceFolder);
-                    const absPath = path.resolve(resolvedFolder, relativePath);
-                    if (absPath !== resolvedFolder && !absPath.startsWith(resolvedFolder + path.sep)) {
-                        throw new Error('Invalid path traversal');
-                    }
-                    
-                    const service = this._getLocalFolderService(root);
-                    if (!service.getBriefsFolderPaths().map(p => path.resolve(p)).includes(resolvedFolder)) {
-                        throw new Error('Folder is not a configured briefs folder');
-                    }
-                    
-                    if (fs.existsSync(absPath)) {
-                        await fs.promises.unlink(absPath);
-                    }
-                    await this._sendBriefsDocsReady();
-                    this.postMessage({ type: 'briefDeleted', success: true });
-                    return { success: true };
-                } catch (err: any) {
-                    this.postMessage({ type: 'briefDeleted', success: false, error: String(err) });
-                    return { success: false, error: String(err) };
-                }
-            }
             case 'stitchPickAttachFiles': {
-                try {
-                    const result = await this._seams().ui.showOpenDialog({
-                        canSelectFiles: true,
-                        canSelectMany: true,
-                        openLabel: 'Attach reference files',
-                        filters: {
-                            'Reference Files': ['png', 'jpg', 'jpeg', 'webp', 'html', 'htm', 'md']
-                        }
-                    });
-                    if (!result || result.length === 0) {
-                        return { success: false, files: [] };
-                    }
-                    const files = result.map(filePath => {
-                        const ext = path.extname(filePath).toLowerCase().replace('.', '');
-                        const name = path.basename(filePath);
-                        const type = ['png', 'jpg', 'jpeg', 'webp'].includes(ext) ? 'image'
-                            : ['html', 'htm'].includes(ext) ? 'html'
-                            : 'markdown';
-                        return { path: filePath, name, type };
-                    });
-                    this.postMessage({ type: 'stitchAttachedFilesPicked', files });
-                    return { success: true, files };
-                } catch (err: any) {
-                    this._seams().ui.showErrorMessage('Failed to pick files: ' + err.message);
-                    return { success: false, error: err.message || String(err) };
-                }
-            }
-
-            case 'stitchSendBrief': {
-                try {
-                    const workspaceRoot = message.workspaceRoot || this._getWorkspaceRoot();
-                    const root = workspaceRoot || '';
-                    const sourceFolder = message.sourceFolder;
-                    if (!sourceFolder) throw new Error('sourceFolder is required');
-
-                    const rawDocId = String(message.docId || '');
-                    const relativePath = rawDocId.includes(':')
-                        ? rawDocId.substring(rawDocId.indexOf(':') + 1)
-                        : rawDocId;
-
-                    const resolvedFolder = path.resolve(sourceFolder);
-                    const absPath = path.resolve(resolvedFolder, relativePath);
-                    if (absPath !== resolvedFolder && !absPath.startsWith(resolvedFolder + path.sep)) {
-                        throw new Error('Invalid file path');
-                    }
-
-                    const service = this._getLocalFolderService(root);
-                    if (!service.getBriefsFolderPaths().map(p => path.resolve(p)).includes(resolvedFolder)) {
-                        throw new Error('Folder is not configured briefs folder');
-                    }
-
-                    const content = await fs.promises.readFile(absPath, 'utf8');
-
-                    // Auto-name the project from the brief title; fall back to the filename stem.
-                    const title = (typeof message.briefTitle === 'string' ? message.briefTitle : '').trim()
-                        || (relativePath ? path.basename(relativePath, path.extname(relativePath)) : '')
-                        || 'Untitled Brief';
-
-                    if (this._stitchOperationLock) {
-                        this.postMessage({ type: 'stitchError', error: 'Another Stitch operation is in progress. Please wait.', workspaceRoot });
-                        break;
-                    }
-                    this._stitchOperationLock = true;
-                    try {
-                        const stitch = await loadStitch('');
-                        const project = await stitch.createProject(title);
-                        const list = await stitch.projects();
-                        const projects = list.map((p: any) => ({
-                            id: p.id,
-                            name: p.data?.title || p.data?.name || p.id,
-                            updateTime: p.data?.updateTime || p.data?.createTime || ''
-                        }));
-                        if (workspaceRoot) {
-                            const db = KanbanDatabase.forWorkspace(workspaceRoot);
-                            for (const p of projects) {
-                                this._stitchProjectNames.set(p.id, p.name);
-                                await db.upsertStitchProject(p.id, p.name, p.updateTime);
-                            }
-                        }
-                        this.postMessage({ type: 'stitchProjectsReady', projects, defaultProjectId: project.id, selectProjectId: project.id, workspaceRoot });
-                        this.postMessage({ type: 'stitchBriefInjected', content, projectId: project.id, autoGenerate: true });
-                        return { success: true, projectId: project.id };
-                    } finally {
-                        this._stitchOperationLock = false;
-                    }
-                } catch (err: any) {
-                    this.postMessage({ type: 'stitchError', error: err.message || String(err), workspaceRoot: message.workspaceRoot || this._getWorkspaceRoot() });
-                    return { success: false, error: err.message || String(err) };
-                }
-            }
 
             case 'stitchGenerate':
                 try {
@@ -4305,7 +4114,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
     }
 
     private _isPolledTab(tab: string): boolean {
-        return tab === 'html-preview' || tab === 'claude' || tab === 'images' || tab === 'briefs';
+        return tab === 'html-preview' || tab === 'claude' || tab === 'images';
     }
 
     private _polledTabsAcrossSeats(): Set<string> {
@@ -4370,8 +4179,6 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         folders = service.getClaudeFolderPaths();
                     } else if (tab === 'images') {
                         folders = service.getImagesFolderPaths();
-                    } else if (tab === 'briefs') {
-                        folders = service.getBriefsFolderPaths();
                     }
 
                     for (const dir of folders) {
@@ -4396,8 +4203,6 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         await this._sendClaudeDocsReady();
                     } else if (tab === 'images') {
                         await this._sendImagesDocsReady();
-                    } else if (tab === 'briefs') {
-                        await this._sendBriefsDocsReady();
                     }
                 }
             }
@@ -4427,8 +4232,6 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 return this._isHtmlOrImageFile(name);
             } else if (tab === 'images') {
                 return this._isImageFile(name);
-            } else if (tab === 'briefs') {
-                return this._isTextFile(name);
             }
             return false;
         };
@@ -4574,7 +4377,8 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             const fileTypeMap: Record<string, string> = {
                 '.json': 'json',
                 '.yaml': 'yaml', '.yml': 'yaml',
-                '.md': 'markdown', '.markdown': 'markdown', '.txt': 'markdown'
+                '.md': 'markdown', '.markdown': 'markdown', '.txt': 'markdown',
+                '.html': 'html', '.htm': 'html'
             };
             const fileType = isImage ? 'image' : (fileTypeMap[fileExt] || 'text');
 
@@ -4723,7 +4527,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 throw new Error('No folder path provided');
             }
 
-            // Build the allowed-folder set across ALL roots and ALL four kinds up front.
+            // Build the allowed-folder set across ALL roots up front.
             // The frontend sends a bare absolute path with no owning-root hint, and
             // DesignPanelProvider has no _getLocalFolderServiceForFolder helper.
             // Validating against a single root would reject legitimate folders from non-primary roots.
@@ -4733,7 +4537,6 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const svc = this._getLocalFolderService(root);
                 allowedPaths.push(
                     ...svc.getDesignFolderPaths(),
-                    ...svc.getBriefsFolderPaths(),
                     ...svc.getHtmlFolderPaths(),
                     ...svc.getImagesFolderPaths(),
                 );

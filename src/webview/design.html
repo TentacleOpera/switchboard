@@ -178,9 +178,7 @@
         #online-content,
         #kanban-content,
         #design-content,
-        #briefs-content,
-        #html-preview-content,
-        #images-content,
+        #previews-content,
         #tickets-content {
             display: none;
             flex-direction: column;
@@ -192,10 +190,19 @@
         #online-content.active,
         #kanban-content.active,
         #design-content.active,
-        #briefs-content.active,
-        #html-preview-content.active,
-        #images-content.active,
+        #previews-content.active,
         #tickets-content.active {
+            display: flex;
+        }
+
+        #previews-content .previews-subpanel {
+            display: none;
+            flex-direction: column;
+            flex: 1 1 auto;
+            min-height: 0;
+        }
+
+        #previews-content .previews-subpanel.active {
             display: flex;
         }
 
@@ -309,7 +316,6 @@
         .content-row.collapsed #tree-pane > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tree-pane-online > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tree-pane-design > *:not(.sidebar-toggle-row),
-        .content-row.collapsed #tree-pane-briefs > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tree-pane-html > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tree-pane-images > *:not(.sidebar-toggle-row),
         .content-row.collapsed #tree-pane-tickets > *:not(.sidebar-toggle-row),
@@ -665,7 +671,6 @@
         #tree-pane,
         #tree-pane-online,
         #tree-pane-design,
-        #tree-pane-briefs,
         #tree-pane-html,
         #tree-pane-images,
         #tree-pane-tickets {
@@ -2097,8 +2102,7 @@
         .cyber-theme-enabled #markdown-preview-online pre,
         .cyber-theme-enabled #markdown-preview-design pre,
         .cyber-theme-enabled #kanban-preview-pane pre,
-        .cyber-theme-enabled #markdown-preview-tickets pre,
-        .cyber-theme-enabled #markdown-preview-briefs pre {
+        .cyber-theme-enabled #markdown-preview-tickets pre {
             box-shadow: 0 0 15px color-mix(in srgb, var(--accent-teal) 5%, transparent),
                         inset 0 0 10px rgba(0, 0, 0, 0.5);
         }
@@ -2108,8 +2112,7 @@
         .cyber-theme-enabled #markdown-preview-online blockquote,
         .cyber-theme-enabled #markdown-preview-design blockquote,
         .cyber-theme-enabled #kanban-preview-pane blockquote,
-        .cyber-theme-enabled #markdown-preview-tickets blockquote,
-        .cyber-theme-enabled #markdown-preview-briefs blockquote {
+        .cyber-theme-enabled #markdown-preview-tickets blockquote {
             border-left-color: var(--accent-teal);
         }
 
@@ -2310,7 +2313,6 @@
             background: transparent;
         }
 
-        body.theme-claudify #briefs-content,
         body.theme-claudify #design-content,
         body.theme-claudify #stitch-content,
         body.theme-claudify #preview-pane-design,
@@ -3631,48 +3633,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
     <body class="cyber-theme-enabled">
     <div id="research-tab-bar" class="shared-tab-bar">
         <button class="shared-tab-btn active" data-tab="stitch">STITCH</button>
-        <button class="shared-tab-btn" data-tab="stitch-html">STITCH HTML</button>
-        <button class="shared-tab-btn" data-tab="briefs">BRIEFS</button>
-        <button class="shared-tab-btn" data-tab="html-preview">HTML PREVIEWS</button>
-        <button class="shared-tab-btn" data-tab="images">IMAGES</button>
+        <button class="shared-tab-btn" data-tab="previews">PREVIEWS</button>
         <button class="shared-tab-btn" data-tab="design">DESIGN SYSTEM</button>
     </div>
     <div class="container">
-        <!-- Briefs Tab -->
-        <div id="briefs-content" class="shared-tab-content">
-            <div class="controls-strip" id="controls-strip-briefs">
-                <select id="briefs-workspace-filter" class="workspace-filter-select">
-                    <option value="">All Workspaces</option>
-                </select>
-                <button id="btn-new-brief" class="strip-btn">New Brief</button>
-                <button id="btn-delete-brief" class="strip-btn" disabled>Delete</button>
-                <button id="btn-edit-brief" class="strip-btn" disabled>Edit</button>
-                <button id="btn-send-brief-to-stitch" class="strip-btn" disabled>Send to Stitch</button>
-                <button id="btn-save-brief" class="strip-btn" style="display:none;">Save</button>
-                <button id="btn-cancel-brief" class="strip-btn" style="display:none;">Cancel</button>
-                <input type="text" id="briefs-docs-search" class="sidebar-search-input" placeholder="Search briefs..." />
-                <span id="status-briefs"></span>
-            </div>
-            <div class="content-row">
-                <div id="tree-pane-briefs">
-                    <div class="sidebar-toggle-row">
-                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
-                    </div>
-                    <div class="empty-state">Loading briefs...</div>
-                </div>
-                <div class="preview-panel-wrapper">
-                    <div id="preview-pane-briefs" style="flex: 1; width: 100%; box-sizing: border-box; overflow: auto; height: 100%;">
-                        <div class="preview-content-wrapper" style="height: 100%; display: flex; flex-direction: column;">
-                            <div id="markdown-preview-briefs">
-                                <div class="empty-state">Select a brief from the sidebar to preview</div>
-                            </div>
-                            <textarea id="markdown-editor-briefs" class="markdown-editor" style="display:none; width: 100%; height: 100%; box-sizing: border-box; resize: none;"></textarea>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
         <!-- Design System Tab -->
         <div id="design-content" class="shared-tab-content">
             <div class="controls-strip" id="controls-strip-design">
@@ -3690,12 +3654,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             </div>
             
             <!-- Source selector dropdown -->
-            <div style="display: flex; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border-color, #333); background: var(--panel-bg2, #1a1a1a);">
+            <div style="display: flex; gap: 8px; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--border-color, #333); background: var(--panel-bg2, #1a1a1a);">
                 <select id="design-source-select" class="workspace-filter-select" style="max-width: 220px;">
                     <option value="local">Local Docs</option>
                     <option value="stitch">Stitch Design Systems</option>
                     <option value="claude">Claude Design Systems</option>
                 </select>
+                <button id="btn-create-design-system-template" class="strip-btn stitch-btn-primary" style="font-size: 11px; padding: 3px 8px; margin-left: auto;">+ Create Design System</button>
+                <button id="btn-copy-design-system-prompt" class="kanban-plan-copy-prompt" style="font-size: 11px; padding: 3px 8px;">Copy Design System Prompt</button>
             </div>
 
             <!-- Wrap existing local content in local panel -->
@@ -3711,9 +3677,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <div id="preview-pane-design" style="flex: 1; width: 100%; box-sizing: border-box; overflow: auto; height: 100%;">
                             <div class="preview-content-wrapper" style="height: 100%; display: flex; flex-direction: column;">
                                 <div id="markdown-preview-design">
-                                    <div class="empty-state">Select a design document, image, JSON, or YAML file from the sidebar to preview</div>
+                                    <div class="empty-state">Select a design document, HTML design system, image, JSON, or YAML file from the sidebar to preview</div>
                                 </div>
                                 <textarea id="markdown-editor-design" class="markdown-editor" style="display:none; width: 100%; height: 100%; box-sizing: border-box; resize: none;"></textarea>
+                                <div id="html-preview-container-design" class="zoomable-container" style="display: none; padding: 0; width: 100%; height: 100%; position: relative; flex: 1;">
+                                    <div class="zoomable-viewport" style="width: 100%; height: 100%;">
+                                        <iframe id="html-preview-frame-design" style="width: 100%; height: 100%; border: none; background: #fff;" sandbox="allow-scripts allow-same-origin"></iframe>
+                                    </div>
+                                </div>
                                 <div id="image-preview-container-design" class="zoomable-container" style="display: none; padding: 0;">
                                     <div class="zoomable-viewport">
                                         <img id="image-preview-img-design" alt="Image preview" style="display: block;" />
@@ -3780,204 +3751,215 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             </div>
         </div>
 
-        <!-- Stitch HTML Tab -->
-        <div id="stitch-html-content" class="shared-tab-content">
-            <div class="controls-strip" id="controls-strip-stitch-html">
-                <select id="stitch-html-project-select" class="workspace-filter-select">
-                    <option value="">Select Project...</option>
+        <!-- Previews Tab -->
+        <div id="previews-content" class="shared-tab-content">
+            <div style="display:flex; gap:8px; padding:6px 12px; border-bottom:1px solid var(--border-color,#333); background:var(--panel-bg2,#1a1a1a); align-items:center;">
+                <select id="previews-source-select" class="workspace-filter-select" style="max-width:220px; margin-bottom:0;">
+                    <option value="stitch-html">Stitch HTML</option>
+                    <option value="html-preview">HTML Previews</option>
+                    <option value="images">Images</option>
                 </select>
-                <button id="stitch-html-btn-inspect" class="preview-overlay-btn" title="Toggle hover-to-select element mode">Inspect Mode</button>
-                <input type="text" id="stitch-html-docs-search" class="sidebar-search-input" placeholder="Search screens..." />
-                <span id="status-stitch-html" style="margin-left: 0; font-size: 12px; color: var(--text-secondary);">No project selected</span>
             </div>
-            <div class="content-row">
-                <div id="tree-pane-stitch-html">
-                    <div class="sidebar-toggle-row">
-                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
-                    </div>
-                    <div class="empty-state">Select a project to browse cached HTML</div>
+
+            <!-- Stitch HTML Sub-panel -->
+            <div id="stitch-html-content" class="previews-subpanel active">
+                <div class="controls-strip" id="controls-strip-stitch-html">
+                    <select id="stitch-html-project-select" class="workspace-filter-select">
+                        <option value="">Select Project...</option>
+                    </select>
+                    <button id="stitch-html-btn-inspect" class="preview-overlay-btn" title="Toggle hover-to-select element mode">Inspect Mode</button>
+                    <input type="text" id="stitch-html-docs-search" class="sidebar-search-input" placeholder="Search screens..." />
+                    <span id="status-stitch-html" style="margin-left: 0; font-size: 12px; color: var(--text-secondary);">No project selected</span>
                 </div>
-                <div class="preview-panel-wrapper">
-                    <div id="preview-pane-stitch-html" style="flex: 1; width: 100%; box-sizing: border-box; height: 100%; display: flex; flex-direction: column; overflow: hidden;">
-                        <div id="stitch-html-edit-bar" style="display: none; padding: 8px 12px; border-bottom: 1px solid var(--border-color); background: var(--panel-bg);">
-                            <div style="display: flex; gap: 8px; align-items: center; width: 100%;">
-                                <input type="text" id="stitch-html-refine-input" class="stitch-input" style="flex: 1;" placeholder="Describe a change to edit this screen, e.g. 'make the header dark blue'..." />
-                                <select id="stitch-html-creative-range-select" class="workspace-filter-select" style="margin-bottom: 0; max-width: 120px;">
-                                    <option value="EXPLORE">Explore</option>
-                                    <option value="REFINE">Refine</option>
-                                    <option value="REIMAGINE">Reimagine</option>
-                                </select>
-                                <button id="stitch-html-btn-edit" class="preview-overlay-btn primary">Apply Edit</button>
-                                <div class="split-button-container" style="display: inline-flex; position: relative;">
-                                    <button id="stitch-html-btn-variants" class="preview-overlay-btn" style="border-top-right-radius: 0; border-bottom-right-radius: 0; margin-right: 0;">+3 Variants</button>
-                                    <button id="stitch-html-btn-variants-toggle" class="preview-overlay-btn" style="border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid var(--border-color); padding: 0 8px; margin-left: 0;">▾</button>
-                                    <div id="stitch-html-variants-dropdown" class="stitch-variants-dropdown" style="display: none; position: absolute; top: 100%; right: 0; background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); z-index: 1000; padding: 8px 12px; min-width: 140px; margin-top: 4px;">
-                                        <div style="font-weight: 600; font-size: 11px; margin-bottom: 6px; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.5px;">Aspects to Vary</div>
-                                        <div id="stitch-html-aspects-checkboxes" style="display: flex; flex-direction: column; gap: 6px;">
-                                            <label class="aspect-chip-vertical" style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;"><input type="checkbox" value="LAYOUT" checked><span>Layout</span></label>
-                                            <label class="aspect-chip-vertical" style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;"><input type="checkbox" value="COLOR_SCHEME" checked><span>Color</span></label>
-                                            <label class="aspect-chip-vertical" style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;"><input type="checkbox" value="IMAGES" checked><span>Images</span></label>
-                                            <label class="aspect-chip-vertical" style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;"><input type="checkbox" value="TEXT_FONT" checked><span>Font</span></label>
-                                            <label class="aspect-chip-vertical" style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;"><input type="checkbox" value="TEXT_CONTENT" checked><span>Text</span></label>
+                <div class="content-row">
+                    <div id="tree-pane-stitch-html">
+                        <div class="sidebar-toggle-row">
+                            <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                        </div>
+                        <div class="empty-state">Select a project to browse cached HTML</div>
+                    </div>
+                    <div class="preview-panel-wrapper">
+                        <div id="preview-pane-stitch-html" style="flex: 1; width: 100%; box-sizing: border-box; height: 100%; display: flex; flex-direction: column; overflow: hidden;">
+                            <div id="stitch-html-edit-bar" style="display: none; padding: 8px 12px; border-bottom: 1px solid var(--border-color); background: var(--panel-bg);">
+                                <div style="display: flex; gap: 8px; align-items: center; width: 100%;">
+                                    <input type="text" id="stitch-html-refine-input" class="stitch-input" style="flex: 1;" placeholder="Describe a change to edit this screen, e.g. 'make the header dark blue'..." />
+                                    <select id="stitch-html-creative-range-select" class="workspace-filter-select" style="margin-bottom: 0; max-width: 120px;">
+                                        <option value="EXPLORE">Explore</option>
+                                        <option value="REFINE">Refine</option>
+                                        <option value="REIMAGINE">Reimagine</option>
+                                    </select>
+                                    <button id="stitch-html-btn-edit" class="preview-overlay-btn primary">Apply Edit</button>
+                                    <div class="split-button-container" style="display: inline-flex; position: relative;">
+                                        <button id="stitch-html-btn-variants" class="preview-overlay-btn" style="border-top-right-radius: 0; border-bottom-right-radius: 0; margin-right: 0;">+3 Variants</button>
+                                        <button id="stitch-html-btn-variants-toggle" class="preview-overlay-btn" style="border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid var(--border-color); padding: 0 8px; margin-left: 0;">▾</button>
+                                        <div id="stitch-html-variants-dropdown" class="stitch-variants-dropdown" style="display: none; position: absolute; top: 100%; right: 0; background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); z-index: 1000; padding: 8px 12px; min-width: 140px; margin-top: 4px;">
+                                            <div style="font-weight: 600; font-size: 11px; margin-bottom: 6px; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.5px;">Aspects to Vary</div>
+                                            <div id="stitch-html-aspects-checkboxes" style="display: flex; flex-direction: column; gap: 6px;">
+                                                <label class="aspect-chip-vertical" style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;"><input type="checkbox" value="LAYOUT" checked><span>Layout</span></label>
+                                                <label class="aspect-chip-vertical" style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;"><input type="checkbox" value="COLOR_SCHEME" checked><span>Color</span></label>
+                                                <label class="aspect-chip-vertical" style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;"><input type="checkbox" value="IMAGES" checked><span>Images</span></label>
+                                                <label class="aspect-chip-vertical" style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;"><input type="checkbox" value="TEXT_FONT" checked><span>Font</span></label>
+                                                <label class="aspect-chip-vertical" style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;"><input type="checkbox" value="TEXT_CONTENT" checked><span>Text</span></label>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
                             </div>
-                        </div>
-                        <div id="stitch-html-initial-state" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 32px; color: var(--text-secondary);">
-                            <span style="font-size: 48px; opacity: 0.5;">📄</span>
-                            <div style="text-align: center;">
-                                <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px;">Stitch HTML Browser</div>
-                                <div style="font-size: 12px; max-width: 320px; line-height: 1.5;">Select a project and a screen to preview its cached HTML. HTML caches as screens load in the Stitch tab.</div>
-                            </div>
-                        </div>
-                        <div id="stitch-html-loading-state" style="flex: 1; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 32px; color: var(--text-secondary);">
-                            <div style="width: 32px; height: 32px; border: 3px solid var(--border-color); border-top-color: var(--accent-teal); border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
-                            <div style="font-size: 12px;">Loading preview...</div>
-                        </div>
-                        <div id="stitch-html-preview-wrapper" class="zoomable-container" style="display: none; flex: 1;">
-                            <div class="zoomable-viewport" style="width: 100%; height: 100%;">
-                                <iframe id="stitch-html-preview-frame" sandbox="allow-scripts allow-same-origin" style="border: none; background: var(--panel-bg); width: 100%; height: 100%; display: block;"></iframe>
-                            </div>
-                            <div id="stitch-tweak-popup" style="display: none; position: absolute; top: 12px; right: 12px; z-index: 20; width: 340px; max-height: calc(100% - 24px); background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); flex-direction: column; overflow: hidden; font-size: 12px; font-family: var(--font-family);">
-                                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border-color); font-weight: 600;">
-                                    <span id="stitch-tweak-header-breadcrumb" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; font-family: monospace;"></span>
-                                    <span id="stitch-tweak-btn-close" style="cursor: pointer; padding: 2px 6px; font-size: 14px;">✕</span>
+                            <div id="stitch-html-initial-state" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 32px; color: var(--text-secondary);">
+                                <span style="font-size: 48px; opacity: 0.5;">📄</span>
+                                <div style="text-align: center;">
+                                    <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px;">Stitch HTML Browser</div>
+                                    <div style="font-size: 12px; max-width: 320px; line-height: 1.5;">Select a project and a screen to preview its cached HTML. HTML caches as screens load in the Stitch tab.</div>
                                 </div>
-                                <div style="padding: 12px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto;">
-                                    <details>
-                                        <summary style="cursor: pointer; outline: none; margin-bottom: 4px; font-size: 11px; color: var(--text-secondary);">Selected HTML snippet</summary>
-                                        <pre id="stitch-tweak-snippet-pre" style="margin: 0; padding: 6px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 3px; font-size: 10px; font-family: monospace; white-space: pre-wrap; word-break: break-all; overflow-x: auto; max-height: 150px;"></pre>
-                                    </details>
-                                    <textarea id="stitch-tweak-input" class="stitch-input" style="width: 100%; height: 80px; box-sizing: border-box; resize: vertical;" placeholder="Describe the change to this element, e.g. 'make it dark blue'..."></textarea>
-                                    <div id="stitch-tweak-status" style="display: none; font-size: 11px; color: var(--accent-red); margin-bottom: 4px;"></div>
-                                    <div style="display: flex; gap: 8px;">
-                                        <button id="stitch-tweak-btn-send" class="preview-overlay-btn primary" style="flex: 1;">Send to Agent</button>
-                                        <button id="stitch-tweak-btn-copy" class="preview-overlay-btn" style="flex: 1;">Copy Prompt</button>
+                            </div>
+                            <div id="stitch-html-loading-state" style="flex: 1; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 32px; color: var(--text-secondary);">
+                                <div style="width: 32px; height: 32px; border: 3px solid var(--border-color); border-top-color: var(--accent-teal); border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+                                <div style="font-size: 12px;">Loading preview...</div>
+                            </div>
+                            <div id="stitch-html-preview-wrapper" class="zoomable-container" style="display: none; flex: 1;">
+                                <div class="zoomable-viewport" style="width: 100%; height: 100%;">
+                                    <iframe id="stitch-html-preview-frame" sandbox="allow-scripts allow-same-origin" style="border: none; background: var(--panel-bg); width: 100%; height: 100%; display: block;"></iframe>
+                                </div>
+                                <div id="stitch-tweak-popup" style="display: none; position: absolute; top: 12px; right: 12px; z-index: 20; width: 340px; max-height: calc(100% - 24px); background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); flex-direction: column; overflow: hidden; font-size: 12px; font-family: var(--font-family);">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border-color); font-weight: 600;">
+                                        <span id="stitch-tweak-header-breadcrumb" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; font-family: monospace;"></span>
+                                        <span id="stitch-tweak-btn-close" style="cursor: pointer; padding: 2px 6px; font-size: 14px;">✕</span>
+                                    </div>
+                                    <div style="padding: 12px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto;">
+                                        <details>
+                                            <summary style="cursor: pointer; outline: none; margin-bottom: 4px; font-size: 11px; color: var(--text-secondary);">Selected HTML snippet</summary>
+                                            <pre id="stitch-tweak-snippet-pre" style="margin: 0; padding: 6px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 3px; font-size: 10px; font-family: monospace; white-space: pre-wrap; word-break: break-all; overflow-x: auto; max-height: 150px;"></pre>
+                                        </details>
+                                        <textarea id="stitch-tweak-input" class="stitch-input" style="width: 100%; height: 80px; box-sizing: border-box; resize: vertical;" placeholder="Describe the change to this element, e.g. 'make it dark blue'..."></textarea>
+                                        <div id="stitch-tweak-status" style="display: none; font-size: 11px; color: var(--accent-red); margin-bottom: 4px;"></div>
+                                        <div style="display: flex; gap: 8px;">
+                                            <button id="stitch-tweak-btn-send" class="preview-overlay-btn primary" style="flex: 1;">Send to Agent</button>
+                                            <button id="stitch-tweak-btn-copy" class="preview-overlay-btn" style="flex: 1;">Copy Prompt</button>
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
-                            <div class="zoom-event-layer"></div>
-                            <div class="zoom-toolbar">
-                                <button class="zoom-btn" data-action="pan" title="Pan mode — drag or scroll to move the canvas">✥</button>
-                                <button class="zoom-btn" data-action="zoom-in" title="Zoom In (hold Space + Scroll)">+</button>
-                                <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (hold Space + Scroll)">−</button>
-                                <button class="zoom-btn" data-action="reset" title="Reset view — 100% size">⟲</button>
-                                <button class="zoom-btn" data-action="fit" title="Fit whole page to view (Double-click)">⤢</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- HTML Previews Tab -->
-        <div id="html-preview-content" class="shared-tab-content">
-            <div class="controls-strip" id="controls-strip-html">
-                <select id="html-workspace-filter" class="workspace-filter-select">
-                    <option value="">All Workspaces</option>
-                </select>
-                <button id="html-btn-inspect" class="preview-overlay-btn" title="Toggle hover-to-select element mode">Inspect Mode</button>
-                <input type="text" id="html-docs-search" class="sidebar-search-input" placeholder="Search previews..." />
-                <button id="btn-copy-design-html-artifact-prompt" class="strip-btn" title="Copy a prompt to publish the selected HTML file to claude.ai as an Artifact">Copy upload prompt</button>
-            </div>
-            <div class="content-row">
-                <div id="tree-pane-html">
-                    <div class="sidebar-toggle-row">
-                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
-                    </div>
-                    <div class="empty-state">Configure a folder to browse HTML files</div>
-                </div>
-                <div class="preview-panel-wrapper">
-                    <div id="preview-pane-html" style="flex: 1; width: 100%; box-sizing: border-box; height: 100%; display: flex; flex-direction: column; overflow: hidden;">
-                        <div id="html-initial-state" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 32px; color: var(--text-secondary);">
-                            <span style="font-size: 48px; opacity: 0.5;">🌐</span>
-                            <div style="text-align: center;">
-                                <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px;">HTML Previewer</div>
-                                <div style="font-size: 12px; max-width: 320px; line-height: 1.5;">Select a file from the sidebar to preview HTML pages. Configure folders using the Manage Folders button.</div>
-                            </div>
-                        </div>
-                        <div id="html-loading-state" style="flex: 1; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 32px; color: var(--text-secondary);">
-                            <div style="width: 32px; height: 32px; border: 3px solid var(--border-color); border-top-color: var(--accent-teal); border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
-                            <div style="font-size: 12px;">Loading preview...</div>
-                        </div>
-                        <div id="html-preview-wrapper" class="zoomable-container" style="display: none; flex: 1;">
-                            <div class="zoomable-viewport" style="width: 100%; height: 100%;">
-                                <iframe id="html-preview-frame" sandbox="allow-scripts allow-same-origin" style="border: none; background: var(--panel-bg); width: 100%; height: 100%; display: block;"></iframe>
-                            </div>
-                            <div id="html-tweak-popup" style="display: none; position: absolute; top: 12px; right: 12px; z-index: 20; width: 340px; max-height: calc(100% - 24px); background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); flex-direction: column; overflow: hidden; font-size: 12px; font-family: var(--font-family);">
-                                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border-color); font-weight: 600;">
-                                    <span id="html-tweak-header-breadcrumb" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; font-family: monospace;"></span>
-                                    <span id="html-tweak-btn-close" style="cursor: pointer; padding: 2px 6px; font-size: 14px;">✕</span>
+                                <div class="zoom-event-layer"></div>
+                                <div class="zoom-toolbar">
+                                    <button class="zoom-btn" data-action="pan" title="Pan mode — drag or scroll to move the canvas">✥</button>
+                                    <button class="zoom-btn" data-action="zoom-in" title="Zoom In (hold Space + Scroll)">+</button>
+                                    <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (hold Space + Scroll)">−</button>
+                                    <button class="zoom-btn" data-action="reset" title="Reset view — 100% size">⟲</button>
+                                    <button class="zoom-btn" data-action="fit" title="Fit whole page to view (Double-click)">⤢</button>
                                 </div>
-                                <div style="padding: 12px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto;">
-                                    <details>
-                                        <summary style="cursor: pointer; outline: none; margin-bottom: 4px; font-size: 11px; color: var(--text-secondary);">Selected HTML snippet</summary>
-                                        <pre id="html-tweak-snippet-pre" style="margin: 0; padding: 6px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 3px; font-size: 10px; font-family: monospace; white-space: pre-wrap; word-break: break-all; overflow-x: auto; max-height: 150px;"></pre>
-                                    </details>
-                                    <textarea id="html-tweak-input" class="stitch-input" style="width: 100%; height: 80px; box-sizing: border-box; resize: vertical;" placeholder="Describe the change to this element, e.g. 'make it dark blue'..."></textarea>
-                                    <div id="html-tweak-status" style="display: none; font-size: 11px; color: var(--accent-red); margin-bottom: 4px;"></div>
-                                    <div style="display: flex; gap: 8px;">
-                                        <button id="html-tweak-btn-copy" class="preview-overlay-btn primary" style="flex: 1;">Copy Prompt</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- HTML Previews Sub-panel -->
+            <div id="html-preview-content" class="previews-subpanel">
+                <div class="controls-strip" id="controls-strip-html">
+                    <select id="html-workspace-filter" class="workspace-filter-select">
+                        <option value="">All Workspaces</option>
+                    </select>
+                    <button id="html-btn-inspect" class="preview-overlay-btn" title="Toggle hover-to-select element mode">Inspect Mode</button>
+                    <input type="text" id="html-docs-search" class="sidebar-search-input" placeholder="Search previews..." />
+                    <button id="btn-copy-design-html-artifact-prompt" class="strip-btn" title="Copy a prompt to publish the selected HTML file to claude.ai as an Artifact">Copy upload prompt</button>
+                </div>
+                <div class="content-row">
+                    <div id="tree-pane-html">
+                        <div class="sidebar-toggle-row">
+                            <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                        </div>
+                        <div class="empty-state">Configure a folder to browse HTML files</div>
+                    </div>
+                    <div class="preview-panel-wrapper">
+                        <div id="preview-pane-html" style="flex: 1; width: 100%; box-sizing: border-box; height: 100%; display: flex; flex-direction: column; overflow: hidden;">
+                            <div id="html-initial-state" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 32px; color: var(--text-secondary);">
+                                <span style="font-size: 48px; opacity: 0.5;">🌐</span>
+                                <div style="text-align: center;">
+                                    <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px;">HTML Previewer</div>
+                                    <div style="font-size: 12px; max-width: 320px; line-height: 1.5;">Select a file from the sidebar to preview HTML pages. Configure folders using the Manage Folders button.</div>
+                                </div>
+                            </div>
+                            <div id="html-loading-state" style="flex: 1; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 32px; color: var(--text-secondary);">
+                                <div style="width: 32px; height: 32px; border: 3px solid var(--border-color); border-top-color: var(--accent-teal); border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+                                <div style="font-size: 12px;">Loading preview...</div>
+                            </div>
+                            <div id="html-preview-wrapper" class="zoomable-container" style="display: none; flex: 1;">
+                                <div class="zoomable-viewport" style="width: 100%; height: 100%;">
+                                    <iframe id="html-preview-frame" sandbox="allow-scripts allow-same-origin" style="border: none; background: var(--panel-bg); width: 100%; height: 100%; display: block;"></iframe>
+                                </div>
+                                <div id="html-tweak-popup" style="display: none; position: absolute; top: 12px; right: 12px; z-index: 20; width: 340px; max-height: calc(100% - 24px); background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); flex-direction: column; overflow: hidden; font-size: 12px; font-family: var(--font-family);">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border-color); font-weight: 600;">
+                                        <span id="html-tweak-header-breadcrumb" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; font-family: monospace;"></span>
+                                        <span id="html-tweak-btn-close" style="cursor: pointer; padding: 2px 6px; font-size: 14px;">✕</span>
+                                    </div>
+                                    <div style="padding: 12px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto;">
+                                        <details>
+                                            <summary style="cursor: pointer; outline: none; margin-bottom: 4px; font-size: 11px; color: var(--text-secondary);">Selected HTML snippet</summary>
+                                            <pre id="html-tweak-snippet-pre" style="margin: 0; padding: 6px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 3px; font-size: 10px; font-family: monospace; white-space: pre-wrap; word-break: break-all; overflow-x: auto; max-height: 150px;"></pre>
+                                        </details>
+                                        <textarea id="html-tweak-input" class="stitch-input" style="width: 100%; height: 80px; box-sizing: border-box; resize: vertical;" placeholder="Describe the change to this element, e.g. 'make it dark blue'..."></textarea>
+                                        <div id="html-tweak-status" style="display: none; font-size: 11px; color: var(--accent-red); margin-bottom: 4px;"></div>
+                                        <div style="display: flex; gap: 8px;">
+                                            <button id="html-tweak-btn-copy" class="preview-overlay-btn primary" style="flex: 1;">Copy Prompt</button>
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
-                            <!-- Shown while Space is held or Pan mode is toggled —
-                                 captures drag/scroll for pan/zoom; otherwise the iframe
-                                 stays fully interactive. -->
-                            <div class="zoom-event-layer"></div>
-                            <div class="zoom-toolbar">
-                                <button class="zoom-btn" data-action="pan" title="Pan mode — drag or scroll to move the canvas">✥</button>
-                                <button class="zoom-btn" data-action="zoom-in" title="Zoom In (hold Space + Scroll)">+</button>
-                                <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (hold Space + Scroll)">−</button>
-                                <button class="zoom-btn" data-action="reset" title="Reset view — 100% size">⟲</button>
-                                <button class="zoom-btn" data-action="fit" title="Fit whole page to view (Double-click)">⤢</button>
+                                <!-- Shown while Space is held or Pan mode is toggled —
+                                     captures drag/scroll for pan/zoom; otherwise the iframe
+                                     stays fully interactive. -->
+                                <div class="zoom-event-layer"></div>
+                                <div class="zoom-toolbar">
+                                    <button class="zoom-btn" data-action="pan" title="Pan mode — drag or scroll to move the canvas">✥</button>
+                                    <button class="zoom-btn" data-action="zoom-in" title="Zoom In (hold Space + Scroll)">+</button>
+                                    <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (hold Space + Scroll)">−</button>
+                                    <button class="zoom-btn" data-action="reset" title="Reset view — 100% size">⟲</button>
+                                    <button class="zoom-btn" data-action="fit" title="Fit whole page to view (Double-click)">⤢</button>
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
-        </div>
 
-        <!-- Images Tab -->
-        <div id="images-content" class="shared-tab-content">
-            <div class="controls-strip" id="controls-strip-images">
-                <select id="images-workspace-filter" class="workspace-filter-select">
-                    <option value="">All Workspaces</option>
-                </select>
-                <input type="text" id="images-docs-search" class="sidebar-search-input" placeholder="Search images..." />
-                <button id="btn-inspect-images" class="strip-btn" disabled>Inspect</button>
-                <span id="status-images" style="margin-left: 0; font-size: 12px; color: var(--text-secondary);">No folder configured</span>
-            </div>
-            <div class="content-row">
-                <div id="tree-pane-images">
-                    <div class="sidebar-toggle-row">
-                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
-                    </div>
-                    <div class="empty-state">Configure a folder to browse image files</div>
+            <!-- Images Sub-panel -->
+            <div id="images-content" class="previews-subpanel">
+                <div class="controls-strip" id="controls-strip-images">
+                    <select id="images-workspace-filter" class="workspace-filter-select">
+                        <option value="">All Workspaces</option>
+                    </select>
+                    <input type="text" id="images-docs-search" class="sidebar-search-input" placeholder="Search images..." />
+                    <button id="btn-inspect-images" class="strip-btn" disabled>Inspect</button>
+                    <span id="status-images" style="margin-left: 0; font-size: 12px; color: var(--text-secondary);">No folder configured</span>
                 </div>
-                <div class="preview-panel-wrapper">
-                    <div id="preview-pane-images" style="flex: 1; width: 100%; box-sizing: border-box; height: 100%; display: flex; flex-direction: column; overflow: hidden;">
-                        <div id="images-initial-state" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 32px; color: var(--text-secondary);">
-                            <span style="font-size: 48px; opacity: 0.5;">🖼️</span>
-                            <div style="text-align: center;">
-                                <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px;">Image Previewer</div>
-                                <div style="font-size: 12px; max-width: 320px; line-height: 1.5;">Select a file from the sidebar to preview image files. Configure folders using the Manage Folders button.</div>
-                            </div>
+                <div class="content-row">
+                    <div id="tree-pane-images">
+                        <div class="sidebar-toggle-row">
+                            <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
                         </div>
-                        <div id="images-loading-state" style="flex: 1; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 32px; color: var(--text-secondary);">
-                            <div style="width: 32px; height: 32px; border: 3px solid var(--border-color); border-top-color: var(--accent-teal); border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
-                            <div style="font-size: 12px;">Loading preview...</div>
-                        </div>
-                        <div id="image-preview-container-images" class="zoomable-container" style="display: none; padding: 0;">
-                            <div class="zoomable-viewport">
-                                <img id="image-preview-img-images" alt="Image preview" style="display: block;" />
+                        <div class="empty-state">Configure a folder to browse image files</div>
+                    </div>
+                    <div class="preview-panel-wrapper">
+                        <div id="preview-pane-images" style="flex: 1; width: 100%; box-sizing: border-box; height: 100%; display: flex; flex-direction: column; overflow: hidden;">
+                            <div id="images-initial-state" style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 32px; color: var(--text-secondary);">
+                                <span style="font-size: 48px; opacity: 0.5;">🖼️</span>
+                                <div style="text-align: center;">
+                                    <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px;">Image Previewer</div>
+                                    <div style="font-size: 12px; max-width: 320px; line-height: 1.5;">Select a file from the sidebar to preview image files. Configure folders using the Manage Folders button.</div>
+                                </div>
                             </div>
-                            <div class="zoom-toolbar">
-                                <button class="zoom-btn" data-action="zoom-in" title="Zoom In (Scroll)">+</button>
-                                <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (Scroll)">−</button>
-                                <button class="zoom-btn" data-action="reset" title="Reset view — 100% size">⟲</button>
-                                <button class="zoom-btn" data-action="fit" title="Fit to View (Double-click)">⤢</button>
+                            <div id="images-loading-state" style="flex: 1; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 32px; color: var(--text-secondary);">
+                                <div style="width: 32px; height: 32px; border: 3px solid var(--border-color); border-top-color: var(--accent-teal); border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+                                <div style="font-size: 12px;">Loading preview...</div>
+                            </div>
+                            <div id="image-preview-container-images" class="zoomable-container" style="display: none; padding: 0;">
+                                <div class="zoomable-viewport">
+                                    <img id="image-preview-img-images" alt="Image preview" style="display: block;" />
+                                </div>
+                                <div class="zoom-toolbar">
+                                    <button class="zoom-btn" data-action="zoom-in" title="Zoom In (Scroll)">+</button>
+                                    <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (Scroll)">−</button>
+                                    <button class="zoom-btn" data-action="reset" title="Reset view — 100% size">⟲</button>
+                                    <button class="zoom-btn" data-action="fit" title="Fit to View (Double-click)">⤢</button>
+                                </div>
                             </div>
                         </div>
                     </div>

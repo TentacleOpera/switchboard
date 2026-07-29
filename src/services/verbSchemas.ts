@@ -118,23 +118,6 @@ const DESIGN_VERB_SCHEMAS: Record<string, VerbSchema> = {
     listStitchFolders: FOLDER_LIST_SCHEMA,
     addStitchFolder: FOLDER_ADD_SCHEMA,
     removeStitchFolder: FOLDER_REMOVE_SCHEMA,
-    listBriefsFolders: FOLDER_LIST_SCHEMA,
-    addBriefsFolder: FOLDER_ADD_SCHEMA,
-    removeBriefsFolder: FOLDER_REMOVE_SCHEMA,
-    createBrief: {
-        fields: {
-            workspaceRoot: { type: 'string' },
-            sourceFolder: { type: 'string', required: true },
-            title: { type: 'string', required: true },
-        },
-    },
-    deleteBrief: {
-        fields: {
-            workspaceRoot: { type: 'string' },
-            sourceFolder: { type: 'string', required: true },
-            docId: { type: 'string', required: true },
-        },
-    },
     persistTabState: {
         fields: {
             tabKey: { type: 'string', required: true },

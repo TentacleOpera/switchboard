@@ -248,12 +248,12 @@ suite('Pair programming comprehensive', () => {
             });
 
             assert.ok(
-                withAccuracy.includes('accuracy.md'),
-                'Coder prompt with accuracy mode should reference accuracy.md'
+                withAccuracy.includes('accuracy') && withAccuracy.includes('SKILL.md'),
+                'Coder prompt with accuracy mode should reference accuracy skill'
             );
             assert.ok(
-                !withoutAccuracy.includes('accuracy.md'),
-                'Coder prompt without accuracy mode should not reference accuracy.md'
+                !withoutAccuracy.includes('accuracy'),
+                'Coder prompt without accuracy mode should NOT reference accuracy skill'
             );
         });
 

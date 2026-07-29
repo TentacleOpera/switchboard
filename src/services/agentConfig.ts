@@ -53,6 +53,8 @@ export interface CustomAgentAddons {
     prdContent?: string;
     /** Per-project PRD links resolved from the plans' own project fields (link-only). */
     prdReferences?: Array<{ projectName: string; prdLink: string }>;
+    /** Per-project Design System links resolved from the plans' own project fields. */
+    designSystemReferences?: Array<{ projectName: string; designSystemLink: string }>;
 
     // Workflow
     workflowFilePathEnabled?: boolean;

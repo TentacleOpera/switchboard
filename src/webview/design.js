@@ -7,8 +7,11 @@
 
     // Listen for transport reconnects to re-assert view state
     window.addEventListener('sbTransportReconnected', () => {
-        const activeTabEl = document.querySelector('.tab-button.active');
-        const activeTab = activeTabEl ? activeTabEl.dataset.tab : (state.activeTab || 'html-preview');
+        const activeTabBtn = document.querySelector('.shared-tab-btn.active');
+        let activeTab = activeTabBtn ? activeTabBtn.dataset.tab : (state.activeTab || 'stitch');
+        if (activeTab === 'previews') {
+            activeTab = state.previewsSource || 'stitch-html';
+        }
         vscode.postMessage({
             type: 'activeTabChanged',
             tab: activeTab,
@@ -38,32 +41,24 @@
         designSystemDocSourceId: null,
         designSystemDocId: null,
         selectedEl: null,
+        previewsSource: 'stitch-html',
         previewRequestId: 0,
         htmlFolderPathsByRoot: persistedState.htmlFolderPathsByRoot || {},
         designFolderPathsByRoot: persistedState.designFolderPathsByRoot || {},
-        briefsFolderPathsByRoot: persistedState.briefsFolderPathsByRoot || {},
         htmlPreviewCollapsed: persistedState.htmlPreviewCollapsed || false,
         designPreviewCollapsed: persistedState.designPreviewCollapsed || false,
         imagesPreviewCollapsed: persistedState.imagesPreviewCollapsed || false,
-        briefsPreviewCollapsed: persistedState.briefsPreviewCollapsed || false,
         stitchHtmlSidebarCollapsed: persistedState.stitchHtmlSidebarCollapsed || false,
         htmlWorkspaceRootFilter: '',
         designWorkspaceRootFilter: '',
         imagesWorkspaceRootFilter: '',
-        briefsWorkspaceRootFilter: '',
         stitchWorkspaceRoot: '',
         htmlDocsSearch: '',
         designDocsSearch: '',
         imagesDocsSearch: '',
-        briefsDocsSearch: '',
         _lastHtmlDocsMsg: null,
         _lastDesignDocsMsg: null,
         _lastImagesDocsMsg: null,
-        _lastBriefsDocsMsg: null,
-        activeBriefSourceId: null,
-        activeBriefDocId: null,
-        briefEditMode: false,
-        briefEditOriginalContent: '',
         stitchProjects: [],
         selectedStitchProjectId: '',
         stitchScreens: [],
@@ -149,7 +144,37 @@
         return _restoredPanelState.panel[tabKey];
     };
 
-    // Tab switcher
+    function selectPreviewsSource(source) {
+        state.previewsSource = source || 'stitch-html';
+        const sel = document.getElementById('previews-source-select');
+        if (sel && sel.value !== state.previewsSource) sel.value = state.previewsSource;
+        document.querySelectorAll('#previews-content .previews-subpanel').forEach(p => {
+            p.classList.toggle('active', p.id === state.previewsSource + '-content');
+        });
+
+        // Seat protocol: report the EFFECTIVE surface, never 'previews' —
+        // _isPolledTab / seat preview-clearing key on the original ids.
+        vscode.postMessage({ type: 'activeTabChanged', tab: state.previewsSource });
+
+        if (state.previewsSource === 'stitch-html') {
+            populateStitchHtmlProjectSelect(state.stitchProjects || []);
+            vscode.postMessage({
+                type: 'stitchListProjects',
+                workspaceRoot: state.stitchWorkspaceRoot
+            });
+        } else {
+            vscode.postMessage({ type: 'refreshDocsForTab', tab: state.previewsSource });
+        }
+        persistTab('previews.source', state.previewsSource);
+    }
+
+    const previewsSourceSelect = document.getElementById('previews-source-select');
+    if (previewsSourceSelect) {
+        previewsSourceSelect.addEventListener('change', (e) => {
+            selectPreviewsSource(e.target.value);
+        });
+    }
+
     const tabBtns = document.querySelectorAll('.shared-tab-btn');
     const tabContents = document.querySelectorAll('.shared-tab-content');
 
@@ -188,23 +213,12 @@
                 type: 'stitchListProjects',
                 workspaceRoot: state.stitchWorkspaceRoot
             });
-        } else if (tabName === 'stitch-html') {
-            // Populate the project dropdown from cached state, then request a fresh list.
-            populateStitchHtmlProjectSelect(state.stitchProjects || []);
-            vscode.postMessage({
-                type: 'stitchListProjects',
-                workspaceRoot: state.stitchWorkspaceRoot
-            });
+            vscode.postMessage({ type: 'activeTabChanged', tab: tabName });
+        } else if (tabName === 'previews') {
+            selectPreviewsSource(state.previewsSource);
+        } else {
+            vscode.postMessage({ type: 'activeTabChanged', tab: tabName });
         }
-
-        // Re-scan source folders on tab entry. VS Code's file watcher misses
-        // externally-created files, so the list can be stale; this forces a fresh
-        // server-side readdir every time the tab is activated (mirrors planning.js).
-        if (tabName === 'html-preview' || tabName === 'images' || tabName === 'briefs') {
-            vscode.postMessage({ type: 'refreshDocsForTab', tab: tabName });
-        }
-
-        vscode.postMessage({ type: 'activeTabChanged', tab: tabName });
 
         persistTab('activeTab', tabName);
     }
@@ -526,7 +540,7 @@
     // Sidebar Collapsing
     function toggleSidebarCollapsed(e) {
         const btn = e.target;
-        const pane = btn.closest('#tree-pane-design') || btn.closest('#tree-pane-html') || btn.closest('#tree-pane-images') || btn.closest('#tree-pane-briefs') || btn.closest('#tree-pane-stitch-html');
+        const pane = btn.closest('#tree-pane-design') || btn.closest('#tree-pane-html') || btn.closest('#tree-pane-images') || btn.closest('#tree-pane-stitch-html');
         if (!pane) return;
         const row = pane.closest('.content-row');
         if (!row) return;
@@ -540,8 +554,6 @@
             state.htmlPreviewCollapsed = isCollapsed;
         } else if (pane.id === 'tree-pane-images') {
             state.imagesPreviewCollapsed = isCollapsed;
-        } else if (pane.id === 'tree-pane-briefs') {
-            state.briefsPreviewCollapsed = isCollapsed;
         } else if (pane.id === 'tree-pane-stitch-html') {
             state.stitchHtmlSidebarCollapsed = isCollapsed;
         }
@@ -892,6 +904,7 @@
         if (['.md', '.markdown'].includes(ext)) subtitle = 'Markdown';
         else if (['.yaml', '.yml'].includes(ext)) subtitle = 'YAML';
         else if (ext === '.json') subtitle = 'JSON';
+        else if (['.html', '.htm'].includes(ext)) subtitle = 'HTML';
         else if (['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(ext)) subtitle = ext.substring(1).toUpperCase();
 
         return renderDocCard({
@@ -902,70 +915,6 @@
             nodeMetadata: node.metadata,
             actions,
             isSelected: state.activeSource === sourceId && state.activeDocId === node.id,
-            clickHandler: () => {
-                loadDocumentPreview(sourceId, node.id, node.name);
-            }
-        });
-    }
-
-    // ── Tree Rendering: Briefs ──
-    function renderBriefsDocs(rootEntry) {
-        const { sourceId, nodes, folderPaths } = rootEntry;
-        const treePaneBriefs = document.getElementById('tree-pane-briefs');
-        if (!treePaneBriefs) return;
-
-        treePaneBriefs.innerHTML = '';
-
-        const toggleRow = document.createElement('div');
-        toggleRow.className = 'sidebar-toggle-row';
-
-        const foldersBtn = document.createElement('button');
-        foldersBtn.className = 'sidebar-folders-btn';
-        foldersBtn.title = 'Manage Folders';
-        foldersBtn.textContent = 'Manage Folders';
-        foldersBtn.addEventListener('click', () => openFoldersModal('briefs'));
-        toggleRow.appendChild(foldersBtn);
-
-        const toggleBtn = document.createElement('button');
-        toggleBtn.className = 'sidebar-toggle-btn';
-        toggleBtn.title = 'Toggle sidebar';
-        toggleBtn.textContent = state.briefsPreviewCollapsed ? '»' : '«';
-        toggleBtn.addEventListener('click', toggleSidebarCollapsed);
-        toggleRow.appendChild(toggleBtn);
-        treePaneBriefs.appendChild(toggleRow);
-
-        const docList = document.createElement('div');
-        docList.className = 'source-doc-list';
-        docList.dataset.sourceId = sourceId;
-        treePaneBriefs.appendChild(docList);
-
-        if ((!nodes || nodes.length === 0) && (!folderPaths || folderPaths.length === 0)) {
-            docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No design briefs found.</div>';
-            return;
-        }
-
-        let docNodes = (nodes || []).filter(n => n.kind === 'document');
-        const folderNodes = (nodes || []).filter(n => n.kind === 'folder');
-        const search = String(state.briefsDocsSearch || '').trim().toLowerCase();
-        if (search) {
-            docNodes = docNodes.filter(d => (d.title || d.name || '').toLowerCase().includes(search));
-        }
-
-        renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, (doc) => createBriefDocCard(doc, sourceId), 'briefs');
-    }
-
-    function createBriefDocCard(node, sourceId) {
-        const fullName = node.name || node.id || '';
-        const lastDot = fullName.lastIndexOf('.');
-        const title = lastDot > 0 ? fullName.substring(0, lastDot) : fullName;
-        return renderDocCard({
-            title: node.title || title,
-            subtitle: 'Markdown',
-            sourceId,
-            nodeId: node.id,
-            nodeMetadata: node.metadata,
-            actions: ['Link Doc'],
-            isSelected: state.activeBriefSourceId === sourceId && state.activeBriefDocId === node.id,
             clickHandler: () => {
                 loadDocumentPreview(sourceId, node.id, node.name);
             }
@@ -1466,29 +1415,6 @@
                 requestId: state.previewRequestId,
                 sourceFolder
             });
-        } else if (sourceId === 'briefs-folder') {
-            if (state.briefEditMode) exitBriefEditMode();
-            state.activeBriefSourceId = sourceId;
-            state.activeBriefDocId = docId;
-            state.activeDocSourceFolder = sourceFolder || null;
-            updateBriefDocControls();
-
-            const statusBriefs = document.getElementById('status-briefs');
-            if (statusBriefs) statusBriefs.textContent = 'Loading...';
-
-            const previewBriefs = document.getElementById('markdown-preview-briefs');
-            if (previewBriefs) {
-                previewBriefs.innerHTML = '<div class="empty-state">Loading preview...</div>';
-                previewBriefs.style.display = 'block';
-            }
-
-            vscode.postMessage({
-                type: 'fetchPreview',
-                sourceId,
-                docId,
-                requestId: state.previewRequestId,
-                sourceFolder
-            });
         }
     }
 
@@ -1687,12 +1613,15 @@
             const imgCont = document.getElementById('image-preview-container-design');
             const imgImg = document.getElementById('image-preview-img-design');
             const jsonCont = document.getElementById('json-preview-container-design');
+            const htmlCont = document.getElementById('html-preview-container-design');
+            const htmlFrame = document.getElementById('html-preview-frame-design');
             const statusDesign = document.getElementById('status-design');
             const inspectBtn = document.getElementById('btn-inspect-design');
 
             if (isImage && webviewUri) {
                 if (mdPrev) mdPrev.style.display = 'none';
                 if (jsonCont) jsonCont.style.display = 'none';
+                if (htmlCont) htmlCont.style.display = 'none';
                 if (imgCont) imgCont.style.display = 'flex';
                 if (imgImg) {
                     imgImg.dataset.filePath = filePath || '';
@@ -1714,8 +1643,24 @@
                 }
             } else {
                 if (inspectBtn) inspectBtn.setAttribute('disabled', 'true');
-                if (msg.fileType === 'json') {
+                if (msg.fileType === 'html') {
                     if (imgCont) imgCont.style.display = 'none';
+                    if (mdPrev) mdPrev.style.display = 'none';
+                    if (jsonCont) jsonCont.style.display = 'none';
+                    if (htmlCont) htmlCont.style.display = 'flex';
+                    if (htmlFrame) {
+                        htmlFrame.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+                        if (msg.iframeSrc) {
+                            htmlFrame.removeAttribute('srcdoc');
+                            htmlFrame.src = isAutoRefreshed ? withCacheBust(msg.iframeSrc) : msg.iframeSrc;
+                        } else {
+                            htmlFrame.removeAttribute('src');
+                            htmlFrame.srcdoc = injectBaseTag(htmlContent || content, webviewUri);
+                        }
+                    }
+                } else if (msg.fileType === 'json') {
+                    if (imgCont) imgCont.style.display = 'none';
+                    if (htmlCont) htmlCont.style.display = 'none';
                     if (mdPrev) mdPrev.style.display = 'none';
                     if (jsonCont) {
                         jsonCont.style.display = 'block';
@@ -1728,6 +1673,7 @@
                     }
                 } else if (msg.fileType === 'yaml') {
                     if (imgCont) imgCont.style.display = 'none';
+                    if (htmlCont) htmlCont.style.display = 'none';
                     if (mdPrev) mdPrev.style.display = 'none';
                     if (jsonCont) {
                         jsonCont.style.display = 'block';
@@ -1746,6 +1692,7 @@
                     // Markdown/Text
                     if (imgCont) imgCont.style.display = 'none';
                     if (jsonCont) jsonCont.style.display = 'none';
+                    if (htmlCont) htmlCont.style.display = 'none';
                     if (mdPrev) {
                         mdPrev.style.display = 'block';
                         mdPrev.innerHTML = renderMarkdown(content) || '';
@@ -1933,152 +1880,6 @@
         }
     })();
 
-    function updateBriefDocControls() {
-        const hasDoc = state.activeBriefSourceId === 'briefs-folder' && !!state.activeBriefDocId;
-        const btnEdit = document.getElementById('btn-edit-brief');
-        const btnDelete = document.getElementById('btn-delete-brief');
-        
-        if (btnEdit) btnEdit.disabled = !hasDoc || state.briefEditMode;
-        if (btnDelete) btnDelete.disabled = !hasDoc;
-        const btnSendToStitch = document.getElementById('btn-send-brief-to-stitch');
-        if (btnSendToStitch) btnSendToStitch.disabled = !hasDoc || state.briefEditMode;
-    }
-
-    function enterBriefEditMode() {
-        const previewPane = document.getElementById('preview-pane-briefs');
-        const textarea = document.getElementById('markdown-editor-briefs');
-        if (!previewPane || !textarea) return;
-
-        state.briefEditOriginalContent = state.activeDocContent || '';
-        textarea.value = state.briefEditOriginalContent;
-        previewPane.classList.add('edit-mode');
-
-        if (window.SwitchboardMarkdownEditor) {
-            window.SwitchboardMarkdownEditor.attach(textarea, {
-                renderPreview: (markdown) => {
-                    return new Promise((resolve, reject) => {
-                        const requestId = Date.now() + Math.random();
-                        const handler = (event) => {
-                            const msg = event.data;
-                            if (msg.type === 'markdownLiveRendered' && msg.requestId === requestId) {
-                                window.removeEventListener('message', handler);
-                                if (msg.error) {
-                                    reject(msg.error);
-                                } else {
-                                    resolve(msg.html || msg.htmlContent || '');
-                                }
-                            }
-                        };
-                        window.addEventListener('message', handler);
-                        vscode.postMessage({
-                            type: 'renderMarkdownLive',
-                            requestId,
-                            content: markdown
-                        });
-                    });
-                }
-            });
-        }
-
-        const btnEdit = document.getElementById('btn-edit-brief');
-        const btnSave = document.getElementById('btn-save-brief');
-        const btnCancel = document.getElementById('btn-cancel-brief');
-        if (btnEdit) btnEdit.style.display = 'none';
-        if (btnSave) btnSave.style.display = '';
-        if (btnCancel) btnCancel.style.display = '';
-
-        state.briefEditMode = true;
-        updateBriefDocControls();
-    }
-
-    function exitBriefEditMode() {
-        const previewPane = document.getElementById('preview-pane-briefs');
-        if (previewPane) previewPane.classList.remove('edit-mode');
-
-        const btnEdit = document.getElementById('btn-edit-brief');
-        const btnSave = document.getElementById('btn-save-brief');
-        const btnCancel = document.getElementById('btn-cancel-brief');
-        if (btnEdit) btnEdit.style.display = '';
-        if (btnSave) btnSave.style.display = 'none';
-        if (btnCancel) btnCancel.style.display = 'none';
-
-        state.briefEditMode = false;
-        updateBriefDocControls();
-    }
-
-    (function initBriefDocControls() {
-        const btnEdit = document.getElementById('btn-edit-brief');
-        const btnSave = document.getElementById('btn-save-brief');
-        const btnCancel = document.getElementById('btn-cancel-brief');
-        const btnNew = document.getElementById('btn-new-brief');
-        const btnDelete = document.getElementById('btn-delete-brief');
-
-        if (btnEdit) {
-            btnEdit.addEventListener('click', () => enterBriefEditMode());
-        }
-        if (btnSave) {
-            btnSave.addEventListener('click', () => {
-                const filePath = state.activeDocFilePath;
-                const editor = document.getElementById('markdown-editor-briefs');
-                if (!filePath || !editor) return;
-                vscode.postMessage({
-                    type: 'saveFileContent',
-                    filePath,
-                    content: editor.value,
-                    originalContent: state.briefEditOriginalContent,
-                    tab: 'briefs'
-                });
-            });
-        }
-        if (btnCancel) {
-            btnCancel.addEventListener('click', () => exitBriefEditMode());
-        }
-        if (btnNew) {
-            btnNew.addEventListener('click', () => {
-                const title = 'untitled-brief';
-                const root = state.briefsWorkspaceRootFilter || Object.keys(state.briefsFolderPathsByRoot)[0];
-                if (!root) {
-                    const statusBriefs = document.getElementById('status-briefs');
-                    if (statusBriefs) {
-                        statusBriefs.textContent = 'Please configure at least one briefs folder first.';
-                        statusBriefs.style.color = '#ff6b6b';
-                        setTimeout(() => { statusBriefs.textContent = ''; }, 3000);
-                    }
-                    return;
-                }
-                const folders = state.briefsFolderPathsByRoot[root] || [];
-                if (folders.length === 0) {
-                    const statusBriefs = document.getElementById('status-briefs');
-                    if (statusBriefs) {
-                        statusBriefs.textContent = 'Please configure at least one briefs folder first.';
-                        statusBriefs.style.color = '#ff6b6b';
-                        setTimeout(() => { statusBriefs.textContent = ''; }, 3000);
-                    }
-                    return;
-                }
-                const sourceFolder = folders[0];
-                vscode.postMessage({
-                    type: 'createBrief',
-                    workspaceRoot: root,
-                    sourceFolder,
-                    title
-                });
-            });
-        }
-        if (btnDelete) {
-            btnDelete.addEventListener('click', () => {
-                if (!state.activeBriefSourceId || !state.activeBriefDocId) return;
-                const wrapper = findTreeNode(state.activeBriefSourceId, state.activeBriefDocId);
-                const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : state.activeDocSourceFolder;
-                vscode.postMessage({
-                    type: 'deleteBrief',
-                    docId: state.activeBriefDocId,
-                    sourceFolder
-                });
-            });
-        }
-    })();
-
     // ── Stitch UI Controls ──
     const stitchProjectSelect = document.getElementById('stitch-project-select');
     const designSystemProjectSelect = document.getElementById('design-system-project-select');
@@ -2107,7 +1908,6 @@
             designPreviewCollapsed: state.designPreviewCollapsed,
             htmlPreviewCollapsed: state.htmlPreviewCollapsed,
             imagesPreviewCollapsed: state.imagesPreviewCollapsed,
-            briefsPreviewCollapsed: state.briefsPreviewCollapsed,
             stitchHtmlSidebarCollapsed: state.stitchHtmlSidebarCollapsed,
             stitchThumbnailStripCollapsed: state.stitchThumbnailStripCollapsed
         });
@@ -2586,7 +2386,8 @@
                     projectId,
                     workspaceRoot: state.stitchWorkspaceRoot
                 });
-                document.querySelector('[data-tab="stitch-html"]')?.click();
+                document.querySelector('[data-tab="previews"]')?.click();
+                selectPreviewsSource('stitch-html');
                 loadDocumentPreview('stitch-html-folder', `${screen.id}.html`, screen.name || screen.id);
             });
         }
@@ -3411,15 +3212,6 @@
                 const designSelect = document.getElementById('design-workspace-filter');
                 if (designSelect) designSelect.value = state.designWorkspaceRootFilter;
 
-                const restoredBriefsRoot = _restoredPanelState.panel['briefs.root'] || '';
-                if (_workspaceItems.length === 0 || restoredBriefsRoot === '' || _workspaceItems.some(i => i.workspaceRoot === restoredBriefsRoot)) {
-                    state.briefsWorkspaceRootFilter = restoredBriefsRoot;
-                } else {
-                    state.briefsWorkspaceRootFilter = '';
-                }
-                const briefsSelect = document.getElementById('briefs-workspace-filter');
-                if (briefsSelect) briefsSelect.value = state.briefsWorkspaceRootFilter;
-
                 const restoredImagesRoot = _restoredPanelState.panel['images.root'] || '';
                 if (_workspaceItems.length === 0 || restoredImagesRoot === '' || _workspaceItems.some(i => i.workspaceRoot === restoredImagesRoot)) {
                     state.imagesWorkspaceRootFilter = restoredImagesRoot;
@@ -3429,42 +3221,27 @@
                 const imagesSelect = document.getElementById('images-workspace-filter');
                 if (imagesSelect) imagesSelect.value = state.imagesWorkspaceRootFilter;
 
+                const restoredPreviewsSource = (msg.panel || {})['previews.source'];
+                if (restoredPreviewsSource && ['stitch-html', 'html-preview', 'images'].includes(restoredPreviewsSource)) {
+                    state.previewsSource = restoredPreviewsSource;
+                }
+
                 // Override active tab with persisted value if it differs from the HTML default
-                const restoredTab = (msg.panel || {})['activeTab'];
-                const validTabs = ['stitch', 'briefs', 'html-preview', 'images', 'design'];
+                let restoredTab = (msg.panel || {})['activeTab'];
+                if (['stitch-html', 'html-preview', 'images'].includes(restoredTab)) {
+                    state.previewsSource = restoredTab;
+                    restoredTab = 'previews';
+                }
+
+                const validTabs = ['stitch', 'previews', 'design'];
                 if (restoredTab && validTabs.includes(restoredTab)) {
                     const currentTab = document.querySelector('.shared-tab-btn.active')?.dataset.tab;
-                    if (currentTab !== restoredTab) {
+                    if (currentTab !== restoredTab || restoredTab === 'previews') {
                         switchTab(restoredTab);
                     }
                 }
                 break;
             }
-            case 'briefsDocsReady':
-                state._lastBriefsDocsMsg = msg;
-                state.briefsFolderPathsByRoot = msg.folderPathsByRoot || {};
-                populateWorkspaceDropdown('briefs-workspace-filter', msg.workspaceItems || [], state.briefsWorkspaceRootFilter);
-                const filteredBriefsNodes = state.briefsWorkspaceRootFilter
-                    ? (msg.nodes || []).filter(n => n.metadata?.root === state.briefsWorkspaceRootFilter)
-                    : (msg.nodes || []);
-                renderBriefsDocs({
-                    sourceId: msg.sourceId || 'briefs-folder',
-                    nodes: filteredBriefsNodes,
-                    folderPaths: getCurrentFolderPaths(state.briefsFolderPathsByRoot, state.briefsWorkspaceRootFilter)
-                });
-                if (state._pendingAutoOpenBrief) {
-                    const pending = state._pendingAutoOpenBrief;
-                    const age = Date.now() - pending.createdAt;
-                    if (age < 5000) {
-                        const nodes = msg.nodes || [];
-                        const found = nodes.find(n => n.id === pending.docId);
-                        if (found) {
-                            loadDocumentPreview('briefs-folder', found.id, found.name);
-                        }
-                    }
-                    state._pendingAutoOpenBrief = null;
-                }
-                break;
 
             case 'stitchAttachedFilesPicked': {
                 if (msg.files && Array.isArray(msg.files)) {
@@ -3476,100 +3253,7 @@
                 break;
             }
 
-            case 'stitchBriefInjected': {
-                const promptInput = document.getElementById('stitch-prompt-input');
-                if (promptInput && msg.content) {
-                    promptInput.value = `\n\n--- Design Brief ---\n${msg.content}\n---`;
-                    promptInput.dispatchEvent(new Event('input'));
-                }
-                document.querySelector('[data-tab="stitch"]')?.click();
-                if (msg.autoGenerate) {
-                    const autoGen = {
-                        prompt: (msg.content || '').trim(),
-                        projectId: msg.projectId,
-                        deviceType: stitchDeviceSelect ? stitchDeviceSelect.value : undefined,
-                        modelId: state.stitchModelId,
-                        statusText: 'Generating from brief\u2026'
-                    };
-                    // stitchProjectsReady arrived immediately before this message: it selected
-                    // the new project AND kicked off a screen-load (setStitchBusy(true)).
-                    // runStitchGenerate bails while busy, so defer until that load finishes and
-                    // clears busy \u2014 the stitchScreensReady handler fires the pending generate.
-                    if (state.stitchBusy) {
-                        state.stitchPendingAutoGenerate = autoGen;
-                    } else {
-                        runStitchGenerate(autoGen);
-                    }
-                } else {
-                    setStitchStatus('Brief loaded \u2014 review and click Generate', 'success');
-                }
-                break;
-            }
 
-            case 'briefsFoldersListed': {
-                if (!state.briefsFolderPathsByRoot) state.briefsFolderPathsByRoot = {};
-                state.briefsFolderPathsByRoot[msg.workspaceRoot] = msg.paths || [];
-                if (folderModalScope === 'briefs') {
-                    renderFolderListModal();
-                }
-                updateBriefDocControls();
-                break;
-            }
-
-            case 'briefCreated': {
-                if (msg.success) {
-                    const statusBriefs = document.getElementById('status-briefs');
-                    if (statusBriefs) {
-                        statusBriefs.textContent = 'Brief created';
-                        statusBriefs.style.color = 'var(--accent-teal)';
-                        setTimeout(() => { statusBriefs.textContent = ''; }, 2000);
-                    }
-                    if (msg.docId && msg.sourceFolder) {
-                        state._pendingAutoOpenBrief = {
-                            docId: msg.docId,
-                            sourceFolder: msg.sourceFolder,
-                            createdAt: Date.now()
-                        };
-                    }
-                } else {
-                    const statusBriefs = document.getElementById('status-briefs');
-                    if (statusBriefs) {
-                        statusBriefs.textContent = 'Failed to create brief: ' + (msg.error || 'unknown error');
-                        statusBriefs.style.color = '#ff6b6b';
-                        setTimeout(() => { statusBriefs.textContent = ''; }, 4000);
-                    }
-                }
-                break;
-            }
-
-            case 'briefDeleted': {
-                if (msg.success) {
-                    state.activeBriefSourceId = null;
-                    state.activeBriefDocId = null;
-                    state.activeDocContent = null;
-                    state.activeDocFilePath = null;
-                    if (state.briefEditMode) exitBriefEditMode();
-                    const previewBriefs = document.getElementById('markdown-preview-briefs');
-                    if (previewBriefs) {
-                        previewBriefs.innerHTML = '<div class="empty-state">Select a brief from the sidebar to preview</div>';
-                    }
-                    updateBriefDocControls();
-                    const statusBriefs = document.getElementById('status-briefs');
-                    if (statusBriefs) {
-                        statusBriefs.textContent = 'Brief deleted';
-                        statusBriefs.style.color = 'var(--accent-teal)';
-                        setTimeout(() => { statusBriefs.textContent = ''; }, 2000);
-                    }
-                } else {
-                    const statusBriefs = document.getElementById('status-briefs');
-                    if (statusBriefs) {
-                        statusBriefs.textContent = 'Failed to delete brief: ' + (msg.error || 'unknown error');
-                        statusBriefs.style.color = '#ff6b6b';
-                        setTimeout(() => { statusBriefs.textContent = ''; }, 4000);
-                    }
-                }
-                break;
-            }
 
             case 'designDocsReady':
                 state._lastDesignDocsMsg = msg;
@@ -4825,8 +4509,6 @@
             vscode.postMessage({ type: 'listImagesFolders', workspaceRoot: root });
         } else if (folderModalScope === 'stitch') {
             vscode.postMessage({ type: 'listStitchFolders', workspaceRoot: root });
-        } else if (folderModalScope === 'briefs') {
-            vscode.postMessage({ type: 'listBriefsFolders', workspaceRoot: root });
         }
     });
 
@@ -4843,12 +4525,8 @@
             vscode.postMessage({ type: 'addImagesFolder', workspaceRoot: root });
         } else if (folderModalScope === 'stitch') {
             vscode.postMessage({ type: 'addStitchFolder', workspaceRoot: root });
-        } else if (folderModalScope === 'briefs') {
-            vscode.postMessage({ type: 'addBriefsFolder', workspaceRoot: root });
         }
     });
-
-    registerWorkspaceDropdown('briefs-workspace-filter', 'briefs.root');
 
     // Stitch HTML tab: project dropdown + search
     const stitchHtmlProjectSelect = document.getElementById('stitch-html-project-select');
@@ -5739,13 +5417,31 @@
         vscode.postMessage({ type: 'copyClaudeArtifactPrompt', prompt, error });
     });
 
+    document.getElementById('btn-copy-design-system-prompt')?.addEventListener('click', () => {
+        const btn = document.getElementById('btn-copy-design-system-prompt');
+        vscode.postMessage({
+            type: 'copyDesignSystemPrompt',
+            sourceFolder: state.activeDocSourceFolder || undefined,
+            docId: state.activeDocId || undefined,
+            filePath: state.activeDocFilePath || undefined,
+            projectName: state.activeProjectName || undefined
+        });
+        if (btn) {
+            const originalText = btn.textContent;
+            btn.textContent = 'Copied!';
+            setTimeout(() => { btn.textContent = originalText; }, 2000);
+        }
+    });
+
+    document.getElementById('btn-create-design-system-template')?.addEventListener('click', () => {
+        vscode.postMessage({ type: 'createDesignSystemTemplate' });
+    });
+
     function applySidebarState() {
         const designRow = document.getElementById('tree-pane-design')?.closest('.content-row');
         if (designRow) designRow.classList.toggle('collapsed', !!state.designPreviewCollapsed);
         const htmlRow = document.getElementById('tree-pane-html')?.closest('.content-row');
         if (htmlRow) htmlRow.classList.toggle('collapsed', !!state.htmlPreviewCollapsed);
-        const briefsRow = document.getElementById('tree-pane-briefs')?.closest('.content-row');
-        if (briefsRow) briefsRow.classList.toggle('collapsed', !!state.briefsPreviewCollapsed);
         const imagesRow = document.getElementById('tree-pane-images')?.closest('.content-row');
         if (imagesRow) imagesRow.classList.toggle('collapsed', !!state.imagesPreviewCollapsed);
         const stitchHtmlRow = document.getElementById('tree-pane-stitch-html')?.closest('.content-row');

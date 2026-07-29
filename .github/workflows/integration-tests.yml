@@ -46,6 +46,9 @@ jobs:
       - name: Design asset route security contract
         run: npm run test:contract:design-asset
 
+      - name: Design per-client reply addressing regression
+        run: npm run test:contract:design-reply-addressing
+
       - name: Run integration suite
         run: npm run test:integration:all
 

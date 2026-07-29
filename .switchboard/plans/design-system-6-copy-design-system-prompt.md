@@ -77,3 +77,6 @@ The one structural risk is divergence between the copied prompt and the dispatch
 - **Low.** A new button plus a message handler, reusing an existing prompt builder, an existing CSS class, and an existing clipboard path. The one real risk is divergence between the copied prompt and the dispatched prompt, which is prevented structurally by building both from `buildDesignSystemBlock` rather than duplicating the framing in the webview.
 
 **Recommendation:** Send to Coder
+
+## Completion Summary
+Added "Copy Design System Prompt" button to Design System tab top controls strip in `src/webview/design.html`. Handled `copyDesignSystemPrompt` in `src/services/DesignPanelProvider.ts` to resolve project-bound or active/selected design doc, construct `buildDesignSystemBlock` with extracted tokens and authoring framing, and copy to clipboard with notification. Added click listener and inline feedback state in `src/webview/design.js`. Files changed: `src/webview/design.html`, `src/webview/design.js`, `src/services/DesignPanelProvider.ts`. No issues encountered.

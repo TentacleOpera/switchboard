@@ -1126,6 +1126,31 @@ export class KanbanDatabase {
         }
     }
 
+    public async getConfigValue(key: string): Promise<string | null> {
+        await this.ensureReady();
+        if (!this._db) return null;
+        try {
+            const stmt = this._db.prepare("SELECT value FROM config WHERE key = ?", [key]);
+            let val: string | null = null;
+            if (stmt.step()) {
+                val = String(stmt.getAsObject().value ?? '');
+            }
+            stmt.free();
+            return val;
+        } catch {
+            return null;
+        }
+    }
+
+    public async setConfigValue(key: string, value: string): Promise<void> {
+        await this.ensureReady();
+        if (!this._db) return;
+        try {
+            this._db.run("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", [key, value]);
+            this.schedulePersist();
+        } catch {}
+    }
+
     /**
      * Validates a potential database path. Checks for directory existence and resolve errors.
      */

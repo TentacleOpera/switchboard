@@ -47,6 +47,7 @@ import { LinearRemoteProvider } from './remote/LinearRemoteProvider';
 import { NotionRemoteProvider } from './remote/NotionRemoteProvider';
 import { ClickUpRemoteProvider } from './remote/ClickUpRemoteProvider';
 import { loadNotionRemoteSetup } from './remote/notionRemoteConfig';
+import { getProjectDesignSystemPath, migrateLegacyDesignSystemIfNeeded, setProjectDesignSystemPath, removeProjectDesignSystemPath } from './designSystemUtils';
 import { LastWriteWinsResolver } from './remote/ContentConflictResolver';
 import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { NotionFetchService } from './NotionFetchService';
@@ -1817,8 +1818,8 @@ export class KanbanProvider implements vscode.Disposable {
         // project-filtered rows above — otherwise subtasks in a different project (or
         // any assigned project while the board shows "__unassigned__") are excluded and
         // every feature renders "0 SUBTASKS". See getSubtaskCountsByFeature.
-        const subtaskCountMap = await db.getSubtaskCountsByFeature(workspaceId);
-        const featureWorkingMap = await db.getFeatureWorkingStates(workspaceId, timeoutMs);
+        const subtaskCountMap = typeof db.getSubtaskCountsByFeature === 'function' ? await db.getSubtaskCountsByFeature(workspaceId) : new Map();
+        const featureWorkingMap = typeof db.getFeatureWorkingStates === 'function' ? await db.getFeatureWorkingStates(workspaceId, timeoutMs) : new Map();
 
         // Build cards directly from DB rows — no _resolveWorkspaceRoot that could return null
         const cards: KanbanCard[] = activeRowsFiltered.map(row => {
@@ -3335,12 +3336,14 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 // value the watcher reads, so "visible == stamped" holds by
                 // construction. Refreshes READ, never WRITE, the DB config.
                 try {
-                    const storedFilter = await db.getConfig('kanban.activeProjectFilter');
-                    if (storedFilter && storedFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
-                        this._projectFilter = storedFilter;
-                        this._projectFilterNeedsValidation = true;
-                    } else {
-                        this._projectFilter = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
+                    if (db && typeof db.getConfig === 'function') {
+                        const storedFilter = await db.getConfig('kanban.activeProjectFilter');
+                        if (storedFilter && storedFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
+                            this._projectFilter = storedFilter;
+                            this._projectFilterNeedsValidation = true;
+                        } else {
+                            this._projectFilter = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
+                        }
                     }
                 } catch (e) {
                     console.warn('[KanbanProvider] _refreshBoardImpl: failed to read active project from DB config:', e);
@@ -4408,7 +4411,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     private async _resolveProjectContextEnabled(workspaceRoot: string): Promise<boolean> {
         try {
             const db = this._getKanbanDb(workspaceRoot);
-            if (db && await db.ensureReady()) {
+            if (db && typeof db.getConfig === 'function' && await db.ensureReady()) {
                 return (await db.getConfig('project_context_enabled')) === 'true';
             }
         } catch { /* non-fatal */ }
@@ -4498,6 +4501,25 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         return prdReferences;
     }
 
+    private async _resolveDesignSystemReferences(workspaceRoot: string, plans: BatchPromptPlan[]): Promise<Array<{ projectName: string; designSystemLink: string }>> {
+        if (!(await this._resolveProjectContextEnabled(workspaceRoot))) return [];
+        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+        const pathConfig = this._seams().pathConfig;
+        await migrateLegacyDesignSystemIfNeeded(workspaceRoot, db, pathConfig);
+
+        const distinctProjects = [...new Set(
+            plans.map(p => p.project).filter((p): p is string => !!p && p !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER)
+        )];
+        const designSystemReferences: Array<{ projectName: string; designSystemLink: string }> = [];
+        for (const projectName of distinctProjects) {
+            const designSystemLink = await getProjectDesignSystemPath(workspaceRoot, projectName);
+            if (designSystemLink) {
+                designSystemReferences.push({ projectName, designSystemLink });
+            }
+        }
+        return designSystemReferences;
+    }
+
     public async generateUnifiedPrompt(
         role: string,
         // Plan arrays for dispatch MUST come from KanbanProvider.buildDispatchPlans
@@ -4552,6 +4574,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 const prdReferences = await this._resolvePrdReferences(workspaceRoot, plans);
                 if (prdReferences.length > 0) {
                     mergedAddons.prdReferences = prdReferences;
+                }
+                const dsReferences = await this._resolveDesignSystemReferences(workspaceRoot, plans);
+                if (dsReferences.length > 0) {
+                    mergedAddons.designSystemReferences = dsReferences;
                 }
             }
             const promptTab = this._getRoleConfig(role)?.prompt?.trim() || '';
@@ -4638,6 +4664,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const prdReferences = await this._resolvePrdReferences(workspaceRoot, plans);
             if (prdReferences.length > 0) {
                 resolvedOptions.prdReferences = prdReferences;
+            }
+            const dsReferences = await this._resolveDesignSystemReferences(workspaceRoot, plans);
+            if (dsReferences.length > 0) {
+                resolvedOptions.designSystemReferences = dsReferences;
             }
         }
 
@@ -9012,6 +9042,10 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 // If no next column, still copy the prompt but don't advance
                 if (!nextCol) {
                     void this._seams().ui.showInformationMessage(`Copied prompt for ${sourceCards.length} plans. No next column to advance to.`);
+                    for (const card of sourceCards) {
+                        const sid = this._cardId(card);
+                        this.postMessage({ type: 'copyPlanLinkResult', planId: sid, sessionId: sid, success: true });
+                    }
                     return { success: true, prompt, advanced: 0 };
                 }
 
@@ -9041,6 +9075,10 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                         allMovedIds.push(...cascadeIds);
                     }
                     this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
+                    for (const card of sourceCards) {
+                        const sid = this._cardId(card);
+                        this.postMessage({ type: 'copyPlanLinkResult', planId: sid, sessionId: sid, success: true });
+                    }
                     this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`, isError: false });
                     return { success: true, prompt, targetColumn: nextCol };
                 }
@@ -9068,9 +9106,17 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                             }
                             this.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
                         }
+                        for (const card of sourceCards) {
+                            const sid = this._cardId(card);
+                            this.postMessage({ type: 'copyPlanLinkResult', planId: sid, sessionId: sid, success: true });
+                        }
                         const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
                         this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. Advanced ${knownIds.length}.${skippedSuffix}`, isError: false });
                     } else {
+                        for (const card of sourceCards) {
+                            const sid = this._cardId(card);
+                            this.postMessage({ type: 'copyPlanLinkResult', planId: sid, sessionId: sid, success: true });
+                        }
                         this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. No plans advanced (${skippedCount} skipped — unknown complexity).`, isError: false });
                     }
                 } else {
@@ -9082,6 +9128,10 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                         allMovedIds.push(...cascadeIds);
                     }
                     this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
+                    for (const card of sourceCards) {
+                        const sid = this._cardId(card);
+                        this.postMessage({ type: 'copyPlanLinkResult', planId: sid, sessionId: sid, success: true });
+                    }
                     this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to next stage.`, isError: false });
                 }
                 return { success: true, prompt, targetColumn: nextCol };

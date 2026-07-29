@@ -92,3 +92,6 @@ Key risks: (1) missing `injectBaseTag` on the new DS-tab path, silently 404ing r
 - No migration concern: purely additive to a read-only file scan. Users with no HTML design docs see no change.
 
 **Recommendation:** Send to Coder
+
+## Completion Summary
+Implemented HTML design system rendering in the Design System tab. Added `.html` and `.htm` to `_isDesignOrImageFile` whitelist in `LocalFolderService.ts`, mapped `html` fileType in `DesignPanelProvider.ts`, added HTML preview container iframe and updated empty state in `design.html`, and added iframe src/srcdoc preview loading logic in `design.js`. Files changed: `src/services/LocalFolderService.ts`, `src/services/DesignPanelProvider.ts`, `src/webview/design.html`, `src/webview/design.js`. No issues encountered.

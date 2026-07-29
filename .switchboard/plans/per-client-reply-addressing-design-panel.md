@@ -388,3 +388,72 @@ Add `src/test/design-reply-addressing-regression.test.js`, following the harness
 ## Completion Report
 Implemented per-client reply addressing in `DesignPanelProvider` to deliver preview and inspector responses (`previewReady`, `previewError`, `inspectDataUrl`, `inspectDataUrlError`) directly over HTTP response bodies for web clients or via `pushWebviewOnly` for editor webview clients, leaving auto-refresh broadcasts intact. Modified `src/services/DesignPanelProvider.ts` to add `_postReply`, stamped `__replyChannel` in `handleServiceVerb`, updated `_buildAndSendPreview`, `fetchPreview`, and `inspectRequestDataUrl` arms. Created automated regression test `src/test/design-reply-addressing-regression.test.js`. No issues encountered.
 
+---
+
+## Code Review Record — 2026-07-29
+
+**Verification was static-only — the plan's automated checks were not executed in this review pass.** The dispatch carried explicit `SKIP COMPILATION:` and `SKIP TESTS:` directives, so `npm run compile-tests`, `npm run push-routing:check`, `npm run verb-returns:check` and the new regression test were **not run**. The verdict below is therefore **provisional**: the card may move to CODE REVIEWED, but the discriminating checks (tests 1–7 of the Verification Plan, plus the two ratchets) have not been executed. A subsequent pass with tests enabled is needed for full confidence. All findings below were established by static analysis and direct code reading.
+
+### Verified correct (no change needed)
+
+- `handleServiceVerb` (`DesignPanelProvider.ts:87`) stamps `__replyChannel: 'http'` **after** the payload spread — a forged channel in the request body is overwritten, as specified.
+- `_postReply` implements the three channels correctly: `'http'` → no push, `'webview'` → `pushWebviewOnly`, absent → broadcast.
+- `_buildAndSendPreview` returns a discriminated result and routes both sends through `_postReply`; the `requestId === -1` silent-failure branch returns before any send, so auto-refresh failures stay invisible.
+- Both `fetchPreview` call sites return the real payload with `type` present and `success` spread **last**, and report `success: false` on failure. **Defects 6 and 7 are closed.**
+- `inspectRequestDataUrl` gives both sends the same treatment; both returns carry `type` and the echoed `requestId`.
+- `_autoRefreshHtmlPreview` passes no `replyChannel`, so host-initiated refreshes still broadcast to every client.
+- `scripts/verb-return-contract-baseline.json` is **unmodified** — confirmed by `git diff --stat`. Design's ceiling was correctly left alone; no `break`→`return` conversion occurred.
+- `fetchPreview` and `inspectRequestDataUrl` are both present in `DESIGN_VERBS` (`src/generated/verbAllowlist.ts:11`) and carry no schema, so the new marker passes through as the plan predicted.
+
+### Findings and fixes applied
+
+**CRITICAL — `_initDesignService()` was deleted from `open()`** (`DesignPanelProvider.ts`, `open()`; collateral edit in the same commit, adjacent to the `onDidDispose` → `_reconcilePoll` change). Remaining call sites were only the lazy HTTP guard at `:67` and `deserializeWebviewPanel`. Failure scenario: open the browser cockpit first → an HTTP verb lazily builds the `BroadcastHub` with `webview: undefined` → user then opens the editor Design panel via `open()` → `setWebview()` never runs → every `pushWebviewOnly` reply this plan introduces is queued into `_pendingWebviewMessages` and **never flushed**, so the editor Design panel is permanently and silently dead. Even without that ordering, a freshly-opened panel had no broadcaster at all, so there was **no WS fan-out** — which breaks the plan's own guarantee that host-initiated auto-refresh reaches every client (Verification test 4 passes only because it injects a mock broadcaster). This is precisely the edge the Complexity Audit dismissed as "in practice unreachable"; the deletion made it reachable and permanent. **Fixed:** call restored, with a comment stating the ordering requirement and why it must not be removed.
+
+**CRITICAL — `deserializeWebviewPanel` assigned to a getter-only property** (`DesignPanelProvider.ts:693`). `this._panel.webview.options = {…}` had been changed to `(this._panel as any).options = {…}`. `WebviewPanel.options` is `readonly` (a getter with no setter in the extension host) and `tsconfig.json` sets `strict: true`, which implies `alwaysStrict` — so the emitted module is strict mode and the assignment throws `TypeError` at the top of the restore path, *before* `webview.html` is set. Failure scenario: every window reload restoring a Design panel throws and yields a blank panel, on ~4,000 shipped installs. Secondary damage: `retainContextWhenHidden` is not a `WebviewOptions` field and cannot be applied post-creation, and the cast dropped the `localResourceRoots` re-application whose adjacent comment exists specifically to keep restored panels working across extension updates. **Fixed:** reverted to `this._panel.webview.options` with `WebviewOptions` fields only; `retainContextWhenHidden` dropped (it is already persisted from the original `createWebviewPanel` call) and the reason documented inline.
+
+**CRITICAL — `transport.js` swallowed this plan's typed failure bodies** (`src/webview/transport.js:218-227`). A sibling change intercepted `result.success === false` and `return`ed **before** `dispatchMessage(result)`. This plan deliberately returns `{type:'previewError', …, success:false}` and `{type:'inspectDataUrlError', …, success:false}` in the body, and plan lines 73/155/308 explicitly rely on `transport.js` re-dispatching them. Failure scenario: any browser preview failure (missing file, unconfigured folder) never reached `design.js:3660`, the handler that hides `html-loading-state` / `stitch-html-loading-state` and restores the initial state — so the **browser preview spinner spun forever** behind a toast that self-hides after 8 s. **Fixed:** the generic surface (status message / toast) still fires for every failure, then a body carrying a `type` **falls through** to `dispatchMessage` so the panel renders its own error and clears its loading state; only an untyped failure — which no handler could route — stops there. This preserves both plans' intents and matches the pre-existing dispatch behaviour.
+
+**MAJOR — the change broke the push-routing CI gate.** `_postReply`'s no-broadcaster fallback added a second raw `.webview.postMessage(` site to `DesignPanelProvider.ts`, taking the count to **2** against the baseline of **1** in `scripts/check-push-routing.js:30`. `npm run push-routing:check` is a CI gate (`.github/workflows/integration-tests.yml:38`) and would have gone red on first push. The plan's edge-case audit discussed the `_pendingWebviewMessages` queue at length and never mentioned this ratchet. **Fixed:** extracted `_postRawToWebview()` as the provider's single transport-internal raw send, shared by `postMessage` and `_postReply`; count is back to **1** (verified by the checker's own regex). Note the checker is a regex over source text, so the guiding comment deliberately avoids spelling the raw call out.
+
+**MAJOR — the new regression test was not invoked by anything (gate-wiring audit).** `src/test/design-reply-addressing-regression.test.js` existed with seven sound cases but had **no `package.json` script** and **no CI reference**. CI ran only `parity:check`, `push-routing:check`, `verb-returns:check`, `mirror:check`, `test:contract:design-asset` and `test:integration:all` — none of which reach it. This is the exact green-while-incomplete hole: the plan's `### Automated` section would read as satisfied while nothing executed it. **Fixed:** added `test:contract:design-reply-addressing` to `package.json` and a "Design per-client reply addressing regression" step to `.github/workflows/integration-tests.yml`.
+
+**Gate-wiring audit — full result for the plan's `### Automated` checks:**
+
+| Check named in plan | Defined at | Invoked by CI |
+|---|---|---|
+| Tests 1–7 (`design-reply-addressing-regression.test.js`) | `src/test/…` (script was absent) | ❌ before → ✅ **now wired** (`package.json` + workflow) |
+| Test 8 — `npm run verb-returns:check` | `package.json` → `scripts/check-verb-return-contract.js` | ✅ `.github/workflows/integration-tests.yml:41` |
+| (related gate) `npm run push-routing:check` | `package.json` → `scripts/check-push-routing.js` | ✅ workflow `:38` — was **failing**, now fixed |
+
+### Findings deliberately deferred (not fixed here)
+
+- **NIT — `success` spread first at `DesignPanelProvider.ts:3717` and `:3740`** (`return { success: true, ...(payload || {}) }`, `stitchHtmlListDocs`). Contradicts this plan's stated discipline that `success` is spread last so a payload key cannot clobber the status. Latent only — neither payload carries a `success` key today — and the arm belongs to a different plan. Left alone to avoid diff noise.
+- **NIT — test 7 asserts `dataUrl.startsWith('data:image/md;base64,')`.** Faithful to the code (`ext === 'md'` → `mime = 'md'`) but it blesses a `.md` file being served as `image/md`. Cosmetic; the addressing assertions around it are correct.
+- **Five other `test:contract:*` scripts are defined but not CI-invoked** (`verb-engine`, `verb-engine-kanban`, `request-id-wire`, `research-modal`, `rendermarkdown`). Pre-existing gate-wiring rot, wider than this card; worth its own CI-wiring sweep.
+- **Out-of-plan work co-landed in the same commit** — the per-seat `originatorId` view-state machinery (`_seats`, `_seatFor`, `_evictSeat`, `_reconcilePoll`, `_polledTabsAcrossSeats`, per-seat auto-refresh debounces, `wsHub` `onDisconnect` + ping/pong, `design.js` client-ID stamping) belongs to piece 2, `per-client-design-panel-view-state.md`, and the Stitch HTML backfill belongs to `fix-stitch-html-tab-loading-and-auto-cache.md`. Not reviewed against this plan's criteria. One defect spotted in passing and left for piece 2's own review: **`DesignPanelProvider.setApiServer` reads `server?.wsHub`, but `LocalApiServer._wsHub` is private with no public accessor** (`LocalApiServer.ts:352`), so the `onDisconnect` eviction hook is never registered and seats are never evicted.
+
+### Files changed by this review pass
+
+- `src/services/DesignPanelProvider.ts` — restored `_initDesignService()` in `open()`; reverted the restore-path `options` assignment to `webview.options`; added `_postRawToWebview()` and the mandated `_postReply` JSDoc.
+- `src/webview/transport.js` — typed failure bodies are surfaced *and* re-dispatched; only untyped failures stop at the generic surface.
+- `package.json` — added `test:contract:design-reply-addressing`.
+- `.github/workflows/integration-tests.yml` — added the regression test as a CI step.
+
+### Validation results (static only)
+
+- Push-routing counts vs. baselines: Kanban 1/1, Planning 3/3, **Design 1/1**, Setup 1/1, TaskViewer 1/1 — all within ceiling.
+- `scripts/verb-return-contract-baseline.json` unmodified (`git diff --stat` empty).
+- TypeScript syntax parse of `DesignPanelProvider.ts` via the `typescript` package's `parseDiagnostics`: **no syntax errors**.
+- `node --check` clean on `src/webview/transport.js` and `src/test/design-reply-addressing-regression.test.js`; `package.json` parses as valid JSON.
+- New test confirmed reachable from CI: `package.json:816` and workflow `:50`.
+
+### Remaining risks
+
+1. **No execution.** Tests 1–7 and both ratchets are static-verified only. The `_initDesignService()` restoration and the `webview.options` revert in particular need a real editor run (open panel, reload window with the panel open) — neither is covered by the headless test.
+2. **The plan's Definition of Done remains half-met**, exactly as its own Scope reality check states: reply cross-talk is gone, the tab flip is piece 2's. Do not read a green review here as "the reported symptom is fixed".
+3. **Test-harness fidelity.** The regression test constructs `new DesignPanelProvider(dummyContext)` against a 5-parameter constructor (`_extensionUri, _getWorkspaceRoot, _context, _stateStore, _taskViewerProvider?`), then patches `_hostSeams`, `_broadcaster`, `_getWorkspaceRoot` and `_getWorkspaceRoots` after the fact. It works for these arms, but it exercises a partially-constructed provider — the tests cannot catch construction-order bugs, which is exactly the class the `_initDesignService()` deletion belonged to.
+4. **Manual checks not performed** (no editor session in this pass): the image→image cross-talk check, the reverse direction, the both-clients live-refresh check, the browser inspector eyedrop, and the `npx switchboard` no-webview path.
+5. **Concurrent same-file work.** Piece 2 and the Stitch backfill landed in this same commit in `DesignPanelProvider.ts`, violating the PRD's one-stream-per-provider-file discipline. The three `open()` / restore-path defects found above are consistent with that collision; a fresh review of piece 2 against its own plan is still owed.
+
+**Stage Complete:** CODE REVIEWED (provisional — automated checks not executed)
+
