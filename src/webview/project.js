@@ -1918,6 +1918,7 @@
                     <button class="strip-btn" id="kanban-meta-upload-btn" ${uploadingPlanAttachment ? 'disabled' : ''}>
                         ${uploadingPlanAttachment ? 'Uploading...' : 'Upload'}
                     </button>
+                ` : ''}
                 <button class="strip-btn" id="kanban-meta-log-btn">Log</button>
                 <button class="strip-btn" id="kanban-meta-delete-btn">Delete</button>
             </div>

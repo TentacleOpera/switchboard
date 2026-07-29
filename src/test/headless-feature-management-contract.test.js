@@ -296,6 +296,75 @@ async function main() {
             `exactly one feature file for the promoted plan, got: ${featureFiles.join(', ')}`);
     });
 
+    await test('recompute resolves the feature column through CUSTOM columns (the mirror\'s hardcoded map could not)', async () => {
+        // The deleted mirror built its ordinal map from DEFAULT_KANBAN_COLUMNS, so a
+        // subtask sitting in a custom column scored Infinity and sorted LAST. The
+        // real provider builds ordinals from the workspace's custom columns, so the
+        // custom lane sorts at its configured position. Placing the custom column
+        // at order 150 puts it BEFORE 'LEAD CODED' (order 180): the provider must
+        // resolve the feature to the CUSTOM column, whereas the mirror would have
+        // resolved 'LEAD CODED'. Asserting the custom id is therefore a result the
+        // mirror provably cannot produce.
+        const CUSTOM_ID = 'custom_column_triage';
+        const db = KanbanDatabase.forWorkspace(tmpRoot);
+        assert.ok(await db.ensureReady());
+        const wsId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || 'contract-ws';
+
+        // Custom columns live in the DB `config` table under 'kanban.customColumns'.
+        // Writing a real .switchboard/state.json would NOT work: `stateFs` is a
+        // façade that transparently redirects every state.json read to
+        // db.getConfigJsonSync (stateConfigBridge.ts), so an on-disk file is
+        // ignored entirely. Seed the blessed store.
+        await db.setConfigJson('kanban.customColumns', [{
+            id: CUSTOM_ID,
+            label: 'Triage',
+            role: 'coder',
+            triggerPrompt: 'Triage it.',
+            order: 150,
+            dragDropMode: 'cli',
+        }]);
+        assert.deepStrictEqual(
+            (await kp._getCustomKanbanColumns(tmpRoot)).map((c) => c.id), [CUSTOM_ID],
+            'precondition: the provider must actually see the seeded custom column');
+
+        const feat = await kp.handleServiceVerb('createFeature',
+            { name: 'Custom Column Recompute', subtaskPlanIds: [], workspaceRoot: tmpRoot });
+        assert.strictEqual(feat.success, true, feat.error);
+        const featId = feat.featurePlanId;
+
+        const seedSub = async (planId, slug, column) => {
+            const rel = `.switchboard/plans/${slug}.md`;
+            fs.writeFileSync(path.join(tmpRoot, rel), `# ${slug}\n\nBody.\n`, 'utf8');
+            const now = new Date().toISOString();
+            await db.insertFileDerivedPlan({
+                planId, sessionId: planId, topic: slug, planFile: rel,
+                kanbanColumn: column, status: 'active', complexity: '3', tags: '',
+                project: '', workspaceId: wsId, createdAt: now, updatedAt: now,
+                sourceType: 'local', workspaceName: 'contract', isFeature: 0,
+            });
+            // feature_id is NOT in insertFileDerivedPlan's column list — link it
+            // through the real primitive or the subtask is an orphan.
+            assert.ok(await db.updateFeatureStatus(planId, 0, featId), `link ${slug}`);
+            // insertFileDerivedPlan CLAMPS an unrecognised column to 'CREATED', so a
+            // custom lane never survives the insert. Set it explicitly (relative
+            // path — updateColumnByPlanFile keys on the stored relative plan_file).
+            assert.ok(await db.updateColumnByPlanFile(rel, wsId, column), `set column for ${slug}`);
+            assert.strictEqual((await db.getPlanByPlanId(planId)).kanbanColumn, column,
+                `precondition: ${slug} must actually sit in ${column}`);
+        };
+        await seedSub('contract-custom-1', 'custom-sub-1', CUSTOM_ID);
+        await seedSub('contract-custom-2', 'custom-sub-2', 'LEAD CODED');
+
+        // Precondition: the recompute only heals a feature still sitting in CREATED.
+        assert.strictEqual((await db.getPlanByPlanId(featId)).kanbanColumn, 'CREATED');
+
+        await kp.recomputeFeatureColumnFromSubtasks(featId, tmpRoot);
+
+        assert.strictEqual((await db.getPlanByPlanId(featId)).kanbanColumn, CUSTOM_ID,
+            'feature must resolve to the CUSTOM column — resolving "LEAD CODED" means the '
+            + 'hardcoded DEFAULT_KANBAN_COLUMNS map is back in the recompute path');
+    });
+
     process.removeListener('unhandledRejection', onUnhandled);
 
     console.log('\n── source contracts: transport failure surfacing ──');
@@ -414,6 +483,34 @@ async function main() {
         }
         assert.ok(/assigned:\s*\[\],\s*skipped:\s*\[\]/.test(bootstrapSrc),
             'assignToFeature failure shape must match the extension\'s (callers destructure assigned)');
+    });
+
+    await test('ingestion feature callbacks delegate to the REAL provider — the mirror is gone', () => {
+        // The headlessFeatureCallbacks.ts mirror reimplemented the provider's
+        // recompute/regen against KanbanDatabase because "standalone has no
+        // KanbanProvider". That premise died when bootstrap started constructing
+        // the real provider; two writers for one feature file is the drift class
+        // this pins shut.
+        assert.ok(!fs.existsSync(path.join(repoRoot, 'src', 'standalone', 'headlessFeatureCallbacks.ts')),
+            'headlessFeatureCallbacks.ts must stay deleted — it is the second feature-file writer');
+        assert.ok(!/headlessFeatureCallbacks/.test(bootstrapSrc),
+            'bootstrap must not import or reference the deleted mirror');
+        assert.ok(!/createHeadlessFeatureColumnRecomputer|createHeadlessFeatureFileRegenerator/.test(bootstrapSrc),
+            'the mirror factory calls must be gone, not merely unimported');
+
+        assert.ok(/setFeatureColumnRecomputer\(\s*\n?\s*\(featurePlanId,\s*watchedRoot\)\s*=>\s*kanbanProvider\.recomputeFeatureColumnFromSubtasks\(/.test(bootstrapSrc),
+            'setFeatureColumnRecomputer must delegate to kanbanProvider.recomputeFeatureColumnFromSubtasks');
+        assert.ok(/setFeatureFileRegenerator\(\s*\n?\s*\(ws,\s*fid\)\s*=>\s*kanbanProvider\.regenerateFeatureFile\(/.test(bootstrapSrc),
+            'setFeatureFileRegenerator must delegate to kanbanProvider.regenerateFeatureFile');
+
+        // Ordering: the lambdas close over `const kanbanProvider`, so the setters
+        // must sit AFTER its initialiser or the wiring is a TDZ crash on boot.
+        const ctorIdx = bootstrapSrc.indexOf('const kanbanProvider = new KanbanProvider(');
+        const recomputeIdx = bootstrapSrc.indexOf('ingestionEngine.setFeatureColumnRecomputer(');
+        const regenIdx = bootstrapSrc.indexOf('ingestionEngine.setFeatureFileRegenerator(');
+        assert.ok(ctorIdx > -1 && recomputeIdx > -1 && regenIdx > -1, 'all three landmarks must be present');
+        assert.ok(recomputeIdx > ctorIdx && regenIdx > ctorIdx,
+            'feature-callback setters must come AFTER the provider const initialises (no TDZ path)');
     });
 
     // ── summary ──────────────────────────────────────────────────────────────

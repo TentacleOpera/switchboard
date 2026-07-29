@@ -128,6 +128,62 @@ async function main() {
 
     console.log('\n=== Verb Engine · 4 — KanbanProvider headless seam tests ===\n');
 
+    // ── Harness self-test ────────────────────────────────────────────────
+    // The seams bundle once declared `pathConfig` TWICE in one object literal.
+    // Last-wins silently killed the `opts.config`-backed getters, so every
+    // `createHeadlessTestSeams({config})` test read a different option bag,
+    // observed '', and fell through to the arm's default — the getDbPath case
+    // below was red for six weeks because of it. These two assertions fail
+    // immediately if the block is ever re-split or one bag is dropped.
+    await test('harness self-test: pathConfig honours BOTH option bags (pins the merged block)', () => {
+        const untyped = createHeadlessTestSeams({ config: { k: 'v' } }).seams.pathConfig;
+        assert.strictEqual(untyped.getConfigString('k'), 'v', 'opts.config must reach getConfigString');
+        assert.strictEqual(untyped.getConfigStringWithDefault('k', 'dflt'), 'v');
+
+        const typed = createHeadlessTestSeams({ configStrings: { k: 'v' } }).seams.pathConfig;
+        assert.strictEqual(typed.getConfigString('k'), 'v', 'opts.configStrings must reach getConfigString');
+
+        // Precedence: untyped `config` wins over the typed bag.
+        const both = createHeadlessTestSeams({ config: { k: 'from-config' }, configStrings: { k: 'from-typed' } }).seams.pathConfig;
+        assert.strictEqual(both.getConfigString('k'), 'from-config');
+
+        // Defaults still apply when neither bag carries the key.
+        const empty = createHeadlessTestSeams({}).seams.pathConfig;
+        assert.strictEqual(empty.getConfigString('missing'), '');
+        assert.strictEqual(empty.getConfigBoolean('missing', true), true);
+        assert.strictEqual(empty.getConfigNumber('missing', 42), 42);
+
+        // workspaceRoot lived on the dead first block; it is part of the seam
+        // interface (hostSeams.ts) and must survive the merge.
+        assert.strictEqual(createHeadlessTestSeams({ roots: ['/tmp/x'] }).seams.pathConfig.workspaceRoot, '/tmp/x');
+
+        // The recording writers are what config-write tests assert against.
+        const rec = createHeadlessTestSeams({});
+        rec.seams.pathConfig.updateConfigWorkspace('a', 1);
+        rec.seams.pathConfig.updateConfigGlobal('b', 2);
+        assert.deepStrictEqual(rec.recorders.configWrites, [
+            { scope: 'workspace', key: 'a', value: 1 },
+            { scope: 'global', key: 'b', value: 2 },
+        ], 'writers must RECORD, not no-op');
+    });
+
+    await test('harness self-test: every HostSeams member the suites use is present', () => {
+        // The duplicate-key merge once deleted seven sibling seam blocks along
+        // with the duplicate. Each absence surfaced as an opaque
+        // "Cannot read properties of undefined" deep inside a provider.
+        const { seams } = createHeadlessTestSeams({ roots: [tmpRoot] });
+        for (const key of ['pathConfig', 'terminal', 'commands', 'ui', 'editor', 'secrets', 'clipboard', 'workspace', 'watcher']) {
+            assert.ok(seams[key] && typeof seams[key] === 'object', `seams.${key} must exist`);
+        }
+        assert.deepStrictEqual(seams.workspace.getWorkspaceRoots(), [tmpRoot]);
+        assert.strictEqual(typeof seams.ui.showWarningMessage, 'function');
+        assert.strictEqual(typeof seams.clipboard.writeText, 'function');
+        assert.strictEqual(typeof seams.editor.openTextDocument, 'function');
+        assert.strictEqual(typeof seams.commands.executeCommand, 'function');
+        assert.strictEqual(typeof seams.terminal.create, 'function');
+        assert.strictEqual(typeof seams.secrets.get, 'function');
+    });
+
     // ── Dispatch contract ────────────────────────────────────────────────
     await test('unknown verb is rejected by the allowlist', async () => {
         const { provider } = buildHeadlessProvider(tmpRoot);
