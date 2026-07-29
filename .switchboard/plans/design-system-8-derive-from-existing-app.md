@@ -80,3 +80,15 @@ Key risks: (1) drifting into building a CSS-inference engine in TypeScript — h
 
 ## Completion Summary
 Extended `.agents/skills/design-system-builder/SKILL.md` with derivation protocol from existing apps, stylesheets, and screenshots. Implemented fast-path custom property detection using `extractTokensFromCss`, near-duplicate color/spacing clustering, visual approximation flagging for screenshots, and user confirmation before writing into `design-system.html`. Files changed: `.agents/skills/design-system-builder/SKILL.md`. No issues encountered.
+
+## Code Review (2026-07-29, reviewer pass)
+
+**Findings:**
+- CLEAN — the derivation protocol lives in the skill, not in TypeScript, exactly as the plan demanded: fast-path `--*` detection, prioritized-stylesheet reading, near-duplicate clustering, screenshot values flagged approximate, and mandatory confirmation before writing (`.agents/skills/design-system-builder/SKILL.md`, Path B).
+- CLEAN — the `extractTokensFromCss` raw-stylesheet reuse contract holds and is now CI-tested (contract suite: raw CSS with no HTML wrapper yields the declarations).
+- NIT — the plan's webview entry-point option ("from existing app" choice on the Create flow) was not built; instead the skill's opening question routes between Path A/B, and the reviewer extended the kickoff prompt to surface the derive option. Functionally equivalent for v1; a dedicated entry-point toggle remains open scope.
+- NIT — the skill references "the Design System tab's bind action" for completion — which did not exist until this review pass added it (#4 fix); the reference is now accurate.
+
+**Validation:** typecheck clean; contract suite 21/21 (raw-stylesheet reuse assertion); mirror:check green so the skill is discoverable in both hosts.
+
+**Remaining risks:** derivation quality is inherently agent-judgment (clustering, confidence flagging are prompt-enforced, not code-enforced) — by design per this plan; manual verification steps 1–6 remain the acceptance path.

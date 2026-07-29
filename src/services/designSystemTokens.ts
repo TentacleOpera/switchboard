@@ -33,6 +33,10 @@ export function extractTokensFromCss(cssText: string): TokenDeclaration[] {
     let currentSelector = '';
     let inBlock = false;
     let blockBuffer = '';
+    // Depth of braces nested INSIDE the current selector block (native CSS
+    // nesting, @keyframes percent blocks). Only a `}` at depth 0 closes the
+    // block — without this, the first nested `}` desyncs scope tracking.
+    let nestedDepth = 0;
 
     while (pos < len) {
         const char = cssText[pos];
@@ -54,9 +58,10 @@ export function extractTokensFromCss(cssText: string): TokenDeclaration[] {
                 } else {
                     inBlock = true;
                     blockBuffer = '';
+                    nestedDepth = 0;
                 }
             } else {
-                // Nested block (e.g. keyframes or media inside selector - rare in simple CSS)
+                nestedDepth++;
                 blockBuffer += char;
             }
             pos++;
@@ -65,12 +70,17 @@ export function extractTokensFromCss(cssText: string): TokenDeclaration[] {
 
         if (char === '}') {
             if (inBlock) {
-                // End of selector block
-                const fullScope = [atStack.join(' '), currentSelector.trim()].filter(Boolean).join(' ');
-                parseDeclarations(blockBuffer, fullScope, results);
-                inBlock = false;
-                currentSelector = '';
-                blockBuffer = '';
+                if (nestedDepth > 0) {
+                    nestedDepth--;
+                    blockBuffer += char;
+                } else {
+                    // End of selector block
+                    const fullScope = [atStack.join(' '), currentSelector.trim()].filter(Boolean).join(' ');
+                    parseDeclarations(blockBuffer, fullScope, results);
+                    inBlock = false;
+                    currentSelector = '';
+                    blockBuffer = '';
+                }
             } else if (atStack.length > 0) {
                 atStack.pop();
                 currentSelector = '';

@@ -38,7 +38,7 @@ export const STARTER_DESIGN_SYSTEM_HTML = `<!DOCTYPE html>
             --radius-lg: 12px;
         }
 
-        :root[data-theme="dark"], @media (prefers-color-scheme: dark) {
+        @media (prefers-color-scheme: dark) {
             :root {
                 /* Palette (Dark) */
                 --ground: #121212;
@@ -51,6 +51,19 @@ export const STARTER_DESIGN_SYSTEM_HTML = `<!DOCTYPE html>
                 --accent-text: #FFFFFF;
                 --shadow: rgba(0, 0, 0, 0.4);
             }
+        }
+
+        :root[data-theme="dark"] {
+            /* Palette (Dark) — explicit data-theme override, same values as the media query */
+            --ground: #121212;
+            --card: #1E1E1E;
+            --ink: #F3F4F6;
+            --body: #D1D5DB;
+            --muted: #9CA3AF;
+            --rule: #374151;
+            --accent: #3B82F6;
+            --accent-text: #FFFFFF;
+            --shadow: rgba(0, 0, 0, 0.4);
         }
 
         body {

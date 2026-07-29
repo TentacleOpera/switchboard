@@ -4461,14 +4461,11 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         return {};
     }
 
-    private async _resolveDesignSystemDoc(workspaceRoot: string): Promise<{ designSystemDocLink?: string; designSystemDocContent?: string }> {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const designSystemDocEnabled = config.get<boolean>('planner.designSystemDocEnabled', false);
-        const designSystemDocLink = designSystemDocEnabled ? (config.get<string>('planner.designSystemDocLink', '') || '').trim() : undefined;
-        if (!designSystemDocLink) return {};
-        // Design system doc does NOT support Notion pre-fetching in this iteration
-        return { designSystemDocLink };
-    }
+    // Legacy `_resolveDesignSystemDoc` (global planner.designSystemDoc* keys) is
+    // retired: `migrateLegacyDesignSystemIfNeeded` consumes those keys once into
+    // per-project pointer files, and `_resolveDesignSystemReferences` below is the
+    // only injection read path. A standing global fallback would hand a design
+    // system to every future project — explicitly rejected behaviour.
 
     private async _buildFeatureDirectivePrefix(workspaceRoot: string): Promise<string> {
         const db = this._getKanbanDb(workspaceRoot);
@@ -4502,7 +4499,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     }
 
     private async _resolveDesignSystemReferences(workspaceRoot: string, plans: BatchPromptPlan[]): Promise<Array<{ projectName: string; designSystemLink: string }>> {
-        if (!(await this._resolveProjectContextEnabled(workspaceRoot))) return [];
+        // Unlike the PRD resolver, this is NOT gated on the project-context toggle:
+        // per-project binding is itself the opt-in — bound ⇒ injected, unbound ⇒ nothing.
         const db = KanbanDatabase.forWorkspace(workspaceRoot);
         const pathConfig = this._seams().pathConfig;
         await migrateLegacyDesignSystemIfNeeded(workspaceRoot, db, pathConfig);
@@ -4557,10 +4555,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             // without it.
             if (mergedAddons.gitProhibition === undefined && mergedAddons.gitProhibitionEnabled === undefined) mergedAddons.gitProhibition = true;
 
-            if (mergedAddons.designSystemDoc) {
-                const { designSystemDocLink } = await this._resolveDesignSystemDoc(workspaceRoot);
-                mergedAddons.designSystemDocLink = designSystemDocLink;
-            }
             if (mergedAddons.constitution) {
                 const { constitutionLink, constitutionContent } = await this._resolveConstitution(workspaceRoot, true);
                 mergedAddons.constitutionLink = constitutionLink;
@@ -4688,8 +4682,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
 
 
             resolvedOptions.constitutionEnabled = promptsConfig.constitutionEnabled;
-            const { designSystemDocLink } = await this._resolveDesignSystemDoc(workspaceRoot);
-            resolvedOptions.designSystemDocLink = designSystemDocLink;
             const { constitutionLink, constitutionContent } = await this._resolveConstitution(workspaceRoot, resolvedOptions.constitutionEnabled);
             resolvedOptions.constitutionLink = constitutionLink;
             resolvedOptions.constitutionContent = constitutionContent;

@@ -74,3 +74,14 @@ Key risks: (1) accidentally renaming the addon carrier fields and rippling into 
 
 ## Completion Summary
 Extracted `buildDesignSystemBlock` helper in `src/services/agentPromptBuilder.ts` with signature `{ link?, content?, mode?, tokens? }` and framing text for `DESIGN SYSTEM`. Replaced mislabeled `PROJECT PRD REFERENCE` injections in both planner prompt builder and custom-agent prompt builder paths with `buildDesignSystemBlock`. Files changed: `src/services/agentPromptBuilder.ts`. No issues encountered.
+
+## Code Review (2026-07-29, reviewer pass)
+
+**Findings:**
+- CLEAN — `buildDesignSystemBlock` exists with the contracted signature (`link/content/mode/tokens`, plus a reviewer-added `includeFullContent`); the approved `DESIGN SYSTEM` framing text is verbatim; both mislabeled injection sites (planner branch and `buildCustomAgentPrompt` addon block) now route through it; zero occurrences of `PROJECT PRD REFERENCE` remain in `src/`.
+- CLEAN — addon carrier fields (`designSystemDocLink`/`designSystemDocContent`) unchanged, as constrained.
+- MAJOR — the plan's automated header assertions existed nowhere. **Fixed**: `src/test/design-system-contract.test.js` (CI-wired) asserts the `DESIGN SYSTEM` header, the absence of the PRD label, and the approved framing sentence.
+
+**Validation:** typecheck clean; design-system contract suite 21/21.
+
+**Remaining risks:** none. The review-mode header (`DESIGN SYSTEM REVIEW CONSTRAINTS`, from #5's mode work) still contains the `DESIGN SYSTEM` prefix, so single-block count assertions remain valid.

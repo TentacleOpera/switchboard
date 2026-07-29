@@ -148,10 +148,6 @@ async function main() {
     await test('schema validation rejects malformed payloads at the boundary', async () => {
         const { provider } = buildHeadlessProvider(tmpRoot);
         await assert.rejects(
-            () => provider.handleServiceVerb('createBrief', { sourceFolder: briefsFolder }),
-            /Invalid payload for Design verb 'createBrief'.*title/
-        );
-        await assert.rejects(
             () => provider.handleServiceVerb('persistTabState', { tabKey: 42 }),
             /Invalid payload.*tabKey/
         );
@@ -302,46 +298,21 @@ async function main() {
         assert.deepStrictEqual(result, { success: true, activeTab: 'briefs' });
     });
 
-    // ── Briefs CRUD ───────────────────────────────────────────────────────
-    await test('createBrief + deleteBrief round-trip in a configured briefs folder', async () => {
+    // ── Briefs CRUD is retired (Briefs tab cut) — the verbs must be gone ──
+    await test('retired briefs verbs are rejected as unknown', async () => {
         const { provider } = buildHeadlessProvider(tmpRoot);
-        const added = await provider.handleServiceVerb('addBriefsFolder', {
-            workspaceRoot: tmpRoot,
-            folderPath: briefsFolder,
-        });
-        assert.strictEqual(added.success, true);
-
-        const created = await provider.handleServiceVerb('createBrief', {
-            workspaceRoot: tmpRoot,
-            sourceFolder: briefsFolder,
-            title: 'My Test Brief',
-        });
-        assert.strictEqual(created.success, true);
-        assert.ok(created.docId, 'created brief reports its docId');
-        const briefPath = path.join(briefsFolder, created.docId.split(':')[1]);
-        assert.ok(fs.existsSync(briefPath), 'brief file exists on disk');
-        assert.ok(fs.readFileSync(briefPath, 'utf8').startsWith('# My Test Brief'));
-
-        const deleted = await provider.handleServiceVerb('deleteBrief', {
-            workspaceRoot: tmpRoot,
-            sourceFolder: briefsFolder,
-            docId: created.docId,
-        });
-        assert.strictEqual(deleted.success, true);
-        assert.ok(!fs.existsSync(briefPath), 'brief file removed');
-    });
-
-    await test('createBrief refuses an unconfigured source folder', async () => {
-        const { provider } = buildHeadlessProvider(tmpRoot);
-        const rogue = path.join(tmpRoot, 'rogue');
-        fs.mkdirSync(rogue, { recursive: true });
-        const result = await provider.handleServiceVerb('createBrief', {
-            workspaceRoot: tmpRoot,
-            sourceFolder: rogue,
-            title: 'Nope',
-        });
-        assert.strictEqual(result.success, false);
-        assert.match(result.error, /not a configured briefs folder/);
+        for (const verb of ['createBrief', 'deleteBrief']) {
+            await assert.rejects(
+                () => provider.handleServiceVerb(verb, {
+                    workspaceRoot: tmpRoot,
+                    sourceFolder: briefsFolder,
+                    title: 'Nope',
+                    docId: 'x',
+                }),
+                /Unknown Design verb/,
+                `${verb} should no longer be a known Design verb`
+            );
+        }
     });
 
     // ── Command registry (host-agnostic switchboard.* dispatch) ──────────

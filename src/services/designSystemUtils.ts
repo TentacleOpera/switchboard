@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { sanitizeProjectSlug } from './prdUtils';
-import { KanbanDatabase } from './KanbanDatabase';
+import type { KanbanDatabase } from './KanbanDatabase';
 
 export function getProjectDesignSystemPointerPath(workspaceRoot: string, projectName: string): string {
     const slug = sanitizeProjectSlug(projectName);
@@ -49,25 +49,44 @@ export async function removeProjectDesignSystemPath(workspaceRoot: string, proje
     } catch {}
 }
 
-export async function migrateLegacyDesignSystemIfNeeded(workspaceRoot: string, db: KanbanDatabase, pathConfig: any): Promise<void> {
+export async function migrateLegacyDesignSystemIfNeeded(
+    workspaceRoot: string,
+    db: KanbanDatabase,
+    pathConfig: { getConfigBoolean(key: string, defaultValue: boolean): boolean; getConfigString(key: string): string }
+): Promise<void> {
     try {
         await db.ensureReady();
-        const stamp = await db.getConfigValue('ds_legacy_migration_done');
+        const stamp = await db.getConfig('ds_legacy_migration_done');
         if (stamp === 'true') return;
 
-        const dsEnabled = pathConfig?.getConfigBoolean ? pathConfig.getConfigBoolean('planner.designSystemDocEnabled', false) : false;
-        const dsLink = pathConfig?.getConfigString ? pathConfig.getConfigString('planner.designSystemDocLink') : null;
+        // Legacy released keys — consumed once here, never consulted for injection
+        // again. Their stored values are deliberately left in place (downgrade-safe,
+        // and re-running this migration is a no-op rewrite of the same pointers).
+        const dsEnabled = pathConfig.getConfigBoolean('planner.designSystemDocEnabled', false);
+        const dsLink = (pathConfig.getConfigString('planner.designSystemDocLink') || '').trim();
 
-        if (dsEnabled && dsLink && fs.existsSync(dsLink)) {
-            const projects = await db.getProjects();
-            for (const proj of projects) {
-                if (proj.name) {
-                    await setProjectDesignSystemPath(workspaceRoot, proj.name, dsLink);
+        if (dsEnabled && dsLink) {
+            if (!fs.existsSync(dsLink)) {
+                // Configured but currently unreadable (unmounted volume, moved file).
+                // Do NOT stamp — stamping now would silently drop the user's
+                // configuration forever; retrying next dispatch costs one stat.
+                return;
+            }
+            const workspaceId = await db.getWorkspaceId();
+            if (!workspaceId) {
+                // No workspace row yet — retry on a later dispatch rather than
+                // stamping an empty migration over a configured design system.
+                return;
+            }
+            const projectNames = await db.getProjects(workspaceId);
+            for (const projectName of projectNames) {
+                if (projectName) {
+                    await setProjectDesignSystemPath(workspaceRoot, projectName, dsLink);
                 }
             }
         }
 
-        await db.setConfigValue('ds_legacy_migration_done', 'true');
+        await db.setConfig('ds_legacy_migration_done', 'true');
     } catch (err) {
         console.error('[DesignSystem] Legacy migration failed:', err);
     }

@@ -80,3 +80,15 @@ The one structural risk is divergence between the copied prompt and the dispatch
 
 ## Completion Summary
 Added "Copy Design System Prompt" button to Design System tab top controls strip in `src/webview/design.html`. Handled `copyDesignSystemPrompt` in `src/services/DesignPanelProvider.ts` to resolve project-bound or active/selected design doc, construct `buildDesignSystemBlock` with extracted tokens and authoring framing, and copy to clipboard with notification. Added click listener and inline feedback state in `src/webview/design.js`. Files changed: `src/webview/design.html`, `src/webview/design.js`, `src/services/DesignPanelProvider.ts`. No issues encountered.
+
+## Code Review (2026-07-29, reviewer pass)
+
+**Findings:**
+- CRITICAL (build) — the handler read `this._activeProjectName` (`DesignPanelProvider.ts`) and the webview sent `state.activeProjectName` — **neither property exists anywhere**; the TS side is a compile error (masked only because compilation was never run) and the JS side always sent `undefined`. **Fixed**: the provider now resolves the preferred project from the board's `kanban.activeProjectFilter` DB config via a new `_getActiveBoardProject` helper; the phantom webview field is removed.
+- CLEAN — server-side prompt construction via `buildDesignSystemBlock` (authoring framing), seam clipboard write, resolution order project-bound → selected doc → explicit filePath, and immediate inline "Copied!" feedback with no dialog — all per plan.
+- CLEAN (post-#5 fix) — parity with the dispatched coder prompt is structural: the handler and dispatch both call `buildDesignSystemBlock` with default `includeFullContent` (token table + link), so the two loops cannot drift.
+- NIT — the plan's stale-response identity echo is implemented (docId echoed) but the webview intentionally ignores the response (clipboard is written server-side from request-time identity), which dissolves the race the echo was for.
+
+**Validation:** typecheck clean; design-system contract suite 21/21 (block framing/table assertions); design-reply-addressing regression 7/7 (the handler's messaging obeys per-client addressing).
+
+**Remaining risks:** none material. The "Copied!" state shows optimistically even if the server-side copy fails; failure also surfaces via the error notification, so at worst the inline state is briefly wrong.

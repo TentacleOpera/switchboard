@@ -891,11 +891,23 @@
             docNodes = docNodes.filter(d => (d.title || d.name || '').toLowerCase().includes(search));
         }
 
+        // Type-priority ordering within each folder group (TYPE_ORDER: HTML design
+        // systems first, then markdown/yaml/json/images). renderSubfolderGroups
+        // preserves input order, so this sort carries through to the rendered tree.
+        docNodes = docNodes.slice().sort((a, b) => {
+            const ai = TYPE_ORDER.indexOf(getDocType(a));
+            const bi = TYPE_ORDER.indexOf(getDocType(b));
+            const ar = ai === -1 ? TYPE_ORDER.length : ai;
+            const br = bi === -1 ? TYPE_ORDER.length : bi;
+            if (ar !== br) return ar - br;
+            return (a.name || a.id || '').localeCompare(b.name || b.id || '');
+        });
+
         renderFolderGroupedDocs(docList, docNodes, folderNodes, folderPaths, search, (doc) => createDesignDocCard(doc, sourceId), 'design-system');
     }
 
     function createDesignDocCard(node, sourceId) {
-        const actions = ['Set Context', 'Link Doc'];
+        const actions = ['Bind', 'Link Doc'];
         const fullName = node.name || node.id || '';
         const lastDot = fullName.lastIndexOf('.');
         const title = lastDot > 0 ? fullName.substring(0, lastDot) : fullName;
@@ -1242,15 +1254,11 @@
 
                 btn.addEventListener('click', (e) => {
                     e.stopPropagation();
-                    if (action === 'Set Context') {
-                        // Activates the kanban "Project PRD Reference" add-on with this doc
-                        const statusDesign = document.getElementById('status-design');
-                        if (statusDesign) {
-                            statusDesign.textContent = 'Setting as active design doc...';
-                            statusDesign.style.color = '';
-                        }
+                    if (action === 'Bind') {
+                        // Per-project design-system binding — the provider shows a
+                        // project QuickPick and writes the pointer file.
                         vscode.postMessage({
-                            type: 'setActivePlanningContext',
+                            type: 'bindDesignSystemToProject',
                             sourceId,
                             docId: nodeId,
                             docName: title,
@@ -1744,7 +1752,7 @@
 
         if (btnSet) {
             btnSet.disabled = !hasDoc;
-            btnSet.textContent = isActiveDoc ? 'Turn off' : 'Set as Active Design Doc';
+            btnSet.textContent = 'Bind to Project…';
             btnSet.dataset.active = isActiveDoc ? 'true' : 'false';
         }
         if (btnLink) btnLink.disabled = !hasDoc;
@@ -1823,24 +1831,15 @@
         if (btnSet) {
             btnSet.addEventListener('click', () => {
                 if (!state.activeSource || !state.activeDocId) return;
-                if (btnSet.dataset.active === 'true') {
-                    vscode.postMessage({ type: 'disableDesignDoc', docType: 'design-system' });
-                    return;
-                }
-                btnSet.disabled = true;
-                const statusDesign = document.getElementById('status-design');
-                if (statusDesign) {
-                    statusDesign.textContent = 'Setting as active design doc...';
-                    statusDesign.style.color = '';
-                }
                 const wrapper = findTreeNode(state.activeSource, state.activeDocId);
                 const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : state.activeDocSourceFolder;
                 vscode.postMessage({
-                    type: 'setActivePlanningContext',
+                    type: 'bindDesignSystemToProject',
                     sourceId: state.activeSource,
                     docId: state.activeDocId,
                     docName: state.activeDocName || state.activeDocId,
-                    sourceFolder
+                    sourceFolder,
+                    filePath: state.activeDocFilePath || undefined
                 });
             });
         }
@@ -5423,8 +5422,7 @@
             type: 'copyDesignSystemPrompt',
             sourceFolder: state.activeDocSourceFolder || undefined,
             docId: state.activeDocId || undefined,
-            filePath: state.activeDocFilePath || undefined,
-            projectName: state.activeProjectName || undefined
+            filePath: state.activeDocFilePath || undefined
         });
         if (btn) {
             const originalText = btn.textContent;

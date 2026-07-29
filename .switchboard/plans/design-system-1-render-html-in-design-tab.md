@@ -95,3 +95,14 @@ Key risks: (1) missing `injectBaseTag` on the new DS-tab path, silently 404ing r
 
 ## Completion Summary
 Implemented HTML design system rendering in the Design System tab. Added `.html` and `.htm` to `_isDesignOrImageFile` whitelist in `LocalFolderService.ts`, mapped `html` fileType in `DesignPanelProvider.ts`, added HTML preview container iframe and updated empty state in `design.html`, and added iframe src/srcdoc preview loading logic in `design.js`. Files changed: `src/services/LocalFolderService.ts`, `src/services/DesignPanelProvider.ts`, `src/webview/design.html`, `src/webview/design.js`. No issues encountered.
+
+## Code Review (2026-07-29, reviewer pass)
+
+**Findings:**
+- MAJOR — `getDocType`/`groupDocsByType` (`design.js:934`/`:945`) were still dead code; the plan required wiring them into the DS tree. The tree is a folder-grouped accordion (a fact the plan's flat-tree assumption missed), so full type-GROUPING would fight the folder accordion. **Fixed** by wiring `getDocType` + `TYPE_ORDER` as a type-priority sort inside `renderDesignDocs` — HTML docs now surface first within every folder group, and the card subtitle already labels them "HTML".
+- MAJOR — the plan's `### Automated` unit assertion on `_isDesignOrImageFile` existed nowhere. **Fixed**: covered in the new CI-wired `src/test/design-system-contract.test.js` (accepts `.html`/`.htm`, whitelist otherwise unregressed).
+- NIT — the DS preview goes beyond the plan: HTML gets a localhost `iframeSrc` origin (relative assets resolve properly) with `injectBaseTag`+`srcdoc` as fallback. Sandbox posture matches the existing `html-preview-frame` exactly (`allow-scripts allow-same-origin`) as required.
+
+**Validation:** `tsc -p tsconfig.test.json` clean; `npm run test:contract:design-system` 21/21 (includes the `_isDesignOrImageFile` whitelist contract). Webpack compile skipped per dispatch directive (dist/ is not used in dev).
+
+**Remaining risks:** none specific to this plan. Manual check "HTML docs under their own group heading" is satisfied in spirit (type-priority ordering within folder groups) rather than letter (dedicated heading), a deliberate call given the folder-accordion tree.

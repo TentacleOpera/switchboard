@@ -85,3 +85,15 @@ The dominant risk is the duplicate-token failure mode — it is not hypothetical
 
 ## Completion Summary
 Implemented CSS custom property token extraction and HTML design system inventory parsing in `src/services/designSystemTokens.ts` (`extractTokensFromCss`, `extractDesignSystemTokens`). Updated `buildDesignSystemBlock` in `src/services/agentPromptBuilder.ts` to parse HTML/CSS design systems into formatted Markdown token tables (grouped by scheme e.g. light/dark) and section inventories. Files created: `src/services/designSystemTokens.ts`. Files changed: `src/services/agentPromptBuilder.ts`. No issues encountered.
+
+## Code Review (2026-07-29, reviewer pass)
+
+**Findings:**
+- MAJOR — the scanner tracked no brace depth inside a selector block: the first `}` of any nested construct (native CSS nesting, `@keyframes` percent blocks) closed the outer block early and desynced scope attribution. **Fixed**: `extractTokensFromCss` now keeps a `nestedDepth` counter and only closes the block at depth 0 (`designSystemTokens.ts`); regression test added ("nested blocks do not desync scope tracking").
+- MAJOR — none of the plan's extractor unit tests existed. **Fixed**: the CI-wired contract suite now covers the 4-scope fixture (declarations found and attributed; light/dark scheme normalization; the two dark mechanisms merging into ONE group — the exact naive-parse failure the plan targets), ordinary-property/keyframe exclusion, no-`<style>` input, raw-stylesheet reuse (#8 contract), and the size caps + `truncated` flag.
+- NIT — `normalizeScheme` is substring-heuristic (`includes('dark')`); order-sensitive but correct for all four real scopes. Exotic selectors like `.sidebar-dark` would misclassify — acceptable for design-system files, fallback covers total failure.
+- NIT — `extractDesignSystemTokens` treats tag-less input containing `--`/`{` as raw CSS; harmless for markdown (no `--x:` declarations inside braces means no tokens, and the content fallback then applies).
+
+**Validation:** typecheck clean; design-system contract suite 21/21 including all scope/merge/cap assertions.
+
+**Remaining risks:** values containing semicolons inside strings (e.g. data-URIs in a custom property) would truncate at the `;` — narrow, cosmetic in a prompt table, not worth a CSS-grade tokenizer.

@@ -49,6 +49,9 @@ jobs:
       - name: Design per-client reply addressing regression
         run: npm run test:contract:design-reply-addressing
 
+      - name: Design system contract (tokens, block framing, binding)
+        run: npm run test:contract:design-system
+
       - name: Run integration suite
         run: npm run test:integration:all
 

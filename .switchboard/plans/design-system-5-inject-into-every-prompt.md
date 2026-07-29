@@ -87,3 +87,16 @@ Main risks: (1) double-injection on the custom-agent path where the legacy addon
 
 ## Completion Summary
 Wired `designSystemReferences` into `dispatchPrefixCore` in `src/services/agentPromptBuilder.ts` so that every role prompt generated via `buildKanbanBatchPrompt` (coder, lead, intern, reviewer, tester, planner, and Copy Prompt paths) automatically receives the `DESIGN SYSTEM` block when bound. Gated double-injection in custom-agent and planner branches. Files changed: `src/services/agentPromptBuilder.ts`. No issues encountered.
+
+## Code Review (2026-07-29, reviewer pass)
+
+**Findings:**
+- CLEAN — the injection mechanism is better than the plan asked for: `buildDesignSystemReferencesBlockFromRefs` is folded into `dispatchPrefixCore` (`agentPromptBuilder.ts:1109` region), the same shared prefix the PRD block uses, so every role branch of `buildKanbanBatchPrompt` (planner, coder, lead, intern, reviewer, tester, and Copy Prompt by the canonical-builder contract) receives it without per-branch wiring. Double-injection is guarded: the planner's legacy block only fires when refs are empty, and the custom-agent path replaces (not stacks) the legacy addon block.
+- MAJOR — every role received the **full document** inline (`Full Reference Doc:\n${content}` — 72 KB for the reference artifact) in every prompt, against this plan's explicit "token table + link for coding/review roles, full content for the planner". **Fixed**: `buildDesignSystemBlock` gained `includeFullContent`; the refs builder passes it only for `planner`. Coder/lead/intern/reviewer/tester now get the token table + section inventory + file link; non-HTML systems keep the content fallback.
+- MAJOR — the acceptance-tester got authoring framing (`mode` was `review` only for `reviewer`), against the plan's "reviewer AND tester with mode: 'review'". **Fixed**: both roles now get review framing.
+- NIT — the PRD block excludes `role === 'tester'` (`buildPrdReferenceBlock:632`); the design-system block deliberately does not (this plan's "no role exclusions"). Asymmetry is intentional and now documented by test.
+- MAJOR — none of the plan's per-role assertions existed. **Partially fixed**: the CI-wired contract suite asserts planner-full/coder-table-link policy, review framing for reviewer+tester, exactly-one-block for a single ref, and zero-block for empty refs — at the refs-builder level. The full `buildKanbanBatchPrompt` per-role matrix and the Copy Prompt parity test remain unwritten (flagged below).
+
+**Validation:** typecheck clean; contract suite 21/21.
+
+**Remaining risks:** (1) no end-to-end per-role prompt matrix through `buildKanbanBatchPrompt` — the shared-prefix construction makes per-role divergence structurally unlikely, but the parity test the plan asked for is still worth writing; (2) the open product call (reviewer severity) remains defaulted to **advisory** — the review framing says "verify conformance / report divergences" and does not instruct blocking.

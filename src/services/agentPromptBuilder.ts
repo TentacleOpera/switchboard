@@ -645,7 +645,11 @@ export function buildDesignSystemReferencesBlockFromRefs(refs: Array<{ projectNa
         const block = buildDesignSystemBlock({
             link: r.designSystemLink,
             content,
-            mode: role === 'reviewer' ? 'review' : 'author'
+            // Reviewer AND acceptance-tester check conformance; everyone else authors.
+            mode: (role === 'reviewer' || role === 'tester') ? 'review' : 'author',
+            // Prompt-size budget: the planner keeps the full document; coding and
+            // review roles get the extracted token table + a link to the file.
+            includeFullContent: role === 'planner'
         });
         if (block) {
             blocks.push(refs.length > 1 ? `### Project "${r.projectName}" Design System:\n${block.trim()}` : block.trim());
@@ -659,6 +663,13 @@ export function buildDesignSystemBlock(opts: {
     content?: string;
     mode?: 'author' | 'review';
     tokens?: ExtractedDesignSystem;
+    /**
+     * When tokens were extracted, also inline the full document (planner only —
+     * other roles get the token table plus the file link to bound prompt size).
+     * Ignored when no tokens could be extracted: the content fallback then
+     * carries the document regardless, since the block would otherwise be empty.
+     */
+    includeFullContent?: boolean;
 }): string {
     const link = opts.link?.trim();
     const content = opts.content?.trim();
@@ -693,7 +704,11 @@ export function buildDesignSystemBlock(opts: {
             tokenTableText += `\n\n### Component & Section Inventory:\n${parsedTokens.sections.map(s => `- ${s}`).join('\n')}\n`;
         }
 
-        return `\n\n${header} (pre-fetched tokens & inventory):\n${description}${tokenTableText}\n\nFull Reference Doc:\n${content}`;
+        if (opts.includeFullContent && content) {
+            return `\n\n${header} (pre-fetched tokens & inventory):\n${description}${tokenTableText}\n\nFull Reference Doc:\n${content}`;
+        }
+        const referenceLine = link ? `\n\nFull Reference Doc: ${link}` : '';
+        return `\n\n${header} (extracted tokens & inventory):\n${description}${tokenTableText}${referenceLine}`;
     }
 
     if (content) {

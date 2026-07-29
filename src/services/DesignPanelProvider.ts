@@ -16,7 +16,7 @@ import { TaskViewerProvider } from './TaskViewerProvider';
 import { PanelStateStore } from './PanelStateStore';
 import { buildWorkspaceItems } from './workspaceUtils';
 import { buildDesignSystemBlock } from './agentPromptBuilder';
-import { getProjectDesignSystemPath } from './designSystemUtils';
+import { getProjectDesignSystemPath, setProjectDesignSystemPath, removeProjectDesignSystemPath } from './designSystemUtils';
 import { STARTER_DESIGN_SYSTEM_HTML } from './designSystemStarterTemplate';
 
 // @google/stitch-sdk is ESM-only (its exports map has no "require" condition), so a
@@ -119,6 +119,7 @@ export class DesignPanelProvider implements vscode.Disposable {
                 htmlPreview: null,
                 claudePreview: null,
                 stitchHtmlPreview: null,
+                designPreview: null,
                 isExtensionWebview: !isViaHttp
             };
             this._seats.set(id, seat);
@@ -219,6 +220,7 @@ export class DesignPanelProvider implements vscode.Disposable {
     private _htmlFolderWatchers: HostWatchHandle[] = [];
     private _claudeFolderWatchers: HostWatchHandle[] = [];
     private _designFolderWatchers: HostWatchHandle[] = [];
+    private _designFolderNativeWatchers: fs.FSWatcher[] = [];
     private _imagesFolderWatchers: HostWatchHandle[] = [];
     private _stitchHtmlFolderWatchers: HostWatchHandle[] = [];
     // Native fs.watch fallbacks for out-of-workspace folders where VS Code's
@@ -238,6 +240,7 @@ export class DesignPanelProvider implements vscode.Disposable {
         htmlPreview: { sourceFolder: string; docId: string; sourceId: string } | null;
         claudePreview: { sourceFolder: string; docId: string; sourceId: string } | null;
         stitchHtmlPreview: { sourceFolder: string; docId: string; sourceId: string; projectId: string; workspaceRoot: string } | null;
+        designPreview: { sourceFolder: string; docId: string; sourceId: string } | null;
         isExtensionWebview: boolean;
     }>();
     private static readonly _DEFAULT_SEAT = '__default__';
@@ -890,6 +893,8 @@ setTimeout(reportDims, 0);
         this._claudeFolderNativeWatchers = [];
         for (const w of this._stitchHtmlFolderNativeWatchers) { try { w.close(); } catch {} }
         this._stitchHtmlFolderNativeWatchers = [];
+        for (const w of this._designFolderNativeWatchers) { try { w.close(); } catch {} }
+        this._designFolderNativeWatchers = [];
     }
 
     private _getHtml(webview: vscode.Webview): string {
@@ -1145,6 +1150,8 @@ setTimeout(reportDims, 0);
     private _setupDesignFolderWatchers(): void {
         this._designFolderWatchers.forEach(w => w.dispose());
         this._designFolderWatchers = [];
+        for (const w of this._designFolderNativeWatchers) { try { w.close(); } catch {} }
+        this._designFolderNativeWatchers = [];
         const roots = this._getWorkspaceRoots();
         for (const root of roots) {
             try {
@@ -1152,8 +1159,19 @@ setTimeout(reportDims, 0);
                 const paths = service.getDesignFolderPaths();
                 for (const p of paths) {
                     if (fs.existsSync(p)) {
-                        const watcher = this._seams().watcher.watchFolder(p, () => this._scheduleDesignDocsReady());
+                        const watcher = this._seams().watcher.watchFolder(p, (event, filePath) => {
+                            this._scheduleDesignDocsReady();
+                            // Live preview during agent iteration (#7): re-push the open
+                            // design doc when it changes on disk.
+                            if (event !== 'delete') {
+                                this._autoRefreshHtmlPreview(filePath);
+                            }
+                        });
                         this._designFolderWatchers.push(watcher);
+                        this._setupNativeFolderWatchFallback(p, this._designFolderNativeWatchers, (filePath) => {
+                            this._scheduleDesignDocsReady();
+                            this._autoRefreshHtmlPreview(filePath);
+                        });
                     }
                 }
             } catch {}
@@ -1523,9 +1541,6 @@ setTimeout(reportDims, 0);
                     folderUris.push(vscode.Uri.file(p));
                 }
                 for (const p of service.getStitchFolderPaths()) {
-                    folderUris.push(vscode.Uri.file(p));
-                }
-                for (const p of service.getBriefsFolderPaths()) {
                     folderUris.push(vscode.Uri.file(p));
                 }
                 // Include the Stitch assets directory (where screen PNGs live) in resource roots
@@ -2074,6 +2089,23 @@ setTimeout(reportDims, 0);
         }
     }
 
+    /**
+     * The board's active project filter, used to prefer the project-bound design
+     * system when copying a prompt without an explicit project. Read-only — the
+     * board owns this config key.
+     */
+    private async _getActiveBoardProject(workspaceRoot: string): Promise<string | undefined> {
+        try {
+            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+            await db.ensureReady();
+            const filter = await db.getConfig('kanban.activeProjectFilter');
+            if (filter && filter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
+                return filter;
+            }
+        } catch {}
+        return undefined;
+    }
+
     // ── Localhost HTML preview server (ported from the planning panel) ──
     // srcdoc iframes inherit the webview's CSP and break relative asset paths;
     // serving from 127.0.0.1 gives previews a real origin (CSP frame-src allows http:).
@@ -2503,6 +2535,9 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 if (message.tab !== 'stitch-html') {
                     seat.stitchHtmlPreview = null;
                 }
+                if (message.tab !== 'design') {
+                    seat.designPreview = null;
+                }
                 this._reconcilePoll();
                 return { success: true, activeTab: seat.activeTab };
             }
@@ -2582,8 +2617,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                             const service = this._getLocalFolderService(r);
                             const allAllowedPaths = [
                                 ...service.getDesignFolderPaths(),
-                                ...service.getHtmlFolderPaths(),
-                                ...service.getBriefsFolderPaths()
+                                ...service.getHtmlFolderPaths()
                             ];
                             if (allAllowedPaths.some(dp => resolved.startsWith(path.resolve(dp) + path.sep))) {
                                 isAllowed = true;
@@ -2673,7 +2707,15 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         ? { ...res.payload, success: true }
                         : { ...(res.payload ?? { type: 'previewError', sourceId: message.sourceId, requestId: message.requestId }), error: res.error, success: false };
                 }
-                if ((message.sourceId === 'html-folder' || message.sourceId === 'claude-folder') && message.sourceFolder) {
+                if (message.sourceId === 'design-folder' && message.sourceFolder) {
+                    // Track the design tab's open doc so agent edits to a bound
+                    // design system auto-refresh the rendered preview (#7).
+                    seat.designPreview = {
+                        sourceFolder: path.resolve(message.sourceFolder),
+                        docId: rawDocId,
+                        sourceId: message.sourceId
+                    };
+                } else if ((message.sourceId === 'html-folder' || message.sourceId === 'claude-folder') && message.sourceFolder) {
                     if (message.target === 'claude') {
                         seat.claudePreview = {
                             sourceFolder: path.resolve(message.sourceFolder),
@@ -2719,9 +2761,10 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
 
             case 'copyDesignSystemPrompt': {
                 let docPath: string | null = null;
-                const activeProject = message.projectName || this._activeProjectName;
+                const copyRoot = this._getWorkspaceRoot() || '';
+                const activeProject = message.projectName || (copyRoot ? await this._getActiveBoardProject(copyRoot) : undefined);
                 if (activeProject) {
-                    docPath = await getProjectDesignSystemPath(this._getWorkspaceRoot() || '', activeProject);
+                    docPath = await getProjectDesignSystemPath(copyRoot, activeProject);
                 }
                 if (!docPath) {
                     docPath = await this._resolveDesignDocPath(message.sourceFolder, String(message.docId || ''));
@@ -2750,6 +2793,65 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 }
             }
 
+            case 'bindDesignSystemToProject': {
+                const root = this._getWorkspaceRoot() || '';
+                if (!root) {
+                    return { success: false, error: 'No workspace root' };
+                }
+                let docPath = await this._resolveDesignDocPath(message.sourceFolder, String(message.docId || ''));
+                if (!docPath && message.filePath && fs.existsSync(message.filePath)) {
+                    docPath = message.filePath;
+                }
+                if (!docPath) {
+                    this._seams().ui.showTemporaryNotification('Select a design document to bind first.');
+                    return { success: false, error: 'No design document selected' };
+                }
+                try {
+                    const db = KanbanDatabase.forWorkspace(root);
+                    await db.ensureReady();
+                    const workspaceId = await db.getWorkspaceId();
+                    const projectNames = workspaceId ? await db.getProjects(workspaceId) : [];
+                    if (projectNames.length === 0) {
+                        this._seams().ui.showTemporaryNotification('No projects exist on the board yet — create a project first.');
+                        return { success: false, error: 'No projects' };
+                    }
+                    const UNBIND_LABEL = 'Unbind a project…';
+                    const items: Array<{ label: string; description?: string }> = [];
+                    const bound: Array<{ name: string; docPath: string }> = [];
+                    for (const name of projectNames) {
+                        const existing = await getProjectDesignSystemPath(root, name);
+                        items.push({ label: name, description: existing ? `bound to ${path.basename(existing)}` : undefined });
+                        if (existing) bound.push({ name, docPath: existing });
+                    }
+                    if (bound.length > 0) {
+                        items.push({ label: UNBIND_LABEL, description: 'Remove an existing design-system binding' });
+                    }
+                    const pick = await this._seams().ui.showQuickPick(items, { placeHolder: `Bind ${path.basename(docPath)} to which project?` });
+                    if (!pick) return { success: false, error: 'Cancelled' };
+                    const label = typeof pick === 'string' ? pick : Array.isArray(pick) ? '' : pick.label;
+                    if (!label) return { success: false, error: 'Cancelled' };
+                    if (label === UNBIND_LABEL) {
+                        const unpick = await this._seams().ui.showQuickPick(
+                            bound.map(b => ({ label: b.name, description: `bound to ${path.basename(b.docPath)}` })),
+                            { placeHolder: 'Unbind the design system from which project?' }
+                        );
+                        if (!unpick) return { success: false, error: 'Cancelled' };
+                        const unbindName = typeof unpick === 'string' ? unpick : Array.isArray(unpick) ? '' : unpick.label;
+                        if (!unbindName) return { success: false, error: 'Cancelled' };
+                        await removeProjectDesignSystemPath(root, unbindName);
+                        this._seams().ui.showTemporaryNotification(`Unbound design system from "${unbindName}".`);
+                        this.postMessage({ type: 'designSystemBindingChanged', projectName: unbindName, bound: false });
+                        return { success: true, unbound: unbindName };
+                    }
+                    await setProjectDesignSystemPath(root, label, docPath);
+                    this._seams().ui.showTemporaryNotification(`Bound ${path.basename(docPath)} as the design system for "${label}".`);
+                    this.postMessage({ type: 'designSystemBindingChanged', projectName: label, bound: true, docPath });
+                    return { success: true, projectName: label, docPath };
+                } catch (err: any) {
+                    return { success: false, error: String(err) };
+                }
+            }
+
             case 'createDesignSystemTemplate': {
                 const root = this._getWorkspaceRoot();
                 if (!root) {
@@ -2759,9 +2861,18 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const folders = service.getDesignFolderPaths();
                 let targetFolder = folders[0];
                 if (!targetFolder) {
-                    targetFolder = path.join(root, '.switchboard', 'designs');
+                    // No design folder configured: the tab can only list files inside
+                    // configured folders, so writing anywhere else (or scaffolding a
+                    // .switchboard subfolder) produces an invisible file. Ask for a
+                    // folder and register it as a design folder in one step.
+                    const picked = await this._seams().ui.pickFolder('Create design system in this folder');
+                    if (!picked) {
+                        this._seams().ui.showTemporaryNotification('Add a design folder first — the template must live in a configured design folder to appear in the tab.');
+                        return { success: false, error: 'No design folder configured' };
+                    }
+                    await service.addDesignFolderPath(picked);
+                    targetFolder = picked;
                 }
-                await fs.promises.mkdir(targetFolder, { recursive: true });
 
                 let candidate = path.join(targetFolder, 'design-system.html');
                 let count = 2;
@@ -2773,7 +2884,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 await fs.promises.writeFile(candidate, STARTER_DESIGN_SYSTEM_HTML, 'utf8');
                 await this._sendDesignDocsReady();
 
-                const kickoffPrompt = `Please run the design-system-builder skill to interactively interview me and customize the design system template at ${candidate}.`;
+                const kickoffPrompt = `Please run the design-system-builder skill to interactively interview me and customize the design system template at ${candidate}. If I want to derive it from an existing app instead of starting from scratch, ask me for the stylesheets, components, or screenshots to read first.`;
                 await this._seams().clipboard.writeText(kickoffPrompt);
                 this._seams().ui.showTemporaryNotification('Created design system starter template and copied kickoff prompt to clipboard.');
 
@@ -3822,6 +3933,33 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             }
 
             case 'stitchPickAttachFiles': {
+                try {
+                    const result = await this._seams().ui.showOpenDialog({
+                        canSelectFiles: true,
+                        canSelectMany: true,
+                        openLabel: 'Attach reference files',
+                        filters: {
+                            'Reference Files': ['png', 'jpg', 'jpeg', 'webp', 'html', 'htm', 'md']
+                        }
+                    });
+                    if (!result || result.length === 0) {
+                        return { success: false, files: [] };
+                    }
+                    const files = result.map(filePath => {
+                        const ext = path.extname(filePath).toLowerCase().replace('.', '');
+                        const name = path.basename(filePath);
+                        const type = ['png', 'jpg', 'jpeg', 'webp'].includes(ext) ? 'image'
+                            : ['html', 'htm'].includes(ext) ? 'html'
+                            : 'markdown';
+                        return { path: filePath, name, type };
+                    });
+                    this.postMessage({ type: 'stitchAttachedFilesPicked', files });
+                    return { success: true, files };
+                } catch (err: any) {
+                    this._seams().ui.showErrorMessage('Failed to pick files: ' + err.message);
+                    return { success: false, error: err.message || String(err) };
+                }
+            }
 
             case 'stitchGenerate':
                 try {
@@ -4295,7 +4433,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 ? docId.substring(docId.indexOf(':') + 1)
                 : docId;
 
-            // Only configured design/html/claude/briefs/images folders may be read from.
+            // Only configured design/html/claude/images folders may be read from.
             const allowedFolders = new Set<string>();
             for (const root of this._getWorkspaceRoots()) {
                 try {
@@ -4303,7 +4441,6 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     svc.getDesignFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
                     svc.getHtmlFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
                     svc.getClaudeFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
-                    svc.getBriefsFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
                     svc.getImagesFolderPaths().forEach(p => allowedFolders.add(path.resolve(p)));
                     // Admit per-project Stitch cache dirs so the stitch-html-folder sourceId
                     // can read cached HTML. Resolved server-side from project IDs — never from
@@ -4487,6 +4624,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     if (!currentSeat) return;
                     const current = target === 'claude' ? currentSeat.claudePreview
                         : target === 'stitch-html' ? currentSeat.stitchHtmlPreview
+                        : target === 'design' ? currentSeat.designPreview
                         : currentSeat.htmlPreview;
                     if (!current) return;
 
@@ -4512,6 +4650,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             checkAndRefresh(seat.htmlPreview);
             checkAndRefresh(seat.claudePreview, 'claude');
             checkAndRefresh(seat.stitchHtmlPreview, 'stitch-html');
+            checkAndRefresh(seat.designPreview, 'design');
         }
     }
 
