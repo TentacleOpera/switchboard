@@ -37,6 +37,13 @@ export interface WsHubOptions {
      * pushes, so the client converges to the current state.
      */
     getFullState?: (scope?: string | null) => Promise<any>;
+    /**
+     * Keepalive ping cadence in ms (default 30000). A connection whose pong has
+     * not arrived by the next tick is terminate()d — the `ws` FAQ pattern that
+     * reaps half-open sockets abrupt client death leaves behind. Overridable so
+     * tests can exercise the loop without 30s waits; production callers omit it.
+     */
+    pingIntervalMs?: number;
 }
 
 /** A push payload: either a plain message object (composed once, sent to every
@@ -98,7 +105,7 @@ export class WsHub {
                         try { meta.ws.ping(); } catch { /* ignore */ }
                     }
                 }
-            }, 30000);
+            }, this._options.pingIntervalMs ?? 30000);
         }
     }
 

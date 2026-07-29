@@ -1,9 +1,26 @@
 (function() {
-    const vscode = acquireVsCodeApi();
-
-    // Unique originatorId per webview/tab instance
-    const clientOriginatorId = 'client_' + Math.random().toString(36).substring(2, 11) + '_' + Date.now();
+    // Unique originatorId per webview/tab instance. In the browser host,
+    // transport.js loads first and generates this global BEFORE its WebSocket
+    // connects, so the WS URL and every stamped message share one identity —
+    // reuse it. In the editor webview transport.js is absent, so generate here.
+    const clientOriginatorId = window.__sbClientOriginatorId
+        || ('client_' + Math.random().toString(36).substring(2, 11) + '_' + Date.now());
     window.__sbClientOriginatorId = clientOriginatorId;
+
+    // Stamp every outbound message with this client's originatorId so the host
+    // keys per-client seats (view state) by sender. The real webview API object
+    // is Object.freeze'd, so wrap it — never patch its properties in place.
+    const _rawVscodeApi = acquireVsCodeApi();
+    const vscode = {
+        postMessage: (message) => {
+            if (message && typeof message === 'object' && !message.originatorId) {
+                message = Object.assign({}, message, { originatorId: clientOriginatorId });
+            }
+            return _rawVscodeApi.postMessage(message);
+        },
+        getState: () => _rawVscodeApi.getState(),
+        setState: (s) => _rawVscodeApi.setState(s),
+    };
 
     // Listen for transport reconnects to re-assert view state
     window.addEventListener('sbTransportReconnected', () => {
@@ -3085,6 +3102,14 @@
     // Message event listener
     window.addEventListener('message', (event) => {
         const msg = event.data;
+
+        // Seat-addressed pushes (e.g. per-seat previewReady auto-refreshes) are
+        // tagged with the owning client's originatorId and broadcast to everyone;
+        // drop copies addressed to another client. Untagged messages (folder
+        // listings, iframe-sourced events, legacy hosts) always pass.
+        if (msg && msg.originatorId && msg.originatorId !== clientOriginatorId) {
+            return;
+        }
         console.log('[DesignPanel Webview] Received message:', msg.type, msg);
 
         // Cross-cutting rule 2: Drop responses whose root != stitchWorkspaceRoot

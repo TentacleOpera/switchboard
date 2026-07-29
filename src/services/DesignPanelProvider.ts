@@ -111,6 +111,15 @@ export class DesignPanelProvider implements vscode.Disposable {
 
     private _seatFor(message: any) {
         const id = message?.originatorId || DesignPanelProvider._DEFAULT_SEAT;
+        // Any message from a client is proof of life: cancel a pending eviction
+        // scheduled by a WS drop, so a reconnect (or the re-assertion it triggers)
+        // inside the grace window keeps the seat. Without this the timer fires
+        // ~60s after a transient blip and silently deletes the LIVE seat.
+        const pendingEviction = this._evictionTimers.get(id);
+        if (pendingEviction) {
+            clearTimeout(pendingEviction);
+            this._evictionTimers.delete(id);
+        }
         let seat = this._seats.get(id);
         if (!seat) {
             const isViaHttp = !!message?.__viaHttp;
@@ -140,7 +149,31 @@ export class DesignPanelProvider implements vscode.Disposable {
                 this._autoRefreshDebounces.delete(key);
             }
         }
+        for (const key of Array.from(this._pollPreviewMtimes.keys())) {
+            if (key.startsWith(`${originatorId}::`)) {
+                this._pollPreviewMtimes.delete(key);
+            }
+        }
+        // Leak guard: seats are bounded by live WS connections plus the extension
+        // webview's seat and the legacy default seat. Log-only — a violation means
+        // seat lifetime and connection lifetime have drifted apart.
+        const connections: number | undefined = this._apiServer?.wsHub?.connectionCount;
+        if (typeof connections === 'number' && this._seats.size > connections + 2) {
+            console.warn(`[DesignPanelProvider] seat leak suspected: ${this._seats.size} seats > ${connections} WS connections + 2`);
+        }
         this._reconcilePoll();
+    }
+
+    /** Drop the extension webview's seat(s) when the panel goes away — the seat is
+     *  pinned to the panel's lifetime. A reopened panel generates a fresh client
+     *  originatorId, so stale webview seats would otherwise accumulate forever and
+     *  revive their poll/auto-refresh contributions whenever a new panel is visible. */
+    private _evictExtensionWebviewSeats(): void {
+        for (const [id, seat] of Array.from(this._seats.entries())) {
+            if (seat.isExtensionWebview) {
+                this._evictSeat(id);
+            }
+        }
     }
 
     private _apiServer?: any;
@@ -150,10 +183,12 @@ export class DesignPanelProvider implements vscode.Disposable {
         this._broadcaster?.setApiServer(server);
         if (server?.wsHub) {
             server.wsHub.onDisconnect((originatorId: string) => {
+                // The hub is shared by every panel; only IDs holding a Design seat matter.
+                if (!this._seats.has(originatorId)) return;
                 if (this._evictionTimers.has(originatorId)) return;
                 const timer = setTimeout(() => {
                     this._evictSeat(originatorId);
-                }, 60000);
+                }, this._evictionGraceMs);
                 this._evictionTimers.set(originatorId, timer);
             });
         }
@@ -245,6 +280,14 @@ export class DesignPanelProvider implements vscode.Disposable {
     }>();
     private static readonly _DEFAULT_SEAT = '__default__';
     private _evictionTimers = new Map<string, NodeJS.Timeout>();
+    /** Grace between a seat's WS disconnect and its eviction. transport.js's
+     *  reconnect backoff caps at 30s, so a transient drop must not evict. */
+    private _evictionGraceMs = 60000;
+    /** Last-seen mtime (ms) of each seat's registered preview file, keyed
+     *  `${originatorId}::${target}` — lets the external-file poll detect edits to
+     *  the previewed DOCUMENT (not just the folder listing) in hosts/states where
+     *  no FileSystemWatcher exists: panel closed, or the standalone host. */
+    private _pollPreviewMtimes = new Map<string, number>();
     private _externalFilePollTimer?: NodeJS.Timeout;
     private _lastFolderSignature: Record<string, string> = {}; // keyed by tab name
     private _activeScreens = new Map<string, any>(); // Key: screen.id, Value: SDK Screen instance
@@ -625,6 +668,10 @@ setTimeout(reportDims, 0);
             this._panel = undefined;
             this._broadcaster?.setWebview(null);
             this.disposeWatchers();
+            // The webview seat is pinned to the panel's lifetime: drop it first,
+            // THEN reconcile — so closing the panel withdraws only the webview's
+            // poll contribution and never stops a browser-only poll.
+            this._evictExtensionWebviewSeats();
             this._reconcilePoll();
         }, null, this._disposables);
 
@@ -681,6 +728,10 @@ setTimeout(reportDims, 0);
                         this.postMessage({ type: 'ultracodeAnimationSetting', enabled });
                     }
                     if (e.affectsConfiguration('switchboard.design.externalFilePollMs')) {
+                        // Stop first: _startExternalFilePoll no-ops while a timer is
+                        // live, so a bare reconcile would keep the OLD interval running
+                        // (and `<= 0` — the disable escape hatch — would never engage).
+                        this._stopExternalFilePoll();
                         this._reconcilePoll();
                     }
                 })
@@ -731,6 +782,8 @@ setTimeout(reportDims, 0);
             this._panel = undefined;
             this._broadcaster?.setWebview(null);
             this.disposeWatchers();
+            // Seat pinned to panel lifetime — drop before reconciling (see open()).
+            this._evictExtensionWebviewSeats();
             this._reconcilePoll();
         }, null, this._disposables);
 
@@ -789,6 +842,10 @@ setTimeout(reportDims, 0);
                         this.postMessage({ type: 'ultracodeAnimationSetting', enabled });
                     }
                     if (e.affectsConfiguration('switchboard.design.externalFilePollMs')) {
+                        // Stop first: _startExternalFilePoll no-ops while a timer is
+                        // live, so a bare reconcile would keep the OLD interval running
+                        // (and `<= 0` — the disable escape hatch — would never engage).
+                        this._stopExternalFilePoll();
                         this._reconcilePoll();
                     }
                 })
@@ -872,6 +929,7 @@ setTimeout(reportDims, 0);
             clearTimeout(t);
         }
         this._evictionTimers.clear();
+        this._pollPreviewMtimes.clear();
         this._seats.clear();
         this._stopExternalFilePoll();
     }
@@ -4344,6 +4402,40 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     }
                 }
             }
+
+            // Preview-level refresh. The folder scan above only re-pushes LISTINGS;
+            // the save listener and html/claude folder watchers exist only while an
+            // extension panel has been opened — with the panel closed (watchers
+            // disposed) or in the standalone host they are absent entirely. So the
+            // poll also stats each live seat's registered html/claude preview
+            // document and routes an mtime advance through the same keyed-debounce
+            // re-push the watchers use. First sighting only seeds the baseline.
+            for (const [origId, seat] of this._seats.entries()) {
+                if (seat.isExtensionWebview && !this._panel?.visible) { continue; }
+                const targets: Array<[{ sourceFolder: string; docId: string } | null, string]> = [
+                    [seat.htmlPreview, 'html'],
+                    [seat.claudePreview, 'claude'],
+                ];
+                for (const [preview, target] of targets) {
+                    if (!preview) { continue; }
+                    const rel = preview.docId.includes(':')
+                        ? preview.docId.substring(preview.docId.indexOf(':') + 1)
+                        : preview.docId;
+                    const abs = path.resolve(preview.sourceFolder, rel);
+                    let mtime: number;
+                    try {
+                        mtime = (await fs.promises.stat(abs)).mtimeMs;
+                    } catch {
+                        continue; // mid-write or deleted — try next tick
+                    }
+                    const key = `${origId}::${target}`;
+                    const last = this._pollPreviewMtimes.get(key);
+                    this._pollPreviewMtimes.set(key, mtime);
+                    if (last !== undefined && mtime > last) {
+                        this._autoRefreshHtmlPreview(abs);
+                    }
+                }
+            }
         } catch (err) {
             // swallow to survive tick
         }
@@ -4567,7 +4659,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
         this._saveTextDocListener = vscode.workspace.onDidSaveTextDocument((document) => {
             let hasAnyPreview = false;
             for (const seat of this._seats.values()) {
-                if (seat.htmlPreview || seat.claudePreview || seat.stitchHtmlPreview) {
+                if (seat.htmlPreview || seat.claudePreview || seat.stitchHtmlPreview || seat.designPreview) {
                     hasAnyPreview = true;
                     break;
                 }

@@ -58,6 +58,9 @@ jobs:
       - name: Headless feature management contract (capability derivation, verb schemas, standalone wiring)
         run: npm run test:contract:headless-feature-mgmt
 
+      - name: Design per-client view state contract (seats, poll lifecycle, wsHub keepalive)
+        run: npm run test:contract:design-view-state
+
       - name: Run integration suite
         run: npm run test:integration:all
 

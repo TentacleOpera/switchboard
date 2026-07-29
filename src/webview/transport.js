@@ -99,6 +99,17 @@
         return url;
     }
 
+    // Generate the per-client originatorId BEFORE the first WS connect if no
+    // panel script has set it yet. This script is injected ahead of the panel's
+    // own JS and connects immediately, so waiting for the panel to generate the
+    // ID would leave the initial (usually only) connection anonymous — and an
+    // anonymous connection can never fire onDisconnect for its seat on the host.
+    // Panel scripts (design.js) reuse this global instead of overwriting it.
+    if (!window.__sbClientOriginatorId) {
+        window.__sbClientOriginatorId =
+            'client_' + Math.random().toString(36).substring(2, 11) + '_' + Date.now();
+    }
+
     function connectWs() {
         if (ws) { return; }
         try {

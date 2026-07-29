@@ -357,3 +357,58 @@ Add the assertions listed under Verification Plan to the existing headless-seams
   - `src/webview/design.js`
   - `src/services/DesignPanelProvider.ts`
 - **Issues encountered:** None. All edits implemented without disrupting existing return contracts or host seams.
+
+---
+
+## Code Review Record — 2026-07-29
+
+Two-stage review (Grumpy → Balanced) executed in-place; all CRITICAL/MAJOR findings fixed in the same pass and verified with tests. The pre-fix implementation had the seat *machinery* right (arms, keyed debounce, keepalive, reconcile structure) but three defects made the system inert or self-defeating in normal operation.
+
+### Findings and dispositions
+
+**CRITICAL — fixed:**
+1. **Seat keying was dead in normal operation.** No outbound `originatorId` stamp existed — piece 1 as shipped pivoted to `__replyChannel` reply-addressing and never added the auto-stamp this plan's design assumed. Every client's messages (`design.js` tab changes at :157/:216/:220, all `fetchPreview` posts) mapped to the single `__default__` seat, so the cross-nulling bug survived intact inside the new data structure. **Fix:** `design.js` now wraps the (frozen — cannot be patched in place) webview API and stamps every outbound message with `originatorId`.
+2. **First WS connection never carried `originatorId`.** `transport.js` is injected before `design.js` and connects synchronously at load, before the global ID existed — so `onDisconnect` could never fire for a browser seat and the seat (and its poll) was immortal. **Fix:** `transport.js` generates `window.__sbClientOriginatorId` when unset, before first connect; `design.js` reuses it instead of overwriting.
+3. **Reconnect did not cancel the pending eviction.** The 60 s timer scheduled on WS drop was never cleared, so a transient blip evicted the *live* seat one minute later — recreating the silent-staleness symptom on a timer. **Fix:** `_seatFor` treats any message from an ID as proof of life and cancels its pending eviction.
+
+**MAJOR — fixed:**
+4. **Webview seats never dropped in `onDidDispose`** (plan §5 "pinned to the panel's lifetime") — stale seats accumulated per reopen and revived poll/auto-refresh contributions. **Fix:** both dispose handlers evict `isExtensionWebview` seats before reconciling.
+5. **`design.externalFilePollMs` changes were ignored while the poll ran** (including the `<= 0` disable escape hatch the plan preserves) because `_startExternalFilePoll` no-ops when a timer is live. **Fix:** config-change handler stops the poll before reconciling.
+6. **Zero automated coverage** — none of the Verification Plan's commit-#1 keepalive gates or seat assertions existed. **Fix:** new `src/test/design-view-state-seats-contract.test.js` (11 tests), wired as `test:contract:design-view-state` in `package.json` **and** as a CI step in `.github/workflows/integration-tests.yml`.
+7. **No receiver-side filter for seat-addressed pushes** — `handlePreviewReady` exempts `requestId === -1` from staleness, so with seats working, one seat's auto-refresh re-rendered inside every other client (cross-client preview bleed). **Fix:** inbound guard at the top of `design.js`'s message listener drops messages tagged with another client's `originatorId`; untagged broadcasts pass.
+8. **Closed-panel / standalone preview refresh was unreachable** — `onDidDispose` disposes the html/claude watchers and the standalone host never creates them, so the plan's own manual tests ("panel closed → browser still updates", "`npx switchboard` → edit file on disk → browser updates") could not pass at the *document* level (the poll only re-pushed folder listings). **Fix:** `_pollTick` now also stats each live seat's registered html/claude preview document and routes mtime advances through the existing keyed-debounce re-push.
+
+**MINOR — fixed:** seat-leak assertion from plan step 11 added (log-only, `seats ≤ connections + 2` — webview seat + legacy default seat are both legitimately connection-less); `designPreview` included in the save-listener's any-preview check; wsHub gained an optional `pingIntervalMs` (default 30000, production behavior unchanged) so the keepalive is testable; disconnects for IDs holding no Design seat (other panels share the hub) no longer schedule no-op eviction timers.
+
+**Reported, not fixed:**
+- **Gate-wiring audit (MAJOR, pre-existing):** `test:contract:verb-engine` (`verb-engine-headless-seams.test.js`, the harness carrying this plan's `activeTabChanged` shape assertion) and `test:contract:verb-engine-kanban` are defined in `package.json` (:813–814) but invoked by **no** CI workflow — the "defined but not gated" hole. Not wired in this pass because the harness currently fails with **4 pre-existing TaskViewer failures** (vscode-trap hit in `TaskViewerProvider`'s constructor field initializer, `out/services/TaskViewerProvider.js:174`) introduced by the prior Headless Feature Management commit (4860e85) — wiring it now would redden CI on an unrelated defect. Fix TaskViewer's trap hit, then wire both scripts into `integration-tests.yml`.
+- The mandated sequencing ("keepalive lands FIRST, as its own commit, verified against all four panels") was not honored — everything landed in one tree. Unrecoverable retroactively; the keepalive now has direct test coverage (B1–B4) as compensation.
+- Stitch **project** targeting remains global per the plan's explicit out-of-scope decision.
+
+### Validation results (this review pass)
+- `npm run compile-tests` (tsc) — clean.
+- `test:contract:design-view-state` — **11/11 pass** (seats A1–A7, wsHub liveness B1–B4, including: cross-nulling regression, seat-local stitch nulling, poll runs with no panel and stops on last-seat exit, keyed-debounce double refresh, eviction grace + cancel + poll stop, poll-driven document refresh, keepalive terminate/survive/teardown).
+- `test:contract:design-reply-addressing` — 7/7 pass (piece 1 unbroken).
+- `test:contract:cross-client-scope` — 18/18 pass (shared transport/wsHub edits safe).
+- `test:contract:design-asset` — 11/11; `test:contract:design-system` — 21/21.
+- `test:contract:verb-engine` — 22 pass / 4 fail; all 4 are the pre-existing TaskViewer trap failures above (none in Design paths; `activeTabChanged` exact-shape assertion passes).
+- `parity:check`, `push-routing:check`, `verb-returns:check` — all pass (no new `break`s; Design ratchet ceiling untouched, consistent with plan constraint #6).
+
+### Files changed in this review pass
+- `src/webview/design.js` — outbound originatorId stamp (frozen-API-safe wrapper), inbound seat-address guard, shared-ID reuse.
+- `src/webview/transport.js` — pre-connect originatorId generation.
+- `src/services/DesignPanelProvider.ts` — eviction cancel-on-proof-of-life, webview-seat eviction on dispose, config-change poll restart, poll-driven preview mtime refresh, seat-leak warn, `designPreview` in save gate, `_evictionGraceMs`/`_pollPreviewMtimes` fields, dispose hygiene.
+- `src/services/wsHub.ts` — optional `pingIntervalMs` (test seam; default preserves 30 s).
+- `src/test/design-view-state-seats-contract.test.js` — new (11 tests).
+- `package.json`, `.github/workflows/integration-tests.yml` — test script + CI gate.
+
+### Remaining risks
+- The keepalive applies to every panel's WS connections; contract tests cover terminate/survive paths, but a full multi-panel soak (Board/Project/Design/Setup receiving pushes across several 30 s ticks) remains a manual item from the plan's commit-#1 gate.
+- Seats on non-polled tabs (stitch-html, design) still rely on their seam-based watchers for document refresh — unchanged behavior, but the poll does not backstop them.
+- The plan's manual test matrix (hidden-tab, closed-panel, standalone, force-kill eviction ≈2 min) has automated analogues but has not been executed against a live VSIX in this pass.
+
+**Review verdict:** implementation now matches the plan's definition of done; card may move to CODE REVIEWED.
+
+## Review-Pass Completion Report
+
+Executed the two-stage reviewer pass and applied fixes for 3 CRITICAL and 5 MAJOR findings: the missing outbound `originatorId` stamp and inbound guard in `design.js` (the seat store was otherwise inert — every client shared `__default__`), the anonymous first WS connection in `transport.js`, eviction-cancel on reconnect, webview-seat eviction on panel dispose, the ignored `externalFilePollMs` config change, poll-driven document refresh for closed-panel/standalone hosts, and full test coverage. Files changed: `src/webview/design.js`, `src/webview/transport.js`, `src/services/DesignPanelProvider.ts`, `src/services/wsHub.ts`, new `src/test/design-view-state-seats-contract.test.js`, plus `package.json` and `.github/workflows/integration-tests.yml` for CI gating. Verification: new contract test 11/11, reply-addressing 7/7, cross-client-scope 18/18, design-asset 11/11, design-system 21/21, and all three ratchets green; the only failures anywhere are 4 pre-existing TaskViewer trap errors inherited from commit 4860e85, unrelated to this plan. One issue reported but deliberately not fixed here: `test:contract:verb-engine` is defined in `package.json` but wired into no CI workflow, and cannot be wired until the pre-existing TaskViewer failures are repaired.
