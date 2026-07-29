@@ -3367,31 +3367,51 @@
 
             case 'previewError': {
                 console.error('[DesignPanel Webview] Preview error:', msg.error);
+                // sourceId → { status, loading, hide[], show[] }. A table rather than
+                // another else-if limb: every tab that raises a spinner in
+                // loadDocumentPreview must lower it here, and the old chain lowered none
+                // of them. `loading` is split out from `hide` because the two obey
+                // different rules on a superseded request — see below.
                 const PREVIEW_ERROR_TARGETS = {
                     'stitch-html-folder': {
                         status: 'status-stitch-html',
-                        hide: ['stitch-html-loading-state', 'stitch-html-preview-wrapper', 'stitch-html-edit-bar'],
+                        loading: 'stitch-html-loading-state',
+                        hide: ['stitch-html-preview-wrapper', 'stitch-html-edit-bar'],
                         show: ['stitch-html-initial-state']
                     },
                     'html-folder': {
                         status: 'status-html',
-                        hide: ['html-loading-state', 'html-preview-wrapper'],
+                        loading: 'html-loading-state',
+                        hide: ['html-preview-wrapper'],
                         show: ['html-initial-state']
                     },
                     'images-folder': {
                         status: 'status-images',
-                        hide: ['images-loading-state', 'image-preview-container-images'],
+                        loading: 'images-loading-state',
+                        hide: ['image-preview-container-images'],
                         show: ['images-initial-state']
                     },
-                    'design-folder': { status: 'status-design', hide: [], show: [] },
-                    'briefs-folder': { status: 'status-briefs', hide: [], show: [] }
+                    'design-folder': { status: 'status-design', loading: null, hide: [], show: [] },
+                    'briefs-folder': { status: 'status-briefs', loading: null, hide: [], show: [] }
                 };
-                const target = PREVIEW_ERROR_TARGETS[msg.sourceId] || { status: 'status-html', hide: [], show: [] };
-                target.hide.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
-                target.show.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'flex'; });
+                const target = PREVIEW_ERROR_TARGETS[msg.sourceId]
+                    || { status: 'status-html', loading: null, hide: [], show: [] };
                 const isStale = msg.requestId !== undefined && msg.requestId !== -1
                     && msg.requestId !== state.previewRequestId;
+                // The spinner ALWAYS comes down — a stale error still means that request
+                // is over, and a spinner nobody will ever lower is the perpetual-loading
+                // bug this fix exists for. Same rule as handlePreviewReady's stale paths.
+                if (target.loading) {
+                    const loadingEl = document.getElementById(target.loading);
+                    if (loadingEl) loadingEl.style.display = 'none';
+                }
+                // Everything else belongs to the CURRENT request only. A late error from
+                // a superseded request must not tear down the newer preview that has
+                // already painted (handlePreviewReady does not re-run to restore it) nor
+                // overwrite the newer request's status line.
                 if (!isStale) {
+                    target.hide.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
+                    target.show.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'flex'; });
                     const statusEl = document.getElementById(target.status);
                     if (statusEl) {
                         statusEl.textContent = 'Preview error: ' + msg.error;

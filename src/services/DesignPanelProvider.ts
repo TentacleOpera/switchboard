@@ -917,6 +917,18 @@ setTimeout(reportDims, 0);
         }
         this._htmlServers.clear();
         this._htmlServerCreationPromises.clear();
+        // Queued listing pushes must not fire into a disposed provider. The stitch-html
+        // sweep schedules one of these per downloaded file, so the window is no longer
+        // theoretical.
+        for (const t of [this._htmlDocsDebounce, this._claudeDocsDebounce, this._designDocsDebounce,
+                         this._imagesDocsDebounce, this._stitchHtmlDocsDebounce]) {
+            if (t) clearTimeout(t);
+        }
+        this._htmlDocsDebounce = undefined;
+        this._claudeDocsDebounce = undefined;
+        this._designDocsDebounce = undefined;
+        this._imagesDocsDebounce = undefined;
+        this._stitchHtmlDocsDebounce = undefined;
         this._saveTextDocListener?.dispose();
         this._saveTextDocListener = undefined;
         this._disposables.forEach(disposable => disposable.dispose());
@@ -1311,7 +1323,22 @@ setTimeout(reportDims, 0);
         }
     }
 
+    /** Progress for THIS project only. A sweep still running on a project the user has
+     *  left must not stamp its counter onto the project they are now looking at. */
+    private _stitchHtmlBackfillFor(workspaceRoot: string, projectId: string): { done: number; total: number } | undefined {
+        const bf = this._stitchHtmlBackfill;
+        return (bf && bf.workspaceRoot === workspaceRoot && bf.projectId === projectId)
+            ? { done: bf.done, total: bf.total }
+            : undefined;
+    }
+
     private async _sendStitchHtmlDocsReady(workspaceRoot: string, projectId: string): Promise<any> {
+        // Mirror _sendHtmlDocsReady: an explicit send supersedes a queued debounce, so
+        // cancel it rather than letting it fire an identical push 300ms later.
+        if (this._stitchHtmlDocsDebounce) {
+            clearTimeout(this._stitchHtmlDocsDebounce);
+            this._stitchHtmlDocsDebounce = undefined;
+        }
         if (!workspaceRoot || !projectId) {
             const empty = { type: 'stitchHtmlDocsReady', docs: [], workspaceRoot };
             this.postMessage(empty);
@@ -1348,7 +1375,7 @@ setTimeout(reportDims, 0);
                 type: 'stitchHtmlDocsReady',
                 docs,
                 workspaceRoot,
-                backfill: this._stitchHtmlBackfill ? { ...this._stitchHtmlBackfill } : undefined
+                backfill: this._stitchHtmlBackfillFor(workspaceRoot, projectId)
             };
             this.postMessage(payload);
             return payload;
@@ -1357,7 +1384,7 @@ setTimeout(reportDims, 0);
                 type: 'stitchHtmlDocsReady',
                 docs: [],
                 workspaceRoot,
-                backfill: this._stitchHtmlBackfill ? { ...this._stitchHtmlBackfill } : undefined
+                backfill: this._stitchHtmlBackfillFor(workspaceRoot, projectId)
             };
             this.postMessage(errPayload);
             return errPayload;
@@ -1860,54 +1887,80 @@ setTimeout(reportDims, 0);
         }, 300);
     }
 
-    private _stitchHtmlBackfill?: { done: number; total: number };
+    /** Live sweep progress, TAGGED with the project it belongs to. The tag is load-
+     *  bearing: `_scheduleStitchHtmlDocsReady` resolves its project at fire time, so an
+     *  untagged object rides whatever project is active then — announcing "Caching
+     *  HTML… 8/13" in a project where nothing is being cached. */
+    private _stitchHtmlBackfill?: { done: number; total: number; workspaceRoot: string; projectId: string };
+    /** Sweeps in flight, keyed `${root}::${projectId}`. `stitchHtmlListDocs` is posted
+     *  from four frontend paths (project select, Open in HTML Tab, every STITCH project
+     *  load, every screen edit) and the sweep runs for tens of seconds to minutes — so
+     *  re-entry is the normal case, not an edge one. Without this guard a second sweep
+     *  duplicates every `getScreen` + `getHtml` round trip (`_downloadToCache` dedupes
+     *  only the download) and clobbers the single progress object. */
+    private _stitchHtmlBackfillsInFlight = new Set<string>();
 
     private async _backfillStitchHtmlForProject(workspaceRoot: string, projectId: string): Promise<void> {
-        const db = KanbanDatabase.forWorkspace(workspaceRoot);
-        await db.ensureReady();
-        const rows = await db.getStitchScreensForProject(projectId);
-        const missing: any[] = [];
-        for (const row of rows) {
-            if (await this._getStitchHtmlPath(row.id, workspaceRoot, projectId)) continue;
-            missing.push(row);
-        }
-        if (missing.length === 0) return;
-
-        this._stitchHtmlBackfill = { done: 0, total: missing.length };
-        this._scheduleStitchHtmlDocsReady();
+        const inFlightKey = `${workspaceRoot}::${projectId}`;
+        if (this._stitchHtmlBackfillsInFlight.has(inFlightKey)) return;
+        this._stitchHtmlBackfillsInFlight.add(inFlightKey);
         try {
-            const stitch = await loadStitch('');
-            const CONCURRENCY = 4;
-            const screens: any[] = [];
-            for (let i = 0; i < missing.length; i += CONCURRENCY) {
-                const batch = missing.slice(i, i + CONCURRENCY);
-                const resolved = await Promise.all(batch.map(async (row) => {
-                    const cached = this._activeScreens.get(row.id);
-                    if (cached) return cached;
-                    try {
-                        const screen = await stitch.project(projectId).getScreen(row.id);
-                        this._activeScreens.set(row.id, screen);
-                        return screen;
-                    } catch (err) {
-                        console.error(`[DesignPanel] getScreen failed for ${row.id}:`, err);
-                        return null;
-                    }
-                }));
-                screens.push(...resolved.filter(Boolean));
-                if (projectId !== this._activeStitchHtmlProjectId
-                    || workspaceRoot !== this._activeStitchHtmlWorkspaceRoot) return;
+            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+            await db.ensureReady();
+            const rows = await db.getStitchScreensForProject(projectId);
+            const missing: any[] = [];
+            for (const row of rows) {
+                if (await this._getStitchHtmlPath(row.id, workspaceRoot, projectId)) continue;
+                missing.push(row);
             }
-            if (screens.length === 0) return;
+            if (missing.length === 0) return;
 
-            await this._backfillStitchHtmlCache(screens, workspaceRoot, () => {
-                if (this._stitchHtmlBackfill) this._stitchHtmlBackfill.done++;
-                this._scheduleStitchHtmlDocsReady();
-            });
-        } finally {
-            this._stitchHtmlBackfill = undefined;
-            if (projectId === this._activeStitchHtmlProjectId && workspaceRoot === this._activeStitchHtmlWorkspaceRoot) {
-                void this._sendStitchHtmlDocsReady(workspaceRoot, projectId);
+            this._stitchHtmlBackfill = { done: 0, total: missing.length, workspaceRoot, projectId };
+            this._scheduleStitchHtmlDocsReady();
+            try {
+                const stitch = await loadStitch('');
+                const CONCURRENCY = 4;
+                const screens: any[] = [];
+                for (let i = 0; i < missing.length; i += CONCURRENCY) {
+                    const batch = missing.slice(i, i + CONCURRENCY);
+                    const resolved = await Promise.all(batch.map(async (row) => {
+                        const cached = this._activeScreens.get(row.id);
+                        if (cached) return cached;
+                        try {
+                            const screen = await stitch.project(projectId).getScreen(row.id);
+                            this._activeScreens.set(row.id, screen);
+                            return screen;
+                        } catch (err) {
+                            console.error(`[DesignPanel] getScreen failed for ${row.id}:`, err);
+                            return null;
+                        }
+                    }));
+                    screens.push(...resolved.filter(Boolean));
+                    if (projectId !== this._activeStitchHtmlProjectId
+                        || workspaceRoot !== this._activeStitchHtmlWorkspaceRoot) return;
+                }
+                if (screens.length === 0) return;
+
+                await this._backfillStitchHtmlCache(screens, workspaceRoot, () => {
+                    if (this._stitchHtmlBackfill) this._stitchHtmlBackfill.done++;
+                    this._scheduleStitchHtmlDocsReady();
+                });
+            } finally {
+                // Only clear progress that is still OURS — a sweep for another project
+                // may have replaced it while we were downloading.
+                if (this._stitchHtmlBackfill?.projectId === projectId
+                    && this._stitchHtmlBackfill?.workspaceRoot === workspaceRoot) {
+                    this._stitchHtmlBackfill = undefined;
+                }
+                // Final unconditional send so the last file can never be lost to a
+                // trailing debounce, and the progress line always clears. Skip it if the
+                // user has since switched project/root — the frontend does not filter.
+                if (projectId === this._activeStitchHtmlProjectId && workspaceRoot === this._activeStitchHtmlWorkspaceRoot) {
+                    void this._sendStitchHtmlDocsReady(workspaceRoot, projectId);
+                }
             }
+        } finally {
+            this._stitchHtmlBackfillsInFlight.delete(inFlightKey);
         }
     }
 
@@ -4559,10 +4612,16 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 throw new Error('Invalid file path');
             }
 
+            // Turn an opaque ENOENT from the readFile below into a readable message. The
+            // "Rebuild Cache" hint is stitch-only — that button exists nowhere else, so
+            // offering it on a design/brief/image doc would be a confidently wrong
+            // instruction.
             try {
                 await fs.promises.stat(absPath);
             } catch {
-                throw new Error('HTML file not found on disk — try Rebuild Cache');
+                throw new Error(sourceId === 'stitch-html-folder'
+                    ? 'HTML file not found on disk — try Rebuild Cache'
+                    : `File not found on disk: ${path.basename(relativePath)}`);
             }
 
             const fileExt = path.extname(relativePath).toLowerCase();

@@ -61,6 +61,9 @@ jobs:
       - name: Design per-client view state contract (seats, poll lifecycle, wsHub keepalive)
         run: npm run test:contract:design-view-state
 
+      - name: STITCH HTML tab contract (preview failure in body, docs in body, spinner-lowering table)
+        run: npm run test:contract:stitch-html-tab
+
       - name: Run integration suite
         run: npm run test:integration:all
 

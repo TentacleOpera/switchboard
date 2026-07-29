@@ -592,7 +592,9 @@ Recorded so these are not re-opened: **no web research is required for this plan
 
 ## Verification Plan
 
-Compilation and automated test execution are **out of scope for this pass** per session directive. Testing is against an installed VSIX; `dist/` in the repo is not served during development.
+> **Superseded (2026-07-29, review pass):** "Compilation and automated test execution are **out of scope for this pass** per session directive."
+> **Reason:** That line records what the *coding* pass did; it is not a standing directive. The review dispatch carried no `SKIP TESTS:` / `SKIP COMPILATION:` line, so verification was executed independently. Results are recorded under *Review Verification Results* below. The three automated tests this plan named as deferred have now been written and CI-wired.
+> **Retained:** manual UAT (items 1-15) still requires an installed VSIX; `dist/` in the repo is not served during development.
 
 0. **Legacy recovery — already confirmed, do not re-probe.** The user verified (2026-07-28) that the existing sweep does fetch HTML for pre-2026-07-12 screens, slowly. Recorded in *Resolved Assumptions*; no probe required. The remaining legacy-data question is a **latency** one, covered by items 3, 4 and 14 below.
 
@@ -614,12 +616,16 @@ Compilation and automated test execution are **out of scope for this pass** per 
 
 ### Automated Tests
 
-Not run in this pass (session directive: skip tests). When tests are next touched, the durable assertions are:
+**Written and CI-wired in the review pass** — `src/test/stitch-html-tab-contract.test.js`, script `test:contract:stitch-html-tab`, invoked by `.github/workflows/integration-tests.yml`. All four durable assertions the plan named now exist:
 
-- A headless test that dispatches `fetchPreview` through `handleServiceVerb` with an unresolvable `projectId` and asserts the returned **body** is `{success:false, error:…}` — a data-asserting test, per the PRD's "green ratchets + a data-asserting test are the definition of done".
-- A headless test that dispatches `stitchHtmlListDocs` against a temp cache dir containing two `.html` files and asserts the returned body's `docs` array has both, with `file`/`sourceFolder`/`absolutePath` populated.
-- A unit test over the `PREVIEW_ERROR_TARGETS` table asserting every sourceId that raises a loading state in `loadDocumentPreview` has a matching entry that lowers it — the invariant whose absence caused this bug.
-- If any `break` → `return` conversion lands in `DesignPanelProvider`, re-run `npm run verb-returns:check` and lower the Design ceiling in `scripts/verb-return-contract-baseline.json` to the true residual count reported by `analyze-verb-migration2.js` in the same change. Never force it below the legitimate nested-`break` floor (Design = 14).
+- ✅ A headless test that dispatches `fetchPreview` through `handleServiceVerb` with an unresolvable `projectId` and asserts the returned **body** is `{success:false, error:…}` — a data-asserting test, per the PRD's "green ratchets + a data-asserting test are the definition of done". (test 1; test 2 asserts the success body carries the rendered HTML)
+- ✅ A headless test that dispatches `stitchHtmlListDocs` against a temp cache dir containing two `.html` files and asserts the returned body's `docs` array has both, with `file`/`sourceFolder`/`absolutePath` populated. (test 5 — also asserts `.png` siblings are excluded and display names resolve from the DB rows)
+- ✅ A unit test over the `PREVIEW_ERROR_TARGETS` table asserting every sourceId that raises a loading state in `loadDocumentPreview` has a matching entry that lowers it — the invariant whose absence caused this bug. (test 10, source-contract style; test 11 pins the stale-vs-current ordering)
+- ✅ `npm run verb-returns:check` re-run; the Design ceiling was lowered **10 → 9** in `scripts/verb-return-contract-baseline.json` (the true residual reported by the analyzer), locking the `fetchPreview` `break` → `return` win.
+
+Plus three regression tests for defects found in review of the fix itself: sweep re-entrancy (test 7), project-tagged progress (test 8), debounce supersession (test 9). Tests 3/4 pin the sourceId-aware not-found message.
+
+> **Correction to this plan's own figure:** the plan states the Design nested-`break` floor is **14**. The analyzer reports a residual of **9** at this change. The "14" was stale — other Design work lowered it in the interim. Do not re-quote 14; read the analyzer.
 
 ---
 
@@ -628,4 +634,81 @@ Not run in this pass (session directive: skip tests). When tests are next touche
 ## Completion Report
 
 Implemented fixes for STITCH HTML tab loading hangs and missing auto-cache. Added `PREVIEW_ERROR_TARGETS` table, loading state resets, stale request guards, and `workspaceRoot` propagation in `src/webview/design.js`. Added debounced watcher refreshes, diagnostic logging for rejected folders, explicit ENOENT error handling, and background HTML auto-caching (`_backfillStitchHtmlForProject`) in `src/services/DesignPanelProvider.ts`. Files changed: `src/webview/design.js` and `src/services/DesignPanelProvider.ts`. No issues encountered.
+
+---
+
+## Code Review Pass — 2026-07-29
+
+Independent reviewer pass. Verification was **executed**, not skipped: the review dispatch carried no `SKIP TESTS:` / `SKIP COMPILATION:` line, and the plan's internal "skip tests" note is a record of the coding pass, not a directive.
+
+### Findings and dispositions
+
+**MAJOR — fixed. Stale `previewError` destroyed a newer, already-painted preview.** `src/webview/design.js:3390-3391` (as implemented) applied `target.hide` / `target.show` **before** the staleness check. A late error from a superseded request therefore hid `stitch-html-preview-wrapper` + `stitch-html-edit-bar` and showed `stitch-html-initial-state` — wiping a preview that had already rendered, with the error text suppressed as stale so the user got no explanation. `handlePreviewReady` does not re-run, so the pane stayed blank until the user clicked again. The pre-fix handler only touched status text, so this was a regression *introduced* by the fix. The plan's own rule for the stale path (line 259: "only the spinner is lowered") was correct and simply not applied here.
+*Fix:* split `loading` out of `hide` in the table; the spinner is lowered unconditionally (the perpetual-loading invariant), and teardown/initial-state/status all moved inside `if (!isStale)`. Pinned by test 11 (ordering) and guarded against back-door reintroduction (no `*-loading-state` id may appear under `hide`).
+
+**MAJOR — fixed. The sweep had no re-entrancy guard, against four trigger paths.** `DesignPanelProvider._backfillStitchHtmlForProject` was fired `void` from `stitchHtmlListDocs` with nothing preventing concurrent runs, and `design.js` posts `stitchHtmlListDocs` from **four** places: project select (`:4568`), "Open in HTML Tab" (`:2401`), every STITCH-tab project load (`:3831`), and **every screen edit** (`:4040`). Since the sweep runs for tens of seconds to minutes (this plan's own *Resolved Assumptions*), re-entry is the normal case. A second sweep duplicated every `getScreen()` **and** `getHtml()` round trip — `_downloadToCache` dedupes only the download, not the two remote calls preceding it — doubling the budgeted `CONCURRENCY = 4`. It also clobbered the single `_stitchHtmlBackfill` object: sweep 2 reset `{done:0}`, then sweep 1's `finally` cleared it while sweep 2 was still downloading, so sweep 2's `done++` silently no-op'd behind its own null-guard and the progress line vanished mid-run.
+*Fix:* `_stitchHtmlBackfillsInFlight: Set<string>` keyed `${root}::${projectId}`, released in an outer `finally`. Pinned by test 7 (including guard release).
+
+**MAJOR — fixed. Sweep progress bled into the wrong project's sidebar.** Verification item 14 requires "the progress line must not persist into the new project's view." `_sendStitchHtmlDocsReady` stamped `backfill: this._stitchHtmlBackfill` for *whatever* project it was asked about, and `_scheduleStitchHtmlDocsReady` resolves its project at **fire** time. The abandon-check existed only in the `getScreen` resolution loop — the download phase in `_backfillStitchHtmlCache` has none — so after a project switch the old sweep kept downloading and every `onCached` scheduled a push for the **new** project carrying the **old** project's counter. Result: project B announcing `Caching HTML… 8/13` and (with `docs.length === 0`) rendering *"Caching HTML for this project — files appear as they download"* while nothing was being cached for it. Persistent for the whole remaining sweep, not a flicker.
+*Fix:* `_stitchHtmlBackfill` is now tagged `{done, total, workspaceRoot, projectId}`; a new `_stitchHtmlBackfillFor(root, projectId)` returns the counter only to its owning project (both payload build sites use it), and the sweep's `finally` clears the field only if it is still its own. Pinned by test 8.
+
+**MAJOR — fixed. The ratchet win was banked but not locked.** `npm run verb-returns:check` reported `Design: 9 break(s) <= ceiling 10 (PROGRESS: ...)`. The PRD requires a completion plan to lower its provider's ceiling to the true residual **in the same change**; this plan repeats that at lines 169 and 622. Leaving the ceiling at 10 lets a future regression slide back in under a green check — the exact hole the ratchet exists to close.
+*Fix:* `scripts/verb-return-contract-baseline.json` Design **10 → 9** via `npm run verb-returns:baseline` (only Design moved; the other four were already at their residual). Also corrected this plan's stale "Design floor = 14" claim.
+
+**MAJOR — fixed. Three of the four automated checks this plan names did not exist.** The `### Automated` subsection named a `fetchPreview` failure-body test, a `stitchHtmlListDocs` docs-body test, and a `PREVIEW_ERROR_TARGETS` coverage test. None were in the repo. Per the PRD, "green ratchets + a data-asserting test are the definition of done, not the completion report" — and this change *is* a return-contract change on two arms.
+*Fix:* wrote `src/test/stitch-html-tab-contract.test.js` (11 assertions), added `test:contract:stitch-html-tab` to `package.json`, **and** invoked it from `.github/workflows/integration-tests.yml`. A check defined in `package.json` but not invoked by CI is the "green while incomplete" hole, so the CI wiring is part of the fix, not a follow-up.
+
+**MINOR — fixed. The not-found message told four of five tabs to press a button they don't have.** The `stat` guard at `_buildAndSendPreview` threw `'HTML file not found on disk — try Rebuild Cache'` for **every** sourceId. "Rebuild Cache" exists only in the STITCH tab and would do nothing for a design doc, brief, or image — an opaque ENOENT was replaced with a confidently wrong instruction.
+*Fix:* the hint is now `sourceId === 'stitch-html-folder'`-gated; other tabs get `File not found on disk: <name>`. Pinned by tests 3 and 4.
+
+**MINOR — fixed. `_sendStitchHtmlDocsReady` dropped the one line its five siblings all have.** `_sendHtmlDocsReady` (`:1262-1265`) cancels its pending debounce on entry; the stitch twin did not, so the sweep's deliberate "final unconditional send so the last file cannot be lost to a trailing debounce" was followed 300 ms later by that very debounce firing an identical push.
+*Fix:* cancel-on-entry, mirroring the sibling. Pinned by test 9.
+
+**MINOR — fixed. `dispose()` never cleared any of the five `*DocsDebounce` timers.** Pre-existing for the four siblings, but this change added a fifth *and* made it fire once per downloaded file, so a queued push into a disposed provider is no longer theoretical.
+*Fix:* all five cleared in `dispose()`.
+
+**Also fixed (test hygiene, found while verifying):** the new contract test leaked the HTML preview server that `fetchPreview` on an `.html` file spins up. Its idle timeout is **ten minutes**, so the suite stalled for exactly 600 s after its last assertion passed. Providers are now collected and disposed — runtime 600 s → **91 ms**. Worth recording: any future Design test that previews an `.html` file must dispose its provider or it will look like a CI hang.
+
+### Verified non-defects (do not re-flag)
+
+- `hasKey` + `_stitchOperationLock` + `missing.length === 0` gating is present and correct (`:3900`).
+- The allowlist diagnostic logs **paths only** — no API key, no signed URL (`:4550`).
+- `handlePreviewReady`'s three stale paths (`:1451`, `:1523`, `:1589`) all lower their spinners as specified.
+- `workspaceRoot: state.stitchWorkspaceRoot` on `fetchPreview` (`design.js:1400`) — the primary Symptom-1 fix — is correct, and the frontend already drops `stitch*` messages whose root mismatches (`:3116`).
+- Sequential downloads with a bounded `CONCURRENCY = 4` resolution phase matches the plan.
+
+### Review Verification Results
+
+| Gate | Result |
+|---|---|
+| `npm run compile-tests` (tsc) | ✅ clean |
+| `npx eslint` (3 changed files) | ✅ 0 errors (153 pre-existing style warnings) |
+| `node --check` design.js / new test | ✅ clean |
+| `npm run verb-returns:check` | ✅ Design **9 ≤ ceiling 9** (locked), all 5 providers pass |
+| `npm run parity:check` | ✅ allowlist ≡ catalog |
+| `npm run push-routing:check` | ✅ all 5 providers at baseline |
+| `npm run mirror:check` | ✅ 46 files match |
+| `test:contract:stitch-html-tab` (**new**) | ✅ 11 passed, 0 failed |
+| `test:contract:design-asset` | ✅ 11 passed |
+| `test:contract:design-reply-addressing` | ✅ 7 passed |
+| `test:contract:design-system` | ✅ 21 passed |
+| `test:contract:cross-client-scope` | ✅ 18 passed |
+| `test:contract:headless-feature-mgmt` | ✅ 33 passed |
+| `test:contract:design-view-state` | ✅ 11 passed |
+| `npm run test:integration:all` | ✅ 3 suites passed |
+
+**Gate-wiring audit.** Every automated check this plan names is invoked by CI: `verb-returns:check` (`integration-tests.yml:41`) and the new `test:contract:stitch-html-tab` (added to the same workflow). No check named by this plan is defined-but-uninvoked.
+
+*Separately noted, not this plan's scope:* `test:contract:verb-engine`, `test:contract:verb-engine-kanban`, `test:contract:research-modal`, `test:contract:request-id-wire` and `test:contract:rendermarkdown` are defined in `package.json` but **not** invoked by CI. The first two are red at HEAD (4 + 1 = 5 failures, all in `TaskViewerProvider` construction reaching `vscode.window`, plus Kanban `getDbPath`) — pre-existing, unrelated to Design, and not regressions from this work. Wiring them into CI requires fixing them first; that is its own plan.
+
+### Remaining risks
+
+- **Manual UAT items 1-15 are still outstanding.** Automated coverage now pins the return contracts, the sweep's re-entrancy/progress-scoping, and the spinner-lowering invariant, but the progressive-population behaviour (items 3, 4, 15) and the two-host split are only observable in an installed VSIX and a live browser cockpit.
+- **The download phase still has no project-switch abandon check.** With the progress object now project-tagged this is no longer user-visible, but an abandoned sweep does keep downloading to completion into the old project's dir. Harmless (the files are correct for their own project) and the plan explicitly accepted it; the only cost is bandwidth after a switch.
+- **Cross-seat re-entrancy is coarse.** The in-flight guard is keyed by root+project, not by client. Two browser clients selecting the same project share one sweep — correct behaviour, but the second client sees no progress until the first sweep's next push.
+- **`BroadcastHub._pendingWebviewMessages` is still unbounded in standalone** (`BroadcastHub.ts:63-69`) and the sweep's per-file pushes feed it. Pre-existing; flagged in this plan as a follow-up; unchanged by this review.
+
+### Completion Report — Review Pass
+
+Reviewed the STITCH HTML tab fix against the plan and the Browser Switchboard PRD, then fixed eight findings. Three were regressions in the fix itself: a stale `previewError` tore down a newer already-painted preview, the background sweep had no re-entrancy guard against four `stitchHtmlListDocs` trigger paths (doubling every `getScreen`/`getHtml`), and the sweep's progress counter bled into whatever project the user switched to. Also lowered the Design return-contract ceiling 10 → 9 to lock the banked win, gated the "try Rebuild Cache" hint to the stitch tab only, added the missing debounce cancellation and `dispose()` timer cleanup, and wrote the three data-asserting tests the plan had deferred — wired into both `package.json` and CI. Files changed: `src/webview/design.js`, `src/services/DesignPanelProvider.ts`, `src/test/stitch-html-tab-contract.test.js` (new), `package.json`, `.github/workflows/integration-tests.yml`, `scripts/verb-return-contract-baseline.json`. Verification: typecheck clean, 0 lint errors, all four ratchets green, 112 contract assertions across seven suites passing, integration suite passing; the 5 pre-existing red `verb-engine`/`verb-engine-kanban` tests are TaskViewer/Kanban failures at HEAD, unrelated to this work and not CI-wired.
 
