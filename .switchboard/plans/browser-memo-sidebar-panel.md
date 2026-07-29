@@ -268,3 +268,32 @@ Testing is via an installed VSIX; treat `src/` as source of truth.
 
 Implemented standalone Memo panel for headless browser app-shell mode and removed legacy MEMO tab from Project panel. Created `src/webview/memo.html` and `src/webview/memo.js` with full auto-save, clear, copy prompt, send to planner, and live theme synchronization capabilities. Updated `src/services/headlessPanelHtml.ts` to register `memo` in the panel manifest and serve its HTML, updated `src/services/LocalApiServer.ts` to add `/memo` serving and `/memo/verb/` routing branches, removed memo UI/listeners from `src/webview/project.html` and `src/webview/project.js`, and updated stale comments in `src/services/PlanningPanelProvider.ts`. No issues encountered during implementation.
 
+## Review Report
+
+**Reviewer pass completed.** Independent adversarial review (Grumpy + Balanced), code fixes, and full verification.
+
+### Findings
+
+| Severity | ID | File:Line | Description | Status |
+|---|---|---|---|---|
+| NIT | G-1 | `memo.js:30/53` | `_memoDirty` referenced before `let` declaration (safe — closure timing, matches `project.js` source) | Deferred |
+| NIT | G-2 | `project.html:1471` | Comment mentioning "memo" violated plan's zero-hits acceptance criterion | **Fixed** |
+| MAJOR | G-3 | `headlessPanelHtml.ts:362-363` | `design`/`planning` panels share the same icon `-42.png` (pre-existing, not introduced by this change) | Out of scope |
+
+### Fixes Applied
+
+1. **G-2 fix:** Removed stale `<!-- Memo tab relocated to standalone panel (src/webview/memo.html) -->` comment from `project.html:1471`. `grep -in memo project.html project.js` now returns zero hits, satisfying the plan's acceptance criterion.
+
+### Verification Results
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | ✅ Pass — 5 pre-existing errors in unrelated files, none in memo-related code |
+| `npm run parity:check` | ✅ Pass |
+| `npm run verb-returns:check` | ✅ Pass — all provider ceilings satisfied |
+| `npm run push-routing:check` | ✅ Pass |
+| `grep -in memo project.html project.js` | ✅ Zero hits |
+
+### Remaining Risks
+
+None material. The implementation faithfully follows the plan across all six files touched. CSP, nonce substitution, transport shim injection, theme handling, race-condition guards, and verb routing are all correct. All three CI gate checks pass.
