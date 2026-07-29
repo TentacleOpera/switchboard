@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "generatedAt": "2026-07-29T07:20:56.261Z",
+  "generatedAt": "2026-07-29T09:23:07.014Z",
   "summary": {
     "totalArms": 601,
     "totalVerbs": 514,
     "totalPushSites": 580,
-    "totalRequestSites": 575,
+    "totalRequestSites": 571,
     "providerArmCounts": {
       "Kanban": 152,
       "Planning": 170,
@@ -2036,307 +2036,307 @@
       "arms": [
         {
           "verb": "renderMarkdownLive",
-          "line": 2424,
+          "line": 2535,
           "dynamic": false
         },
         {
           "verb": "ready",
-          "line": 2445,
+          "line": 2556,
           "dynamic": false
         },
         {
           "verb": "persistTabState",
-          "line": 2484,
+          "line": 2595,
           "dynamic": false
         },
         {
           "verb": "inspectRequestDataUrl",
-          "line": 2496,
+          "line": 2607,
           "dynamic": false
         },
         {
           "verb": "activeTabChanged",
-          "line": 2526,
+          "line": 2637,
           "dynamic": false
         },
         {
           "verb": "setActivePlanningContext",
-          "line": 2544,
+          "line": 2655,
           "dynamic": false
         },
         {
           "verb": "disableDesignDoc",
-          "line": 2576,
+          "line": 2687,
           "dynamic": false
         },
         {
           "verb": "saveFileContent",
-          "line": 2602,
+          "line": 2713,
           "dynamic": false
         },
         {
           "verb": "fetchPreview",
-          "line": 2671,
+          "line": 2782,
           "dynamic": false
         },
         {
           "verb": "copyStitchTweakPrompt",
-          "line": 2754,
+          "line": 2865,
           "dynamic": false
         },
         {
           "verb": "copyDesignSystemPrompt",
-          "line": 2762,
+          "line": 2873,
           "dynamic": false
         },
         {
           "verb": "bindDesignSystemToProject",
-          "line": 2796,
-          "dynamic": false
-        },
-        {
-          "verb": "createDesignSystemTemplate",
-          "line": 2855,
-          "dynamic": false
-        },
-        {
-          "verb": "sendStitchTweakPrompt",
-          "line": 2894,
-          "dynamic": false
-        },
-        {
-          "verb": "copyHtmlTweakPrompt",
           "line": 2907,
           "dynamic": false
         },
         {
+          "verb": "createDesignSystemTemplate",
+          "line": 2966,
+          "dynamic": false
+        },
+        {
+          "verb": "sendStitchTweakPrompt",
+          "line": 3005,
+          "dynamic": false
+        },
+        {
+          "verb": "copyHtmlTweakPrompt",
+          "line": 3018,
+          "dynamic": false
+        },
+        {
           "verb": "sendHtmlTweakPrompt",
-          "line": 2915,
+          "line": 3026,
           "dynamic": false
         },
         {
           "verb": "copyClaudeImportPrompt",
-          "line": 2928,
+          "line": 3039,
           "dynamic": false
         },
         {
           "verb": "sendClaudeImportPrompt",
-          "line": 2936,
+          "line": 3047,
           "dynamic": false
         },
         {
           "verb": "copyClaudeArtifactPrompt",
-          "line": 2949,
+          "line": 3060,
           "dynamic": false
         },
         {
           "verb": "sendClaudeArtifactPrompt",
-          "line": 2958,
+          "line": 3069,
           "dynamic": false
         },
         {
           "verb": "linkToDocument",
-          "line": 2973,
+          "line": 3084,
           "dynamic": false
         },
         {
           "verb": "linkToFolder",
-          "line": 2988,
+          "line": 3099,
           "dynamic": false
         },
         {
           "verb": "serveAndOpenHtml",
-          "line": 2993,
+          "line": 3104,
           "dynamic": false
         },
         {
           "verb": "stitchSaveApiKey",
-          "line": 3013,
+          "line": 3124,
           "dynamic": false
         },
         {
           "verb": "stitchSaveAuthConfig",
-          "line": 3032,
+          "line": 3143,
           "dynamic": false
         },
         {
           "verb": "stitchValidateAuth",
-          "line": 3057,
+          "line": 3168,
           "dynamic": false
         },
         {
           "verb": "stitchListDesignSystems",
-          "line": 3092,
+          "line": 3203,
           "dynamic": false
         },
         {
           "verb": "stitchCreateDesignSystem",
-          "line": 3125,
+          "line": 3236,
           "dynamic": false
         },
         {
           "verb": "stitchUpdateDesignSystem",
-          "line": 3160,
-          "dynamic": false
-        },
-        {
-          "verb": "stitchApplyDesignSystem",
-          "line": 3197,
-          "dynamic": false
-        },
-        {
-          "verb": "stitchListProjects",
           "line": 3271,
           "dynamic": false
         },
         {
+          "verb": "stitchApplyDesignSystem",
+          "line": 3308,
+          "dynamic": false
+        },
+        {
+          "verb": "stitchListProjects",
+          "line": 3382,
+          "dynamic": false
+        },
+        {
           "verb": "stitchGetProjectScreens",
-          "line": 3340,
+          "line": 3451,
           "dynamic": false
         },
         {
           "verb": "stitchRebuildImageCache",
-          "line": 3438,
+          "line": 3549,
           "dynamic": false
         },
         {
           "verb": "stitchForceReloadScreens",
-          "line": 3483,
+          "line": 3594,
           "dynamic": false
         },
         {
           "verb": "stitchCreateProject",
-          "line": 3558,
+          "line": 3669,
           "dynamic": false
         },
         {
           "verb": "stitchRefreshScreen",
-          "line": 3599,
+          "line": 3710,
           "dynamic": false
         },
         {
           "verb": "stitchOpenManifest",
-          "line": 3614,
+          "line": 3725,
           "dynamic": false
         },
         {
           "verb": "stitchDownloadPalette",
-          "line": 3679,
-          "dynamic": false
-        },
-        {
-          "verb": "listDesignFolders",
-          "line": 3722,
-          "dynamic": false
-        },
-        {
-          "verb": "addDesignFolder",
-          "line": 3729,
-          "dynamic": false
-        },
-        {
-          "verb": "removeDesignFolder",
-          "line": 3746,
-          "dynamic": false
-        },
-        {
-          "verb": "listHtmlFolders",
-          "line": 3757,
-          "dynamic": false
-        },
-        {
-          "verb": "addHtmlFolder",
-          "line": 3764,
-          "dynamic": false
-        },
-        {
-          "verb": "removeHtmlFolder",
-          "line": 3780,
-          "dynamic": false
-        },
-        {
-          "verb": "listClaudeFolders",
           "line": 3790,
           "dynamic": false
         },
         {
+          "verb": "listDesignFolders",
+          "line": 3833,
+          "dynamic": false
+        },
+        {
+          "verb": "addDesignFolder",
+          "line": 3840,
+          "dynamic": false
+        },
+        {
+          "verb": "removeDesignFolder",
+          "line": 3857,
+          "dynamic": false
+        },
+        {
+          "verb": "listHtmlFolders",
+          "line": 3868,
+          "dynamic": false
+        },
+        {
+          "verb": "addHtmlFolder",
+          "line": 3875,
+          "dynamic": false
+        },
+        {
+          "verb": "removeHtmlFolder",
+          "line": 3891,
+          "dynamic": false
+        },
+        {
+          "verb": "listClaudeFolders",
+          "line": 3901,
+          "dynamic": false
+        },
+        {
           "verb": "addClaudeFolder",
-          "line": 3797,
+          "line": 3908,
           "dynamic": false
         },
         {
           "verb": "removeClaudeFolder",
-          "line": 3813,
+          "line": 3924,
           "dynamic": false
         },
         {
           "verb": "stitchHtmlListDocs",
-          "line": 3829,
+          "line": 3940,
           "dynamic": false
         },
         {
           "verb": "refreshDocsForTab",
-          "line": 3849,
+          "line": 3960,
           "dynamic": false
         },
         {
           "verb": "listImagesFolders",
-          "line": 3871,
+          "line": 3982,
           "dynamic": false
         },
         {
           "verb": "addImagesFolder",
-          "line": 3878,
+          "line": 3989,
           "dynamic": false
         },
         {
           "verb": "removeImagesFolder",
-          "line": 3894,
+          "line": 4005,
           "dynamic": false
         },
         {
           "verb": "listStitchFolders",
-          "line": 3905,
+          "line": 4016,
           "dynamic": false
         },
         {
           "verb": "addStitchFolder",
-          "line": 3912,
+          "line": 4023,
           "dynamic": false
         },
         {
           "verb": "removeStitchFolder",
-          "line": 3926,
+          "line": 4037,
           "dynamic": false
         },
         {
           "verb": "stitchPickAttachFiles",
-          "line": 3935,
+          "line": 4046,
           "dynamic": false
         },
         {
           "verb": "stitchGenerate",
-          "line": 3964,
+          "line": 4075,
           "dynamic": false
         },
         {
           "verb": "stitchEdit",
-          "line": 4021,
+          "line": 4132,
           "dynamic": false
         },
         {
           "verb": "stitchVariants",
-          "line": 4078,
+          "line": 4189,
           "dynamic": false
         },
         {
           "verb": "stitchDownloadAsset",
-          "line": 4137,
+          "line": 4248,
           "dynamic": false
         },
         {
           "verb": "stitchPreviewHtml",
-          "line": 4201,
+          "line": 4312,
           "dynamic": false
         }
       ]
@@ -8596,13 +8596,6 @@
       ],
       "siteCount": 9
     },
-    "listBriefsFolders": {
-      "payloadKeys": [
-        "type",
-        "workspaceRoot"
-      ],
-      "siteCount": 1
-    },
     "listDesignFolders": {
       "payloadKeys": [
         "type",
@@ -9188,14 +9181,6 @@
       ],
       "siteCount": 4
     },
-    "removeBriefsFolder": {
-      "payloadKeys": [
-        "type",
-        "folderPath",
-        "workspaceRoot"
-      ],
-      "siteCount": 1
-    },
     "removeConstitutionPath": {
       "payloadKeys": [
         "type",
@@ -9410,7 +9395,7 @@
         "originalContent",
         "tab"
       ],
-      "siteCount": 9
+      "siteCount": 8
     },
     "saveFileContentResult": {
       "payloadKeys": "dynamic",
@@ -10214,15 +10199,6 @@
         "workspaceRoot"
       ],
       "siteCount": 6
-    },
-    "stitchSendBrief": {
-      "payloadKeys": [
-        "type",
-        "docId",
-        "briefTitle",
-        "sourceFolder"
-      ],
-      "siteCount": 1
     },
     "stitchUpdateDesignSystem": {
       "payloadKeys": [
@@ -12883,7 +12859,7 @@
       "verb": "stitchElementSelected",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 442,
+      "line": 485,
       "receiver": "window.parent",
       "provider": "Design",
       "payloadKeys": [
@@ -12900,7 +12876,7 @@
       "verb": "sbInspectState",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 485,
+      "line": 528,
       "receiver": "window.parent",
       "provider": "Design",
       "payloadKeys": [
@@ -12912,7 +12888,7 @@
       "verb": "sbSpacePan",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 504,
+      "line": 547,
       "receiver": "window.parent",
       "provider": "Design",
       "payloadKeys": [
@@ -12924,7 +12900,7 @@
       "verb": "sbSpacePan",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 508,
+      "line": 551,
       "receiver": "window.parent",
       "provider": "Design",
       "payloadKeys": [
@@ -12936,7 +12912,7 @@
       "verb": "sbSpacePan",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 511,
+      "line": 554,
       "receiver": "window.parent",
       "provider": "Design",
       "payloadKeys": [
@@ -12948,7 +12924,7 @@
       "verb": "sbWheel",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 523,
+      "line": 566,
       "receiver": "window.parent",
       "provider": "Design",
       "payloadKeys": [
@@ -12964,7 +12940,7 @@
       "verb": "sbContentDims",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 537,
+      "line": 580,
       "receiver": "window.parent",
       "provider": "Design",
       "payloadKeys": [
@@ -12977,7 +12953,7 @@
       "verb": "workspaceItemsUpdated",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 641,
+      "line": 688,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -12989,7 +12965,7 @@
       "verb": "themeChanged",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 662,
+      "line": 709,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13000,7 +12976,7 @@
       "verb": "cyberAnimationSetting",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 669,
+      "line": 716,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13012,7 +12988,7 @@
       "verb": "cyberScanlinesSetting",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 673,
+      "line": 720,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13024,7 +13000,7 @@
       "verb": "switchboardThemeChanged",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 677,
+      "line": 724,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13036,7 +13012,7 @@
       "verb": "ultracodeAnimationSetting",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 681,
+      "line": 728,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13048,7 +13024,7 @@
       "verb": "workspaceItemsUpdated",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 749,
+      "line": 802,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13060,7 +13036,7 @@
       "verb": "themeChanged",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 770,
+      "line": 823,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13071,7 +13047,7 @@
       "verb": "cyberAnimationSetting",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 777,
+      "line": 830,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13083,7 +13059,7 @@
       "verb": "cyberScanlinesSetting",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 781,
+      "line": 834,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13095,7 +13071,7 @@
       "verb": "switchboardThemeChanged",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 785,
+      "line": 838,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13107,7 +13083,7 @@
       "verb": "ultracodeAnimationSetting",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 789,
+      "line": 842,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13119,7 +13095,7 @@
       "verb": "activeDesignDocUpdated",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2054,
+      "line": 2165,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13131,7 +13107,7 @@
       "verb": "previewRenderStatus",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2332,
+      "line": 2443,
       "receiver": "window.parent",
       "provider": "Design",
       "payloadKeys": [
@@ -13148,7 +13124,7 @@
       "verb": "markdownLiveRendered",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2427,
+      "line": 2538,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13162,7 +13138,7 @@
       "verb": "markdownLiveRendered",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2435,
+      "line": 2546,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13177,7 +13153,7 @@
       "verb": "workspaceItemsUpdated",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2450,
+      "line": 2561,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13189,7 +13165,7 @@
       "verb": "restoredTabState",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2454,
+      "line": 2565,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13202,7 +13178,7 @@
       "verb": "stitchApiKeyStatus",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2460,
+      "line": 2571,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13214,7 +13190,7 @@
       "verb": "stitchAuthStatus",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2461,
+      "line": 2572,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13228,7 +13204,7 @@
       "verb": "switchboardThemeChanged",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2468,
+      "line": 2579,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13240,7 +13216,7 @@
       "verb": "cyberAnimationSetting",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2469,
+      "line": 2580,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13252,7 +13228,7 @@
       "verb": "cyberScanlinesSetting",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2470,
+      "line": 2581,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13264,7 +13240,7 @@
       "verb": "activeContextSet",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2548,
+      "line": 2659,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13277,7 +13253,7 @@
       "verb": "activeContextSet",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2568,
+      "line": 2679,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13289,7 +13265,7 @@
       "verb": "activeContextSet",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2571,
+      "line": 2682,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13302,7 +13278,7 @@
       "verb": "activeContextSet",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2597,
+      "line": 2708,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13315,7 +13291,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2609,
+      "line": 2720,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13329,7 +13305,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2630,
+      "line": 2741,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13343,7 +13319,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2640,
+      "line": 2751,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13358,7 +13334,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2649,
+      "line": 2760,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13372,7 +13348,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2657,
+      "line": 2768,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13386,7 +13362,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2663,
+      "line": 2774,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13399,7 +13375,7 @@
       "verb": "saveFileContentResult",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2666,
+      "line": 2777,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13413,7 +13389,7 @@
       "verb": "copyDesignSystemPromptResult",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2776,
+      "line": 2887,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13426,7 +13402,7 @@
       "verb": "copyDesignSystemPromptResult",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2788,
+      "line": 2899,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13440,7 +13416,7 @@
       "verb": "copyDesignSystemPromptResult",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2791,
+      "line": 2902,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13453,7 +13429,7 @@
       "verb": "designSystemBindingChanged",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2843,
+      "line": 2954,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13466,7 +13442,7 @@
       "verb": "designSystemBindingChanged",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 2848,
+      "line": 2959,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13480,7 +13456,7 @@
       "verb": "stitchApiKeyStatus",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3023,
+      "line": 3134,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13492,7 +13468,7 @@
       "verb": "stitchAuthStatus",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3024,
+      "line": 3135,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13505,7 +13481,7 @@
       "verb": "stitchApiKeyStatus",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3043,
+      "line": 3154,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13517,7 +13493,7 @@
       "verb": "stitchAuthStatus",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3044,
+      "line": 3155,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13531,7 +13507,7 @@
       "verb": "stitchAuthStatus",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3061,
+      "line": 3172,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13546,7 +13522,7 @@
       "verb": "stitchAuthStatus",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3073,
+      "line": 3184,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13560,7 +13536,7 @@
       "verb": "stitchAuthStatus",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3082,
+      "line": 3193,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13575,7 +13551,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3097,
+      "line": 3208,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13588,7 +13564,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3102,
+      "line": 3213,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13601,7 +13577,7 @@
       "verb": "stitchDesignSystemsReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3118,
+      "line": 3229,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13614,7 +13590,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3121,
+      "line": 3232,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13627,7 +13603,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3127,
+      "line": 3238,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13640,100 +13616,11 @@
       "verb": "stitchDesignSystemCreated",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3151,
-      "receiver": "this",
-      "provider": "Design",
-      "payloadKeys": [
-        "type",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "stitchError",
-      "direction": "push",
-      "file": "src/services/DesignPanelProvider.ts",
-      "line": 3154,
-      "receiver": "this",
-      "provider": "Design",
-      "payloadKeys": [
-        "type",
-        "error",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "stitchError",
-      "direction": "push",
-      "file": "src/services/DesignPanelProvider.ts",
-      "line": 3162,
-      "receiver": "this",
-      "provider": "Design",
-      "payloadKeys": [
-        "type",
-        "error",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "stitchDesignSystemUpdated",
-      "direction": "push",
-      "file": "src/services/DesignPanelProvider.ts",
-      "line": 3188,
-      "receiver": "this",
-      "provider": "Design",
-      "payloadKeys": [
-        "type",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "stitchError",
-      "direction": "push",
-      "file": "src/services/DesignPanelProvider.ts",
-      "line": 3191,
-      "receiver": "this",
-      "provider": "Design",
-      "payloadKeys": [
-        "type",
-        "error",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "stitchError",
-      "direction": "push",
-      "file": "src/services/DesignPanelProvider.ts",
-      "line": 3199,
-      "receiver": "this",
-      "provider": "Design",
-      "payloadKeys": [
-        "type",
-        "error",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "stitchDesignSystemApplied",
-      "direction": "push",
-      "file": "src/services/DesignPanelProvider.ts",
       "line": 3262,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
         "type",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "stitchScreensReady",
-      "direction": "push",
-      "file": "src/services/DesignPanelProvider.ts",
-      "line": 3263,
-      "receiver": "this",
-      "provider": "Design",
-      "payloadKeys": [
-        "type",
-        "screens",
         "workspaceRoot"
       ]
     },
@@ -13751,10 +13638,99 @@
       ]
     },
     {
+      "verb": "stitchError",
+      "direction": "push",
+      "file": "src/services/DesignPanelProvider.ts",
+      "line": 3273,
+      "receiver": "this",
+      "provider": "Design",
+      "payloadKeys": [
+        "type",
+        "error",
+        "workspaceRoot"
+      ]
+    },
+    {
+      "verb": "stitchDesignSystemUpdated",
+      "direction": "push",
+      "file": "src/services/DesignPanelProvider.ts",
+      "line": 3299,
+      "receiver": "this",
+      "provider": "Design",
+      "payloadKeys": [
+        "type",
+        "workspaceRoot"
+      ]
+    },
+    {
+      "verb": "stitchError",
+      "direction": "push",
+      "file": "src/services/DesignPanelProvider.ts",
+      "line": 3302,
+      "receiver": "this",
+      "provider": "Design",
+      "payloadKeys": [
+        "type",
+        "error",
+        "workspaceRoot"
+      ]
+    },
+    {
+      "verb": "stitchError",
+      "direction": "push",
+      "file": "src/services/DesignPanelProvider.ts",
+      "line": 3310,
+      "receiver": "this",
+      "provider": "Design",
+      "payloadKeys": [
+        "type",
+        "error",
+        "workspaceRoot"
+      ]
+    },
+    {
+      "verb": "stitchDesignSystemApplied",
+      "direction": "push",
+      "file": "src/services/DesignPanelProvider.ts",
+      "line": 3373,
+      "receiver": "this",
+      "provider": "Design",
+      "payloadKeys": [
+        "type",
+        "workspaceRoot"
+      ]
+    },
+    {
+      "verb": "stitchScreensReady",
+      "direction": "push",
+      "file": "src/services/DesignPanelProvider.ts",
+      "line": 3374,
+      "receiver": "this",
+      "provider": "Design",
+      "payloadKeys": [
+        "type",
+        "screens",
+        "workspaceRoot"
+      ]
+    },
+    {
+      "verb": "stitchError",
+      "direction": "push",
+      "file": "src/services/DesignPanelProvider.ts",
+      "line": 3376,
+      "receiver": "this",
+      "provider": "Design",
+      "payloadKeys": [
+        "type",
+        "error",
+        "workspaceRoot"
+      ]
+    },
+    {
       "verb": "stitchApiKeyStatus",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3275,
+      "line": 3386,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13767,7 +13743,7 @@
       "verb": "stitchProjectsReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3292,
+      "line": 3403,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13783,7 +13759,7 @@
       "verb": "stitchProjectsReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3325,
+      "line": 3436,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13799,7 +13775,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3336,
+      "line": 3447,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13812,7 +13788,7 @@
       "verb": "stitchScreensReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3365,
+      "line": 3476,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13825,7 +13801,7 @@
       "verb": "stitchScreensReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3413,
+      "line": 3524,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13838,7 +13814,7 @@
       "verb": "stitchScreenReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3422,
+      "line": 3533,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13851,7 +13827,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3434,
+      "line": 3545,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13864,46 +13840,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3442,
-      "receiver": "this",
-      "provider": "Design",
-      "payloadKeys": [
-        "type",
-        "error",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "stitchScreensReady",
-      "direction": "push",
-      "file": "src/services/DesignPanelProvider.ts",
-      "line": 3474,
-      "receiver": "this",
-      "provider": "Design",
-      "payloadKeys": [
-        "type",
-        "screens",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "stitchError",
-      "direction": "push",
-      "file": "src/services/DesignPanelProvider.ts",
-      "line": 3479,
-      "receiver": "this",
-      "provider": "Design",
-      "payloadKeys": [
-        "type",
-        "error",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "stitchError",
-      "direction": "push",
-      "file": "src/services/DesignPanelProvider.ts",
-      "line": 3487,
+      "line": 3553,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13916,7 +13853,7 @@
       "verb": "stitchScreensReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3548,
+      "line": 3585,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13929,7 +13866,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3554,
+      "line": 3590,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13942,7 +13879,33 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3563,
+      "line": 3598,
+      "receiver": "this",
+      "provider": "Design",
+      "payloadKeys": [
+        "type",
+        "error",
+        "workspaceRoot"
+      ]
+    },
+    {
+      "verb": "stitchScreensReady",
+      "direction": "push",
+      "file": "src/services/DesignPanelProvider.ts",
+      "line": 3659,
+      "receiver": "this",
+      "provider": "Design",
+      "payloadKeys": [
+        "type",
+        "screens",
+        "workspaceRoot"
+      ]
+    },
+    {
+      "verb": "stitchError",
+      "direction": "push",
+      "file": "src/services/DesignPanelProvider.ts",
+      "line": 3665,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13955,7 +13918,20 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3567,
+      "line": 3674,
+      "receiver": "this",
+      "provider": "Design",
+      "payloadKeys": [
+        "type",
+        "error",
+        "workspaceRoot"
+      ]
+    },
+    {
+      "verb": "stitchError",
+      "direction": "push",
+      "file": "src/services/DesignPanelProvider.ts",
+      "line": 3678,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13968,7 +13944,7 @@
       "verb": "stitchProjectsReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3590,
+      "line": 3701,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13983,7 +13959,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3595,
+      "line": 3706,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -13996,7 +13972,7 @@
       "verb": "stitchScreenReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3607,
+      "line": 3718,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14009,7 +13985,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3610,
+      "line": 3721,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14022,7 +13998,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3675,
+      "line": 3786,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14035,7 +14011,7 @@
       "verb": "designFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3726,
+      "line": 3837,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14048,7 +14024,7 @@
       "verb": "designFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3743,
+      "line": 3854,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14061,7 +14037,7 @@
       "verb": "designFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3753,
+      "line": 3864,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14074,7 +14050,7 @@
       "verb": "htmlFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3761,
+      "line": 3872,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14087,7 +14063,7 @@
       "verb": "htmlFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3777,
+      "line": 3888,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14100,7 +14076,7 @@
       "verb": "htmlFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3787,
+      "line": 3898,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14113,7 +14089,7 @@
       "verb": "claudeFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3794,
+      "line": 3905,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14126,7 +14102,7 @@
       "verb": "claudeFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3810,
+      "line": 3921,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14137,84 +14113,6 @@
     },
     {
       "verb": "claudeFoldersListed",
-      "direction": "push",
-      "file": "src/services/DesignPanelProvider.ts",
-      "line": 3820,
-      "receiver": "this",
-      "provider": "Design",
-      "payloadKeys": [
-        "type",
-        "paths",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "imagesFoldersListed",
-      "direction": "push",
-      "file": "src/services/DesignPanelProvider.ts",
-      "line": 3875,
-      "receiver": "this",
-      "provider": "Design",
-      "payloadKeys": [
-        "type",
-        "paths",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "imagesFoldersListed",
-      "direction": "push",
-      "file": "src/services/DesignPanelProvider.ts",
-      "line": 3891,
-      "receiver": "this",
-      "provider": "Design",
-      "payloadKeys": [
-        "type",
-        "paths",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "imagesFoldersListed",
-      "direction": "push",
-      "file": "src/services/DesignPanelProvider.ts",
-      "line": 3901,
-      "receiver": "this",
-      "provider": "Design",
-      "payloadKeys": [
-        "type",
-        "paths",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "stitchFoldersListed",
-      "direction": "push",
-      "file": "src/services/DesignPanelProvider.ts",
-      "line": 3909,
-      "receiver": "this",
-      "provider": "Design",
-      "payloadKeys": [
-        "type",
-        "paths",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "stitchFoldersListed",
-      "direction": "push",
-      "file": "src/services/DesignPanelProvider.ts",
-      "line": 3923,
-      "receiver": "this",
-      "provider": "Design",
-      "payloadKeys": [
-        "type",
-        "paths",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "stitchFoldersListed",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
       "line": 3931,
@@ -14227,10 +14125,88 @@
       ]
     },
     {
+      "verb": "imagesFoldersListed",
+      "direction": "push",
+      "file": "src/services/DesignPanelProvider.ts",
+      "line": 3986,
+      "receiver": "this",
+      "provider": "Design",
+      "payloadKeys": [
+        "type",
+        "paths",
+        "workspaceRoot"
+      ]
+    },
+    {
+      "verb": "imagesFoldersListed",
+      "direction": "push",
+      "file": "src/services/DesignPanelProvider.ts",
+      "line": 4002,
+      "receiver": "this",
+      "provider": "Design",
+      "payloadKeys": [
+        "type",
+        "paths",
+        "workspaceRoot"
+      ]
+    },
+    {
+      "verb": "imagesFoldersListed",
+      "direction": "push",
+      "file": "src/services/DesignPanelProvider.ts",
+      "line": 4012,
+      "receiver": "this",
+      "provider": "Design",
+      "payloadKeys": [
+        "type",
+        "paths",
+        "workspaceRoot"
+      ]
+    },
+    {
+      "verb": "stitchFoldersListed",
+      "direction": "push",
+      "file": "src/services/DesignPanelProvider.ts",
+      "line": 4020,
+      "receiver": "this",
+      "provider": "Design",
+      "payloadKeys": [
+        "type",
+        "paths",
+        "workspaceRoot"
+      ]
+    },
+    {
+      "verb": "stitchFoldersListed",
+      "direction": "push",
+      "file": "src/services/DesignPanelProvider.ts",
+      "line": 4034,
+      "receiver": "this",
+      "provider": "Design",
+      "payloadKeys": [
+        "type",
+        "paths",
+        "workspaceRoot"
+      ]
+    },
+    {
+      "verb": "stitchFoldersListed",
+      "direction": "push",
+      "file": "src/services/DesignPanelProvider.ts",
+      "line": 4042,
+      "receiver": "this",
+      "provider": "Design",
+      "payloadKeys": [
+        "type",
+        "paths",
+        "workspaceRoot"
+      ]
+    },
+    {
       "verb": "stitchAttachedFilesPicked",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3956,
+      "line": 4067,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14242,7 +14218,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3968,
+      "line": 4079,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14255,46 +14231,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 3975,
-      "receiver": "this",
-      "provider": "Design",
-      "payloadKeys": [
-        "type",
-        "error",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "stitchScreenReady",
-      "direction": "push",
-      "file": "src/services/DesignPanelProvider.ts",
-      "line": 4012,
-      "receiver": "this",
-      "provider": "Design",
-      "payloadKeys": [
-        "type",
-        "screen",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "stitchError",
-      "direction": "push",
-      "file": "src/services/DesignPanelProvider.ts",
-      "line": 4017,
-      "receiver": "this",
-      "provider": "Design",
-      "payloadKeys": [
-        "type",
-        "error",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "stitchError",
-      "direction": "push",
-      "file": "src/services/DesignPanelProvider.ts",
-      "line": 4025,
+      "line": 4086,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14307,7 +14244,7 @@
       "verb": "stitchScreenReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4069,
+      "line": 4123,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14320,7 +14257,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4074,
+      "line": 4128,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14333,7 +14270,46 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4082,
+      "line": 4136,
+      "receiver": "this",
+      "provider": "Design",
+      "payloadKeys": [
+        "type",
+        "error",
+        "workspaceRoot"
+      ]
+    },
+    {
+      "verb": "stitchScreenReady",
+      "direction": "push",
+      "file": "src/services/DesignPanelProvider.ts",
+      "line": 4180,
+      "receiver": "this",
+      "provider": "Design",
+      "payloadKeys": [
+        "type",
+        "screen",
+        "workspaceRoot"
+      ]
+    },
+    {
+      "verb": "stitchError",
+      "direction": "push",
+      "file": "src/services/DesignPanelProvider.ts",
+      "line": 4185,
+      "receiver": "this",
+      "provider": "Design",
+      "payloadKeys": [
+        "type",
+        "error",
+        "workspaceRoot"
+      ]
+    },
+    {
+      "verb": "stitchError",
+      "direction": "push",
+      "file": "src/services/DesignPanelProvider.ts",
+      "line": 4193,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14346,7 +14322,7 @@
       "verb": "stitchScreensReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4128,
+      "line": 4239,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14359,7 +14335,7 @@
       "verb": "stitchError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4133,
+      "line": 4244,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14372,7 +14348,7 @@
       "verb": "stitchAssetDownloaded",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4187,
+      "line": 4298,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14386,7 +14362,7 @@
       "verb": "stitchHtmlPreviewError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4198,
+      "line": 4309,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14399,7 +14375,7 @@
       "verb": "stitchHtmlPreviewReady",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4230,
+      "line": 4341,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -14414,7 +14390,7 @@
       "verb": "stitchHtmlPreviewError",
       "direction": "push",
       "file": "src/services/DesignPanelProvider.ts",
-      "line": 4233,
+      "line": 4344,
       "receiver": "this",
       "provider": "Design",
       "payloadKeys": [
@@ -17792,7 +17768,7 @@
       "verb": "sbInspectToggle",
       "direction": "push",
       "file": "src/webview/design.js",
-      "line": 4587,
+      "line": 4518,
       "receiver": "frame.contentWindow?",
       "payloadKeys": [
         "type",
@@ -17803,7 +17779,7 @@
       "verb": "sbInspectToggle",
       "direction": "push",
       "file": "src/webview/design.js",
-      "line": 4686,
+      "line": 4617,
       "receiver": "frame.contentWindow?",
       "payloadKeys": [
         "type",
@@ -17836,7 +17812,7 @@
       "verb": "switchPanel",
       "direction": "push",
       "file": "src/webview/transport.js",
-      "line": 223,
+      "line": 234,
       "receiver": "window.parent",
       "payloadKeys": [
         "type",
@@ -17847,7 +17823,7 @@
       "verb": "switchPanel",
       "direction": "push",
       "file": "src/webview/transport.js",
-      "line": 298,
+      "line": 309,
       "receiver": "window.parent",
       "payloadKeys": [
         "type",
@@ -17860,7 +17836,7 @@
       "verb": "activeTabChanged",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 15,
+      "line": 32,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -17872,7 +17848,7 @@
       "verb": "persistTabState",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 128,
+      "line": 144,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -17885,7 +17861,7 @@
       "verb": "activeTabChanged",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 157,
+      "line": 173,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -17896,7 +17872,7 @@
       "verb": "stitchListProjects",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 161,
+      "line": 177,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -17907,7 +17883,7 @@
       "verb": "refreshDocsForTab",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 166,
+      "line": 182,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -17918,7 +17894,7 @@
       "verb": "stitchListProjects",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 212,
+      "line": 228,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -17929,7 +17905,7 @@
       "verb": "activeTabChanged",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 216,
+      "line": 232,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -17940,7 +17916,7 @@
       "verb": "activeTabChanged",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 220,
+      "line": 236,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -17951,7 +17927,7 @@
       "verb": "linkToFolder",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 747,
+      "line": 763,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -17962,7 +17938,7 @@
       "verb": "linkToFolder",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 786,
+      "line": 802,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -17973,7 +17949,7 @@
       "verb": "linkToFolder",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 1023,
+      "line": 1039,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -17984,7 +17960,7 @@
       "verb": "copyHtmlTweakPrompt",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 1032,
+      "line": 1048,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -17995,7 +17971,7 @@
       "verb": "bindDesignSystemToProject",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 1260,
+      "line": 1276,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18009,7 +17985,7 @@
       "verb": "linkToDocument",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 1268,
+      "line": 1284,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18023,7 +17999,7 @@
       "verb": "serveAndOpenHtml",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 1276,
+      "line": 1292,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18037,7 +18013,7 @@
       "verb": "fetchPreview",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 1357,
+      "line": 1373,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18051,7 +18027,7 @@
       "verb": "fetchPreview",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 1376,
+      "line": 1392,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18067,7 +18043,7 @@
       "verb": "fetchPreview",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 1396,
+      "line": 1412,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18081,7 +18057,7 @@
       "verb": "fetchPreview",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 1419,
+      "line": 1435,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18095,7 +18071,7 @@
       "verb": "renderMarkdownLive",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 1788,
+      "line": 1784,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18107,7 +18083,7 @@
       "verb": "bindDesignSystemToProject",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 1836,
+      "line": 1832,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18122,7 +18098,7 @@
       "verb": "linkToDocument",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 1851,
+      "line": 1847,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18136,7 +18112,7 @@
       "verb": "saveFileContent",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 1868,
+      "line": 1864,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18150,7 +18126,7 @@
       "verb": "linkToDocument",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 2034,
+      "line": 2030,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18162,7 +18138,7 @@
       "verb": "stitchRefreshScreen",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 2182,
+      "line": 2178,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18175,7 +18151,7 @@
       "verb": "stitchPreviewHtml",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 2213,
+      "line": 2209,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18188,7 +18164,7 @@
       "verb": "stitchDownloadAsset",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 2222,
+      "line": 2218,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18202,7 +18178,7 @@
       "verb": "stitchHtmlListDocs",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 2383,
+      "line": 2379,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18214,7 +18190,7 @@
       "verb": "serveAndOpenHtml",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 2411,
+      "line": 2407,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18226,7 +18202,7 @@
       "verb": "stitchEdit",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 2431,
+      "line": 2427,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18240,7 +18216,7 @@
       "verb": "stitchVariants",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 2463,
+      "line": 2459,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18257,30 +18233,17 @@
       "verb": "stitchPickAttachFiles",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 2556,
+      "line": 2552,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
       ]
     },
     {
-      "verb": "stitchSendBrief",
-      "direction": "request",
-      "file": "src/webview/design.js",
-      "line": 2569,
-      "receiver": "vscode",
-      "payloadKeys": [
-        "type",
-        "docId",
-        "briefTitle",
-        "sourceFolder"
-      ]
-    },
-    {
       "verb": "stitchListProjects",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 2594,
+      "line": 2572,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18292,7 +18255,7 @@
       "verb": "stitchRebuildImageCache",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 2606,
+      "line": 2584,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18304,7 +18267,7 @@
       "verb": "stitchForceReloadScreens",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 2620,
+      "line": 2598,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18316,7 +18279,7 @@
       "verb": "stitchOpenManifest",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 2630,
+      "line": 2608,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18328,7 +18291,7 @@
       "verb": "stitchDownloadPalette",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 2644,
+      "line": 2622,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18341,7 +18304,7 @@
       "verb": "stitchSaveApiKey",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 2657,
+      "line": 2635,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18352,7 +18315,7 @@
       "verb": "stitchGenerate",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 2670,
+      "line": 2648,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18368,7 +18331,7 @@
       "verb": "stitchGetProjectScreens",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 2712,
+      "line": 2690,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18380,7 +18343,7 @@
       "verb": "stitchListProjects",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 3139,
+      "line": 3098,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18391,7 +18354,7 @@
       "verb": "stitchListProjects",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 3188,
+      "line": 3147,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18399,24 +18362,10 @@
       ]
     },
     {
-      "verb": "saveFileContent",
-      "direction": "request",
-      "file": "src/webview/design.js",
-      "line": 3632,
-      "receiver": "vscode",
-      "payloadKeys": [
-        "type",
-        "filePath",
-        "content",
-        "originalContent",
-        "tab"
-      ]
-    },
-    {
       "verb": "fetchPreview",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 3668,
+      "line": 3615,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18430,7 +18379,7 @@
       "verb": "saveFileContent",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 3689,
+      "line": 3636,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18444,7 +18393,7 @@
       "verb": "stitchListDesignSystems",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 3729,
+      "line": 3676,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18456,7 +18405,7 @@
       "verb": "stitchListDesignSystems",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 3738,
+      "line": 3685,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18468,7 +18417,7 @@
       "verb": "stitchListDesignSystems",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 3747,
+      "line": 3694,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18480,7 +18429,7 @@
       "verb": "stitchGetProjectScreens",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 3776,
+      "line": 3723,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18492,7 +18441,7 @@
       "verb": "stitchGetProjectScreens",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 3785,
+      "line": 3732,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18504,7 +18453,7 @@
       "verb": "stitchHtmlListDocs",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 3805,
+      "line": 3752,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18516,7 +18465,7 @@
       "verb": "stitchPreviewHtml",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 3870,
+      "line": 3808,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18529,7 +18478,7 @@
       "verb": "stitchHtmlListDocs",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4014,
+      "line": 3952,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18541,7 +18490,7 @@
       "verb": "stitchListProjects",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4210,
+      "line": 4147,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18552,7 +18501,7 @@
       "verb": "listDesignFolders",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4265,
+      "line": 4200,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18563,7 +18512,7 @@
       "verb": "listHtmlFolders",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4266,
+      "line": 4201,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18574,7 +18523,7 @@
       "verb": "listImagesFolders",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4267,
+      "line": 4202,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18585,18 +18534,7 @@
       "verb": "listStitchFolders",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4268,
-      "receiver": "vscode",
-      "payloadKeys": [
-        "type",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "listBriefsFolders",
-      "direction": "request",
-      "file": "src/webview/design.js",
-      "line": 4269,
+      "line": 4203,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18607,7 +18545,7 @@
       "verb": "removeDesignFolder",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4404,
+      "line": 4337,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18619,7 +18557,7 @@
       "verb": "removeHtmlFolder",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4406,
+      "line": 4339,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18631,7 +18569,7 @@
       "verb": "removeImagesFolder",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4408,
+      "line": 4341,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18643,19 +18581,7 @@
       "verb": "removeStitchFolder",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4410,
-      "receiver": "vscode",
-      "payloadKeys": [
-        "type",
-        "folderPath",
-        "workspaceRoot"
-      ]
-    },
-    {
-      "verb": "removeBriefsFolder",
-      "direction": "request",
-      "file": "src/webview/design.js",
-      "line": 4412,
+      "line": 4343,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18667,7 +18593,7 @@
       "verb": "listDesignFolders",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4504,
+      "line": 4435,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18678,7 +18604,7 @@
       "verb": "listHtmlFolders",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4506,
+      "line": 4437,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18689,7 +18615,7 @@
       "verb": "listImagesFolders",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4508,
+      "line": 4439,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18700,7 +18626,7 @@
       "verb": "listStitchFolders",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4510,
+      "line": 4441,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18711,7 +18637,7 @@
       "verb": "addDesignFolder",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4520,
+      "line": 4451,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18722,7 +18648,7 @@
       "verb": "addHtmlFolder",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4522,
+      "line": 4453,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18733,7 +18659,7 @@
       "verb": "addImagesFolder",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4524,
+      "line": 4455,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18744,7 +18670,7 @@
       "verb": "addStitchFolder",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4526,
+      "line": 4457,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18755,7 +18681,7 @@
       "verb": "stitchHtmlListDocs",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4542,
+      "line": 4473,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18767,7 +18693,7 @@
       "verb": "sendStitchTweakPrompt",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4643,
+      "line": 4574,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18779,7 +18705,7 @@
       "verb": "copyStitchTweakPrompt",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4671,
+      "line": 4602,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18790,7 +18716,7 @@
       "verb": "sendHtmlTweakPrompt",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4742,
+      "line": 4673,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18802,7 +18728,7 @@
       "verb": "copyHtmlTweakPrompt",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4770,
+      "line": 4701,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18813,7 +18739,7 @@
       "verb": "stitchEdit",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4805,
+      "line": 4736,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18828,7 +18754,7 @@
       "verb": "stitchVariants",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4829,
+      "line": 4760,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18846,7 +18772,7 @@
       "verb": "stitchSaveAuthConfig",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4863,
+      "line": 4794,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18857,7 +18783,7 @@
       "verb": "stitchValidateAuth",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4880,
+      "line": 4811,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -18867,7 +18793,7 @@
       "verb": "stitchCreateProject",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4948,
+      "line": 4879,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18879,7 +18805,7 @@
       "verb": "stitchUpdateDesignSystem",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 4998,
+      "line": 4929,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18895,7 +18821,7 @@
       "verb": "stitchCreateDesignSystem",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 5008,
+      "line": 4939,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18910,7 +18836,7 @@
       "verb": "stitchApplyDesignSystem",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 5047,
+      "line": 4978,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18924,7 +18850,7 @@
       "verb": "stitchListDesignSystems",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 5123,
+      "line": 5054,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18936,7 +18862,7 @@
       "verb": "copyClaudeImportPrompt",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 5366,
+      "line": 5295,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18947,7 +18873,7 @@
       "verb": "sendClaudeImportPrompt",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 5377,
+      "line": 5306,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18959,7 +18885,7 @@
       "verb": "copyClaudeArtifactPrompt",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 5416,
+      "line": 5345,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18971,7 +18897,7 @@
       "verb": "copyDesignSystemPrompt",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 5421,
+      "line": 5350,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -18984,7 +18910,7 @@
       "verb": "createDesignSystemTemplate",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 5435,
+      "line": 5364,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -18994,7 +18920,7 @@
       "verb": "ready",
       "direction": "request",
       "file": "src/webview/design.js",
-      "line": 5450,
+      "line": 5379,
       "receiver": "vscode",
       "payloadKeys": [
         "type"

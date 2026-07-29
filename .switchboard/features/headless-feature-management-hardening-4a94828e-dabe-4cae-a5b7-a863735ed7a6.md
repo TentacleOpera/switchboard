@@ -14,9 +14,9 @@ Close the residual risks the 2026-07-29 code review of Headless Feature Manageme
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Headless Feature Management — Destructive & Convergence Path Tests](../plans/headless-feature-destructive-path-tests.md) — **PLAN REVIEWED**
-- [ ] [Standalone Ingestion Feature Callbacks — Delegate to the Real Provider](../plans/standalone-feature-callbacks-provider-delegation.md) — **PLAN REVIEWED**
-- [ ] [Fix the Verb-Engine Kanban Seam Harness (and CI-Wire the Verb-Engine Suites)](../plans/fix-verb-engine-kanban-seam-harness.md) — **PLAN REVIEWED**
+- [x] [Headless Feature Management — Destructive & Convergence Path Tests](../plans/headless-feature-destructive-path-tests.md) — **CODER CODED**
+- [x] [Standalone Ingestion Feature Callbacks — Delegate to the Real Provider](../plans/standalone-feature-callbacks-provider-delegation.md) — **CODER CODED**
+- [x] [Fix the Verb-Engine Kanban Seam Harness (and CI-Wire the Verb-Engine Suites)](../plans/fix-verb-engine-kanban-seam-harness.md) — **CODER CODED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -30,3 +30,7 @@ Close the residual risks the 2026-07-29 code review of Headless Feature Manageme
 | 3 | Verb-engine seam harness fix | Fully independent of #1/#2 in logic; shares only the CI workflow file with #2 — land their CI edits sequentially, not concurrently. |
 
 Shared-file contention: `.github/workflows/integration-tests.yml` (#2, #3 — both append steps; serialise) and `src/standalone/bootstrap.ts` (#1 only). Nothing here touches `src/services/KanbanProvider.ts`, so this feature contends with no provider-file work stream.
+
+## Completion Report
+
+Implemented standalone ingestion feature callback delegation to the real `KanbanProvider` in `src/standalone/bootstrap.ts` and deleted `src/standalone/headlessFeatureCallbacks.ts`. Created `src/test/headless-feature-management-destructive.test.js` covering reconcile, deletion side effects, split, watcher exclusion, WebSocket board pushes, and HTTP hook routes. Merged duplicate `pathConfig` in `src/test/helpers/verbEngineTestSeams.js`, defined `test:contract:verb-engine-planning` in `package.json`, and CI-wired all missing contract suites in `.github/workflows/integration-tests.yml`. No issues were encountered.

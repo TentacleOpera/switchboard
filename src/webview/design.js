@@ -89,7 +89,6 @@
         stitchScreenPolls: new Map(),
         stitchPollGaveUp: new Set(),
         stitchGeneratingLabel: null,
-        stitchPendingAutoGenerate: null,
         docsSectionCollapsed: persistedState.docsSectionCollapsed || {},
         stitchHtmlActiveFilePath: null,
         stitchSelectedElement: null,
@@ -1729,26 +1728,6 @@
                 statusDesign.textContent = isAutoRefreshed ? 'Auto-refreshed' : 'Loaded';
                 statusDesign.style.color = 'var(--accent-teal)';
             }
-        } else if (sourceId === 'briefs-folder') {
-            if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
-
-            state.activeDocFilePath = filePath || null;
-            state.activeFileType = msg.fileType || null;
-            state.activeDocContent = content || '';
-            updateBriefDocControls();
-
-            const mdPrev = document.getElementById('markdown-preview-briefs');
-            const statusBriefs = document.getElementById('status-briefs');
-
-            if (mdPrev) {
-                mdPrev.style.display = 'block';
-                mdPrev.innerHTML = renderMarkdown(content) || '';
-            }
-
-            if (statusBriefs) {
-                statusBriefs.textContent = isAutoRefreshed ? 'Auto-refreshed' : 'Loaded';
-                statusBriefs.style.color = 'var(--accent-teal)';
-            }
         }
     }
 
@@ -2574,24 +2553,6 @@
         });
     }
 
-    const btnSendBriefToStitch = document.getElementById('btn-send-brief-to-stitch');
-    if (btnSendBriefToStitch) {
-        btnSendBriefToStitch.addEventListener('click', () => {
-            if (state.stitchBusy) return;
-            const briefNode = (state._lastBriefsDocsMsg?.nodes || []).find(n => n.id === state.activeBriefDocId);
-            const briefTitle = briefNode?.title || briefNode?.name || 'Untitled';
-            const wrapper = findTreeNode(state.activeBriefSourceId, state.activeBriefDocId);
-            const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : state.activeDocSourceFolder;
-            setStitchStatus('Creating Stitch project from brief…', 'busy');
-            vscode.postMessage({
-                type: 'stitchSendBrief',
-                docId: state.activeBriefDocId,
-                briefTitle,
-                sourceFolder
-            });
-        });
-    }
-
     if (btnNewStitchProject) {
         btnNewStitchProject.addEventListener('click', () => {
             if (state.stitchBusy) return;
@@ -3030,33 +2991,6 @@
         });
     });
 
-    document.getElementById('briefs-workspace-filter')?.addEventListener('change', (e) => {
-        state.briefsWorkspaceRootFilter = e.target.value;
-        persistTab('briefs.root', state.briefsWorkspaceRootFilter);
-        const msg = state._lastBriefsDocsMsg || {};
-        const filteredNodes = state.briefsWorkspaceRootFilter
-            ? (msg.nodes || []).filter(n => n.metadata?.root === state.briefsWorkspaceRootFilter)
-            : (msg.nodes || []);
-        renderBriefsDocs({
-            sourceId: msg.sourceId || 'briefs-folder',
-            nodes: filteredNodes,
-            folderPaths: getCurrentFolderPaths(state.briefsFolderPathsByRoot, state.briefsWorkspaceRootFilter)
-        });
-    });
-
-    document.getElementById('briefs-docs-search')?.addEventListener('input', (e) => {
-        state.briefsDocsSearch = e.target.value;
-        const msg = state._lastBriefsDocsMsg || {};
-        const filteredNodes = state.briefsWorkspaceRootFilter
-            ? (msg.nodes || []).filter(n => n.metadata?.root === state.briefsWorkspaceRootFilter)
-            : (msg.nodes || []);
-        renderBriefsDocs({
-            sourceId: msg.sourceId || 'briefs-folder',
-            nodes: filteredNodes,
-            folderPaths: getCurrentFolderPaths(state.briefsFolderPathsByRoot, state.briefsWorkspaceRootFilter)
-        });
-    });
-
     // Search listeners
     document.getElementById('design-docs-search')?.addEventListener('input', (e) => {
         state.designDocsSearch = e.target.value;
@@ -3120,11 +3054,11 @@
 
         switch (msg.type) {
             case 'designReadyComplete': {
-                // Browser return-contract: the `ready` verb's HTTP body carries the five
+                // Browser return-contract: the `ready` verb's HTTP body carries the four
                 // local-tab doc trees that the VS Code webview receives as separate
                 // pushes. Re-dispatch each as its own message so the existing per-tab
                 // render cases below stay the single render path.
-                [msg.htmlDocs, msg.claudeDocs, msg.designDocs, msg.imagesDocs, msg.briefsDocs]
+                [msg.htmlDocs, msg.claudeDocs, msg.designDocs, msg.imagesDocs]
                     .forEach(function (p) {
                         if (p && p.type) {
                             window.dispatchEvent(new MessageEvent('message', { data: p }));
@@ -3391,8 +3325,7 @@
                         hide: ['image-preview-container-images'],
                         show: ['images-initial-state']
                     },
-                    'design-folder': { status: 'status-design', loading: null, hide: [], show: [] },
-                    'briefs-folder': { status: 'status-briefs', loading: null, hide: [], show: [] }
+                    'design-folder': { status: 'status-design', loading: null, hide: [], show: [] }
                 };
                 const target = PREVIEW_ERROR_TARGETS[msg.sourceId]
                     || { status: 'status-html', loading: null, hide: [], show: [] };
@@ -3659,37 +3592,6 @@
             }
 
             case 'saveFileContentResult': {
-                if (msg.tab === 'briefs') {
-                    const editor = document.getElementById('markdown-editor-briefs');
-                    const statusBriefs = document.getElementById('status-briefs');
-                    if (msg.success) {
-                        state.activeDocContent = editor ? editor.value : state.activeDocContent;
-                        exitBriefEditMode();
-                        const mdPrevBriefs = document.getElementById('markdown-preview-briefs');
-                        if (mdPrevBriefs) mdPrevBriefs.innerHTML = renderMarkdown(state.activeDocContent) || '';
-                        if (statusBriefs) {
-                            statusBriefs.textContent = 'Saved successfully';
-                            statusBriefs.style.color = 'var(--accent-teal)';
-                            setTimeout(() => { statusBriefs.textContent = ''; statusBriefs.style.color = ''; }, 2000);
-                        }
-                    } else if (msg.conflict) {
-                        if (editor && state.activeDocFilePath) {
-                            vscode.postMessage({
-                                type: 'saveFileContent',
-                                filePath: state.activeDocFilePath,
-                                content: editor.value,
-                                originalContent: msg.diskContent,
-                                tab: 'briefs'
-                            });
-                        }
-                    } else {
-                        if (statusBriefs) {
-                            statusBriefs.textContent = 'Save failed: ' + (msg.error || 'unknown error');
-                            statusBriefs.style.color = '#ff6b6b';
-                        }
-                    }
-                    break;
-                }
                 if (msg.tab !== 'design') break;
                 const editor = document.getElementById('markdown-editor-design');
                 const statusDesign = document.getElementById('status-design');
@@ -3863,15 +3765,6 @@
                     setStitchStatus(`${screens.length} screen${screens.length === 1 ? '' : 's'} loaded`, 'success');
                 }
 
-                // A brief "Send to Stitch" is waiting to auto-generate: the new project's
-                // (empty) screen-load just completed and cleared busy. Fire it last so
-                // runStitchGenerate's "Generating from brief…" status/spinner win over the
-                // "0 screens loaded" line above.
-                if (state.stitchPendingAutoGenerate) {
-                    const pending = state.stitchPendingAutoGenerate;
-                    state.stitchPendingAutoGenerate = null;
-                    runStitchGenerate(pending);
-                }
                 break;
             }
 
@@ -4111,7 +4004,6 @@
                 // screen refresh hitting NOT_FOUND) used to kill every other screen's
                 // retry loop, leaving "Preview not ready" cards permanently stuck.
                 // Polls are individually bounded (max attempts) so they self-terminate.
-                state.stitchPendingAutoGenerate = null;
                 hideStitchGenerating();
                 setStitchBusy(false);
                 state.stitchEditInFlightId = null;
@@ -4260,7 +4152,7 @@
     });
 
     // ===== FOLDER MANAGEMENT & PREVIEW HELPERS =====
-    let folderModalScope = 'design'; // design, html, images, stitch, briefs
+    let folderModalScope = 'design'; // design, html, images, stitch
     // The concrete workspace the folder modal is currently acting on. The modal always
     // operates on ONE workspace (never an ambiguous "all workspaces" aggregate) so Add /
     // Remove are always live and the listed paths always belong to a single workspace.
@@ -4273,7 +4165,6 @@
             case 'html': return state.htmlWorkspaceRootFilter || '';
             case 'images': return state.imagesWorkspaceRootFilter || '';
             case 'stitch': return state.stitchWorkspaceRoot || '';
-            case 'briefs': return state.briefsWorkspaceRootFilter || '';
             default: return '';
         }
     }
@@ -4283,7 +4174,6 @@
             case 'html': return state.htmlFolderPathsByRoot || {};
             case 'images': return state.imagesFolderPathsByRoot || {};
             case 'stitch': return state.stitchFolderPathsByRoot || {};
-            case 'briefs': return state.briefsFolderPathsByRoot || {};
             default: return {};
         }
     }
@@ -4311,7 +4201,6 @@
         vscode.postMessage({ type: 'listHtmlFolders', workspaceRoot: root });
         vscode.postMessage({ type: 'listImagesFolders', workspaceRoot: root });
         vscode.postMessage({ type: 'listStitchFolders', workspaceRoot: root });
-        vscode.postMessage({ type: 'listBriefsFolders', workspaceRoot: root });
     }
 
     function updateDestinationDropdowns() {
@@ -4363,7 +4252,6 @@
             else if (scope === 'html') modalTitle.textContent = 'Manage HTML Previews Folders';
             else if (scope === 'images') modalTitle.textContent = 'Manage Images Folders';
             else if (scope === 'stitch') modalTitle.textContent = 'Manage Stitch Folders';
-            else if (scope === 'briefs') modalTitle.textContent = 'Manage Briefs Folders';
         }
         if (modal) {
             modal.style.display = 'flex';
@@ -4453,8 +4341,6 @@
                     vscode.postMessage({ type: 'removeImagesFolder', folderPath: path, workspaceRoot: effectiveRoot });
                 } else if (folderModalScope === 'stitch') {
                     vscode.postMessage({ type: 'removeStitchFolder', folderPath: path, workspaceRoot: effectiveRoot });
-                } else if (folderModalScope === 'briefs') {
-                    vscode.postMessage({ type: 'removeBriefsFolder', folderPath: path, workspaceRoot: effectiveRoot });
                 }
             });
 
@@ -4509,7 +4395,7 @@
 
     document.addEventListener('keydown', (e) => {
         if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-        const panes = ['tree-pane-design', 'tree-pane-briefs', 'tree-pane-html', 'tree-pane-images'];
+        const panes = ['tree-pane-design', 'tree-pane-html', 'tree-pane-images'];
         for (const id of panes) {
             const pane = document.getElementById(id);
             if (pane && pane.offsetParent !== null) {
@@ -5364,8 +5250,6 @@
         if (designRow) designRow.classList.toggle('collapsed', !!state.designPreviewCollapsed);
         const htmlRow = document.getElementById('tree-pane-html')?.closest('.content-row');
         if (htmlRow) htmlRow.classList.toggle('collapsed', !!state.htmlPreviewCollapsed);
-        const briefsRow = document.getElementById('tree-pane-briefs')?.closest('.content-row');
-        if (briefsRow) briefsRow.classList.toggle('collapsed', !!state.briefsPreviewCollapsed);
         const imagesRow = document.getElementById('tree-pane-images')?.closest('.content-row');
         if (imagesRow) imagesRow.classList.toggle('collapsed', !!state.imagesPreviewCollapsed);
         const stitchHtmlRow = document.getElementById('tree-pane-stitch-html')?.closest('.content-row');
@@ -5499,7 +5383,8 @@
 
     // Restore folder modal state if it was open before a reload
     const persistedModalState = vscode.getState();
-    if (persistedModalState?.folderModalOpen && persistedModalState?.folderModalScope) {
+    if (persistedModalState?.folderModalOpen
+        && ['design', 'html', 'images', 'stitch'].includes(persistedModalState?.folderModalScope)) {
         openFoldersModal(persistedModalState.folderModalScope);
     }
 

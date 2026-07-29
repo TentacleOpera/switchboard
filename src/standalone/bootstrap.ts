@@ -25,10 +25,7 @@ import {
 } from '../services/headlessPanelHtml';
 import { PlanIngestionEngine } from '../services/PlanIngestionEngine';
 import { createStandalonePlanIngestionHost, readPlanScannerCustomSourceDirs } from './planIngestionHost';
-import {
-    createHeadlessFeatureColumnRecomputer,
-    createHeadlessFeatureFileRegenerator,
-} from './headlessFeatureCallbacks';
+
 import { ClickUpSyncService } from '../services/ClickUpSyncService';
 import { LinearSyncService } from '../services/LinearSyncService';
 import { NotionFetchService } from '../services/NotionFetchService';
@@ -267,8 +264,6 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         log: (line: string) => log(opts, line),
     });
     const ingestionEngine = new PlanIngestionEngine(getClickUpService, getLinearService, ingestionHost, getNotionService);
-    ingestionEngine.setFeatureColumnRecomputer(createHeadlessFeatureColumnRecomputer(workspaceRoot));
-    ingestionEngine.setFeatureFileRegenerator(createHeadlessFeatureFileRegenerator(workspaceRoot));
 
     // In-memory UI settings (persisted to DB in saveSetting)
     const uiSettings = new Map<string, any>();
@@ -542,6 +537,12 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     (kanbanProvider as any)._hostSeams = headlessSeams;
     (kanbanProvider as any)._broadcaster = headlessBroadcaster;
     (kanbanProvider as any)._currentWorkspaceRoot = workspaceRoot;
+    ingestionEngine.setFeatureColumnRecomputer(
+        (featurePlanId, watchedRoot) => kanbanProvider.recomputeFeatureColumnFromSubtasks(featurePlanId, watchedRoot)
+    );
+    ingestionEngine.setFeatureFileRegenerator(
+        (ws, fid) => kanbanProvider.regenerateFeatureFile(ws, fid)
+    );
     taskViewerProvider.setKanbanProvider(kanbanProvider);
 
     // Planning: extensionUri, researchImportService, plannerPromptWriter,

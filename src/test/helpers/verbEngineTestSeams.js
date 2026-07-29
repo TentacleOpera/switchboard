@@ -78,127 +78,35 @@ function createHeadlessTestSeams(opts = {}) {
     const seams = {
         pathConfig: {
             workspaceRoot: (opts.roots && opts.roots[0]) || '',
-            getConfigString: (key) => (opts.config && opts.config[key]) || '',
-            getConfigStringWithDefault: (key, dflt) =>
-                opts.config && key in opts.config ? opts.config[key] : dflt,
-            getConfigBoolean: (key, dflt) =>
-                opts.config && key in opts.config ? !!opts.config[key] : dflt,
-            getConfigNumber: (key, dflt) =>
-                opts.config && key in opts.config ? Number(opts.config[key]) : dflt,
-            getConfigJson: (key, dflt) =>
-                opts.config && key in opts.config ? opts.config[key] : dflt,
+            getConfigString: (key, def = '') =>
+                opts.config && key in opts.config
+                    ? opts.config[key]
+                    : opts.configStrings?.[key] ?? def,
+            getConfigStringWithDefault: (key, def = '') =>
+                opts.config && key in opts.config
+                    ? opts.config[key]
+                    : opts.configStrings?.[key] ?? def,
+            getConfigBoolean: (key, def = false) =>
+                opts.config && key in opts.config
+                    ? !!opts.config[key]
+                    : opts.configBooleans?.[key] ?? def,
+            getConfigNumber: (key, def = 0) =>
+                opts.config && key in opts.config
+                    ? Number(opts.config[key])
+                    : opts.configNumbers?.[key] ?? def,
+            getConfigJson: (key, def = undefined) =>
+                opts.config && key in opts.config
+                    ? opts.config[key]
+                    : opts.configJson?.[key] ?? def,
+            updateConfig: async (key, value) => {
+                recorders.configWrites.push({ scope: 'workspace', key, value });
+            },
             updateConfigGlobal: async (key, value) => {
                 recorders.configWrites.push({ scope: 'global', key, value });
             },
             updateConfigWorkspace: async (key, value) => {
                 recorders.configWrites.push({ scope: 'workspace', key, value });
             },
-        },
-        terminal: {
-            create: (name) => {
-                const handle = {
-                    name,
-                    sendText: (text) => recorders.terminalSends.push({ name, text }),
-                    dispose: () => {},
-                    show: () => {},
-                };
-                return handle;
-            },
-            findByName: () => null,
-            findByNameContains: () => null,
-            sendInput: (name, text) => {
-                recorders.terminalSends.push({ name, text });
-                return true;
-            },
-            kill: () => false,
-            resize: () => false,
-            onClose: () => {},
-        },
-        commands: {
-            executeCommand: async (command, ...args) => {
-                recorders.executedCommands.push({ command, args });
-                if (opts.commandResults && command in opts.commandResults) {
-                    const r = opts.commandResults[command];
-                    return typeof r === 'function' ? await r(...args) : r;
-                }
-                return undefined;
-            },
-        },
-        ui: {
-            showWarningMessage: async (message) => {
-                recorders.warningMessages.push(message);
-                return opts.warningMessageResult;
-            },
-            showInformationMessage: async (message) => {
-                recorders.infoMessages.push(message);
-                return undefined;
-            },
-            showErrorMessage: async (message) => {
-                recorders.errorMessages.push(message);
-                return undefined;
-            },
-            showModalWarningMessage: async (message) => {
-                recorders.warningMessages.push(message);
-                return opts.modalWarningResult;
-            },
-            showTemporaryNotification: (message) => {
-                recorders.notifications.push(message);
-            },
-            showInputBox: async (options) => {
-                recorders.pickedItems.push({ kind: 'inputBox', options });
-                return opts.inputBoxResult;
-            },
-            showQuickPick: async (items, options) => {
-                recorders.pickedItems.push({ kind: 'quickPick', items, options });
-                if (opts.quickPickResult !== undefined) return opts.quickPickResult;
-                if (options && options.canPickMany) return [];
-                return undefined;
-            },
-            showOpenDialog: async (options) => {
-                recorders.pickedItems.push({ kind: 'openDialog', options });
-                return opts.showOpenDialogResult;
-            },
-            openExternal: async (url) => {
-                recorders.openedExternals.push(url);
-            },
-            pickFolder: async () => opts.pickFolderResult,
-            pickFiles: async () => opts.pickFilesResult,
-        },
-        editor: {
-            openTextDocument: async (filePath) => {
-                recorders.openedDocuments.push(filePath);
-            },
-            showTextDocument: async (filePath) => {
-                recorders.openedDocuments.push(filePath);
-            },
-        },
-        secrets: {
-            get: async (key) => recorders.secrets.get(key),
-            store: async (key, value) => {
-                recorders.secrets.set(key, value);
-            },
-            delete: async (key) => {
-                recorders.secrets.delete(key);
-            },
-        },
-        clipboard: {
-            writeText: async (text) => {
-                recorders.clipboardWrites.push(text);
-            },
-            readText: async () => recorders.clipboardWrites[recorders.clipboardWrites.length - 1] || '',
-        },
-        workspace: {
-            getWorkspaceRoots: () => opts.roots || [],
-        },
-        pathConfig: {
-            getConfigString: (key, def = '') => opts.configStrings?.[key] ?? def,
-            getConfigStringWithDefault: (key, def = '') => opts.configStrings?.[key] ?? def,
-            getConfigBoolean: (key, def = false) => opts.configBooleans?.[key] ?? def,
-            getConfigNumber: (key, def = 0) => opts.configNumbers?.[key] ?? def,
-            getConfigJson: (key, def = undefined) => opts.configJson?.[key] ?? def,
-            updateConfig: async () => {},
-            updateConfigGlobal: async () => {},
-            updateConfigWorkspace: async () => {},
         },
         watcher: {
             watchFolder: (folderPath, _listener) => {

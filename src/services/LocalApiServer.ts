@@ -3300,6 +3300,9 @@ export class LocalApiServer {
             } else if (pathname.startsWith('/project/verb/') && req.method === 'POST') {
                 const verb = decodeURIComponent(pathname.slice('/project/verb/'.length));
                 await this._handlePlanningVerb(verb, req, res);
+            } else if (pathname.startsWith('/memo/verb/') && req.method === 'POST') {
+                const verb = decodeURIComponent(pathname.slice('/memo/verb/'.length));
+                await this._handlePlanningVerb(verb, req, res);
             } else if (pathname.startsWith('/design/verb/') && req.method === 'POST') {
                 const verb = decodeURIComponent(pathname.slice('/design/verb/'.length));
                 await this._handleDesignVerb(verb, req, res);
@@ -3389,6 +3392,8 @@ export class LocalApiServer {
                 await this._handleServePanels(req, res);
             } else if ((pathname === '/project' || pathname === '/project.html') && req.method === 'GET') {
                 await this._handleServeProject(req, res);
+            } else if ((pathname === '/memo' || pathname === '/memo.html') && req.method === 'GET') {
+                await this._handleServePanelById('memo', req, res);
             } else if ((pathname === '/planning' || pathname === '/planning.html') && req.method === 'GET') {
                 await this._handleServePanelById('planning', req, res);
             } else if ((pathname === '/design' || pathname === '/design.html') && req.method === 'GET') {

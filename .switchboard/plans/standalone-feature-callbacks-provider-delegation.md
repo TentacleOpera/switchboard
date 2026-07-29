@@ -141,3 +141,7 @@ Key risks: (1) boot-scan feature events now run callback-less in the pre-provide
 **Recommendation:** Complexity 3 → **Send to Intern.** (Corrected from "Send to Coder" — the 1-3 band routes to Intern, and the one genuinely risky decision, the wiring order, is now resolved in-plan.)
 
 **Stage Complete:** CREATED
+
+## Completion Report
+
+Implemented delegation of standalone feature callbacks (`recomputeFeatureColumnFromSubtasks` and `regenerateFeatureFile`) directly to the constructed `KanbanProvider` instance in `src/standalone/bootstrap.ts`. Deleted `src/standalone/headlessFeatureCallbacks.ts` mirror and cleaned up unused imports. No issues were encountered during execution.

@@ -58,6 +58,18 @@ jobs:
       - name: Headless feature management contract (capability derivation, verb schemas, standalone wiring)
         run: npm run test:contract:headless-feature-mgmt
 
+      - name: Headless feature management destructive contract (reconcile, delete, split, watcher, WS push)
+        run: npm run test:contract:headless-feature-mgmt-destructive
+
+      - name: Verb engine contract (headless seams)
+        run: npm run test:contract:verb-engine
+
+      - name: Verb engine kanban contract (seams, db path, return contract)
+        run: npm run test:contract:verb-engine-kanban
+
+      - name: Verb engine planning contract (seams, memo, return contract)
+        run: npm run test:contract:verb-engine-planning
+
       - name: Design per-client view state contract (seats, poll lifecycle, wsHub keepalive)
         run: npm run test:contract:design-view-state
 

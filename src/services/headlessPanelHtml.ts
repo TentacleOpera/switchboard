@@ -312,6 +312,30 @@ export function getSetupHtml(repoRoot: string, workspaceRoot: string, capabiliti
     return { html: content, csp };
 }
 
+export function getMemoHtml(repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult {
+    const candidates = [
+        path.join(repoRoot, 'dist', 'webview', 'memo.html'),
+        path.join(repoRoot, 'src', 'webview', 'memo.html'),
+    ];
+    const htmlPath = findFile(candidates);
+    if (!htmlPath) {
+        return { html: '<html><body>Memo panel HTML not found.</body></html>', csp: '' };
+    }
+    let content = fs.readFileSync(htmlPath, 'utf8');
+    const nonce = makeNonce();
+    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; frame-src 'none';`;
+    content = content.replace(/\{\{NONCE\}\}/g, nonce);
+    content = content.replace(/\{\{MEMO_JS_URI\}\}/g, '/static/webview/memo.js');
+    content = content.replace(/\{\{HANKEN_FONT_URI\}\}/g, '/static/designs/HankenGrotesk-Variable.woff2');
+    content = content.replace(/\{\{GEIST_PIXEL_FONT_URI\}\}/g, '/static/designs/GeistPixel-Square.woff2');
+    content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', `<script nonce="${nonce}" src="/static/webview/memo.js"></script>`);
+    const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
+    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="memo" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
+    content = content.replace(/<body/, `<body ${bodyAttr}`);
+    content = applyThemeClass(content, themeClass);
+    return { html: content, csp };
+}
+
 export interface PanelManifestEntry {
     id: string;
     label: string;
@@ -334,6 +358,7 @@ export function getPanelsManifest(availability?: PanelAvailability): PanelManife
     return [
         { id: 'board', label: 'Board', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-78.png`, route: '/board', enabled: true },
         { id: 'project', label: 'Project', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-24.png`, route: '/project', enabled: true },
+        { id: 'memo', label: 'Memo', icon: `${iconDir}/25-101-150 Sci-Fi Flat icons-118.png`, route: '/memo', enabled: true },
         { id: 'planning', label: 'Artifacts', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-42.png`, route: '/planning', enabled: planningEnabled },
         { id: 'design', label: 'Design', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-42.png`, route: '/design', enabled: designEnabled },
         { id: 'setup', label: 'Setup', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-55.png`, route: '/setup', enabled: setupEnabled },
@@ -344,6 +369,7 @@ export function getPanelHtmlById(id: string, repoRoot: string, workspaceRoot: st
     switch (id) {
         case 'board': return getBoardHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'project': return getProjectHtml(repoRoot, workspaceRoot, capabilities, themeClass);
+        case 'memo': return getMemoHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'planning': return getPlanningHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'design': return getDesignHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'setup': return getSetupHtml(repoRoot, workspaceRoot, capabilities, themeClass);

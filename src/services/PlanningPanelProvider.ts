@@ -96,13 +96,12 @@ export class PlanningPanelProvider {
         if (!this._broadcaster) {
             this._initPlanningService();
         }
-        // Memo verbs (Feature: Headless Browser UI · Memo subtask): the memo
-        // capture UI was relocated from implementation.html (TaskViewer panel)
-        // to project.html (Planning/Project panel). The verb handlers still
-        // live on TaskViewerProvider (they're file I/O + planner dispatch),
-        // so delegate to it when project.html posts a memo verb. The verbs are
-        // in TASKVIEWER_VERBS, not PLANNING_VERBS — without this delegation the
-        // PLANNING_VERBS guard below would reject them.
+        // Memo verbs: the memo capture UI was relocated from project.html to the
+        // standalone memo panel (memo.html), posted at POST /memo/verb/<verb>.
+        // The verb handlers still live on TaskViewerProvider (they're file I/O +
+        // planner dispatch), so delegate to it when a memo verb is posted. The
+        // verbs are in TASKVIEWER_VERBS, not PLANNING_VERBS — without this
+        // delegation the PLANNING_VERBS guard below would reject them.
         if (verb === 'memoLoad' || verb === 'memoSave' || verb === 'memoClear' || verb === 'memoGeneratePrompt') {
             if (this._taskViewerProvider) {
                 return this._taskViewerProvider.handleServiceVerb(verb, payload);

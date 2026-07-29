@@ -49,8 +49,6 @@
                 vscode.postMessage({ type: 'loadConstitutionFiles' });
             } else if (activeTab === 'tuning') {
                 vscode.postMessage({ type: 'loadInsights', workspaceRoot: tuningWorkspaceFilter ? tuningWorkspaceFilter.value : '' });
-            } else if (activeTab === 'memo') {
-                vscode.postMessage({ type: 'memoLoad', workspaceRoot: getProjectsTabWorkspaceRoot() });
             }
 
         });
@@ -1171,88 +1169,9 @@
                 break;
             }
 
-            // ─── Memo (relocated from implementation.html — Feature: Headless Browser UI) ──
-            case 'memoContent': {
-                const textarea = document.getElementById('memo-textarea');
-                if (textarea) {
-                    const isFocused = document.activeElement === textarea;
-                    if (isFocused || _memoDirty) {
-                        break;
-                    }
-                    textarea.value = typeof msg.content === 'string' ? msg.content : '';
-                }
-                break;
-            }
-            case 'memoPromptResult': {
-                const statusEl = document.getElementById('memo-status');
-                if (statusEl) statusEl.textContent = msg.message || '';
-                break;
-            }
-            case 'memoError': {
-                const statusEl = document.getElementById('memo-status');
-                if (statusEl) { statusEl.textContent = msg.message || 'Memo error'; }
-                break;
-            }
-
-
-
-
+            // ─── End message cases ───
         }
     });
-
-    // ─── Memo tab wiring (relocated from implementation.html) ────────────────
-    // Capture/autosave/clear/Copy Prompt are non-terminal and work in both
-    // hosts. "Send to Planner" dispatches to a planner terminal in the
-    // extension; headless (hostCapabilities.terminalDispatch === false) the
-    // backend degrades send→copy so the button never dead-clicks. The
-    // affordance is hidden via CSS when terminalDispatch is false (see
-    // transport.js capability gating) — but it stays clickable in the
-    // extension, so we keep the handler live here.
-    let _memoDirty = false;
-    let _memoSaveTimer = null;
-    function _debouncedMemoSave() {
-        _memoDirty = true;
-        if (_memoSaveTimer) clearTimeout(_memoSaveTimer);
-        _memoSaveTimer = setTimeout(() => {
-            const content = document.getElementById('memo-textarea')?.value || '';
-            vscode.postMessage({ type: 'memoSave', content, workspaceRoot: getProjectsTabWorkspaceRoot() });
-            _memoDirty = false;
-            const statusEl = document.getElementById('memo-status');
-            if (statusEl) { statusEl.textContent = 'Saved'; setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 1500); }
-        }, 800);
-    }
-    const _memoTextarea = document.getElementById('memo-textarea');
-    if (_memoTextarea) { _memoTextarea.addEventListener('input', _debouncedMemoSave); }
-    const _memoClearBtn = document.getElementById('memo-clear-btn');
-    if (_memoClearBtn) {
-        _memoClearBtn.addEventListener('click', () => {
-            const textarea = document.getElementById('memo-textarea');
-            if (textarea) textarea.value = '';
-            if (_memoSaveTimer) clearTimeout(_memoSaveTimer);
-            _memoDirty = false;
-            vscode.postMessage({ type: 'memoClear', workspaceRoot: getProjectsTabWorkspaceRoot() });
-            const statusEl = document.getElementById('memo-status');
-            if (statusEl) statusEl.textContent = 'Cleared';
-        });
-    }
-    const _memoCopyBtn = document.getElementById('memo-copy-btn');
-    if (_memoCopyBtn) {
-        _memoCopyBtn.addEventListener('click', () => {
-            if (_memoSaveTimer) clearTimeout(_memoSaveTimer);
-            _memoDirty = false;
-            const content = document.getElementById('memo-textarea')?.value || '';
-            vscode.postMessage({ type: 'memoGeneratePrompt', content, action: 'copy', workspaceRoot: getProjectsTabWorkspaceRoot() });
-        });
-    }
-    const _memoSendBtn = document.getElementById('memo-send-btn');
-    if (_memoSendBtn) {
-        _memoSendBtn.addEventListener('click', () => {
-            if (_memoSaveTimer) clearTimeout(_memoSaveTimer);
-            _memoDirty = false;
-            const content = document.getElementById('memo-textarea')?.value || '';
-            vscode.postMessage({ type: 'memoGeneratePrompt', content, action: 'send', workspaceRoot: getProjectsTabWorkspaceRoot() });
-        });
-    }
 
     // Ready-handshake: signal the extension host that the message listener is
     // registered. The host queues outbound messages until this arrives so that

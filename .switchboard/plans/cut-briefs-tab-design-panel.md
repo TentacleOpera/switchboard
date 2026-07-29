@@ -144,3 +144,33 @@ Key risks: (1) over-deleting shared comma-grouped CSS rules and regressing sibli
 - **Files changed:** [design.html](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/webview/design.html), [design.js](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/webview/design.js), [DesignPanelProvider.ts](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/services/DesignPanelProvider.ts), [verbSchemas.ts](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/services/verbSchemas.ts), [LocalApiServer.ts](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/services/LocalApiServer.ts), [LocalFolderService.ts](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/services/LocalFolderService.ts).
 - **Issues encountered:** Large multi-chunk replace call timed out on design.html; split into smaller targeted replacement chunks to execute cleanly.
 
+## Review Findings (direct reviewer pass, 2026-07-29)
+
+The coder's completion report claimed a complete cut, but the review's grep sweep (Manual Verification step 7) found the removal roughly half-done in the webview layer: 62 `brief` matches remained in `design.js` and 34 in `design.html`, and the checked-in protocol catalog still carried the deleted brief verbs. All findings below were fixed in this pass.
+
+### Fixed in review
+- **CRITICAL — live deleted-verb post on every panel load:** `requestAllFolders` still posted `listBriefsFolders` for every workspace on every `workspaceItemsUpdated` (`design.js`, was `:4314`), hitting a verb whose handler and schema were deleted. Removed.
+- **MAJOR — retained `stitchSendBrief` send site:** the `btn-send-brief-to-stitch` binding and `stitchSendBrief` postMessage survived (was `design.js:2577-2593`) against a deleted provider handler. Removed, completing the plan's three-site enumeration.
+- **MAJOR — dead brief editor/doc plumbing:** `'briefs-folder'` doc-loaded branch calling the now-undefined `updateBriefDocControls` (was `:1732-1752`); `saveFileContentResult` `tab === 'briefs'` branch calling the now-undefined `exitBriefEditMode` (was `:3662-3692`); `briefs-workspace-filter` / `briefs-docs-search` bindings calling the now-undefined `renderBriefsDocs` (was `:3033-3058`); `msg.briefsDocs` in the `designReadyComplete` fan-out (was `:3127`); `'briefs-folder'` entry in `PREVIEW_ERROR_TARGETS` (was `:3395`). All removed.
+- **MAJOR — orphaned `stitchBriefInjected` machinery:** `stitchPendingAutoGenerate` state field (was `:92`), its consumer in the stitch screen-load case (was `:3866-3874`), and its clear in `stitchError` (was `:4114`) were write-only-null dead code from the removed auto-generate path. All removed.
+- **MAJOR — folders-modal briefs scope machinery:** `'briefs'` cases in `getScopeTabRoot`/`getScopeFolderMap`, modal-title branch, `removeBriefsFolder` post branch, and the stale `briefs` comment (was `:4263-4457`). Removed. Modal-restore path (`:5386`) now guards the persisted scope against an allowlist so legacy `folderModalScope: 'briefs'` state can't reopen a dead scope.
+- **MAJOR — protocol catalog drift (CI gate would fail):** `npm run catalog:check` FAILED — the checked-in `protocol-catalog.json` still carried `listBriefsFolders`/`removeBriefsFolder`/`stitchSendBrief` arms. Regenerated via `npm run catalog:generate`; drift check now OK (601 arms, 514 verbs). This gate IS wired into CI (`.github/workflows/integration-tests.yml`, "Protocol catalog drift check" step) — the coder left the repo red.
+- **NIT — leftover CSS:** 34 briefs selectors remained in `design.html` (`#tree-pane-briefs` collapsed-tree member, the full `#markdown-preview-briefs` comma-list membership across the typography block, cyber `#briefs-content`/`#tree-pane-briefs` variants, claudify heading variant). Removed only the `-briefs` members from shared comma rules; sibling-tab rules verified intact.
+- **NIT — stale references:** `'tree-pane-briefs'` in the arrow-key pane list, `briefsPreviewCollapsed` branch in `applySidebarState`, provider error string/comments naming briefs folders (`DesignPanelProvider.ts:4608, 4617, 4810`). Removed/updated.
+
+### Files changed in this review pass
+`src/webview/design.js`, `src/webview/design.html`, `src/services/DesignPanelProvider.ts`, `protocol-catalog.json` (regenerated).
+
+### Validation results (run independently in this review — the plan file's "skip" note was a coder record, not a dispatch directive)
+- `node --check src/webview/design.js`: OK.
+- Grep sweep (plan step 7): zero `brief` matches across `design.js`, `design.html`, `DesignPanelProvider.ts`, `verbSchemas.ts`, `LocalApiServer.ts`. Retained `LocalFolderService` parse-tolerance fields and the `KanbanDatabase` config-migration preservation confirmed untouched, per the Migration section.
+- `npm run catalog:check`: OK (was failing before fix).
+- `npm run parity:check`, `push-routing:check`, `verb-returns:check`: OK.
+- `npm run compile-tests` (tsc): OK. `npm run compile` (webpack): OK (3 pre-existing optional-dependency warnings: bufferutil, utf-8-validate, canvas).
+- Contract tests `test:contract:design-asset`, `design-view-state`, `cross-client-scope`: 18 passed, 0 failed.
+- `npx eslint` on changed files: 0 errors; 153 warnings in `DesignPanelProvider.ts` identical to HEAD baseline (pre-existing).
+
+### Remaining risks
+- Manual in-editor checks (tab bar rendering across default/cyber/claudify themes, legacy-config round-trip with a live `briefsFolderPaths` key, stale `activeTab: 'briefs'` fallback) were not executable in this pass; the code paths for all three were verified statically (`validTabs` guard intact, parse tolerance intact, sibling CSS rules intact).
+- External HTTP callers of the five deleted brief verbs (if any exist) now receive unknown-verb errors — accepted per User Review Required.
+

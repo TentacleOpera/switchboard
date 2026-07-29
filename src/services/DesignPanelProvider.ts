@@ -4605,7 +4605,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     roots: this._getWorkspaceRoots(),
                     allowedCount: allowedFolders.size
                 });
-                throw new Error('sourceFolder is not a configured design/html/claude/briefs/images folder');
+                throw new Error('sourceFolder is not a configured design/html/claude/images folder');
             }
             const absPath = path.resolve(resolvedFolder, relativePath);
             if (absPath !== resolvedFolder && !absPath.startsWith(resolvedFolder + path.sep)) {
@@ -4614,7 +4614,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
 
             // Turn an opaque ENOENT from the readFile below into a readable message. The
             // "Rebuild Cache" hint is stitch-only — that button exists nowhere else, so
-            // offering it on a design/brief/image doc would be a confidently wrong
+            // offering it on a design/image doc would be a confidently wrong
             // instruction.
             try {
                 await fs.promises.stat(absPath);
@@ -4807,7 +4807,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
 
     /**
      * Resolve a folder path (absolute, or <index>:<relativePath> subfolder id)
-     * to an absolute path, verify it sits within a configured design/briefs/html/images
+     * to an absolute path, verify it sits within a configured design/html/images
      * folder, and copy it to the clipboard so the user can paste it into an agent prompt.
      * Mirrors PlanningPanelProvider._handleLinkToFolder.
      */

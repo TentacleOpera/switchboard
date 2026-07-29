@@ -304,7 +304,6 @@
         .content-row.collapsed #tree-pane,
         .content-row.collapsed #tree-pane-online,
         .content-row.collapsed #tree-pane-design,
-        .content-row.collapsed #tree-pane-briefs,
         .content-row.collapsed #tree-pane-html,
         .content-row.collapsed #tree-pane-images,
         .content-row.collapsed #tree-pane-tickets,
@@ -1029,7 +1028,6 @@
         #markdown-preview-online,
         #markdown-preview-design,
         #markdown-preview-tickets,
-        #markdown-preview-briefs,
         #kanban-preview-pane {
             flex: 1;
             overflow-y: auto;
@@ -1049,7 +1047,6 @@
         #markdown-preview-design h1, #markdown-preview-design h2, #markdown-preview-design h3, #markdown-preview-design h4, #markdown-preview-design h5, #markdown-preview-design h6,
         #kanban-preview-pane h1, #kanban-preview-pane h2, #kanban-preview-pane h3, #kanban-preview-pane h4, #kanban-preview-pane h5, #kanban-preview-pane h6,
         #markdown-preview-tickets h1, #markdown-preview-tickets h2, #markdown-preview-tickets h3, #markdown-preview-tickets h4, #markdown-preview-tickets h5, #markdown-preview-tickets h6,
-        #markdown-preview-briefs h1, #markdown-preview-briefs h2, #markdown-preview-briefs h3, #markdown-preview-briefs h4, #markdown-preview-briefs h5, #markdown-preview-briefs h6 {
             margin-top: 24px;
             margin-bottom: 12px;
             font-weight: 600;
@@ -1063,7 +1060,6 @@
         body.cyber-theme-enabled #markdown-preview-design h1, body.cyber-theme-enabled #markdown-preview-design h2, body.cyber-theme-enabled #markdown-preview-design h3, body.cyber-theme-enabled #markdown-preview-design h4, body.cyber-theme-enabled #markdown-preview-design h5, body.cyber-theme-enabled #markdown-preview-design h6,
         body.cyber-theme-enabled #kanban-preview-pane h1, body.cyber-theme-enabled #kanban-preview-pane h2, body.cyber-theme-enabled #kanban-preview-pane h3, body.cyber-theme-enabled #kanban-preview-pane h4, body.cyber-theme-enabled #kanban-preview-pane h5, body.cyber-theme-enabled #kanban-preview-pane h6,
         body.cyber-theme-enabled #markdown-preview-tickets h1, body.cyber-theme-enabled #markdown-preview-tickets h2, body.cyber-theme-enabled #markdown-preview-tickets h3, body.cyber-theme-enabled #markdown-preview-tickets h4, body.cyber-theme-enabled #markdown-preview-tickets h5, body.cyber-theme-enabled #markdown-preview-tickets h6,
-        body.cyber-theme-enabled #markdown-preview-briefs h1, body.cyber-theme-enabled #markdown-preview-briefs h2, body.cyber-theme-enabled #markdown-preview-briefs h3, body.cyber-theme-enabled #markdown-preview-briefs h4, body.cyber-theme-enabled #markdown-preview-briefs h5, body.cyber-theme-enabled #markdown-preview-briefs h6 {
             font-family: var(--font-family);
             line-height: 1.2;
         }
@@ -1073,7 +1069,6 @@
         body.cyber-theme-enabled #markdown-preview-design h1,
         body.cyber-theme-enabled #kanban-preview-pane h1,
         body.cyber-theme-enabled #markdown-preview-tickets h1,
-        body.cyber-theme-enabled #markdown-preview-briefs h1 {
             color: var(--doc-heading);
         }
         /* Cyber theme — doc preview h2-h6 use accent color */
@@ -1082,7 +1077,6 @@
         body.cyber-theme-enabled #markdown-preview-design h2, body.cyber-theme-enabled #markdown-preview-design h3, body.cyber-theme-enabled #markdown-preview-design h4, body.cyber-theme-enabled #markdown-preview-design h5, body.cyber-theme-enabled #markdown-preview-design h6,
         body.cyber-theme-enabled #kanban-preview-pane h2, body.cyber-theme-enabled #kanban-preview-pane h3, body.cyber-theme-enabled #kanban-preview-pane h4, body.cyber-theme-enabled #kanban-preview-pane h5, body.cyber-theme-enabled #kanban-preview-pane h6,
         body.cyber-theme-enabled #markdown-preview-tickets h2, body.cyber-theme-enabled #markdown-preview-tickets h3, body.cyber-theme-enabled #markdown-preview-tickets h4, body.cyber-theme-enabled #markdown-preview-tickets h5, body.cyber-theme-enabled #markdown-preview-tickets h6,
-        body.cyber-theme-enabled #markdown-preview-briefs h2, body.cyber-theme-enabled #markdown-preview-briefs h3, body.cyber-theme-enabled #markdown-preview-briefs h4, body.cyber-theme-enabled #markdown-preview-briefs h5, body.cyber-theme-enabled #markdown-preview-briefs h6 {
             color: var(--accent-primary);
         }
 
@@ -1091,7 +1085,6 @@
         #markdown-preview-design h1,
         #kanban-preview-pane h1,
         #markdown-preview-tickets h1,
-        #markdown-preview-briefs h1 {
             font-size: 2.25rem; /* 36px — matches site .docs-article h1 */
             margin-top: 0;
             padding-bottom: 0.3em;
@@ -1106,7 +1099,6 @@
         #markdown-preview-design h2,
         #kanban-preview-pane h2,
         #markdown-preview-tickets h2,
-        #markdown-preview-briefs h2 {
             font-size: 1.5rem; /* 24px — matches site .docs-article h2 */
             margin-top: 36px;
             padding-bottom: 0.3em;
@@ -1134,7 +1126,6 @@
         #markdown-preview-design h6,
         #kanban-preview-pane h6,
         #markdown-preview-tickets h3, #markdown-preview-tickets h4, #markdown-preview-tickets h5, #markdown-preview-tickets h6,
-        #markdown-preview-briefs h3, #markdown-preview-briefs h4, #markdown-preview-briefs h5, #markdown-preview-briefs h6 {
             text-transform: uppercase;
             color: var(--accent-teal);
         }
@@ -1144,7 +1135,6 @@
         #markdown-preview-design h3,
         #kanban-preview-pane h3,
         #markdown-preview-tickets h3,
-        #markdown-preview-briefs h3 {
             font-size: 1.2rem; /* 19px — matches site .docs-article h3 */
         }
 
@@ -1153,7 +1143,6 @@
         #markdown-preview-design h4,
         #kanban-preview-pane h4,
         #markdown-preview-tickets h4,
-        #markdown-preview-briefs h4 {
             font-size: 1em;
         }
 
@@ -1162,7 +1151,6 @@
         #markdown-preview-design h5,
         #kanban-preview-pane h5,
         #markdown-preview-tickets h5,
-        #markdown-preview-briefs h5 {
             font-size: 0.875em;
         }
 
@@ -1171,7 +1159,6 @@
         #markdown-preview-design h6,
         #kanban-preview-pane h6,
         #markdown-preview-tickets h6,
-        #markdown-preview-briefs h6 {
             font-size: 0.85em;
         }
 
@@ -1180,7 +1167,6 @@
         #markdown-preview-design p,
         #kanban-preview-pane p,
         #markdown-preview-tickets p,
-        #markdown-preview-briefs p {
             margin-bottom: 16px;
             line-height: inherit; /* Inherits from container's 1.5 */
             color: var(--doc-text);
@@ -1192,7 +1178,6 @@
         #markdown-preview-design li,
         #kanban-preview-pane li,
         #markdown-preview-tickets li,
-        #markdown-preview-briefs li {
             margin-bottom: 6px; /* Tighter list item spacing */
             line-height: inherit;
             color: var(--doc-text-bright);
@@ -1204,7 +1189,6 @@
         #markdown-preview-design li p,
         #kanban-preview-pane li p,
         #markdown-preview-tickets li p,
-        #markdown-preview-briefs li p {
             margin-bottom: 0; /* Paragraphs inside list items: zero extra margin (li already spaced) */
         }
 
@@ -1213,7 +1197,6 @@
         #markdown-preview-design pre,
         #kanban-preview-pane pre,
         #markdown-preview-tickets pre,
-        #markdown-preview-briefs pre {
             background-color: var(--vscode-textCodeBlock-background, rgba(255,255,255,0.04));
             border: 1px solid var(--vscode-widget-border, rgba(127, 127, 127, 0.35));
             border-radius: 3px;
@@ -1227,7 +1210,6 @@
         #markdown-preview-design pre code,
         #kanban-preview-pane pre code,
         #markdown-preview-tickets pre code,
-        #markdown-preview-briefs pre code {
             background: none;
             padding: 0;
             border: none;
@@ -1241,7 +1223,6 @@
         #markdown-preview-design code,
         #kanban-preview-pane code,
         #markdown-preview-tickets code,
-        #markdown-preview-briefs code {
             font-family: var(--vscode-editor-font-family, 'SF Mono', Monaco, Menlo, Consolas, monospace);
             font-size: 1em; /* Match VS Code: inline code is same size as surrounding text */
             line-height: 1.357em;
@@ -1257,7 +1238,6 @@
         #markdown-preview-design blockquote,
         #kanban-preview-pane blockquote,
         #markdown-preview-tickets blockquote,
-        #markdown-preview-briefs blockquote {
             margin: 0;
             padding: 0 16px 0 10px; /* Match VS Code's markdown.css */
             border-left: 5px solid var(--vscode-textBlockQuote-border, var(--border-color));
@@ -1271,7 +1251,6 @@
         #markdown-preview-design ul, #markdown-preview-design ol,
         #kanban-preview-pane ul, #kanban-preview-pane ol,
         #markdown-preview-tickets ul, #markdown-preview-tickets ol,
-        #markdown-preview-briefs ul, #markdown-preview-briefs ol {
             margin-bottom: 16px; /* Match VS Code's tighter list spacing */
             padding-left: 2em;
         }
@@ -1282,7 +1261,6 @@
         #markdown-preview-design table,
         #kanban-preview-pane table,
         #markdown-preview-tickets table,
-        #markdown-preview-briefs table {
             border-collapse: collapse;
             margin-bottom: 0.7em;
             font-size: inherit; /* Inherits from container */
@@ -1293,7 +1271,6 @@
         #markdown-preview-design th,
         #kanban-preview-pane th,
         #markdown-preview-tickets th,
-        #markdown-preview-briefs th {
             text-align: left;
             border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.69));
             font-weight: 600;
@@ -1305,7 +1282,6 @@
         #markdown-preview-design td,
         #kanban-preview-pane td,
         #markdown-preview-tickets td,
-        #markdown-preview-briefs td {
             padding: 5px 10px;
             border-top: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
             color: var(--vscode-editor-foreground, var(--text-primary));
@@ -1316,7 +1292,6 @@
         #markdown-preview-design tr:hover td,
         #kanban-preview-pane tr:hover td,
         #markdown-preview-tickets tr:hover td,
-        #markdown-preview-briefs tr:hover td {
             background: var(--vscode-list-hoverBackground, var(--card-bg-hover));
         }
 
@@ -1325,7 +1300,6 @@
         #markdown-preview-design .table-wrapper,
         #kanban-preview-pane .table-wrapper,
         #markdown-preview-tickets .table-wrapper,
-        #markdown-preview-briefs .table-wrapper {
             overflow-x: auto;
             max-width: 100%;
             margin-bottom: 16px;
@@ -1337,7 +1311,6 @@
         #markdown-preview-design a,
         #kanban-preview-pane a,
         #markdown-preview-tickets a,
-        #markdown-preview-briefs a {
             color: var(--vscode-textLink-foreground, var(--accent-teal));
             text-decoration: none;
         }
@@ -1347,7 +1320,6 @@
         #markdown-preview-design a:hover,
         #kanban-preview-pane a:hover,
         #markdown-preview-tickets a:hover,
-        #markdown-preview-briefs a:hover {
             color: var(--vscode-textLink-activeForeground, var(--accent-teal-bright));
             text-decoration: underline;
         }
@@ -1357,7 +1329,6 @@
         #markdown-preview-design hr,
         #kanban-preview-pane hr,
         #markdown-preview-tickets hr,
-        #markdown-preview-briefs hr {
             border: 0;
             height: 1px;
             border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
@@ -1368,7 +1339,6 @@
         #markdown-preview-design img,
         #kanban-preview-pane img,
         #markdown-preview-tickets img,
-        #markdown-preview-briefs img {
             max-width: 100%;
             max-height: 100%;
             position: relative;
@@ -1381,7 +1351,6 @@
         #markdown-preview-design .empty-state,
         #kanban-preview-pane .empty-state,
         #markdown-preview-tickets .empty-state,
-        #markdown-preview-briefs .empty-state {
             display: flex;
             align-items: center;
             justify-content: center;
@@ -2176,7 +2145,6 @@
         .cyber-theme-enabled #tree-pane,
         .cyber-theme-enabled #tree-pane-online,
         .cyber-theme-enabled #tree-pane-design,
-        .cyber-theme-enabled #tree-pane-briefs,
         .cyber-theme-enabled #tree-pane-html,
         .cyber-theme-enabled #tree-pane-images,
         .cyber-theme-enabled #tree-pane-tickets {
@@ -2231,7 +2199,6 @@
         .cyber-theme-enabled #local-content,
         .cyber-theme-enabled #online-content,
         .cyber-theme-enabled #design-content,
-        .cyber-theme-enabled #briefs-content,
         .cyber-theme-enabled #html-preview-content,
         .cyber-theme-enabled #images-content,
         .cyber-theme-enabled #tickets-content,
@@ -2325,7 +2292,6 @@
         }
 
         /* Claudify: h2-h6 — Hanken, terracotta */
-        body.theme-claudify #markdown-preview-briefs h2, body.theme-claudify #markdown-preview-briefs h3, body.theme-claudify #markdown-preview-briefs h4, body.theme-claudify #markdown-preview-briefs h5, body.theme-claudify #markdown-preview-briefs h6,
         body.theme-claudify #markdown-preview-design h2, body.theme-claudify #markdown-preview-design h3, body.theme-claudify #markdown-preview-design h4, body.theme-claudify #markdown-preview-design h5, body.theme-claudify #markdown-preview-design h6 {
             font-family: var(--font-family);
             letter-spacing: normal;

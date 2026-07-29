@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{NONCE}}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; frame-src 'none';">
+    <title>Memo</title>
+    <style>
+        @font-face {
+            font-family: 'Hanken Grotesk';
+            src: url('{{HANKEN_FONT_URI}}') format('woff2');
+            font-weight: 100 900;
+            font-style: normal;
+            font-display: swap;
+        }
+        @font-face {
+            font-family: 'Geist Pixel Square';
+            src: url('{{GEIST_PIXEL_FONT_URI}}') format('woff2');
+            font-weight: 400;
+            font-style: normal;
+            font-display: swap;
+        }
+        :root {
+            --text-primary: #e0e0e0;
+            --text-secondary: #888888;
+            --border-color: #333333;
+            --accent-teal: #00f0ff;
+            --bg-color: #0e0e10;
+        }
+        body.theme-claudify {
+            --text-primary: #d4d4d8;
+            --text-secondary: #71717a;
+            --border-color: #27272a;
+            --accent-teal: #d97706;
+            --bg-color: #18181b;
+        }
+        body.cyber-theme-enabled {
+            --text-primary: #00f0ff;
+            --text-secondary: #7000ff;
+            --border-color: #00f0ff;
+            --accent-teal: #ff0055;
+            --bg-color: #05050a;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 0;
+            background: var(--bg-color);
+            color: var(--text-primary);
+            font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
+            font-size: 13px;
+            height: 100vh;
+            overflow-y: auto;
+        }
+        .strip-btn {
+            background: #18181b;
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            padding: 6px 12px;
+            font-size: 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.15s ease, border-color 0.15s ease;
+        }
+        .strip-btn:hover {
+            background: #27272a;
+            border-color: var(--accent-teal);
+        }
+        .markdown-editor {
+            font-family: var(--font-mono, monospace);
+        }
+    </style>
+</head>
+<body>
+    <div style="padding: 16px;">
+        <div style="display: flex; flex-direction: column; gap: 8px; max-width: 720px; margin: 0 auto;">
+            <p style="font-size: 11px; color: var(--text-secondary); margin: 0 0 4px;">
+                Jot down bugs, thoughts, or issues — one per line or paragraph. Saved automatically.
+                Send to an agent via Copy Prompt / Send to Planner to create one plan per issue.
+            </p>
+            <p style="font-size: 11px; color: var(--text-secondary); margin: 0 0 4px;">
+                Tip: you can also use 'start memo capture' in an agent chat.
+            </p>
+            <textarea id="memo-textarea" class="markdown-editor"
+                      placeholder="Bug: login button overlaps on mobile&#10;&#10;Thought: maybe cache the user profile&#10;&#10;Issue: API returns 500 on empty payload..."
+                      style="width: 100%; min-height: 320px; resize: vertical; font-family: var(--font-mono, monospace); font-size: 13px; background: #111; border: 1px solid var(--border-color); color: var(--text-primary); padding: 8px; border-radius: 4px;"></textarea>
+            <span id="memo-status" style="font-size: 11px; color: var(--text-secondary); min-height: 14px;"></span>
+            <div style="display: flex; gap: 8px;">
+                <button id="memo-clear-btn" class="strip-btn" style="flex: 1;">Clear</button>
+                <button id="memo-copy-btn" class="strip-btn" style="flex: 1; border-color: var(--accent-teal, #00f0ff);">Copy Prompt</button>
+                <button id="memo-send-btn" class="strip-btn" style="flex: 1; border-color: var(--accent-teal, #00f0ff);">Send to Planner</button>
+            </div>
+        </div>
+    </div>
+    <!-- SHARED_DEFAULTS_SCRIPT -->
+    <script nonce="{{NONCE}}" src="{{MEMO_JS_URI}}"></script>
+</body>
+</html>
