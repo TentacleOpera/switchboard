@@ -2357,7 +2357,7 @@
             }
         }
 
-        // "Open in HTML Tab" — jump to the Stitch HTML tab with this screen's cached
+        // "Open in HTML Tab" — jump to PREVIEWS → Stitch HTML with this screen's cached
         // file open, where the full editing surface (refine/variants) lives.
         if (previewBtnHtml) {
             const newHtmlBtn = previewBtnHtml.cloneNode(true);
@@ -2365,7 +2365,7 @@
             previewBtnHtml = newHtmlBtn;
             previewBtnHtml.disabled = !screen.htmlPath;
             previewBtnHtml.title = screen.htmlPath
-                ? "Open this screen's cached HTML in the Stitch HTML tab for further editing"
+                ? "Open this screen's cached HTML under PREVIEWS → Stitch HTML for further editing"
                 : 'HTML not cached yet — it downloads automatically as the screen loads';
             previewBtnHtml.addEventListener('click', () => {
                 if (!screen.htmlPath) return;
@@ -2381,8 +2381,19 @@
                     projectId,
                     workspaceRoot: state.stitchWorkspaceRoot
                 });
-                document.querySelector('[data-tab="previews"]')?.click();
-                selectPreviewsSource('stitch-html');
+                // Set the source BEFORE the tab click. switchTab('previews') routes through
+                // selectPreviewsSource(state.previewsSource), so pre-setting it keeps this to
+                // ONE activeTabChanged + ONE stitchListProjects — calling selectPreviewsSource
+                // again after the click would re-post both (stitchListProjects always hits the
+                // Stitch API), and leaving the source stale would fire a pointless
+                // refreshDocsForTab readdir for a surface we're navigating away from.
+                state.previewsSource = 'stitch-html';
+                const previewsTabBtn = document.querySelector('[data-tab="previews"]');
+                if (previewsTabBtn) {
+                    previewsTabBtn.click();
+                } else {
+                    selectPreviewsSource('stitch-html');
+                }
                 loadDocumentPreview('stitch-html-folder', `${screen.id}.html`, screen.name || screen.id);
             });
         }

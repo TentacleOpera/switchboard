@@ -169,3 +169,58 @@ Files modified:
 - `src/webview/design.js`: Added `selectPreviewsSource` helper, updated `switchTab`, `sbTransportReconnected`, `restoredTabState`, and redirected Stitch screen HTML button click.
 
 No issues encountered.
+
+---
+
+## Code Review — Reviewer Pass (2026-07-30)
+
+### Verdict
+The two load-bearing mechanisms this plan identified as its real risks are implemented **correctly**, and both were verified against the provider rather than taken on the plan's word:
+- **Effective-tab protocol holds.** All three `activeTabChanged` emitters were audited (`design.js:33`, `:173`, `:232`, `:236`); none can emit `'previews'`. `_isPolledTab` (`DesignPanelProvider.ts:4365-4367`) still sees `'html-preview'`/`'images'`, so external-file polling and preview auto-refresh survive. The provider diff is exactly the one authorized string at `:2559`.
+- **Sub-panel blanking avoided.** The three moved panes carry only `previews-subpanel` (no residual `shared-tab-content`), so `switchTab`'s global deactivation loop cannot reach them. The id-based display block removals match the pre-change file exactly (`#html-preview-content`/`#images-content` and their `.active` partners removed; `#stitch-html-content` was never in it).
+- **Two bonus repairs beyond the plan's scope, both confirmed correct:** the reconnect handler's selector was fixed (`.tab-button.active` → `.shared-tab-btn.active`, `design.js:27`), closing the pre-existing defect the plan only promised not to worsen; and the legacy forward-map (`:3189-3192`) covers `'stitch-html'`, which was never in `validTabs`, incidentally fixing a long-standing restore gap. The `|| restoredTab === 'previews'` clause at `:3197` is load-bearing (it forces source application when the tab is already correct, and re-persists `activeTab` so a legacy value self-heals).
+
+### Findings and fixes applied
+
+**MAJOR — cyber-theme background regression (fixed).** `#previews-content` was added to the base display block (`design.html:181`) where it picks up `background: var(--panel-bg)` = `#000000`, but was **omitted from the cyber transparent list** at `:2199-2205`. Pre-change, `#html-preview-content`/`#images-content` were direct children of `.container` and explicitly transparent, and `#stitch-html-content` had no background rule at all — all three let the body's `#171717` + cyan grid (`:2125-2132`) show through. Wrapping them in an opaque parent hid that grid, so PREVIEWS rendered flat black while STITCH and DESIGN SYSTEM kept the grid — in the panel's default shipped theme (`<body class="cyber-theme-enabled">`, `:3599`). **Fix:** added `.cyber-theme-enabled #previews-content` (and `#stitch-html-content` for completeness) to the transparent list. Specificity checked: `1 id + 1 class` beats the base `1 id` rule, and it is later in source order.
+
+**MAJOR — `Open in HTML Tab` doubled an outbound Stitch API call (fixed).** `design.js:2384-2385` did `.click()` on the PREVIEWS button and *then* called `selectPreviewsSource('stitch-html')`. The click routes through `switchTab('previews')` → `selectPreviewsSource(state.previewsSource)`, which in the common case (`state.previewsSource === 'stitch-html'`, the default) already posted `stitchListProjects` — so the explicit second call posted it again. `stitchListProjects` **always** refreshes from the Stitch API (`DesignPanelProvider.ts:3397-3400`), so this was a genuine duplicate external round trip on a hot user path, and a regression against the old single-`.click()` behavior. When the prior source was `'images'`, the click additionally fired a spurious `refreshDocsForTab: 'images'` (a recursive 10-deep readdir of every configured image folder, `:4497-4528`) plus a `seat.stitchHtmlPreview` clear/un-clear cycle. **Fix:** set `state.previewsSource = 'stitch-html'` before the click so the click's own routing does the work exactly once, with an explicit `selectPreviewsSource` fallback if the button is absent.
+
+**NIT — `.previews-subpanel` had dropped `overflow: hidden` (fixed).** The class it replaced (`.shared-tab-content`, `:3558-3563`) provided it; the replacement reproduced `display`, `flex-direction`, and `flex` but not the clipping. Nothing was visibly broken (`.content-row`'s own `overflow:hidden` covered it), but the panes hold iframes and zoom-transformed canvases that should stay clipped. Restored, with a comment explaining why.
+
+**NIT — source strip lacked `flex-shrink: 0` (fixed).** Every `.controls-strip` in this file has it (`:216`); the new inline-styled strip did not. `min-height: auto` floored it in practice, but the guard is free.
+
+**NIT — tooltips named a deleted tab (fixed).** `design.html:4022` and `design.js:2368` both read "…in the **Stitch HTML tab**…", a tab that no longer exists in the tab bar. Reworded to "under PREVIEWS → Stitch HTML" in both places, and the adjacent code comment at `design.js:2360` updated to match. The visible button label "Open in HTML Tab" was left alone — renaming it is a separate copy decision outside this plan.
+
+### Gate-wiring audit
+This plan's `### Automated Tests` subsection names **no** automated checks (it declared manual verification only), so there is no plan-named check to audit for CI wiring — and no new check was added by this work that could sit defined-but-unwired. For the record, the pre-existing CI gates that do cover these files are all invoked by `.github/workflows/integration-tests.yml`: `test:contract:design-view-state` (:79), `test:contract:stitch-html-tab` (:82), `test:contract:design-system` (:53), `test:contract:design-asset` (:47), `test:contract:design-reply-addressing` (:50), `test:contract:shim-injection` (:85), plus `compile`, `compile-tests`, `parity:check`, `verb-returns:check`, `mirror:check`. Two suites (`test:contract:verb-engine`, `test:contract:verb-engine-planning`) are deliberately unwired with a documented red-cause rationale at `:67-76` — pre-existing and unrelated to this change.
+
+### Validation results (executed in this review pass)
+The plan's note that compilation and tests were skipped is a record of the coding session, not a directive to the reviewer; the dispatch prompt carried no `SKIP TESTS:`/`SKIP COMPILATION:` line, so verification was run independently — **after** the fixes above.
+
+| Check | Result |
+|---|---|
+| `tsc -p tsconfig.test.json --noEmit` | ✅ clean |
+| `node --check src/webview/design.js` | ✅ syntax OK |
+| `eslint src/webview/design.js src/services/DesignPanelProvider.ts` | ✅ 0 errors (153 pre-existing style warnings) |
+| `npm run compile` (webpack) | ✅ compiled (3 pre-existing optional-dep warnings) |
+| `test:contract:design-view-state` | ✅ 11 passed, 0 failed |
+| `test:contract:stitch-html-tab` | ✅ 11 passed, 0 failed |
+| `test:contract:design-system` | ✅ 21 passed, 0 failed |
+| `test:contract:design-asset` | ✅ 11 passed, 0 failed |
+| `test:contract:design-reply-addressing` | ✅ 7 passed, 0 failed |
+| `test:contract:shim-injection` | ✅ 17 passed, 0 failed |
+| `parity:check` / `verb-returns:check` / `mirror:check` / `catalog:check` | ✅ all pass, no drift |
+
+### Files changed by this review pass
+- `src/webview/design.html` — cyber transparent list (+`#previews-content`, +`#stitch-html-content`); `.previews-subpanel` gains `overflow: hidden`; source strip gains `flex-shrink: 0`; `preview-btn-html` tooltip reworded.
+- `src/webview/design.js` — `Open in HTML Tab` handler no longer double-dispatches `selectPreviewsSource`; tooltip string and adjacent comment reworded.
+
+### Remaining risks
+- **No automated coverage for the collapse itself.** The seat/poll protocol is exercised by `design-view-state` at the provider level, but nothing asserts that the *webview* reports an effective source rather than `'previews'`. A regression there would be silent (folders stop polling; the panel still looks fine) and would only surface via the plan's Manual Verification step 7. A small DOM-free contract test over `design.js`'s emitter set would close this — worth its own plan.
+- **Manual steps still owed.** Steps 2, 3, 7, 8, and 9 of the Manual Verification plan require a running panel: per-source zoom/pan and filter independence, the two poll-preservation checks, hidden-sub-panel background updates, and a visual pass on cyber/claudify now that the wrapper transparency is fixed.
+- **Pre-existing, out of scope, worth its own plan:** `persistTab('stitchModelId')`, `persistTab('stitchCreativeRange')`, `persistTab('stitchAspects')`, `persistTab('stitchHtml.projectId')` and `persistTab('stitch.projectId')` (`design.js:4072`, `:4079`, `:4093`, `:2375`, `:2679`) all write to the tab-state store but appear in **neither** the panel nor byRoot side of the `tabKeys` allowlist (`DesignPanelProvider.ts:2559`) — they persist and are never restored. This predates the plan and is exactly the failure mode the plan's one-line `tabKeys` addition guarded against for `previews.source`.
+- **Merge note:** `cut-briefs-tab-design-panel.md` has already landed — the tab bar is STITCH / PREVIEWS / DESIGN SYSTEM (3 tabs), `validTabs` is `['stitch', 'previews', 'design']`, and `_isPolledTab` no longer lists `'briefs'`. No residual conflict.
+
+### Reviewer completion summary
+Reviewed the PREVIEWS collapse against this plan as source of truth. The effective-tab seat/poll protocol and the `previews-subpanel` re-classing — the two changes the plan flagged as load-bearing — are both correct, verified directly against `DesignPanelProvider.ts` rather than assumed. Fixed two real defects: `#previews-content` was missing from the cyber-theme transparent list, so the collapsed tab rendered flat black instead of showing the body grid in the default theme; and `Open in HTML Tab` double-dispatched `selectPreviewsSource`, duplicating an outbound Stitch API call (and firing a spurious recursive folder readdir when the prior source wasn't Stitch HTML). Also restored `overflow: hidden` on the moved panes, added `flex-shrink: 0` to the source strip, and reworded two tooltips that still named the deleted "Stitch HTML tab". Files touched: `src/webview/design.html`, `src/webview/design.js`. Verification ran independently of the plan's skip note and is fully green: tsc, eslint (0 errors), webpack, six design contract suites (78 assertions), and all four protocol ratchets.

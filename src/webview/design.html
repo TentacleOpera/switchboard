@@ -195,11 +195,16 @@
             display: flex;
         }
 
+        /* These three panes were `.shared-tab-content` before the PREVIEWS collapse; the
+           dropdown handler now owns their visibility. `overflow: hidden` is carried over
+           from that class deliberately — the panes hold iframes and zoom-transformed
+           canvases that must stay clipped to the pane. */
         #previews-content .previews-subpanel {
             display: none;
             flex-direction: column;
             flex: 1 1 auto;
             min-height: 0;
+            overflow: hidden;
         }
 
         #previews-content .previews-subpanel.active {
@@ -2199,8 +2204,13 @@
         .cyber-theme-enabled #local-content,
         .cyber-theme-enabled #online-content,
         .cyber-theme-enabled #design-content,
+        /* #previews-content is the WRAPPER the three preview sub-panels moved into. The
+           sub-panel rules below it are still transparent, but an opaque wrapper above them
+           hides the body grid just as effectively — the wrapper needs the rule too. */
+        .cyber-theme-enabled #previews-content,
         .cyber-theme-enabled #html-preview-content,
         .cyber-theme-enabled #images-content,
+        .cyber-theme-enabled #stitch-html-content,
         .cyber-theme-enabled #tickets-content,
         .cyber-theme-enabled #stitch-content {
             background: transparent;
@@ -3719,7 +3729,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         <!-- Previews Tab -->
         <div id="previews-content" class="shared-tab-content">
-            <div style="display:flex; gap:8px; padding:6px 12px; border-bottom:1px solid var(--border-color,#333); background:var(--panel-bg2,#1a1a1a); align-items:center;">
+            <div style="display:flex; gap:8px; padding:6px 12px; border-bottom:1px solid var(--border-color,#333); background:var(--panel-bg2,#1a1a1a); align-items:center; flex-shrink:0;">
                 <select id="previews-source-select" class="workspace-filter-select" style="max-width:220px; margin-bottom:0;">
                     <option value="stitch-html">Stitch HTML</option>
                     <option value="html-preview">HTML Previews</option>
@@ -4009,7 +4019,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                 </select>
                             </div>
                             <button id="preview-btn-png" class="preview-overlay-btn" title="Copy the image file path to the clipboard">Copy Link</button>
-                            <button id="preview-btn-html" class="preview-overlay-btn" title="Open this screen's cached HTML in the Stitch HTML tab for further editing">Open in HTML Tab</button>
+                            <button id="preview-btn-html" class="preview-overlay-btn" title="Open this screen's cached HTML under PREVIEWS → Stitch HTML for further editing">Open in HTML Tab</button>
                             <button id="preview-btn-open-web" class="preview-overlay-btn" style="display: none;" title="Serve the downloaded HTML on localhost and open it in your browser">Open in Browser</button>
                             <button id="btn-close-preview" class="preview-overlay-btn close-btn">✕ Close</button>
                         </div>
