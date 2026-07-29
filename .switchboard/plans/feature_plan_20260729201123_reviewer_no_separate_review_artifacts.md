@@ -44,7 +44,7 @@ The directive keeps the broader wording (workspace root included) because prohib
 - **Two key namespaces must be wired in lockstep.** Persisted role-config addons use short names (`advancedRegression`, `reviewerConciseMode`, `reviewerCompactPlanUpdate`); `CustomAgentAddons` / `PromptBuilderOptions` use `*Enabled` names; `AgentSkillExporter.normalizeBuiltinAddons` (`AgentSkillExporter.ts:90-92`) translates between them. Getting one name wrong yields a toggle that reads `undefined` forever and — because the default is `true` — fails *silently in the on direction*: the checkbox appears to work, the directive never turns off, and every default-on test still passes.
 - **Default-true round-trip.** `parseCustomAgentAddons` (`agentConfig.ts:198-200`) uses `if (s.X === true) a.X = true`, which discards an explicit `false`. A default-true addon added that way cannot be disabled for custom agents. The correct precedent already in the file is `if (s.useSubagents === false) a.useSubagents = false;` (`agentConfig.ts:214`).
 - **Override survivability.** The directive must survive a `replace`-mode `defaultPromptOverride`, which wholesale replaces the reviewer `base` string (`resolveBaseInstructions`, `agentPromptBuilder.ts:325-333`).
-- **Prohibition-vs-completion collision.** The reviewer's completion handshake *is* an edit to the plan file inside `.switchboard/plans/` (mtime advance clears the card's activity light). A directive that reads as "do not touch .md files in .switchboard/plans/" can suppress that edit and break completion detection. The directive must forbid **creation**, explicitly permitting the in-place edit.
+- **Prohibition-vs-completion collision.** The reviewer's completion handshake *is* an edit to the plan file inside `.switchboard/plans/` (mtime advance clears the card's activity light), so a directive that reads as "do not touch .md files in `.switchboard/plans/`" would suppress that edit and hang the card. Mitigated by copying the shipped `SUPPRESS_WALKTHROUGH` / `COMPLETION REPORT` pairing rather than inventing a formulation: the prohibition names *creation* of artifact files only and defers the destination to the `COMPLETION REPORT` directive the reviewer branch already receives. Verified by the co-existence assertion in the test plan, not by inspection.
 - **Existing-install exporter divergence.** `normalizeBuiltinAddons` gates on `!== undefined`, so installs whose persisted reviewer addons predate this key export a skill file *without* the directive while dispatch *includes* it.
 - **Neither target test file is wired to any gate** (see Verification Plan) — assertions added without wiring are inert.
 
@@ -57,7 +57,7 @@ The directive keeps the broader wording (workspace root included) because prohib
 - None. The change adds a static string to a prompt and one boolean to config. No new input is interpolated into the prompt, no path is constructed from user data, and no new file/network access is introduced.
 
 ### Side Effects
-- **Reviewer prompt length grows** by ~11 lines / ~110 tokens on every reviewer dispatch (default-on). Acceptable; `cavemanOutput` and concise mode are unaffected (neither touches this block).
+- **Reviewer prompt length grows** by one paragraph / ~70 tokens on every reviewer dispatch (default-on) — comparable to `SUPPRESS_WALKTHROUGH_DIRECTIVE`. `cavemanOutput` and concise mode are unaffected (neither touches this block).
 - **Newline hygiene:** `src/test/minimal-prompt.test.js` asserts no `\n\n\n` in any role × option combination. The directive constant must not begin or end with a newline, and must be joined with the existing `'\n\n'` separator — not concatenated with its own leading break.
 - **Exported skill files** (`.agents/skills/switchboard-reviewer.md`) change content once the exporter branch is added; that is intended parity, not a regression.
 - **Prompts-tab preview** picks the directive up for free — `_getDefaultPromptPreviews` (`KanbanProvider.ts:4265-4320`) delegates to `generateUnifiedPrompt`, which is the same path dispatch uses. No separate preview wiring is needed.
@@ -97,27 +97,19 @@ Key risks: (1) a key-name mismatch between the persisted addon (`noSeparateRevie
 
 **Implementation.**
 
-1. Directive constant — place beside `ADVANCED_REVIEWER_DIRECTIVE` (line 903).
+1. Directive constant — place it immediately beside `SUPPRESS_WALKTHROUGH_DIRECTIVE` (line 756), not beside the reviewer directives. That adjacency is the point: this is the **same directive shape**, and the two should be read and maintained together.
 
-> **Superseded:** an earlier draft of this directive as ALL-CAPS-labelled prose (`REVIEW OUTPUT LOCATION (on by default): … REASON: Switchboard's plan watcher ingests every new .md file under .switchboard/plans/ and .switchboard/features/ …`).
-> **Reason:** web research (see **Resolved Assumptions**) identified three defects. (a) An entangled permit/forbid pair on the same object class (`.md` files) is the documented trigger for *collateral suppression* — the model over-generalises the prohibition and stops editing the plan file too; XML enclosure of the two rules is the measured mitigation (~25–30% error reduction on structured prompts, and the pattern Anthropic's own guidance prescribes). (b) Enumerating the two watched directories inside the *reason* clause hands a reasoning model a navigable escape hatch ("then I'll write it at the repo root instead") — the documented CoT-over-reasoning pitfall. (c) The prohibition was keyed to file *extension* rather than file *operation*, where action-verb disambiguation (instantiate vs. mutate-in-place) is what actually separates the forbidden action from the required one.
-> **Replaced with:** the XML-structured, verb-disambiguated block below. Paths are named in the *prohibition* (`anywhere in the repository`), never as a scoped list in the reason.
+**This directive is a styling extension of a pattern already working in production.** `SUPPRESS_WALKTHROUGH_DIRECTIVE` (line 756) suppresses an agent artifact for the coder/lead/intern roles while those same roles are simultaneously required, by `CODING_COMPLETION_REPORT_DIRECTIVE` (line 769), to append a report to the plan file. That is the identical permit/forbid pair this plan needs, it has shipped, and it does not cause the agent to skip its completion report. Copy its shape exactly:
+- `ALL_CAPS LABEL:` prefix, plain prose, single paragraph.
+- Bare negative, with the offending filenames named literally.
+- `Omit the … step entirely.` — the same closing clause.
+- **Do not restate the permission.** `SUPPRESS_WALKTHROUGH` does not re-explain the completion report; it relies on `COMPLETION REPORT` being its own directive. The reviewer branch already calls `ensureCompletionDirective(baseInstructions)` (line 1345), so the reviewer receives `CODING_COMPLETION_REPORT_DIRECTIVE` verbatim and post-override. Cross-reference it by name rather than re-litigating the carve-out — one canonical statement of the permission, no second copy to drift.
 
 ```typescript
-export const NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE = `<file_modification_policy>
-  <required_action>
-    Record your review findings in your response, and in the existing target plan file listed under PLANS TO PROCESS — edit that file in place. This edit is expected and required: it is the completion signal that clears the card's activity light.
-  </required_action>
-  <forbidden_action>
-    You MUST NOT create any new file for this review, anywhere in the repository — no review.md, review_notes.md, review_artifact.md, grumpy_critique.md, balanced_review.md, no temporary notes file, no scratch file under any name or directory.
-  </forbidden_action>
-  <reason>
-    Switchboard's plan watcher ingests newly created .md files as Kanban cards, so a review artifact file becomes a duplicate plan card on the board.
-  </reason>
-</file_modification_policy>`;
+export const NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE = `NO SEPARATE REVIEW ARTIFACTS: Do NOT create separate review artifact files (review.md, review_notes.md, review_artifact.md, grumpy_critique.md, balanced_review.md, or any similarly-named new file) at any point in this task. Omit the review-artifact creation step entirely. Record your findings in your response and in the existing target plan file, per the COMPLETION REPORT step. A new .md file in the workspace is imported as a duplicate card on the kanban board.`;
 ```
 
-**Convention note for the reviewer of this change:** every other directive in this file is `ALL_CAPS_LABEL: prose`. The departure is deliberate and confined to this one block — it is the only directive in the reviewer prompt carrying an entangled permit/forbid pair over one object class, which is precisely the case XML delimitation is documented to fix. Do not "normalise" it back to prose, and do not convert the other directives to XML.
+The one addition over `SUPPRESS_WALKTHROUGH`'s shape is the closing reason sentence, which follows `CODING_COMPLETION_REPORT_DIRECTIVE`'s precedent of a brief, system-oriented "why" ("This edit signals task completion to the kanban board — the file watcher detects it…"). Keep it to one clause and do **not** enumerate the watched directories: a reasoning agent told exactly which two directories are watched can reason its way to an unwatched one, which is the opposite of the intent.
 
 2. Option flag — add to `PromptBuilderOptions` next to `reviewerCompactPlanUpdateEnabled` (line 169):
 
@@ -140,7 +132,7 @@ export const NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE = `<file_modification_policy
             : '';
 ```
 
-then insert it into `promptParts` (lines 1355-1363) as the **last instruction element — immediately after `featureDirectiveBlock` and immediately before the `PLANS TO PROCESS` data block**:
+then insert it into `promptParts` (lines 1355-1363) in the **same slot the working precedent uses: dead last, after the `PLANS TO PROCESS` block** — mirroring `suppressWalkthroughBlock` in the lead branch (line 1478), and identically in the coder/intern/analyst branches (lines 1536, 1580, 1622):
 
 ```typescript
         const promptParts = [
@@ -150,18 +142,16 @@ then insert it into `promptParts` (lines 1355-1363) as the **last instruction el
             baseInstructions,
             suffixBlock,
             featureDirectiveBlock,
-            // Tail-anchored deliberately — see the placement note below. Keep this the
-            // last instruction element; PLANS TO PROCESS is data, not instruction.
-            noSeparateReviewArtifactsBlock,
-            `PLANS TO PROCESS:\n${planList}`
+            `PLANS TO PROCESS:\n${planList}`,
+            // Last element, matching suppressWalkthroughBlock in the lead/coder/intern
+            // branches — artifact-suppression directives are tail-placed in this builder.
+            noSeparateReviewArtifactsBlock
         ].filter(Boolean).join('\n\n');
 ```
 
-**Placement rationale (do not "tidy" this into the middle).** The assembled reviewer prompt runs ~1.5–4k tokens across ~8 blocks, which is squarely inside the range where positional-bias research measures a large adherence drop for constraints landing in the middle third; both Anthropic's and Google's published guidance put hard output constraints at the final lines before execution. Placing the block after `baseInstructions` — where an earlier draft of this plan had it — buries it mid-prompt, behind the longest block in the prompt (the 10-step base instructions).
+**Placement rationale.** Don't invent a placement rule — inherit the one that already works. Every artifact-suppression directive in this builder is emitted last, after the plan list, and that is where `SUPPRESS_WALKTHROUGH` demonstrably holds without suppressing the coder's completion report. Matching it keeps the reviewer branch structurally consistent with the four code roles, so a future reader sees one pattern rather than two.
 
-The research also describes *dual anchoring* (head **and** tail). **Decision: single tail anchor.** Recency is the stronger of the two for a constraint that must bind at tool-call time, and a second copy would mean two literals that can silently drift apart — the failure this file already carries scars from (the `String.replace` coupling at lines 1308-1325 exists behind a WARNING comment for exactly that reason). One copy, correctly placed, no drift. If field evidence later shows the tail anchor alone is insufficient, add the head anchor by referencing the same exported constant — never by re-typing the text.
-
-**Edge Cases.** `''` when disabled is stripped by the existing `.filter(Boolean)` — no stray blank line, so `minimal-prompt.test.js`'s no-`\n\n\n` assertion holds. The XML block's internal lines are single-newline separated; do not add a leading or trailing newline inside the template literal, and do not blank-line-separate the tags. Do not touch `DEFAULT_REVIEWER_BASE_INSTRUCTIONS` (lines 1262-1297) at all — root cause #1 is addressed by the new block, not by editing that literal, which two `String.replace` call sites are coupled to. Do **not** add a `CRITICAL:` prefix: the reviewer prompt already carries two (`agentPromptBuilder.ts:1297` and `BATCH_EXECUTION_RULES`), and stacking a third is the documented *constraint poisoning* regime where added emphasis degrades adjacent task performance. The single `MUST NOT` inside the XML is the intended emphasis budget.
+**Edge Cases.** `''` when disabled is stripped by the existing `.filter(Boolean)` — no stray blank line, so `minimal-prompt.test.js`'s no-`\n\n\n` assertion holds. Single-paragraph prose with no internal newlines, matching `SUPPRESS_WALKTHROUGH_DIRECTIVE`; no leading or trailing newline in the template literal. Do not touch `DEFAULT_REVIEWER_BASE_INSTRUCTIONS` (lines 1262-1297) at all — root cause #1 is addressed by the new block, not by editing that literal, which two `String.replace` call sites are coupled to. Do **not** add a `CRITICAL:` prefix: the reviewer prompt already carries two (`agentPromptBuilder.ts:1297` and `BATCH_EXECUTION_RULES`), and `SUPPRESS_WALKTHROUGH` needs none to work.
 
 #### [MODIFY] [agentConfig.ts](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/services/agentConfig.ts)
 
@@ -271,12 +261,11 @@ In `ROLE_ADDONS.reviewer` (line 168), after the `reviewerCompactPlanUpdate` entr
 
 **Logic.** Four tests — the *off* and *override* cases are the ones that actually discriminate; a default-on-only test passes even if the whole config chain is mis-wired.
 
-**Implementation.** Add to the reviewer suite. Sentinel string: `<file_modification_policy>`.
-1. Default (no options) → prompt includes `<file_modification_policy>`.
+**Implementation.** Add to the reviewer suite. Sentinel string: `NO SEPARATE REVIEW ARTIFACTS`.
+1. Default (no options) → prompt includes `NO SEPARATE REVIEW ARTIFACTS`.
 2. `noSeparateReviewArtifactsEnabled: false` → prompt does **not** include it.
 3. `defaultPromptOverrides: { reviewer: { mode: 'replace', text: '…' } }` → prompt **still** includes it (the override-survivability guarantee).
-4. Prompt includes the in-place-edit carve-out (`it is the completion signal that clears the card's activity light`) so the completion handshake can't be phrased away by a later edit.
-5. **Tail-anchor position guard:** `prompt.indexOf('<file_modification_policy>') > prompt.indexOf('For each plan:')` **and** `prompt.indexOf('<file_modification_policy>') < prompt.indexOf('PLANS TO PROCESS')`. Without this, a future refactor can silently relocate the block into the mid-prompt dead zone the placement rationale exists to avoid — and no other assertion would notice.
+4. **Co-existence guard:** the same prompt contains **both** `NO SEPARATE REVIEW ARTIFACTS` and `COMPLETION REPORT:`. This is the assertion that matters — it pins the invariant the whole design rests on (prohibition and plan-file permission present together, exactly as the coder roles ship), and it fails loudly if a future edit drops `ensureCompletionDirective` from the reviewer branch.
 
 #### [MODIFY] [autoban-reviewer-prompt-regression.test.js](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/test/autoban-reviewer-prompt-regression.test.js)
 
@@ -294,16 +283,12 @@ In `ROLE_ADDONS.reviewer` (line 168), after the `reviewerCompactPlanUpdate` entr
         'Expected the no-separate-review-artifacts directive constant to exist.'
     );
     assert.ok(
-        builderSource.includes('<file_modification_policy>'),
-        'Expected the reviewer prompt to carry the XML-delimited file modification policy.'
+        builderSource.includes('NO SEPARATE REVIEW ARTIFACTS: Do NOT create separate review artifact files'),
+        'Expected the reviewer prompt to forbid creating separate review artifact files.'
     );
     assert.ok(
-        builderSource.includes('You MUST NOT create any new file for this review'),
-        'Expected the reviewer prompt to forbid creating new review artifact files.'
-    );
-    assert.ok(
-        builderSource.includes('it is the completion signal that clears the card'),
-        'Expected the policy to explicitly permit the in-place plan-file edit.'
+        builderSource.includes('per the COMPLETION REPORT step'),
+        'Expected the directive to redirect findings to the existing plan file via the COMPLETION REPORT step.'
     );
 ```
 
@@ -337,22 +322,25 @@ Per the dispatch directives active for this plan, automated tests and compilatio
 
 ### Manual Verification
 1. Prompts tab → Reviewer: the **No Separate Review Artifacts** checkbox is present and **checked** on an existing install that has never seen this key.
-2. The reviewer prompt preview contains the `<file_modification_policy>` block, including the in-place-edit carve-out, and it appears as the **last block before `PLANS TO PROCESS:`**.
+2. The reviewer prompt preview ends with the `NO SEPARATE REVIEW ARTIFACTS:` paragraph, and the same preview still contains the `COMPLETION REPORT:` directive — same layout as a coder preview with Suppress Walkthrough ticked.
 3. Untick the checkbox → the block disappears from the preview. Reload the window → it stays unticked (this is the round-trip that catches a key-name mismatch and the `=== true` parser trap).
 4. Set a `replace`-mode reviewer prompt override → the block is **still** present in the preview.
 5. Dispatch a real reviewer pass: the reviewer edits the target plan file in place, the card's activity light clears, and no new `.md` file appears in `.switchboard/plans/` or `.switchboard/features/` — and no new card appears on the board.
 6. Re-export agent skills → `.agents/skills/switchboard-reviewer.md` contains the `### No Separate Review Artifacts` section.
 
 ## Resolved Assumptions
-The one external uncertainty in this plan — the reliable phrasing and placement of a prohibition directive that must coexist with a nearly identical permission — was researched and **closed on 2026-07-30**. This section is authoritative: do not re-open it, and do not commission further research on it.
+The one open question in this plan — how to word and place a prohibition directive that must coexist with a nearly identical permission — is **closed, and it was closed by in-repo evidence, not by theory.** This section is authoritative: do not re-open it, do not commission research on it, and do not redesign the directive shape.
 
-Findings applied to the directive above:
-1. **Pure negative phrasing is unreliable; positive-only phrasing leaks.** Bare prohibitions suffer *negation decay* (the forbidden concept activates, the negation operator under-weights); positive-only redirection is read as additive, so the agent does the edit *and* writes the artifact. Hybrid framing — positive destination + explicit negative boundary + literal filenames — is the measured optimum (~40% fewer violations than bare-negative). **Applied:** `<required_action>` precedes `<forbidden_action>`, with the specific filenames enumerated.
-2. **An entangled permit/forbid pair over one object class is the documented trigger for *collateral suppression*** — the model over-generalises "no new .md files" into "don't touch .md files" and skips the required plan-file edit, which here would break completion detection. XML enclosure of the two rules is the measured mitigation and matches Anthropic's published guidance. **Applied:** the two rules sit in separate XML elements, and the prohibition is keyed to the *operation* (create) not the *extension*.
-3. **Position dominates in prompts of this size.** Mid-prompt constraints in a ~1.5–4k-token, ~8-block prompt lose substantial adherence; vendor guidance places hard constraints at the final lines before execution. **Applied:** tail anchor, with a position-guard test. Dual anchoring was considered and rejected on drift risk — rationale recorded inline at the placement note.
-4. **A brief, declarative, system-oriented reason improves compliance; a verbose or navigable one invites workarounds.** A reasoning model given the specific watched directories will reason its way to an unwatched directory. **Applied:** the reason states the mechanism without enumerating paths; the prohibition itself says "anywhere in the repository". The verified path list stays in this plan's **Clarification** section, for humans, not in the agent-facing text.
-5. **Emphasis markers work only sparingly; stacking them causes *constraint poisoning*.** The reviewer prompt already carries two `CRITICAL:` markers. **Applied:** no third `CRITICAL:`; one `MUST NOT` is the whole emphasis budget. Threat-style language ("you will be penalised") is cargo cult and is not used.
-6. **Cross-model note.** Gemini is the family most vulnerable to mid-prompt constraint drops, and Google's guidance is the most explicit about tail placement — so the tail anchor is the right call for a multi-host product, not just a Claude optimisation. XML delimitation is documented as cross-model stable.
+**The answer is `SUPPRESS_WALKTHROUGH_DIRECTIVE` (`agentPromptBuilder.ts:756`).** It suppresses an agent-authored artifact for the coder/lead/intern roles while `CODING_COMPLETION_REPORT_DIRECTIVE` (line 769) simultaneously requires those same roles to append a report to the plan file. That is the same permit/forbid pair over the same object class, it has been shipping, and the completion report still lands — the coder roles' activity lights clear, which is directly observable on the board. A shipped pattern in this codebase, under these hosts, on these models, outranks any external finding about how such directives *ought* to be phrased.
+
+Concretely inherited from it, and not to be re-derived:
+1. **Shape:** `ALL_CAPS LABEL:` + plain prose, single paragraph, bare negative, literal filenames, `Omit the … step entirely.` No XML, no structured tags — the rest of this file is prose and consistency is worth more here than novelty.
+2. **Placement:** last element of `promptParts`, after `PLANS TO PROCESS` — where all four code roles already put `suppressWalkthroughBlock`.
+3. **One canonical permission.** The prohibition does **not** restate the plan-file carve-out; it cross-references `COMPLETION REPORT`, which the reviewer branch already receives via `ensureCompletionDirective` (line 1345). Restating it would create a second copy of the completion contract that can drift from the real one — a hazard this file explicitly documents at lines 758-768.
+4. **Emphasis budget:** no `CRITICAL:` prefix. `SUPPRESS_WALKTHROUGH` needs none, and the reviewer prompt already carries two.
+5. **Reason clause:** one short, system-oriented sentence, following `CODING_COMPLETION_REPORT_DIRECTIVE`'s precedent — and deliberately *not* enumerating the watched directories, so the text can't be read as a map of which directories are unwatched.
+
+**Process note for future passes on this plan.** An earlier revision of this file specified an XML-structured `<file_modification_policy>` block with a mid-prompt anchor, justified by external prompt-engineering research. That was superseded: the question was answerable from the repository, and the repository's answer was both simpler and already validated in production. The plan-authoring rule this violated is on the record — repo questions get answered by reading the repo. No research hand-off is needed for this plan.
 
 ## Follow-Up (Out of Scope — Recommend a Companion Plan)
 A prompt directive is advisory. It reduces stray review artifacts; it cannot guarantee their absence, and it reaches only the built-in `reviewer` role. Every other writer — coder/lead/intern/tester/analyst dispatches, custom agents, human-driven review sessions, fleet/orchestrator agents — can still drop an `.md` into `.switchboard/plans/` and mint a card.

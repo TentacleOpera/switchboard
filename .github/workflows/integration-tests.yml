@@ -22,8 +22,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Protocol catalog drift check
-        run: node scripts/generate-protocol-catalog.js
+      - name: Protocol catalog + verb allowlist drift check
+        run: npm run catalog:check
 
       - name: Compile test outputs
         run: npm run compile-tests

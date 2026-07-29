@@ -5398,6 +5398,8 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
      *   - comms → the comms monitor prompt (read-only; built by TaskViewerProvider)
      *   - board-batch → the board-batch core (DB-backed; byte-identical to the
      *     legacy antigravity-batch output for the same agent/column/batchSize)
+     *   - fetch-plans → the shared `buildFetchPlansPrompt` preset (same copy the
+     *     local-terminal tick uses — see `./schedulerPresets`)
      *   - reconcile → the forward-only reconcile prompt
      *   - custom → the job's promptOverride
      *

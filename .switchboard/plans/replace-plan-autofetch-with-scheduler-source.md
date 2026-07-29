@@ -532,3 +532,105 @@ ready-to-run research prompt was supplied in chat.
 
 Implemented removal of PlanAutoFetchService and added the dedicated "fetch-plans" Scheduler source. Removed `PlanAutoFetchService.ts`, UI modal elements in `project.html`/`project.js`, provider handlers in `PlanningPanelProvider.ts`/`extension.ts`, and settings in `package.json`. Added shared prompt builder `src/services/schedulerPresets.ts`, updated `ScheduledJob.source` in `GlobalIntegrationConfigService.ts`, wired UI inputs in `kanban.html`, and connected the preset prompt to both `KanbanProvider.ts` (COPY PROMPT) and `TaskViewerProvider.ts` (local terminal tick). Regenerated protocol catalog and verb allowlist clean via `npm run catalog:generate`.
 
+## Review Pass — 2026-07-30
+
+Independent reviewer pass against this plan as source of truth. Verification was
+**executed** (no skip-tests / skip-compilation directive was present in the dispatch).
+
+### Findings
+
+| Sev | Location | Finding |
+| :-- | :-- | :-- |
+| CRITICAL | `src/services/schedulerPresets.ts:35` (pre-fix) | The summary path was emitted as the **literal** string `.switchboard/scheduler-${JOB_ID}-latest.md` — `\${JOB_ID}` was escaped inside the TS template literal, so no job id was ever interpolated. `TaskViewerProvider._startSchedulerOutputCapture` (`:22334`) watches `.switchboard/scheduler-<job.id>-latest.md`, so **no `fetch-plans` run could ever surface output in the panel**. Directly violates Part B step 8 / Verified Fact 8. Compounded by the trailing escape hatch *"(or output it directly)"*, which invited the agent to skip the file entirely. |
+| MAJOR | `.github/workflows/integration-tests.yml:25–26` | Gate-wiring hole. `npm run catalog:check` (defined `package.json:796`) is named by this plan's `### Automated Tests` as a CI guard, but CI invoked only its first half (`node scripts/generate-protocol-catalog.js`). The `generate-verb-allowlist.js` byte-identity assertion — the guard over the artifact Part A step 7 had to regenerate — was **not invoked by CI under any name**. (Set-equality drift was incidentally covered by `parity:check` at `:35`; structural/ordering drift was not.) |
+| MAJOR | `src/test/autoban-*.test.js` | Gate-wiring hole. The plan's *"Existing suites that must stay green"* names all four `autoban-*.test.js` files. They are referenced by **zero** npm scripts and **zero** CI steps — orphan files. Two of the four (`autoban-controls-regression`, `autoban-state-regression`) are **red at HEAD**, confirmed pre-existing by re-running them against `4d335c3^`. Not fixed here — see Deferred. |
+| MINOR | `GlobalIntegrationConfigService.ts:37` | Part B step 1 explicitly required updating this doc comment's source list; it still read *"board-batch / reconcile / custom are others"*. |
+| MINOR | `kanban.html:10112` | Part B step 2 explicitly required updating the scheduler-panel sources comment; it still read *"board-batch / reconcile / custom are the others"*. |
+| MINOR | `KanbanProvider.ts:5396–5401` | `_buildSchedulerPrompt`'s dispatch docblock enumerated four sources while the body dispatched five — `fetch-plans` undocumented at its own dispatch site. |
+| MINOR | `schedulerPresets.ts:15` | The Security section requires user-configured values be single-quoted in emitted commands. `git for-each-ref` quoted correctly; `git fetch ${remote} --prune` did not. |
+| NIT | `src/webview/project.html:1512` | The Auto-Fetch modal deletion removed 7 `<div>` opens but only 6 closes, leaving an orphan `</div>`. **No behavioural impact** — it lands on a *pre-existing* unclosed `<div class="container">` (opened `:1233`, previously auto-closed at `</body>`), and the two elements it displaces are `position: fixed` with `.container` establishing no containing block. Net effect: the file is now div-balanced where it previously was not. |
+
+### Fixes applied
+
+1. **`src/services/schedulerPresets.ts`** — signature widened to `{ id?: string; sourceConfig?: … }`; the real `job.id` is now interpolated into the summary path (both call sites already pass the whole `job`). Removed the *"(or output it directly)"* escape hatch and replaced it with an explicit *"write that file even when nothing was copied; it is the only channel by which this job's result reaches the Switchboard panel."* Single-quoted `remote` in `git fetch`, and the ref/path arguments in `git ls-tree` / `git show`. Added `never stage anything` to the constraint recap. Added a docblock recording that `job.id` is load-bearing and naming the watcher it must match.
+2. **`.github/workflows/integration-tests.yml`** — the drift-check step now runs `npm run catalog:check` (both generators) instead of the catalog generator alone, and is renamed accordingly. The check is green as of this pass, so this wires a passing gate, not a red one.
+3. **`GlobalIntegrationConfigService.ts`**, **`kanban.html`**, **`KanbanProvider.ts`** — the three stale source-list doc comments now include `fetch-plans`.
+4. **`src/webview/project.html`** — the orphan `</div>` annotated as the `.container` close, recording that it is intentional and why the elements after it are unaffected.
+
+### Files changed in this review pass
+
+`src/services/schedulerPresets.ts`, `src/services/GlobalIntegrationConfigService.ts`,
+`src/services/KanbanProvider.ts`, `src/webview/kanban.html`, `src/webview/project.html`,
+`.github/workflows/integration-tests.yml`.
+
+### Validation results (executed)
+
+| Check | Result |
+| :-- | :-- |
+| `npm run compile` (webpack) | ✅ compiled, 0 errors (3 pre-existing optional-dep warnings: `bufferutil`, `utf-8-validate`, `canvas`) |
+| `npm run compile-tests` (`tsc -p tsconfig.test.json`) | ✅ clean, exit 0 |
+| `npm run catalog:check` | ✅ `[catalog] OK — no drift (599 arms, 512 verbs)` / `[allowlist] OK` |
+| `npm run parity:check` | ✅ allowlist ≡ catalog, generic dispatchers in place |
+| `npm run test:contract:drag-guard` | ✅ passed |
+| `autoban-no-valid-tickets-regression` | ✅ passed |
+| `autoban-reviewer-prompt-regression` | ✅ passed |
+| `autoban-controls-regression` | ❌ **pre-existing red** — verified identical failure at `4d335c3^` |
+| `autoban-state-regression` | ❌ **pre-existing red** — verified identical failure at `4d335c3^` |
+| `grep -rin "planAutoFetch\|auto-fetch\|autofetch" src/ package.json` | ✅ zero matches |
+| `grep -c planAutoFetch protocol-catalog.json` | ✅ 0 (was 10) |
+| `src/services/PlanAutoFetchService.ts` exists | ✅ removed |
+| `project.html` div balance (stack scan) | ✅ 0 unclosed, 0 orphan (parent had 1 unclosed) |
+| `buildFetchPlansPrompt` behavioural assertions | ✅ no literal `${JOB_ID}`; emits `.switchboard/scheduler-abc-123-latest.md` for `id:'abc-123'`; defaults `origin` / `*` applied on empty `sourceConfig`; `remote`/`branchGlob` overrides honoured; **none** of `git checkout`/`switch`/`merge`/`reset`/`pull` appear as instructions (only inside the negated constraint recap) |
+
+### Deferred
+
+- **Wiring the four `autoban-*.test.js` into CI.** Two are red at HEAD for causes predating
+  this plan. `integration-tests.yml:67–76` states the repo's own convention verbatim —
+  *"a permanently-red gate is worse than no gate… Wire them in the same change that greens
+  them."* Greening them is outside this plan's scope; the hole is recorded above.
+- **A unit test over `buildFetchPlansPrompt`.** The plan's `### Automated Tests` section is
+  authoritative (*"No new automated test is added"*) and phrases the forbidden-verb assertion
+  as optional. The repo also has no harness that imports `.ts` from a plain-node `src/test/`
+  script. The assertions were instead executed ad hoc in this pass (row above) and pass.
+- **Part A step 8 (changelog).** The repo has **no** `CHANGELOG.md` (nor any changelog file or
+  README changelog section) — there is no target to edit. Step is N/A, not skipped.
+
+### Remaining risks
+
+- **Prompt correctness is unverified end-to-end.** `buildFetchPlansPrompt` was asserted as a
+  string; no live `fetch-plans` tick was run against a real remote. The plan's runtime
+  checks — copied file appears untracked, nothing staged, `HEAD` unchanged, idempotent
+  re-run skips — still require a VSIX install and a manual pass.
+- **`Uncertain Assumptions` 2 and 3 remain unconfirmed.** The preset assumes
+  `git show <ref>:<path> >` touches only the working tree (it does not write the index) and
+  that `for-each-ref` globs match across `/` for nested branch names like `claude/feat/x`.
+  The former is high-confidence; the latter is not — if `*` does not cross `/`, a user
+  entering `claude/*` will silently scan nothing. The summary file will show
+  "0 branches scanned", which is the detectable signature.
+- **The preset instructs an agent to run git in the live working tree.** Mitigated by the
+  forbidden-verb recap (verified absent as instructions), not enforced by code.
+- **Pending sibling plans 3 and 4** still overlap `TaskViewerProvider._schedulerTick`'s
+  non-comms branch and the `kanban.html` scheduler panel. Step 9's additive shape is
+  preserved, so plan 3 can generalise it without a revert.
+- **Orphan DB row** `planAutoFetch.enabled` in the `config` table remains by design
+  (migration note); nothing reads it.
+
+## Review Completion Report
+
+Reviewed the implementation against this plan and fixed the defects found. The one material
+bug was in `src/services/schedulerPresets.ts`: the summary-file path was emitted as a literal
+`${JOB_ID}` placeholder rather than the job's id, so no `fetch-plans` run could ever have
+surfaced output through `TaskViewerProvider._startSchedulerOutputCapture` — the exact channel
+Part B step 8 and Verified Fact 8 exist to preserve; the builder now takes `job.id` and
+interpolates it, and the "(or output it directly)" escape hatch is gone. Also wired
+`npm run catalog:check` into CI (only half of it ran before, leaving the regenerated verb
+allowlist ungated), refreshed three stale source-list doc comments the plan explicitly
+required, tightened shell quoting in the preset, and annotated the orphan `</div>` left by
+the modal deletion in `project.html`. Files changed: `schedulerPresets.ts`,
+`GlobalIntegrationConfigService.ts`, `KanbanProvider.ts`, `kanban.html`, `project.html`,
+`.github/workflows/integration-tests.yml`. Verification: `compile`, `compile-tests`,
+`catalog:check`, `parity:check`, `test:contract:drag-guard` and two of four `autoban-*` tests
+all pass — the two red `autoban-*` tests were confirmed pre-existing by re-running them
+against `4d335c3^`; the four `autoban-*` files are wired into neither `package.json` nor CI,
+which is reported above and left for the change that greens them.
+

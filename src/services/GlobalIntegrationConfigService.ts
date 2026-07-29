@@ -34,7 +34,8 @@ export interface GlobalConfig {
     /**
      * Scheduler settings — the terminal-agnostic successor to `mcpMonitor`.
      * Holds an ordered list of `ScheduledJob`s. The comms monitor is one job
-     * (`source: 'comms'`); board-batch / reconcile / custom are others. See
+     * (`source: 'comms'`); board-batch / fetch-plans / reconcile / custom are
+     * others. See
      * `SchedulerConfig` / `ScheduledJob` below for the shape.
      */
     scheduler?: {
