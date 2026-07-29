@@ -3405,10 +3405,9 @@ Start by checking which documents exist, then present the menu.`;
                     this.postMessageToWebview({ type: 'createPlansPasteBackResult', ok: false, error: 'Plan is too large (>200 KB).' });
                     break;
                 }
-                // Pin to the board's active project when one is set; on any failure
-                // to read the filter the plan lands unassigned (never invent a project).
+                const pbRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || workspaceRoot;
                 let cpProject: string | null = null;
-                try { cpProject = this._kanbanProvider?.getProjectFilter() || null; } catch { cpProject = null; }
+                try { cpProject = (await this._kanbanProvider?.resolveAuthoringProject(pbRoot, msg.initiatorProject)) || null; } catch { cpProject = null; }
                 try {
                     await this._seams().commands.executeCommand(
                         'switchboard.importPlanFromClipboard',

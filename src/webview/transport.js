@@ -61,10 +61,17 @@
     let reconnectTimer;
     let intentionallyClosed = false;
 
+    let isReconnecting = false;
+
     function wsUrl() {
         const loc = window.location;
         const protocol = loc.protocol === 'https:' ? 'wss:' : 'ws:';
-        return `${protocol}//${loc.host}/ws`;
+        let url = `${protocol}//${loc.host}/ws`;
+        const originatorId = window.__sbClientOriginatorId;
+        if (originatorId) {
+            url += `?originatorId=${encodeURIComponent(originatorId)}`;
+        }
+        return url;
     }
 
     function connectWs() {
@@ -79,6 +86,14 @@
 
         ws.onopen = function () {
             console.log('[transport] WebSocket connected');
+            if (isReconnecting) {
+                try {
+                    window.dispatchEvent(new CustomEvent('sbTransportReconnected'));
+                } catch (e) {
+                    console.error('[transport] dispatch sbTransportReconnected failed:', e);
+                }
+            }
+            isReconnecting = true;
             reconnectDelay = 500;
         };
 
@@ -146,6 +161,27 @@
         openDesignPanel: 'design',
     };
 
+    const STATUS_MESSAGE_PANELS = { kanban: true };
+
+    function showTransportError(text) {
+        let host = document.getElementById('sb-transport-error');
+        if (!host) {
+            host = document.createElement('div');
+            host.id = 'sb-transport-error';
+            host.style.cssText =
+                'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);' +
+                'z-index:2147483647;max-width:80vw;padding:10px 16px;border-radius:4px;' +
+                'background:#2b1416;color:#ff6b6b;border:1px solid #ff6b6b;' +
+                'font:12px/1.4 var(--vscode-font-family,system-ui,sans-serif);' +
+                'white-space:pre-wrap;pointer-events:none;';
+            (document.body || document.documentElement).appendChild(host);
+        }
+        host.textContent = text;
+        host.style.display = 'block';
+        if (host._hideTimer) { clearTimeout(host._hideTimer); }
+        host._hideTimer = setTimeout(function () { host.style.display = 'none'; }, 8000);
+    }
+
     const vscodeShim = {
         postMessage: function (message) {
             if (!message || typeof message.type !== 'string') {
@@ -178,6 +214,16 @@
                         navigator.clipboard.writeText(result.prompt).catch(function (err) {
                             console.warn('[transport] Clipboard write failed:', err);
                         });
+                    }
+                    if (result && typeof result === 'object' && result.success === false) {
+                        const text = result.error || ('Action failed: ' + verb);
+                        console.warn('[transport] verb failed:', verb, text);
+                        if (STATUS_MESSAGE_PANELS[panel]) {
+                            dispatchMessage({ type: 'showStatusMessage', message: text, isError: true });
+                        } else {
+                            showTransportError(text);
+                        }
+                        return;
                     }
                     // Re-dispatch the in-body response as a MessageEvent so request/response
                     // verbs (fetchKanbanPlans -> kanbanPlansReady, updateWorkspaceSelection, etc.)
@@ -305,6 +351,24 @@
                     disableInputsAndHint();
                 }
                 setTimeout(disableInputsAndHint, 500);
+            }
+
+            if (caps.featureManagement === false) {
+                document.body.classList.add('host-feature-management-false');
+                const disableFeatureControls = () => {
+                    const btn = document.getElementById('btn-feature-action');
+                    if (btn) {
+                        btn.disabled = true;
+                        btn.setAttribute('data-tooltip',
+                            'Feature management is not available in this host — open this workspace in VS Code.');
+                    }
+                };
+                if (document.readyState === 'loading') {
+                    document.addEventListener('DOMContentLoaded', disableFeatureControls);
+                } else {
+                    disableFeatureControls();
+                }
+                setTimeout(disableFeatureControls, 500);
             }
 
             // Per-provider integration configured gating & hints

@@ -496,7 +496,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _pidCache = new WeakMap<vscode.Terminal, { pid: number; timestamp: number }>();
     private readonly PID_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
     private _terminalOpenDisposable?: vscode.Disposable;
-    private _cachedDefaultPromptOverrides: Partial<Record<string, DefaultPromptOverride>> = {};
+    private _cachedDefaultPromptOverrides = new Map<string, Partial<Record<string, DefaultPromptOverride>>>();
 
     // Hard workspace ownership scoping
     private _workspaceId: string | null = null;
@@ -847,11 +847,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     /** Rebuild the cached prompt overrides from the current scope (plan 05).
      *  Public so KanbanProvider can call it on override toggle / project-filter change. */
-    public async refreshPromptOverridesCache(): Promise<void> {
+    public async refreshPromptOverridesCache(project?: string | null): Promise<void> {
         const workspaceRoot = this._getWorkspaceRoot();
         if (workspaceRoot) {
             try {
-                this._cachedDefaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
+                if (project === undefined) {
+                    this._cachedDefaultPromptOverrides.clear();
+                    const key = ' none';
+                    const overrides = await this._getDefaultPromptOverrides(workspaceRoot);
+                    this._cachedDefaultPromptOverrides.set(key, overrides);
+                } else {
+                    const key = project ?? ' none';
+                    const overrides = await this._getDefaultPromptOverrides(workspaceRoot, project);
+                    this._cachedDefaultPromptOverrides.set(key, overrides);
+                }
             } catch {
                 // Silently ignore — cache will be refreshed next time the Prompts Tab is opened
             }
@@ -865,12 +874,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     /** Scope-aware role config read for TaskViewerProvider's own prompt-assembly paths
      *  (plan 05). Delegates to KanbanProvider's scoped resolver; falls back to the
      *  existing globalState read when _kanbanProvider is unset (sidebar-only flows). */
-    private _readRoleConfigScoped(role: string): any {
-        return this._kanbanProvider?.getScopedRoleConfig(role)
+    private _readRoleConfigScoped(role: string, initiatorProject?: string | null): any {
+        return this._kanbanProvider?.getScopedRoleConfig(role, initiatorProject)
             ?? this.getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
     }
 
-    public async exportPromptSettings(): Promise<boolean> {
+    public async exportPromptSettings(initiatorProject?: string | null): Promise<boolean> {
         const workspaceRoot = this._getWorkspaceRoot();
         if (!workspaceRoot) {
             this._seams().ui.showWarningMessage('No workspace selected.');
@@ -916,10 +925,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         if (val !== undefined) { workspaceRoleConfigs[role] = val; }
                     }
                     // Project-scoped: only for the active project when project override is ON.
-                    const activeProject = db.getConfigSync('kanban.activeProjectFilter');
-                    const projectOverrideOn = db.getConfigJsonSync<boolean>('kanban.projectOverrideEnabled', false);
-                    if (projectOverrideOn && activeProject && activeProject !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
-                        const allProjectConfigs = await db.getAllProjectConfigJson(activeProject);
+                    const projectTier = this._kanbanProvider?._projectTier(initiatorProject);
+                    if (projectTier) {
+                        const allProjectConfigs = await db.getAllProjectConfigJson(projectTier);
                         const projConfigs: Record<string, unknown> = {};
                         for (const [k, v] of Object.entries(allProjectConfigs)) {
                             if (k.startsWith('switchboard.prompts.roleConfig_')) {
@@ -927,7 +935,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             }
                         }
                         if (Object.keys(projConfigs).length > 0) {
-                            projectRoleConfigs.push({ project: activeProject, configs: projConfigs });
+                            projectRoleConfigs.push({ project: projectTier, configs: projConfigs });
                         }
                     }
                 }
@@ -1836,17 +1844,29 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 };
                 return {
                     getBoardHtml: async () => {
-                        const caps = { ...baseHostCapabilities, integrationsConfigured: await computeIntegrationsConfigured() };
+                        const caps = {
+                            ...baseHostCapabilities,
+                            featureManagement: this._localApiServer?.hasFeatureManagement() ?? false,
+                            integrationsConfigured: await computeIntegrationsConfigured()
+                        };
                         return sharedGetBoardHtml(repoRoot, wsRoot, caps, getTheme());
                     },
                     getProjectHtml: async () => {
-                        const caps = { ...baseHostCapabilities, integrationsConfigured: await computeIntegrationsConfigured() };
+                        const caps = {
+                            ...baseHostCapabilities,
+                            featureManagement: this._localApiServer?.hasFeatureManagement() ?? false,
+                            integrationsConfigured: await computeIntegrationsConfigured()
+                        };
                         return sharedGetProjectHtml(repoRoot, wsRoot, caps, getTheme());
                     },
                     getShellHtml: async () => sharedGetShellHtml(repoRoot, getTheme()),
                     getPanelsManifest: () => sharedGetPanelsManifest({ design: true, setup: true, planning: true }),
                     getPanelHtml: async (id: string) => {
-                        const caps = { ...baseHostCapabilities, integrationsConfigured: await computeIntegrationsConfigured() };
+                        const caps = {
+                            ...baseHostCapabilities,
+                            featureManagement: this._localApiServer?.hasFeatureManagement() ?? false,
+                            integrationsConfigured: await computeIntegrationsConfigured()
+                        };
                         const result = sharedGetPanelHtmlById(id, repoRoot, wsRoot, caps, getTheme());
                         return result || null;
                     },
@@ -5477,10 +5497,12 @@ Each plan file must include:
     }
 
     public async handleGetDefaultPromptOverrides(
-        workspaceRoot?: string
+        workspaceRoot?: string,
+        initiatorProject?: string | null
     ): Promise<Partial<Record<string, DefaultPromptOverride>>> {
-        const overrides = await this._getDefaultPromptOverrides(workspaceRoot);
-        this._cachedDefaultPromptOverrides = overrides;
+        const key = initiatorProject ?? ' none';
+        const overrides = await this._getDefaultPromptOverrides(workspaceRoot, initiatorProject);
+        this._cachedDefaultPromptOverrides.set(key, overrides);
         return overrides;
     }
 
@@ -6658,7 +6680,8 @@ Each plan file must include:
         workspaceRoot: string,
         issueId: string,
         includeSubtasks: boolean = true,
-        skipSync: boolean = false
+        skipSync: boolean = false,
+        initiatorProject?: string | null
     ): Promise<{ success: boolean; planFile?: string; importedPlanFiles: string[]; error?: string; message?: string }> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) {
@@ -6693,7 +6716,7 @@ Each plan file must include:
             }
         }
 
-        const projectFilter = this._kanbanProvider?.getProjectFilter() ?? null;
+        const projectFilter = await this._kanbanProvider?.resolveAuthoringProject(effectiveRoot, initiatorProject) ?? null;
 
         const importedPlanFiles: string[] = [];
         const rootPlanFile = await this._createImportedLinearPlan(
@@ -6728,7 +6751,8 @@ Each plan file must include:
         workspaceRoot: string,
         taskId: string,
         includeSubtasks: boolean = true,
-        skipSync: boolean = false
+        skipSync: boolean = false,
+        initiatorProject?: string | null
     ): Promise<{ success: boolean; planFile?: string; importedPlanFiles: string[]; error?: string; message?: string }> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) {
@@ -6759,7 +6783,7 @@ Each plan file must include:
             const task = details.task;
             const subtasks = includeSubtasks && details.subtasks ? details.subtasks : [];
 
-            const projectFilter = this._kanbanProvider?.getProjectFilter() ?? null;
+            const projectFilter = await this._kanbanProvider?.resolveAuthoringProject(effectiveRoot, initiatorProject) ?? null;
 
             // Build plan content for the parent task (include fetched comments)
             const createdAt = new Date().toISOString();
@@ -8631,7 +8655,7 @@ Each plan file must include:
      * kickoff prompt, and arms the session. The wake tick (subtask 5) reuses
      * the terminal-launch portion for delivery-failure recovery.
      */
-    public async startOrchestratorFromKanban(workspaceRoot?: string): Promise<void> {
+    public async startOrchestratorFromKanban(workspaceRoot?: string, initiatorProject?: string | null): Promise<void> {
         const root = this._resolveWorkspaceRoot(workspaceRoot);
         if (!root) {
             this._seams().ui.showErrorMessage('No workspace folder found. Cannot start the orchestrator.');
@@ -8766,10 +8790,7 @@ Each plan file must include:
         const personaPath = path.join(root, '.agents', 'skills', 'switchboard-orchestrator', 'SKILL.md');
         let projectFilter = '';
         try {
-            const db = await this._getKanbanDb(root);
-            if (db && await db.ensureReady()) {
-                projectFilter = (await db.getConfig('kanban.activeProjectFilter')) || '';
-            }
+            projectFilter = (await this._kanbanProvider?.resolveAuthoringProject(root, initiatorProject)) || '';
         } catch { /* best-effort */ }
         let kickoffPrompt: string;
         try {
@@ -9502,7 +9523,8 @@ Each plan file must include:
 
 
     private async _getDefaultPromptOverrides(
-        workspaceRoot?: string
+        workspaceRoot?: string,
+        initiatorProject?: string | null
     ): Promise<Partial<Record<string, DefaultPromptOverride>>> {
         const globalValue = this._context.globalState.get<any>('switchboard.agents.promptOverrides');
         let overrides: Partial<Record<string, DefaultPromptOverride>> = {};
@@ -9522,7 +9544,7 @@ Each plan file must include:
         // Merge with roleConfigs from globalState
         const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher'];
         for (const role of roles) {
-            const config: any = this._readRoleConfigScoped(role);
+            const config: any = this._readRoleConfigScoped(role, initiatorProject);
             if (config && config.prompt?.trim()) {
                 overrides[role] = {
                     text: config.prompt.trim(),
@@ -9980,7 +10002,8 @@ Each plan file must include:
             await this.updateState((state: any) => {
                 state.defaultPromptOverrides = data.overrides;
             });
-            this._cachedDefaultPromptOverrides = parseDefaultPromptOverrides(data.overrides);
+            const key = data.initiatorProject ?? ' none';
+            this._cachedDefaultPromptOverrides.set(key, parseDefaultPromptOverrides(data.overrides));
         }
         this._postSharedWebviewMessage({ type: 'saveDefaultPromptOverridesResult', success: true });
     }
@@ -11993,9 +12016,7 @@ Each plan file must include:
                             });
                             return { success: false, message: 'No entries to process.' };
                         }
-                        const db = KanbanDatabase.forWorkspace(workspaceRoot);
-                        const activeProject = await db.getConfig('kanban.activeProjectFilter');
-                        const projectName = (activeProject && activeProject !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) ? activeProject : undefined;
+                        const projectName = await this._kanbanProvider?.resolveAuthoringProject(workspaceRoot, data.initiatorProject);
                         const prompt = this._buildMemoPlannerPrompt(issues, workspaceRoot, projectName);
 
                         let sendSucceeded = action !== 'send';
@@ -18824,7 +18845,7 @@ What would you like to find?`;
         await this._seams().commands.executeCommand('vscode.open', vscode.Uri.file(planFileAbsolute));
     }
 
-    public async createDraftPlanTicket(): Promise<void> {
+    public async createDraftPlanTicket(initiatorProject?: string | null): Promise<void> {
         // No VS Code dialogue — create directly with default title.
         // The project panel opens in edit mode (autoEdit: true) so the user
         // can rename the plan immediately in the editor.
@@ -18832,12 +18853,8 @@ What would you like to find?`;
         const createdAt = new Date().toISOString();
         const idea = this._buildDraftPlanContent(title);
 
-        // Inherit the active kanban project filter, if any
-        let projectName: string | undefined;
-        const activeProject = this._kanbanProvider?.getProjectFilter();
-        if (activeProject && activeProject !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
-            projectName = activeProject;
-        }
+        const workspaceRoot = this._resolveWorkspaceRoot() || '';
+        const projectName = await this._kanbanProvider?.resolveAuthoringProject(workspaceRoot, initiatorProject);
 
         try {
             const { planFileAbsolute } = await this._createInitiatedPlan(title, idea, false, { createdAt, projectName });

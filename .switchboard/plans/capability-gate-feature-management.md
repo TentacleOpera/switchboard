@@ -227,3 +227,7 @@ So the derivation must be read at **request time** through the host's server han
 **Recommendation:** Complexity 4 → **Send to Coder.**
 
 **Stage Complete:** CREATED
+
+## Completion Summary
+Added derived late-bound `featureManagement` capability flag to `HostCapabilities`, `LocalApiServer.hasFeatureManagement()`, `TaskViewerProvider`, and `bootstrap.ts`. Disabled `#btn-feature-action` with explanatory tooltip in `transport.js` when `featureManagement` is false, and guarded `updateFeatureActionButton()` in `kanban.html`. Files modified: `src/services/headlessPanelHtml.ts`, `src/services/LocalApiServer.ts`, `src/services/TaskViewerProvider.ts`, `src/standalone/bootstrap.ts`, `src/webview/transport.js`, `src/webview/kanban.html`. No issues encountered.
+

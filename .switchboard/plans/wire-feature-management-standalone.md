@@ -249,3 +249,7 @@ No web research is required — nothing here is external to this repository.
 **Recommendation:** Complexity 6 → **Send to Coder.**
 
 **Stage Complete:** CREATED
+
+## Completion Summary
+Constructed `KanbanProvider` in `src/standalone/bootstrap.ts` and attached it to `TaskViewerProvider`. Wired all six feature management hooks on `LocalApiServerOptions` delegating to `KanbanProvider`. Routed UI verbs (`createFeature`, `promoteToFeature`, `addSubtaskToFeature`) through `kanbanProvider.handleServiceVerb` and added their input schemas in `src/services/verbSchemas.ts`. Files modified: `src/standalone/bootstrap.ts`, `src/services/verbSchemas.ts`. No issues encountered.
+

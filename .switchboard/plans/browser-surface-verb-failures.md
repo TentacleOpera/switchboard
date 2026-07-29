@@ -193,3 +193,7 @@ This is the smallest change in the feature set and the one with the widest blast
 **Recommendation:** Complexity 2 → **Send to Intern.**
 
 **Stage Complete:** CREATED
+
+## Completion Summary
+Implemented explicit failure handling in `src/webview/transport.js` for failed verb responses (`result.success === false`). Dispatches `showStatusMessage` on the `kanban` panel and renders a transport-owned fallback toast element (`#sb-transport-error`) on other panels. Files modified: `src/webview/transport.js`. No issues encountered.
+

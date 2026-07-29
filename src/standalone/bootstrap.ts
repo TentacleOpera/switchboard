@@ -36,6 +36,7 @@ import { NotionBrowseService } from '../services/NotionBrowseService';
 import { DesignPanelProvider } from '../services/DesignPanelProvider';
 import { SetupPanelProvider } from '../services/SetupPanelProvider';
 import { TaskViewerProvider } from '../services/TaskViewerProvider';
+import { KanbanProvider } from '../services/KanbanProvider';
 import { PlanningPanelProvider } from '../services/PlanningPanelProvider';
 import { ResearchImportService } from '../services/ResearchImportService';
 import { PlannerPromptWriter } from '../services/PlannerPromptWriter';
@@ -406,6 +407,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     };
     const getStandaloneCaps = async (): Promise<HostCapabilities> => ({
         ...baseStandaloneCapabilities,
+        featureManagement: server?.hasFeatureManagement() ?? false,
         integrationsConfigured: await computeIntegrationsConfigured(),
     });
 
@@ -526,6 +528,21 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // Setup arms delegate startup-command / integration-state reads to the
     // TaskViewer provider; wire the real (headless) instance.
     setupProvider.setTaskViewerProvider(taskViewerProvider);
+
+    // Kanban: constructed the same way as Design/Setup/TaskViewer/Planning — shim context,
+    // seams and broadcaster injected post-construction to pre-empt _initKanbanService's
+    // empty-root bail. Only the three feature verbs are routed to it (see kanbanVerb below);
+    // the existing hand-rolled arms are unchanged.
+    const kanbanProvider = new KanbanProvider(
+        { fsPath: repoRoot } as any,
+        headlessContext,
+        undefined,
+        undefined
+    );
+    (kanbanProvider as any)._hostSeams = headlessSeams;
+    (kanbanProvider as any)._broadcaster = headlessBroadcaster;
+    (kanbanProvider as any)._currentWorkspaceRoot = workspaceRoot;
+    taskViewerProvider.setKanbanProvider(kanbanProvider);
 
     // Planning: extensionUri, researchImportService, plannerPromptWriter,
     // getWorkspaceRoot, adapterFactories, context, stateStore. Memo verbs
@@ -833,6 +850,14 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     return { success: true, sessionId };
                 }
 
+                case 'createFeature':
+                case 'promoteToFeature':
+                case 'addSubtaskToFeature': {
+                    const result = await kanbanProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: root });
+                    await pushFullState();
+                    return result;
+                }
+
                 default:
                     return { success: false, error: `Verb '${verb}' not implemented in standalone mode` };
             }
@@ -987,6 +1012,48 @@ Each plan file must include:
             setupProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),
         taskViewerVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
             taskViewerProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),
+        createFeature: async (wsRoot: string, name: string, planIds: string[], description?: string) => {
+            try {
+                return await kanbanProvider.createFeatureFromPlanIds(wsRoot, name, planIds, description);
+            } catch (err) {
+                return { success: false, error: err instanceof Error ? err.message : String(err) };
+            }
+        },
+        assignToFeature: async (wsRoot: string, featureSessionId: string, subtaskSessionIds: string[]) => {
+            try {
+                return await kanbanProvider.assignPlansToFeature(wsRoot, featureSessionId, subtaskSessionIds);
+            } catch (err) {
+                return { success: false, error: err instanceof Error ? err.message : String(err), assigned: [], skipped: [] };
+            }
+        },
+        removeSubtaskFromFeature: async (wsRoot: string, subtaskSessionId: string) => {
+            try {
+                return await kanbanProvider._removeSubtaskFromFeature(wsRoot, subtaskSessionId);
+            } catch (err) {
+                return { success: false, error: err instanceof Error ? err.message : String(err) };
+            }
+        },
+        deleteFeature: async (wsRoot: string, featureSessionId: string, deleteSubtasks: boolean = false) => {
+            try {
+                return await kanbanProvider._deleteFeature(wsRoot, featureSessionId, deleteSubtasks);
+            } catch (err) {
+                return { success: false, error: err instanceof Error ? err.message : String(err) };
+            }
+        },
+        splitFeature: async (wsRoot: string, featureSessionId: string, keptPlanIds: string[], firstFeatureName: string, secondFeatureName: string) => {
+            try {
+                return await kanbanProvider.splitFeature(wsRoot, featureSessionId, keptPlanIds, firstFeatureName, secondFeatureName);
+            } catch (err) {
+                return { success: false, error: err instanceof Error ? err.message : String(err) };
+            }
+        },
+        reconcileFeatures: async (wsRoot: string, manifest: any) => {
+            try {
+                return await kanbanProvider.reconcileFeatures(wsRoot, manifest);
+            } catch (err) {
+                return { success: false, error: err instanceof Error ? err.message : String(err) };
+            }
+        },
         getFullState,
         consumeOneTimeToken: (t: string) => {
             if (oneTimeConsumed || t !== oneTimeToken) return false;
@@ -1010,6 +1077,7 @@ Each plan file must include:
     setupProvider.setApiServer(server);
     taskViewerProvider.setApiServer(server);
     planningProvider.setApiServer(server);
+    kanbanProvider.setApiServer(server);
     const port = await server.start();
 
     // Write the discovery port file for external skills/scripts

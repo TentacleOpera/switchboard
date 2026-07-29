@@ -542,7 +542,13 @@ export class KanbanProvider implements vscode.Disposable {
         return out;
     }
 
-    public getScopedRoleConfig(role: string): any {
+    public _projectTier(initiatorProject?: string | null): string | undefined {
+        if (!this._projectOverrideEnabled) return undefined;
+        const raw = initiatorProject !== undefined ? initiatorProject : this._projectFilter;
+        return (!raw || raw === KanbanDatabase.UNASSIGNED_PROJECT_FILTER) ? undefined : raw;
+    }
+
+    public getScopedRoleConfig(role: string, initiatorProject?: string | null): any {
         const key = `switchboard.prompts.roleConfig_${role}`;
         const root = this._taskViewerProvider?._resolveWorkspaceRoot();
         if (root) {
@@ -550,9 +556,9 @@ export class KanbanProvider implements vscode.Disposable {
                 const db = KanbanDatabase.forWorkspace(root);
                 if (db.isOpen()) {
                     // 1. Project tier
-                    if (this._projectOverrideEnabled && this._projectFilter
-                        && this._projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
-                        const projectVal = db.getProjectConfigJsonSync<any>(this._projectFilter, key, undefined);
+                    const tier = this._projectTier(initiatorProject);
+                    if (tier) {
+                        const projectVal = db.getProjectConfigJsonSync<any>(tier, key, undefined);
                         if (projectVal !== undefined) return this._normalizeRoleConfig(projectVal);
                     }
                     // 2. Workspace tier
@@ -571,16 +577,15 @@ export class KanbanProvider implements vscode.Disposable {
 
     /** Scope-aware role config write. Project-ON → project_config only.
      *  Workspace-ON → db config only. Both OFF → today's saveRoleConfig path. */
-    public async updateScopedRoleConfig(role: string, value: unknown): Promise<void> {
+    public async updateScopedRoleConfig(role: string, value: unknown, initiatorProject?: string | null): Promise<void> {
         const key = `switchboard.prompts.roleConfig_${role}`;
         const root = this._taskViewerProvider?._resolveWorkspaceRoot();
         const db = root ? KanbanDatabase.forWorkspace(root) : undefined;
-        if (this._projectOverrideEnabled && this._projectFilter
-                && this._projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER
-                && db && await db.ensureReady()) {
-            await db.setProjectConfigJson(this._projectFilter, key, value);
+        const tier = this._projectTier(initiatorProject);
+        if (tier && db && await db.ensureReady()) {
+            await db.setProjectConfigJson(tier, key, value);
             // Scoped write bypasses saveRoleConfig, so invalidate the prompt cache here.
-            await this._taskViewerProvider?.refreshPromptOverridesCache();
+            await this._taskViewerProvider?.refreshPromptOverridesCache(tier);
         } else if (this._workspaceOverrideEnabled && db && await db.ensureReady()) {
             await db.setConfigJson(key, value);
             await this._taskViewerProvider?.refreshPromptOverridesCache();
@@ -624,16 +629,16 @@ export class KanbanProvider implements vscode.Disposable {
 
     /** Scope-aware read. Resolution: project → workspace → globalState → (legacy) db config → default.
      *  Both overrides OFF = bit-identical to _getSetting (globalState → db config). */
-    private _getScopedSetting<T>(key: string, defaultValue: T): T {
+    public _getScopedSetting<T>(key: string, defaultValue: T, initiatorProject?: string | null): T {
         const root = this._taskViewerProvider?._resolveWorkspaceRoot();
         if (root) {
             try {
                 const db = KanbanDatabase.forWorkspace(root);
                 if (db.isOpen()) {
                     // 1. Project tier (only if a specific project is selected)
-                    if (this._projectOverrideEnabled && this._projectFilter
-                        && this._projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
-                        const projectVal = db.getProjectConfigJsonSync<T | undefined>(this._projectFilter, key, undefined);
+                    const tier = this._projectTier(initiatorProject);
+                    if (tier) {
+                        const projectVal = db.getProjectConfigJsonSync<T | undefined>(tier, key, undefined);
                         if (projectVal !== undefined) return projectVal;
                     }
                     // 2. Workspace tier (db config takes precedence over globalState)
@@ -662,13 +667,12 @@ export class KanbanProvider implements vscode.Disposable {
 
     /** Scope-aware write. Project-ON → project_config only. Workspace-ON → db config only.
      *  Both OFF → globalState + db config mirror (verbatim _updateSetting body). */
-    private async _updateScopedSetting<T>(key: string, value: T): Promise<void> {
+    public async _updateScopedSetting<T>(key: string, value: T, initiatorProject?: string | null): Promise<void> {
         const root = this._taskViewerProvider?._resolveWorkspaceRoot();
         const db = root ? KanbanDatabase.forWorkspace(root) : undefined;
-        if (this._projectOverrideEnabled && this._projectFilter
-                && this._projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER
-                && db && await db.ensureReady()) {
-            await db.setProjectConfigJson(this._projectFilter, key, value);
+        const tier = this._projectTier(initiatorProject);
+        if (tier && db && await db.ensureReady()) {
+            await db.setProjectConfigJson(tier, key, value);
             return;
         }
         if (this._workspaceOverrideEnabled && db && await db.ensureReady()) {
@@ -1208,14 +1212,7 @@ export class KanbanProvider implements vscode.Disposable {
         const workspaceRoot = this._resolveWorkspaceRoot(workspaceRootInput);
         if (!workspaceRoot) { return null; }
 
-        let resolvedProject = projectName;
-        if (!resolvedProject) {
-            const db = this._getKanbanDb(workspaceRoot);
-            const activeProject = await db.getConfig('kanban.activeProjectFilter');
-            if (activeProject && activeProject !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
-                resolvedProject = activeProject;
-            }
-        }
+        const resolvedProject = await this.resolveAuthoringProject(workspaceRoot, projectName);
 
         const chatPlanDestinations = this._taskViewerProvider?.resolveChatPlanDestinations(workspaceRoot);
         const prompt = buildKanbanBatchPrompt('chat', [], { 
@@ -1928,7 +1925,7 @@ export class KanbanProvider implements vscode.Disposable {
             // Column occupancy must be computed from the full workspace (not filtered by
             // project/repo), otherwise a hidden column that holds a card in another project
             // would be dropped and its card would render in CREATED.
-            const filterActive = this._projectFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER || !!this._repoScopeFilter;
+            const filterActive = !!this._repoScopeFilter;
             const allActiveRows = filterActive && workspaceId && typeof (db as any).getBoard === 'function'
                 ? await db.getBoard(workspaceId)
                 : activeRows;
@@ -3374,11 +3371,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                         // else: filter names an existing project — keep it as-is.
                     }
                 }
-                const projectFilter = this._projectFilter;
                 const repoScope = this._repoScopeFilter;
 
-                const dbRows = (projectFilter !== null || repoScope)
-                    ? await db.getBoardFilteredByProject(workspaceId, projectFilter, repoScope)
+                const dbRows = repoScope
+                    ? await db.getBoardFilteredByProject(workspaceId, null, repoScope)
                     : await db.getBoard(workspaceId);
                 console.log(`[KanbanProvider] _refreshBoardImpl: getBoard returned ${dbRows.length} active rows`);
 
@@ -6392,6 +6388,31 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
         return this._projectFilter;
     }
 
+    /**
+     * Resolve the project an authoring action should file under.
+     * `initiatorProject` is the initiating client's own view filter, sent in the
+     * verb payload — the ONLY per-client signal available (handleServiceVerb
+     * carries no client identity). Falls back to the shared workspace default so
+     * DB-less/remote callers and watcher-driven imports are unchanged.
+     * Returns undefined for "no project" (all three sentinels collapse here).
+     */
+    public async resolveAuthoringProject(
+        workspaceRoot: string,
+        initiatorProject?: string | null
+    ): Promise<string | undefined> {
+        const norm = (v: string | null | undefined) =>
+            (!v || v === KanbanDatabase.UNASSIGNED_PROJECT_FILTER) ? undefined : v;
+        if (initiatorProject !== undefined) return norm(initiatorProject);
+        try {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (db && typeof db.getConfig === 'function') {
+                const row = await db.getConfig('kanban.activeProjectFilter');
+                if (norm(row)) return norm(row);
+            }
+        } catch { /* fall through to the in-memory value */ }
+        return norm(this._projectFilter);
+    }
+
     // --- O(1) no-op refresh early-out (see plan: fix-refresh-loop-cost-on-large-boards) ---
 
     /**
@@ -6972,10 +6993,10 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             handleMessage: async (msg) => this._handleMessage(msg),
             workspaceStateGet: (key) => this._context.workspaceState.get(key),
             workspaceStateUpdate: async (key, value) => { await this._context.workspaceState.update(key, value); },
-            getScopedRoleConfig: (roleName) => this.getScopedRoleConfig(roleName),
-            updateScopedRoleConfig: (roleName, value) => this.updateScopedRoleConfig(roleName, value),
-            getScopedSetting: (key, defaultValue) => this._getScopedSetting(key, defaultValue),
-            updateScopedSetting: (key, value) => this._updateScopedSetting(key, value),
+            getScopedRoleConfig: (roleName, initiatorProject) => this.getScopedRoleConfig(roleName, initiatorProject),
+            updateScopedRoleConfig: (roleName, value, initiatorProject) => this.updateScopedRoleConfig(roleName, value, initiatorProject),
+            getScopedSetting: (key, defaultValue, initiatorProject) => this._getScopedSetting(key, defaultValue, initiatorProject),
+            updateScopedSetting: (key, value, initiatorProject) => this._updateScopedSetting(key, value, initiatorProject),
             remoteGetConfigPayload: (wsRoot) => this.remoteGetConfigPayload(wsRoot),
             remoteSetConfig: (wsRoot, config) => this.remoteSetConfig(wsRoot, config),
         };
@@ -8925,9 +8946,12 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
 
                 let chatPlans: BatchPromptPlan[] = [];
                 if (Array.isArray(msg.sessionIds) && msg.sessionIds.length > 0) {
-                    const selectedCards = this._lastCards.filter(card =>
+                    let selectedCards = this._lastCards.filter(card =>
                         card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
                     );
+                    if (selectedCards.length === 0) {
+                        selectedCards = await this._buildCardsFromDbSessionIds(workspaceRoot, msg.sessionIds);
+                    }
                     chatPlans = selectedCards.map(card => ({
                         topic: card.topic,
                         absolutePath: this._resolvePlanFilePath(workspaceRoot, card.planFile),
@@ -8940,9 +8964,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 }
 
                 // Resolve board's active project filter at generation time
-                const db = this._getKanbanDb(workspaceRoot);
-                const activeProject = await db.getConfig('kanban.activeProjectFilter');
-                const manifestProject = (activeProject && activeProject !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER) ? activeProject : undefined;
+                const manifestProject = await this.resolveAuthoringProject(workspaceRoot, msg.initiatorProject);
 
                 const chatPlanDestinations = this._taskViewerProvider?.resolveChatPlanDestinations(workspaceRoot);
                 const prompt = buildKanbanBatchPrompt('chat', chatPlans, { workspaceRoot, chatPlanDestinations, manifestProject });
@@ -8953,7 +8975,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 return { success: true, prompt, planCount: count };
             }
             case 'copyChatWorkflow': {
-                const prompt = await this.copyGeneralChatPrompt(msg.workspaceRoot);
+                const prompt = await this.copyGeneralChatPrompt(msg.workspaceRoot, msg.initiatorProject);
                 if (prompt) {
                     this.postMessage({ type: 'showStatusMessage', message: 'Copied planning chat prompt to clipboard.', isError: false });
                     return { success: true, prompt };
@@ -9829,9 +9851,9 @@ ${FOCUS_DIRECTIVE}`;
                     value = this._context.workspaceState.get(fullKey);
                 } else if (key.startsWith('roleConfig_')) {
                     const roleName = key.replace('roleConfig_', '');
-                    value = this.getScopedRoleConfig(roleName);
+                    value = this.getScopedRoleConfig(roleName, msg.initiatorProject);
                 } else {
-                    value = this._getScopedSetting(fullKey, undefined);
+                    value = this._getScopedSetting(fullKey, undefined, msg.initiatorProject);
                 }
                 this.postMessage({ type: 'settingResult', key, value });
                 return { success: true, key, value };
@@ -10739,7 +10761,8 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
                     workspaceRoot,
                     msg.name ? String(msg.name) : '',
                     subtaskPlanIds,
-                    msg.description ? String(msg.description) : undefined
+                    msg.description ? String(msg.description) : undefined,
+                    msg.initiatorProject
                 );
                 if (!result.success) {
                     void this._seams().ui.showWarningMessage(result.error || 'Failed to create feature.');
@@ -11823,7 +11846,8 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         workspaceRoot: string,
         name: string,
         planIds: string[],
-        description?: string
+        description?: string,
+        initiatorProject?: string | null
     ): Promise<{ success: boolean; featurePlanId?: string; featureSessionId?: string; error?: string }> {
         // Strip newlines so a multi-line name cannot inject a second YAML key or H1 heading.
         const featureName = (name || '').replace(/[\r\n]+/g, ' ').trim();
@@ -11875,8 +11899,8 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         let featureProject = subtasks.find(st => st.project)?.project || '';
         let featureProjectId = subtasks.find(st => st.projectId != null)?.projectId ?? null;
         if (!featureProject) {
-            const activeProject = (await db.getConfig('kanban.activeProjectFilter')) || '';
-            if (activeProject) featureProject = activeProject;
+            const resolved = await this.resolveAuthoringProject(workspaceRoot, initiatorProject);
+            if (resolved) featureProject = resolved;
         }
         // upsertPlan does NOT resolve project_id from the project name (unlike
         // insertFileDerivedPlan). Resolve it here so the feature appears on the

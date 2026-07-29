@@ -39,10 +39,10 @@ export interface KanbanServiceContext {
     handleMessage(msg: any): Promise<any>;
     workspaceStateGet(key: string): any;
     workspaceStateUpdate(key: string, value: any): Promise<void>;
-    getScopedRoleConfig(roleName: string): any;
-    updateScopedRoleConfig(roleName: string, value: any): Promise<void>;
-    getScopedSetting(key: string, defaultValue?: any): any;
-    updateScopedSetting(key: string, value: any): Promise<void>;
+    getScopedRoleConfig(roleName: string, initiatorProject?: string | null): any;
+    updateScopedRoleConfig(roleName: string, value: any, initiatorProject?: string | null): Promise<void>;
+    getScopedSetting(key: string, defaultValue?: any, initiatorProject?: string | null): any;
+    updateScopedSetting(key: string, value: any, initiatorProject?: string | null): Promise<void>;
     remoteGetConfigPayload(workspaceRoot?: string): Promise<Record<string, any> | null>;
     remoteSetConfig(workspaceRoot: string | undefined, config: any): Promise<Record<string, any> | null>;
 }
@@ -202,9 +202,9 @@ export class KanbanService {
             value = this._ctx.workspaceStateGet(fullKey);
         } else if (key.startsWith('roleConfig_')) {
             const roleName = key.replace('roleConfig_', '');
-            value = this._ctx.getScopedRoleConfig(roleName);
+            value = this._ctx.getScopedRoleConfig(roleName, payload?.initiatorProject);
         } else {
-            value = this._ctx.getScopedSetting(fullKey, undefined);
+            value = this._ctx.getScopedSetting(fullKey, undefined, payload?.initiatorProject);
         }
 
         this._ctx.broadcaster.push({ type: 'settingResult', key, value });
@@ -230,9 +230,9 @@ export class KanbanService {
 
         if (key.startsWith('roleConfig_')) {
             const roleName = key.replace('roleConfig_', '');
-            await this._ctx.updateScopedRoleConfig(roleName, value);
+            await this._ctx.updateScopedRoleConfig(roleName, value, payload?.initiatorProject);
         } else {
-            await this._ctx.updateScopedSetting(fullKey, value);
+            await this._ctx.updateScopedSetting(fullKey, value, payload?.initiatorProject);
         }
         return { success: true };
     }

@@ -1590,7 +1590,15 @@ export class SetupPanelProvider implements vscode.Disposable {
 
         // Inject shared defaults
         const sharedDefaultsUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'sharedDefaults.js')).toString();
-        content = content.replace('<!-- SHARED_DEFAULTS_SCRIPT -->', `<script src="${sharedDefaultsUri}" nonce="${nonce}"></script>`);
+        const sharedDefaultsTag = `<script src="${sharedDefaultsUri}" nonce="${nonce}"></script>`;
+        const marker = '<!-- SHARED_DEFAULTS_SCRIPT -->';
+        if (content.includes(marker)) {
+            content = content.replace(marker, sharedDefaultsTag);
+        } else {
+            const firstScript = `<script nonce="${nonce}">`;
+            console.warn('[SetupPanelProvider] SHARED_DEFAULTS_SCRIPT marker missing in setup.html — injecting sharedDefaults.js before the first inline script.');
+            content = content.replace(firstScript, `${sharedDefaultsTag}\n${firstScript}`);
+        }
 
         const hankenFontUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this._extensionUri, 'designs', 'HankenGrotesk-Variable.woff2')

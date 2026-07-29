@@ -1,6 +1,24 @@
 (function() {
     const vscode = acquireVsCodeApi();
 
+    // Unique originatorId per webview/tab instance
+    const clientOriginatorId = 'client_' + Math.random().toString(36).substring(2, 11) + '_' + Date.now();
+    window.__sbClientOriginatorId = clientOriginatorId;
+
+    // Listen for transport reconnects to re-assert view state
+    window.addEventListener('sbTransportReconnected', () => {
+        const activeTabEl = document.querySelector('.tab-button.active');
+        const activeTab = activeTabEl ? activeTabEl.dataset.tab : (state.activeTab || 'html-preview');
+        vscode.postMessage({
+            type: 'activeTabChanged',
+            tab: activeTab,
+            originatorId: clientOriginatorId
+        });
+        if (state.activeSource && state.activeDocId) {
+            loadDocumentPreview(state.activeSource, state.activeDocId, state.activeDocName);
+        }
+    });
+
     // Restore persisted state
     const persistedState = vscode.getState() || {};
 
@@ -1114,7 +1132,11 @@
         treePane.appendChild(docList);
 
         if (!docs || docs.length === 0) {
-            docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No cached HTML found for this project. HTML caches as screens load in the Stitch tab.</div>';
+            docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">'
+                + (state.stitchHtmlBackfill && state.stitchHtmlBackfill.total
+                    ? 'Caching HTML for this project — files appear as they download.'
+                    : 'No cached HTML for this project yet.')
+                + '</div>';
             return;
         }
 
@@ -1400,7 +1422,8 @@
                 docId,
                 requestId: state.previewRequestId,
                 sourceFolder,
-                projectId: state.selectedStitchHtmlProjectId
+                projectId: state.selectedStitchHtmlProjectId,
+                workspaceRoot: state.stitchWorkspaceRoot
             });
         } else if (sourceId === 'images-folder') {
             const statusImages = document.getElementById('status-images');
@@ -1473,7 +1496,11 @@
         const { sourceId, requestId, content, docName, isAutoRefreshed, filePath, htmlContent, webviewUri, isImage } = msg;
 
         if (sourceId === 'html-folder') {
-            if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
+            if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) {
+                const loading = document.getElementById('html-loading-state');
+                if (loading) loading.style.display = 'none';
+                return;
+            }
             if (!isAutoRefreshed) {
                 resetZoom('html');
                 _fitPending.html = true;   // fresh file → fit once when dims arrive
@@ -1541,7 +1568,11 @@
             if (htmlTweakPopup) htmlTweakPopup.style.display = 'none';
             state.htmlSelectedElement = null;
         } else if (sourceId === 'stitch-html-folder') {
-            if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
+            if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) {
+                const loading = document.getElementById('stitch-html-loading-state');
+                if (loading) loading.style.display = 'none';
+                return;
+            }
             state.stitchHtmlActiveFilePath = msg.filePath || null;
             const inspectBtn = document.getElementById('stitch-html-btn-inspect');
             if (inspectBtn) inspectBtn.classList.remove('active');
@@ -1604,7 +1635,11 @@
             if (shRange) shRange.value = state.stitchCreativeRange;
             state.stitchHtmlActiveScreenProjectId = state.selectedStitchHtmlProjectId;
         } else if (sourceId === 'images-folder') {
-            if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
+            if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) {
+                const loading = document.getElementById('images-loading-state');
+                if (loading) loading.style.display = 'none';
+                return;
+            }
             resetZoom('images');
 
             const initialState = document.getElementById('images-initial-state');
@@ -3622,24 +3657,41 @@
                 handlePreviewReady(msg);
                 break;
 
-            case 'previewError':
+            case 'previewError': {
                 console.error('[DesignPanel Webview] Preview error:', msg.error);
-                let activeStatus;
-                if (msg.sourceId === 'design-folder') {
-                    activeStatus = 'status-design';
-                } else if (msg.sourceId === 'images-folder') {
-                    activeStatus = 'status-images';
-                } else if (msg.sourceId === 'briefs-folder') {
-                    activeStatus = 'status-briefs';
-                } else {
-                    activeStatus = 'status-html';
-                }
-                const statusEl = document.getElementById(activeStatus);
-                if (statusEl) {
-                    statusEl.textContent = 'Preview error: ' + msg.error;
-                    statusEl.style.color = '#ff6b6b';
+                const PREVIEW_ERROR_TARGETS = {
+                    'stitch-html-folder': {
+                        status: 'status-stitch-html',
+                        hide: ['stitch-html-loading-state', 'stitch-html-preview-wrapper', 'stitch-html-edit-bar'],
+                        show: ['stitch-html-initial-state']
+                    },
+                    'html-folder': {
+                        status: 'status-html',
+                        hide: ['html-loading-state', 'html-preview-wrapper'],
+                        show: ['html-initial-state']
+                    },
+                    'images-folder': {
+                        status: 'status-images',
+                        hide: ['images-loading-state', 'image-preview-container-images'],
+                        show: ['images-initial-state']
+                    },
+                    'design-folder': { status: 'status-design', hide: [], show: [] },
+                    'briefs-folder': { status: 'status-briefs', hide: [], show: [] }
+                };
+                const target = PREVIEW_ERROR_TARGETS[msg.sourceId] || { status: 'status-html', hide: [], show: [] };
+                target.hide.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
+                target.show.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'flex'; });
+                const isStale = msg.requestId !== undefined && msg.requestId !== -1
+                    && msg.requestId !== state.previewRequestId;
+                if (!isStale) {
+                    const statusEl = document.getElementById(target.status);
+                    if (statusEl) {
+                        statusEl.textContent = 'Preview error: ' + msg.error;
+                        statusEl.style.color = '#ff6b6b';
+                    }
                 }
                 break;
+            }
 
             case 'stitchElementSelected': {
                 const selector = String(msg.selector || '');
@@ -4098,12 +4150,19 @@
             case 'stitchHtmlDocsReady': {
                 const docs = msg.docs || [];
                 state.stitchHtmlDocs = docs;
+                state.stitchHtmlBackfill = msg.backfill || null;
                 renderStitchHtmlDocs(docs);
                 const statusEl = document.getElementById('status-stitch-html');
                 if (statusEl) {
-                    statusEl.textContent = docs.length > 0
-                        ? `${docs.length} file${docs.length === 1 ? '' : 's'}`
-                        : 'No cached HTML';
+                    const bf = msg.backfill;
+                    if (bf && bf.total) {
+                        statusEl.textContent = `Caching HTML… ${bf.done}/${bf.total}`
+                            + (docs.length ? ` · ${docs.length} ready` : '');
+                    } else {
+                        statusEl.textContent = docs.length > 0
+                            ? `${docs.length} file${docs.length === 1 ? '' : 's'}`
+                            : 'No cached HTML';
+                    }
                 }
                 break;
             }

@@ -8176,6 +8176,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             updateManagerPassButton();
             const btn = document.getElementById('btn-feature-action');
             if (!btn) return;
+            if (document.body.classList.contains('host-feature-management-false')) {
+                btn.disabled = true;
+                btn.textContent = 'PROMOTE TO FEATURE';
+                return;
+            }
             const selected = Array.from(selectedCards.values());
             const features = selected.filter(s => s.isFeature);
             const nonFeatures = selected.filter(s => !s.isFeature);

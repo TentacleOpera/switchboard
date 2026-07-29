@@ -80,9 +80,11 @@ export class DesignPanelProvider implements vscode.Disposable {
         // RETURN their result (returned to the HTTP caller in the response body;
         // the webview push stays additive); un-migrated arms still `break` and the
         // route layer sends its {success:true} ack.
-        // `type` is set LAST so a payload `type` field can never override the
-        // allowlist-checked verb, regardless of caller.
-        return this._handleMessage({ ...(payload ?? {}), type: verb });
+        // `type`, `__replyChannel` and `__viaHttp` are set LAST so a payload field can never override
+        // the allowlist-checked verb or forge the reply channel/stamp, regardless of caller.
+        // `__replyChannel: 'http'` means "an HTTP caller is awaiting the response body" —
+        // reply arms return their payload instead of pushing it to every connected client.
+        return this._handleMessage({ ...(payload ?? {}), type: verb, __replyChannel: 'http' as const, __viaHttp: true as const });
     }
 
 
@@ -104,11 +106,53 @@ export class DesignPanelProvider implements vscode.Disposable {
         }
     }
 
+    private _seatFor(message: any) {
+        const id = message?.originatorId || DesignPanelProvider._DEFAULT_SEAT;
+        let seat = this._seats.get(id);
+        if (!seat) {
+            const isViaHttp = !!message?.__viaHttp;
+            seat = {
+                activeTab: '',
+                htmlPreview: null,
+                claudePreview: null,
+                stitchHtmlPreview: null,
+                isExtensionWebview: !isViaHttp
+            };
+            this._seats.set(id, seat);
+        }
+        return seat;
+    }
+
+    private _evictSeat(originatorId: string): void {
+        this._seats.delete(originatorId);
+        const timer = this._evictionTimers.get(originatorId);
+        if (timer) {
+            clearTimeout(timer);
+            this._evictionTimers.delete(originatorId);
+        }
+        for (const [key, t] of Array.from(this._autoRefreshDebounces.entries())) {
+            if (key.startsWith(`${originatorId}::`)) {
+                clearTimeout(t);
+                this._autoRefreshDebounces.delete(key);
+            }
+        }
+        this._reconcilePoll();
+    }
+
     private _apiServer?: any;
 
     public setApiServer(server: any): void {
         this._apiServer = server;
         this._broadcaster?.setApiServer(server);
+        if (server?.wsHub) {
+            server.wsHub.onDisconnect((originatorId: string) => {
+                if (this._evictionTimers.has(originatorId)) return;
+                const timer = setTimeout(() => {
+                    this._evictSeat(originatorId);
+                }, 60000);
+                this._evictionTimers.set(originatorId, timer);
+            });
+        }
     }
 
     /**
@@ -189,7 +233,15 @@ export class DesignPanelProvider implements vscode.Disposable {
     private _designDocsDebounce?: NodeJS.Timeout;
     private _imagesDocsDebounce?: NodeJS.Timeout;
     private _briefsDocsDebounce?: NodeJS.Timeout;
-    private _activeTab: string = '';
+    private _seats = new Map<string, {
+        activeTab: string;
+        htmlPreview: { sourceFolder: string; docId: string; sourceId: string } | null;
+        claudePreview: { sourceFolder: string; docId: string; sourceId: string } | null;
+        stitchHtmlPreview: { sourceFolder: string; docId: string; sourceId: string; projectId: string; workspaceRoot: string } | null;
+        isExtensionWebview: boolean;
+    }>();
+    private static readonly _DEFAULT_SEAT = '__default__';
+    private _evictionTimers = new Map<string, NodeJS.Timeout>();
     private _externalFilePollTimer?: NodeJS.Timeout;
     private _lastFolderSignature: Record<string, string> = {}; // keyed by tab name
     private _activeScreens = new Map<string, any>(); // Key: screen.id, Value: SDK Screen instance
@@ -510,12 +562,9 @@ setTimeout(reportDims, 0);
     ];
     private _lastWebviewRootsSignature?: string;
     private _themeListenersRegistered = false;
-    private _activeHtmlPreview: { sourceFolder: string; docId: string; sourceId: string } | null = null;
-    private _activeClaudePreview: { sourceFolder: string; docId: string; sourceId: string } | null = null;
-    private _activeStitchHtmlPreview: { sourceFolder: string; docId: string; sourceId: string; projectId: string; workspaceRoot: string } | null = null;
     private _activeStitchHtmlProjectId: string = '';
     private _activeStitchHtmlWorkspaceRoot: string = '';
-    private _autoRefreshDebounce?: NodeJS.Timeout;
+    private _autoRefreshDebounces = new Map<string, NodeJS.Timeout>();
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
@@ -561,13 +610,11 @@ setTimeout(reportDims, 0);
             this._disposables
         );
 
-        this._initDesignService();
-
         this._panel.onDidDispose(() => {
             this._panel = undefined;
             this._broadcaster?.setWebview(null);
             this.disposeWatchers();
-            this._stopExternalFilePoll();
+            this._reconcilePoll();
         }, null, this._disposables);
 
         this._panel.onDidChangeViewState(e => this._onVisibilityChanged(e.webviewPanel.visible), null, this._disposables);
@@ -626,10 +673,7 @@ setTimeout(reportDims, 0);
                         this.postMessage({ type: 'ultracodeAnimationSetting', enabled });
                     }
                     if (e.affectsConfiguration('switchboard.design.externalFilePollMs')) {
-                        this._stopExternalFilePoll();
-                        if (this._panel?.visible && this._isPolledTab(this._activeTab)) {
-                            this._startExternalFilePoll();
-                        }
+                        this._reconcilePoll();
                     }
                 })
             );
@@ -646,8 +690,9 @@ setTimeout(reportDims, 0);
         // update those URIs point at the previous version's install dir (404 → blocked
         // scripts on the restored panel). Re-applying them keeps restored panels working
         // across updates. Mirrors the localResourceRoots set in open().
-        this._panel.webview.options = {
+        (this._panel as any).options = {
             enableScripts: true,
+            retainContextWhenHidden: true,
             localResourceRoots: [
                 vscode.Uri.joinPath(this._extensionUri, 'dist'),
                 vscode.Uri.joinPath(this._extensionUri, 'webview'),
@@ -671,7 +716,7 @@ setTimeout(reportDims, 0);
             this._panel = undefined;
             this._broadcaster?.setWebview(null);
             this.disposeWatchers();
-            this._stopExternalFilePoll();
+            this._reconcilePoll();
         }, null, this._disposables);
 
         this._panel.onDidChangeViewState(e => this._onVisibilityChanged(e.webviewPanel.visible), null, this._disposables);
@@ -732,10 +777,7 @@ setTimeout(reportDims, 0);
                         this.postMessage({ type: 'ultracodeAnimationSetting', enabled });
                     }
                     if (e.affectsConfiguration('switchboard.design.externalFilePollMs')) {
-                        this._stopExternalFilePoll();
-                        if (this._panel?.visible && this._isPolledTab(this._activeTab)) {
-                            this._startExternalFilePoll();
-                        }
+                        this._reconcilePoll();
                     }
                 })
             );
@@ -749,6 +791,16 @@ setTimeout(reportDims, 0);
         } else {
             this._panel?.webview.postMessage(message);
         }
+    }
+
+    private _postReply(message: any, channel: 'http' | 'webview' | undefined): void {
+        if (channel === 'http') { return; }
+        if (channel === 'webview') {
+            if (this._broadcaster) { this._broadcaster.pushWebviewOnly(message); }
+            else { this._panel?.webview.postMessage(message); }
+            return;
+        }
+        this.postMessage(message);
     }
 
     public dispose(): void {
@@ -766,10 +818,16 @@ setTimeout(reportDims, 0);
         this._saveTextDocListener = undefined;
         this._disposables.forEach(disposable => disposable.dispose());
         this._disposables = [];
-        if (this._autoRefreshDebounce) {
-            clearTimeout(this._autoRefreshDebounce);
-            this._autoRefreshDebounce = undefined;
+        for (const t of this._autoRefreshDebounces.values()) {
+            clearTimeout(t);
         }
+        this._autoRefreshDebounces.clear();
+        for (const t of this._evictionTimers.values()) {
+            clearTimeout(t);
+        }
+        this._evictionTimers.clear();
+        this._seats.clear();
+        this._stopExternalFilePoll();
     }
 
     private disposeWatchers(): void {
@@ -996,7 +1054,7 @@ setTimeout(reportDims, 0);
                 // Bail if the active project changed between watcher creation and fire —
                 // a callback from a just-discarded project must not refresh the new view.
                 if (this._activeStitchHtmlProjectId !== projectId || this._activeStitchHtmlWorkspaceRoot !== workspaceRoot) return;
-                void this._sendStitchHtmlDocsReady(workspaceRoot, projectId);
+                this._scheduleStitchHtmlDocsReady();
                 if (event !== 'delete') {
                     this._autoRefreshHtmlPreview(filePath);
                 }
@@ -1006,7 +1064,7 @@ setTimeout(reportDims, 0);
                 // Same race-guard as the primary watcher — a callback from a
                 // just-discarded project must not refresh the new view.
                 if (this._activeStitchHtmlProjectId !== projectId || this._activeStitchHtmlWorkspaceRoot !== workspaceRoot) return;
-                void this._sendStitchHtmlDocsReady(workspaceRoot, projectId);
+                this._scheduleStitchHtmlDocsReady();
                 this._autoRefreshHtmlPreview(filePath);
             });
         } catch {}
@@ -1136,10 +1194,11 @@ setTimeout(reportDims, 0);
         }
     }
 
-    private async _sendStitchHtmlDocsReady(workspaceRoot: string, projectId: string): Promise<void> {
+    private async _sendStitchHtmlDocsReady(workspaceRoot: string, projectId: string): Promise<any> {
         if (!workspaceRoot || !projectId) {
-            this.postMessage({ type: 'stitchHtmlDocsReady', docs: [], workspaceRoot });
-            return;
+            const empty = { type: 'stitchHtmlDocsReady', docs: [], workspaceRoot };
+            this.postMessage(empty);
+            return empty;
         }
         try {
             await this._resolveStitchProjectName(workspaceRoot, projectId);
@@ -1168,9 +1227,23 @@ setTimeout(reportDims, 0);
                     });
                 }
             } catch {}
-            this.postMessage({ type: 'stitchHtmlDocsReady', docs, workspaceRoot });
+            const payload = {
+                type: 'stitchHtmlDocsReady',
+                docs,
+                workspaceRoot,
+                backfill: this._stitchHtmlBackfill ? { ...this._stitchHtmlBackfill } : undefined
+            };
+            this.postMessage(payload);
+            return payload;
         } catch {
-            this.postMessage({ type: 'stitchHtmlDocsReady', docs: [], workspaceRoot });
+            const errPayload = {
+                type: 'stitchHtmlDocsReady',
+                docs: [],
+                workspaceRoot,
+                backfill: this._stitchHtmlBackfill ? { ...this._stitchHtmlBackfill } : undefined
+            };
+            this.postMessage(errPayload);
+            return errPayload;
         }
     }
 
@@ -1743,6 +1816,72 @@ setTimeout(reportDims, 0);
         return this._cacheDownloadsInFlight.get(key)!;
     }
 
+    private _stitchHtmlDocsDebounce?: ReturnType<typeof setTimeout>;
+
+    /** Debounced watcher entry point — see _scheduleHtmlDocsReady. */
+    private _scheduleStitchHtmlDocsReady(): void {
+        if (this._stitchHtmlDocsDebounce) {
+            clearTimeout(this._stitchHtmlDocsDebounce);
+        }
+        this._stitchHtmlDocsDebounce = setTimeout(() => {
+            this._stitchHtmlDocsDebounce = undefined;
+            const root = this._activeStitchHtmlWorkspaceRoot;
+            const projectId = this._activeStitchHtmlProjectId;
+            if (root && projectId) void this._sendStitchHtmlDocsReady(root, projectId);
+        }, 300);
+    }
+
+    private _stitchHtmlBackfill?: { done: number; total: number };
+
+    private async _backfillStitchHtmlForProject(workspaceRoot: string, projectId: string): Promise<void> {
+        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+        await db.ensureReady();
+        const rows = await db.getStitchScreensForProject(projectId);
+        const missing: any[] = [];
+        for (const row of rows) {
+            if (await this._getStitchHtmlPath(row.id, workspaceRoot, projectId)) continue;
+            missing.push(row);
+        }
+        if (missing.length === 0) return;
+
+        this._stitchHtmlBackfill = { done: 0, total: missing.length };
+        this._scheduleStitchHtmlDocsReady();
+        try {
+            const stitch = await loadStitch('');
+            const CONCURRENCY = 4;
+            const screens: any[] = [];
+            for (let i = 0; i < missing.length; i += CONCURRENCY) {
+                const batch = missing.slice(i, i + CONCURRENCY);
+                const resolved = await Promise.all(batch.map(async (row) => {
+                    const cached = this._activeScreens.get(row.id);
+                    if (cached) return cached;
+                    try {
+                        const screen = await stitch.project(projectId).getScreen(row.id);
+                        this._activeScreens.set(row.id, screen);
+                        return screen;
+                    } catch (err) {
+                        console.error(`[DesignPanel] getScreen failed for ${row.id}:`, err);
+                        return null;
+                    }
+                }));
+                screens.push(...resolved.filter(Boolean));
+                if (projectId !== this._activeStitchHtmlProjectId
+                    || workspaceRoot !== this._activeStitchHtmlWorkspaceRoot) return;
+            }
+            if (screens.length === 0) return;
+
+            await this._backfillStitchHtmlCache(screens, workspaceRoot, () => {
+                if (this._stitchHtmlBackfill) this._stitchHtmlBackfill.done++;
+                this._scheduleStitchHtmlDocsReady();
+            });
+        } finally {
+            this._stitchHtmlBackfill = undefined;
+            if (projectId === this._activeStitchHtmlProjectId && workspaceRoot === this._activeStitchHtmlWorkspaceRoot) {
+                void this._sendStitchHtmlDocsReady(workspaceRoot, projectId);
+            }
+        }
+    }
+
     /**
      * Eagerly cache every screen's HTML next to its PNG (same `.switchboard/stitch/`
      * dir, `<id>.html`). The HTML is tiny (~15KB) but its download URL is a signed
@@ -1750,7 +1889,7 @@ setTimeout(reportDims, 0);
      * the user manually clicked DL HTML. Also makes the live-HTML preview and "Open
      * in Browser" instant. Fire-and-forget; never touches the webview.
      */
-    private async _backfillStitchHtmlCache(screens: any[], workspaceRoot: string): Promise<void> {
+    private async _backfillStitchHtmlCache(screens: any[], workspaceRoot: string, onCached?: () => void): Promise<void> {
         if (!workspaceRoot) return;
         for (const screen of screens) {
             try {
@@ -1763,6 +1902,7 @@ setTimeout(reportDims, 0);
                 // Sequential on purpose — this is a background sweep, not a hot path.
                 await this._downloadToCache(htmlUrl, cacheDir,
                     path.join(cacheDir, `${path.basename(screen.id)}.html`));
+                onCached?.();
             } catch (err) {
                 console.error(`Stitch HTML cache backfill failed for screen ${screen?.id}:`, err);
             }
@@ -2368,6 +2508,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             }
             case 'inspectRequestDataUrl': {
                 const filePath = message.filePath;
+                const replyChannel: 'http' | 'webview' | undefined = message.__replyChannel === 'http' ? 'http' : 'webview';
                 try {
                     // Simple path verification helper (defense-in-depth)
                     const isAllowed = this._getWorkspaceRoots().some(root => {
@@ -2381,35 +2522,34 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     const ext = path.extname(filePath).slice(1).toLowerCase();
                     const mime = ext === 'jpg' ? 'jpeg' : (ext || 'png');
                     const dataUrl = `data:image/${mime};base64,${buf.toString('base64')}`;
-                    this.postMessage({
+                    const payload = {
                         type: 'inspectDataUrl',
                         dataUrl,
                         requestId: message.requestId
-                    });
-                    return { success: true, dataUrl };
+                    };
+                    this._postReply(payload, replyChannel);
+                    return { ...payload, success: true };
                 } catch (e) {
                     console.error('[DesignPanelProvider] inspectRequestDataUrl failed', e);
-                    this.postMessage({ type: 'inspectDataUrlError', requestId: message.requestId, error: String(e) });
-                    return { success: false, error: String(e) };
+                    const payload = { type: 'inspectDataUrlError', requestId: message.requestId, error: String(e) };
+                    this._postReply(payload, replyChannel);
+                    return { ...payload, success: false, error: String(e) };
                 }
             }
             case 'activeTabChanged': {
-                this._activeTab = message.tab;
+                const seat = this._seatFor(message);
+                seat.activeTab = message.tab;
                 if (message.tab !== 'html-preview') {
-                    this._activeHtmlPreview = null;
+                    seat.htmlPreview = null;
                 }
                 if (message.tab !== 'claude') {
-                    this._activeClaudePreview = null;
+                    seat.claudePreview = null;
                 }
                 if (message.tab !== 'stitch-html') {
-                    this._activeStitchHtmlPreview = null;
+                    seat.stitchHtmlPreview = null;
                 }
-                if (this._isPolledTab(message.tab) && this._panel?.visible) {
-                    this._startExternalFilePoll();
-                } else {
-                    this._stopExternalFilePoll();
-                }
-                return { success: true, activeTab: this._activeTab };
+                this._reconcilePoll();
+                return { success: true, activeTab: seat.activeTab };
             }
             case 'setActivePlanningContext': {
                 try {
@@ -2540,7 +2680,9 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             }
 
             case 'fetchPreview': {
+                const seat = this._seatFor(message);
                 const rawDocId = String(message.docId || '');
+                const replyChannel: 'http' | 'webview' | undefined = message.__replyChannel === 'http' ? 'http' : 'webview';
                 if (message.sourceId === 'stitch-html-folder') {
                     // Resolve the folder server-side from projectId — never trust webview-supplied paths.
                     const root = message.workspaceRoot || this._getWorkspaceRoot() || '';
@@ -2554,7 +2696,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     const resolvedFolder = (root && projectId)
                         ? this._getImageCacheDir(root, projectId)
                         : '';
-                    this._activeStitchHtmlPreview = resolvedFolder
+                    seat.stitchHtmlPreview = resolvedFolder
                         ? { sourceFolder: resolvedFolder, docId: rawDocId, sourceId: message.sourceId, projectId, workspaceRoot: root }
                         : null;
                     // Re-target the per-project watcher if the active project changed.
@@ -2568,19 +2710,23 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                         sourceFolder: resolvedFolder,
                         docId: rawDocId,
                         requestId: message.requestId,
-                        isAutoRefreshed: false
+                        isAutoRefreshed: false,
+                        replyChannel,
+                        originatorId: message.originatorId
                     });
-                    return { success: true, preview: res };
+                    return res.success
+                        ? { ...res.payload, success: true }
+                        : { ...(res.payload ?? { type: 'previewError', sourceId: message.sourceId, requestId: message.requestId }), error: res.error, success: false };
                 }
                 if ((message.sourceId === 'html-folder' || message.sourceId === 'claude-folder') && message.sourceFolder) {
                     if (message.target === 'claude') {
-                        this._activeClaudePreview = {
+                        seat.claudePreview = {
                             sourceFolder: path.resolve(message.sourceFolder),
                             docId: rawDocId,
                             sourceId: message.sourceId
                         };
                     } else {
-                        this._activeHtmlPreview = {
+                        seat.htmlPreview = {
                             sourceFolder: path.resolve(message.sourceFolder),
                             docId: rawDocId,
                             sourceId: message.sourceId
@@ -2588,9 +2734,9 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     }
                 } else {
                     if (message.target === 'claude') {
-                        this._activeClaudePreview = null;
+                        seat.claudePreview = null;
                     } else {
-                        this._activeHtmlPreview = null;
+                        seat.htmlPreview = null;
                     }
                 }
                 const res = await this._buildAndSendPreview({
@@ -2599,9 +2745,13 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                     docId: rawDocId,
                     target: message.target,
                     requestId: message.requestId,
-                    isAutoRefreshed: false
+                    isAutoRefreshed: false,
+                    replyChannel,
+                    originatorId: message.originatorId
                 });
-                return { success: true, preview: res };
+                return res.success
+                    ? { ...res.payload, success: true }
+                    : { ...(res.payload ?? { type: 'previewError', sourceId: message.sourceId, requestId: message.requestId }), error: res.error, success: false };
             }
 
             case 'copyStitchTweakPrompt': {
@@ -3556,11 +3706,15 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 if (projectId !== this._activeStitchHtmlProjectId || workspaceRoot !== this._activeStitchHtmlWorkspaceRoot) {
                     this._activeStitchHtmlProjectId = projectId;
                     this._activeStitchHtmlWorkspaceRoot = workspaceRoot;
-                    this._activeStitchHtmlPreview = null;
+                    this._seatFor(message).stitchHtmlPreview = null;
                     void this._setupStitchHtmlFolderWatchers().catch(() => {});
                 }
-                await this._sendStitchHtmlDocsReady(workspaceRoot, projectId);
-                return { success: true };
+                const payload = await this._sendStitchHtmlDocsReady(workspaceRoot, projectId);
+                if (hasKey && workspaceRoot && projectId && !this._stitchOperationLock) {
+                    void this._backfillStitchHtmlForProject(workspaceRoot, projectId)
+                        .catch(err => console.error('[DesignPanel] stitch-html backfill failed:', err));
+                }
+                return { success: true, ...(payload || {}) };
             }
 
             case 'refreshDocsForTab': {
@@ -4154,12 +4308,30 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
         return tab === 'html-preview' || tab === 'claude' || tab === 'images' || tab === 'briefs';
     }
 
-    private _onVisibilityChanged(visible: boolean): void {
-        if (visible && this._isPolledTab(this._activeTab)) {
+    private _polledTabsAcrossSeats(): Set<string> {
+        const tabs = new Set<string>();
+        for (const seat of this._seats.values()) {
+            if (seat.isExtensionWebview && !this._panel?.visible) {
+                continue;
+            }
+            if (this._isPolledTab(seat.activeTab)) {
+                tabs.add(seat.activeTab);
+            }
+        }
+        return tabs;
+    }
+
+    private _reconcilePoll(): void {
+        const polled = this._polledTabsAcrossSeats();
+        if (polled.size > 0) {
             this._startExternalFilePoll();
         } else {
             this._stopExternalFilePoll();
         }
+    }
+
+    private _onVisibilityChanged(visible: boolean): void {
+        this._reconcilePoll();
     }
 
     private _startExternalFilePoll(): void {
@@ -4178,59 +4350,55 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
     }
 
     private async _pollTick(): Promise<void> {
-        const tab = this._activeTab;
-        const visible = !!this._panel?.visible;
-        if (!visible || !this._isPolledTab(tab) || !this._panel) {
+        const tabs = this._polledTabsAcrossSeats();
+        if (!tabs.size) {
+            this._stopExternalFilePoll();
             return;
         }
 
         try {
             const allRoots = this._getWorkspaceRoots();
-            const signatures: string[] = [];
 
-            for (const root of allRoots) {
-                const service = this._getLocalFolderService(root);
-                let folders: string[] = [];
-                if (tab === 'html-preview') {
-                    folders = service.getHtmlFolderPaths();
-                } else if (tab === 'claude') {
-                    folders = service.getClaudeFolderPaths();
-                } else if (tab === 'images') {
-                    folders = service.getImagesFolderPaths();
-                } else if (tab === 'briefs') {
-                    folders = service.getBriefsFolderPaths();
+            for (const tab of tabs) {
+                const signatures: string[] = [];
+                for (const root of allRoots) {
+                    const service = this._getLocalFolderService(root);
+                    let folders: string[] = [];
+                    if (tab === 'html-preview') {
+                        folders = service.getHtmlFolderPaths();
+                    } else if (tab === 'claude') {
+                        folders = service.getClaudeFolderPaths();
+                    } else if (tab === 'images') {
+                        folders = service.getImagesFolderPaths();
+                    } else if (tab === 'briefs') {
+                        folders = service.getBriefsFolderPaths();
+                    }
+
+                    for (const dir of folders) {
+                        const sigs = await this._getFolderSignature(dir, tab);
+                        signatures.push(...sigs);
+                    }
                 }
 
-                for (const dir of folders) {
-                    // Do NOT use fs.existsSync here — it is a synchronous stat that
-                    // blocks the event loop and bypasses the per-readdir 5s deadline
-                    // in _getFolderSignature. On a hung NFS/SMB mount existsSync would
-                    // wedge the tick exactly where the plan mandated a timeout. The
-                    // raced readdir inside _getFolderSignature already handles
-                    // non-existent dirs (rejects → caught → returns []).
-                    const sigs = await this._getFolderSignature(dir, tab);
-                    signatures.push(...sigs);
+                signatures.sort();
+                const combined = signatures.join('\n');
+                const hash = crypto.createHash('md5').update(combined).digest('hex');
+
+                if (!this._polledTabsAcrossSeats().has(tab)) {
+                    continue;
                 }
-            }
 
-            signatures.sort();
-            const combined = signatures.join('\n');
-            const hash = crypto.createHash('md5').update(combined).digest('hex');
-
-            if (this._activeTab !== tab || !this._panel?.visible) {
-                return;
-            }
-
-            if (this._lastFolderSignature[tab] !== hash) {
-                this._lastFolderSignature[tab] = hash;
-                if (tab === 'html-preview') {
-                    await this._sendHtmlDocsReady();
-                } else if (tab === 'claude') {
-                    await this._sendClaudeDocsReady();
-                } else if (tab === 'images') {
-                    await this._sendImagesDocsReady();
-                } else if (tab === 'briefs') {
-                    await this._sendBriefsDocsReady();
+                if (this._lastFolderSignature[tab] !== hash) {
+                    this._lastFolderSignature[tab] = hash;
+                    if (tab === 'html-preview') {
+                        await this._sendHtmlDocsReady();
+                    } else if (tab === 'claude') {
+                        await this._sendClaudeDocsReady();
+                    } else if (tab === 'images') {
+                        await this._sendImagesDocsReady();
+                    } else if (tab === 'briefs') {
+                        await this._sendBriefsDocsReady();
+                    }
                 }
             }
         } catch (err) {
@@ -4314,8 +4482,10 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
         requestId: number;
         target?: string;
         isAutoRefreshed?: boolean;
-    }): Promise<void> {
-        const { sourceId, sourceFolder, docId, requestId, target, isAutoRefreshed } = opts;
+        replyChannel?: 'http' | 'webview' | undefined;
+        originatorId?: string;
+    }): Promise<{ success: true; payload: any } | { success: false; error: string; payload?: any }> {
+        const { sourceId, sourceFolder, docId, requestId, target, isAutoRefreshed, replyChannel, originatorId } = opts;
         try {
             if (!sourceFolder) throw new Error('sourceFolder is required');
             const relativePath = docId.includes(':')
@@ -4345,11 +4515,22 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             }
             const resolvedFolder = path.resolve(sourceFolder);
             if (!allowedFolders.has(resolvedFolder)) {
+                console.error('[DesignPanel] preview folder rejected', {
+                    sourceId, resolvedFolder,
+                    roots: this._getWorkspaceRoots(),
+                    allowedCount: allowedFolders.size
+                });
                 throw new Error('sourceFolder is not a configured design/html/claude/briefs/images folder');
             }
             const absPath = path.resolve(resolvedFolder, relativePath);
             if (absPath !== resolvedFolder && !absPath.startsWith(resolvedFolder + path.sep)) {
                 throw new Error('Invalid file path');
+            }
+
+            try {
+                await fs.promises.stat(absPath);
+            } catch {
+                throw new Error('HTML file not found on disk — try Rebuild Cache');
             }
 
             const fileExt = path.extname(relativePath).toLowerCase();
@@ -4405,7 +4586,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 } catch {}
             }
 
-            this.postMessage({
+            const payload: any = {
                 type: 'previewReady',
                 sourceId,
                 requestId,
@@ -4419,25 +4600,38 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 webviewUri,
                 iframeSrc,
                 htmlContent: isHtmlFile ? this._injectLocalCsp(this._injectIntoHead(fileContent, DesignPanelProvider._INSPECTOR_SCRIPT)) : undefined,
-                isAutoRefreshed: isAutoRefreshed || undefined
-            });
+                isAutoRefreshed: isAutoRefreshed || undefined,
+                originatorId: originatorId || undefined
+            };
+            this._postReply(payload, replyChannel);
+            return { success: true, payload };
         } catch (err: any) {
+            const error = err.message || String(err);
             // Auto-refresh (requestId === -1) must fail silently — the file may be mid-write.
-            if (requestId === -1) return;
-            this.postMessage({
+            if (requestId === -1) return { success: false, error };
+            const payload: any = {
                 type: 'previewError',
                 sourceId,
                 requestId,
-                error: err.message || String(err)
-            });
+                error,
+                originatorId: originatorId || undefined
+            };
+            this._postReply(payload, replyChannel);
+            return { success: false, error, payload };
         }
     }
 
     private _registerSaveTextDocListener(): void {
         if (this._saveTextDocListener) return;
         this._saveTextDocListener = vscode.workspace.onDidSaveTextDocument((document) => {
-            if (!this._panel?.visible) return;
-            if (!this._activeHtmlPreview && !this._activeClaudePreview && !this._activeStitchHtmlPreview) return;
+            let hasAnyPreview = false;
+            for (const seat of this._seats.values()) {
+                if (seat.htmlPreview || seat.claudePreview || seat.stitchHtmlPreview) {
+                    hasAnyPreview = true;
+                    break;
+                }
+            }
+            if (!hasAnyPreview) return;
             this._autoRefreshHtmlPreview(document.uri.fsPath);
         });
         this._disposables.push(this._saveTextDocListener);
@@ -4468,44 +4662,53 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
     private _autoRefreshHtmlPreview(changedFsPath: string): void {
         const changedPath = this._normalizePreviewPath(path.resolve(changedFsPath));
 
-        const checkAndRefresh = (active: typeof this._activeHtmlPreview, target?: string) => {
-            if (!active) return;
-            const relativePath = active.docId.includes(':')
-                ? active.docId.substring(active.docId.indexOf(':') + 1)
-                : active.docId;
-            const activePath = this._normalizePreviewPath(path.resolve(active.sourceFolder, relativePath));
+        for (const [origId, seat] of this._seats.entries()) {
+            const checkAndRefresh = (active: typeof seat.htmlPreview, target?: string) => {
+                if (!active) return;
+                const relativePath = active.docId.includes(':')
+                    ? active.docId.substring(active.docId.indexOf(':') + 1)
+                    : active.docId;
+                const activePath = this._normalizePreviewPath(path.resolve(active.sourceFolder, relativePath));
 
-            if (changedPath !== activePath) return;
+                if (changedPath !== activePath) return;
 
-            if (this._autoRefreshDebounce) clearTimeout(this._autoRefreshDebounce);
-            this._autoRefreshDebounce = setTimeout(() => {
-                this._autoRefreshDebounce = undefined;
+                const debounceKey = `${origId}::${target || 'html'}`;
+                const existing = this._autoRefreshDebounces.get(debounceKey);
+                if (existing) clearTimeout(existing);
 
-                const current = target === 'claude' ? this._activeClaudePreview
-                    : target === 'stitch-html' ? this._activeStitchHtmlPreview
-                    : this._activeHtmlPreview;
-                if (!current || !this._panel) return;
+                const timer = setTimeout(() => {
+                    this._autoRefreshDebounces.delete(debounceKey);
 
-                const currentRel = current.docId.includes(':')
-                    ? current.docId.substring(current.docId.indexOf(':') + 1)
-                    : current.docId;
-                const currentPath = this._normalizePreviewPath(path.resolve(current.sourceFolder, currentRel));
-                if (currentPath !== activePath) return;
+                    const currentSeat = this._seats.get(origId);
+                    if (!currentSeat) return;
+                    const current = target === 'claude' ? currentSeat.claudePreview
+                        : target === 'stitch-html' ? currentSeat.stitchHtmlPreview
+                        : currentSeat.htmlPreview;
+                    if (!current) return;
 
-                this._buildAndSendPreview({
-                    sourceId: current.sourceId,
-                    sourceFolder: current.sourceFolder,
-                    docId: current.docId,
-                    target,
-                    requestId: -1,
-                    isAutoRefreshed: true
-                });
-            }, 300);
-        };
+                    const currentRel = current.docId.includes(':')
+                        ? current.docId.substring(current.docId.indexOf(':') + 1)
+                        : current.docId;
+                    const currentPath = this._normalizePreviewPath(path.resolve(current.sourceFolder, currentRel));
+                    if (currentPath !== activePath) return;
 
-        checkAndRefresh(this._activeHtmlPreview);
-        checkAndRefresh(this._activeClaudePreview, 'claude');
-        checkAndRefresh(this._activeStitchHtmlPreview, 'stitch-html');
+                    this._buildAndSendPreview({
+                        sourceId: current.sourceId,
+                        sourceFolder: current.sourceFolder,
+                        docId: current.docId,
+                        target,
+                        requestId: -1,
+                        isAutoRefreshed: true,
+                        originatorId: origId
+                    });
+                }, 300);
+                this._autoRefreshDebounces.set(debounceKey, timer);
+            };
+
+            checkAndRefresh(seat.htmlPreview);
+            checkAndRefresh(seat.claudePreview, 'claude');
+            checkAndRefresh(seat.stitchHtmlPreview, 'stitch-html');
+        }
     }
 
     /**

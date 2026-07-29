@@ -1,7 +1,7 @@
 {
   "generator": "SwitchboardControlPlane",
   "version": "1.7.13",
-  "generatedAt": "2026-07-27T04:35:21.260Z",
+  "generatedAt": "2026-07-29T03:06:09.531Z",
   "files": [
     "skills/_lib/sb_api_call.sh",
     "skills/accuracy/SKILL.md",

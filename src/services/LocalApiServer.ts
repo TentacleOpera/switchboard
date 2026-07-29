@@ -357,6 +357,15 @@ export class LocalApiServer {
         this._allRoots = options.allRoots || [];
     }
 
+    /** True only when every feature-management hook is supplied. A partially
+     *  wired host reports false — a capability flag that overstates what is
+     *  wired turns a dead control into one that claims support. */
+    public hasFeatureManagement(): boolean {
+        const o = this._options;
+        return !!(o.createFeature && o.assignToFeature && o.removeSubtaskFromFeature
+            && o.deleteFeature && o.splitFeature && o.reconcileFeatures);
+    }
+
     /**
      * Start the local API server on a random free port.
      * Returns the port number.

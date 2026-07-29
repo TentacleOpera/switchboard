@@ -41,15 +41,24 @@ export interface WsHubOptions {
 interface ConnectionMeta {
     ws: WebSocket;
     seq: number; // last sent sequence number on this connection
+    originatorId?: string;
+    isAlive?: boolean;
 }
 
 export class WsHub {
     private _wss: WebSocketServer | null = null;
     private _options: WsHubOptions;
     private _connections: Set<ConnectionMeta> = new Set();
+    private _disconnectListeners: Set<(originatorId: string) => void> = new Set();
+    private _pingInterval: NodeJS.Timeout | null = null;
 
     constructor(options: WsHubOptions) {
         this._options = options;
+    }
+
+    onDisconnect(cb: (originatorId: string) => void): () => void {
+        this._disconnectListeners.add(cb);
+        return () => { this._disconnectListeners.delete(cb); };
     }
 
     /**
@@ -67,6 +76,19 @@ export class WsHub {
                 try { socket.destroy(); } catch { /* already gone */ }
             }
         });
+
+        if (!this._pingInterval) {
+            this._pingInterval = setInterval(() => {
+                for (const meta of this._connections) {
+                    if (meta.isAlive === false) {
+                        try { meta.ws.terminate(); } catch { /* ignore */ }
+                    } else {
+                        meta.isAlive = false;
+                        try { meta.ws.ping(); } catch { /* ignore */ }
+                    }
+                }
+            }, 30000);
+        }
     }
 
     private _parseCookies(req: any): Record<string, string> {
@@ -124,7 +146,12 @@ export class WsHub {
 
         // All checks passed — complete the upgrade.
         this._wss!.handleUpgrade(req, socket, head, async (ws) => {
-            const meta: ConnectionMeta = { ws, seq: 0 };
+            const originatorId = reqUrl.searchParams.get('originatorId') || undefined;
+            const meta: ConnectionMeta = { ws, seq: 0, originatorId, isAlive: true };
+
+            ws.on('pong', () => {
+                meta.isAlive = true;
+            });
 
             // Subscribe-AFTER-snapshot. The full-state resync (seq 0) is sent BEFORE
             // this connection joins `_connections`, so no broadcast can interleave
@@ -150,12 +177,21 @@ export class WsHub {
             // Join the broadcast set only now that the snapshot is on the wire.
             this._connections.add(meta);
 
-            ws.on('close', () => {
-                this._connections.delete(meta);
-            });
+            const handleDisconnect = () => {
+                if (this._connections.has(meta)) {
+                    this._connections.delete(meta);
+                    if (meta.originatorId) {
+                        for (const listener of Array.from(this._disconnectListeners)) {
+                            try { listener(meta.originatorId); } catch (e) { console.error('[wsHub] disconnect listener error:', e); }
+                        }
+                    }
+                }
+            };
+
+            ws.on('close', handleDisconnect);
             ws.on('error', (err) => {
                 console.error('[wsHub] connection error:', err);
-                this._connections.delete(meta);
+                handleDisconnect();
             });
         });
     }
@@ -232,6 +268,10 @@ export class WsHub {
 
     /** Close all connections and shut down the WS server. */
     close(): void {
+        if (this._pingInterval) {
+            clearInterval(this._pingInterval);
+            this._pingInterval = null;
+        }
         for (const meta of this._connections) {
             try { meta.ws.close(); } catch { /* ignore */ }
         }

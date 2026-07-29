@@ -182,6 +182,28 @@ const DESIGN_VERB_SCHEMAS: Record<string, VerbSchema> = {
 // external endpoints (/kanban/move, /kanban/dispatch route through them).
 
 const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
+    createFeature: {
+        fields: {
+            name: { type: 'string', required: true },
+            subtaskPlanIds: { type: 'array', required: true },
+            description: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    promoteToFeature: {
+        fields: {
+            planId: { type: 'string', required: true },
+            name: { type: 'string', required: true },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    addSubtaskToFeature: {
+        fields: {
+            featureSessionId: { type: 'string', required: true },
+            subtaskSessionId: { type: 'string', required: true },
+            workspaceRoot: { type: 'string' },
+        },
+    },
     // Read verb backing the browser Automation tab. The arm dereferences nothing off
     // `msg`, so every field is optional — a stricter schema would reject valid
     // webview payloads on shipped installs (PRD contract #5).

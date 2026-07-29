@@ -31,9 +31,9 @@ It also removed the feature's only cross-feature file contention (see below).
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Surface Verb Failures in the Browser Transport](../plans/browser-surface-verb-failures.md) — **PLAN REVIEWED**
-- [ ] [Capability-Gate Feature Management in the Browser](../plans/capability-gate-feature-management.md) — **PLAN REVIEWED**
-- [ ] [Construct KanbanProvider in the Standalone Host and Wire Feature Management](../plans/wire-feature-management-standalone.md) — **PLAN REVIEWED**
+- [ ] [Surface Verb Failures in the Browser Transport](../plans/browser-surface-verb-failures.md) — **CODER CODED**
+- [ ] [Capability-Gate Feature Management in the Browser](../plans/capability-gate-feature-management.md) — **CODER CODED**
+- [ ] [Construct KanbanProvider in the Standalone Host and Wire Feature Management](../plans/wire-feature-management-standalone.md) — **CODER CODED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -74,3 +74,7 @@ Nothing from any other feature must land first.
 The residual risk moved rather than vanished, and it is now concentrated in one place: **constructing `KanbanProvider` under the shim**. Four providers prove the pattern, but kanban is the heaviest and the only one whose constructor fires async work (`_reconcileStaleWorktreeMode`). The plan's step-1 smoke gate exists to surface that in minutes. The other trap is the workspace root: the shim's `workspaceFolders` is `[]`, so the root must be assigned post-construction or every routed verb throws *"Kanban service unavailable"*.
 
 Two shared-input risks carry across the set and are pinned by tests in their owning plans: an over-strict verb schema is a shipped-install regression (these verbs also arrive from the extension's webview through the same validated path), and a `featureManagement` flag read too early disables the button in VS Code as well as standalone.
+
+## Completion Summary
+Implemented all subtasks for headless feature management. Surfaced verb failure messages in `src/webview/transport.js` via `showStatusMessage` or fallback toast. Capability-gated feature management controls via a derived, late-bound `featureManagement` flag across `HostCapabilities`, `LocalApiServer`, `TaskViewerProvider`, `bootstrap.ts`, `transport.js`, and `kanban.html`. Constructed `KanbanProvider` in `bootstrap.ts`, supplied all six `LocalApiServerOptions` feature hooks, routed `createFeature`/`promoteToFeature`/`addSubtaskToFeature` UI verbs to `kanbanProvider.handleServiceVerb`, and added schemas in `verbSchemas.ts`. Files modified: `src/webview/transport.js`, `src/services/headlessPanelHtml.ts`, `src/services/LocalApiServer.ts`, `src/services/TaskViewerProvider.ts`, `src/standalone/bootstrap.ts`, `src/webview/kanban.html`, `src/services/verbSchemas.ts`. No issues encountered.
+
