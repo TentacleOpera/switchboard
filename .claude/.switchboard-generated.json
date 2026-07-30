@@ -1,7 +1,7 @@
 {
   "generator": "ClaudeCodeMirrorService",
   "version": "1.7.13",
-  "generatedAt": "2026-07-30T00:03:32.669Z",
+  "generatedAt": "2026-07-30T11:13:02.578Z",
   "skills": [
     {
       "source": "workflows/switchboard.md",
@@ -52,6 +52,11 @@
       "source": "skills/create-feature-from-plans",
       "name": "create-feature-from-plans",
       "relPath": ".claude/skills/create-feature-from-plans/SKILL.md"
+    },
+    {
+      "source": "skills/design-system-builder",
+      "name": "design-system-builder",
+      "relPath": ".claude/skills/design-system-builder/SKILL.md"
     },
     {
       "source": "skills/clickup-api",
