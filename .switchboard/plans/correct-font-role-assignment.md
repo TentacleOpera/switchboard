@@ -145,7 +145,7 @@ This is an **allowlist, not a blocklist** — the 135 JS-side uses cannot all be
 
 `.activity-time`, `.orchestrator-timer` (`implementation`) · `.tickets-comment-date`, `.cm-thread-date`, `.cm-reply-date` (`planning`) · `.tickets-comment-date` (`design`) · `.column-count`, `.autoban-timer-badge` (`kanban`)
 
-**Decided: these stay on `--font-code`.** `font-variant-numeric: tabular-nums` is not an option — verified against Hanken's GSUB table, which contains `ccmp dnom frac liga locl numr` and **no `tnum`** — so proportional figures cannot be aligned by a feature flag. `.orchestrator-timer` and `.autoban-timer-badge` tick live, so proportional digits would visibly jitter every second; `.column-count` sits in a fixed header where a `9 → 10` transition would nudge the layout; the three date selectors align down vertical comment lists. The cost is a small monospace island inside otherwise-Hanken chrome, which is exactly what Tier 2 authorises.
+**Decided: these stay on `--font-code`.** `font-variant-numeric: tabular-nums` is not an option — verified two ways: Hanken's GSUB table contains `ccmp dnom frac liga locl numr` and **no `tnum`**, and `css-fonts-4` defines no synthetic-widening fallback, so no engine manufactures tabular figures for a font that lacks the feature. There is no `font-feature-settings`, `font-palette` or `font-synthesis` escape hatch either. Proportional figures cannot be aligned by a feature flag; the only alternatives are fixed `ch`-unit widths on every affected element or a monospace face. `.orchestrator-timer` and `.autoban-timer-badge` tick live, so proportional digits would visibly jitter every second; `.column-count` sits in a fixed header where a `9 → 10` transition would nudge the layout; the three date selectors align down vertical comment lists. The cost is a small monospace island inside otherwise-Hanken chrome, which is exactly what Tier 2 authorises.
 
 > **Superseded:** "**Tabular numerics have no clean answer — decide before Phase 1.** … Two options: (a) Keep them on `--font-code` … (b) Move them to Hanken … Pick one."
 > **Reason:** Left as an open question, this blocks Phase 1 on a decision that the plan already had the evidence to make. Hanken's missing `tnum` is now confirmed by direct inspection of the font binary, and the affected elements include two live-ticking counters — which settles it.
@@ -237,6 +237,8 @@ For each file:
 
 Hanken is proportional, with different advance widths and x-height than the monospace face it replaces. Walk all 7 panels and fix anything that now wraps, clips, or sits wrong. Expected hotspots: `.plan-status-tag` (9px uppercase with `letter-spacing: 0.5px`), `.column-name`, `.card-meta`, fixed-width buttons in the Completed column (`RECOVER`, `✓ Done`), and any `width`/`min-width` tuned against a monospace character count.
 
+**Two metric effects, not one.** Moving Tier 3 text from monospace to Hanken is the expected reflow. Separately, the eight OS-fallback symbols now sit inside Hanken text rather than inside monospace text, and fallback faces carry their own leading and baseline metrics — on Windows, `Segoe UI Symbol`'s larger internal leading can clip or misalign a symbol in a tight container even where the surrounding text fits fine. Where a symbol sits in a fixed-height badge or button (`✓ Done`, status dots, warning badges), check the symbol's alignment separately from the label's fit. If a symbol cannot be made to sit correctly, the durable fix is a masked SVG rather than a font glyph — the pattern already used by the browser nav rail (`.strip-glyph` in `shell.html`) — but that is a follow-on, not this plan.
+
 ## Verification Plan
 
 Per session directive, compilation and automated test execution are excluded. The greps below are the mechanical gates; the manual pass is the real one, since no webview rendering harness exists.
@@ -260,7 +262,9 @@ The browser cockpit serves `shell` + `kanban`, `project`, `planning`, `design`, 
 - [ ] **The agent startup-command fields are still monospace** — Agents tab in `kanban`, onboarding and CLI rows in `implementation`, and the path/token/URL fields in `setup`'s startup rows. The `select` beside them in `setup` is now Hanken.
 - [ ] The Tier 2 timers, dates and counts are monospace and do not jitter as digits change. Watch `.orchestrator-timer` and `.autoban-timer-badge` tick for at least 10 seconds.
 - [ ] **The memo panel header still renders in GeistPixel**, not Hanken and not a fallback.
-- [ ] **Glyph sweep — no tofu boxes anywhere.** Explicitly hunt `▸ ▾ ● ─ └ ✓ ✕ ✗ ⚙ ⚠ ⚡ → ↳ ⇨ ⤢ ⋮ ⋯ ↻ ⟲ ⎇ ✥` across expand controls, status dots, tree views, tick marks, warning badges and overflow menus. Confirm each falls through to Menlo (or OS fallback for `⋮ ⎇ ⟲ ⤢`) rather than rendering as a box. **This is the most likely failure of this plan** — Hanken contains none of these 24 symbols (verified).
+- [ ] **Glyph sweep — no tofu boxes anywhere.** Hanken contains **none** of these 24 symbols (verified), so every one of them is being supplied by the fallback tail or the OS. **This is the most likely failure of this plan.** Hunt them across expand controls, status dots, tree views, tick marks, warning badges and overflow menus, expecting two groups:
+  - **Menlo-supplied (16), monochrome:** `→ ↳ ↻ ⇨ ⋯ ─ └ ▲ ▶ ▸ ▼ ▾ ● ✓ ✕ ✗`
+  - **OS-fallback (8):** `⋮ ⎇ ⚙ ⚠ ⚡ ✥ ⟲ ⤢` — `⚙ ⚠ ⚡` render as **colour emoji** on both platforms. Current behaviour; confirm, do not "fix".
 - [ ] Emoji still render in colour (`✅ ❌ ⏳ 🔒 🔴 🟢 📋 📄 💡 🌐 🖼`).
 - [ ] Nothing wraps, clips or overflows that did not before — especially the count badges (`2`, `1063`, `100`) and Completed-column buttons.
 - [ ] Browser cockpit and VS Code webview remain typographically **identical to each other** on the 6 dual-host panels (the dependency plan's guarantee must survive this change).
@@ -292,14 +296,16 @@ Settled by direct measurement this session. Do not re-open or re-research these.
 - **`.startup-row` means different things per file** — CLI command fields in `kanban`/`implementation`, and a settings row of paths, tokens, URLs and checkboxes in `setup`. All three are Tier 1; `setup`'s bundled `select` is not.
 - **`.strip-icon`'s font declaration is inert** — the rail renders masked SVGs via `.strip-glyph`.
 
-## Uncertain Assumptions
+## Resolved by Research
 
-The following are external platform/standards behaviours that cannot be settled by reading this repository. The user has been advised to run web research to confirm them before implementation; a ready-to-run research prompt was supplied in chat.
+Web research (W3C `css-variables-1` and `css-fonts-4`, MDN, Microsoft/Apple font documentation) has closed all four previously-open external questions. Two of them confirm decisions in this plan; two correct claims in it. Recorded as settled — do not re-research.
 
-1. **An unresolvable `var()` in `font-family` makes the declaration invalid at computed-value time** (so the element inherits) rather than falling back to the remaining families in the list. This is the basis for treating `memo.html:87` as a must-fix rather than a cosmetic tidy.
-2. **`font-variant-numeric: tabular-nums` is a no-op when the font ships no `tnum` feature** — i.e. no browser synthesises tabular figures. This is what forecloses the "move Tier 2 to Hanken and add `tabular-nums`" option.
-3. **`Consolas` is present on Windows and covers the symbol set** that `Menlo` covers on macOS, so Tier 3 text keeps its glyphs there.
-4. **The four symbols `⋮ ⎇ ⟲ ⤢` resolve via OS-level font fallback** rather than rendering as tofu, given that neither Hanken nor Menlo contains them.
+1. **Confirmed — an unresolvable `var()` in `font-family` is invalid at computed-value time.** The declaration is discarded entirely and the element **inherits** from its parent; the browser does *not* skip the bad variable and use the remaining named families. Verified uniform across Chromium 120+/Electron 28+, Gecko 120+ and WebKit 17+. This makes `memo.html:87` a must-fix exactly as specified in Phase 7: leaving `var(--font-mono)` there after the token is deleted would drop `'GeistPixel'` too, not just its tail, and the header would silently inherit `body`.
+2. **Confirmed — `tabular-nums` is a strict no-op without a `tnum` table.** `css-fonts-4` defines no synthetic-widening fallback, and no engine synthesises tabular figures. There is no `font-feature-settings`, `font-palette` or `font-synthesis` escape hatch. The only alternatives are fixed `ch`-unit widths or a monospace face — which is what Tier 2 does. **The Tier 2 decision is now spec-backed, not just preferred.**
+3. **Corrected — `Consolas` covers only 3 of the 24 symbols** (`─ └ ●`), not the set `Menlo` covers. It is stock on Windows since Vista (and on macOS only with Microsoft Office), so it stays in the stacks, but Windows symbol coverage comes from DirectWrite fallback to `Segoe UI Symbol` / `Segoe UI Emoji` — not from our tail.
+4. **Corrected — `Menlo` covers 16 of 24, not 20.** Eight symbols need OS fallback, not four: `⋮ ⎇ ⚙ ⚠ ⚡ ✥ ⟲ ⤢`. None render as tofu on a stock macOS or Windows install, but `⚙ ⚠ ⚡` route to an **emoji** font on both platforms and therefore render in **colour**. That is current behaviour, so it is not a regression this plan introduces — but the glyph sweep must expect it rather than file it as a bug.
+
+**Windows-only artefact worth knowing before Phase 11:** the 21 symbols Consolas lacks fall to `Segoe UI Symbol`, which has larger internal leading and different ascender/descender metrics than the surrounding face. Fallback glyphs in tight containers can clip or sit off-baseline on Windows in a way they do not on macOS, where Core Text adjusts placement more gracefully. Pre-existing, not caused by this plan, and invisible to a macOS-only test pass.
 
 ## Decisions Already Made (do not re-litigate)
 

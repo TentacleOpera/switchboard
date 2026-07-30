@@ -114,7 +114,8 @@ One plan: single root cause, single deliverable, 12 edit sites, verified in one 
 - **Every panel's chrome changes face in the browser** (Monaco → Menlo), and `implementation.html`'s chrome changes in the webview only if `editor.fontFamily` was set. This is the intended effect, not a regression.
 - **Metrics shift slightly.** Menlo and Monaco have different advance widths; anything tuned against Monaco's metrics in the browser may reflow by a pixel or two. No fixed-width chrome is known to be that tight, but the manual pass should watch the count badges.
 - `--font-code` is introduced **dead on arrival** — nothing references it until `correct-font-role-assignment.md` lands, except the 3 markdown-preview `code` rules this plan converts. That is deliberate (see *Decisions Already Made*).
-- `transport.js`'s toast is a fixed-position error overlay shared across panels; using a nested `var()` fallback keeps it correct in both token-naming schemes (`--font-family` in panels, `--font` in `shell.html`).
+- `transport.js`'s toast is a fixed-position error overlay shared across panels; using a nested `var()` fallback keeps it correct in both token-naming schemes (`--font-family` in panels, `--font` in `shell.html`), and the longhand split keeps its sizing independent of family resolution.
+- **Windows metric mismatch on fallback glyphs.** 21 of the 24 symbols fall through to `Segoe UI Symbol` on Windows, which carries larger internal leading and different ascender/descender metrics than the surrounding face. Fallback glyphs inside tight containers can clip or sit off-baseline. This is pre-existing behaviour (nothing in the old stack supplied these glyphs either) and is not made worse by this plan, but it is a real Windows-only rendering artefact that a macOS-only test pass will never surface.
 
 ### Dependencies & Conflicts
 
@@ -172,11 +173,23 @@ Eight `:root` blocks plus four host-variable stragglers.
 ```
 
 > **Superseded:** `--font-family: 'Hanken Grotesk', Menlo, sans-serif;`
-> **Reason:** `Menlo` does not exist on Windows, so on Windows the proportional stack collapses to `'Hanken Grotesk', sans-serif` and all 24 symbols Hanken lacks fall through to whatever the OS picks. This plan already applies exactly this reasoning to the mono stacks ("`Consolas` is retained … as the Windows equivalent — it is genuinely reachable there"); the proportional stack needs it for the same reason, because it holds the same per-glyph-supplier role.
-> **Replaced with:** `--font-family: 'Hanken Grotesk', Menlo, Consolas, sans-serif;` — `Menlo` supplies the symbols on macOS, `Consolas` on Windows, `sans-serif` terminates the chain.
+> **Reason:** `Menlo` does not exist on Windows, so on Windows the proportional stack collapses to `'Hanken Grotesk', sans-serif`. Adding a Windows-reachable face gives the browser somewhere to look before it reaches OS fallback.
+> **Replaced with:** `--font-family: 'Hanken Grotesk', Menlo, Consolas, sans-serif;`
 
-- `Menlo, Consolas` in the **proportional** stack is the per-glyph supplier for the 24 symbols Hanken lacks. It is not a "in case the woff2 fails" entry.
-- `Consolas` is retained in the mono stacks as the Windows equivalent — it is genuinely reachable there, unlike on macOS.
+**What the tail actually buys, measured (do not overstate this).** Web research against Microsoft and Apple font documentation returned the per-glyph matrix for the 24 symbols Hanken lacks:
+
+| supplier | covers | needs OS fallback |
+|---|---|---|
+| `Menlo` (macOS) | **16 of 24** | 8: `⋮ ⎇ ⚙ ⚠ ⚡ ✥ ⟲ ⤢` |
+| `Consolas` (Windows) | **3 of 24** — only `─ └ ●` | 21, via DirectWrite → `Segoe UI Symbol` / `Segoe UI Emoji` |
+
+> **Superseded:** "`Menlo` supplies the symbols on macOS, `Consolas` on Windows." / "Menlo covers 20 of them; the remaining four (`⋮ ⎇ ⟲ ⤢`) resolve through OS-level fallback."
+> **Reason:** Both figures were wrong and the Windows half was wrong in kind, not just degree. Menlo covers 16, not 20 — **eight** symbols need OS fallback, not four (the four previously named plus `⚙ ⚠ ⚡ ✥`). And Consolas covers only 3 of 24, so it does not "supply the symbols on Windows" in any meaningful sense; Windows symbol coverage comes from **OS-level fallback**, not from anything in our stack.
+> **Replaced with:** On macOS, `Menlo` is a genuine per-glyph supplier for 16 of 24. On Windows, the tail is nearly inert for symbols — `Consolas` catches 3 and DirectWrite fallback handles the other 21. Keep `Consolas` anyway: it is free, it catches those 3, and it is the only Windows-reachable face in the chain. But do not claim it solves Windows symbol rendering, and do not treat its presence as a substitute for the Windows glyph sweep.
+
+- `Menlo, Consolas` in the **proportional** stack is a per-glyph supplier, not a "in case the woff2 fails" entry. Its value is real on macOS (16 glyphs) and marginal on Windows (3).
+- `Consolas` is retained in the mono stacks as the Windows equivalent — it is genuinely reachable there (stock since Windows Vista), unlike on macOS, where it ships only with Microsoft Office.
+- **Three symbols may render as colour emoji, not monochrome glyphs.** `⚙ ⚠ ⚡` are absent from both Menlo and Consolas, and both platforms' fallback routes them to an emoji font (`Segoe UI Emoji` / `Apple Color Emoji`) before a monochrome symbol font. Expect the gear, warning and lightning marks to appear as colour emoji. That is today's behaviour too — Menlo is already what the webview resolves to — so it is not a regression, but it is worth knowing before someone files it as one.
 - `--font-mono` and `--font-code` are intentionally identical here. They exist as two names so that `correct-font-role-assignment.md` can move the chrome off monospace with a one-line edit instead of a re-audit.
 - In `shell.html` the proportional token is named `--font`; keep its name and change only its value.
 
@@ -197,14 +210,21 @@ Rendered inline code is monospace-by-alignment content, so `--font-code` is the 
 
 ### Step 3 — `src/webview/transport.js:211`
 
+Replace the shorthand with longhands:
+
 ```js
 // was: 'font:12px/1.4 var(--vscode-font-family,system-ui,sans-serif);' +
-'font:12px/1.4 var(--font-family, var(--font, system-ui, sans-serif));' +
+'font-size:12px;line-height:1.4;' +
+'font-family:var(--font-family, var(--font, system-ui, sans-serif));' +
 ```
 
 The nested fallback covers both naming schemes: panels define `--font-family`, `shell.html` defines `--font`. If neither is in scope (the toast is a `position: fixed` overlay appended to `document.body`, so one of them always is), it degrades to `system-ui, sans-serif`.
 
-**Edge case:** if `var()` substitution inside the `font` shorthand behaves unexpectedly in any target browser, split the shorthand into `font-size`/`line-height`/`font-family` longhands rather than reverting to a host variable. See *Uncertain Assumptions*.
+> **Superseded:** `'font:12px/1.4 var(--font-family, var(--font, system-ui, sans-serif));'` — keeping the `font` shorthand, with a note to split it into longhands only if a browser bug appeared.
+> **Reason:** Confirmed by research against the CSS Custom Properties spec: an unresolvable `var()` invalidates the **entire declaration** at computed-value time, and for a shorthand that means every longhand it sets resets — `font-size` and `line-height` included, not just the family. This element is the **transport-error toast**: the one piece of UI whose job is to be legible when something else has already broken. Trading an all-or-nothing declaration for three independent ones costs nothing and removes the failure mode where a font problem makes the error message about the font problem unreadable.
+> **Replaced with:** three longhand declarations, as above. A substitution failure now degrades the family only; the toast keeps its 12px/1.4 sizing regardless.
+
+Note that the nested fallback terminates in a literal (`system-ui, sans-serif`), so substitution cannot actually fail to resolve here — the longhand split is defence-in-depth for an error path, not a fix for a live bug.
 
 ## Verification Plan
 
@@ -231,7 +251,10 @@ Run the extension and the browser cockpit **side by side on the same display** (
 - [ ] **Set `editor.fontFamily` to something distinctive (e.g. `"Courier New"`) and reload both. Neither window changes.** This is the regression the Menlo-first stopgap would have passed, and it is the actual acceptance criterion for this plan. Check `implementation.html` (webview) here too — it is the panel this test exists for.
 - [ ] Rendered inline code in the markdown preview panes (`design`, `planning`, `project`) is still monospace and still sized to match surrounding text.
 - [ ] Trigger a transport error (e.g. stop the API server and interact) and confirm the toast at the bottom of the viewport renders in Hanken, not a fallback serif.
-- [ ] Symbol glyphs still render — no tofu boxes. Eyeball `▸ ▾ ● ─ └ ✓ ✕ ✗ ⚙ ⚠ ⚡ → ↳ ⇨ ⋮ ⋯ ↻ ⟲ ⎇ ⤢` across expand chevrons, status dots, tree views, tick marks, warning badges and overflow menus.
+- [ ] Symbol glyphs still render — no tofu boxes. Eyeball all 24 across expand chevrons, status dots, tree views, tick marks, warning badges and overflow menus. Expect two visually distinct groups:
+  - **Menlo-supplied (16):** `→ ↳ ↻ ⇨ ⋯ ─ └ ▲ ▶ ▸ ▼ ▾ ● ✓ ✕ ✗` — monochrome, matching the surrounding text weight.
+  - **OS-fallback (8):** `⋮ ⎇ ⚙ ⚠ ⚡ ✥ ⟲ ⤢` — of which `⚙ ⚠ ⚡` render as **colour emoji** on both platforms. This is current behaviour, not a regression; confirm rather than "fix".
+- [ ] On Windows (if available): the 21 symbols Consolas lacks fall to `Segoe UI Symbol`, which has larger internal leading than the surrounding face. Check tight containers — status badges, tree rows, small buttons — for clipping or baseline misalignment. macOS Core Text handles this more gracefully than Windows DirectWrite.
 - [ ] Emoji still render in colour (`✅ ❌ ⏳ 🔒 🔴 🟢 📋 📄 💡 🌐 🖼`).
 - [ ] Hanken still loads and applies to card titles in both hosts (this plan must not regress it) — Network/Fonts tab shows `HankenGrotesk-Variable.woff2` loaded, not a fallback.
 - [ ] Fonts render with **networking disconnected**.
@@ -262,14 +285,18 @@ Settled by direct measurement this session. Do not re-open or re-research these.
 - **No test asserts a font token's *value*.** Only `memo-panel-style-contract.test.js:20` asserts a token's *existence* (`--font-mono:`), which this plan preserves.
 - **`kanban.html:38–39` still reads the host variable** in the working tree — confirmed against `git diff`.
 
-## Uncertain Assumptions
+## Resolved by Research
 
-The following are external platform/standards behaviours that cannot be settled by reading this repository. The user has been advised to run web research to confirm them before implementation; a ready-to-run research prompt was supplied in chat.
+Web research (W3C specs, MDN, Microsoft/Apple font documentation, VS Code webview API) has closed all four previously-open external questions. Recorded here as settled — do not re-research.
 
-1. **`Consolas` is present on Windows and covers the symbol set** that `Menlo` covers on macOS — the basis for adding it to the proportional stack. Untestable from a macOS dev machine.
-2. **The four symbols `⋮ ⎇ ⟲ ⤢` resolve via OS-level font fallback** on macOS (and have some resolution on Windows) rather than rendering as tofu, given that neither Hanken nor Menlo contains them.
-3. **`var()` substitution inside the `font` shorthand, with a nested `var()` fallback**, is reliably supported in the browsers that host these panels (Electron/Chromium for VS Code webviews; the user's browser for the cockpit).
-4. **VS Code injects `--vscode-editor-font-family` into every webview**, and its macOS default resolves to `Menlo, Monaco, 'Courier New', monospace` — the basis for the claim that the two hosts coincidentally agree today.
+1. **`Consolas` is stock on Windows since Vista** (and on macOS only with Microsoft Office), **but covers just 3 of the 24 symbols** — `─ └ ●`. Windows symbol coverage therefore comes from DirectWrite fallback to `Segoe UI Symbol` / `Segoe UI Emoji`, not from our stack. Consolas stays in the tail because it is free and catches those 3; the claim that it "supplies the symbols on Windows" is withdrawn.
+2. **`Menlo` covers 16 of the 24, not 20.** Eight need OS fallback: `⋮ ⎇ ⚙ ⚠ ⚡ ✥ ⟲ ⤢`. On macOS these route to `Apple Symbols` / `STIX Two` / `Apple Color Emoji`; none render as tofu on a stock install. `⚙ ⚠ ⚡` route to an **emoji** font on both platforms, so they render in colour.
+3. **`var()` in the `font` shorthand works, but fails atomically.** An unresolvable `var()` is invalid at computed-value time and resets *every* longhand the shorthand sets — `font-size` and `line-height` included. Longhands are used instead (Step 3). Modern Chromium handles this atomically; older builds had non-atomic shorthand reset bugs, which is one more reason not to rely on the shorthand.
+4. **VS Code does inject `--vscode-font-family` and `--vscode-editor-font-family` into every webview root.** On desktop (Electron) they reflect host settings; on web/served instances the defaults follow the host browser unless an extension overrides them. This confirms the root-cause analysis: the webview always has these variables and the browser cockpit never does.
+5. **`Cascadia Code` / `Cascadia Mono` are not OS-core on Windows** — they ship with Windows Terminal and VS Code, not the OS. So the old `'Cascadia Code'` fallback entry was dead weight on a stock Windows box too, not only on macOS. This strengthens the root-cause finding rather than changing it.
+6. **Tofu is still possible on stripped Windows builds.** Windows Server / LTSC installs may omit `Segoe UI Emoji` or supplemental font packs, in which case `⎇` and `⤢` can render as boxes. Out of scope to fix — no font stack we can write helps — but worth knowing if a report arrives from such a machine.
+
+**One finding argues for a different long-term approach** and is captured in *Adjacent Finding* below rather than folded in: research rated OS symbol fallback as low visual consistency and flagged that `Segoe UI Symbol` has larger internal leading than `Consolas`, so fallback glyphs can clip or misalign inside tight UI containers on Windows. The robust fix is SVG rather than font glyphs — and this codebase has already started down that path.
 
 ## Adjacent Finding (not in scope)
 
@@ -283,12 +310,20 @@ The Geist/GeistPixel family was removed as a feature but its plumbing remains, a
 
 Worth its own cleanup plan; deliberately left out of this one. Note that `correct-font-role-assignment.md` must preserve `memo.html:87` rather than strip it, because deciding the pixel header's fate belongs to that cleanup, not to a font-role pass.
 
+### Second adjacent finding — UI symbols should probably not be font glyphs at all
+
+Research rated font-glyph symbols with OS fallback as **low visual consistency** and flagged the concrete mechanism: fallback faces (`Segoe UI Symbol`, `Apple Symbols`) carry different leading and baseline metrics than the surrounding text, so symbols shift alignment per platform, and three of them (`⚙ ⚠ ⚡`) come back as colour emoji whether we want that or not. No font stack can fix this — the glyphs simply are not in the faces we can name.
+
+**The codebase has already solved this once.** The browser nav rail now renders single-colour SVG glyphs painted with `currentColor` via CSS `mask-image` (`.strip-glyph` in `shell.html`, per-icon mask set inline by `shell.js`, assets in `icons/nav-*.svg`). That pattern is metric-independent, themeable, and immune to font fallback entirely.
+
+Extending it to the remaining UI symbols — the expand chevrons, status dots, tick marks and warning badges — is the durable fix for the whole symbol-coverage problem, and would make the fallback tails genuinely unnecessary rather than load-bearing. It is **not** in scope here: this plan is about host decoupling and would be blocked for weeks by an icon migration. Recorded so the option is on the table when the tofu/metric complaints arrive, and so nobody mistakes the fallback tails for a solved problem rather than a mitigation.
+
 ## Decisions Already Made (do not re-litigate)
 
 - **No font token reads a host setting.** This is the defect; a fixed stack is the fix. Reintroducing `var(--vscode-editor-font-family, …)` "so code matches the user's editor" recreates the bug.
 - **No new font family is bundled.** The Geist family was removed deliberately; this plan does not add a replacement.
 - **The mono face is `Menlo, Consolas, monospace`** — the platform monospace. Overruling this means picking a family, licensing it, converting to `woff2`, adding an `@font-face` to 8 files, and wiring a new `{{…_FONT_URI}}` placeholder through **12** substitution sites (6 in `headlessPanelHtml.ts` at lines 175/201/242/280/306/329, plus `KanbanProvider.ts:11188`, `SetupPanelProvider.ts:1606`, `PlanningPanelProvider.ts:730` and `:1812`, `DesignPanelProvider.ts:1030`, `TaskViewerProvider.ts:20657`) — roughly the difference between complexity 3 and complexity 6. The escape hatch is one line per file if a brand monospace is later wanted; the rest of this plan stands unaltered.
-- **The fallback tails are load-bearing — do not strip them.** Font fallback is per-glyph, so the tail of each stack renders the 24 symbols Hanken lacks (verified). `Menlo` supplies them on macOS, `Consolas` on Windows.
+- **The fallback tails are load-bearing on macOS — do not strip them.** Font fallback is per-glyph, so the tail supplies the symbols Hanken lacks: `Menlo` covers **16 of 24** on macOS. On Windows the tail is nearly inert for symbols (`Consolas` covers 3) and OS fallback does the work. Keep the tail regardless — it is free, and removing it would cost 16 glyphs on the platform this is developed and tested on.
 - **`--font-code` is created now even though it is identical to `--font-mono`**, so the follow-on plan is a one-line change per file. It is deliberately dead on arrival apart from the 3 markdown-preview `code` rules.
 - **Colour host variables are out of scope.** Only font declarations are decoupled here.
 
