@@ -192,7 +192,10 @@ The three layers, and why each is present:
         }
 ```
 
-- **Edge cases.** Do not reach for `--border-bright` here — it does not exist in this file and would render the thumb transparent. `scrollbar-color` is inherited, so declaring it on `:root` inside the gate covers the textarea too; no universal selector is needed.
+- **Edge cases.** `scrollbar-color` is inherited, so declaring it on `:root` inside the gate covers the textarea too; no universal selector is needed.
+  > **Superseded (review pass 2026-07-30):** "Do not reach for `--border-bright` here — it does not exist in this file and would render the thumb transparent."
+  > **Reason:** Stale premise, and the coder followed it. `memo.html` **does** define `--border-bright: #444444` — on `:root` (line 27) *and* in `body.theme-claudify` (line 52). The Browser Memo Panel rewrite landed in the same commit window and brought the token with it, along with a comment at line 39 stating "Afterburner IS the :root palette (matches kanban/project/setup)". The original claim was true when the plan was authored and false by the time it was executed.
+  > **Replaced with:** Use `var(--border-bright)` as the thumb fallback and inside the gated `scrollbar-color`, exactly as `kanban.html` / `project.html` / `setup.html` do. This is what the plan's Goal ("the same dark, thin scrollbar the board already has") requires — `--border-color` is `#333333` against the board's `#444444`, so the original instruction produced a memo scrollbar visibly dimmer than every other panel's. Fixed in the review pass.
 
 ### 2. `src/webview/project.html`
 
@@ -415,7 +418,10 @@ Per this session's directives, **no compilation step and no automated test run i
 1. `npm run test:contract:panel-scrollbars` — the new contract test. It requires **no build**: it reads `src/webview/*.html` and `src/services/headlessPanelHtml.ts` from disk directly.
 2. **Load-bearing checks when it is run** — an assertion that cannot fail is not a test. Two mutations, each restored afterwards: (a) delete the block from `src/webview/setup.html` and confirm the test fails naming `setup.html`; (b) hoist `scrollbar-width: thin` out of the `@supports` gate in any one file and confirm the gate-leak assertion fails. Mutation (b) is the one that matters most — it is the regression the gate exists to prevent.
 3. `npm run test:contract:shim-injection` — should stay green; the same four files are re-read and no injection marker or script anchor is near a `</style>`.
-4. `npm run lint` — `eslint src` covers `src/test/*.js`, so the new file must be lint-clean.
+4. `npm run lint` — must stay at 0 errors.
+   > **Superseded (review pass 2026-07-30):** "`eslint src` covers `src/test/*.js`, so the new file must be lint-clean."
+   > **Reason:** False, and it manufactures confidence in an unchecked file. `eslint.config.js:11` scopes every rule block to `files: ['**/*.ts']`, so `src/test/browser-panel-scrollbar-contract.test.js` matches **no** configuration. `npx eslint` on it exits 0 because nothing was applied, not because it passed. `.github/workflows/integration-tests.yml` already documents this exact trap in a comment above its lint step ("gives ZERO coverage of src/webview/*.js and src/test/*.js. Do not read a green lint step as 'the webview JS was linted'").
+   > **Replaced with:** `npm run lint` is a TypeScript-only gate; it must stay at 0 errors, but it gives **no** signal on the new `.js` test. Correctness of that file is carried by running it plus the two mutation checks in item 2, not by lint. Widening `eslint.config.js` to `.js` is deliberately out of scope — the workflow comment states it needs its own plan because it would surface an unmeasured warning backlog.
 5. Not affected by construction, listed so nobody re-runs them looking for a signal: `verb-returns:check`, `parity:check`, `push-routing:check`. No verb, schema, seam, or allowlist is touched.
 
 ### Manual — sync first (no compile)
@@ -475,3 +481,88 @@ Files changed:
 - `package.json`
 
 No issues encountered during implementation.
+
+---
+
+## Review Pass — 2026-07-30 (reviewer, in-place)
+
+Reviewed the committed change (all four HTML edits, the test, and `package.json` landed in commit `4b31e9e`) against this plan. One CRITICAL shipped-surface regression, two MAJOR findings, and one MINOR parity deviation. All fixed in this pass.
+
+### CRITICAL — the scrollbar block deleted a shipped CSS rule in `project.html`
+
+`git diff 4b31e9e^ 4b31e9e -- src/webview/project.html` reports **42 insertions / 3 deletions** on a change this plan defines as purely additive. The three deletions were the whole `.review-mode-btn.active` rule:
+
+```css
+.review-mode-btn.active {
+    border-color: var(--accent-teal, #00f0ff);
+    color: var(--accent-teal, #00f0ff);
+}
+```
+
+The block was pasted *over* the last rule in the `<style>` element rather than inserted before `</style>`, and the deleted rule's closing brace was reused to terminate the new `@supports` block — which is why the CSS still parsed and nothing failed loudly.
+
+**Impact.** Every Review toggle in the Project panel lost its active state: `btn-review-projects`, `btn-review-constitution`, `btn-review-system` (project.html), plus `btn-review-kanban` / `btn-review-features` built dynamically in `project.js`. Clicking Review enabled the mode with no visual confirmation. `project.html` is served to the **VS Code editor webview** (`PlanningPanelProvider.ts:678-680`) as well as the browser, so this hit the shipped extension (~4,000 installs) and violated PRD contract #2 (behaviour-preserving edits to shipped providers).
+
+**Fixed** — rule restored at `src/webview/project.html:1218-1221`, immediately after `.popup-actions button.primary` where it originally sat. `src/test/project-panel-review-mode.test.js` red → green.
+
+**`memo.html`, `setup.html`, `shell.html` were checked for the same pattern and are clean:** setup 43 insertions / **0** deletions, shell 34 / **0**. `memo.html` shows 155/54 in the same commit, but its deletions belong to the Browser Memo Panel restyle swept into the same auto-commit — the scrollbar block there is cleanly appended (verified in the `-U6` hunk), and `test:contract:memo-panel-style` is green.
+
+### MAJOR — the new contract test is structurally blind to this defect, and the test that caught it was ungated
+
+All five assertions in `browser-panel-scrollbar-contract.test.js` are **presence-only** (rule count, token defined, no gate leak, `color-scheme` present, `@supports` present). None can distinguish a file that gained the new block from one that gained the block *and lost an existing rule*. It reported **30 passed, 0 failed** against the vandalised `project.html`. This is the "green while incomplete" hole the review protocol targets, inside the very test written to prevent silent regressions.
+
+The test that did catch it — `src/test/project-panel-review-mode.test.js:36` (`assert.ok(htmlSource.includes('.review-mode-btn.active'))`) — was invoked by **no workflow**.
+
+**Fixed** — `project-panel-review-mode.test.js` wired into `.github/workflows/integration-tests.yml:126` with a comment recording why. Chose to wire the existing test rather than duplicate its assertions into the scrollbar test: it already guards the whole `project.html` review surface (buttons, popup CSS, active state), which is the actual regression class.
+
+### MAJOR — plan's lint verification claim was false
+
+Verification item 4 asserted `eslint src` covers `src/test/*.js`. It does not — `eslint.config.js:11` scopes to `files: ['**/*.ts']`, so the new test file matches no configuration and `eslint` exits 0 without applying a single rule. Plan text corrected in place (see the superseded block in **Verification Plan → Automated Tests**). No code change: widening the eslint config is explicitly deferred to its own plan by the comment already in `integration-tests.yml`.
+
+### MINOR — `memo.html` thumb missed board parity
+
+Implementation used `var(--border-color)` (`#333333`) per the plan's edge-case note claiming `--border-bright` does not exist in `memo.html`. It does — line 27 (`:root`) and line 52 (`body.theme-claudify`) — the Memo Panel rewrite added it. Against the board's `#444444` the memo thumb rendered visibly dimmer, contradicting this plan's Goal of board parity.
+
+**Fixed** — `src/webview/memo.html:166` and `:182` now use `var(--border-bright)` in the thumb fallback and the gated `scrollbar-color`. Plan edge-case note superseded in §1.
+
+### Verified correct — kept unchanged
+
+The `@supports not selector(::-webkit-scrollbar)` gate is present and correct in all four files (the single highest-consequence line in the change); `::-webkit-scrollbar-corner` present in all four; `setup.html`'s block is in the **first** `<style>` block (closes 583) not the second (653); `shell.html` correctly omits the `--vscode-*` fallback; exactly one bare `::-webkit-scrollbar` rule per file; no `scrollbar-width`/`scrollbar-color` leaks outside the gate anywhere; `headlessPanelHtml.ts` performs no `</style>`- or CSS-keyed substitution that these edits could disturb.
+
+### Validation results
+
+Verification was **fully executed** — no `SKIP TESTS:`/`SKIP COMPILATION:` directive was present in the dispatch instructions. This plan's note that "no compilation step and no automated test run is part of this verification pass" was treated as a record of the coder's session, not as an instruction to the reviewer.
+
+| Check | Result |
+| :--- | :--- |
+| `test:contract:panel-scrollbars` | **30 passed, 0 failed** |
+| Mutation (a) — delete `setup.html` block | fails with 4 assertions naming `setup.html` — **load-bearing** |
+| Mutation (b) — hoist `scrollbar-width` out of the gate | fails the gate-leak assertion — **load-bearing** |
+| `project-panel-review-mode` | red at HEAD → **PASS** after fix |
+| All 20 CI-wired `test:contract:*` | **20/20 PASS** |
+| `npm run lint` | **0 errors** (2376 pre-existing warnings) |
+| `npm run compile-tests` (`tsc -p tsconfig.test.json`) | **exit 0** |
+| `verb-returns:check` / `parity:check` / `push-routing:check` | **PASS** — the plan's "unaffected by construction" claim confirmed |
+| `integration-tests.yml` YAML parse | **valid**, 33 steps |
+
+Mutations ran against an isolated `git archive` export in the scratchpad, never the working tree.
+
+**Gate-wiring audit.** `test:contract:panel-scrollbars` → defined `package.json:792`, invoked `integration-tests.yml:115` ✅. `test:contract:shim-injection` → invoked `:85` ✅. `npm run lint` → invoked `:136` but **zero coverage of the new `.js` file** (see MAJOR above). `verb-returns:check`/`parity:check`/`push-routing:check` → wired, unaffected, green. `project-panel-review-mode` → was unwired, **now invoked at `:126`**.
+
+**Four pre-existing red tests, not caused by this change** — confirmed red at `4b31e9e^` by exporting that tree and running them there: `setup-autosave-regression`, `setup-panel-migration`, `project-panel-kanban-create-button`, `operation-mode-toggle-regression`. None are CI-wired. Out of scope for this plan.
+
+**Manual step 6 (`dist/` + installed-extension copy) was not performed, by project rule.** `CLAUDE.md` states `dist/` is not used during development or testing, that `src/` is the source of truth, and that `dist/` staleness must not be audited or flagged during review. That overrides this plan's sync instruction; flagged rather than silently resolved. The plan's step 6 should be dropped on any future revision.
+
+### Remaining risks
+
+1. **Unverifiable by static review — needs your eyes.** `color-scheme: dark` repaints native form controls on the shipped editor webview: `project.html` (14 selects, 8 textareas) and `setup.html` (8 selects, **83** inputs). The direction is verified correct (both themes dark, zero `vscode-light` rules in `src/webview/`, backgrounds `#000000`/`#0d0d0d`), but this plan routed it to the user as a sign-off. Open a `<select>` popup in the editor's Project and Setup panels under a **light** VS Code theme.
+2. **All browser-mode and Firefox manual steps (7-13) remain unexecuted.** No headless browser was driven in this pass. The `@supports` Firefox branch has never been exercised at runtime — only asserted statically.
+3. **The presence-only weakness persists for the other three panels.** If `kanban.html`/`planning.html`/`design.html` are brought up to standard later (User Review item 3), the same CSS-append clobber can recur in files whose surviving rules no CI test asserts. Only `project.html` now has that guard.
+4. **`withoutWebkitGate()` brace-matches through CSS comments** — a `{`/`}` inside a comment within the gate would mis-terminate the strip. No such content exists today; left unfixed as churn without benefit.
+
+### Files changed in this review pass
+
+- `src/webview/project.html` — restored the clobbered `.review-mode-btn.active` rule (CRITICAL)
+- `src/webview/memo.html` — thumb + gated `scrollbar-color` → `--border-bright` for board parity (MINOR)
+- `.github/workflows/integration-tests.yml` — wired `project-panel-review-mode.test.js` (MAJOR)
+- this plan file — superseded the stale `--border-bright` note (§1) and the false lint claim (Verification), appended these findings

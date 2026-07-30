@@ -163,7 +163,7 @@
             background: transparent;
         }
         ::-webkit-scrollbar-thumb {
-            background: var(--vscode-scrollbarSlider-background, var(--border-color));
+            background: var(--vscode-scrollbarSlider-background, var(--border-bright));
             border-radius: 3px;
         }
         ::-webkit-scrollbar-thumb:hover {
@@ -179,7 +179,7 @@
         @supports not selector(::-webkit-scrollbar) {
             :root {
                 scrollbar-width: thin;
-                scrollbar-color: var(--border-color) transparent;
+                scrollbar-color: var(--border-bright) transparent;
             }
         }
     </style>

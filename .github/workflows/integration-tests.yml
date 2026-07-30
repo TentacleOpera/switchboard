@@ -114,6 +114,17 @@ jobs:
       - name: Browser panel scrollbar contract (@supports gating, no ungated scrollbar-width)
         run: npm run test:contract:panel-scrollbars
 
+      # Wired during the scrollbar-styling review pass. The scrollbar block was
+      # appended to project.html's <style> in a way that DELETED the preceding
+      # `.review-mode-btn.active` rule and reused its closing brace, silently
+      # killing the Review toggle's active state on a shipped webview. The
+      # scrollbar contract test could not see it — presence-only assertions never
+      # notice a pre-existing rule going missing. THIS test caught it and was
+      # invoked by no workflow. It is the guard against CSS-append clobber in
+      # project.html; keep it wired.
+      - name: Project panel review mode (review buttons + popup/active-state CSS survive edits)
+        run: node src/test/project-panel-review-mode.test.js
+
       # `npm run lint` is named as an automated check by many plans but was
       # invoked by no workflow. It exits 0 today (0 errors, warnings only), so
       # wiring it gates future ERRORS without going permanently red.
