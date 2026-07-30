@@ -36,7 +36,7 @@ Confirmed empirically: a plan imported with no pin, then rewritten with `**Proje
 
 ### Scope
 
-This plan fixes **recoverability only** — a pin can fill an empty project. It does **not** address why pins fail to apply on first insert; that is the sibling subtask (root-cause investigation) in this feature. This change is valuable on its own: it turns every present and future missed pin into a self-healing case.
+This plan fixes **recoverability only** — a pin can fill an empty project. It does **not** address why pins fail to apply on first insert; that is the sibling subtask (same-snapshot resolution fix) in this feature, implemented in the same coding session. This change is valuable on its own: it turns every present and future missed pin into a self-healing case.
 
 ## Metadata
 
@@ -85,7 +85,7 @@ This plan fixes **recoverability only** — a pin can fill an empty project. It 
 - **`project_id` must be resolved, not copied.** On the update path the record's `projectId` is null for an unassigned row, so `_resolveProjectForInsert` performs the name lookup and `excluded.project_id` carries the resolved id. Do not bypass `_resolveProjectForInsert` by reaching for `record.project` directly in the SQL bindings.
 - **Resolve-only still applies.** A pin naming a non-existent project must continue to produce `('', null)`, not create a `projects` row. `_resolveProjectForInsert` already enforces this; the fill inherits it unchanged because `excluded.*` are the values that helper produced for this pass.
 - **`upsertPlans` is a different path.** It is DB-sourced (Notion restore, manifest ingest) and legitimately carries project. Leave it alone; this change is scoped to the file-derived path (`insertFileDerivedPlan`).
-- **Sibling subtask (root-cause fix) shares `PlanIngestionEngine.ts` and `package.json`.** This plan lands **first**; the sibling's regression test must keep this plan's contract test green. If the sibling's fix moves `project_id` resolution into the INSERT statement (its preferred shape), the CASE composes unchanged — `excluded.project_id` then carries the subquery-computed value (verified empirically, see Resolved Assumptions).
+- **Sibling subtask (same-snapshot resolution fix) — same coding session, implement this plan's changes first.** The sibling moves `project_id` resolution into the INSERT statement's VALUES; the fill CASE composes unchanged — `excluded.project_id` carries the subquery-computed value (the exact combined shape is verified empirically, see Resolved Assumptions). Since both plans edit `insertFileDerivedPlan`'s SQL, write the combined statement once, and keep both contract tests green against it.
 - **Build/deploy dependency.** The running extension serves from its install folder (`~/.devin/extensions/turnzero.switchboard-1.7.13/dist/`), not this repo's `dist/`. A change is not live until built and synced there and the window reloaded. Verified for this investigation: the installed bundle's `insertFileDerivedPlan` is logically identical to src, so there is no version skew to work around — but "compiled" is not "live".
 - **`npm run verb-returns:check` / `catalog:check`** are unaffected (no verb signature or push site changes); `catalog.json` records line numbers and this edit shifts them in `KanbanDatabase.ts`, so a `catalog:generate` refresh may be needed when the implementer's pipeline runs those gates.
 

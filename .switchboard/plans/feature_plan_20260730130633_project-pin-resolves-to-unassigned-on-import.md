@@ -2,7 +2,7 @@
 
 ## Goal
 
-Establish why `_resolveProjectForInsert` returns `('', null)` for a pin that names an existing project in the plan's own workspace, and fix it — so a plan authored with a PROJECT PIN lands in that project on first import.
+Make a plan authored with a valid PROJECT PIN land in that project on **first import**, and make any residual failure diagnosable from logs instead of silent. The fix is structural (same-snapshot resolution inside the INSERT statement) rather than diagnosis-gated, so the whole plan is completable unattended by one coder in one pass.
 
 ### Problem
 
@@ -10,7 +10,7 @@ Every fresh plan import carrying a valid pin currently lands unassigned. Measure
 
 The consequence is worse than "no project": a plan can end up with a non-empty `project` string and a null `project_id`, which is filtered out of the project view (no id to join on) **and** out of the Unassigned view (non-empty string) — invisible on the board in both directions. That is how three real plans went missing earlier today.
 
-### Root cause — narrowed, not yet identified
+### Root cause — narrowed to one surviving mechanism class
 
 The code path is correct on inspection, in both `src/` and the build that is actually running. `_resolveProjectForInsert` ([KanbanDatabase.ts:1933](../../src/services/KanbanDatabase.ts#L1933)) has exactly three exits that yield unassigned:
 
@@ -18,7 +18,7 @@ The code path is correct on inspection, in both `src/` and the build that is act
 2. the workspace-name guard — `_isWorkspaceName(pin, record.workspaceId)` (line 1979)
 3. the resolve miss — `getProjectIdByName(record.workspaceId, pin)` returning null (line 1989)
 
-One of those three fires on every import — **or the pin never reaches the function at all** (see "Zeroth exit" below). Which is unknown, because none of them is observable from outside the process. The same lookup SQL, run directly against the DB file, resolves correctly:
+…or the pin never reaches the function at all (parse/plumbing loss — the "zeroth exit"). The same lookup SQL, run directly against the DB file, resolves correctly:
 
 ```
 sqlite3 .switchboard/kanban.db \
@@ -26,13 +26,9 @@ sqlite3 .switchboard/kanban.db \
 → 11
 ```
 
-**Zeroth exit (added in review — previously unobservable):** if `parsePlanMetadata` returns an empty `project` (or the value is lost between parse and record), `_resolveProjectForInsert` skips the pin branch entirely, falls to precedence #2 (`kanban.activeProjectFilter`, currently **empty** in this DB), and lands at precedence #3 — unassigned. The originally proposed instrumentation only logged **inside** the pin branch, so this failure mode would have produced *no output at all* and stalled the diagnosis. The parser regex (`planMetadataUtils.ts:102`) was inspected and tolerates plain, list-item, numbered, and blockquote forms case-insensitively — a parse miss is *unlikely*, but it costs one log line to make it observable instead of assumed away (Proposed Change 1b).
+**What the evidence eliminates.** The pins are real names (not `<placeholders>`), all `workspace_name` values for this workspace are empty (guard should no-op), the parser regex (`planMetadataUtils.ts:102`) was inspected and tolerates plain/list-item/numbered/blockquote forms case-insensitively, and `record.workspaceId` matched the projects row's `workspace_id` in every failing row examined. What survives all of it is the **resolve-miss class**: the in-process lookup misses against a snapshot that differs from what the same statement's write later commits — some flavor of sql.js instance/snapshot divergence (`_instancesByDbPath` dedupes per resolved path *string*, so two path spellings of one file create two instances — the exact hazard the code documents at KanbanDatabase.ts:6156-6159; `_reloadIfStale` runs on every `ensureReady()` but is stat-debounced and can fail, logging `"Reload from disk failed"`).
 
-**Leading hypothesis (sharpened in review):** the lookup runs on an in-memory sql.js image that differs from the file. Review of the instance lifecycle constrains how that can happen:
-
-- `ensureReady()` calls `_reloadIfStale()` on **every** access (KanbanDatabase.ts:1747-1785 → 6143-6225): stat-debounced at 500ms, it reloads whenever the file's mtime is **strictly newer** than what this instance loaded. A long-lived stale image therefore self-heals on the next access — plain staleness cannot persist for weeks past the projects row's creation (2026-07-13/17) unless the reload is persistently failing (that failure logs `"Reload from disk failed"` / `"External modification detected"` via `console.*`).
-- **The write-side inference that makes this decisive:** the *same* `insertFileDerivedPlan` call that misses the lookup persists the plan row moments later via a **full-image export** (`_persist()` writes the whole DB image, not a delta). The failing rows demonstrably reached the on-disk file, and the user's post-failure disk query shows the `projects` row **present** in that same file. So the image that performed the write **contained the projects row**. If exit 3 is firing on an image *without* the row, the lookup and the write are running on **two different `KanbanDatabase` instances** — which is exactly the "path-resolution divergence yielding two instances for one file" hazard the code itself documents (KanbanDatabase.ts:6156-6159; `_instancesByDbPath` dedupes per resolved path *string*, so two different path spellings of one file create two instances). The `instanceId` diagnostic (`#N(kanban.db)`) already exists from the is_feature-clobber investigation (docs/investigation-feature-is_feature-clobber.md) precisely to expose this — the `[pin]` instrumentation must therefore include `this.instanceId` in every line (Proposed Change 1).
-- Supporting observation for out-of-lockstep behavior: after ten `DELETE /kanban/plans` calls returned `{"success":true}`, the on-disk DB still showed all ten rows for roughly six seconds before converging. Note the persist layer is debounced/coalesced by design (`PERSIST_DEBOUNCE_MS = 300`, Workstream B), so *some* disk lag is expected behavior, not itself the bug.
+**Why this plan no longer tries to name the exact flavor first:** the divergence mechanics are only observable inside the live, long-running extension-host process (a fresh headless repro loads the on-disk file — which contains the projects row — and resolves fine). Pinning down the flavor requires an instrumented build running in the user's window, which cannot happen in the middle of an unattended coding dispatch. The fix below therefore targets the *class*, not the flavor: resolve inside the INSERT so lookup and write share one snapshot by construction — correct under a healthy snapshot, self-healing under a divergent one — and ship permanent tripwires so any residual non-resolve-miss mechanism identifies itself in logs on its next natural occurrence.
 
 ### Hypotheses already excluded — do not re-test these
 
@@ -40,174 +36,166 @@ sqlite3 .switchboard/kanban.db \
 | :--- | :--- |
 | Watcher read a partially-written file | Pin byte-offset does not predict failure (failures at offset 106 and 14054; successes at 134 and 5588). Every failing row had `created_at == updated_at`, i.e. a single insert pass — no create-then-change double import. |
 | The `projects` row didn't exist yet | `Website` id 10 created 2026-07-13, `Browser Switchboard` id 11 created 2026-07-17; every affected plan imported after both. |
-| Pin syntax / list-item prefix | Across 1,395 files: list-item form 7 applied / 7 empty, plain form 7 applied / 5 empty — no correlation. Both styles failed live. Parser regex additionally inspected in review (`planMetadataUtils.ts:102`): tolerant of both forms, case-insensitive, trims the capture. |
+| Pin syntax / list-item prefix | Across 1,395 files: list-item form 7 applied / 7 empty, plain form 7 applied / 5 empty — no correlation. Both styles failed live. Parser regex additionally inspected in review: tolerant of both forms, case-insensitive, trims the capture. |
 | Stale installed build (src fixed, build old) | The running bundle's `insertFileDerivedPlan`, `_resolveProjectForInsert`, `getProjectIdByName`, `_isWorkspaceName` and `getDistinctWorkspaceNamesUnion` were disassembled and are logically identical to `src/`. Repo and installed both report 1.7.13. |
 | Write mechanics | In-place single-shot write and atomic rename from outside the watched directory behave identically — both fail. |
-| The workspace-name guard matching by accident | All `workspace_name` values for this workspace are empty, and `getDistinctWorkspaceNamesUnion` filters `!= ''`, so the guard should no-op. Ranked unlikely but **not** conclusively excluded — the union also reads the cold/archive instance, which was not inspected. |
+| The workspace-name guard matching by accident | All `workspace_name` values for this workspace are empty, and `getDistinctWorkspaceNamesUnion` filters `!= ''`, so the guard should no-op. Ranked unlikely but not conclusively excluded — covered by a permanent DROP tripwire rather than pre-fix diagnosis. |
 
 ### Historical note
 
-Of 26 corpus files whose pin names a real project, 14 show the pinned project. Given the pin demonstrably does not work now, those are more consistent with precedence #2 — `kanban.activeProjectFilter`, the active board project at insert time (KanbanDatabase.ts:1994-2010) — having been populated when those plans imported. That key is currently empty in this DB, which is why nothing rescues the miss today. Worth confirming during the fix, since it determines whether this ever worked or has always been masked. (This masking also fits the zeroth exit: if the pin never reaches the resolver, precedence #2 was the only thing that ever assigned projects — and it stopped when the filter went empty.)
+Of 26 corpus files whose pin names a real project, 14 show the pinned project. Given the pin demonstrably does not work now, those are more consistent with precedence #2 — `kanban.activeProjectFilter`, the active board project at insert time (KanbanDatabase.ts:1994-2010) — having been populated when those plans imported. That key is currently empty in this DB, which is why nothing rescues the miss today. The permanent tripwires settle this question passively over time; it does not gate the fix.
 
 ## Metadata
 
-- **Complexity:** 7
+- **Complexity:** 6
 - **Tags:** backend, database, bugfix, reliability
 - **Project:** Browser Switchboard
 
 ## User Review Required
 
-- **The fix cannot be pre-approved in detail** — it is gated on the diagnosis (Step 1 must produce its `[pin]` line before any fix is written). The fix *shapes* per outcome are enumerated in Proposed Change 3; if the diagnosis lands outside them (e.g. a cross-process writer from a second IDE window), expect a follow-up plan rather than an improvised fix.
-- **Instrumentation reading location changed during review:** the decisive `[pin]` lines from `KanbanDatabase` are read from the **editor's extension-host log**, not the Switchboard output channel (see the superseded callout in Proposed Change 2). The engine-side line (Change 1b) *does* go to the Switchboard output channel.
+- **Approach changed during review (see superseded callout in Proposed Changes):** the original diagnose-first structure required a live-window reproduction mid-dispatch, which is incompatible with single-shot unattended coding. The structural fix ships without first proving which divergence flavor fired. The trade-off is explicit: we may never learn the exact mechanism of the 9/9 failures — in exchange, the resolve-miss class becomes impossible by construction, and any *other* mechanism identifies itself in logs on its next occurrence while the sibling's fill fix makes it recoverable meanwhile. Veto if you want the diagnosis session first instead.
+- **Post-merge acceptance is yours, not the coder's:** after installing the built extension, author one pinned plan and check the row (Manual Verification step 1). If it still lands unassigned, the tripwire logs now say exactly why — paste them into a follow-up.
 
 ## Complexity Audit
 
 ### Routine
 
-- The instrumentation itself: five log lines plus one debug helper, all removed or downgraded before merge.
-- The regression test follows the existing contract-test pattern and registration.
+- The tripwire log lines and the regression/contract tests follow existing repo patterns.
+- The subquery-in-INSERT shape is probe-verified against the vendored sql.js and mirrors the existing name-join pattern (KanbanDatabase.ts:670-672).
 
 ### Complex / Risky
 
-- **This is a diagnosis before it is a fix**, and the fix cannot be specified until step 1 produces its answer.
-- **The failure is invisible.** Nothing logs, nothing throws, no test fails; the plan simply lands unassigned. Whatever fix lands must come with an assertion that fails loudly if it regresses, or the next occurrence is equally silent.
-- **Two of the three candidate exits are shared code.** `getProjectIdByName` is used by `resolveProjectId`, `addProject`, `ensureProjectExists` and the board's own filters; `_isWorkspaceName` guards every insert path. A fix aimed at the watcher must not weaken resolve-only semantics for the others.
-- **If the leading hypothesis is right, the bug is not in this function at all** — it is DB-instance lifecycle (two instances per file via path divergence, or a persistently failing `_reloadIfStale`). That is a wider fix than a null check, and the plan must not paper over it with a re-read that hides a coherency problem.
+- **Load-bearing SQL on the hottest import path.** `insertFileDerivedPlan` runs for every plan import (1,395 files on this board). The computed `project`/`project_id` expressions must preserve resolve-only semantics exactly (unknown pin → `('', null)`, never a minted `projects` row, never the stranded name-without-id state).
+- **Two of the three original exits are shared code.** `getProjectIdByName` is used by `resolveProjectId`, `addProject`, `ensureProjectExists` and the board's own filters; `_isWorkspaceName` guards every insert path. This plan deliberately leaves both untouched — the TS-side resolution stays primary; the SQL fallback only catches what it missed.
+- **The failure being fixed is invisible.** Nothing logs, nothing throws today. The regression test must assert the *applied* path, and the tripwires must survive into the merged build (downgraded, not deleted).
 
 ## Edge-Case & Dependency Audit
 
 ### Race Conditions
 
-- `_reloadIfStale`'s 500ms stat debounce means an external write can be invisible to a lookup that lands inside the debounce window. That window is far too short to explain misses against a projects row created weeks ago, but the instrumentation's `visibleProjects` dump plus `instanceId` will distinguish it from instance divergence if the timing is ever that tight.
-- Reproduction runs against a live watcher — write one file at a time so `[pin]` lines correlate unambiguously with files.
+- The whole point of the fix: resolution and write happen in **one statement on one snapshot**, eliminating the lookup/write divergence window entirely. No new async boundary is introduced; `_resolveProjectForInsert` still runs before the statement as the primary (guards + activeProjectFilter precedence), and the SQL fallback re-resolves atomically only when the TS side came back null.
 
 ### Security
 
-- No new input surface; instrumentation logs values already in memory. Do not log file contents wholesale — pin, wsId, instanceId, and the visible project names are sufficient and keep the exthost log readable.
+- No new input surface. The pin only reaches the SQL binding after passing the existing placeholder and workspace-name guards; an unknown name simply misses the subquery and lands `('', null)`.
 
 ### Side Effects
 
-- **Instrumentation must be temporary and explicit.** The log lines added in step 1 exist to answer one question. Either remove them before merge or downgrade to `console.debug` behind an existing verbosity flag — a permanent per-import log on a 1,395-plan board is noise that will be ignored within a day.
-- **Reproduction pollutes the board.** Each test plan file becomes a card. Use an obvious throwaway prefix, and clean up with `DELETE /kanban/plans?planId=…` plus removing the file. Note that the DELETE's on-disk effect lags (debounced/coalesced persist) — verify via `GET /kanban/plans` (what the board renders) **and** the file, and re-check the file after a pause before declaring cleanup complete.
+- **Tripwires must be signal, not noise.** The engine-side anomaly line fires only when the file *contains* a `**Project` marker but the parser extracted nothing (a genuine anomaly, near-zero frequency). The DB-side DROP lines fire only on drops. No per-import APPLY logging survives to merge.
+- **Perf:** the fallback subquery executes only when the TS lookup returned null (bound id short-circuits via `COALESCE`), and the `projects` table is tiny; cost on the healthy path is nil.
 
 ### Dependencies & Conflicts
 
-- **Do not "fix" it by auto-creating the project.** Resolve-only is deliberate: only the user creates projects, via `addProject`. An unknown pin must still drop to unassigned. The import guard is the backstop against phantom projects and must survive.
-- **If the fix is a re-read from disk before resolution**, it runs on every plan import — 1,395 files on this board. Measure it, and prefer resolving `project_id` inside the same SQL statement (the `SELECT id FROM projects WHERE projects.name = plans.project` subquery pattern already used at KanbanDatabase.ts:670-672) over an extra async round trip per record. The subquery-in-`VALUES` shape is verified viable on the vendored sql.js (see Resolved Assumptions).
-- **Multi-workspace interaction.** `record.workspaceId` is the value bound to the row's `workspace_id`, so it is observable after the fact and matched the projects row in every failing case examined. If step 1 shows it differing at call time, the bug is upstream in the ingestion engine's workspace resolution, not here — a different fix with different blast radius.
-- **The cold/archive instance.** `getDistinctWorkspaceNamesUnion` reads it when `hasArchiveInstance(this._workspaceRoot)`. If exit 2 turns out to be the culprit, inspect what workspace names the archive contributes before changing the guard.
-- **Recoverability is handled separately.** The sibling subtask (landing **first**) makes a pin apply when the stored project is empty. That does not fix this bug — it only means a second save of the file works around it — so do not treat the two as substitutes. Any fix here must keep the sibling's `test:contract:project-pin-fill` green; note the sibling adds CASE expressions to `insertFileDerivedPlan`'s ON CONFLICT clause, and `excluded.project_id` composes with a subquery-computed value if that fix shape is chosen.
-- **Sibling overlap surfaces:** `PlanIngestionEngine.ts` (sibling edits ~line 795; this plan adds a log after line 705) and `package.json` (both append one script line) — trivial merges, sibling lands first. This plan's instrumentation owns `_resolveProjectForInsert`; the sibling no longer touches that function (its subtask decision moved into the SQL CASE).
-- **Build/deploy dependency.** The running extension serves from `~/.devin/extensions/turnzero.switchboard-1.7.13/dist/`. Instrumentation is not live until built, synced there, and the window reloaded. Confirmed for this investigation that the installed bundle matches src, so there is no version skew to chase.
+- **Do not "fix" it by auto-creating the project.** Resolve-only is deliberate: only the user creates projects, via `addProject`. An unknown pin must still drop to unassigned. The import guard is the backstop against phantom projects and must survive — the regression test asserts it.
+- **Sibling subtask (apply-if-empty fill) — same coding session, implement first.** Its fill CASE and this plan's computed `excluded.*` values compose in the same ON CONFLICT statement; the exact combined shape (subquery-computed VALUES + fill CASE keyed on `plans.project = ''` with the `feature_id` guard) is probe-verified (see Resolved Assumptions). Shared files: `insertFileDerivedPlan`'s SQL (both edit it — write it once, together), `PlanIngestionEngine.ts` (sibling ~795, this plan ~705), `package.json` (one script line each).
+- **Multi-workspace:** the subquery binds the same `record.workspaceId` the row is written with, so a systematically wrong `workspaceId` would make both miss consistently — that residual case is exactly what the DROP tripwire's `wsId` field exposes.
+- **Build/deploy:** the running extension serves from `~/.devin/extensions/turnzero.switchboard-1.7.13/dist/`; the fix is live only after build + sync + reload. That is the user's post-merge acceptance step, not a mid-dispatch gate.
 
 ## Dependencies
 
-- None (no session dependencies; the sibling-subtask ordering is recorded in the feature file's Dependencies & sequencing).
+- None (no session dependencies; in-session ordering with the sibling is recorded in the feature file's Dependencies & sequencing).
 
 ## Adversarial Synthesis
 
-Key risks: (1) writing a fix before the diagnosis line exists — the enumerated fix shapes look actionable enough to tempt skipping step 1, and a wrong guess papers over a coherency bug; (2) instrumentation blind spots — logging only inside the pin branch (or reading the wrong log surface) yields silence and a stalled diagnosis; (3) a fix that weakens resolve-only or the shared lookup helpers. Mitigations: a hard gate on the `[pin]` line, entry/exit logging on both sides of the parse→resolve seam with `instanceId` in every line, and a regression test asserting the applied path plus resolve-only plus the unrepresentability of the stranded name-without-id state.
+Key risks: (1) the computed SQL expressions drifting from resolve-only semantics (minting nothing must stay guaranteed; name-without-id must stay unrepresentable); (2) shipping a class-level fix means the exact historical mechanism may never be named — mitigated by permanent DROP/anomaly tripwires that make any residual failure self-identifying; (3) same-statement collision with the sibling's fill CASE — mitigated by writing the combined statement once in the same session, locked by both contract tests plus the probe-verified combined shape.
 
 ## Resolved Assumptions
 
 Settled empirically this session (2026-07-30) — do not re-flag or re-research:
 
-- Vendored sql.js bundles **SQLite 3.49.1**; a scalar subquery inside `INSERT … VALUES` works, and `excluded.project_id` in the ON CONFLICT clause reflects the subquery-computed value — so preferred fix shape 3a is viable as written, and it composes with the sibling's apply-if-empty CASE (probe verified fill / no-move / subtask-skip against this exact statement shape).
+- Vendored sql.js bundles **SQLite 3.49.1**; a scalar subquery inside `INSERT … VALUES` works, and `excluded.project_id` in the ON CONFLICT clause reflects the subquery-computed value. The probe exercised the exact combined shape this feature ships: subquery-computed VALUES + apply-if-empty CASE (fill `''→name` with id ✓, no-move on different pin ✓, subtask-skip via `feature_id` condition ✓).
 - `parsePlanMetadata`'s project regex (`planMetadataUtils.ts:102`) accepts plain, list-item, numbered, and blockquote pin forms, case-insensitively, and trims the capture (CRLF-safe).
 
 ## Proposed Changes
 
-### 1. `src/services/KanbanDatabase.ts` — instrument the exits (temporary, first commit)
+> **Superseded:** the original plan structure — temporary instrumentation of all resolver exits, a live reproduction gated as "do not write the fix before the `[pin]` line exists", then a fix shape chosen per observed exit (instance coherency / argument mismatch / guard collision / parse loss).
+> **Reason:** the reproduction requires building, syncing to the installed extension, reloading the user's live window, and reading exthost logs — steps only the user's environment can perform. The feature dispatches to one coder, all subtasks in one unattended pass; a mid-dispatch human gate makes the plan undispatchable in that model. Meanwhile the evidence already narrows the live mechanism to the resolve-miss class, and a same-snapshot fix defeats that entire class without needing to know which flavor fired.
+> **Replaced with:** ship the structural fix (Change 1) plus permanent, gated observability (Change 2) plus headless tests (Changes 3–4) in one pass. The diagnosis value is preserved by the tripwires: if a residual mechanism ever fires again, its log line names it — no instrumented rebuild needed.
 
-In `_resolveProjectForInsert`, log which exit fires and the values that decided it. **Every line carries `this.instanceId`** — if the `[pin]` lines and the board's writes show different instance ids for the same `kanban.db`, the two-instance hypothesis is confirmed in one repro run:
+### 1. `src/services/KanbanDatabase.ts` — same-snapshot fallback resolution in `insertFileDerivedPlan`
 
-```ts
-        if (record.project && record.project.trim() !== '') {
-            const pin = record.project.trim();
-            if (/^<.*>$/.test(pin)) {
-                console.warn(`[pin] ${this.instanceId} DROP placeholder pin=${JSON.stringify(pin)} file=${record.planFile}`);
-                return { project: '', projectId: null };
-            }
-            const isWsName = await this._isWorkspaceName(pin, record.workspaceId);
-            if (isWsName) {
-                console.warn(`[pin] ${this.instanceId} DROP workspace-name-guard pin=${JSON.stringify(pin)} wsId=${record.workspaceId} names=${JSON.stringify(await this.getDistinctWorkspaceNamesUnion(record.workspaceId))}`);
-                return { project: '', projectId: null };
-            }
-            let projectId = record.projectId ?? null;
-            if (projectId === null) {
-                projectId = await this.getProjectIdByName(record.workspaceId, pin);
-            }
-            if (projectId === null) {
-                // The decisive line: dump what THIS in-memory instance can see, so a
-                // miss here can be compared against the same query run on the file.
-                const visible = await this.getAllProjectNamesForDebug?.(record.workspaceId);
-                console.warn(`[pin] ${this.instanceId} DROP resolve-miss pin=${JSON.stringify(pin)} wsId=${record.workspaceId} visibleProjects=${JSON.stringify(visible)}`);
-                return { project: '', projectId: null };
-            }
-            console.log(`[pin] ${this.instanceId} APPLY pin=${JSON.stringify(pin)} -> id=${projectId} file=${record.planFile}`);
-            return { project: pin, projectId };
-        }
-        // Zeroth-exit observability: the pin branch was never entered.
-        console.warn(`[pin] ${this.instanceId} NO-PIN record.project=${JSON.stringify(record.project ?? null)} file=${record.planFile} (falls through to activeProjectFilter/unassigned)`);
-```
-
-Add the debug helper next to `getProjectIdByName` (also temporary):
+`_resolveProjectForInsert` stays exactly as-is (placeholder guard, workspace-name guard, activeProjectFilter precedence, resolve-only). What changes: the INSERT no longer trusts the TS lookup as the *only* resolution attempt. Bind an `effectiveName` — the TS-resolved name if non-empty, otherwise the guard-passed pin (empty string when there was no usable pin) — and compute both columns in SQL:
 
 ```ts
-    public async getAllProjectNamesForDebug(workspaceId: string): Promise<string[]> {
-        if (!(await this.ensureReady()) || !this._db) return ['<db-not-ready>'];
-        const stmt = this._db.prepare('SELECT name FROM projects WHERE workspace_id = ?', [workspaceId]);
-        const out: string[] = [];
-        try { while (stmt.step()) { out.push(String(stmt.getAsObject().name)); } } finally { stmt.free(); }
-        return out;
-    }
+        const { project: resolvedProject, projectId: resolvedProjectId } =
+            await this._resolveProjectForInsert(record, isExisting);
+        // Same-snapshot fallback: if the TS lookup missed (resolvedProjectId null)
+        // but a guard-passed pin exists, let the INSERT re-resolve it atomically
+        // against the same image the write commits to. A lookup and a write in one
+        // statement cannot see two different snapshots — this closes the
+        // resolve-miss class (silent unassigned imports) by construction.
+        const guardPassedPin = await this._guardPassedPin(record); // trimmed pin, or '' (placeholder/ws-name guards applied; NO getProjectIdByName call)
+        const effectiveName = resolvedProject !== '' ? resolvedProject : guardPassedPin;
 ```
 
-`visibleProjects` + `instanceId` together are the whole point: an empty/incomplete list on the instance that *also* persists the plan rows means the in-memory image genuinely lacks the row (coherency bug); a complete list means the miss is in the arguments; and mismatched instance ids across the repro mean two instances share one file.
+```sql
+            INSERT INTO plans (
+                plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
+                repo_scope, project, project_id, workspace_id, created_at, updated_at, last_action, source_type,
+                brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
+                clickup_task_id, linear_issue_id, notion_page_id, workspace_name, is_feature
+            ) VALUES (?, ?, ?, ?, 'CREATED', 'active', ?, ?, '',
+                -- project: only ever non-empty when the id resolves in this same
+                -- statement — the stranded name-without-id state is unrepresentable.
+                CASE WHEN COALESCE(?, (SELECT id FROM projects WHERE name = ? AND workspace_id = ?)) IS NOT NULL
+                     THEN ? ELSE '' END,
+                -- project_id: TS-resolved id when the lookup hit; same-snapshot
+                -- subquery otherwise. Resolve-only: an unknown name misses both
+                -- and lands NULL — no projects row is ever minted here.
+                COALESCE(?, (SELECT id FROM projects WHERE name = ? AND workspace_id = ?)),
+                ?, ?, ?, '', ?, '', '', '', '', '', '', '', '', ?, ?)
+```
 
-### 1b. `src/services/PlanIngestionEngine.ts` — log the parse output (temporary, same commit)
+with bindings `[resolvedProjectId, effectiveName, record.workspaceId, effectiveName, resolvedProjectId, effectiveName, record.workspaceId, …]`. When `effectiveName` is `''` both subqueries miss and the columns land `('', NULL)` — identical to today's unpinned behavior. When the TS lookup hit, `COALESCE` short-circuits and behavior is byte-identical to today's healthy path. The new `_guardPassedPin` helper extracts the existing placeholder + workspace-name checks (reusing them, not duplicating) and never calls `getProjectIdByName` — the whole point is that the *name→id* step moves into the statement.
 
-Immediately after `parsePlanMetadata` (line 705), log what the parser actually produced, via the host logger so it lands in the **Switchboard output channel**:
+The ON CONFLICT clause is written **once, jointly with the sibling subtask** (same session): these computed VALUES feed `excluded.project` / `excluded.project_id`, and the sibling's apply-if-empty CASE consumes them. Combined shape probe-verified.
+
+### 2. Permanent tripwires (survive to merge, gated to near-zero noise)
+
+**2a. `KanbanDatabase._resolveProjectForInsert`** — `console.debug` on each DROP exit, each line carrying `this.instanceId` (the diagnostic id added for the is_feature-clobber investigation — if lines for one `kanban.db` ever show two instance ids, the path-divergence flavor is confirmed for free):
 
 ```ts
-            this._host.logger.appendLine(
-                `[GlobalPlanWatcher] [pin-parse] project=${JSON.stringify(metadata.project ?? null)} file=${relativePath}`
-            );
+                console.debug(`[pin] ${this.instanceId} DROP placeholder pin=${JSON.stringify(pin)} file=${record.planFile}`);
+                console.debug(`[pin] ${this.instanceId} DROP workspace-name-guard pin=${JSON.stringify(pin)} wsId=${record.workspaceId}`);
+                console.debug(`[pin] ${this.instanceId} DROP resolve-miss pin=${JSON.stringify(pin)} wsId=${record.workspaceId} visibleProjects=${JSON.stringify(await this.getAllProjectNamesForDebug(record.workspaceId))}`);
 ```
 
-This closes the zeroth-exit blind spot: if `[pin-parse]` shows `null` for a file whose bytes carry a valid pin, the bug is in parse/plumbing and the `KanbanDatabase` exits are irrelevant; if it shows the pin but `KanbanDatabase` logs `NO-PIN`, the value is lost between the engine and the resolver (record construction).
+(`getAllProjectNamesForDebug` as originally specified, kept private-ish but permanent; the `projects` table is tiny.) Note the resolve-miss DROP can now only fire when the *same-statement* subquery would also decide — its `visibleProjects` dump remains the forensic record of what the in-memory image saw. These lines land in the editor's **extension-host log** (`console.*` does not reach the Switchboard output channel).
 
-### 2. Reproduce and read the answer
+**2b. `PlanIngestionEngine._handlePlanFile`** — one anomaly line via the host logger (this one *does* reach the Switchboard output channel), immediately after `parsePlanMetadata` (line 705), fired only when the file visibly carries a pin marker the parser didn't extract:
 
-Build → sync to the install folder → reload the window. Write one throwaway plan pinned to an existing project, then read the logs. Clean up the card and file afterwards.
+```ts
+            if (!metadata.project && /\*\*Project\b/i.test(content)) {
+                this._host.logger.appendLine(
+                    `[GlobalPlanWatcher] [pin-parse] file contains a **Project marker but no pin was parsed: ${relativePath}`
+                );
+            }
+```
 
-> **Superseded:** "read the Switchboard output channel for the `[pin]` line."
-> **Reason:** `KanbanDatabase` logs via `console.*`, which does **not** reach the Switchboard output channel (only `_host.logger.appendLine` writes there). In a packaged (non-debug) window, `console.*` from the extension host lands in the editor's extension-host log files — the same surface used successfully in the earlier board-push investigation (grep the editor's `logs/**/window*/` for `renderer`/`exthost` logs).
-> **Replaced with:** Read the `[pin-parse]` line in the **Switchboard output channel** (it uses the host logger), and the `[pin]` lines by grepping the **editor's extension-host log** for `[pin]`. If the exthost log proves awkward on the target editor, temporarily route the four `[pin]` lines through a logger callback passed into `KanbanDatabase` instead — the reading surface must be confirmed *before* the repro, not discovered during it.
+This closes the zeroth-exit blind spot permanently: parse/plumbing loss can never again fail silently.
 
-### 3. Fix, per what step 2 shows
-
-- **`resolve-miss` with `visibleProjects` empty or incomplete** → DB-instance coherency. First compare `instanceId` across the repro's `[pin]` lines and the board's own writes: two ids for one `kanban.db` = path-resolution divergence (fix the path normalization at `forWorkspace`/`_instancesByDbPath`, per the documented hazard at KanbanDatabase.ts:6156-6159); one id = the image itself is stale despite `_reloadIfStale` (check the exthost log for `"Reload from disk failed"` — fix the reload failure). Preferred belt-and-braces fix either way: resolve `project_id` inside the INSERT statement via the existing name-join subquery pattern (KanbanDatabase.ts:670-672) so resolution reads the same snapshot the write commits to (shape verified viable — see Resolved Assumptions).
-- **`resolve-miss` with `visibleProjects` containing the name** → the mismatch is in the arguments: compare the logged `wsId` against the row's stored `workspace_id` and fix the upstream workspace resolution in `PlanIngestionEngine`.
-- **`workspace-name-guard`** → inspect the archive's contribution to `getDistinctWorkspaceNamesUnion` and tighten the guard so a project name can never collide with an archived workspace name.
-- **`placeholder`** → the pin text is arriving malformed; fix the parse in `planMetadataUtils.parsePlanMetadata`.
-- **`NO-PIN` (with `[pin-parse]` null)** → the parser is failing on real files despite the inspected regex; fix `parsePlanMetadata` against the exact failing file bytes.
-- **`NO-PIN` (with `[pin-parse]` showing the pin)** → the value is dropped between parse and record construction in `PlanIngestionEngine._handlePlanFile`; fix the plumbing there.
-
-### 4. Regression test — assert the applied path, not the absence of a crash
+### 3. `src/test/project-pin-resolve-contract.test.js` — regression test (headless, no live window needed)
 
 ```js
 'use strict';
 /**
  * Contract: a pin naming an existing project in the plan's workspace RESOLVES
- * on first insert. Measured before the fix: 9 of 9 fresh imports with a valid
- * pin landed project='' / project_id=null, silently.
+ * on first insert — including when the caller's TS-side lookup came back null
+ * (the same-snapshot fallback). Measured before the fix: 9 of 9 fresh imports
+ * with a valid pin landed project='' / project_id=null, silently.
  */
 await db.addProject(wsId, 'Contract Project');
+
+// Healthy path: TS lookup resolves, first insert lands assigned.
 await db.insertFileDerivedPlan({ ...rec, project: 'Contract Project', projectId: null });
 const row = await db.getPlanByPlanId(rec.planId);
 assert.strictEqual(row.project, 'Contract Project', 'valid pin did not resolve on first insert');
 assert.ok(row.projectId != null, 'project name stored with null project_id — strands the card on both filter paths');
+
+// Same-snapshot fallback: statement-level resolution with a null bound id.
+// Drive the raw statement shape with resolvedProjectId=null and the pin bound
+// (mirrors the probe): the subquery must resolve name AND id together.
+// (Implement as a direct-statement test against an in-memory instance.)
 
 // Resolve-only survives the fix.
 await db.insertFileDerivedPlan({ ...rec2, project: 'Phantom Project', projectId: null });
@@ -220,43 +208,35 @@ const stranded = await db.allPlansWithProjectButNoId?.(wsId) ?? [];
 assert.strictEqual(stranded.length, 0, `${stranded.length} plans have a project name with no project_id`);
 ```
 
-### 5. Remove the instrumentation, or gate it
-
-Final commit strips the `[pin] APPLY`, `[pin] NO-PIN`, `[pin-parse]` lines and `getAllProjectNamesForDebug`, keeping the three `DROP` warnings at `console.debug` so the next silent failure has a trail.
-
-### 6. `package.json` — register the test
+### 4. `package.json` — register the test
 
 ```json
     "test:contract:project-pin-resolve": "node src/test/project-pin-resolve-contract.test.js",
 ```
 
-(The sibling subtask adds its own script line here first — trivial merge.)
+(One line each from this plan and the sibling — written in the same session, no merge conflict in practice.)
 
 ## Verification Plan
 
-Per session directive (SKIP COMPILATION / SKIP TESTS), compilation and automated-test execution are **not** part of this plan's verification pass; the regression test is authored as a deliverable and runs in CI / the implementer's pipeline.
-
-**Step 1 — diagnosis (gate: do not write the fix before this produces a line)**
-
-1. With the instrumented build live (build/sync/reload is a deployment prerequisite outside this plan's verification scope), import one throwaway pinned plan.
-2. The Switchboard output channel shows one `[pin-parse]` line, and the exthost log shows exactly one `[pin]` line for that file. Record which exit fired and the `visibleProjects` / `wsId` / `instanceId` values. Clean up the card and file; verify via `GET /kanban/plans` and the file, re-checking the file after a pause.
+Per session directive (SKIP COMPILATION / SKIP TESTS), compilation and automated-test execution are **not** part of this plan's verification pass; the tests are authored as deliverables and run in CI / the implementer's pipeline.
 
 ### Automated Tests
 
 Authored, not run in this workflow:
 
-3. `test:contract:project-pin-resolve` — first-insert resolution, resolve-only survival, stranded-state unrepresentability. Mutation check for the implementer's pipeline: revert the fix and confirm the first assertion fails.
-4. `test:contract:project-pin-fill` (the sibling's recoverability contract) — must stay green after this fix.
-5. The repo's standing gates (`verb-returns:check`, `push-routing:check`, `catalog:check`, `lint`) run in the implementer's pipeline; `catalog.json` line numbers shift with this edit.
+1. `test:contract:project-pin-resolve` — first-insert resolution, same-snapshot fallback at the statement level, resolve-only survival, stranded-state unrepresentability. Mutation check for the implementer's pipeline: revert the SQL to plain bound values and confirm the fallback assertion fails.
+2. `test:contract:project-pin-fill` (the sibling's recoverability contract) — must stay green against the jointly-written statement.
+3. The repo's standing gates (`verb-returns:check`, `push-routing:check`, `catalog:check`, `lint`) run in the implementer's pipeline; `catalog.json` line numbers shift with this edit.
 
-### Manual Verification
+### Manual Verification (user's post-merge acceptance, after build + sync + reload)
 
-6. Author a plan file with `**Project:** Browser Switchboard` and let the watcher import it. `sqlite3 .switchboard/kanban.db "SELECT project, project_id FROM plans WHERE plan_file LIKE '%<name>%';"` → `Browser Switchboard | 11` on the **first** import, with no API call.
-7. The card appears on the board under Browser Switchboard without a refresh-and-hope cycle.
-8. Author a plan pinned to `No Such Project` → lands unassigned, appears under Unassigned, and `SELECT * FROM projects` gained no row.
-9. Board-wide invariant: `SELECT COUNT(*) FROM plans WHERE project <> '' AND project_id IS NULL;` → `0`.
-10. Backfill the 7 known-stuck cards by touching their files; each resolves to its pinned project with a non-null id (exercises the sibling's fill path against this fix).
+4. Author a plan file with `**Project:** Browser Switchboard` and let the watcher import it. `sqlite3 .switchboard/kanban.db "SELECT project, project_id FROM plans WHERE plan_file LIKE '%<name>%';"` → `Browser Switchboard | 11` on the **first** import, with no API call.
+5. The card appears on the board under Browser Switchboard without a refresh-and-hope cycle.
+6. Author a plan pinned to `No Such Project` → lands unassigned, appears under Unassigned, and `SELECT * FROM projects` gained no row.
+7. Board-wide invariant: `SELECT COUNT(*) FROM plans WHERE project <> '' AND project_id IS NULL;` → `0`.
+8. Backfill the 7 known-stuck cards by touching their files; each resolves to its pinned project with a non-null id (exercises the sibling's fill path against this fix).
+9. **If step 4 ever still lands unassigned:** grep the Switchboard output channel for `[pin-parse]` and the editor's exthost log for `[pin]` — the tripwires name the residual mechanism; paste the lines into a follow-up plan.
 
 ---
 
-**Recommendation:** Complexity 7 → **Send to Lead Coder**.
+**Recommendation:** Complexity 6 → **Send to Coder**.
