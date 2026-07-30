@@ -90,6 +90,12 @@ jobs:
       - name: Kanban card-button drag guard contract
         run: npm run test:contract:drag-guard
 
+      - name: Tickets sidebar list scoping contract
+        run: npm run test:contract:tickets-sidebar-scoping
+
+      - name: Tickets subtask embedding contract
+        run: npm run test:contract:tickets-subtasks
+
       - name: Run integration suite
         run: npm run test:integration:all
 

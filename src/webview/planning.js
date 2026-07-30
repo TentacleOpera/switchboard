@@ -63,6 +63,8 @@
     // the fetchRootsComplete body fallback so a WS push isn't handled twice.
     let _integrationWorkspacesReceived = false;
     let _integrationProviderStatesReceived = false;
+    let _restoredTabStateReceived = false;
+    let _ticketsListedUnscoped = false;
 
     // Helper to register a dropdown for updates
     function registerWorkspaceDropdown(selectElOrId, tabKey, includeAllOption = true) {
@@ -5245,6 +5247,11 @@
                 // stayed permanently stuck on "Configure ClickUp or Linear...". The body
                 // is the fallback; the flags keep it from double-handling a push that
                 // did land.
+                if (msg.restoredTabState && !_restoredTabStateReceived) {
+                    window.dispatchEvent(new MessageEvent('message', {
+                        data: { type: 'restoredTabState', ...msg.restoredTabState }
+                    }));
+                }
                 if (msg.integrationWorkspaces && !_integrationWorkspacesReceived) {
                     window.dispatchEvent(new MessageEvent('message', {
                         data: { type: 'integrationWorkspaces', workspaces: msg.integrationWorkspaces }
@@ -5271,6 +5278,7 @@
                 break;
             }
             case 'restoredTabState': {
+                _restoredTabStateReceived = true;
                 _restoredPanelState.panel = msg.panel || {};
                 _restoredPanelState.byRoot = msg.byRoot || {};
                 if (!ticketsWorkspaceRoot) {
@@ -6099,7 +6107,9 @@
             case 'localTicketFilesListed': {
                 const localProvider = msg.provider || lastIntegrationProvider;
                 const tickets = msg.tickets || [];
-                ticketsLoadedOnce = true;
+                if (!msg.unscopedPlaceholder) {
+                    ticketsLoadedOnce = true;
+                }
                 if (localProvider === 'clickup') {
                     clickUpProjectIssues = tickets.map(t => ({
                         id: t.id, title: t.title, identifier: t.id,
@@ -12302,6 +12312,30 @@ Instructions:
         // Guarding on a falsy root here left the (now files-only) sidebar permanently
         // blank even though the import wrote every file and the DB held every row.
         if (!lastIntegrationProvider) return;
+
+        const effectiveListId = lastIntegrationProvider === 'clickup' ? (clickUpSelectedListId || undefined) : undefined;
+        const effectiveProjectId = lastIntegrationProvider === 'linear' ? (linearProjectPickerValue || undefined) : undefined;
+
+        if (lastIntegrationProvider === 'clickup' && !effectiveListId) {
+            _ticketsListedUnscoped = true;
+            window.dispatchEvent(new MessageEvent('message', {
+                data: {
+                    type: 'localTicketFilesListed',
+                    provider: 'clickup',
+                    workspaceRoot: ticketsWorkspaceRoot || undefined,
+                    tickets: [],
+                    unscopedPlaceholder: true
+                }
+            }));
+            return;
+        }
+
+        if (effectiveListId || effectiveProjectId) {
+            _ticketsListedUnscoped = false;
+        } else {
+            _ticketsListedUnscoped = true;
+        }
+
         vscode.postMessage({
             type: 'listLocalTicketFiles',
             provider: lastIntegrationProvider,
@@ -12309,8 +12343,8 @@ Instructions:
             // Scope the sidebar to the selected list (ClickUp). Linear stays unscoped
             // for now (name-based picker). Sent on every call site since they all
             // read the current selection from these globals.
-            listId: lastIntegrationProvider === 'clickup' ? (clickUpSelectedListId || undefined) : undefined,
-            projectId: lastIntegrationProvider === 'linear' ? (linearProjectPickerValue || undefined) : undefined
+            listId: effectiveListId,
+            projectId: effectiveProjectId
         });
     }
 
@@ -12444,6 +12478,12 @@ Instructions:
         }
         if (state.linearProjectPickerValue) {
             _restoredLinearProjectPickerValue = state.linearProjectPickerValue;
+        }
+
+        const currentScopeId = lastIntegrationProvider === 'clickup' ? clickUpSelectedListId : linearProjectPickerValue;
+        if (_ticketsListedUnscoped && currentScopeId) {
+            _ticketsListedUnscoped = false;
+            loadLocalTicketFiles();
         }
     }
 

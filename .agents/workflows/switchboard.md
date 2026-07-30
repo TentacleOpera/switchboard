@@ -29,21 +29,6 @@ board move, so they are always current — no staleness check, no timestamp read
 separate plans-existence probe. Everything the entry report needs comes from these
 two commands.
 
-0. **Locality check (one line, no network).** Before Command A, answer: *does my own
-   runtime context state that I am running in a managed remote/cloud execution environment
-   with no local machine in the loop (Claude Code on the web, a Claude Code Remote
-   container)?*
-   - **Yes, stated explicitly** → skip Command A and Command B; present the **Remote
-     fallback** bullet below — that half **on its own**, without the Local fallback line —
-     and stop. Do not read `api-server-port.txt`, do not curl `/health`, do not advise
-     opening VS Code.
-   - **No, or unstated** → proceed to Command A as normal. A CI runner or browser board is
-     "no" here — this skill is built to drive the console from exactly those hosts (see the
-     persona note at the top), so they probe first and, if the probe fails, land on the
-     remote-safe fallback below. Never guess "remote" from a sniffed marker alone: a wrong
-     "remote" verdict locks a local user out of their own console. Marker hints are used
-     only to order the message in the fallback below.
-
 1. **Resolve ROOT + liveness + board state — two commands total.**
 
    **Command A — liveness (the only network call):**
@@ -57,25 +42,8 @@ two commands.
      ```bash
      CUR="$PWD"; while [ "$CUR" != "/" ] && [ ! -f "$CUR/.switchboard/api-server-port.txt" ]; do CUR=$(dirname "$CUR"); done; ROOT="$CUR"
      ```
-   - If the port file is missing, or `/health` does not answer — the API is not reachable
-     from here. Present **both** possibilities in one short message, then **stop** (do not
-     retry, do not fall back to direct DB access):
-     - **Local fallback** — *On the machine running VS Code?* Open this workspace in VS Code
-       with the Switchboard extension active, then re-run `/switchboard`.
-     - **Remote fallback** — *In a remote or cloud session?* The API server lives on the
-       user's local machine and cannot be reached from here. Use **`/switchboard-remote`**
-       to drive plans via Linear or Notion, **`/switchboard-cloud`** to plan without
-       auto-coding in a VM, or work read-only against the on-disk `.switchboard/plans/` and
-       `.switchboard/features/`. (This is the bullet Step 0's "yes" branch presents alone.)
-     - **Ordering hint (optional, never a gate):** if the environment looks remote, lead
-       with the Remote fallback; otherwise lead with the Local fallback. A single cheap read
-       is enough — it must print a verdict and never fail the step:
-       ```bash
-       { [ -d /root/.ccr ] || [ -n "${CLAUDE_CODE_REMOTE:-}" ]; } && echo remote-hint || echo local-hint
-       ```
-       Getting the order wrong costs the user one line of reading; it must never remove
-       either option. No output, or anything other than `remote-hint`, means "no hint" —
-       lead with the Local fallback.
+   - If the port file is missing, tell the user to open the workspace in VS Code with the
+     Switchboard extension active. Do not fall back to direct DB access.
    - Cross-check that `ROOT` appears in `health.roots`; if not, warn the user they are
      outside a registered Switchboard workspace and stop.
    - **Save the `terminals` field** — `terminalCount > 0` means a terminal agent is live.

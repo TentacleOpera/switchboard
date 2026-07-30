@@ -240,3 +240,6 @@ Authored, not run in this workflow:
 ---
 
 **Recommendation:** Complexity 6 → **Send to Coder**.
+
+### Completion Report
+I have successfully implemented this plan. I modified `src/services/KanbanDatabase.ts` to perform atomic statement-level fallback resolution of project names and IDs within the `insertFileDerivedPlan` query. I added parser-level and database-level tripwire logs to track anomalies and resolution drops, and registered a contract test `project-pin-resolve-contract.test.js` under `test:contract:project-pin-resolve`. No issues were encountered during this work.

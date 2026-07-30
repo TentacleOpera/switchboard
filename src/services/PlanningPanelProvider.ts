@@ -6399,9 +6399,14 @@ Please format the updated output document strictly as follows:
                                 ? String((msg.listId as string) || '').trim()
                                 : String((msg.projectId as string) || '').trim();
 
+                            let totalCandidates = 0;
+                            let hiddenBySubtask = 0;
+                            let hiddenByScope = 0;
+
                             // Map DB entries to the provider-specific tickets output list
                             for (const dbT of dbTickets) {
                                 if (dbT.sourceId === provider) {
+                                    totalCandidates++;
                                     let kanbanColumn = '';
                                     let clickStatus = '';
                                     let parentId = '';
@@ -6460,14 +6465,20 @@ Please format the updated output document strictly as follows:
                                     }
                                     // Defensive: a subtask file (has parentId) is never a sidebar row —
                                     // subtasks are embedded in their parent's file.
-                                    if (parentId) { continue; }
+                                    if (parentId) {
+                                        hiddenBySubtask++;
+                                        continue;
+                                    }
                                     // List/project scoping: when the webview names a selected list/
                                     // project, show ONLY files belonging to it. Files for other lists
                                     // (and legacy files lacking the key) are hidden. The selected list
                                     // is always re-imported on select — which rewrites its files WITH
                                     // this key from the live task's list.id/project.id — so its rows
                                     // reappear once that import completes.
-                                    if (scopeId && fileScopeId !== scopeId) { continue; }
+                                    if (scopeId && fileScopeId !== scopeId) {
+                                        hiddenByScope++;
+                                        continue;
+                                    }
                                     tickets.push({
                                         id: dbT.remoteDocId || dbT.slugPrefix.replace(`${provider}_`, ''),
                                         title: dbT.docName,
@@ -6482,6 +6493,9 @@ Please format the updated output document strictly as follows:
                                     });
                                 }
                             }
+                            if (scopeId && totalCandidates > 0 && tickets.length === 0) {
+                                console.warn(`[PlanningPanelProvider] listLocalTicketFiles scoping hid all candidate files for ${provider} (scopeId: ${scopeId}, total: ${totalCandidates}, hiddenByScope: ${hiddenByScope}, hiddenBySubtask: ${hiddenBySubtask})`);
+                            }
                         } catch (err) {
                             console.error('[PlanningPanelProvider] error listing tickets from cache DB:', err);
                         }
@@ -6491,7 +6505,7 @@ Please format the updated output document strictly as follows:
                 // Fallback to live file scan if still empty (e.g. database not ready or no entries found)
                 if (tickets.length === 0) {
                     for (const dir of ticketDirs) {
-                        this._scanLocalTicketFiles(dir, provider, tickets);
+                        this._scanLocalTicketFiles(dir, provider, tickets, { scopeId, skipSubtasks: true });
                     }
                 }
 
@@ -9529,7 +9543,7 @@ Write the resulting markdown directly to the local file path, preserving any YAM
         }
     }
 
-    private _scanLocalTicketFiles(dir: string, provider: string, out: any[]): void {
+    private _scanLocalTicketFiles(dir: string, provider: string, out: any[], options?: { scopeId?: string; skipSubtasks?: boolean }): void {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const nfs = require('fs') as typeof import('fs');
         let entries: import('fs').Dirent[];
@@ -9537,7 +9551,7 @@ Write the resulting markdown directly to the local file path, preserving any YAM
         for (const entry of entries) {
             const fullPath = path.join(dir, entry.name);
             if (entry.isDirectory()) {
-                this._scanLocalTicketFiles(fullPath, provider, out);
+                this._scanLocalTicketFiles(fullPath, provider, out, options);
             } else if (entry.isFile() && entry.name.endsWith('.md')) {
                 const match = entry.name.match(/^(?:clickup|linear)_([^_]+)_(.+)\.md$/);
                 if (!match) { continue; }
@@ -9547,6 +9561,8 @@ Write the resulting markdown directly to the local file path, preserving any YAM
                 let dateCreated: string | undefined;
                 let assignees: string[] = [];
                 let priority: { priority: string; color: string; orderindex: string } | null = null;
+                let parentId = '';
+                let fileScopeId = '';
                 try {
                     const content = nfs.readFileSync(fullPath, 'utf8');
                     const fm = content.match(/^---\n([\s\S]*?)\n---/);
@@ -9554,6 +9570,9 @@ Write the resulting markdown directly to the local file path, preserving any YAM
                         const km = fm[1].match(/kanbanColumn:\s*(.+)/); if (km) { kanbanColumn = km[1].trim(); }
                         const cm = fm[1].match(/^created:\s*(.+)$/m); if (cm) { dateCreated = cm[1].trim(); }
                         const am = fm[1].match(/^assignees:\s*(.+)$/m); if (am) { assignees = am[1].split(',').map(s => s.trim()).filter(Boolean); }
+                        const pm = fm[1].match(/^parentId:\s*(.+)$/m); if (pm) { parentId = pm[1].trim(); }
+                        const idm = fm[1].match(provider === 'clickup' ? /^listId:\s*(.+)$/m : /^projectName:\s*(.+)$/m);
+                        if (idm) { fileScopeId = idm[1].trim(); }
                         const prm = fm[1].match(/^priority:\s*(.+)$/m);
                         const prcm = fm[1].match(/^priorityColor:\s*(.+)$/m);
                         const prom = fm[1].match(/^priorityOrderIndex:\s*(.+)$/m);
@@ -9568,6 +9587,10 @@ Write the resulting markdown directly to the local file path, preserving any YAM
                     const h1 = content.match(/^#\s+(.+)$/m);
                     if (h1) { title = h1[1].trim(); }
                 } catch { }
+
+                if (options?.skipSubtasks && parentId) { continue; }
+                if (options?.scopeId && fileScopeId !== options.scopeId) { continue; }
+
                 // Fallback to file mtime when no `created:` frontmatter, so the sidebar's
                 // newest-first sort still has a usable key.
                 if (!dateCreated) {

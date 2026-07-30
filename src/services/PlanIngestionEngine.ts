@@ -704,6 +704,12 @@ export class PlanIngestionEngine {
             const content = await fs.promises.readFile(fsPath, 'utf8');
             const metadata = await parsePlanMetadata(content, relativePath);
 
+            if (!metadata.project && /\*\*Project\b/i.test(content)) {
+                this._host.logger.appendLine(
+                    `[GlobalPlanWatcher] [pin-parse] file contains a **Project marker but no pin was parsed: ${relativePath}`
+                );
+            }
+
             let importClickupTaskId = extractClickUpTaskId(content);
             let importLinearIssueId = extractLinearIssueId(content);
             let importSourceType: KanbanPlanRecord['sourceType'] = 'local';
@@ -792,7 +798,12 @@ export class PlanIngestionEngine {
                     topic: metadata.topic,
                     complexity: metadata.complexity,
                     tags: metadata.tags,
-                    project: plan.project,
+                    // Send the FILE's pin when the DB row is unassigned and not a
+                    // subtask, so the SQL's apply-if-empty CASE has something to
+                    // apply; keep the DB value otherwise so a re-import can never
+                    // move an assigned card (and a subtask's project stays
+                    // governed by its feature).
+                    project: (plan.project === '' && !plan.featureId && metadata.project) ? metadata.project : plan.project,
                     updatedAt: fileMtime
                 };
                 if (relativePath.startsWith('.switchboard/features/')) {

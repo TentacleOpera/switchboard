@@ -1969,6 +1969,7 @@ export class KanbanDatabase {
             // Drop literal placeholders (e.g. `<project>`) and empty-after-trim.
             // Authoritative regex: tight form applied post-trim.
             if (/^<.*>$/.test(pin)) {
+                console.debug(`[pin] ${this.instanceId} DROP placeholder pin=${JSON.stringify(pin)} file=${record.planFile}`);
                 return { project: '', projectId: null };
             }
             // Best-effort workspace-name guard (secondary, NOT a true guard).
@@ -1977,6 +1978,7 @@ export class KanbanDatabase {
             // workspace_name is empty for this workspace the check no-ops and
             // safety still holds via resolve-only.
             if (await this._isWorkspaceName(pin, record.workspaceId)) {
+                console.debug(`[pin] ${this.instanceId} DROP workspace-name-guard pin=${JSON.stringify(pin)} wsId=${record.workspaceId}`);
                 return { project: '', projectId: null };
             }
             let projectId = record.projectId ?? null;
@@ -1987,6 +1989,7 @@ export class KanbanDatabase {
             }
             // On a resolve miss, drop the orphan string too (see header comment).
             if (projectId === null) {
+                console.debug(`[pin] ${this.instanceId} DROP resolve-miss pin=${JSON.stringify(pin)} wsId=${record.workspaceId} visibleProjects=${JSON.stringify(await this.getAllProjectNamesForDebug(record.workspaceId))}`);
                 return { project: '', projectId: null };
             }
             return { project: pin, projectId };
@@ -2031,6 +2034,36 @@ export class KanbanDatabase {
             console.debug('[KanbanDatabase] _isWorkspaceName check failed (best-effort no-op):', e);
         }
         return false;
+    }
+
+    private async _guardPassedPin(record: KanbanPlanRecord): Promise<string> {
+        if (record.project && record.project.trim() !== '') {
+            const pin = record.project.trim();
+            if (/^<.*>$/.test(pin)) {
+                return '';
+            }
+            if (await this._isWorkspaceName(pin, record.workspaceId)) {
+                return '';
+            }
+            return pin;
+        }
+        return '';
+    }
+
+    private async getAllProjectNamesForDebug(workspaceId: string): Promise<string[]> {
+        if (!this._db) return [];
+        const stmt = this._db.prepare('SELECT name FROM projects WHERE workspace_id = ?', [workspaceId]);
+        const names: string[] = [];
+        try {
+            while (stmt.step()) {
+                names.push(stmt.getAsObject().name as string);
+            }
+        } catch (e) {
+            console.error('getAllProjectNamesForDebug failed:', e);
+        } finally {
+            stmt.free();
+        }
+        return names;
     }
 
     public async upsertPlans(records: KanbanPlanRecord[]): Promise<boolean> {
@@ -2131,6 +2164,14 @@ export class KanbanDatabase {
         const { project: resolvedProject, projectId: resolvedProjectId } =
             await this._resolveProjectForInsert(record, isExisting);
 
+        // Same-snapshot fallback: if the TS lookup missed (resolvedProjectId null)
+        // but a guard-passed pin exists, let the INSERT re-resolve it atomically
+        // against the same image the write commits to. A lookup and a write in one
+        // statement cannot see two different snapshots — this closes the
+        // resolve-miss class (silent unassigned imports) by construction.
+        const guardPassedPin = await this._guardPassedPin(record);
+        const effectiveName = resolvedProject !== '' ? resolvedProject : guardPassedPin;
+
         // is_feature floor: a file under .switchboard/features/ IS a feature, no matter
         // which caller built the record. Prevents any lossy record shape (registry
         // entries, run-sheet records) from demoting a feature on fresh INSERT. The ON
@@ -2147,13 +2188,27 @@ export class KanbanDatabase {
                 repo_scope, project, project_id, workspace_id, created_at, updated_at, last_action, source_type,
                 brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
                 clickup_task_id, linear_issue_id, notion_page_id, workspace_name, is_feature
-            ) VALUES (?, ?, ?, ?, 'CREATED', 'active', ?, ?, '', ?, ?, ?, ?, ?, '', ?, '', '', '', '', '', '', '', '', ?, ?)
+            ) VALUES (?, ?, ?, ?, 'CREATED', 'active', ?, ?, '',
+                CASE WHEN COALESCE(?, (SELECT id FROM projects WHERE name = ? AND workspace_id = ?)) IS NOT NULL
+                     THEN ? ELSE '' END,
+                COALESCE(?, (SELECT id FROM projects WHERE name = ? AND workspace_id = ?)),
+                ?, ?, ?, '', ?, '', '', '', '', '', '', '', '', ?, ?)
             ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
                 topic = excluded.topic,
                 complexity = excluded.complexity,
                 tags = excluded.tags,
-                project = plans.project,
-                project_id = plans.project_id,
+                -- APPLY-IF-EMPTY, not overwrite. The invariant this preserves is
+                -- "a file-derived re-import can never MOVE a card between
+                -- projects" — filling an UNASSIGNED card is not a move, and an
+                -- unassigned card with a pin is currently invisible on every
+                -- project-filtered view with no recovery path from the file.
+                -- Do NOT simplify to `project = excluded.project`: that would let
+                -- a stale pin drag a card the user rearranged on the board.
+                -- feature_id guard: a subtask's project is governed by its feature
+                -- (startup reconcile + cascade own inheritance); a file pin must
+                -- never make a subtask diverge, so feature-linked rows never fill.
+                project    = CASE WHEN plans.project = '' AND (plans.feature_id IS NULL OR plans.feature_id = '') THEN excluded.project    ELSE plans.project    END,
+                project_id = CASE WHEN plans.project = '' AND (plans.feature_id IS NULL OR plans.feature_id = '') THEN excluded.project_id ELSE plans.project_id END,
                 updated_at = excluded.updated_at,
                 is_feature = CASE WHEN excluded.is_feature > 0 THEN excluded.is_feature ELSE plans.is_feature END
         `;
@@ -2166,8 +2221,13 @@ export class KanbanDatabase {
                 relativePlanFile,
                 record.complexity,
                 record.tags || '',
-                resolvedProject,
                 resolvedProjectId,
+                effectiveName,
+                record.workspaceId,
+                effectiveName,
+                resolvedProjectId,
+                effectiveName,
+                record.workspaceId,
                 record.workspaceId,
                 record.createdAt,
                 record.updatedAt,

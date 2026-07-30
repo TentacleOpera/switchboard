@@ -353,3 +353,48 @@ The deterministic complement, which the codebase already precedents on its *othe
 
 ## Completion Report
 Implemented default-ON reviewer prompt directive `NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE` prohibiting creation of separate review `.md` artifact files. Updated `agentPromptBuilder.ts`, `agentConfig.ts`, `KanbanProvider.ts`, `AgentSkillExporter.ts`, `sharedDefaults.js`, `agentPromptBuilder.test.ts`, `autoban-reviewer-prompt-regression.test.js`, `package.json`, `.vscode-test.mjs`, and `.github/workflows/integration-tests.yml`. No issues encountered during implementation.
+
+## Review Pass (2026-07-30)
+
+### Findings
+
+| # | Severity | File:Line | Finding |
+|---|----------|-----------|---------|
+| 1 | NIT | `agentPromptBuilder.ts:1371` | `promptParts` array entry has no comment, but is self-documenting and consistent with suppressWalkthrough placement in sibling branches. |
+| 2 | NIT | Plan text | Plan note about "internal newlines are safe inside fenced block" is misleading — the directive has no internal newlines. Harmless. |
+
+**No CRITICAL or MAJOR findings.**
+
+### Verified Correct
+
+- **Directive placement:** separate `promptParts` element (line 1359-1361), not inside `reviewerBaseInstructions` → override-proof by construction.
+- **Parser guard:** `=== false` form (agentConfig.ts:202), matching `useSubagents` precedent → explicit disable survives reload.
+- **Normalizer:** unconditional `?? true` (AgentSkillExporter.ts:94) → pre-existing installs export the directive without requiring a migration.
+- **Default concordance:** `sharedDefaults.js` DEFAULT_ROLE_CONFIG (line 26, `true`), ROLE_ADDONS (line 173, `default: true`), `_getPromptsConfig` (KanbanProvider.ts:4904, `?? true`) — all three agree on `true`.
+- **Coexistence:** `ensureCompletionDirective(baseInstructions)` (line 1349) fires before `promptParts` assembly → COMPLETION REPORT is guaranteed present alongside the no-artifact directive. Test assertion at agentPromptBuilder.test.ts:172-179 pins this.
+- **Tests:** all four plan-specified assertions present (default-on, explicit-off, replace-override survival, coexistence).
+
+### Gate-Wiring Audit
+
+| Check | Defined | Invoked by CI |
+|-------|---------|---------------|
+| `test:contract:reviewer-prompt` | package.json:779 | integration-tests.yml:88 ✅ |
+| `agentPromptBuilder.test.ts` via vscode-test | .vscode-test.mjs:8 | via `npm test` ✅ |
+
+No "defined but not invoked" holes found for this plan's automated checks.
+
+### Verification Results
+
+| Test | Result |
+|------|--------|
+| `node src/test/autoban-reviewer-prompt-regression.test.js` | ✅ PASS |
+| `npm run compile-tests` | ✅ PASS (TypeScript clean) |
+| `node src/test/kanban-default-prompt-previews.test.js` | ✅ PASS |
+| `node src/test/minimal-prompt.test.js` | ❌ FAIL — **pre-existing**, unrelated (planner + gitProhibition: `assembleSuffix` strips `gitBlock` for non-CODE_TOUCHING_ROLES, but test assumes planner receives it) |
+
+### Fixes Applied
+None required — no CRITICAL or MAJOR findings.
+
+### Remaining Risks
+1. **Pre-existing test failure** in `minimal-prompt.test.js` (`testGitProhibitionIncludedWhenEnabled` for planner role). Not introduced by this plan; recommend separate fix.
+2. **Prompt directives are advisory** — LLM may still create stray files. The plan's Follow-Up section already recommends a deterministic ingestion-engine guard as a companion plan.

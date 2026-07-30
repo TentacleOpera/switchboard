@@ -244,3 +244,6 @@ Prerequisite (outside this plan's verification scope): the built extension synce
 ---
 
 **Recommendation:** Complexity 4 → **Send to Coder**.
+
+### Completion Report
+I have successfully implemented this plan. I modified `src/services/PlanIngestionEngine.ts` to forward the file's pin on updates when the database project is empty and not a subtask, and updated `src/services/KanbanDatabase.ts` ON CONFLICT UPDATE to set `project` and `project_id` when the database project is empty and not a subtask. I registered a contract test `project-pin-apply-if-empty-contract.test.js` under `test:contract:project-pin-fill`. No issues were encountered during this work.
