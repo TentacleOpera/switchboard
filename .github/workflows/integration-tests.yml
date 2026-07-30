@@ -114,6 +114,16 @@ jobs:
       - name: Browser panel scrollbar contract (@supports gating, no ungated scrollbar-width)
         run: npm run test:contract:panel-scrollbars
 
+      # `npm run lint` is named as an automated check by many plans but was
+      # invoked by no workflow. It exits 0 today (0 errors, warnings only), so
+      # wiring it gates future ERRORS without going permanently red.
+      # KNOWN LIMITATION: eslint.config.js scopes rules to `**/*.ts` ONLY, so this
+      # step gives ZERO coverage of src/webview/*.js and src/test/*.js. Do not read
+      # a green lint step as "the webview JS was linted" — widening the config to
+      # .js needs its own plan (it would surface an unmeasured warning backlog).
+      - name: Lint (TypeScript only — see limitation above)
+        run: npm run lint
+
       - name: Run integration suite
         run: npm run test:integration:all
 

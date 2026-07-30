@@ -517,3 +517,58 @@ Subtests now covering: typed/routable body + file emptied + host-side clipboard 
 - **`TaskViewerProvider`'s ctor and `_getWorkspaceRoots()` remain vscode-coupled.** Both are pre-existing contract #3 gaps, now explicitly documented in the test and the helper. They need their own plan; nothing in this feature made them worse.
 - The standalone/WebKit `NotAllowedError` clipboard limitation is unaddressed by design (User Review item 2) and remains recorded for a future plan.
 
+## Review Pass 2 — 2026-07-30 (independent, tests executed)
+
+Second independent reviewer pass. All prior claims were **re-verified, not inherited**. The host-side work is confirmed correct and kept: the typed body, `memoCleared: sendSucceeded` (never hardcoded), the conditional `error` satisfying PRD contract #4, the deliberate absence of `prompt`, the `success: true` empty-memo flip, `_apiServerForBroadcast` + the `?? this._localApiServer` fallback (verified as the path that actually fixes the extension host — `TaskViewerProvider.setApiServer` is called **only** from `bootstrap.ts:1081`, never in the extension host, so the `_initTaskViewerService` fallback is load-bearing), `bootstrap.ts` parity fields, and `transport.js` untouched.
+
+Two upstream facts were verified rather than assumed: `wsHub.broadcast` fans out to **every** connection (`surface` is a routing hint in the payload, not a filter), and `transport.js:159` **unwraps** the wsHub envelope (`Object.assign({}, payload, {type: msg.type})`) — so a WS push really does reach `memo.js`'s switch with its fields intact. That confirms change 1 delivers, and it is also what exposed the CRITICAL below.
+
+### Findings
+
+| Severity | Finding | Location |
+| :--- | :--- | :--- |
+| **CRITICAL** | **The post-click-typing guard was defeated, losing user-typed memo text.** In the browser one click produces **two** deliveries of the same `memoPromptResult`: the WS fan-out that change 1 switched on, *and* the HTTP response body re-dispatched by `transport.js`. Delivery 1 correctly declined to clear (the user had kept typing) — and then ran `_submittedContent = null` unconditionally. Delivery 2 therefore took the `_submittedContent === null` short-circuit and **wiped the textarea**, discarding exactly the text delivery 1 had just protected. This is the plan's own manual step 14 failing, and it was *introduced* by change 1: before the WS wiring only one delivery existed, so the guard worked. The plan's Race Conditions section anticipated "two independent delivery paths" for `memoContent:''` vs `memoPromptResult`, but not `memoPromptResult` racing **itself**. **Reproduced empirically** (jsdom, real `memo.js` + real `memo.html` markup): text typed after the click was present after delivery 1 and `""` after delivery 2. | `src/webview/memo.js:88` (`_submittedContent = null` reset) |
+| MAJOR | **An untyped failure branch survived in the same arm the plan retyped.** The unresolvable-workspace early return was `{ success: false, message }` — no `type`, no `error`. Per `transport.js:254-272` an untyped failure body raises the toast `Action failed: memoGeneratePrompt` and **returns before `dispatchMessage`**, so the reply never reaches the panel. This is the identical defect the plan diagnosed for the final return (change 2) and the empty-memo return (change 2a), three lines above them, and it violates PRD contract #4, which the PRD says wins. | `src/services/TaskViewerProvider.ts:12027-12029` |
+| MAJOR | **The contract test could not see the CRITICAL, because it only grepped `memo.js`.** Every `memo.js` assertion was a source regex (`/msg\.memoCleared/`, `/_submittedContent/`, `/textarea\.value === ''/`, `/!msg\.isError && msg\.memoCleared/`). All four still matched while the panel destroyed user input — the handler was never executed. A regex suite cannot express "safe to run twice". | `src/test/memo-browser-clear-and-copy-contract.test.js` (pre-fix, source-only assertions) |
+| MAJOR (gate wiring) | `npm run lint` is named in this plan's **Automated** subsection (step 8) but was invoked by **no** CI workflow. Now fixed. | `package.json:770` defined; workflow had no invocation |
+| NIT | A duplicated `extensionUri` key with broken indentation — an editing artifact. Harmless at runtime (ES2015+ last-wins) and invisible to `npm run lint`, because `eslint.config.js` scopes rules to `**/*.ts` only **and** declares no `no-dupe-keys`. | `src/test/memo-browser-clear-and-copy-contract.test.js:233-234` |
+
+### Fixes applied
+
+- **`src/webview/memo.js:86-129` — the CRITICAL.** Two independent protections, so a single future regression cannot reopen the hole:
+  1. **Precise reset.** `_submittedContent` / `_submittedAction` are released only when the clear actually happened (`clearedNow`) or when no clear is coming at all (`memoCleared === false` — empty memo, or a failed send that preserved the memo). The one path that now **keeps** the guard is "`memoCleared` true but we declined because the user typed", which is exactly the state delivery 2 must still see.
+  2. **The foreign-clear branch is guarded.** `_submittedContent === null` no longer short-circuits unconditionally; it requires `!_memoDirty && !isFocused` — the *same* guard the `memoContent` case already uses. A clear originating from another surface is still honoured on a clean panel, but can never discard unsaved local typing.
+  Also `flashAction` is now resolved **before** the reset, so the reset cannot null the fallback the flash reads.
+- **`src/services/TaskViewerProvider.ts:12027-12033` — the untyped failure.** Now returns `{ success: false, type: 'memoError', message, error }`. `memoError` is the correct routing type: `memo.js` already has a `memoError` case, and it matches the push emitted on the same branch, so the toast and the panel status line finally say the same thing.
+- **`src/test/memo-browser-clear-and-copy-contract.test.js` — the suite now EXECUTES `memo.js`.** Added a `bootMemoPanel()` helper that loads the real `memo.js` into jsdom over the real `memo.html` body markup (`jsdom` is a production dependency, so CI has it), driving real `click` / `input` / `message` events. Nine new behavioural subtests, replacing regex faith with observed behaviour: both double-delivery cases, the ordinary copy round trip (including `Building prompt…`), copy-flashes-copy / send-flashes-send / neither-flashes-the-other, failed send preserving the memo with the red status, the empty-memo no-op not flashing, foreign-clear-when-clean vs foreign-clear-must-not-discard-dirty, and `workspaceChanged` relabelling + clearing + re-issuing `memoLoad` with no surviving `memoSave`. Plus one host-side subtest for the untyped-failure fix. The duplicate `extensionUri` key was removed.
+- **CI wiring** — `npm run lint` added to `.github/workflows/integration-tests.yml` (32 steps, structurally validated), annotated with its TypeScript-only limitation.
+
+### Validation results (executed)
+
+| Check | Result |
+| :--- | :--- |
+| `npm run compile-tests` (tsc) | **PASS** — exit 0 |
+| `npm run compile` (webpack → `dist`) | **PASS** — 0 errors; `dist/webview/memo.js` confirmed **identical to src**, so the cockpit serves the fixed handler (it is served `dist`-first) |
+| `npm run test:contract:memo-browser-clear` | **PASS — 17/17** (was 8/8 before this pass; +9 behavioural, +1 untyped-failure, all new) |
+| **Negative control** — restored *both* halves of the shipped guard (`_submittedContent === null \|\|` short-circuit + unconditional reset) | **3 subtests FAIL as designed**: `delivery 2 discarded text typed after the click`, `delivery 2 discarded text typed after the clear`, `a foreign clear discarded unsaved local typing`. This is the shipped bug, caught. |
+| Negative control — reverting **one** half only | Suite stays green. Recorded honestly: the two protections are redundant by design, so the suite gates the **behaviour** (no data loss), not either implementation detail. A partial revert is safe *and* undetected. |
+| Negative control — removed `type: 'memoPromptResult'` from the body | **FAILS as designed** — `response body carries no type` |
+| Negative control — hardcoded `memoCleared: true` | **FAILS as designed** — `a failed send discarded the memo` |
+| `npm run verb-returns:check` | **PASS** — `TaskViewer: 1 break(s) <= ceiling 1`; baseline untouched |
+| `npm run push-routing:check` | **PASS** — `TaskViewerProvider.ts: 1 (baseline 1)` |
+| `npm run catalog:check` | **PASS** — no drift (599 arms / 512 verbs); no regeneration needed this pass |
+| `npm run parity:check` | **PASS** — allowlist ≡ catalog, all five generic dispatchers present |
+| `npm run test:contract:memo-panel-style` / `memo-workspace-binding` / `shim-injection` / `panel-scrollbars` / `verb-engine-kanban` / `cross-client-scope` | **PASS** — OK / 11/11 / 17/17 / 30/30 / 19/19 / 18/18 |
+| `npm run lint` | **PASS** — exit 0, 0 errors |
+| `npm run test:contract:verb-engine` (named by **Automated** step 7) | **22 passed, 4 failed** — the 4 reds are `TaskViewer: unknown verb is rejected` / `sendToTerminal` / `showInfo` / `copyTextToClipboard`. **Pre-existing and unrelated to memo**: none is a memo verb, and they are the exact 4 the workflow's `NOT WIRED YET` comment documents (`TaskViewerProvider`'s ctor reaches `vscode.window`). Deliberately still unwired — a permanently-red gate is worse than none; it needs its own plan. |
+| Gate-wiring audit | All other **Automated** checks (steps 1-6, 8) are invoked in CI. |
+
+### Remaining risks
+
+- **Manual verification still not performed.** Steps 9-19 need a running extension, a synced install folder and a browser. The jsdom subtests now cover the panel's *logic* end-to-end (including step 14, the case that was broken), but not rendering, the real clipboard, or the live sidebar↔browser sync of step 17.
+- **The double delivery itself is left in place**, not de-duplicated. Both paths are individually correct and the handler is now idempotent, but every future `memoPromptResult` consumer inherits the obligation to be safe to run twice. A request-id or a "WS push suppressed for the addressed caller" mechanism would remove the class of bug rather than this instance; that is a larger design change and belongs in its own plan.
+- **Change 1 still turns on WS fan-out for every TaskViewer push.** Now partly evidenced: `wsHub.broadcast` sends to all connections and `transport.js` unwraps unconditionally, so browser panels really do receive pushes they never received before. Panels ignore unknown types (`switch` with no `default`), so the blast radius is bounded — but it is still verified by reasoning plus two assertions, not by observing a live cockpit.
+- **`TaskViewerProvider`'s ctor and `_getWorkspaceRoots()` remain vscode-coupled** (PRD contract #3), recorded as a named ratchet in the test. Pre-existing; needs its own plan.
+- The standalone/WebKit `NotAllowedError` clipboard limitation is still unaddressed by design (User Review item 2).
+- The new lint gate is **TypeScript-only**, so `memo.js` — where the CRITICAL lived — is still linted by nothing.
+

@@ -14,6 +14,15 @@ function testTicketsSubtaskEmbeddingContract() {
         return content.slice(start, end);
     };
 
+    // Negative assertions on identifiers MUST run against code, not comments. The
+    // never-regenerate rule is documented in a comment that names `isDelta` ("Deliberately
+    // no `isDelta` fork here"), so a raw substring check goes red against a correct
+    // implementation and pressures a coder into deleting the explanation.
+    const stripComments = (s) => s
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^[ \t]*\/\/.*$/gm, '')
+        .replace(/([^:])\/\/.*$/gm, '$1');
+
     // 1. Anti-drift: the section header literal has exactly ONE producer. The bare
     // '## Subtasks' heading legitimately appears elsewhere (the feature-file subtask
     // block, and the push-truncation guard), so anchor on the builder-specific literal.
@@ -67,8 +76,8 @@ function testTicketsSubtaskEmbeddingContract() {
         '_writeTaskDocument must NOT call _buildSubtasksSection directly — that regenerates the section from the payload and deletes subtasks the payload cannot see'
     );
     assert.strictEqual(
-        writeDocBody.includes('isDelta'), false,
-        'isDelta must not appear in the section write path — full and delta share one never-delete merge rule'
+        stripComments(writeDocBody).includes('isDelta'), false,
+        'isDelta must not appear in the section write CODE — full and delta share one never-delete merge rule. (A comment may name it; a branch may not.)'
     );
     const mergeBody = sliceBetween('private _mergeSubtasksSection(', 'private async _writeTaskDocument(');
     assert.ok(
@@ -104,7 +113,7 @@ function testTicketsSubtaskEmbeddingContract() {
     // 9. Rate-limit guard: no per-parent detail fetch inside the document fast path.
     // The ids-based slow path legitimately has one; the fast path runs on a background timer.
     assert.strictEqual(
-        /getTaskDetails\(|importTaskAsDocument\(/.test(importAllBody), false,
+        /getTaskDetails\(|importTaskAsDocument\(/.test(stripComments(importAllBody)), false,
         'no per-parent detail fetch may appear in importAllTasks document fast path — ~101 requests for a 100-task list would exhaust ClickUp\'s 100 req/min budget on a repeating timer'
     );
 
@@ -130,6 +139,32 @@ function testTicketsSubtaskEmbeddingContract() {
     assert.ok(
         /#\{1,6\}/.test(entryBody),
         'embedded descriptions must demote line-leading headings only'
+    );
+
+    // 12. The description must be read off the NORMALISED field. Every ClickUp subtask
+    // reaching _buildSubtaskEntry has been through _normalizeClickUpTask, which renames
+    // the API's `markdown_description` to `markdownDescription`; reading only the raw key
+    // makes the whole description embed dead code and leaves a titles-only checklist —
+    // "has a ## Subtasks section" while still handing the agent an incomplete spec.
+    assert.ok(
+        /st\?\.markdownDescription/.test(entryBody),
+        '_buildSubtaskEntry must read the normalised markdownDescription field, not only the raw markdown_description key'
+    );
+
+    // 13. Legacy-line dedupe. The shipped per-open enrich wrote ClickUp subtasks as
+    // `- [ ] ${name}` with NO id, so an id-only merge appends the payload line beside the
+    // legacy one — every ClickUp parent ever opened would list its subtasks twice after
+    // the next import. The id must be anchored at the END of the line (a title may itself
+    // contain parentheses) and a legacy title slot must be written through, not added to.
+    assert.ok(content.includes('_parseSubtaskLine('), 'TaskViewerProvider must define _parseSubtaskLine');
+    const parseLineBody = sliceBetween('private _parseSubtaskLine(', 'private _parseSubtaskEntries(');
+    assert.ok(
+        /\\\(\(\[\^\(\)\]\*\)\\\)\$/.test(parseLineBody),
+        'the id must be matched at the END of the checklist line, so a title containing parentheses is not mis-keyed'
+    );
+    assert.ok(
+        /merged\.has\(parsed\.titleKey\)/.test(mergeBody),
+        '_mergeSubtasksSection must write through a legacy title-keyed slot instead of appending a duplicate line'
     );
 
     console.log('tickets-subtask-embedding.test.js contract test PASSED');

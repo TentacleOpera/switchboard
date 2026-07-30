@@ -418,3 +418,61 @@ Independent reviewer pass (Grumpy → Balanced → fixes → verification). The 
 - Memo content already written to the wrong workspace is **not** migrated, per the plan's explicit instruction. `Gitlab/.switchboard/memo.md` stays where it is.
 - `npm run lint` is outside CI, so lint regressions are ungated.
 
+## Review Pass 2 — 2026-07-30 (independent, tests executed)
+
+Second independent reviewer pass. All prior claims **re-verified, not inherited** — the build is genuinely green (`TS2304: wsRoot` is gone; `stitch:` reads `effectiveRoot` with the comment explaining why that route stays deliberately frozen), and `dist/` is current.
+
+The production logic is confirmed correct and kept verbatim: `currentWsRoot()` routing through `resolveEffectiveWorkspaceRootFromMappings(this._getWorkspaceRoot() || effectiveRoot)`, applied at all three panel-HTML call sites (`TaskViewerProvider.ts:1863, 1871, 1881`); the destination-workspace project guard with the exact optional-chained `wsId` idiom, `if (id !== null)` preserving valid pins, and the `console.warn` retained (**observed firing live** during the test run); `KanbanProvider.ts:6478-6480`'s `path.resolve()` comparison plus the `!!this._currentWorkspaceRoot` null guard; and `memo.js`'s `_wsRoot` single owner with the load-bearing clear-timer-**then**-reassign order.
+
+Two things this pass verified that the plan flagged as open questions:
+
+- **The live-follow path really is live.** The plan asserts `workspaceChanged` reaches the browser only over the WS fan-out. Traced end to end: `TaskViewerProvider.ts:5776` pushes it → `BroadcastHub.push` → `mirrorToWs` → `wsHub.broadcast`, which fans out to **every** connection (`surface` is a payload routing hint, not a filter) → `transport.js:159` **unwraps** the envelope with `Object.assign({}, payload, {type: msg.type})`, so `msg.workspaceRoot` survives intact and `memo.js:57`'s guard sees it. Had `transport.js` dispatched the raw envelope, `msg.workspaceRoot` would have been `undefined` and the whole live-follow would have been silently dead. It is not.
+- **The multi-root mapping hazard is closed on the host side.** `memo.js` now sends whatever root `workspaceChanged` carried, and that push is **not** mapping-collapsed (`_resolveWorkspaceRoot`, not `resolveEffectiveWorkspaceRootFromMappings`). But every memo arm re-resolves through `_resolveStateWorkspaceRoot` → `kanbanProvider.resolveEffectiveWorkspaceRoot` → the same collapse, so a child root can never start writing its own `.switchboard/memo.md`. The plan's stated worry does not fire.
+
+### Findings
+
+| Severity | Finding | Location |
+| :--- | :--- | :--- |
+| NIT | **The workspace label can name a workspace the memo is not saved to.** The served initial root is mapping-collapsed; the `workspaceChanged` push is not. In a `workspaceDatabaseMappings` setup where a child root collapses onto a parent's `.switchboard`, after a live switch the header renders the **child's** basename while the memo file is still the **parent's** — and the span's own tooltip says "Workspace this memo is saved to". No data goes astray (the host re-collapses), so this is cosmetic and mapped-multi-root-only. **Deliberately not fixed:** the only clean fix is to collapse the root at the push site, and that push is shared with `kanban.html` and `implementation.html` — changing its semantics for a label is disproportionate blast radius. Recorded for a future plan. | `src/services/TaskViewerProvider.ts:5776` vs `:1825-1826`; label at `src/webview/memo.js:18`, `:62` |
+| MAJOR (gate wiring) | `npm run lint` is named in this plan's **Automated** subsection (step 6) but was invoked by **no** CI workflow. Now fixed. | `package.json:770` defined; workflow had no invocation |
+| — | Cross-check: narrowing `resolveAuthoringProject`'s in-memory fallback did **not** regress its other five callers. `cross-client-scope-contract.test.js` (18/18) and the `KanbanProvider` DB-config path both still pass — they exercise the `initiatorProject` short-circuit and the DB row, neither of which the scoping touches. | verified, no action |
+
+**No CRITICAL or code-level MAJOR findings in this subtask.** `TaskViewerProvider`'s workspace-root work, `KanbanProvider.ts` and `memo.js`'s `_wsRoot` conversion were **not modified** in this pass. (`memo.js` *was* changed, but for subtask 2's CRITICAL — the `memoPromptResult` handler — not for anything in this plan. The `workspaceChanged` handler is untouched and is now covered by a new executing subtest.)
+
+### Fixes applied
+
+- **CI wiring** — `npm run lint` added to `.github/workflows/integration-tests.yml`, annotated with the limitation that `eslint.config.js` scopes rules to `**/*.ts` only (so `memo.js` remains unlinted by any gate).
+- **New behavioural coverage for this plan's change 2**, added to the sibling suite (which boots the real `memo.js` in jsdom): `workspaceChanged` relabels the header to the new root's basename, clears the textarea, re-issues `memoLoad` **for the new root**, and leaves **no** surviving `memoSave` — i.e. the 800 ms debounce data-loss window of step 12 is now asserted by execution, not only by the existing source-order index check.
+
+### Validation results (executed)
+
+| Check | Result |
+| :--- | :--- |
+| `npm run compile-tests` (tsc) | **PASS** — exit 0 |
+| `npm run compile` (webpack → `dist`) | **PASS** — 0 errors, 3 pre-existing optional-dep warnings |
+| `npm run test:contract:memo-workspace-binding` | **PASS — 11/11** |
+| Guard observed live | `[memo] dropping PROJECT PIN 'Browser Switchboard': not a project in …/ws-b` emitted during the run — the required `console.warn` trace is present |
+| `npm run test:contract:memo-browser-clear` | **PASS — 17/17** (now includes the executing `workspaceChanged` subtest above) |
+| `npm run test:contract:cross-client-scope` | **PASS — 18/18** — confirms the `resolveAuthoringProject` narrowing broke no other caller |
+| `npm run test:contract:memo-panel-style` / `shim-injection` / `panel-scrollbars` / `verb-engine-kanban` | **PASS** — OK / 17/17 / 30/30 / 19/19 |
+| `npm run verb-returns:check` | **PASS** — all ceilings satisfied, baseline untouched |
+| `npm run push-routing:check` | **PASS** — all providers at baseline |
+| `npm run catalog:check` | **PASS** — no drift (599 arms / 512 verbs) |
+| `npm run parity:check` | **PASS** |
+| `npm run lint` | **PASS** — exit 0, 0 errors |
+| Gate-wiring audit | Every check named in **Automated** (steps 1-6) is now invoked in CI, `lint` included. |
+
+### Remaining risks
+
+- **Manual verification still not performed — and step 13 is still the highest-value gap.** The unfreeze changes what Project, Planning, Design and Setup bind to, which this plan's own Adversarial Synthesis names as where "a regression shows up in a panel nobody was testing". Nothing automated covers it: the per-render getter is asserted at **source level** only, because it lives inside `_startLocalApiServer`'s `serveStatic` closure, which cannot be constructed without binding a real TCP port. Steps 7-12 and 14 (the two-`memo.md` `stat` check, the live follow, the debounce-vs-switch window in a real browser, the standalone host) are likewise unexecuted.
+- **The frozen-closure guard remains a source-text assertion.** It catches a reintroduced `const wsRoot = effectiveRoot;` capture and a call site reverted to a constant; a differently-spelled re-freeze could still slip past.
+- **The live-follow path is still sidebar-gated.** `workspaceChanged` is pushed only from `_postSidebarConfigurationState`, which early-returns when `this._view` is unmounted (User Review item 2 — accepted).
+- **A transient DB failure still drops a valid pin** (`getProjectIdByName` returns `null` for both "no such project" and "DB not ready"). Fail-safe direction; `console.warn` is the only trace, as specified.
+- **The label/mapping mismatch above** is unfixed by design.
+- **`TaskViewerProvider`'s ctor and `_getWorkspaceRoots()` remain vscode-coupled** (PRD contract #3). Pre-existing; needs its own plan.
+- Memo content already written to the wrong workspace is **not** migrated, per this plan's explicit instruction.
+
+### Out-of-scope discovery (not fixed here — needs its own plan)
+
+`src/services/wsHub.ts` contains **two raw NUL bytes**, embedded as literal `\x00` characters inside two string literals (`'\x00undeclared'` / `'\x00null'`, the per-scope render keys in `broadcast()`), rather than written as `\0` escapes. TypeScript compiles it fine, but `grep`/`ripgrep` classify the whole file as **binary and silently skip it** — `grep -n "broadcast" src/services/wsHub.ts` returns *nothing*. Any regex-based gate or audit that globs source files therefore cannot see this file at all, which is how it went unnoticed. Introduced by commit `b5b2f95` (STITCH HTML tab, 2026-07-29), unrelated to this feature, and `wsHub.ts` is not touched by any of these three subtasks — a repo-wide scan found it to be the **only** affected file. The fix is a one-line re-encode to `\0` escapes; deliberately left alone here rather than smuggled into a memo-panel review commit.
+

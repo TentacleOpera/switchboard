@@ -68,6 +68,10 @@
     // Last listLocalTicketFiles response's scope-coverage counts, when list/project
     // scoping hid every candidate file. Drives the distinguishing empty-state copy.
     let _ticketsScopeCoverage = null;
+    // True while the last listing was the ClickUp "no list selected" placeholder. The
+    // sidebar then has nothing correct to show, and "No tasks found." would read as
+    // "this list is empty" for a user who has not picked a list at all.
+    let _ticketsAwaitingListSelection = false;
 
     // Helper to register a dropdown for updates
     function registerWorkspaceDropdown(selectElOrId, tabKey, includeAllOption = true) {
@@ -6118,6 +6122,7 @@
                 // "this list has no tickets", so it would never be reported as a
                 // regression — say what actually happened instead.
                 _ticketsScopeCoverage = msg.scopeCoverage || null;
+                _ticketsAwaitingListSelection = !!msg.unscopedPlaceholder;
                 if (localProvider === 'clickup') {
                     clickUpProjectIssues = tickets.map(t => ({
                         id: t.id, title: t.title, identifier: t.id,
@@ -11412,8 +11417,12 @@ Instructions:
 
         const filteredIssues = getFilteredLinearIssues();
         if (filteredIssues.length === 0) {
+            // The backend scopes Linear rows on `projectName:` and reports the same
+            // scopeCoverage counts it reports for ClickUp, so the re-key copy must reach
+            // Linear users too — otherwise the honesty path is wired for one provider
+            // and silent for the other.
             const emptyText = linearProjectIssues.length === 0
-                ? 'No Linear issues are currently available.'
+                ? _ticketsEmptyStateCopy('No Linear issues are currently available.')
                 : 'No Linear issues matched the current search/filter.';
             if (emptyState.textContent !== emptyText) {
                 emptyState.textContent = emptyText;
@@ -11953,15 +11962,27 @@ Instructions:
         });
     }
 
-    // "No tasks found." is the wrong answer when list/project scoping hid every
-    // candidate file — that reads as "this list is empty" and hides a real coverage
-    // problem (files imported before the scope key existed in frontmatter).
-    function _ticketsEmptyStateCopy() {
+    // "No tasks found." is the wrong answer twice over: when NO list is selected (the
+    // sidebar has nothing correct to show, and the old behaviour was to dump every
+    // list's tickets), and when list/project scoping hid every candidate file — that
+    // reads as "this list is empty" and hides a real coverage problem (files imported
+    // before the scope key existed in frontmatter). Shared by both provider renderers
+    // so the honesty path cannot be half-wired.
+    function _ticketsEmptyStateCopy(fallback) {
+        if (_ticketsAwaitingListSelection) {
+            return 'Select a space and list to see its tickets.';
+        }
         const cov = _ticketsScopeCoverage;
         if (cov && cov.hiddenByScope > 0) {
-            return `${cov.hiddenByScope} local file${cov.hiddenByScope === 1 ? '' : 's'} for this provider don't carry a list id — Refetch this list to re-key them.`;
+            const n = cov.hiddenByScope;
+            const files = `${n} local file${n === 1 ? '' : 's'} for this provider`;
+            // Linear scopes on `projectName:`, ClickUp on `listId:` — name the key the
+            // user actually has to re-key, or the instruction is unfollowable.
+            return lastIntegrationProvider === 'linear'
+                ? `${files} don't carry a project name — Refetch this project to re-key them.`
+                : `${files} don't carry a list id — Refetch this list to re-key them.`;
         }
-        return 'No tasks found.';
+        return fallback || 'No tasks found.';
     }
 
     function renderTicketsClickUpList() {

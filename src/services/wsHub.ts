@@ -279,8 +279,8 @@ export class WsHub {
         for (const meta of this._connections) {
             let body = payload;
             if (isFactory) {
-                const key = meta.project === undefined ? ' undeclared'
-                    : meta.project === null ? ' null'
+                const key = meta.project === undefined ? '\u0000undeclared'
+                    : meta.project === null ? '\u0000null'
                         : `p:${meta.project}`;
                 if (!rendered.has(key)) {
                     rendered.set(key, (payload as Function)(meta.project));

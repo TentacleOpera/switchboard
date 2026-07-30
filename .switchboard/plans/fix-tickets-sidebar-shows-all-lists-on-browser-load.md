@@ -318,3 +318,35 @@ None. Every claim in this plan was settled by reading this repository — the ha
 
 Implemented state-restoration re-dispatch in browser webview `fetchRootsComplete` body fallback to ensure tickets list selection restores prior to initial load. Added ClickUp no-list selection synthetic empty return with guarded latch, late-restore re-issue check, and scoped fallback scanning in backend `PlanningPanelProvider`. Modified `src/webview/planning.js`, `src/services/PlanningPanelProvider.ts`, `package.json`, `.github/workflows/integration-tests.yml`, and added contract test `src/test/tickets-sidebar-list-scoping.test.js`. No implementation issues encountered.
 
+## Reviewer Pass — 2026-07-30
+
+Stages 1, 3 and 4 verified correct as implemented; two MAJOR gaps in Stage 2's user-facing half were found and fixed.
+
+### Findings
+
+**MAJOR — Stage 2's required empty-state copy was never implemented.** `_ticketsEmptyStateCopy()` returned `'No tasks found.'` on the ClickUp no-list-selected path, i.e. the same string a genuinely empty list produces. The `unscopedPlaceholder` marker reached the webview and gated the latch, but never reached the copy. This failed three separate statements of the same requirement: the Stage 2 Implementation bullet, the **User Review Required** decision ("the sidebar now renders an explicit 'select a list' empty state"), and **UAT step 3**. It is also the exact "empty is not correct" failure the plan's Stage 4 legislates against, reproduced one level up.
+
+**MAJOR — the Stage 4 honesty path was wired for one provider only.** `_ticketsEmptyStateCopy()` was called from `renderTicketsClickUpList` and nowhere else; `renderTicketsLinearList` kept a hard-coded `'No Linear issues are currently available.'`. The backend computes `scopeCoverage` for **both** providers (Linear scopes on `projectName:`, per the regex added in `_scanLocalTicketFiles`), so a Linear user with legacy files got the silent regression with the diagnostic sitting unread in the payload. The copy also hardcoded "list id" — a key Linear has no equivalent of, making the re-key instruction unfollowable.
+
+**Correct as implemented (no change):** the `restoredTabState` re-dispatch position (after `workspaceItemsUpdated`, before `integrationProviderStates`) and its `_restoredTabStateReceived` guard; the `_restoredPanelState` assignment left unconditional beside the guard rather than inside it; Stage 3's re-issue at the end of `restoreTicketsStateForRoot` with `ticketsLoadedOnce` untouched; the `!msg.unscopedPlaceholder` latch guard; the option-gated `_scanLocalTicketFiles`; the display fallback scoped while the backfill scan at `PlanningPanelProvider.ts:6378` correctly stays unscoped so `_findTicketFilePath` can still resolve orphan subtask files; and the bounded probe re-scan that only runs on the already-empty path.
+
+### Fixes applied
+
+- `src/webview/planning.js:67-70` — added `_ticketsAwaitingListSelection`.
+- `src/webview/planning.js:6120` — record `!!msg.unscopedPlaceholder` in the `localTicketFilesListed` handler.
+- `src/webview/planning.js:11960-11981` — `_ticketsEmptyStateCopy(fallback)` returns `'Select a space and list to see its tickets.'` for the placeholder, and provider-accurate re-key copy (`list id` for ClickUp, `project name` for Linear).
+- `src/webview/planning.js:11418-11422` — `renderTicketsLinearList` routes its empty state through the shared helper.
+- `src/test/tickets-sidebar-list-scoping.test.js` — added gates: the placeholder copy, the Linear noun, the `unscopedPlaceholder` capture, and that **both** renderers call `_ticketsEmptyStateCopy` (so the honesty path cannot be half-wired again).
+
+### Validation
+
+`npx tsc -p tsconfig.test.json` exit 0; `npm run compile` clean (3 pre-existing optional-dep warnings). `test:contract:tickets-sidebar-scoping` **PASS**. `planning-aggregate-cache` and `tickets-link-to-ticket-regression` PASS. `verb-engine-planning-headless` 37 pass / 3 fail and `planning-modal-contract` fail — **both reproduce identically at baseline `ea28cd2`** (stash-verified by materialising that commit in a scratch tree), so neither is attributable to this change. `parity:check` / `push-routing:check` / `verb-returns:check` PASS.
+
+Gate-wiring audit: `test:contract:tickets-sidebar-scoping` is defined at `package.json:794` **and invoked** at `.github/workflows/integration-tests.yml:94`. Not an orphaned script.
+
+### Remaining risks
+
+- **The manual UAT is still the gate and has not been run.** Steps 1–11 all remain open, in particular step 11 (autoSync watcher activation in the browser) and step 5's legacy-file case — the fixes above make the legacy-file state *legible*, but only a real run confirms the copy fires.
+- Verification ran against the repo, not the installed extension folder. Per the plan's own note, a repo build alone does not change what the running cockpit serves.
+- Behaviour change stands as designed: kanban / research / docs filters now restore in the browser on first load, and a ClickUp user with no list selected sees an empty sidebar (now correctly labelled) instead of a full one.
+

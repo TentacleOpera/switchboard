@@ -19,6 +19,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const { JSDOM } = require('jsdom');
+
 const {
     installPermissiveVscodeStub,
     createHeadlessTestSeams,
@@ -92,6 +94,59 @@ function buildHeadlessTaskViewer(tmpRoot, seamOpts = {}) {
     vscodeStub.reset();
     return { provider, seams, recorders, pushes };
 }
+
+/**
+ * Boot `src/webview/memo.js` for REAL against the real `memo.html` body markup.
+ *
+ * Source-regex assertions on memo.js cannot see behaviour, and that blindness
+ * shipped a data-loss bug: the post-click-typing guard was defeated by the
+ * BROWSER's double delivery (one click → the WS fan-out copy of
+ * `memoPromptResult` AND the HTTP response body re-dispatched by transport.js),
+ * while every regex the suite asserted still matched. These subtests execute the
+ * handler instead of reading it.
+ */
+function bootMemoPanel(initialRoot = '/tmp/ws-a') {
+    const REPO_ROOT = path.join(__dirname, '..', '..');
+    const memoJs = fs.readFileSync(path.join(REPO_ROOT, 'src', 'webview', 'memo.js'), 'utf8');
+    const memoHtml = fs.readFileSync(path.join(REPO_ROOT, 'src', 'webview', 'memo.html'), 'utf8');
+    // Real markup, minus the <script> tags the shim/loader inject at serve time.
+    const bodyInner = memoHtml.match(/<body>([\s\S]*?)<\/body>/)[1].replace(/<script[\s\S]*?<\/script>/g, '');
+    const dom = new JSDOM(
+        `<!DOCTYPE html><html><body data-initial-workspace-root="${encodeURIComponent(initialRoot)}">${bodyInner}</body></html>`,
+        { runScripts: 'outside-only' }
+    );
+    const { window } = dom;
+    const posted = [];
+    window.acquireVsCodeApi = () => ({ postMessage: (m) => posted.push(m) });
+    window.eval(memoJs);
+    const el = (id) => window.document.getElementById(id);
+    return {
+        window, posted,
+        el,
+        get value() { return el('memo-textarea').value; },
+        status: () => el('memo-status'),
+        // Typing goes through the real `input` listener, so _memoDirty tracks it.
+        type: (v) => {
+            const ta = el('memo-textarea');
+            ta.value = v;
+            ta.dispatchEvent(new window.Event('input', { bubbles: true }));
+        },
+        click: (id) => el(id).dispatchEvent(new window.MouseEvent('click', { bubbles: true })),
+        deliver: (m) => window.dispatchEvent(new window.MessageEvent('message', { data: m })),
+    };
+}
+
+const REPLY_COPY_CLEARED = {
+    type: 'memoPromptResult', success: true, memoCleared: true, isError: false, action: 'copy',
+    message: 'Prompt for 2 issue(s) copied to clipboard. Memo cleared.',
+};
+const REPLY_SEND_FAILED = {
+    type: 'memoPromptResult', success: false, memoCleared: false, isError: true, action: 'send',
+    message: 'Failed to send to planner. Prompt copied to clipboard. Memo preserved for retry.',
+};
+const REPLY_EMPTY = {
+    type: 'memoPromptResult', success: true, memoCleared: false, message: 'No entries to process.',
+};
 
 async function main() {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-memo-clear-'));
@@ -216,6 +271,23 @@ async function main() {
         assert.strictEqual(empty.success, true);
     });
 
+    await test('the unresolvable-workspace failure is ROUTABLE and carries `error` (PRD contract #4)', async () => {
+        const { provider } = buildHeadlessTaskViewer(tmpRoot);
+        // _resolveWorkspaceRoot() returns null only when there are NO roots at all,
+        // which is what makes this branch reachable.
+        vscodeStub.setWorkspaceFolders([]);
+        const res = await provider.handleServiceVerb('memoGeneratePrompt', {
+            content: 'Bug: one', action: 'copy',
+        });
+        vscodeStub.setWorkspaceFolders([tmpRoot]);
+        assert.strictEqual(res.success, false);
+        assert.ok(typeof res.type === 'string' && res.type.length > 0,
+            'untyped failure body — transport.js stops before dispatchMessage, so the panel never shows it');
+        assert.ok(typeof res.error === 'string' && res.error.length > 0,
+            'failure body has no `error` — transport.js would toast "Action failed: memoGeneratePrompt"');
+        assert.strictEqual(res.error, res.message, 'the toast and the panel status must say the same thing');
+    });
+
     await test('setApiServer BEFORE the hub exists still wires WS fan-out (sibling-provider parity)', async () => {
         // The regression: _initTaskViewerService() runs LAZILY on the first HTTP
         // verb, which is AFTER the API server started, so an optional-chained
@@ -230,7 +302,6 @@ async function main() {
                 globalState: { get: () => undefined, update: async () => {} },
                 workspaceState: { get: () => undefined, update: async () => {} },
                 subscriptions: [],
-            extensionUri: { fsPath: path.join(__dirname, '..', '..') },
                 extensionUri: { fsPath: path.join(__dirname, '..', '..') },
                 secrets: null,
             },
@@ -277,6 +348,120 @@ async function main() {
         const transportJs = fs.readFileSync(path.join(REPO_ROOT, 'src', 'webview', 'transport.js'), 'utf8');
         assert.ok(!/clipboardWriteFailed/.test(transportJs),
             'transport.js gained a clipboard-failure path this plan deliberately dropped');
+    });
+
+    // ── memo.js EXECUTED (not grepped) under the browser's double delivery ──
+
+    await test('DOUBLE DELIVERY: post-click typing survives BOTH copies of the reply', async () => {
+        // The bug this locks down: one click yields two deliveries of the same
+        // memoPromptResult (WS fan-out + HTTP body). The first correctly declined
+        // to clear because the user had kept typing — and then released the guard,
+        // so the SECOND delivery took the `_submittedContent === null` branch and
+        // discarded the text the first delivery had just protected. Subtask 2's
+        // own manual step 14 is exactly this case.
+        const p = bootMemoPanel();
+        p.type('Bug: one\n\nBug: two');
+        p.click('memo-copy-btn');
+        p.type('Bug: one\n\nBug: two\n\nBug: THREE typed after the click');
+
+        p.deliver(REPLY_COPY_CLEARED);
+        assert.ok(p.value.includes('typed after the click'),
+            'delivery 1 discarded text typed after the click');
+        p.deliver(REPLY_COPY_CLEARED);
+        assert.ok(p.value.includes('typed after the click'),
+            'delivery 2 discarded text typed after the click — the guard was released too early');
+    });
+
+    await test('DOUBLE DELIVERY: text typed BETWEEN the two deliveries is not discarded', async () => {
+        const p = bootMemoPanel();
+        p.type('Bug: one');
+        p.click('memo-copy-btn');
+        p.deliver(REPLY_COPY_CLEARED);
+        assert.strictEqual(p.value, '', 'delivery 1 did not clear the submitted batch');
+        p.type('Bug: brand new, typed after the clear');
+        p.deliver(REPLY_COPY_CLEARED);
+        assert.ok(p.value.includes('brand new'),
+            'delivery 2 discarded text typed after the clear');
+    });
+
+    await test('the ordinary copy round trip still clears and flashes the COPY button only', async () => {
+        const p = bootMemoPanel();
+        p.type('Bug: one\n\nBug: two');
+        p.click('memo-copy-btn');
+        assert.match(p.status().textContent, /Building prompt/, 'no in-flight status on click');
+        p.deliver(REPLY_COPY_CLEARED);
+        p.deliver(REPLY_COPY_CLEARED);
+        assert.strictEqual(p.value, '', 'the textarea was not cleared');
+        assert.match(p.status().textContent, /copied to clipboard/i);
+        assert.ok(p.el('memo-copy-btn').textContent.includes('Copied'), 'Copy button did not flash');
+        assert.ok(!p.el('memo-send-btn').textContent.includes('Sent'),
+            'Send to Planner flashed for a copy the user never asked it to do');
+    });
+
+    await test('a successful send flashes SEND, never COPY (a send does not copy)', async () => {
+        const p = bootMemoPanel();
+        const sent = { ...REPLY_COPY_CLEARED, action: 'send', message: 'Sent 1 issue(s) to planner. Memo cleared.' };
+        p.type('Bug: one');
+        p.click('memo-send-btn');
+        p.deliver(sent);
+        p.deliver(sent);
+        assert.strictEqual(p.value, '');
+        assert.ok(p.el('memo-send-btn').textContent.includes('Sent'), 'Send button did not flash');
+        assert.ok(!p.el('memo-copy-btn').textContent.includes('Copied'),
+            'Copy Prompt flashed on a send — feedback on a control the user did not touch');
+    });
+
+    await test('a failed send preserves the memo, shows the error colour, and does not flash', async () => {
+        const p = bootMemoPanel();
+        p.type('Bug: one');
+        p.click('memo-send-btn');
+        p.deliver(REPLY_SEND_FAILED);
+        p.deliver(REPLY_SEND_FAILED);
+        assert.strictEqual(p.value, 'Bug: one', 'a failed send discarded the memo');
+        assert.match(p.status().style.color, /accent-red/);
+        assert.ok(!p.el('memo-send-btn').textContent.includes('Sent'), 'flashed success on a failed send');
+    });
+
+    await test('the empty-memo no-op does not flash "Copied ✓" (nothing was copied)', async () => {
+        const p = bootMemoPanel();
+        p.click('memo-copy-btn');
+        p.deliver(REPLY_EMPTY);
+        p.deliver(REPLY_EMPTY);
+        assert.match(p.status().textContent, /No entries to process/);
+        assert.ok(!p.el('memo-copy-btn').textContent.includes('Copied'),
+            'the button announced "Copied ✓" while the status said nothing was processed');
+    });
+
+    await test('a FOREIGN clear applies when clean, but never discards unsaved local typing', async () => {
+        // `_submittedContent === null` means this panel never submitted, so the
+        // reply belongs to another surface (the sidebar pressed Copy). Trust it
+        // only under the same dirty/focus guard the memoContent case uses.
+        const clean = bootMemoPanel();
+        clean.el('memo-textarea').value = 'text this panel never submitted';
+        clean.deliver(REPLY_COPY_CLEARED);
+        assert.strictEqual(clean.value, '', 'a foreign clear did not reach a clean panel');
+
+        const dirty = bootMemoPanel();
+        dirty.type('locally typed, not yet saved');
+        dirty.deliver(REPLY_COPY_CLEARED);
+        assert.strictEqual(dirty.value, 'locally typed, not yet saved',
+            'a foreign clear discarded unsaved local typing');
+    });
+
+    await test('workspaceChanged relabels, clears, and re-issues memoLoad for the new root', async () => {
+        const p = bootMemoPanel('/tmp/ws-a');
+        assert.strictEqual(p.el('memo-workspace').textContent, 'ws-a', 'initial workspace label missing');
+        p.type('ws-a memo text');
+        p.deliver({ type: 'workspaceChanged', workspaceRoot: '/tmp/ws-b' });
+        assert.strictEqual(p.value, '', 'the previous workspace\'s text survived the switch');
+        assert.strictEqual(p.el('memo-workspace').textContent, 'ws-b', 'header did not follow the switch');
+        const loads = p.posted.filter(m => m.type === 'memoLoad');
+        assert.ok(loads.length >= 2 && loads[loads.length - 1].workspaceRoot === '/tmp/ws-b',
+            'no memoLoad re-issued for the new root');
+        // The pending debounced save for the OLD root must be gone, or it fires
+        // against the NEW root and writes the previous workspace's text there.
+        assert.ok(!p.posted.some(m => m.type === 'memoSave'),
+            'a pending memoSave survived the workspace switch');
     });
 
     await test('standalone arm carries the same parity flags', async () => {

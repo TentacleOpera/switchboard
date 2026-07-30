@@ -12025,8 +12025,14 @@ Each plan file must include:
                     case 'memoGeneratePrompt': {
                         const workspaceRoot = this._resolveStateWorkspaceRoot(data.workspaceRoot);
                         if (!workspaceRoot) {
-                            this.postMessage({ type: 'memoError', message: 'No workspace folder found for memo.' });
-                            return { success: false, message: 'No workspace folder found for memo.' };
+                            const noRootMsg = 'No workspace folder found for memo.';
+                            this.postMessage({ type: 'memoError', message: noRootMsg });
+                            // TYPED + `error`, like the two returns below it. Untyped,
+                            // transport.js stops before dispatchMessage and raises the
+                            // useless toast "Action failed: memoGeneratePrompt" over a
+                            // panel status line that never updates from the reply
+                            // (PRD contract #4: a failure body carries `error`).
+                            return { success: false, type: 'memoError', message: noRootMsg, error: noRootMsg };
                         }
                         const content = typeof data.content === 'string' ? data.content : '';
                         const action = data.action === 'send' ? 'send' : 'copy';
@@ -21260,7 +21266,15 @@ What would you like to find?`;
             if (st?.status?.status) {
                 statusStr = String(st.status.status).trim();
             }
-            rawDesc = String(st?.markdown_description || '').trim();
+            // `markdownDescription` FIRST: every ClickUp subtask reaching this method has
+            // been through _normalizeClickUpTask, which renames the API's
+            // `markdown_description` to camelCase (ClickUpSyncService.ts:753) and already
+            // falls back to `description`. Reading only the raw API key made the embedded
+            // description dead code on BOTH producers — the bulk list payload and
+            // getTaskDetails' subtasks — leaving a titles-only checklist, which is exactly
+            // the "has a ## Subtasks section but still an incomplete spec" trap.
+            // The raw key stays as a defensive fallback for any un-normalised caller.
+            rawDesc = String(st?.markdownDescription || st?.markdown_description || st?.description || '').trim();
         } else {
             const ty = String(st?.state?.type || '').toLowerCase();
             done = ty === 'completed' || ty === 'canceled';
@@ -21302,6 +21316,35 @@ What would you like to find?`;
     }
 
     /**
+     * Split one checklist line into its id and a normalised title key.
+     *
+     * The id is the parenthesised group at the END of the line (before the optional
+     * ` — status` suffix), which is where _buildSubtaskEntry writes it. Anchoring on the
+     * end — not "the last parens anywhere" — is what keeps a title that itself contains
+     * parentheses (`- [ ] Fix the (broken) widget`) from being keyed on a fragment of
+     * its own title.
+     *
+     * The title key exists for LEGACY lines. The shipped per-open enrich wrote ClickUp
+     * subtasks as `- [ ] ${name}` with no id at all, so an id-keyed merge would append the
+     * payload's id-carrying line BESIDE the legacy one and every ClickUp parent that was
+     * ever opened would show its subtasks twice after the next import.
+     */
+    private _parseSubtaskLine(line: string): { id: string; titleKey: string } {
+        let rest = line.trim().replace(/^- \[[ xX]\]\s*/, '');
+        const statusMatch = rest.match(/\s+—\s+[^—]*$/);
+        if (statusMatch && statusMatch.index !== undefined) {
+            rest = rest.slice(0, statusMatch.index).trimEnd();
+        }
+        let id = '';
+        const idMatch = rest.match(/\(([^()]*)\)$/);
+        if (idMatch && idMatch.index !== undefined) {
+            id = idMatch[1].trim();
+            rest = rest.slice(0, idMatch.index).trimEnd();
+        }
+        return { id, titleKey: `__title:${rest.replace(/\s+/g, ' ').toLowerCase()}` };
+    }
+
+    /**
      * Parse an existing `## Subtasks` block (heading to EOF) into an ordered
      * id → entry-text map. An entry starts at a `- [` line; every following line that
      * is not a new `- [` line belongs to it (that's the description block).
@@ -21312,7 +21355,6 @@ What would you like to find?`;
         const lines = sectionText.split(/\r?\n/);
         let currentKey: string | null = null;
         let buffer: string[] = [];
-        let unkeyed = 0;
         const flush = () => {
             if (currentKey !== null) {
                 entries.set(currentKey, buffer.join('\n').replace(/\s+$/, ''));
@@ -21322,11 +21364,12 @@ What would you like to find?`;
         for (const line of lines) {
             if (/^- \[[ xX]\]/.test(line.trim()) && line.trimStart() === line) {
                 flush();
-                // Key on the LAST parenthesised group on the checklist line — that is
-                // where _buildSubtaskEntry writes the id, and a title may contain parens.
-                const idMatches = [...line.matchAll(/\(([^()]*)\)/g)];
-                const id = idMatches.length ? idMatches[idMatches.length - 1][1].trim() : '';
-                currentKey = id || `__unkeyed_${unkeyed++}`;
+                const parsed = this._parseSubtaskLine(line);
+                let key = parsed.id || parsed.titleKey;
+                // Two legacy lines with identical titles must not collapse into one —
+                // suffix on collision rather than losing a row.
+                if (entries.has(key)) { key = `${key}#${entries.size}`; }
+                currentKey = key;
                 buffer.push(line);
             } else if (currentKey !== null) {
                 buffer.push(line);
@@ -21355,7 +21398,18 @@ What would you like to find?`;
         const merged = this._parseSubtaskEntries(existingSection);
         for (const st of subtasks || []) {
             const entry = this._buildSubtaskEntry(provider, st);
-            merged.set(entry.id || `__unkeyed_${merged.size}`, entry.text);
+            // Key the payload line through the SAME parser the existing lines went
+            // through, so both sides normalise identically.
+            const parsed = this._parseSubtaskLine(entry.text.split('\n')[0]);
+            const idKey = parsed.id || entry.id;
+            // Write through a legacy title-keyed slot when one exists: the id-carrying
+            // replacement then takes the legacy line's PLACE instead of appearing beside
+            // it as a duplicate. No entry is ever removed — the slot is overwritten, and
+            // the rewritten line now carries its id, so the next parse keys it by id.
+            const slot = (idKey && merged.has(idKey))
+                ? idKey
+                : (merged.has(parsed.titleKey) ? parsed.titleKey : (idKey || parsed.titleKey));
+            merged.set(slot, entry.text);
         }
         if (merged.size === 0) { return ''; }
         let section = TaskViewerProvider._SUBTASKS_HEADER;

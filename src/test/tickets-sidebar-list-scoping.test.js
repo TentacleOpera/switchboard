@@ -165,6 +165,44 @@ function testTicketsSidebarListScoping() {
         /don't carry a list id — Refetch this list to re-key them/,
         'the empty state must offer the re-key copy rather than a bare "No tasks found."'
     );
+    // Linear scopes on `projectName:` and gets the same scopeCoverage counts, so the
+    // re-key instruction must name the key the Linear user can actually fix.
+    assert.match(
+        planningJs,
+        /don't carry a project name — Refetch this project to re-key them/,
+        'the re-key copy must name projectName for Linear, not "list id"'
+    );
+
+    // Assertion 10: the no-list-selected state says so. Showing "No tasks found." to a
+    // user who has selected nothing reads as "this list is empty" — the same
+    // empty-is-not-correct failure the coverage warn exists to prevent, one level up.
+    assert.match(
+        planningJs,
+        /_ticketsAwaitingListSelection\s*=\s*!!msg\.unscopedPlaceholder;/,
+        "the localTicketFilesListed handler must record the unscopedPlaceholder marker"
+    );
+    assert.match(
+        planningJs,
+        /if\s*\(\s*_ticketsAwaitingListSelection\s*\)\s*\{\s*return\s+'Select a space and list to see its tickets\.';/,
+        'the ClickUp no-list-selected placeholder must render the "Select a space and list" empty state'
+    );
+
+    // Assertion 11: BOTH provider renderers route through the shared copy helper. Wiring
+    // it into one renderer only leaves the other silently reporting "no tickets".
+    const clickUpRenderIdx = planningJs.indexOf('function renderTicketsClickUpList()');
+    const linearRenderIdx = planningJs.indexOf('function renderTicketsLinearList()');
+    assert.strictEqual(clickUpRenderIdx !== -1 && linearRenderIdx !== -1, true, 'both ticket list renderers must exist');
+    for (const [name, startIdx, endNeedle] of [
+        ['renderTicketsClickUpList', clickUpRenderIdx, 'function renderTicketsClickUpTaskDetail()'],
+        ['renderTicketsLinearList', linearRenderIdx, 'function renderTicketsLinearTaskDetail()']
+    ]) {
+        const endIdx = planningJs.indexOf(endNeedle, startIdx);
+        assert.strictEqual(endIdx !== -1, true, `expected to find ${endNeedle}`);
+        assert.ok(
+            planningJs.slice(startIdx, endIdx).includes('_ticketsEmptyStateCopy('),
+            `${name} must render its empty state through _ticketsEmptyStateCopy`
+        );
+    }
 }
 
 if (require.main === module) {

@@ -440,3 +440,40 @@ Independent reviewer pass (Grumpy → Balanced → fixes → verification). The 
 - The pixel-font header is a small visual addition beyond the pre-review state; it matches `project.html` / `kanban.html` chrome but has not been eyeballed in a browser.
 - `npm run lint` remains outside CI, so lint regressions are not gated anywhere.
 
+## Review Pass 2 — 2026-07-30 (independent, tests executed)
+
+Second independent reviewer pass. The prior pass's claims were **re-verified rather than inherited**; all of its fixes hold. The CSS/markup work is confirmed correct and kept in full — canonical `:root` tokens, the non-repainting `body.cyber-theme-enabled { }` rule, the claudify derived-teal redeclaration plus the `.section-label` grey override, flex `.memo-actions`, bare `<body>`, all five load-bearing ids, the `<!-- SHARED_DEFAULTS_SCRIPT -->` anchor, `'GeistPixel'` now actually applied, and zero inline `style=` attributes. `dist/webview/memo.html` is byte-identical to `src/` and contains no `#00f0ff` / `#d97706` / `strip-btn`.
+
+### Findings
+
+| Severity | Finding | Location |
+| :--- | :--- | :--- |
+| MAJOR (gate wiring) | `npm run lint` is named in this plan's **Automated** subsection (step 4) but was invoked by **no** CI workflow — the named-but-unwired hole. Now fixed. | `package.json:770` defined; `.github/workflows/integration-tests.yml` had no invocation |
+| NIT | The style contract test reads `getMemoHtml`, which prefers `dist/webview/memo.html`, so run locally without a rebuild it asserts against the **built** copy and can report a false pass/fail on edited source. CI is safe (it runs `npm run compile` first). Documented, not changed — making the test read `src/` would stop it validating what is actually served. | `src/test/memo-panel-style-contract.test.js:16` |
+| NIT | The test locks the tokens and the five ids but **not** the two hooks this plan exists to reserve for its siblings — `.is-copied` and `#memo-workspace`. Deleting either would be caught only indirectly, by the sibling suites' behavioural subtests (which now do execute `memo.js` — see subtask 2). | `src/test/memo-panel-style-contract.test.js` |
+
+No CRITICAL or code-level MAJOR findings. **`src/webview/memo.html` was not modified in this pass.**
+
+### Fixes applied
+
+- **CI wiring** — added a `Lint (TypeScript only — see limitation above)` step to `.github/workflows/integration-tests.yml`, with a comment recording that `eslint.config.js` scopes rules to `**/*.ts` **only**, so the step gives *zero* coverage of `src/webview/*.js` or `src/test/*.js`. That limitation is stated in the workflow rather than left to be misread as "the webview JS is linted". Widening the config to `.js` would surface an unmeasured warning backlog repo-wide and needs its own plan.
+
+### Validation results (executed)
+
+| Check | Result |
+| :--- | :--- |
+| `npm run compile-tests` (tsc) | **PASS** — exit 0, no errors |
+| `npm run compile` (webpack → `dist`) | **PASS** — 0 errors, 3 pre-existing optional-dep warnings (`utf-8-validate`, `canvas`, `bufferutil`) |
+| `npm run test:contract:memo-panel-style` | **PASS** |
+| `npm run test:contract:shim-injection` | **PASS** — 17/17 |
+| `npm run test:contract:panel-scrollbars` | **PASS** — 30/30 |
+| `npm run lint` | **PASS** — exit 0, 0 errors (2376 warnings; warnings do not fail eslint here, which is why wiring it cannot go red) |
+| `dist` vs `src` for `memo.html` | **IDENTICAL** — the cockpit serves the restyled panel |
+| Gate-wiring audit | Every check named in **Automated** (steps 1-4) is now invoked in CI: `compile-tests`, `compile`, `test:contract:memo-panel-style`, `test:contract:shim-injection`, **and `lint`**. |
+
+### Remaining risks
+
+- **Manual verification still not performed.** Steps 5-12 need a rebuilt-and-synced install folder plus a browser: the Board side-by-side comparison, the claudify terracotta/no-glow check, the standalone two-button row, and the sidebar Memo tab being pixel-identical. Unchanged from the first pass.
+- **The default-theme repaint removal is still a visible change on ~4,000 installs** (User Review item 1) — intended and signed off, restated only so it is not lost.
+- The new lint gate is TypeScript-only, so the `.js` files this feature changed most (`memo.js`) are still unlinted by any gate.
+
