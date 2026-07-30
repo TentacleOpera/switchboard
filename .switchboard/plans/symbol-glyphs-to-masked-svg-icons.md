@@ -68,7 +68,7 @@ So this is **extending a proven in-repo pattern**, not introducing an architectu
 
 ### Complex / Risky
 
-- **The failure mode is worse than the bug it fixes.** A `mask-image` that does not resolve leaves the element unmasked, so `background-color: currentColor` paints a **solid 16×16 block**. A missing font glyph is a small box in one place; a broken mask is a filled rectangle where a chevron used to be. The primitive must be designed so this cannot happen silently (Phase 2).
+- **There are two failure modes, with opposite appearances.** Confirmed against the CSS Masking spec: an *unloadable or malformed* mask image evaluates to a transparent-black layer, so the element renders **completely invisible**; a *CSS-invalid* `mask-image` (syntax error, or a `var()` invalid at computed-value time) computes to `none`, so no mask is applied and `background-color: currentColor` paints a **solid block**. Both must be designed against and both must be swept for — a verifier told to hunt only solid blocks will pass a page full of missing icons. See *Failure Modes*.
 - **Four sites are CSS pseudo-element glyphs** (`content: '▸'`, `content: '└─'`, `content: ' ●'`, `content: '⚡ '`), which need restructuring to `content: ''` plus box metrics — a different edit shape from the markup sites.
 - **~12 sites are JS state toggles** (`textContent = isCollapsed ? '▸ ' : '▾ '`). Replacing a text swap with an icon swap changes how state is expressed, and a `var()`-based swap would reintroduce the solid-square failure.
 - **Two sources of truth for each asset** (the `.svg` file and its inlined `data:` URI) can drift. Mitigated by a parity check, not by discipline.
@@ -83,7 +83,8 @@ So this is **extending a proven in-repo pattern**, not introducing an architectu
 ### Security
 
 - **No new surface, and one small reduction.** `data:image/svg+xml` in a CSS `mask-image` is not executable: mask images are rendered as images, so scripts, `<foreignObject>` and external references inside them do not execute. The SVGs are repo assets, not user input.
-- **No CSP change required — verified.** Every CSP in the codebase already permits `data:` under `img-src`: `headlessPanelHtml.ts` lines 115, 132, 192, 230, 267, 301, 326, and providers `KanbanProvider.ts:11133`, `TaskViewerProvider.ts:20644`, `SetupPanelProvider.ts:1587`. Nothing is widened.
+- **No CSP change required — verified, and the requirement is real.** Research confirms mask-image fetches are governed by **`img-src`** (falling back to `default-src`; there is no `mask-src` directive), and that `data:` URIs in mask position are **not** exempt as same-document — they need an explicit `data:` source expression. Every CSP in this codebase already has one: `headlessPanelHtml.ts` lines 115, 132, 192, 230, 267, 301, 326, and providers `KanbanProvider.ts:11133`, `TaskViewerProvider.ts:20644`, `SetupPanelProvider.ts:1587`. Nothing is widened.
+- **Guard for the future:** because `data:` in `img-src` is load-bearing after this lands, removing it from any of those ten CSPs — a plausible "tighten the CSP" cleanup — turns **every icon invisible at once**, with a console CSP violation as the only signal. Several of those policies use `default-src 'none'`, so there is no permissive fallback to absorb it.
 - Several Category C sites currently build status strings with `textContent`, which cannot hold markup. Any temptation to convert those to `innerHTML` to fit an icon in would introduce an injection surface for interpolated server/API text. **They are out of scope precisely so that does not happen** — see *Decisions Already Made*.
 
 ### Side Effects
@@ -111,7 +112,7 @@ No prior session IDs apply — dependencies are plan-file relationships:
 
 ## Adversarial Synthesis
 
-**Risk Summary.** The dominant risk is the primitive's failure mode: an unresolved `mask-image` renders a solid `currentColor` block, so a typo produces filled rectangles rather than missing icons — which is why masks are written as literal `data:` URIs in each rule instead of routed through a custom property that could be invalid at computed-value time. Secondary risks are inline-flow regressions where an `inline-block` icon box replaces a baseline-aligned character, and silent drift between each `.svg` source and its inlined copy. Mitigations: literal URIs plus two-class state toggles (no `var()` in a mask), an explicit "no solid squares" verification sweep in both hosts and both themes, and a parity script that fails loudly when a `.svg` and its inlined URI diverge.
+**Risk Summary.** The dominant risk is that this primitive fails in two opposite ways — a malformed or CSP-blocked mask renders the element **invisible**, while a CSS-invalid `mask-image` renders it as a **solid `currentColor` block** — so a sweep tuned to one shape passes the other, and the invisible mode is indistinguishable from "no icon was ever there". Secondary risks are inline-flow regressions where an `inline-block` icon box replaces a baseline-aligned character, and silent drift between each `.svg` source and its inlined copy. Mitigations: base64 encoding (removing the `#`/quote/newline hazards that cause the invisible mode), literal URIs plus two-class state toggles (removing the `var()` hazard that causes the solid mode), a verification sweep that counts icons against an enumerated site list and reads the console for CSP and decode errors, and a parity script that fails loudly on divergence.
 
 ## Site Taxonomy
 
@@ -167,32 +168,44 @@ Keep the `fill="#45e0e6"` convention verbatim for consistency with `nav-*.svg`, 
 ```css
 .sb-icon {
     display: inline-block;
-    width: 1em;
-    height: 1em;
+    width: 16px;                /* integer px, never em — see below */
+    height: 16px;
     vertical-align: -0.125em;   /* sit on the text baseline like the glyph did */
     background-color: currentColor;
     flex-shrink: 0;
-    -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
-    -webkit-mask-position: center; mask-position: center;
-    -webkit-mask-size: contain;   mask-size: contain;
+    mask-repeat: no-repeat;
+    mask-position: center;
+    mask-size: contain;
 }
+/* Size variants for the contexts these glyphs occupied. */
+.sb-icon-sm { width: 10px; height: 10px; }   /* inline chevrons, breadcrumb marks */
+.sb-icon-xs { width: 6px;  height: 6px;  }   /* status dots */
 ```
 
-Then one rule per icon, with the `data:` URI written **literally**:
+Then one rule per icon, with a **base64** `data:` URI written **literally**:
 
 ```css
 /* source: icons/icon-chevron-right.svg */
 .sb-icon-chevron-right {
-    -webkit-mask-image: url('data:image/svg+xml,%3Csvg xmlns=…%3E');
-            mask-image: url('data:image/svg+xml,%3Csvg xmlns=…%3E');
+    mask-image: url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0…');
 }
 ```
 
-**Do not route the mask through a custom property.** `mask-image: var(--icon-chevron-right)` is invalid at computed-value time if the property is undefined or misspelled, which resets `mask-image` to `none` — leaving `background-color: currentColor` to paint a solid block. Literal URIs remove that failure class entirely, at the cost of duplication that is acceptable at 17 icons.
+Three constraints, each closing a confirmed failure mode:
 
-Percent-encode at minimum `#`, `<`, `>`, `"` and newlines. `#` is mandatory — an unencoded `#` truncates the URI at the fragment identifier.
+- **Base64, not percent-encoding.** Research confirms base64 sidesteps every hand-encoding hazard at once: unencoded `#` (which truncates the URI at the fragment identifier), quote collisions with the CSS string token, and literal newlines (invalid inside a CSS string). Each of those produces an **invisible** icon, and the encoding is the single most error-prone step in this plan. The cost is ~33% payload growth — roughly 500 → 665 bytes per icon, which is immaterial here. Base64 also makes the parity check a one-liner.
 
-**2c. Add `scripts/check-icon-parity.js`** — reads each `icons/icon-*.svg`, percent-encodes it, and asserts the result appears in every panel CSS that declares the matching `.sb-icon-<name>` rule. Exits non-zero on divergence. ~20 lines, no dependencies. This is what keeps the two sources of truth honest; without it, drift is invisible.
+  > **Superseded:** percent-encoded `data:image/svg+xml,%3Csvg…` URIs, with a note to escape `#`, `<`, `>`, `"` and newlines.
+  > **Reason:** It puts the correctness of 17 assets on a manual escaping step whose failure mode is a silently invisible icon. Research explicitly rated base64 as eliminating quote, `#` and newline hazards, and flagged that percent-encoding needs build-step validation to be safe — which this repo has no place to put, since the webview CSS is authored by hand with no build stage.
+  > **Replaced with:** `data:image/svg+xml;base64,…`. Human readability is not lost, because the canonical editable asset is the `.svg` file, not the CSS string.
+
+- **No custom property in the mask.** `mask-image: var(--icon-chevron-right)` is invalid at computed-value time if that property is undefined or misspelled, which resets `mask-image` to `none` — leaving `background-color: currentColor` painting a solid block. Literal URIs remove that failure class, at the cost of duplication that is acceptable at 17 icons. **Now spec-confirmed**, not inferred.
+
+- **Integer `px` dimensions, never `em`.** Research flagged that fractional element sizes under fractional display scaling (125%/150%/175%, common on Windows) can clip a mask edge or leave an anti-aliased seam, because Blink's mask painting snaps subpixels differently from background painting. `1em` at an 11px font is fine; `0.5em` for a dot is 5.5px and is exactly the hazard. Fixed px also matches the shipping `.strip-glyph`, which is `20px`/`20px`.
+
+**Unprefixed `mask-*` only.** Chromium un-prefixed the whole `mask-*` family (including `mask-size` and `mask-composite`) in **Chromium 120**; `package.json` requires `engines.vscode: ^1.93.0`, which is far past the Electron 28 / Chromium 120 line, and the browser cockpit runs the user's own modern browser. Research also warns that **mixing prefixed and unprefixed longhands in one rule can cause cascade overrides** — a real risk, not a style preference. The shipping `.strip-glyph` sets both; that is harmless legacy and must **not** be copied into the new primitive.
+
+**2c. Add `scripts/check-icon-parity.js`** — for each `icons/icon-*.svg`, base64-encode the file and assert the string appears in every panel CSS that declares the matching `.sb-icon-<name>` rule. Exits non-zero on divergence. ~20 lines, no dependencies (`fs.readFileSync(f).toString('base64')`). This is what keeps the two representations honest; without it, drift is invisible.
 
 ### Phase 3 — Pilot: the `design.html` zoom/pan cluster
 
@@ -232,17 +245,23 @@ Four sites in `kanban.html` generate glyphs through `content:`. A pseudo-element
 
 ```css
 /* was: .prompts-role-tab.has-override::after { content:' ●'; color:var(--accent-teal); } */
+/* source: icons/icon-dot.svg */
 .prompts-role-tab.has-override::after {
     content: '';
     display: inline-block;
-    width: 0.5em; height: 0.5em;
-    margin-left: 0.35em;
+    width: 6px; height: 6px;          /* integer px — 0.5em would be 5.5px here */
+    margin-left: 4px;
     background-color: var(--accent-teal);
-    -webkit-mask-image: url('data:image/svg+xml,…dot…'); mask-image: url('data:image/svg+xml,…dot…');
-    -webkit-mask-size: contain; mask-size: contain;
-    -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+    mask-image: url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0…');
+    mask-size: contain;
+    mask-repeat: no-repeat;
 }
 ```
+
+Research confirms pseudo-element masking is visually identical to masking a real element in Blink, so this is a safe shape. Two constraints specific to pseudo-elements:
+
+- **`transform: rotate()` is safe; `transform: scale()` is not.** A transform animation on a masked pseudo-element promotes it to a composited layer, and Blink rasterizes the mask texture at its *initial* visual bounds before GPU scaling — so a scale-up transition produces fuzzy, pixelated edges. `kanban.html:2525` currently transitions `transform` on the chevron pseudo-element; keep it as a rotation and it is unaffected. Do not "improve" any of these into a scale animation.
+- **Keep the SVG's intrinsic `width`/`height` attributes.** Research flagged that assets relying on `viewBox` alone are more prone to fractional-DPR rounding in mask positioning. The existing `nav-*.svg` already carry both; Phase 2a's convention preserves that, and this is the reason why.
 
 Sites: `kanban.html:1212` (`● ` override marker), `:1530` (`⚡ `), `:2286` (`└─` tree elbow), `:2525` (`▸` expand chevron). Note `:2286` currently emits **two** characters — the elbow icon must incorporate both the corner and the horizontal run, or the rule must keep a separate rule for the run.
 
@@ -251,6 +270,20 @@ Sites: `kanban.html:1212` (`● ` override marker), `:1530` (`⚡ `), `:2286` (`
 1. Run `scripts/check-icon-parity.js`.
 2. Confirm every Category A site in the Phase 1 document is migrated.
 3. Add a short note to the two font plans' *Decisions Already Made* recording that the fallback tails are now a convenience rather than load-bearing for the migrated symbols — but must still not be trimmed, since Categories B/C/D keep ~69 text-glyph sites alive.
+
+## Failure Modes
+
+Confirmed against the CSS Masking spec and cross-engine testing. The two modes look **opposite** on screen, which is why the verification sweep hunts for both.
+
+| cause | mechanism | on screen | diagnostic |
+|---|---|---|---|
+| Malformed SVG, bad base64, missing `viewBox`/dimensions | image fails to decode → mask layer is transparent black (alpha 0 everywhere) | **icon invisible** — blank space | element box present but empty; image-decode error in console |
+| CSP blocks the `data:` URI (`img-src` lacks `data:`) | fetch refused → transparent-black layer | **icon invisible** — blank space | explicit `Refused to load the image 'data:…'` console violation |
+| Unencoded `#` in a percent-encoded URI | URI truncates at the fragment identifier → decode fails | **icon invisible** or truncated mask | why base64 is mandated in Phase 2b |
+| `mask-image: var(--missing)` — invalid at computed-value time | property resets to `none` → no mask applied | **solid block** in `currentColor` | computed value shows `none`; declaration struck through in devtools |
+| Typo'd `mask-image` value or property name | CSS syntax error → declaration dropped | **solid block** in `currentColor` | declaration absent from computed styles |
+
+The practical consequence: **invisible icons will be the common failure** (encoding and CSP are the fragile links), while solid blocks only appear if someone reintroduces a `var()` or fat-fingers a property. Both gates are in the manual pass, and the console is a first-class diagnostic — not an afterthought.
 
 ## Verification Plan
 
@@ -263,13 +296,17 @@ Compilation and automated test execution are excluded per session convention. Th
 - `grep -c 'sb-icon-' src/webview/*.html src/webview/*.js` — the per-file totals reconcile against the Category A distribution table.
 - The Category B/C/D/E sites are **unchanged** — their symbol counts must be identical before and after. A drop means the sweep over-reached into text that should have stayed text.
 - No new CSP directive appears in `headlessPanelHtml.ts` or any provider — this plan requires none, so a diff there means someone took the URL route by mistake.
-- `grep -rn "mask-image: var(" src/webview/` returns **nothing** — masks are literal URIs, per Phase 2b.
+- `grep -rn "mask-image: var(" src/webview/` returns **nothing** — masks are literal URIs, per Phase 2b. This is the solid-block failure class; a single hit reintroduces it.
+- `grep -rn -- "-webkit-mask" src/webview/*.html | grep -v shell.html` returns **nothing** — new rules are unprefixed only. `shell.html`'s legacy `.strip-glyph` prefixes are expected and excluded.
+- Every `.sb-icon*` rule uses integer `px` for `width`/`height` — no `em` in a mask box (the fractional-DPR clipping hazard).
+- Every `img-src` directive across the 7 headless CSPs and 3 provider CSPs still contains `data:`. After this lands, that token is load-bearing for every icon in the product.
 
 ### Manual — both hosts, both themes
 
 The browser cockpit serves `shell` + `kanban`, `project`, `planning`, `design`, `setup`, `memo`; `implementation.html` is webview-only. So six panels compare directly across hosts.
 
-- [ ] **No solid squares anywhere.** This is the primary gate and the signature failure of this plan — a filled `currentColor` block where an icon should be means an unresolved mask. Sweep every migrated control in both hosts.
+- [ ] **Every migrated control shows its icon.** Sweep all ~62 sites in both hosts, hunting **both** failure shapes per *Failure Modes*: a **blank gap** (mask failed to load — the likely one, from encoding or CSP) and a **solid block** (mask resolved to `none` — from a `var()` or a typo). Count icons against the Phase 1 site document rather than eyeballing; a missing icon in a rarely-opened overlay is easy to walk past.
+- [ ] **The devtools console is clean in both hosts** — no `Refused to load the image 'data:…'` CSP violations and no image-decode errors. This is the fastest detector of the invisible-icon mode, which is otherwise indistinguishable from "there was never an icon there".
 - [ ] Every migrated icon renders at the same visual size and baseline as the glyph it replaced. Watch inline contexts hardest: breadcrumb chevrons, the `.select-arrow`, the tree elbow, and any icon sharing a line with text.
 - [ ] **Icons follow the theme.** Toggle Afterburner ↔ Claudify and confirm each icon recolours with its surrounding text. An icon that stays teal under Claudify was implemented as an `<img>` or a `background-image`, not a mask.
 - [ ] Icons follow interaction state — hover, active, disabled, and the hardcoded per-status colours on `kanban.html`'s clean/dirty/`—` dots.
@@ -294,20 +331,27 @@ Settled by direct inspection this session. Do not re-open.
 - **No test references any of the 24 symbols**, so no test updates are required.
 - **Font coverage** (from prior research): Hanken 0/24, Menlo 16/24, Consolas 3/24; `⚙ ⚠ ⚡` resolve to emoji fonts on both platforms.
 
-## Uncertain Assumptions
+## Resolved by Research
 
-External standards/engine behaviours that cannot be settled from this repository. The user has been advised to run web research to confirm them before implementation; a ready-to-run prompt was supplied in chat. Items 1 and 2 shape the primitive's design and the verification instructions, so they are worth confirming first.
+Web research (W3C CSS Masking Level 1, CSP Level 3, CSS Syntax Level 3, RFC 2397/3986, MDN, Chrome Platform Status, Blink paint sources) closed all four open questions. One correction, one decision reversal, and two confirmations. Do not re-research.
 
-1. **A `mask-image` that fails to resolve leaves the element unmasked** (painting a solid `currentColor` block) rather than fully masked (invisible). The entire "no solid squares" gate and the literal-URI decision rest on this. If the true behaviour is "invisible", the failure mode is a missing icon instead — still a bug, but it changes what the verifier looks for.
-2. **Percent-encoding requirements for `data:image/svg+xml` inside a CSS `url()`** — which characters must be escaped for reliable parsing across Chromium/Electron, and whether single-quoted URIs with unencoded `<`/`>` are safe in practice.
-3. **Whether `-webkit-mask-*` prefixes are still required** in the Electron/Chromium versions VS Code currently ships, or whether unprefixed `mask-*` alone suffices. The existing `.strip-glyph` sets both; this plan copies that, but the prefix may be removable.
-4. **Whether CSP `img-src` governs `mask-image` fetches** (there is no `mask-src` directive). Moot while URIs are inline `data:`, but it decides whether a future move to `/static/` URLs would need a CSP change.
+1. **Corrected — there are two failure modes, not one.** An *unloadable or malformed* mask image evaluates to a transparent-black layer, making the element **invisible**; a *CSS-invalid* `mask-image` (syntax error, or `var()` invalid at computed-value time) computes to `none`, making it a **solid block**. Uniform across Blink, WebKit and Gecko. The original plan asserted only the solid-block mode, which would have produced a verification sweep blind to the more likely failure. Both are now in *Failure Modes* and both are gated.
+2. **Reversed the encoding decision — base64, not percent-encoding.** Research rated base64 as eliminating the `#`-truncation, quote-collision and literal-newline hazards outright, and noted percent-encoding needs build-step validation to be safe. This repo has nowhere to put such a step: the webview CSS is hand-authored with no build stage. Every one of those hazards yields an *invisible* icon, so the fragile path was also the silent one. ~33% payload growth on a 500-byte asset is not a real cost.
+3. **Confirmed — unprefixed `mask-*` is sufficient.** Chromium un-prefixed the full family (including `mask-size` and `mask-composite`) in **Chromium 120**; `engines.vscode: ^1.93.0` puts the floor far above the Electron 28 / Chromium 120 line. Research additionally warns that **mixing prefixed and unprefixed longhands in one rule risks cascade overrides** — so dropping the prefixes is the safer choice, not merely the tidier one. `shell.html`'s existing prefixes stay as harmless legacy.
+4. **Confirmed — `img-src` governs mask fetches, and `data:` is not exempt.** There is no `mask-src` directive; mask images are image fetches, governed by `img-src` with fallback to `default-src`. `data:` URIs require an explicit `data:` source expression — they are *not* treated as same-document. All ten CSPs in this codebase already carry it, so no change is needed, but the token becomes load-bearing (see *Security*).
+5. **New — pseudo-element masking has full parity with element masking** in Blink, so Phase 10's shape is sound. But a `transform` animation on a masked pseudo-element promotes it to a composited layer, and Blink rasterizes the mask at its initial bounds before GPU scaling — so `scale()` transitions go fuzzy. Rotation is unaffected, which is what the existing chevron uses.
+6. **New — fractional sizing is a real clipping hazard.** Under fractional display scaling (125/150/175%, common on Windows), fractional element dimensions can clip a mask edge or leave an anti-aliased seam, because Blink's mask painting snaps subpixels differently from background painting. Assets relying on `viewBox` alone without intrinsic `width`/`height` are more susceptible. Hence integer `px` boxes and retained SVG dimension attributes.
 
 ## Decisions Already Made (do not re-litigate)
 
 - **Masks are inlined as `data:image/svg+xml` URIs, not `/static/` URLs and not a new `{{…_URI}}` placeholder.** The panels are dual-host: a `/static/icons/…` path resolves in the browser cockpit but not in a VS Code webview, which needs `asWebviewUri`. The placeholder alternative works but costs 11+ substitution sites across `headlessPanelHtml.ts` and five providers — the same plumbing tax that `decouple-webview-fonts-from-host.md` priced at roughly three complexity points. Inline `data:` URIs are dual-host by construction, need no provider change, need no CSP change, and involve no fetch. The nav rail keeps its URL approach because it is browser-only and already correct.
-- **`icons/icon-*.svg` files are canonical; the inlined URI is the shipped copy; `scripts/check-icon-parity.js` prevents drift.** Two representations is a real cost, accepted so the assets stay diffable and editable rather than living only as percent-encoded strings.
-- **Masks are written as literal URIs in each rule, never through a custom property.** An unresolvable `var()` in `mask-image` is invalid at computed-value time and resets the property to `none`, leaving a solid `currentColor` block. State changes use two classes, not a variable swap.
+- **The URIs are base64-encoded, not percent-encoded.** Base64 eliminates the `#`-truncation, quote-collision and literal-newline hazards in one move; each of those produces a silently *invisible* icon, and percent-encoding would need a validation step this repo has nowhere to put (the webview CSS is hand-authored with no build stage). ~33% growth on a ~500-byte asset is immaterial.
+- **`icons/icon-*.svg` files are canonical; the inlined base64 is the shipped copy; `scripts/check-icon-parity.js` prevents drift.** Two representations is a real cost, accepted so the assets stay diffable and editable rather than living only as encoded strings — and base64 makes the parity check a one-liner.
+- **Masks are written as literal URIs in each rule, never through a custom property.** An unresolvable `var()` in `mask-image` is invalid at computed-value time and resets the property to `none`, leaving a solid `currentColor` block — spec-confirmed. State changes use two classes, not a variable swap.
+- **Unprefixed `mask-*` only.** `engines.vscode: ^1.93.0` is far past Chromium 120, where the family was un-prefixed; and mixing prefixed with unprefixed longhands in one rule risks cascade overrides. `shell.html`'s existing prefixed twins are legacy and are not copied forward.
+- **Icon boxes use integer `px`, never `em`.** Fractional dimensions under fractional display scaling can clip a mask edge, because Blink snaps mask subpixels differently from background subpixels. Sizes are fixed per context: 16px buttons, 10px inline chevrons, 6px dots.
+- **`transform: rotate()` on masked pseudo-elements is fine; `scale()` is not** — a scale animation rasterizes the mask at its initial bounds and goes fuzzy. Keep the existing chevron rotation.
+- **`data:` in `img-src` is now load-bearing.** Mask fetches are governed by `img-src` and `data:` URIs are not exempt from it. All ten CSPs already permit it; removing that token from any of them makes every icon invisible at once.
 - **Only Category A is in scope.** Category C is excluded on a security-and-mechanism basis (`textContent` cannot hold markup; `innerHTML` would add an injection surface for interpolated text), Category D because `title` attributes and prose separators are text by definition, and Category E because those glyphs are deliberately emoji.
 - **Category B (43 icon+label buttons) is deferred, not rejected.** The label already carries the meaning there, so the glyph is reinforcement rather than the affordance — a poor return on restructuring 43 strings. Worth revisiting as a follow-on. **Cheap partial win available now:** any Category B glyph that is one of the eight OS-fallback symbols can simply be **deleted**, keeping the label — no icon, no asset, no markup change.
 - **Icon style matches `icons/nav-*.svg` exactly** — 16×16 viewBox, single `<path>`, `fill-rule="evenodd"`, sci-fi flat with clipped corners. The `fill` attribute is retained for consistency but is **ignored under a mask**; only alpha matters.
@@ -316,4 +360,4 @@ External standards/engine behaviours that cannot be settled from this repository
 
 ---
 
-**Recommendation:** Complexity 6 → **Send to Coder.** The pattern is proven in-repo and the site set is small and enumerable, but three things need care rather than speed: the solid-square failure mode, the inline-flow alignment of icons that used to be baseline characters, and the discipline not to sweep into Categories C/D. Ship Phase 3 (the pilot) and verify it in both hosts and both themes before touching the other five panels. Sequence after the "Font improvements" feature to avoid contending over the same files.
+**Recommendation:** Complexity 6 → **Send to Coder.** The pattern is proven in-repo and the site set is small and enumerable, but three things need care rather than speed: the two opposite failure modes (a blank gap is the likely one, a solid block the loud one), the inline-flow alignment of icons that used to be baseline characters, and the discipline not to sweep into Categories C/D. Ship Phase 3 (the pilot) and verify it in both hosts and both themes — console included — before touching the other five panels. Sequence after the "Font improvements" feature to avoid contending over the same files.
