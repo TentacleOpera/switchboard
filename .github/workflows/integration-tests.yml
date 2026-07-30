@@ -96,6 +96,12 @@ jobs:
       - name: Tickets subtask embedding contract
         run: npm run test:contract:tickets-subtasks
 
+      - name: Project pin apply-if-empty contract (fill, no-move, subtask-skip)
+        run: npm run test:contract:project-pin-fill
+
+      - name: Project pin same-snapshot resolve contract (first-import, fallback, resolve-only)
+        run: npm run test:contract:project-pin-resolve
+
       - name: Run integration suite
         run: npm run test:integration:all
 

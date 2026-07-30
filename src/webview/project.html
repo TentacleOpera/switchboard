@@ -1215,9 +1215,48 @@
             color: #000;
             border-color: var(--accent-teal, var(--accent-primary));
         }
-        .review-mode-btn.active {
-            border-color: var(--accent-teal, #00f0ff);
-            color: var(--accent-teal, #00f0ff);
+
+        /* Browser cockpit: opt this document into the dark native palette so a
+           plain browser stops painting light scrollbars and light form controls
+           on a black surface. The VS Code webview host supplies its own dark
+           chrome, which is why the gap is browser-only. Unscoped on purpose —
+           this panel has no light presentation in any theme. */
+        :root { color-scheme: dark; }
+
+        /* Scrollbar styling — the kanban.html/planning.html/design.html block
+           plus -corner. The --vscode-* var is absent in a browser and falls
+           through to this panel's own token, so one declaration serves both
+           hosts. */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-corner {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--vscode-scrollbarSlider-background, var(--border-bright));
+            border-radius: 3px;
+            border: none;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--vscode-scrollbarSlider-hoverBackground, var(--text-secondary));
+        }
+
+        /* Firefox only. DO NOT hoist these two properties out of the @supports
+           gate: Chromium 121+ and Safari 17.4+ ignore EVERY ::-webkit-scrollbar
+           rule on a scroller that declares scrollbar-width or scrollbar-color,
+           so an ungated copy silently deletes the 6px styling above. Chromium
+           and Safari report this selector as supported and skip the block;
+           Gecko reports it unsupported and enters it. */
+        @supports not selector(::-webkit-scrollbar) {
+            :root {
+                scrollbar-width: thin;
+                scrollbar-color: var(--border-bright) transparent;
+            }
         }
     </style>
 </head>

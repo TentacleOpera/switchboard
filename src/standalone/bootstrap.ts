@@ -958,7 +958,7 @@ Each plan file must include:
             const action = payload.action === 'send' ? 'send' : 'copy';
             const issues = parseMemoEntries(content);
             if (issues.length === 0) {
-                return { success: true, type: 'memoPromptResult', message: 'No entries to process.' };
+                return { success: true, type: 'memoPromptResult', message: 'No entries to process.', memoCleared: false };
             }
             const prompt = buildMemoPlannerPrompt(issues, root);
             // Headless degrade: no planner terminal → always copy. Return the
@@ -969,6 +969,8 @@ Each plan file must include:
                 success: true,
                 type: 'memoPromptResult',
                 message: `Prompt for ${issues.length} issue(s) copied to clipboard. Memo cleared.`,
+                memoCleared: true,
+                action: 'copy',
                 prompt,
             };
         }

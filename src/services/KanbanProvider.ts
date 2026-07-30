@@ -6475,7 +6475,9 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 if (norm(row)) return norm(row);
             }
         } catch { /* fall through to the in-memory value */ }
-        return norm(this._projectFilter);
+        const sameWorkspace = !!this._currentWorkspaceRoot
+            && path.resolve(this._currentWorkspaceRoot) === path.resolve(workspaceRoot);
+        return sameWorkspace ? norm(this._projectFilter) : undefined;
     }
 
     // --- O(1) no-op refresh early-out (see plan: fix-refresh-loop-cost-on-large-boards) ---

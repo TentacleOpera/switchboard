@@ -10,6 +10,12 @@ async function run() {
     const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'switchboard-project-pin-fill-'));
     const db = KanbanDatabase.forWorkspace(workspaceRoot);
 
+    // KanbanDatabase deliberately never auto-creates kanban.db (scaffold-litter
+    // policy) — seed an empty file exactly as bootstrap does.
+    const dbDir = path.dirname(db.dbPath);
+    if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
+    if (!fs.existsSync(db.dbPath)) fs.writeFileSync(db.dbPath, Buffer.alloc(0));
+
     try {
         const ready = await db.ensureReady();
         assert.strictEqual(ready, true, 'kanban DB should initialize');
@@ -60,14 +66,14 @@ async function run() {
         assert.strictEqual(row1.project, 'Browser Switchboard');
 
         // 4. Resolve-only intact: unknown pin fills nothing and creates no projects row.
-        const rec2 = { ...rec, planId: 'plan-2', planFile: '.switchboard/plans/plan-2.md' };
+        const rec2 = { ...rec, planId: 'plan-2', sessionId: 'sess-2', planFile: '.switchboard/plans/plan-2.md' };
         await db.insertFileDerivedPlan({ ...rec2, project: 'No Such Project' });
         let row2 = await db.getPlanByPlanId(rec2.planId);
         assert.strictEqual(row2.project, '');
         assert.strictEqual(await db.getProjectIdByName(wsId, 'No Such Project'), null);
 
         // 5. Subtask-skip: a feature-linked row with an empty project NEVER fills from a pin.
-        const rec3 = { ...rec, planId: 'plan-3', planFile: '.switchboard/plans/plan-3.md' };
+        const rec3 = { ...rec, planId: 'plan-3', sessionId: 'sess-3', planFile: '.switchboard/plans/plan-3.md' };
         const featurePlanId = 'feat-1';
         await db.insertFileDerivedPlan({ ...rec3, project: '' }); // first import
         await db.updateFeatureStatus(rec3.planId, 0, featurePlanId); // link to a feature

@@ -315,6 +315,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
 
+    private _apiServerForBroadcast: any | null = null;
+
     private _initTaskViewerService(): void {
         const workspaceRoot = this._getWorkspaceRoot() || '';
         if (!workspaceRoot) {
@@ -324,10 +326,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
         this._hostSeams = createVscodeHostSeams(workspaceRoot, this._context.secrets);
         if (!this._broadcaster) {
-            this._broadcaster = new BroadcastHub({ webview: this._view?.webview, apiServer: null });
+            this._broadcaster = new BroadcastHub({
+                webview: this._view?.webview,
+                apiServer: this._apiServerForBroadcast ?? this._localApiServer ?? null,
+            });
         } else {
             this._broadcaster.setWebview(this._view?.webview);
         }
+        this._broadcaster.setApiServer(this._apiServerForBroadcast ?? this._localApiServer ?? null);
     }
 
     /**
@@ -353,6 +359,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * still fail with a clear headless error (B3).
      */
     public setApiServer(server: any): void {
+        this._apiServerForBroadcast = server ?? null;
         this._broadcaster?.setApiServer(server);
     }
 
@@ -1815,7 +1822,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             consumeOneTimeToken: (t: string) => this.consumeBrowserToken(t),
             serveStatic: (() => {
                 const repoRoot = this._context.extensionUri.fsPath;
-                const wsRoot = effectiveRoot;
+                const currentWsRoot = () =>
+                    resolveEffectiveWorkspaceRootFromMappings(this._getWorkspaceRoot() || effectiveRoot);
                 // secrets.get() is async (returns Promise<string|undefined>), so
                 // integrationsConfigured must be computed inside the async getters,
                 // not captured synchronously at IIFE-evaluation time.
@@ -1852,7 +1860,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             featureManagement: this._localApiServer?.hasFeatureManagement() ?? false,
                             integrationsConfigured: await computeIntegrationsConfigured()
                         };
-                        return sharedGetBoardHtml(repoRoot, wsRoot, caps, getTheme());
+                        return sharedGetBoardHtml(repoRoot, currentWsRoot(), caps, getTheme());
                     },
                     getProjectHtml: async () => {
                         const caps = {
@@ -1860,7 +1868,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             featureManagement: this._localApiServer?.hasFeatureManagement() ?? false,
                             integrationsConfigured: await computeIntegrationsConfigured()
                         };
-                        return sharedGetProjectHtml(repoRoot, wsRoot, caps, getTheme());
+                        return sharedGetProjectHtml(repoRoot, currentWsRoot(), caps, getTheme());
                     },
                     getShellHtml: async () => sharedGetShellHtml(repoRoot, getTheme()),
                     getPanelsManifest: () => sharedGetPanelsManifest({ design: true, setup: true, planning: true }),
@@ -1870,7 +1878,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             featureManagement: this._localApiServer?.hasFeatureManagement() ?? false,
                             integrationsConfigured: await computeIntegrationsConfigured()
                         };
-                        const result = sharedGetPanelHtmlById(id, repoRoot, wsRoot, caps, getTheme());
+                        const result = sharedGetPanelHtmlById(id, repoRoot, currentWsRoot(), caps, getTheme());
                         return result || null;
                     },
                     staticRoutes: {
@@ -12018,11 +12026,25 @@ Each plan file must include:
                         if (issues.length === 0) {
                             this.postMessage({
                                 type: 'memoPromptResult',
-                                message: 'No entries to process.'
+                                message: 'No entries to process.',
+                                memoCleared: false
                             });
-                            return { success: false, message: 'No entries to process.' };
+                            return { success: true, type: 'memoPromptResult', message: 'No entries to process.', memoCleared: false };
                         }
-                        const projectName = await this._kanbanProvider?.resolveAuthoringProject(workspaceRoot, data.initiatorProject);
+                        const rawProject = await this._kanbanProvider?.resolveAuthoringProject(workspaceRoot, data.initiatorProject);
+                        let projectName: string | undefined = undefined;
+                        if (rawProject) {
+                            const db = await this._getKanbanDb(workspaceRoot);
+                            const wsId = db
+                                ? ((await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '')
+                                : '';
+                            const id = (db && wsId) ? await db.getProjectIdByName(wsId, rawProject) : null;
+                            if (id !== null) {
+                                projectName = rawProject;
+                            } else {
+                                console.warn(`[memo] dropping PROJECT PIN '${rawProject}': not a project in ${workspaceRoot}`);
+                            }
+                        }
                         const prompt = this._buildMemoPlannerPrompt(issues, workspaceRoot, projectName);
 
                         let sendSucceeded = action !== 'send';
@@ -12053,9 +12075,20 @@ Each plan file must include:
                             : `Failed to send to planner. Prompt copied to clipboard. Memo preserved for retry.`;
                         this.postMessage({
                             type: 'memoPromptResult',
-                            message: msg
+                            message: msg,
+                            memoCleared: sendSucceeded,
+                            isError: !sendSucceeded,
+                            action
                         });
-                        return { success: sendSucceeded, message: msg };
+                        return {
+                            success: sendSucceeded,
+                            type: 'memoPromptResult',
+                            message: msg,
+                            memoCleared: sendSucceeded,
+                            isError: !sendSucceeded,
+                            action,
+                            ...(sendSucceeded ? {} : { error: msg }),
+                        };
                     }
                     case 'getRecentActivity': {
                         const limit = Number(data.limit) || 50;
@@ -21281,7 +21314,7 @@ What would you like to find?`;
                     const subtaskHeadingIdx = existingContent.indexOf('\n\n## Subtasks\n');
                     if (subtaskHeadingIdx !== -1) {
                         const rawBlock = existingContent.slice(subtaskHeadingIdx);
-                        existingSubtaskLines = rawBlock.split(/\r?\n/).filter(l => l.trim().startsWith('- ['));
+                        existingSubtaskLines = rawBlock.split(/\r?\n/).filter((l: string) => l.trim().startsWith('- ['));
                     }
                 } catch (e) {
                     /* ignore read error */

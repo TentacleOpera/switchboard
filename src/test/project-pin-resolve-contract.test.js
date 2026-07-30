@@ -10,6 +10,12 @@ async function run() {
     const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'switchboard-project-pin-resolve-'));
     const db = KanbanDatabase.forWorkspace(workspaceRoot);
 
+    // KanbanDatabase deliberately never auto-creates kanban.db (scaffold-litter
+    // policy) — seed an empty file exactly as bootstrap does.
+    const dbDir = path.dirname(db.dbPath);
+    if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
+    if (!fs.existsSync(db.dbPath)) fs.writeFileSync(db.dbPath, Buffer.alloc(0));
+
     try {
         const ready = await db.ensureReady();
         assert.strictEqual(ready, true, 'kanban DB should initialize');

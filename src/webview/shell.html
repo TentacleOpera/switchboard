@@ -126,6 +126,40 @@
             padding: 12px 8px;
             text-align: center;
         }
+
+        /* Browser-only shell: dark native palette + a 6px strip scrollbar to
+           match the panels it frames. #strip is the document's only scroller
+           (html, body are overflow:hidden). No --vscode-* fallback — the shell
+           has no VS Code webview equivalent. */
+        :root { color-scheme: dark; }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-corner {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-dim);
+        }
+
+        /* Firefox only — see the note in memo.html. Never hoist these out of
+           the gate: they would disable the ::-webkit-* rules above in
+           Chromium 121+ / Safari 17.4+. */
+        @supports not selector(::-webkit-scrollbar) {
+            :root {
+                scrollbar-width: thin;
+                scrollbar-color: var(--border) transparent;
+            }
+        }
     </style>
 </head>
 

@@ -2202,7 +2202,7 @@ export class KanbanDatabase {
                 -- projects" — filling an UNASSIGNED card is not a move, and an
                 -- unassigned card with a pin is currently invisible on every
                 -- project-filtered view with no recovery path from the file.
-                -- Do NOT simplify to `project = excluded.project`: that would let
+                -- Do NOT simplify to "project = excluded.project": that would let
                 -- a stale pin drag a card the user rearranged on the board.
                 -- feature_id guard: a subtask's project is governed by its feature
                 -- (startup reconcile + cascade own inheritance); a file pin must

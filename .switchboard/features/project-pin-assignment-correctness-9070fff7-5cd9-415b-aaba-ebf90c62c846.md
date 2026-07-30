@@ -23,7 +23,11 @@ Together they close both failure layers: subtask 2 makes the pin work on first i
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Let a `**Project:**` Pin Apply to an Unassigned Plan Instead of Being Frozen Forever](../plans/feature_plan_20260730130632_project-pin-unrecoverable-once-missed.md) — **LEAD CODED**
-- [ ] [Find and Fix Why a Valid `**Project:**` Pin Resolves to Unassigned on Every Fresh Plan Import](../plans/feature_plan_20260730130633_project-pin-resolves-to-unassigned-on-import.md) — **LEAD CODED**
+- [ ] [Let a `**Project:**` Pin Apply to an Unassigned Plan Instead of Being Frozen Forever](../plans/feature_plan_20260730130632_project-pin-unrecoverable-once-missed.md) — **CODE REVIEWED**
+- [ ] [Find and Fix Why a Valid `**Project:**` Pin Resolves to Unassigned on Every Fresh Plan Import](../plans/feature_plan_20260730130633_project-pin-resolves-to-unassigned-on-import.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
+
+## Code Review (2026-07-30, reviewer pass)
+
+Both subtasks reviewed as one delivery unit against the jointly-written `insertFileDerivedPlan` statement. Verdict: the implemented shape matches both plans (apply-if-empty CASEs, same-snapshot COALESCE/subquery VALUES, engine guard, tripwires), but the delivery shipped **uncompiled and untested** — a CRITICAL backtick-in-template-literal syntax error broke the whole build, both contract tests could not initialize their DB, one test violated the `plans.session_id` UNIQUE constraint, and neither test was wired into CI. All four defects fixed in review; two unrelated build-blocking type errors from the tickets feature (swept into the same auto-commit) were also fixed to restore compile. Final state: tsc clean, webpack green, both contract tests PASS, both mutation checks bite (no-move assertion and fallback assertion each fail under the respective mutation), standing gates green (`verb-returns` / `push-routing` / `parity` / `catalog`), and both tests now run in `.github/workflows/integration-tests.yml`. Remaining: the 7 stuck cards heal on next file touch; post-merge acceptance (build + sync + reload, author one pinned plan) is the user's step.

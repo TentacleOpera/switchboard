@@ -1,6 +1,16 @@
 (function () {
     const vscode = acquireVsCodeApi();
     const WS_ROOT = decodeURIComponent(document.body.dataset.initialWorkspaceRoot || '');
+    let _wsRoot = WS_ROOT;
+
+    // What we sent with the most recent memoGeneratePrompt — guards the clear so
+    // text the user typed AFTER clicking is never discarded.
+    let _submittedContent = null;
+    // Which button to flash — 'copy' or 'send'.
+    let _submittedAction = null;
+
+    const wsLabel = document.getElementById('memo-workspace');
+    if (wsLabel) { wsLabel.textContent = _wsRoot.split('/').filter(Boolean).pop() || _wsRoot; }
 
     function handleThemeChanged(theme) {
         document.body.classList.remove('theme-claudify', 'cyber-theme-enabled');
@@ -9,6 +19,21 @@
         } else if (theme === 'cyber' || theme === 'afterburner') {
             document.body.classList.add('cyber-theme-enabled');
         }
+    }
+
+    function _flashAction(action) {
+        const isSend = action === 'send';
+        const btn = document.getElementById(isSend ? 'memo-send-btn' : 'memo-copy-btn');
+        if (!btn || btn.dataset.flashing === '1') return;
+        const original = btn.textContent;
+        btn.dataset.flashing = '1';
+        btn.textContent = isSend ? 'Sent ✓' : 'Copied ✓';
+        btn.classList.add('is-copied');
+        setTimeout(() => {
+            btn.textContent = original;
+            btn.classList.remove('is-copied');
+            btn.dataset.flashing = '0';
+        }, 1600);
     }
 
     window.addEventListener('message', (event) => {
@@ -20,6 +45,19 @@
             case 'switchboardThemeNameSetting': {
                 if (msg.theme) {
                     handleThemeChanged(msg.theme);
+                }
+                break;
+            }
+            case 'workspaceChanged': {
+                if (msg.workspaceRoot && msg.workspaceRoot !== _wsRoot) {
+                    if (_memoSaveTimer) { clearTimeout(_memoSaveTimer); _memoSaveTimer = null; }
+                    _memoDirty = false;
+                    _submittedContent = null;
+                    _wsRoot = msg.workspaceRoot;
+                    if (wsLabel) { wsLabel.textContent = _wsRoot.split('/').filter(Boolean).pop() || _wsRoot; }
+                    const ta = document.getElementById('memo-textarea');
+                    if (ta) { ta.value = ''; }
+                    vscode.postMessage({ type: 'memoLoad', workspaceRoot: _wsRoot });
                 }
                 break;
             }
@@ -36,19 +74,35 @@
             }
             case 'memoPromptResult': {
                 const statusEl = document.getElementById('memo-status');
-                if (statusEl) statusEl.textContent = msg.message || '';
+                if (statusEl) {
+                    statusEl.textContent = msg.message || '';
+                    statusEl.style.color = msg.isError ? 'var(--accent-red)' : 'var(--text-secondary)';
+                }
+                if (msg.memoCleared) {
+                    const textarea = document.getElementById('memo-textarea');
+                    if (textarea && (_submittedContent === null || textarea.value === _submittedContent || textarea.value === '')) {
+                        textarea.value = '';
+                        if (_memoSaveTimer) { clearTimeout(_memoSaveTimer); _memoSaveTimer = null; }
+                        _memoDirty = false;
+                    }
+                }
+                if (!msg.isError) { _flashAction(msg.action || _submittedAction); }
+                _submittedContent = null;
                 break;
             }
             case 'memoError': {
                 const statusEl = document.getElementById('memo-status');
-                if (statusEl) { statusEl.textContent = msg.message || 'Memo error'; }
+                if (statusEl) {
+                    statusEl.textContent = msg.message || 'Memo error';
+                    statusEl.style.color = 'var(--accent-red)';
+                }
                 break;
             }
         }
     });
 
     // Initial load request
-    vscode.postMessage({ type: 'memoLoad', workspaceRoot: WS_ROOT });
+    vscode.postMessage({ type: 'memoLoad', workspaceRoot: _wsRoot });
 
     let _memoDirty = false;
     let _memoSaveTimer = null;
@@ -57,10 +111,14 @@
         if (_memoSaveTimer) clearTimeout(_memoSaveTimer);
         _memoSaveTimer = setTimeout(() => {
             const content = document.getElementById('memo-textarea')?.value || '';
-            vscode.postMessage({ type: 'memoSave', content, workspaceRoot: WS_ROOT });
+            vscode.postMessage({ type: 'memoSave', content, workspaceRoot: _wsRoot });
             _memoDirty = false;
             const statusEl = document.getElementById('memo-status');
-            if (statusEl) { statusEl.textContent = 'Saved'; setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 1500); }
+            if (statusEl) {
+                statusEl.textContent = 'Saved';
+                statusEl.style.color = 'var(--text-secondary)';
+                setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 1500);
+            }
         }, 800);
     }
 
@@ -73,9 +131,12 @@
             if (textarea) textarea.value = '';
             if (_memoSaveTimer) clearTimeout(_memoSaveTimer);
             _memoDirty = false;
-            vscode.postMessage({ type: 'memoClear', workspaceRoot: WS_ROOT });
+            vscode.postMessage({ type: 'memoClear', workspaceRoot: _wsRoot });
             const statusEl = document.getElementById('memo-status');
-            if (statusEl) statusEl.textContent = 'Cleared';
+            if (statusEl) {
+                statusEl.textContent = 'Cleared';
+                statusEl.style.color = 'var(--text-secondary)';
+            }
         });
     }
     const _memoCopyBtn = document.getElementById('memo-copy-btn');
@@ -84,7 +145,11 @@
             if (_memoSaveTimer) clearTimeout(_memoSaveTimer);
             _memoDirty = false;
             const content = document.getElementById('memo-textarea')?.value || '';
-            vscode.postMessage({ type: 'memoGeneratePrompt', content, action: 'copy', workspaceRoot: WS_ROOT });
+            _submittedContent = content;
+            _submittedAction = 'copy';
+            const statusEl = document.getElementById('memo-status');
+            if (statusEl) { statusEl.textContent = 'Building prompt…'; statusEl.style.color = 'var(--text-secondary)'; }
+            vscode.postMessage({ type: 'memoGeneratePrompt', content, action: 'copy', workspaceRoot: _wsRoot });
         });
     }
     const _memoSendBtn = document.getElementById('memo-send-btn');
@@ -93,7 +158,11 @@
             if (_memoSaveTimer) clearTimeout(_memoSaveTimer);
             _memoDirty = false;
             const content = document.getElementById('memo-textarea')?.value || '';
-            vscode.postMessage({ type: 'memoGeneratePrompt', content, action: 'send', workspaceRoot: WS_ROOT });
+            _submittedContent = content;
+            _submittedAction = 'send';
+            const statusEl = document.getElementById('memo-status');
+            if (statusEl) { statusEl.textContent = 'Building prompt…'; statusEl.style.color = 'var(--text-secondary)'; }
+            vscode.postMessage({ type: 'memoGeneratePrompt', content, action: 'send', workspaceRoot: _wsRoot });
         });
     }
 })();

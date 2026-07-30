@@ -6328,6 +6328,26 @@ Please format the updated output document strictly as follows:
                 const ticketDirs = this._getTicketDocumentDirs(workspaceRoot, provider);
                 const tickets: any[] = [];
 
+                // Scope to the currently-selected list/project. The DB holds
+                // tickets for EVERY list ever opened; without this, selecting one
+                // sprint would show files from every other sprint. We scope by the
+                // listId/projectId recorded in each file's frontmatter at import
+                // time — instance-independent (does NOT depend on which service holds
+                // the live hierarchy selection, which differs between providers).
+                // If the webview didn't send a scope id, we don't scope (show all)
+                // so the sidebar is never wrongly emptied.
+                // ClickUp scopes strictly by list id (the key written to each file's
+                // frontmatter from the live task's list.id, and the same id the webview
+                // tracks as the selected list). Linear scopes by project name (the
+                // picker is name-based, and _buildLinearImportPlanContent writes
+                // `projectName:` to each file's frontmatter from issue.project.name).
+                // Legacy Linear files lacking `projectName:` are hidden until the
+                // project is re-imported (which rewrites them with the key).
+                // Shared by the cache-DB path below and the live file-scan fallback.
+                const scopeId = provider === 'clickup'
+                    ? String((msg.listId as string) || '').trim()
+                    : String((msg.projectId as string) || '').trim();
+
                 if (!this._cacheService && workspaceRoot) {
                     this._cacheService = this._adapterFactories.getCacheService(workspaceRoot);
                 }
@@ -6379,25 +6399,6 @@ Please format the updated output document strictly as follows:
                                 // Re-fetch from DB
                                 dbTickets = await this._cacheService.getImportedTickets();
                             }
-
-                            // Scope to the currently-selected list/project. The DB holds
-                            // tickets for EVERY list ever opened; without this, selecting one
-                            // sprint would show files from every other sprint. We scope by the
-                            // listId/projectId recorded in each file's frontmatter at import
-                            // time — instance-independent (does NOT depend on which service holds
-                            // the live hierarchy selection, which differs between providers).
-                            // If the webview didn't send a scope id, we don't scope (show all)
-                            // so the sidebar is never wrongly emptied.
-                            // ClickUp scopes strictly by list id (the key written to each file's
-                            // frontmatter from the live task's list.id, and the same id the webview
-                            // tracks as the selected list). Linear scopes by project name (the
-                            // picker is name-based, and _buildLinearImportPlanContent writes
-                            // `projectName:` to each file's frontmatter from issue.project.name).
-                            // Legacy Linear files lacking `projectName:` are hidden until the
-                            // project is re-imported (which rewrites them with the key).
-                            const scopeId = provider === 'clickup'
-                                ? String((msg.listId as string) || '').trim()
-                                : String((msg.projectId as string) || '').trim();
 
                             let totalCandidates = 0;
                             let hiddenBySubtask = 0;
