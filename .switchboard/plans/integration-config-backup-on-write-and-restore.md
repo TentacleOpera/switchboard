@@ -143,7 +143,11 @@ Add `private static _snapshotBeforeWrite(reason: string, incoming: GlobalConfig)
 1. Resolve `filePath`. If it does not exist, return — a first-ever write has no predecessor.
 2. Read the existing file. If it parses, run the significance gate (§2) against `incoming`; if the write is churn-only, return without snapshotting. **If it does not parse, always snapshot** — an unparseable config is precisely when a byte-for-byte copy is most valuable, and the gate cannot be evaluated anyway.
 3. `mkdir` the snapshot directory `{ recursive: true, mode: 0o700 }`.
-4. **`fs.copyFileSync(filePath, snapshotPath)`** — then set `mode 0o600` explicitly if `copyFile` does not preserve it on the target platform.
+4. **`fs.copyFileSync(filePath, snapshotPath)`**, then **unconditionally** `fs.chmodSync(snapshotPath, 0o600)`.
+
+> **Superseded:** "then set `mode 0o600` explicitly **if** `copyFile` does not preserve it on the target platform."
+> **Reason:** the conditional makes the security guarantee depend on a per-platform `fs.copyFile` behaviour the implementer would have to research, and it is ambiguous in the one case that actually matters — overwriting an *existing* snapshot on a same-millisecond collision, where the destination's prior mode may win. The condition buys nothing: an unconditional `chmod` to the mode the file already has is a no-op syscall on ~3 KB, and there is direct evidence in this very incident that improvised copies leak the bit — `integration-config.json.pre-restore.bak` is `0644` while its source was `0600`.
+> **Replaced with:** always `chmod` after copy. No platform assumption, no research dependency, and verification item 12 becomes an unconditional assertion rather than a platform-conditional one. `fs.copyFile`/`copyFileSync` is already the established pattern in this codebase (8 call sites, e.g. `KanbanDatabase.ts:1234`, `ControlPlaneMigrationService.ts:1012`), so this is not a new dependency.
 5. Prune to the newest 10 (§4).
 6. Wrap the entire body in `try { … } catch (e) { console.error(…) }`. A failed snapshot must never fail or delay the write it was protecting — the same contract `writeDbBackup` uses.
 
@@ -167,7 +171,9 @@ Add `private static _snapshotBeforeWrite(reason: string, incoming: GlobalConfig)
 
 Compare with a **canonical** serialisation — recursively key-sorted `JSON.stringify` — not the raw string. Key insertion order is not stable across a load-modify-save cycle (and §1b of the write-guards plan introduces an object spread that can reorder keys outright), so a raw string comparison would report every write as significant and silently disable the gate.
 
-**Implementation.** Deep-clone both sides via `structuredClone` (or `JSON.parse(JSON.stringify(…))`), `delete` the churn paths, canonical-stringify, compare. Keep the churn key list as a single exported constant so it is greppable and so a future timer-driven field is added in one place.
+**Implementation.** Deep-clone both sides via `structuredClone`, `delete` the churn paths, canonical-stringify, compare. Keep the churn key list as a single exported constant so it is greppable and so a future timer-driven field is added in one place.
+
+*Clarification (2026-07-31):* `structuredClone` is available unconditionally — `package.json` declares `"node": ">=22.0.0"` with `@types/node: 22.x`, and the global has existed since Node 17. The originally-offered `JSON.parse(JSON.stringify(…))` fallback is therefore unnecessary and is dropped; there is no version question to resolve at implementation time. (It is also not currently used anywhere in `src/`, so this is its first use — no existing convention to match.)
 
 **Edge cases.** An unparseable stored file bypasses the gate entirely (§1 step 2). A write that *only* clears a churn field — e.g. `lastSync` going from a timestamp to `null` on a config reset — is treated as churn and not snapshotted; acceptable, because a reset that matters will change something else too. If the churn list ever grows to cover a field a user can edit directly, that field must come off the list; note this in the constant's comment.
 
