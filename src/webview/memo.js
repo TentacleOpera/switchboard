@@ -9,8 +9,13 @@
     // Which button to flash — 'copy' or 'send'.
     let _submittedAction = null;
 
+    // Split on BOTH separators: this extension ships on Windows, where an
+    // absolute root ("C:\Users\x\repo") contains no '/' and a '/'-only split
+    // would render the whole path instead of the folder name.
+    function _basename(p) { return String(p || '').split(/[\\/]/).filter(Boolean).pop() || p; }
+
     const wsLabel = document.getElementById('memo-workspace');
-    if (wsLabel) { wsLabel.textContent = _wsRoot.split('/').filter(Boolean).pop() || _wsRoot; }
+    if (wsLabel) { wsLabel.textContent = _basename(_wsRoot); }
 
     function handleThemeChanged(theme) {
         document.body.classList.remove('theme-claudify', 'cyber-theme-enabled');
@@ -54,7 +59,7 @@
                     _memoDirty = false;
                     _submittedContent = null;
                     _wsRoot = msg.workspaceRoot;
-                    if (wsLabel) { wsLabel.textContent = _wsRoot.split('/').filter(Boolean).pop() || _wsRoot; }
+                    if (wsLabel) { wsLabel.textContent = _basename(_wsRoot); }
                     const ta = document.getElementById('memo-textarea');
                     if (ta) { ta.value = ''; }
                     vscode.postMessage({ type: 'memoLoad', workspaceRoot: _wsRoot });
@@ -86,8 +91,14 @@
                         _memoDirty = false;
                     }
                 }
-                if (!msg.isError) { _flashAction(msg.action || _submittedAction); }
+                // Gate on memoCleared, NOT on !isError. The empty-memo reply is
+                // { success: true, memoCleared: false } with no `isError`, so an
+                // !isError gate flashed "Copied ✓" on a no-op that never reached
+                // the clipboard — feedback describing something that did not
+                // happen, the same defect _flashCopied() was replaced for.
+                if (!msg.isError && msg.memoCleared) { _flashAction(msg.action || _submittedAction); }
                 _submittedContent = null;
+                _submittedAction = null;
                 break;
             }
             case 'memoError': {

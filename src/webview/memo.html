@@ -62,9 +62,22 @@
         }
         .memo-body { padding: 16px 20px; max-width: 760px; }
         .memo-hint { font-size: 11px; color: var(--text-secondary); line-height: 1.5; }
+        /* Structure lives in classes, not in style="" attributes (the defect this
+           panel was rebuilt to remove). */
+        .memo-body > .memo-hint { margin: 0 0 4px; }
+        .memo-body > .memo-hint:last-of-type { margin-bottom: 12px; }
         .memo-actions { display: flex; gap: 8px; margin-top: 10px; }
         .memo-actions .secondary-btn { flex: 1; }
         #memo-status { font-size: 11px; color: var(--text-secondary); min-height: 14px; display: block; margin-top: 8px; }
+
+        /* The pixel display face is downloaded by the @font-face above; apply it
+           to the panel header the way project.html/kanban.html do, so we are not
+           shipping a font no selector can match. */
+        .memo-header .section-label {
+            font-family: 'GeistPixel', var(--font-mono);
+            font-size: 11px;
+            letter-spacing: 1.5px;
+        }
 
         .section-label {
             font-family: var(--font-mono);

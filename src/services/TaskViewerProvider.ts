@@ -1889,7 +1889,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         // workspace selector, and the cached-screenshot URLs the provider
                         // now emits (/static/stitch/<projectFolder>/<screenId>.png) carry
                         // no root — _handleServeStatic tries each candidate in order.
-                        stitch: Array.from(new Set([wsRoot, ...allRoots].filter(Boolean)))
+                        // `effectiveRoot`, NOT currentWsRoot(): this is an object
+                        // literal evaluated ONCE at server construction, and it
+                        // already unions the primary root with every mapped root,
+                        // so a workspace switch cannot make a path unreachable.
+                        // Deliberately frozen — rebuilding staticRoutes per request
+                        // would buy nothing. (This line previously read `wsRoot`,
+                        // the alias deleted when the panel getters were unfrozen,
+                        // which broke the build outright.)
+                        stitch: Array.from(new Set([effectiveRoot, ...allRoots].filter(Boolean)))
                             .map(r => path.join(r, '.switchboard', 'stitch')),
                     },
                 };
