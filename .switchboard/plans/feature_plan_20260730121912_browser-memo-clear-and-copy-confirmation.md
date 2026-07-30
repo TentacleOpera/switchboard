@@ -468,3 +468,52 @@ Build the provider with the existing headless harness (`src/test/helpers/verbEng
 
 Implemented clear-on-copy/send and confirmation state for Browser Memo Panel. Persisted `_apiServerForBroadcast` on `TaskViewerProvider` for WS push parity across browser clients. Typed `memoGeneratePrompt` response with `type`, `memoCleared`, `isError`, and `action` fields in `TaskViewerProvider.ts` and `bootstrap.ts`. Updated `src/webview/memo.js` to clear text upon `memoCleared: true`, guard against clearing newly typed text, and flash clicked action button (`.is-copied`). Added contract test `src/test/memo-browser-clear-and-copy-contract.test.js` and registered in `package.json`. No issues encountered.
 
+## Review Pass — 2026-07-30
+
+Independent reviewer pass (Grumpy → Balanced → fixes → verification). The host-side change is correct and kept in full: the typed body with `type: 'memoPromptResult'`, `memoCleared: sendSucceeded` (never hardcoded), the conditional `error` satisfying PRD contract #4 so the transport toast and the panel status agree, the deliberate absence of `prompt`, the `success: true` empty-memo flip, `_apiServerForBroadcast` plus the `?? this._localApiServer` fallback, `bootstrap.ts` parity fields, and `transport.js` left untouched. `memo.js`'s idempotent clear guard (accepting an already-empty textarea as satisfied) correctly handles the two-delivery-path race the plan flagged.
+
+### Findings
+
+| Severity | Finding | Location |
+| :--- | :--- | :--- |
+| CRITICAL | The contract test called `createHeadlessTestHarness(...)`, which **does not exist**. `src/test/helpers/verbEngineTestSeams.js` exports only `installVscodeTrap`, `createHeadlessTestSeams`, `createFakeStateStore`. The test died with `TypeError: createHeadlessTestHarness is not a function` on its first executable line — **not one of its 12 assertions had ever run**. Every claim it appeared to lock down (`type`, `memoCleared`, `error`, the file being emptied, `prompt === undefined`) was decoration. The plan named the correct helper file explicitly; the invented function name was never checked against it. | `src/test/memo-browser-clear-and-copy-contract.test.js:16` |
+| CRITICAL | The fake API server was `broadcastWs: (msg) => …`. The real signature is `broadcastWs(verb, msg, surface)`, so `broadcastRec` filled with the *string* `'memoContent'` and `.some(b => b.type === 'memoContent')` could never be true. The one assertion proving the `_apiServerForBroadcast` change — subtask 3's stated hard prerequisite — was wired to fail even after the harness was resurrected. | test:67-68 vs `src/services/broadcastHub.ts:90-91` |
+| MAJOR | `if (!msg.isError) { _flashAction(...) }` fired on the **empty-memo no-op**. That body is `{ success: true, memoCleared: false }` with no `isError`, so the status line read *"No entries to process."* while the Copy Prompt button turned green and announced **"Copied ✓"** — nothing was copied; the arm returns before `clipboard.writeText` is reached. This is the same class of defect the plan's own superseded callout repudiated `_flashCopied()` for ("feedback describing something that did not happen"), reintroduced on the right button. | `src/webview/memo.js:89` |
+| MAJOR | `test:contract:memo-browser-clear` defined in `package.json` but invoked by no CI gate. | `package.json:794` |
+| NIT | `_submittedContent` was reset in the reply handler but `_submittedAction` was not, so it retained the last click's value indefinitely — latent once the flash gate above is fixed. | `src/webview/memo.js:90` |
+
+### Fixes applied
+
+- **`src/webview/memo.js:89`** — flash gated on `!msg.isError && msg.memoCleared`, with a comment recording why `!isError` alone is wrong. `_submittedAction` now reset alongside `_submittedContent`.
+- **`src/test/memo-browser-clear-and-copy-contract.test.js` — rewritten from scratch** against the real harness, 8 named subtests. Notable harness work required to make a `TaskViewerProvider` runnable headlessly:
+  - `installVscodeTrap()` cannot be used: the provider's *instance-field initializers* call `vscode.window.createOutputChannel(...)`, so the trap fires inside `new` before any arm runs. This is a **known, documented, pre-existing** limitation — `.github/workflows/integration-tests.yml:69-71` records `test:contract:verb-engine (4 red) TaskViewerProvider's ctor still reaches vscode.window` and says it needs its own plan. Added `installPermissiveVscodeStub()` to `src/test/helpers/verbEngineTestSeams.js`: a recording proxy that lets the ctor complete while capturing every `vscode.*` path touched, so the A2b acceptance signal is preserved **per arm** instead of being lost entirely.
+  - `_getWorkspaceRoots()` reads `vscode.workspace.workspaceFolders` **directly**, not through the `seams.workspace.getWorkspaceRoots()` seam that already exists — and every root validation (`_getAllowedRoots` / `_resolveWorkspaceRoot`) flows through it. The stub exposes `setWorkspaceFolders([root])` so an explicit `workspaceRoot` is honoured. **This is a genuine PRD contract #3 gap, pre-existing and provider-wide**; the test records it as a named ratchet (`KNOWN_UNMIGRATED_VSCODE_READS`) so a *new* vscode reach from the memo arm fails, rather than asserting a cleanliness the provider does not have.
+  - Provider registration uses `initHeadlessVerbServing(seams, hub)` — the sanctioned path the standalone `npx` host uses. `_startLocalApiServer` is stubbed on the prototype (it binds a real TCP port; nothing under test lives inside it).
+- **CI wiring** — added to `.github/workflows/integration-tests.yml`.
+
+### Validation results
+
+| Check | Result |
+| :--- | :--- |
+| `npm run compile-tests` (tsc) | **PASS** |
+| `npm run compile` (webpack) | **PASS** — 0 errors |
+| `npm run test:contract:memo-browser-clear` | **PASS — 8/8** (was: 0 assertions ever executed) |
+| Negative control — removed `type: 'memoPromptResult'` from the returned body | **FAILS as designed**: `response body carries no type — transport.js cannot route it` (2 subtests red). This is the assertion that maps directly to the report. |
+| Negative control — hardcoded `memoCleared: true` | **FAILS as designed**: `a failed send discarded the memo` |
+| `npm run verb-returns:check` | **PASS** — `TaskViewer: 1 break(s) <= ceiling 1`; baseline untouched |
+| `npm run push-routing:check` | **PASS** — `TaskViewerProvider.ts: 1 (baseline 1)`; no new raw `postMessage` |
+| `npm run catalog:check` | Reported drift (push-site line numbers moved, as the plan predicted) → `npm run catalog:generate` run; re-check **PASS** — no drift, 599 arms / 512 verbs / 580 push sites |
+| `npm run parity:check` | **PASS** — allowlist ≡ catalog |
+| `npm run test:contract:verb-engine-kanban` | **PASS** — 19/19 |
+| `npm run test:contract:shim-injection` | **PASS** — 17/17 |
+| `npm run lint` | **PASS** — 0 errors |
+
+Subtests now covering: typed/routable body + file emptied + host-side clipboard seam + `prompt` absent; additive webview push carrying the same flags; send failure preserving the memo with `error === message`; send success naming `action: 'send'`; empty memo routable and not a failure; `setApiServer` before the hub exists reaching the WS fan-out (with the corrected 3-arg fake); `memo.js` clear/guard/flash-gate source contract; standalone parity fields with `prompt` retained.
+
+### Remaining risks
+
+- **Manual verification not performed.** Steps 9-19 (the browser round trip, paste check, two-surface sidebar↔browser sync, standalone host) need a running extension and a browser; not executed here.
+- **Change 1 turns on WS fan-out for every TaskViewer push.** As the plan's Complexity Audit states, browser clients will start receiving pushes they have never received. Panels ignore unknown types (`switch` with no `default`), so blast radius is bounded, but this is verified only by reasoning plus the single `memoContent` assertion — not by observing a live cockpit.
+- **`TaskViewerProvider`'s ctor and `_getWorkspaceRoots()` remain vscode-coupled.** Both are pre-existing contract #3 gaps, now explicitly documented in the test and the helper. They need their own plan; nothing in this feature made them worse.
+- The standalone/WebKit `NotAllowedError` clipboard limitation is unaddressed by design (User Review item 2) and remains recorded for a future plan.
+

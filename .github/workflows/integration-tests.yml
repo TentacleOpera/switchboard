@@ -102,6 +102,18 @@ jobs:
       - name: Project pin same-snapshot resolve contract (first-import, fallback, resolve-only)
         run: npm run test:contract:project-pin-resolve
 
+      - name: Memo panel style contract (default-theme class must not repaint, canonical tokens, load-bearing ids)
+        run: npm run test:contract:memo-panel-style
+
+      - name: Memo browser clear/copy contract (typed body, memoCleared, failure preserves memo, WS fan-out wiring)
+        run: npm run test:contract:memo-browser-clear
+
+      - name: Memo panel workspace binding contract (per-render root, cross-workspace PROJECT PIN guard)
+        run: npm run test:contract:memo-workspace-binding
+
+      - name: Browser panel scrollbar contract (@supports gating, no ungated scrollbar-width)
+        run: npm run test:contract:panel-scrollbars
+
       - name: Run integration suite
         run: npm run test:integration:all
 

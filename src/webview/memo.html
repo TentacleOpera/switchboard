@@ -70,15 +70,6 @@
         .memo-actions .secondary-btn { flex: 1; }
         #memo-status { font-size: 11px; color: var(--text-secondary); min-height: 14px; display: block; margin-top: 8px; }
 
-        /* The pixel display face is downloaded by the @font-face above; apply it
-           to the panel header the way project.html/kanban.html do, so we are not
-           shipping a font no selector can match. */
-        .memo-header .section-label {
-            font-family: 'GeistPixel', var(--font-mono);
-            font-size: 11px;
-            letter-spacing: 1.5px;
-        }
-
         .section-label {
             font-family: var(--font-mono);
             font-size: 10px;
@@ -89,6 +80,14 @@
             opacity: 0.7;
         }
         body.theme-claudify .section-label { color: #8a8a8a; }
+        /* The pixel display face is downloaded by the @font-face above; apply it
+           to the panel header the way project.html/kanban.html do, so the panel
+           is not shipping a font that no selector can match. */
+        .memo-header .section-label {
+            font-family: 'GeistPixel', var(--font-mono);
+            font-size: 11px;
+            letter-spacing: 1.5px;
+        }
 
         .secondary-btn {
             background: var(--panel-bg2);
@@ -191,11 +190,11 @@
         <span id="memo-workspace" class="memo-hint" title="Workspace this memo is saved to"></span>
     </div>
     <div class="memo-body">
-        <p class="memo-hint" style="margin: 0 0 4px;">
+        <p class="memo-hint">
             Jot down bugs, thoughts, or issues — one per line or paragraph. Saved automatically.
             Send to an agent via Copy Prompt / Send to Planner to create one plan per issue.
         </p>
-        <p class="memo-hint" style="margin: 0 0 12px;">Tip: you can also use 'start memo capture' in an agent chat.</p>
+        <p class="memo-hint">Tip: you can also use 'start memo capture' in an agent chat.</p>
         <textarea id="memo-textarea" class="modal-textarea"
                   placeholder="Bug: login button overlaps on mobile&#10;&#10;Thought: maybe cache the user profile&#10;&#10;Issue: API returns 500 on empty payload..."></textarea>
         <span id="memo-status"></span>

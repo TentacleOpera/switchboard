@@ -90,10 +90,13 @@ function testTicketsSidebarListScoping() {
         /if\s*\(\s*_ticketsListedUnscoped\s*&&\s*currentScopeId\s*\)\s*\{\s*_ticketsListedUnscoped\s*=\s*false;\s*loadLocalTicketFiles\(\);\s*\}/,
         "restoreTicketsStateForRoot must re-issue loadLocalTicketFiles when previous list was unscoped and scope is now known"
     );
+    // Assert no ASSIGNMENT, not the absence of the identifier: the function carries an
+    // explanatory comment naming ticketsLoadedOnce, so a substring check fails against
+    // correct code (it did — this gate was red at HEAD).
     assert.strictEqual(
-        restoreTicketsBody.includes('ticketsLoadedOnce'),
+        /ticketsLoadedOnce\s*=/.test(restoreTicketsBody),
         false,
-        "restoreTicketsStateForRoot must not touch ticketsLoadedOnce"
+        "restoreTicketsStateForRoot must not assign ticketsLoadedOnce — the late re-issue must not re-open the double-fetch the latch prevents"
     );
 
     // Assertion 7: PlanningPanelProvider fallback scan passes scopeId & skipSubtasks, backfill scan does not
@@ -108,19 +111,59 @@ function testTicketsSidebarListScoping() {
         "Fallback scan call in listLocalTicketFiles must pass { scopeId, skipSubtasks: true }"
     );
 
-    const backfillIdx = providerTs.indexOf('// Backfill/orphan scan');
-    const backfillBody = providerTs.slice(backfillIdx !== -1 ? backfillIdx : 0, (backfillIdx !== -1 ? backfillIdx : 0) + 500);
+    // The backfill/orphan scan registers subtask files so _findTicketFilePath can still
+    // resolve them — it must stay UNSCOPED. Anchored on the call itself, not on a comment:
+    // an anchor comment that does not exist in the source slices the file header instead
+    // and the negative passes vacuously no matter what the backfill call does.
+    const backfillCall = providerListLocalBody.match(
+        /this\._scanLocalTicketFiles\s*\(\s*dir,\s*provider,\s*scannedTickets\s*([^)]*)\)/
+    );
+    assert.ok(
+        backfillCall,
+        'Backfill scan call this._scanLocalTicketFiles(dir, provider, scannedTickets) must exist in listLocalTicketFiles'
+    );
     assert.strictEqual(
-        /_scanLocalTicketFiles\s*\([^)]*\{\s*scopeId/.test(backfillBody),
-        false,
-        "Backfill scan call must NOT pass scopeId option"
+        backfillCall[1].trim(),
+        '',
+        'Backfill scan call must NOT pass a scopeId/skipSubtasks option — orphan subtask files must keep being registered'
     );
 
-    // Assertion 8: Scoping warning log exists in PlanningPanelProvider DB loop
+    // Assertion 8: Scoping coverage warn AND its counters exist together, so the honesty
+    // path cannot be dropped as "noise" while leaving the log line behind.
     assert.match(
         providerListLocalBody,
         /console\.warn\(`\[PlanningPanelProvider\] listLocalTicketFiles scoping hid all candidate files for \${provider}/,
         "PlanningPanelProvider listLocalTicketFiles must log a warning when scoping hides all candidate files"
+    );
+    for (const counter of ['totalCandidates', 'hiddenByScope', 'hiddenBySubtask']) {
+        assert.ok(
+            providerListLocalBody.includes(`${counter}++`),
+            `listLocalTicketFiles must increment ${counter} so the coverage warn reports real counts`
+        );
+    }
+
+    // Assertion 9: the coverage counts travel back on the response so the sidebar can
+    // distinguish "this list has no tickets" from "these files need re-keying". An empty
+    // sidebar that reads as "no tickets" is the one way this change ships a silent regression.
+    assert.match(
+        providerListLocalBody,
+        /scopeCoverage\s*=\s*\{\s*total:\s*totalCandidates/,
+        'listLocalTicketFiles must record scopeCoverage when scoping hides every candidate file'
+    );
+    assert.match(
+        providerListLocalBody,
+        /const res = \{ type: 'localTicketFilesListed', provider, tickets, \.\.\.\(scopeCoverage \?/,
+        'localTicketFilesListed response must carry scopeCoverage'
+    );
+    assert.match(
+        planningJs,
+        /_ticketsScopeCoverage\s*=\s*msg\.scopeCoverage\s*\|\|\s*null;/,
+        'localTicketFilesListed handler must capture msg.scopeCoverage'
+    );
+    assert.match(
+        planningJs,
+        /don't carry a list id — Refetch this list to re-key them/,
+        'the empty state must offer the re-key copy rather than a bare "No tasks found."'
     );
 }
 

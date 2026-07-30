@@ -6327,6 +6327,11 @@ Please format the updated output document strictly as follows:
                 }
                 const ticketDirs = this._getTicketDocumentDirs(workspaceRoot, provider);
                 const tickets: any[] = [];
+                // Set when scoping hid EVERY candidate file. "Empty" and "correct" are
+                // not the same answer: a scoped read that hides all rows looks identical
+                // to "this list has no tickets", so the counts travel back on the
+                // response and the sidebar says the files need re-keying instead.
+                let scopeCoverage: { total: number; hiddenByScope: number; hiddenBySubtask: number } | undefined;
 
                 // Scope to the currently-selected list/project. The DB holds
                 // tickets for EVERY list ever opened; without this, selecting one
@@ -6496,6 +6501,7 @@ Please format the updated output document strictly as follows:
                             }
                             if (scopeId && totalCandidates > 0 && tickets.length === 0) {
                                 console.warn(`[PlanningPanelProvider] listLocalTicketFiles scoping hid all candidate files for ${provider} (scopeId: ${scopeId}, total: ${totalCandidates}, hiddenByScope: ${hiddenByScope}, hiddenBySubtask: ${hiddenBySubtask})`);
+                                scopeCoverage = { total: totalCandidates, hiddenByScope, hiddenBySubtask };
                             }
                         } catch (err) {
                             console.error('[PlanningPanelProvider] error listing tickets from cache DB:', err);
@@ -6508,9 +6514,23 @@ Please format the updated output document strictly as follows:
                     for (const dir of ticketDirs) {
                         this._scanLocalTicketFiles(dir, provider, tickets, { scopeId, skipSubtasks: true });
                     }
+                    // Same honesty rule as the DB path above: if the scoped scan also came
+                    // back empty, find out whether there were candidate files at all. Only
+                    // runs on the already-empty path, so the extra pass is bounded to the
+                    // failure case and never costs anything on a healthy read.
+                    if (scopeId && tickets.length === 0) {
+                        const probe: any[] = [];
+                        for (const dir of ticketDirs) {
+                            this._scanLocalTicketFiles(dir, provider, probe, { skipSubtasks: true });
+                        }
+                        if (probe.length > 0) {
+                            console.warn(`[PlanningPanelProvider] listLocalTicketFiles scoping hid all candidate files for ${provider} (scopeId: ${scopeId}, total: ${probe.length}, hiddenByScope: ${probe.length}, hiddenBySubtask: 0) [fallback scan]`);
+                            scopeCoverage = { total: probe.length, hiddenByScope: probe.length, hiddenBySubtask: 0 };
+                        }
+                    }
                 }
 
-                const res = { type: 'localTicketFilesListed', provider, tickets };
+                const res = { type: 'localTicketFilesListed', provider, tickets, ...(scopeCoverage ? { scopeCoverage } : {}) };
                 this.postMessageToWebview(res);
                 return { success: true, ...res };
             }

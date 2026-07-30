@@ -399,3 +399,44 @@ Add alongside the other `test:contract:*` entries (package.json:777-797).
 
 Implemented design language restyle for the Browser Memo Panel in `src/webview/memo.html`. Replaced ad-hoc palette and repainting `cyber-theme-enabled` default theme override with canonical panel design tokens, `.section-label`, `.secondary-btn`, `.modal-textarea` classes, panel header structure, and empty `#memo-workspace` slot. Registered contract test `src/test/memo-panel-style-contract.test.js` in `package.json`. No issues encountered.
 
+## Review Pass — 2026-07-30
+
+Independent reviewer pass (Grumpy → Balanced → fixes → verification). The CSS transcription was faithful and is kept in full: canonical tokens, the non-repainting `body.cyber-theme-enabled { }` rule (the whole point of the plan), the claudify derived-teal-family redeclaration, the flex `.memo-actions` row, the bare `<body>`, all five load-bearing ids, and the `<!-- SHARED_DEFAULTS_SCRIPT -->` anchor.
+
+### Findings
+
+| Severity | Finding | Location |
+| :--- | :--- | :--- |
+| MAJOR | The three memo contract tests were registered in `package.json` but invoked by **no** CI gate. The same commit wired the two *project-pin* tests from a different feature, so the memo checks shipped as ornaments — the exact "green while incomplete" hole. | `package.json:793-795` defined; `.github/workflows/integration-tests.yml` had no invocation |
+| MAJOR | `getMemoHtml` prefers `dist/webview/memo.html`, and `dist` was stale (built 29 Jul, still containing `#00f0ff` five times) because the feature never compiled — see subtask 3's CRITICAL. The browser cockpit was still serving the old neon panel and the style contract test failed against the stale artifact. | `src/services/headlessPanelHtml.ts:317` |
+| NIT | Two residual inline `style="margin: …"` attributes survived the change whose stated deliverable was "dropping every inline `style`". | `src/webview/memo.html:181`, `:185` |
+| NIT | The `@font-face` family was correctly renamed to `'GeistPixel'` but never referenced by any selector — re-creating, under a better name, the plan's own root-cause item 4 ("a downloaded font that no rule can match"). | `src/webview/memo.html:15-21` |
+
+### Fixes applied
+
+- **CI wiring** — added four steps to `.github/workflows/integration-tests.yml`: `test:contract:memo-panel-style`, `test:contract:memo-browser-clear`, `test:contract:memo-workspace-binding`, and `test:contract:panel-scrollbars` (the sibling scrollbar plan's check, unwired for the same reason). Workflow YAML re-parsed to confirm validity (31 steps).
+- **Inline styles removed** — the two `<p>` margins moved into `.memo-body > .memo-hint` / `:last-of-type` rules in the `<style>` block.
+- **Pixel font now used** — added `.memo-header .section-label { font-family: 'GeistPixel', var(--font-mono); font-size: 11px; letter-spacing: 1.5px; }`, taking the plan's sanctioned "rename-and-use" route to completion. Placed after the base rule; `body.theme-claudify .section-label` (higher specificity, `color` only) is unaffected.
+- The stale `dist` resolved on build once the compile error in subtask 3 was fixed.
+
+### Validation results
+
+| Check | Result |
+| :--- | :--- |
+| `npm run compile-tests` (tsc) | **PASS** — no errors |
+| `npm run compile` (webpack → `dist`) | **PASS** — 3 pre-existing optional-dependency warnings (`canvas`, `bufferutil`), 0 errors |
+| `npm run test:contract:memo-panel-style` | **PASS** |
+| Negative control — re-added `--text-primary: #00f0ff` under `body.cyber-theme-enabled` | **FAILS as designed**: `AssertionError: non-canonical accent #00f0ff still present`. The default-theme assertion bites. |
+| `npm run test:contract:shim-injection` | **PASS** — 17/17 (marker and script order survived the rewrite) |
+| `npm run test:contract:panel-scrollbars` | **PASS** — 30/30 |
+| `npm run lint` | **PASS** — 0 errors (2374 pre-existing warnings, baseline unchanged) |
+| `dist/webview/memo.html` audit | 0 occurrences of `#00f0ff` / `#d97706` / `strip-btn` / `Geist Pixel Square`; 0 inline `style=` attributes |
+| Gate-wiring audit | All plan-named automated checks now invoked in CI. `npm run lint` is **not** run by any workflow — pre-existing repo-wide gap, not introduced here. |
+
+### Remaining risks
+
+- **Manual verification not performed.** Steps 5-12 (side-by-side comparison with the Board panel, claudify terracotta/no-glow check, standalone two-button row, sidebar Memo tab unchanged) require a running extension and a browser; not executed in this pass.
+- **The default-theme look changes for every user** on ~4,000 installs, as User Review item 1 states. Unchanged by this review — it is the intended, signed-off behaviour.
+- The pixel-font header is a small visual addition beyond the pre-review state; it matches `project.html` / `kanban.html` chrome but has not been eyeballed in a browser.
+- `npm run lint` remains outside CI, so lint regressions are not gated anywhere.
+

@@ -53,6 +53,83 @@ function installVscodeTrap() {
 }
 
 /**
+ * A PERMISSIVE, RECORDING `vscode` module stub — the counterpart to
+ * `installVscodeTrap()` for providers whose CONSTRUCTOR is not yet host-agnostic.
+ *
+ * `TaskViewerProvider`'s instance-field initializers call
+ * `vscode.window.createOutputChannel(...)` (TaskViewerProvider.ts, `_julesDiagnosticsChannel`
+ * / `_apiServerDiagnosticsChannel`), so the booby trap fires in `new` before any
+ * arm can run. That is a documented unmigrated-ctor problem with its own plan
+ * (see the NOT WIRED YET comment in .github/workflows/integration-tests.yml) —
+ * NOT a harness bug, and not something an arm-level contract test can fix.
+ *
+ * This stub lets the ctor complete while still preserving the A2b acceptance
+ * signal where it actually matters: every property path touched is recorded, so
+ * a test can snapshot `accesses.length` around a `handleServiceVerb` call and
+ * assert the ARM reached no vscode at all. Prefer `installVscodeTrap()` whenever
+ * the provider under test can be constructed under it.
+ *
+ * `values` is a MUTABLE map from dotted path to a literal value, consulted
+ * before a proxy node is manufactured. It exists because some provider paths read
+ * `vscode` directly rather than through a seam — notably
+ * `_getWorkspaceRoots()` → `vscode.workspace.workspaceFolders`, which every root
+ * validation (`_getAllowedRoots` / `_resolveWorkspaceRoot`) depends on. Set it
+ * with `setWorkspaceFolders([root])` before exercising an arm that validates a
+ * workspace root, or the arm will resolve no roots.
+ *
+ * Returns `{ accesses, values, setWorkspaceFolders(roots), reset() }`.
+ * Idempotent; safe to call once per process.
+ */
+let _stubInstalled = null;
+
+function installPermissiveVscodeStub() {
+    if (_stubInstalled) return _stubInstalled;
+    const accesses = [];
+    const values = Object.create(null);
+    const makeNode = (pathStr) => new Proxy(function () { }, {
+        get(_t, prop) {
+            if (prop === '__esModule') return true;
+            // Give coercion a primitive so an accidental String(node) yields the
+            // path instead of "Cannot convert object to primitive value".
+            if (prop === Symbol.toPrimitive) return () => `[vscode:${pathStr}]`;
+            if (prop === 'then' || typeof prop === 'symbol') return undefined;
+            const next = pathStr ? `${pathStr}.${String(prop)}` : String(prop);
+            accesses.push(next);
+            if (next in values) return values[next];
+            return makeNode(next);
+        },
+        apply() { return makeNode(`${pathStr}()`); },
+        construct() { return makeNode(`new ${pathStr}`); },
+    });
+    // Defaults for the two paths whose PROXY return value would otherwise be
+    // coerced into a bogus string: `getConfiguration().get()` feeds a DB path,
+    // and `workspaceFolders` must be an array (or absent), never a callable node.
+    values['workspace.getConfiguration'] = () => ({
+        get: () => undefined,
+        has: () => false,
+        inspect: () => undefined,
+        update: async () => { },
+    });
+    values['workspace.workspaceFolders'] = undefined;
+
+    const root = makeNode('');
+    const originalLoad = Module._load;
+    Module._load = function (request) {
+        if (request === 'vscode') return root;
+        return originalLoad.apply(this, arguments);
+    };
+    _stubInstalled = {
+        accesses,
+        values,
+        setWorkspaceFolders: (roots) => {
+            values['workspace.workspaceFolders'] = (roots || []).map(r => ({ uri: { fsPath: r } }));
+        },
+        reset: () => { accesses.length = 0; },
+    };
+    return _stubInstalled;
+}
+
+/**
  * In-memory HostSeams bundle. `opts.roots` — workspace roots the HostWorkspace
  * seam reports. `opts.pickFolderResult` / `opts.pickFilesResult` — what the
  * dialog seams resolve to (default undefined = user cancelled).
@@ -260,4 +337,9 @@ function createFakeStateStore() {
     };
 }
 
-module.exports = { installVscodeTrap, createHeadlessTestSeams, createFakeStateStore };
+module.exports = {
+    installVscodeTrap,
+    installPermissiveVscodeStub,
+    createHeadlessTestSeams,
+    createFakeStateStore,
+};

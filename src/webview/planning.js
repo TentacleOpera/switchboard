@@ -65,6 +65,9 @@
     let _integrationProviderStatesReceived = false;
     let _restoredTabStateReceived = false;
     let _ticketsListedUnscoped = false;
+    // Last listLocalTicketFiles response's scope-coverage counts, when list/project
+    // scoping hid every candidate file. Drives the distinguishing empty-state copy.
+    let _ticketsScopeCoverage = null;
 
     // Helper to register a dropdown for updates
     function registerWorkspaceDropdown(selectElOrId, tabKey, includeAllOption = true) {
@@ -6110,6 +6113,11 @@
                 if (!msg.unscopedPlaceholder) {
                     ticketsLoadedOnce = true;
                 }
+                // Scoping can hide every candidate file (legacy files lacking the
+                // `listId:`/`projectName:` frontmatter key). That renders identically to
+                // "this list has no tickets", so it would never be reported as a
+                // regression — say what actually happened instead.
+                _ticketsScopeCoverage = msg.scopeCoverage || null;
                 if (localProvider === 'clickup') {
                     clickUpProjectIssues = tickets.map(t => ({
                         id: t.id, title: t.title, identifier: t.id,
@@ -11945,6 +11953,17 @@ Instructions:
         });
     }
 
+    // "No tasks found." is the wrong answer when list/project scoping hid every
+    // candidate file — that reads as "this list is empty" and hides a real coverage
+    // problem (files imported before the scope key existed in frontmatter).
+    function _ticketsEmptyStateCopy() {
+        const cov = _ticketsScopeCoverage;
+        if (cov && cov.hiddenByScope > 0) {
+            return `${cov.hiddenByScope} local file${cov.hiddenByScope === 1 ? '' : 's'} for this provider don't carry a list id — Refetch this list to re-key them.`;
+        }
+        return 'No tasks found.';
+    }
+
     function renderTicketsClickUpList() {
         closePriorityPopover();
         if (!isTicketsTabActive()) return;
@@ -11978,7 +11997,7 @@ Instructions:
         } else {
             const tasks = getFilteredClickUpTasks();
             if (tasks.length === 0) {
-                html = `<div class="empty-state">No tasks found.</div>`;
+                html = `<div class="empty-state">${_ticketsEmptyStateCopy()}</div>`;
             } else {
                 // Normal mode: group by status into collapsible accordion sections. Tasks
                 // are already sorted by priority then newest-first from getFilteredClickUpTasks.
