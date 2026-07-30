@@ -21,8 +21,9 @@ Interactive CLI agents need a real PTY, not pipes: this codebase's standing rule
 
 ## User Review Required
 
-- **Dependency choice:** `@homebridge/node-pty-prebuilt-multiarch` (prebuilt fork) over upstream `node-pty`. Flagged for web research before implementation — see `## Uncertain Assumptions`. If research shows the fork is stale or ABI coverage is poor for current Node LTS, revisit this choice.
 - The fixed ~750ms shell-readiness delay before startup-command injection is a v1 simplification with a known flake mode (slow login shells). Confirm the user accepts this over a prompt-detection heuristic.
+
+(Dependency choice — previously flagged here — is now resolved by research; see `## Resolved Assumptions`.)
 
 ## Complexity Audit
 
@@ -33,7 +34,7 @@ Interactive CLI agents need a real PTY, not pipes: this codebase's standing rule
 - Boot-reconcile purge is a simple filter on `purpose: 'pty'`.
 
 ### Complex / Risky
-- Native module packaging for `npx` distribution across darwin/linux/win32 — prebuilt binary coverage is the whole ballgame and is externally unverifiable from this repo (research flagged).
+- Native module packaging for `npx` distribution across darwin/linux/win32 — research resolved the strategy (upstream node-pty, bundled prebuilds), but the darwin `spawn-helper` permission defect and exit-time SIGABRT race must be coded around.
 - No shell-readiness event exists; startup-command injection timing is heuristic (fixed delay) and can silently drop or garble the agent launch command on slow shells.
 - Shutdown semantics: draining/killing interactive agent processes without a timeout budget can orphan shells or corrupt an agent mid-write.
 - Boot-purge must be sequenced before any reader of `state.terminals` routes work, or dispatch can target a ghost terminal.
@@ -79,12 +80,20 @@ Key risks: the fixed 750ms shell-readiness delay can silently drop startup comma
 
 ### 1. Dependency and packaging
 
-- Add `@homebridge/node-pty-prebuilt-multiarch` as a runtime `dependency` (decided over upstream `node-pty`: ships prebuilt binaries for darwin/linux/win32 across node ABIs, so `npx switchboard` users don't need node-gyp/build tools). Add `@types` or local typings as needed. (Confirmed: no node-pty variant is currently in `package.json`.)
+> **Superseded:** "Add `@homebridge/node-pty-prebuilt-multiarch` as a runtime `dependency` (decided over upstream `node-pty`: ships prebuilt binaries for darwin/linux/win32 across node ABIs, so `npx switchboard` users don't need node-gyp/build tools)."
+> **Reason:** Web research (2026-07-31) reversed the decision. The homebridge fork downloads its binaries at install time via `prebuild-install` in a `postinstall` hook (`prebuild-install || node-gyp rebuild`) — this fails under `--ignore-scripts`, pnpm/Yarn Berry/Bun script suppression, offline/air-gapped machines, and proxies blocking GitHub Releases, and its `node-gyp` fallback requires build tools we promised users they wouldn't need. Upstream `node-pty` v1.1.x migrated to N-API (ABI-stable across Node 20/22+ LTS) and bundles prebuilt binaries **inside the npm tarball** (`prebuilds/<platform>-<arch>/pty.node`) — zero network, zero scripts at install time, maintained by the VS Code team.
+> **Replaced with:** Add upstream **`node-pty`** (v1.1.x, or v1.2.x if Linux prebuilds are required — see caveat below) as a runtime `dependency`, pinned to a published version ≥ 7 days old. Add typings as needed. (Confirmed: no node-pty variant is currently in `package.json`.)
+>
+> **Caveats from research, must be handled in implementation:**
+> 1. **macOS `spawn-helper` permission defect:** node-pty v1.1.0's npm tarball packs the darwin `spawn-helper` binary mode `644` (no execute bit); spawning fails with `posix_spawnp failed` after `npx`/pnpm/bun extraction. `PtyTerminalBackend` must run a zero-dependency repair at construction (before first `spawn`): on darwin, `fs.chmodSync(<resolved node-pty>/prebuilds/darwin-<arch>/spawn-helper, 0o755)`, best-effort with a warn on failure.
+> 2. **Linux prebuild coverage:** upstream v1.1.0 bundles darwin-arm64/x64 + win32-x64/arm64; Linux (glibc/musl) prebuilds stabilized in v1.2.0-beta line. The coder must confirm the pinned version ships `linux-x64` (glibc, and musl if Alpine support is claimed) prebuilds; if the chosen pinned version lacks them, either pin the v1.2.x line or document linux as build-from-source-required — do NOT silently ship an npx package that compiles on install.
+> 3. **Exit-time SIGABRT race (upstream issue #904):** failing to explicitly `.kill()`/dispose all live `IPty` instances before Node process exit can crash in `Napi::ThreadSafeFunction` cleanup. This hardens the shutdown step below from "graceful" to **mandatory-dispose-before-exit**.
+
 - `webpack.config.js`: add the module to `externals` in **`standaloneConfig` only**.
 
 > **Superseded:** "`webpack.config.js`: add the module to `externals` in **`standaloneConfig` only** (`webpack.config.js:100-140`)."
 > **Reason:** Line range drifted and, more importantly, `standaloneConfig` (lines 107-144) has **no externals section today** — it uses `resolve.alias` to map `vscode` to the shim (lines 125-126). "Add to externals" implied extending a section that does not exist.
-> **Replaced with:** Create a new `externals` key on `standaloneConfig` (`webpack.config.js:107-144`): `externals: { '@homebridge/node-pty-prebuilt-multiarch': 'commonjs @homebridge/node-pty-prebuilt-multiarch' }`. The main extension config's externals stay `{ vscode }` (lines 24-26) — if the extension bundle ever pulls it in, the build should fail loudly rather than bundle a `.node` binary.
+> **Replaced with:** Create a new `externals` key on `standaloneConfig` (`webpack.config.js:107-144`): `externals: { 'node-pty': 'commonjs node-pty' }`. The main extension config's externals stay `{ vscode }` (lines 24-26) — if the extension bundle ever pulls it in, the build should fail loudly rather than bundle a `.node` binary.
 
 - Import rule: only `src/standalone/**` may import node-pty. Add a contract test that (a) greps `src/` for the import and asserts all sites are under `src/standalone/`, and (b) asserts `dist/extension.js` contains no `node-pty` string after a compile (skippable when dist is stale — dist is not the dev source of truth, but the check must run in the VSIX release path). **Known gap:** (a) alone cannot catch bundling via barrel-file re-exports that never name `node-pty` in source; only (b) does — so (b) is the load-bearing check and must be mandatory in the release path, never waived for a stale dist without a loud warning.
 
@@ -109,7 +118,7 @@ Owns the living set of PTY terminals:
 - Inject after a short shell-readiness delay (no `onDidStartTerminalShellExecution` equivalent exists; a fixed ~750ms delay + trailing `\r` is acceptable v1 — PTYs don't have the VS Code race the event solved). **Known flake mode:** on slow login shells (heavy `.zshrc`), the command can arrive before the prompt and be garbled or dropped; the delay is a heuristic, not a guarantee. v1 accepts this; recovery is manual re-dispatch, and the delay value should be a named constant so it can be tuned without a code hunt.
 - **Registry integration:** persist per-terminal metadata into the same `state.terminals` map (`runtime.terminals` config key via `src/services/stateConfigBridge.ts:38`) with the established field set (`purpose`, `role`, `pid`, `startTime`, `status`, `friendlyName`, `worktreePath`, `ideName`) so `/health`, the board, and worktree routing all see them. Use `purpose: 'pty'` and `ideName: 'standalone-pty'` — the existing `ideName` partition (`extension.ts:548-556`, `isCompatibleIdeName`) keeps the extension from adopting them. **Coder must verify** the extension's cleanup paths (`handleTerminalClosed` at `TaskViewerProvider.ts:17917-17960` and any stale-entry sweeps) never prune entries with a foreign `ideName`; if any sweep is name-keyed without an owner check, add the owner check there. (Verified: `handleTerminalClosed` prunes by name only after confirming no live terminal with that name exists — `TaskViewerProvider.ts:17935-17940` — but any OTHER sweep must get the same audit.)
 - **Boot reconcile:** on standalone start, purge `state.terminals` entries with `purpose: 'pty'` (they are dead — PTYs do not survive the server process). **Sequencing requirement:** the purge MUST complete synchronously inside bootstrap, before `LocalApiServer.start()` begins accepting requests — otherwise a dispatch landing in the gap routes to a ghost terminal. Runtime conflict with the extension is already impossible: `cli.ts:116-121` exits when the extension's API server is alive (single-writer rule).
-- Graceful shutdown: SIGTERM to children, then kill, on standalone process exit. Specify the budget: SIGTERM → bounded grace period (e.g. 3s, named constant) → SIGKILL; reap via node-pty `kill()` and confirm no orphaned shells remain.
+- Graceful shutdown: SIGTERM to children, then kill, on standalone process exit. Specify the budget: SIGTERM → bounded grace period (e.g. 3s, named constant) → SIGKILL; reap via node-pty `kill()` and confirm no orphaned shells remain. **Mandatory dispose-before-exit (research-hardened):** upstream node-pty has an N-API teardown race (issue #904) — exiting the Node process with live `IPty` instances can SIGABRT in `ThreadSafeFunction` cleanup. Register `SIGINT`/`SIGTERM`/`exit` handlers in bootstrap that explicitly `.kill()` + dispose every live fleet handle BEFORE the process exits; this is a crash-prevention requirement, not politeness.
 
 ### 4. Wire into bootstrap + HTTP surface
 
@@ -121,8 +130,8 @@ Owns the living set of PTY terminals:
 
 ### `package.json`
 - **Context:** No node-pty variant is currently a dependency.
-- **Logic:** Add `@homebridge/node-pty-prebuilt-multiarch` as a runtime dependency (pin a published version ≥ 7 days old).
-- **Edge cases:** Version must have prebuilds for the Node ABIs `npx` users actually run — externally unverifiable here; see `## Uncertain Assumptions`.
+- **Logic:** Add upstream `node-pty` (v1.1.x / v1.2.x) as a runtime dependency (pin a published version ≥ 7 days old). Research resolved the fork-vs-upstream decision in upstream's favor (bundled prebuilds, N-API ABI stability).
+- **Edge cases:** Pinned version must bundle prebuilds for every claimed platform in its npm tarball — verify `linux-x64` (glibc/musl) coverage on the exact pinned version before committing to Linux support.
 
 ### `webpack.config.js` (standaloneConfig, lines 107-144)
 - **Context:** `standaloneConfig` currently has no `externals` section; it uses `resolve.alias` for the `vscode` shim.
@@ -154,12 +163,14 @@ Owns the living set of PTY terminals:
 - **Logic:** Add the four `pty*` verbs to the catalog; regenerate.
 - **Edge cases:** Never hand-edit the generated file.
 
-## Uncertain Assumptions
+## Resolved Assumptions
 
-The following are external, code-unanswerable uncertainties. The user was advised to run web research to confirm them before implementation (a ready-to-run research prompt was supplied in chat):
+Resolved by web research (2026-07-31) — authoritative, do not re-open:
 
-1. **`@homebridge/node-pty-prebuilt-multiarch` currency and ABI coverage** — is the fork actively maintained, and do its prebuilt binaries cover the Node versions (current LTS line) that `npx switchboard` users run, across darwin-arm64/darwin-x64/linux-x64/win32-x64? If stale, does upstream `node-pty` (v1.x) now ship sufficient prebuilds to be the better choice?
-2. **node-pty `pause()`/`resume()` semantics in the chosen fork** — the backpressure design in the sibling WS subtask depends on the IPty `pause`/`resume` API existing and behaving as flow control on the output stream; confirm its availability and semantics in the fork's lineage.
+1. **Dependency choice → upstream `node-pty` v1.1.x/v1.2.x.** N-API bindings (ABI-stable across Node 20/22+ LTS); prebuilt binaries bundled inside the npm tarball (no install-time network, immune to `--ignore-scripts`/offline/proxy failures that break the homebridge fork's `prebuild-install` postinstall model). Maintained by the VS Code team.
+2. **macOS `spawn-helper` defect:** v1.1.0 tarballs pack darwin's `spawn-helper` mode `644`; runtime `chmod 0o755` repair required before first spawn (coded into step 1).
+3. **Linux prebuilds:** bundled in the v1.2.0-beta line, not v1.1.0 — pin accordingly (caveat in step 1).
+4. **`IPty.pause()`/`resume()` exist and buffer, never drop.** Pausing suspends master-fd reads; child output accumulates in the OS kernel PTY/pipe buffer (~64 KB) and the child blocks on write when it fills — exactly the flow control the WS subtask's backpressure design needs. Cautions: don't call `pause()` before the first data cycle (early-pause race can swallow chunks); explicitly `.kill()`/dispose all instances before process exit (SIGABRT teardown race, issue #904).
 
 ## Verification Plan
 

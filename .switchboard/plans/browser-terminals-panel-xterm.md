@@ -47,7 +47,7 @@ The browser shell (`src/webview/shell.html` + `shell.js`) mounts panels as simul
 
 **Security**
 - Cookie auth rides the same-origin WebSocket automatically; no token handling in page JS.
-- xterm rendering of untrusted agent output: xterm.js handles escape-sequence safety; do NOT inject terminal text into the DOM outside xterm.
+- xterm rendering of untrusted agent output: xterm.js handles escape-sequence safety; do NOT inject terminal text into the DOM outside xterm. Research flagged terminal escape-sequence injection as an active CVE class (e.g. OSC color-query abuse) — pin a modern `@xterm/xterm` (v5.5+/v6, legacy CVEs resolved), keep xterm's default parser behavior, and never register custom automated response handlers that act on raw PTY output.
 - CSP: vendor scripts only via the per-render nonce mechanism (`src/services/headlessPanelHtml.ts:50-52`); no new CSP sources.
 
 **Side Effects**
@@ -78,7 +78,8 @@ Key risks: a hand-synced src-mirror of vendored xterm rotting against the dist c
 
 ### 1. Vendor xterm.js
 
-- Add `@xterm/xterm` + `@xterm/addon-fit` as dependencies (pin published versions ≥ 7 days old). Serve them as static assets: extend the webpack `CopyPlugin` config (sql.js precedent at `webpack.config.js:94-100`) to copy the dist JS/CSS into `dist/webview/vendor/xterm/`.
+- Add `@xterm/xterm` + `@xterm/addon-fit` as dependencies (pin published versions ≥ 7 days old; use a current v5.5+/v6 line — legacy escape-handling CVEs are resolved in modern releases). Serve them as static assets: extend the webpack `CopyPlugin` config (sql.js precedent at `webpack.config.js:94-100`) to copy the dist JS/CSS into `dist/webview/vendor/xterm/`.
+- **Exact assets (confirmed by research 2026-07-31):** `@xterm/xterm` ships `lib/xterm.js` (UMD → `window.Terminal`) + `css/xterm.css`; `@xterm/addon-fit` ships `lib/addon-fit.js` (UMD → `window.FitAddon.FitAddon`). All three are plain script-tag-consumable without a bundler and compatible with nonce-only CSP (no `unsafe-inline`/`unsafe-eval` needed). Copy exactly these three files.
 - **Copy strategy (clarification):** the dev flow serves from `src/` when `dist/` is absent (`_handleServeStatic` dist→src fallback, `LocalApiServer.ts:782-830`). Rather than hand-mirroring a second copy under `src/` (two copies, guaranteed to rot), the coder must FIRST check how the sql.js assets handle the src-fallback case and adopt the SAME strategy for xterm; if sql.js is mirrored-and-rotting, prefer making the dev flow run the same copy step (or a tiny `scripts/` sync) so there is exactly one source of truth. Record the chosen strategy in the plan's implementation notes.
 - Load via `<script nonce="{{NONCE}}" src="/static/webview/vendor/xterm/xterm.js">` — the CSP nonce mechanism already exists per-render (`src/services/headlessPanelHtml.ts:50-52`). No CDN, ever (CSP forbids it and the VSIX/npm package must be self-contained).
 
@@ -131,11 +132,12 @@ Key risks: a hand-synced src-mirror of vendored xterm rotting against the dist c
 - **Logic:** New codicon-shaped terminal glyph.
 - **Edge cases:** Must render via `mask-image` + `currentColor`, not embedded fills/PNG.
 
-## Uncertain Assumptions
+## Resolved Assumptions
 
-The following are external, code-unanswerable uncertainties. The user was advised to run web research to confirm them before implementation (a ready-to-run research prompt was supplied in chat):
+Resolved by web research (2026-07-31) — authoritative, do not re-open:
 
-1. **`@xterm/xterm` + `@xterm/addon-fit` packaging** — current package versions, and whether the npm packages ship a plain script-tag-consumable build (UMD/`lib/xterm.js` + `css/xterm.css`) suitable for vendoring without a bundler, plus the fit addon's dist file layout.
+1. **xterm vendoring is feasible without a bundler.** `@xterm/xterm` ships `lib/xterm.js` (UMD → `window.Terminal`) + `css/xterm.css`; `@xterm/addon-fit` ships `lib/addon-fit.js` (UMD → `window.FitAddon.FitAddon`). Plain `<script nonce>` loading works under strict CSP; no `unsafe-inline`/`unsafe-eval` required. Exact copy list written into step 1.
+2. **Security posture:** legacy xterm escape-handling CVEs are resolved in modern releases (v5.5+/v6); terminal escape-sequence injection remains an active CVE class generally, so custom automated response handlers on raw PTY output are forbidden (noted in Security audit).
 
 ## Verification Plan
 

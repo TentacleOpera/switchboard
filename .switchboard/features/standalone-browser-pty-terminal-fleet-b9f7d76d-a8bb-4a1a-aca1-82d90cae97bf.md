@@ -43,3 +43,10 @@ Cross-subtask audit outcome — reconciled end-state the coder should implement 
 - **Upgrade routing:** exactly one `'upgrade'` router, owned by `LocalApiServer` (wsHub's self-attached private listener is extracted) — `/ws` → hub, `/ws/terminal` → gateway, else destroy.
 - **Backpressure:** two-tier — `pty.pause()` at high-water, laggard client eviction (disconnect + lossless re-attach via replay) as the backstop; pause-the-world alone is insufficient.
 - All four subtask plans were improved in place (no merges/deletes/splits); all remain in PLAN REVIEWED.
+
+## Research Findings (2026-07-31, folded into subtask plans)
+
+- **Dependency decision REVERSED:** use upstream `node-pty` v1.1.x/v1.2.x (N-API, prebuilds bundled in the npm tarball), NOT `@homebridge/node-pty-prebuilt-multiarch` (install-time `prebuild-install` download fails under `--ignore-scripts`/offline/proxy). Caveats coded into the backend plan: darwin `spawn-helper` needs a runtime `chmod 0o755` repair (v1.1.0 tarball defect), Linux prebuilds live in the v1.2.x line, and all `IPty` instances must be killed/disposed before process exit (SIGABRT teardown race).
+- **`IPty.pause()`/`resume()` confirmed:** output buffers in the OS kernel PTY buffer, never drops — the WS backpressure design is sound; don't pause before the first data cycle.
+- **xterm vendoring confirmed:** `@xterm/xterm` `lib/xterm.js` + `css/xterm.css`, `@xterm/addon-fit` `lib/addon-fit.js` — plain script-tag UMD, nonce-CSP compatible.
+- All previous `## Uncertain Assumptions` sections are now `## Resolved Assumptions` in the subtask plans. No open external uncertainties remain; the feature is ready to execute.

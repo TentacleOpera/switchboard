@@ -58,7 +58,7 @@ Security framing: a terminal input channel is remote-code-execution-grade surfac
 
 **Dependencies & Conflicts**
 - Depends on the fleet backend subtask: extended `TerminalHandle` (`onData`/`write`/`resize`), PtyFleetService, and its `onDidChange` hook (backend is the single owner of fleet lifecycle events).
-- node-pty `pause()`/`resume()` availability is an external assumption — see `## Uncertain Assumptions` in the backend plan (shared research item).
+- node-pty `pause()`/`resume()` semantics confirmed by research — see `## Resolved Assumptions`.
 - Sibling consumers: the xterm panel speaks this plan's frame protocol; dispatch does not use it.
 - `ws` library is already a dependency (`ws@8.21.0`); `bufferedAmount` is a standard `ws` property but unused in this codebase today — this plan introduces the pattern.
 
@@ -100,7 +100,7 @@ Key risks: the plan's original step 1 described a routing seam that does not exi
   - JSON+base64 over binary frames is a deliberate v1 simplification — human-scale CLI TUI traffic; revisit only if profiling demands it.
 - **Multiple viewers:** any number of authenticated clients may attach to one terminal; output fans out to all; input is accepted from any of them (single user, multiple tabs — matches the shell's multi-iframe model). Leave a comment flagging this as a single-user assumption for any future multi-user work.
 - **Scrollback:** per-terminal ring buffer (256 KB). **Feed timing (corrected):** the gateway subscribes to each terminal's `onData` when the fleet reports it (via the fleet service's `onDidChange` hook — owned by the backend subtask), NOT on first client attach — otherwise first-attach replay is empty and the feature's 256 KB promise is broken for terminals created before any viewer connects. Replay on every attach before live frames — mirrors the hub's resync-before-join ordering rule (`wsHub.ts:192-214`): buffer any live output that arrives during replay and flush it after, so no frame is lost or reordered.
-- **Backpressure (two-tier policy):** when a client's `ws.bufferedAmount` exceeds a high-water mark (1 MB), call `pty.pause()`; resume when all attached clients drain below a low-water mark. **Laggard eviction (added):** if any client stays above the high-water mark beyond a bounded grace window (named constant, e.g. 30s), disconnect THAT client (close frame naming the reason; it can re-attach and replay scrollback losslessly) and resume if it was the last laggard. Slow-client protection must not kill the agent — and must not let one abandoned tab freeze every other viewer indefinitely.
+- **Backpressure (two-tier policy):** when a client's `ws.bufferedAmount` exceeds a high-water mark (1 MB), call `pty.pause()`; resume when all attached clients drain below a low-water mark. **Laggard eviction (added):** if any client stays above the high-water mark beyond a bounded grace window (named constant, e.g. 30s), disconnect THAT client (close frame naming the reason; it can re-attach and replay scrollback losslessly) and resume if it was the last laggard. Slow-client protection must not kill the agent — and must not let one abandoned tab freeze every other viewer indefinitely. **Semantics confirmed by research (2026-07-31):** `IPty.pause()` suspends master-fd reads; agent output buffers in the OS kernel PTY buffer (~64 KB) and is never dropped — a paused agent blocks on stdout write, i.e. natural flow control, not data loss. Caution from research: never call `pause()` before the first data cycle completes (an early-pause race can swallow initial chunks) — the high-water trigger naturally satisfies this since it only fires after output has flowed.
 - **Lifecycle:** PTY exit → `{t:'exit'}` to all clients, close connections, drop the ring buffer; fleet `kill()` does the same. 30s ping/pong reaper per connection (reuse the hub's pattern, `wsHub.ts:98-109`).
 - Fleet change events (create/close/rename) additionally broadcast a small `terminalsChanged` verb over the **existing** hub so the board and the future Terminals panel list can refresh without polling — the gateway subscribes to the fleet service's `onDidChange` hook (single owner: PtyFleetService) and emits via the established `broadcastWs` sink (`LocalApiServer.ts:441-443`).
 
@@ -131,11 +131,11 @@ Key risks: the plan's original step 1 described a routing seam that does not exi
 - **Logic:** Construct gateway with fleet service; inject via `LocalApiServerOptions`.
 - **Edge cases:** Gateway absent in extension host — nothing registered, nothing reachable.
 
-## Uncertain Assumptions
+## Resolved Assumptions
 
-The following are external, code-unanswerable uncertainties. The user was advised to run web research to confirm them before implementation (a ready-to-run research prompt was supplied in chat; shared with the backend subtask):
+Resolved by web research (2026-07-31) — authoritative, do not re-open:
 
-1. **node-pty `pause()`/`resume()` semantics** — the two-tier backpressure design depends on the IPty `pause`/`resume` API existing in the chosen node-pty fork and behaving as output flow control (paused output buffered by the OS/pty rather than dropped). Confirm availability and drop-vs-buffer semantics.
+1. **`IPty.pause()`/`resume()` exist in upstream node-pty and buffer, never drop.** Paused output accumulates in the OS kernel PTY/pipe buffer (~64 KB); when full, the child process blocks on write — the exact flow-control behavior the two-tier backpressure design assumes. Two cautions coded into the steps: no `pause()` before the first data cycle (early-pause chunk-loss race), and mandatory kill/dispose of all instances before process exit (upstream teardown SIGABRT race, issue #904 — owned by the backend subtask's shutdown budget).
 
 ## Verification Plan
 
