@@ -316,7 +316,9 @@ Research rated font-glyph symbols with OS fallback as **low visual consistency**
 
 **The codebase has already solved this once.** The browser nav rail now renders single-colour SVG glyphs painted with `currentColor` via CSS `mask-image` (`.strip-glyph` in `shell.html`, per-icon mask set inline by `shell.js`, assets in `icons/nav-*.svg`). That pattern is metric-independent, themeable, and immune to font fallback entirely.
 
-Extending it to the remaining UI symbols — the expand chevrons, status dots, tick marks and warning badges — is the durable fix for the whole symbol-coverage problem, and would make the fallback tails genuinely unnecessary rather than load-bearing. It is **not** in scope here: this plan is about host decoupling and would be blocked for weeks by an icon migration. Recorded so the option is on the table when the tofu/metric complaints arrive, and so nobody mistakes the fallback tails for a solved problem rather than a mitigation.
+Extending it to the remaining UI symbols — the expand chevrons, status dots, tick marks and zoom controls — is the durable fix for the whole symbol-coverage problem. It is **not** in scope here: this plan is about host decoupling and would be blocked for weeks by an icon migration.
+
+**Now written up as its own plan:** `.switchboard/plans/symbol-glyphs-to-masked-svg-icons.md` (complexity 6), sequenced *after* this feature to avoid contending over the same panel files. Note what it does **not** remove: it migrates the ~62 sites where a symbol is an element's entire content, leaving ~69 text-glyph sites in labels, status sentences and tooltips. **So the fallback tails remain necessary even after that plan lands** — just no longer the only thing standing between the UI and broken controls.
 
 ## Decisions Already Made (do not re-litigate)
 
