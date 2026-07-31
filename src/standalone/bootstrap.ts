@@ -370,6 +370,15 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     ingestionEngine.onPlanDiscovered((_root, _filePath) => {
         try { void pushFullState(); } catch (e) { console.error('[bootstrap] ingestion-driven pushFullState failed:', e); }
     });
+    ingestionEngine.setOnWorkingStateCleared((record) => {
+        if (!server) return;
+        server.broadcastWs('agentCompleted', {
+            planFile: record.planFile,
+            planTitle: record.topic,
+            role: record.dispatchedAgent,
+            terminalName: record.dispatchedTerminal || undefined,
+        });
+    });
     await ingestionEngine.initialize();
     log(opts, 'PlanIngestionEngine initialized (headless)');
 
@@ -911,10 +920,10 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     return result;
                 }
 
-                case 'ptyCreateTerminal':
-                case 'ptyCloseTerminal':
-                case 'ptyListTerminals':
-                case 'ptyRenameTerminal':
+                // NOTE: the four `pty*` verbs deliberately do NOT appear here — they
+                // are served only on `/terminals/verb/` (see `terminalVerb` below), so
+                // a board surface that cannot display a PTY cannot spawn one. Only the
+                // dispatch verbs, which the board legitimately owns, stay on this route.
                 case 'triggerAction':
                 case 'sendToTerminal': {
                     // Defense in depth for the optional native module: the capability
@@ -1032,6 +1041,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                 routedTo: targetColumn || rec.kanbanColumn || '',
                                 dispatchedAgent: targetRole,
                                 dispatchedIde: PTY_IDE_NAME,
+                                dispatchedTerminal: terminal.friendlyName,
                             });
                         } catch (err) {
                             console.warn('[bootstrap] Failed to update dispatch info:', err);
@@ -1246,8 +1256,15 @@ Each plan file must include:
         allRoots: [workspaceRoot],
         getKanbanDatabase: async () => db,
         kanbanVerb,
-        terminalVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
-            handlePtyVerb(verb, payload, workspaceRootArg || payload?.workspaceRoot || workspaceRoot),
+        // Same `ptyReady` guard the kanbanVerb entry point carries: a page loaded
+        // before a restart (or a direct API caller) can still reach these verbs, and
+        // an unguarded call would surface as an unhandled spawn exception.
+        terminalVerb: async (verb: string, payload: any, workspaceRootArg?: string) => {
+            if (!ptyReady) {
+                return { success: false, error: 'PTY terminals are unavailable: the optional node-pty module could not be loaded on this machine.' };
+            }
+            return handlePtyVerb(verb, payload, workspaceRootArg || payload?.workspaceRoot || workspaceRoot);
+        },
         planningVerb,
         designVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
             designProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),

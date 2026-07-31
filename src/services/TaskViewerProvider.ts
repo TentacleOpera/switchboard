@@ -20,8 +20,9 @@ import type { FSWatcher, Dirent, Stats } from 'fs';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { isPtyAvailable } from '../standalone/ptyBackend';
-import { PtyFleetService } from '../standalone/ptyFleetService';
+import { PtyFleetService, PTY_IDE_NAME } from '../standalone/ptyFleetService';
 import { TerminalWsGateway } from '../standalone/terminalWsGateway';
+import { sendPromptToPty } from '../standalone/ptyPromptDelivery';
 
 import * as cp from 'child_process';
 import { promisify } from 'util';
@@ -192,6 +193,20 @@ type ConfiguredKanbanDispatchOptions = {
     targetTerminalOverride?: string;
     /** Skip column rollback on dispatch failure. Used by kanban drag-dispatch which persists the column move independently and handles the fallback prompt. */
     persistColumnOnError?: boolean;
+    /**
+     * Per-surface dispatch discriminator. True when this dispatch arrived over HTTP
+     * (`POST /kanban/dispatch` sets `apiOriginated: true` on the triggerAction payload)
+     * — i.e. from the browser cockpit, a CLI script or the orchestrator. False/absent
+     * means an in-process webview dispatch from the VS Code sidebar.
+     *
+     * It selects the terminal FLEET: an api-originated dispatch may resolve and deliver
+     * to a PTY (visible in the browser Terminals panel); an in-process dispatch may not
+     * (the sidebar cannot display a PTY, so delivering there is a silent black hole).
+     *
+     * OBLIGATION: any NEW HTTP dispatch entry point added later MUST set this, or its
+     * dispatches silently route to VS Code terminals the caller cannot see.
+     */
+    apiOriginated?: boolean;
 };
 
 type ClickUpSetupColumnState = {
@@ -1620,17 +1635,33 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const cacheService = this._getCacheService(effectiveRoot);
         const allRoots = this._filterMappedRoots(this._getWorkspaceRoots());
 
+        // Fleet construction is deliberately ONE-SHOT per extension-host lifetime.
+        // _startLocalApiServer is re-entrant — the liveness watchdog calls it again on
+        // every failed health check (see _checkApiServerLiveness). Re-constructing here
+        // would orphan the previous fleet's child processes (nothing reaps them until
+        // process exit), leak the old gateway's ping/drain intervals, purge the LIVE
+        // fleet's registry rows, and mint a new token that 401s every already-open
+        // browser terminal. The fleet outlives individual server restarts; only the
+        // gateway reference is handed to the new LocalApiServer.
         const ptyReady = isPtyAvailable();
-        if (ptyReady) {
+        if (ptyReady && !this._ptyFleetService) {
             const db = await this._getKanbanDb(effectiveRoot);
             if (db) {
                 this._ptyFleetService = new PtyFleetService(effectiveRoot, db);
-                void PtyFleetService.purgePtyTerminals(db);
+                // Awaited, not fire-and-forget: the write side (setConfigJson) is async,
+                // so a `void` purge leaves a window in which /kanban/dispatch's pre-flight
+                // and worktree routing still see ghost rows from the previous host.
+                await PtyFleetService.purgePtyTerminals(db);
                 this._terminalSessionToken = crypto.randomBytes(32).toString('hex');
                 const token = this._terminalSessionToken;
                 this._terminalWsGateway = new TerminalWsGateway(this._ptyFleetService, async () => token);
             }
         }
+        // Capability-gating honesty (PRD contract #6): the probe passing is NOT enough —
+        // with no kanban db the fleet and gateway are never constructed, so advertising
+        // the panel on `ptyReady` alone ships a Terminals icon whose every verb fails and
+        // whose /ws/terminal upgrade is destroyed. Gate on the fleet actually existing.
+        const ptyHostReady = () => ptyReady && !!this._ptyFleetService;
 
         const handlePtyVerb = async (verb: string, payload: any, root?: string): Promise<any> => {
             if (!ptyReady || !this._ptyFleetService) {
@@ -1893,7 +1924,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     terminalDispatch: true,
                     automation: true,
                     orchestrator: true,
-                    terminalFleet: ptyReady,
+                    terminalFleet: ptyHostReady(),
                     mcpTerminals: false,
                     secretsEntry: false,
                 };
@@ -1933,7 +1964,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         return sharedGetProjectHtml(repoRoot, currentWsRoot(), caps, getTheme());
                     },
                     getShellHtml: async () => sharedGetShellHtml(repoRoot, getTheme()),
-                    getPanelsManifest: () => sharedGetPanelsManifest({ design: true, setup: true, planning: true, terminals: ptyReady }),
+                    getPanelsManifest: () => sharedGetPanelsManifest({ design: true, setup: true, planning: true, terminals: ptyHostReady() }),
                     getPanelHtml: async (id: string) => {
                         const caps = {
                             ...baseHostCapabilities,
@@ -1942,10 +1973,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         };
                         const result = sharedGetPanelHtmlById(id, repoRoot, currentWsRoot(), caps, getTheme());
                         if (result && id === 'terminals' && this._terminalSessionToken) {
-                            const scriptTag = `<script>window.__SB_TERMINAL_TOKEN__=${JSON.stringify(this._terminalSessionToken)};</script>`;
+                            // Carried as a body data-attribute, NOT an inline <script>.
+                            // The terminals panel serves `script-src 'nonce-<n>' 'self'`
+                            // (headlessPanelHtml.getTerminalsHtml + the CSP meta tag in
+                            // terminals.html), so a nonce-less inline script is blocked
+                            // outright — the token would never reach terminals.js and every
+                            // /ws/terminal upgrade would 401 against the gateway's
+                            // rejectWhenTokenEmpty guard: terminals that render but never
+                            // stream. A data-attribute is not script, so no CSP interaction.
+                            // The token is hex (crypto.randomBytes) so it needs no escaping,
+                            // but it is escaped anyway to keep that a local property.
+                            const attrSafeToken = this._terminalSessionToken.replace(/[^a-zA-Z0-9]/g, '');
                             return {
                                 ...result,
-                                html: result.html.replace('</head>', `${scriptTag}</head>`)
+                                html: result.html.replace('<body', `<body data-terminal-token="${attrSafeToken}"`)
                             };
                         }
                         return result || null;
@@ -4376,7 +4417,8 @@ Each plan file must include:
             instruction: options.instruction,
             workspaceRoot: resolvedWorkspaceRoot,
             targetTerminalOverride: options.targetTerminalOverride,
-            persistColumnOnError: true
+            persistColumnOnError: true,
+            apiOriginated: options.apiOriginated
         };
 
         if (options.dragDropMode === 'prompt') {
@@ -4880,6 +4922,8 @@ Each plan file must include:
         }
 
         const workflowName = this._workflowNameForDispatchRole(role, instruction);
+        // Per-surface fleet selection (see ConfiguredKanbanDispatchOptions.apiOriginated).
+        const allowPtyFleet = !!options?.apiOriginated;
         const targetColumn = options?.targetColumn
             ? this._normalizeLegacyKanbanColumn(options.targetColumn)
             : this._targetColumnForRole(role);
@@ -4896,7 +4940,7 @@ Each plan file must include:
             const groupAllSameWorktree = groupPlans.every(p => p.worktreePath === groupCommonWorktree);
             const worktreePath = groupAllSameWorktree ? groupCommonWorktree : undefined;
             const targetAgent = String(targetTerminalOverride || '').trim()
-                || await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath);
+                || await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath, allowPtyFleet);
             if (!targetAgent || !this._isValidAgentName(targetAgent)) {
                 this._seams().ui.showErrorMessage(`No agent assigned to role '${role}' for feature '${g.feature.topic || 'Untitled'}'. Cannot dispatch batch.`);
                 return false;
@@ -4910,7 +4954,7 @@ Each plan file must include:
             const looseAllSameWorktree = loose.every(p => p.worktreePath === looseCommonWorktree);
             const worktreePath = looseAllSameWorktree ? looseCommonWorktree : undefined;
             const targetAgent = String(targetTerminalOverride || '').trim()
-                || await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath);
+                || await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath, allowPtyFleet);
             if (!targetAgent || !this._isValidAgentName(targetAgent)) {
                 this._seams().ui.showErrorMessage(`No agent assigned to role '${role}' for loose plans. Cannot dispatch batch.`);
                 return false;
@@ -4966,7 +5010,7 @@ Each plan file must include:
                 const sent = await this._dispatchExecuteMessage(resolvedWorkspaceRoot, group.targetAgent, finalPrompt, {
                     batch: true,
                     sessionIds: group.plans.map(p => p.sessionId || p.planId || '').filter(Boolean)
-                });
+                }, 'sidebar', allowPtyFleet);
                 if (!sent) {
                     throw new Error(`Could not deliver prompt to '${group.targetAgent}'`);
                 }
@@ -7804,26 +7848,48 @@ Each plan file must include:
     private async _resolveAgentTerminalForPlan(
         role: string,
         workspaceRoot: string,
-        worktreePath?: string
+        worktreePath?: string,
+        allowPtyFleet: boolean = false
     ): Promise<string | undefined> {
         if (worktreePath) {
-            const wtTerminal = await this._findTerminalNameByWorktreePathAndRole(worktreePath, role);
+            const wtTerminal = await this._findTerminalNameByWorktreePathAndRole(worktreePath, role, false, allowPtyFleet);
             if (wtTerminal) { return wtTerminal; }
+        }
+        // Per-surface routing: an api-originated dispatch prefers a live PTY of the
+        // requested role, because that is the fleet the calling surface (the browser
+        // cockpit) can actually display. `_getAliveAutobanTerminalRegistry` cannot
+        // supply one — it keeps a row only on a VS Code pid/name match or a heartbeat,
+        // and PTY rows have none of those — so the fleet is consulted directly here.
+        if (allowPtyFleet && this._ptyFleetService) {
+            const normalizedRole = this._normalizeAgentKey(role);
+            const match = this._ptyFleetService.listActive()
+                .find(t => this._normalizeAgentKey(t.role) === normalizedRole);
+            if (match) { return match.friendlyName; }
         }
         return this._getAgentNameForRole(role, workspaceRoot);
     }
 
+    /**
+     * @param allowPtyFleet When false (the default, and every in-process/sidebar caller),
+     * `purpose:'pty'` registry rows are skipped. Those terminals live in the browser
+     * Terminals panel and are invisible in VS Code, so routing a sidebar dispatch to one
+     * delivers the prompt into a window the user is not looking at. See the
+     * `apiOriginated` discriminator on ConfiguredKanbanDispatchOptions.
+     */
     private async _findTerminalNameByWorktreePathAndRole(
         worktreePath: string,
         role: string,
-        strictRole: boolean = false
+        strictRole: boolean = false,
+        allowPtyFleet: boolean = false
     ): Promise<string | undefined> {
         const resolvedTarget = path.resolve(worktreePath);
         const normalizedRole = this._normalizeAgentKey(role);
+        const isEligible = (info: any) => allowPtyFleet || !(info?.purpose === 'pty' || info?.ideName === PTY_IDE_NAME);
         return new Promise<string | undefined>((resolve) => {
             this.updateState(async (state) => {
                 if (state.terminals) {
                     for (const [name, info] of Object.entries(state.terminals) as [string, any][]) {
+                        if (!isEligible(info)) { continue; }
                         if (info.worktreePath && path.resolve(info.worktreePath) === resolvedTarget && this._normalizeAgentKey(info.role) === normalizedRole) {
                             resolve(name);
                             return;
@@ -7834,6 +7900,7 @@ Each plan file must include:
                     // role's terminal exists every other role matches it and is never created.
                     if (!strictRole) {
                         for (const [name, info] of Object.entries(state.terminals) as [string, any][]) {
+                            if (!isEligible(info)) { continue; }
                             if (info.worktreePath && path.resolve(info.worktreePath) === resolvedTarget) {
                                 resolve(name);
                                 return;
@@ -18250,7 +18317,8 @@ What would you like to find?`;
         targetAgent: string,
         payload: string,
         metadata: Record<string, any>,
-        sender: string = 'sidebar'
+        sender: string = 'sidebar',
+        allowPtyFleet: boolean = false
     ): Promise<boolean> {
         // F-04 SECURITY: Validate agent name before using as path segment
         if (!this._isValidAgentName(targetAgent)) {
@@ -18266,7 +18334,7 @@ What would you like to find?`;
             recipient: targetAgent,
             action: 'execute',
             metadata
-        });
+        }, allowPtyFleet);
         if (pushed) return true;
 
         this._seams().ui.showWarningMessage(`Could not deliver prompt to '${targetAgent}'. The terminal is not running in VS Code.`);
@@ -18321,8 +18389,46 @@ What would you like to find?`;
         terminalName: string,
         payload: string,
         messageId: string,
-        meta: { sender: string; recipient: string; action: string; metadata: Record<string, any> }
+        meta: { sender: string; recipient: string; action: string; metadata: Record<string, any> },
+        allowPtyFleet: boolean = false
     ): Promise<boolean> {
+        // Per-surface routing: the PTY fleet is checked FIRST, but only for callers that
+        // opted in via the `apiOriginated` discriminator. Checking it first (rather than
+        // as a not-found fallback) matters — a PTY and a VS Code terminal can normalize
+        // to the same agent key, and for an api-originated dispatch the PTY is the one
+        // the calling surface can display. Sidebar callers never opt in, so they can
+        // never deliver into a terminal VS Code cannot show.
+        if (allowPtyFleet && this._ptyFleetService) {
+            const normalizedTarget = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
+            const ptyHandle = this._ptyFleetService.get(terminalName)
+                || this._ptyFleetService.listActive().find(t =>
+                    this._normalizeAgentKey(this._stripIdeSuffix(t.friendlyName)) === normalizedTarget);
+            if (ptyHandle && ptyHandle.status === 'active') {
+                await this._logEvent('dispatch', {
+                    timestamp: new Date().toISOString(),
+                    dispatchId: messageId,
+                    event: 'received',
+                    sender: meta.sender,
+                    recipient: meta.recipient,
+                    action: meta.action
+                });
+                // Delegate to the shared PTY delivery helper rather than a raw
+                // `pty.write(payload + '\r')`. That helper owns bracketed-paste framing,
+                // 256-byte chunked writes, the per-terminal send lock and the second
+                // confirm CR that interactive CLI agents need. A raw write submits a
+                // multi-line prompt one line at a time — the agent runs fragments.
+                const clearBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
+                const clearDelay = vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 2000);
+                try {
+                    await sendPromptToPty(ptyHandle, payload, { clearBeforePrompt, clearBeforePromptDelayMs: clearDelay });
+                    return true;
+                } catch (err) {
+                    console.error(`[TaskViewerProvider] PTY prompt delivery to '${terminalName}' failed:`, err);
+                    return false;
+                }
+            }
+        }
+
         // Try registered terminals first, then fall back to open VS Code terminals
         let terminal: vscode.Terminal | undefined;
 
@@ -18353,17 +18459,7 @@ What would you like to find?`;
             });
         }
 
-        if (!terminal) {
-            if (this._ptyFleetService) {
-                const ptyHandle = this._ptyFleetService.get(terminalName) ||
-                    this._ptyFleetService.list().find(t => this._normalizeAgentKey(this._stripIdeSuffix(t.friendlyName)) === this._normalizeAgentKey(this._stripIdeSuffix(terminalName)));
-                if (ptyHandle) {
-                    ptyHandle.pty.write(payload + '\r');
-                    return true;
-                }
-            }
-            return false;
-        }
+        if (!terminal) return false;
 
         // Serialize the full /clear + prompt sequence per terminal so two
         // overlapping dispatches to the SAME terminal cannot interleave. Key on
@@ -18561,6 +18657,8 @@ What would you like to find?`;
 
 
 
+        // Per-surface fleet selection (see ConfiguredKanbanDispatchOptions.apiOriginated).
+        const allowPtyFleet = !!options?.apiOriginated;
         let targetAgent: string | undefined;
         let plannerLocationKey: string | undefined;
         if (options?.targetTerminalOverride && this._isValidAgentName(options.targetTerminalOverride)) {
@@ -18576,10 +18674,10 @@ What would you like to find?`;
                 }
             }
             if (!targetAgent) {
-                targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath);
+                targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath, allowPtyFleet);
             }
         } else {
-            targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath);
+            targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath, allowPtyFleet);
         }
 
         if (!targetAgent) {
@@ -18712,7 +18810,7 @@ What would you like to find?`;
 
         // 4. Send Message (Write to Inbox) — dispatch after column is moved
         try {
-            const success = await this._dispatchExecuteMessage(resolvedWorkspaceRoot, targetAgent, messagePayload, messageMetadata);
+            const success = await this._dispatchExecuteMessage(resolvedWorkspaceRoot, targetAgent, messagePayload, messageMetadata, 'sidebar', allowPtyFleet);
 
             if (success) {
                 // Dispatch succeeded — no additional state updates needed (already done above)

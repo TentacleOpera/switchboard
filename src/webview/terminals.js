@@ -2,13 +2,24 @@
     'use strict';
 
     let activeTerminalName = null;
-    const terminalsMap = new Map(); // name -> { handle, container, ws, term, fitAddon, lastSeq, batchQueue, animationFrameId, reconnectTimer, reconnectDelay }
+    let currentLayout = '1'; // '1', '2h', '2v', '2x2'
+    let focusedPaneIndex = 0;
+    let paneAssignments = []; // [terminalName or null, ...] length based on currentLayout
+    const collapsedWorktrees = new Set();
+    let osNotifyEnabled = false;
+
+    const terminalBadges = new Map(); // terminalName -> string label / count
+    const terminalsMap = new Map(); // name -> { handle, container, ws, term, fitAddon, lastSeq, batchQueue, animationFrameId, reconnectTimer, reconnectDelay, resizeObserver, exited }
     let fleetList = [];
 
     const listEl = document.getElementById('terminals-list');
     const mainEl = document.getElementById('terminals-main');
     const emptyStateEl = document.getElementById('empty-state');
     const btnNew = document.getElementById('btn-new-terminal');
+    const paneGridEl = document.getElementById('pane-grid');
+    const toastContainerEl = document.getElementById('toast-container');
+    const fallbackBannerEl = document.getElementById('layout-fallback-banner');
+    const notifyToggleEl = document.getElementById('notify-toggle');
 
     function utf8ToBase64(str) {
         const bytes = new TextEncoder().encode(str);
@@ -27,7 +38,7 @@
 
     function init() {
         if (btnNew) {
-            btnNew.addEventListener('click', onNewTerminalClicked);
+            btnNew.addEventListener('click', () => onNewTerminalClicked());
         }
         const pickerCancel = document.getElementById('role-picker-cancel');
         if (pickerCancel) {
@@ -36,13 +47,34 @@
                 if (picker) { picker.hidden = true; }
             });
         }
-        // Double-click a name to rename, as well as the ✎ affordance.
+
         if (listEl) {
             listEl.addEventListener('dblclick', (e) => {
                 const nameEl = e.target && e.target.closest ? e.target.closest('.item-name') : null;
                 if (nameEl && nameEl.textContent) {
                     beginInlineRename(nameEl, nameEl.textContent);
                 }
+            });
+        }
+
+        const layoutBtns = document.querySelectorAll('.btn-layout');
+        layoutBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const requested = btn.getAttribute('data-layout');
+                if (requested) {
+                    setLayoutMode(requested);
+                    saveLayoutSettings();
+                }
+            });
+        });
+
+        if (notifyToggleEl) {
+            notifyToggleEl.addEventListener('change', () => {
+                osNotifyEnabled = notifyToggleEl.checked;
+                if (osNotifyEnabled && typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
+                    Notification.requestPermission().catch(() => {});
+                }
+                saveSetting('terminals.osNotify', osNotifyEnabled);
             });
         }
 
@@ -53,10 +85,82 @@
                 fetchTerminalList();
             } else if (message.type === 'switchboardThemeChanged') {
                 applyThemeToAllTerminals(message.theme);
+            } else if (message.type === 'agentCompleted') {
+                handleAgentCompleted(message);
             }
         });
 
-        fetchTerminalList();
+        window.addEventListener('resize', debounce(() => {
+            checkLayoutFloorAndFit();
+        }, 150));
+
+        loadLayoutSettings().then(() => {
+            fetchTerminalList();
+        });
+    }
+
+    function getSlotCount(layout) {
+        switch (layout) {
+            case '2h': return 2;
+            case '2v': return 2;
+            case '2x2': return 4;
+            case '1':
+            default: return 1;
+        }
+    }
+
+    async function loadSetting(key, defaultVal) {
+        try {
+            const res = await fetch('/kanban/verb/getSetting', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                if (data && data.value !== undefined) {
+                    return data.value;
+                }
+            }
+        } catch { /* ignore */ }
+        return defaultVal;
+    }
+
+    async function saveSetting(key, value) {
+        try {
+            await fetch('/kanban/verb/saveSetting', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key, value })
+            });
+        } catch { /* ignore */ }
+    }
+
+    async function loadLayoutSettings() {
+        const savedMode = await loadSetting('terminals.layoutMode', '1');
+        const savedPanes = await loadSetting('terminals.paneAssignments', []);
+        const savedCollapsed = await loadSetting('terminals.collapsedWorktrees', []);
+        const savedNotify = await loadSetting('terminals.osNotify', false);
+
+        if (['1', '2h', '2v', '2x2'].includes(savedMode)) {
+            currentLayout = savedMode;
+        }
+        if (Array.isArray(savedPanes)) {
+            paneAssignments = savedPanes;
+        }
+        if (Array.isArray(savedCollapsed)) {
+            savedCollapsed.forEach(c => collapsedWorktrees.add(c));
+        }
+        osNotifyEnabled = Boolean(savedNotify);
+        if (notifyToggleEl) {
+            notifyToggleEl.checked = osNotifyEnabled;
+        }
+    }
+
+    function saveLayoutSettings() {
+        saveSetting('terminals.layoutMode', currentLayout);
+        saveSetting('terminals.paneAssignments', paneAssignments);
+        saveSetting('terminals.collapsedWorktrees', Array.from(collapsedWorktrees));
     }
 
     async function fetchTerminalList() {
@@ -70,7 +174,9 @@
                 const data = await res.json();
                 if (data && Array.isArray(data.terminals)) {
                     fleetList = data.terminals;
+                    sanitizePaneAssignments();
                     renderSidebarList();
+                    renderPaneGrid();
                 }
             }
         } catch (err) {
@@ -78,75 +184,360 @@
         }
     }
 
+    function sanitizePaneAssignments() {
+        const liveNames = new Set(fleetList.map(t => t.friendlyName));
+        const slotCount = getSlotCount(currentLayout);
+
+        paneAssignments = paneAssignments.slice(0, slotCount);
+        while (paneAssignments.length < slotCount) {
+            paneAssignments.push(null);
+        }
+
+        for (let i = 0; i < paneAssignments.length; i++) {
+            if (paneAssignments[i] && !liveNames.has(paneAssignments[i])) {
+                paneAssignments[i] = null;
+            }
+        }
+
+        if (activeTerminalName && !liveNames.has(activeTerminalName)) {
+            activeTerminalName = null;
+        }
+
+        if (!paneAssignments.some(name => name !== null) && fleetList.length > 0) {
+            paneAssignments[0] = fleetList[0].friendlyName;
+            activeTerminalName = fleetList[0].friendlyName;
+        }
+    }
+
     function renderSidebarList() {
         listEl.innerHTML = '';
         if (fleetList.length === 0) {
             emptyStateEl.style.display = 'flex';
-            if (activeTerminalName) {
-                switchActiveTerminal(null);
-            }
+            paneGridEl.style.display = 'none';
             return;
         }
 
+        emptyStateEl.style.display = 'none';
+        paneGridEl.style.display = 'grid';
+
+        const groupsMap = new Map(); // worktreePath -> { basename, fullPath, items: [] }
+
         for (const item of fleetList) {
-            const div = document.createElement('div');
-            div.className = 'terminal-item' + (item.friendlyName === activeTerminalName ? ' active' : '');
-            
-            const info = document.createElement('div');
-            info.className = 'item-info';
-            
-            const nameEl = document.createElement('div');
-            nameEl.className = 'item-name';
-            nameEl.textContent = item.friendlyName;
-            
-            const roleEl = document.createElement('div');
-            roleEl.className = 'item-role';
-            roleEl.textContent = item.role;
-
-            info.appendChild(nameEl);
-            info.appendChild(roleEl);
-
-            const dot = document.createElement('div');
-            dot.className = 'status-dot' + (item.status === 'exited' ? ' exited' : '');
-
-            const actions = document.createElement('div');
-            actions.className = 'item-actions';
-
-            const renameBtn = document.createElement('button');
-            renameBtn.className = 'btn-rename-term';
-            renameBtn.textContent = '✎';
-            renameBtn.title = 'Rename terminal';
-            renameBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                beginInlineRename(nameEl, item.friendlyName);
-            });
-            actions.appendChild(renameBtn);
-
-            const closeBtn = document.createElement('button');
-            closeBtn.className = 'btn-close-term';
-            closeBtn.textContent = '×';
-            closeBtn.title = 'Close terminal';
-            // Immediate — no confirm gate, per project rule.
-            closeBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                closeTerminal(item.friendlyName);
-            });
-            actions.appendChild(closeBtn);
-
-            div.appendChild(info);
-            div.appendChild(dot);
-            div.appendChild(actions);
-
-            div.addEventListener('click', () => {
-                switchActiveTerminal(item.friendlyName);
-            });
-
-            listEl.appendChild(div);
+            const wtPath = item.worktreePath || 'Workspace Root';
+            let group = groupsMap.get(wtPath);
+            if (!group) {
+                let basename = 'Workspace Root';
+                if (item.worktreePath) {
+                    const parts = item.worktreePath.replace(/\\/g, '/').split('/').filter(Boolean);
+                    basename = parts.length > 0 ? parts[parts.length - 1] : item.worktreePath;
+                }
+                group = { basename, fullPath: wtPath, items: [] };
+                groupsMap.set(wtPath, group);
+            }
+            group.items.push(item);
         }
 
-        if (!activeTerminalName && fleetList.length > 0) {
-            switchActiveTerminal(fleetList[0].friendlyName);
+        for (const [wtPath, group] of groupsMap.entries()) {
+            const groupDiv = document.createElement('div');
+            const isCollapsed = collapsedWorktrees.has(wtPath);
+            groupDiv.className = 'worktree-group' + (isCollapsed ? ' collapsed' : '');
+
+            const activeCount = group.items.filter(i => i.status !== 'exited').length;
+            const exitedCount = group.items.length - activeCount;
+
+            const headerEl = document.createElement('div');
+            headerEl.className = 'worktree-group-header';
+            headerEl.title = group.fullPath;
+
+            const titleArea = document.createElement('div');
+            titleArea.className = 'worktree-title-area';
+
+            const icon = document.createElement('span');
+            icon.className = 'worktree-collapse-icon';
+            icon.textContent = '▼';
+
+            const nameEl = document.createElement('span');
+            nameEl.className = 'worktree-name';
+            nameEl.textContent = group.basename;
+
+            const countEl = document.createElement('span');
+            countEl.className = 'worktree-count';
+            countEl.textContent = `${group.items.length} (${activeCount}a/${exitedCount}x)`;
+
+            titleArea.appendChild(icon);
+            titleArea.appendChild(nameEl);
+            titleArea.appendChild(countEl);
+
+            const groupNewBtn = document.createElement('button');
+            groupNewBtn.className = 'btn-group-new';
+            groupNewBtn.textContent = '+';
+            groupNewBtn.title = `Spawn terminal in ${group.basename}`;
+            groupNewBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                onNewTerminalClicked(wtPath === 'Workspace Root' ? undefined : wtPath);
+            });
+
+            headerEl.appendChild(titleArea);
+            headerEl.appendChild(groupNewBtn);
+
+            headerEl.addEventListener('click', () => {
+                if (collapsedWorktrees.has(wtPath)) {
+                    collapsedWorktrees.delete(wtPath);
+                } else {
+                    collapsedWorktrees.add(wtPath);
+                }
+                saveLayoutSettings();
+                renderSidebarList();
+            });
+
+            groupDiv.appendChild(headerEl);
+
+            const itemsContainer = document.createElement('div');
+            itemsContainer.className = 'worktree-items';
+
+            for (const item of group.items) {
+                const itemDiv = document.createElement('div');
+                const isAssigned = paneAssignments.includes(item.friendlyName);
+                const isFocused = activeTerminalName === item.friendlyName;
+                itemDiv.className = 'terminal-item' + (isFocused ? ' active' : '');
+
+                const info = document.createElement('div');
+                info.className = 'item-info';
+
+                const termNameEl = document.createElement('div');
+                termNameEl.className = 'item-name';
+                termNameEl.textContent = item.friendlyName;
+
+                const roleEl = document.createElement('div');
+                roleEl.className = 'item-role';
+                roleEl.textContent = item.role;
+
+                info.appendChild(termNameEl);
+                info.appendChild(roleEl);
+
+                if (terminalBadges.has(item.friendlyName)) {
+                    const badge = document.createElement('span');
+                    badge.className = 'pane-badge';
+                    badge.textContent = terminalBadges.get(item.friendlyName);
+                    info.appendChild(badge);
+                }
+
+                const dot = document.createElement('div');
+                dot.className = 'status-dot' + (item.status === 'exited' ? ' exited' : '');
+
+                const actions = document.createElement('div');
+                actions.className = 'item-actions';
+
+                const renameBtn = document.createElement('button');
+                renameBtn.className = 'btn-rename-term';
+                renameBtn.textContent = '✎';
+                renameBtn.title = 'Rename terminal';
+                renameBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    beginInlineRename(termNameEl, item.friendlyName);
+                });
+                actions.appendChild(renameBtn);
+
+                const closeBtn = document.createElement('button');
+                closeBtn.className = 'btn-close-term';
+                closeBtn.textContent = '×';
+                closeBtn.title = 'Close terminal';
+                closeBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    closeTerminal(item.friendlyName);
+                });
+                actions.appendChild(closeBtn);
+
+                itemDiv.appendChild(info);
+                itemDiv.appendChild(dot);
+                itemDiv.appendChild(actions);
+
+                itemDiv.addEventListener('click', () => {
+                    assignToFocusedPane(item.friendlyName);
+                });
+
+                itemsContainer.appendChild(itemDiv);
+            }
+
+            groupDiv.appendChild(itemsContainer);
+            listEl.appendChild(groupDiv);
         }
+    }
+
+    function setLayoutMode(mode) {
+        if (!['1', '2h', '2v', '2x2'].includes(mode)) return;
+        currentLayout = mode;
+
+        document.querySelectorAll('.btn-layout').forEach(btn => {
+            btn.classList.toggle('active', btn.getAttribute('data-layout') === mode);
+        });
+
+        sanitizePaneAssignments();
+        renderPaneGrid();
+        checkLayoutFloorAndFit();
+    }
+
+    function assignToFocusedPane(terminalName) {
+        if (focusedPaneIndex < 0 || focusedPaneIndex >= getSlotCount(currentLayout)) {
+            focusedPaneIndex = 0;
+        }
+
+        const existingIndex = paneAssignments.indexOf(terminalName);
+        if (existingIndex !== -1 && existingIndex !== focusedPaneIndex) {
+            paneAssignments[existingIndex] = null;
+        }
+
+        paneAssignments[focusedPaneIndex] = terminalName;
+        activeTerminalName = terminalName;
+        if (terminalBadges.has(terminalName)) {
+            terminalBadges.delete(terminalName);
+        }
+
+        saveLayoutSettings();
+        renderSidebarList();
+        renderPaneGrid();
+        batchFitVisiblePanes();
+    }
+
+    function renderPaneGrid() {
+        const slotCount = getSlotCount(currentLayout);
+        paneGridEl.className = `pane-grid layout-${currentLayout}`;
+        paneGridEl.innerHTML = '';
+
+        for (let i = 0; i < slotCount; i++) {
+            const paneEl = document.createElement('div');
+            paneEl.className = 'terminal-pane' + (i === focusedPaneIndex ? ' focused' : '');
+            paneEl.dataset.paneIndex = i;
+
+            paneEl.addEventListener('click', () => {
+                if (focusedPaneIndex !== i) {
+                    focusedPaneIndex = i;
+                    const nameInPane = paneAssignments[i];
+                    if (nameInPane) { activeTerminalName = nameInPane; }
+                    renderPaneGrid();
+                    renderSidebarList();
+                }
+            });
+
+            const headerEl = document.createElement('div');
+            headerEl.className = 'pane-header';
+
+            const titleEl = document.createElement('div');
+            titleEl.className = 'pane-title';
+
+            const assignedName = paneAssignments[i];
+            if (assignedName) {
+                titleEl.textContent = assignedName;
+                if (terminalBadges.has(assignedName)) {
+                    const badgeSpan = document.createElement('span');
+                    badgeSpan.className = 'pane-badge';
+                    badgeSpan.textContent = terminalBadges.get(assignedName);
+                    titleEl.appendChild(badgeSpan);
+                }
+            } else {
+                titleEl.textContent = `Pane ${i + 1} (Empty)`;
+            }
+
+            const actionsEl = document.createElement('div');
+            if (assignedName) {
+                const unassignBtn = document.createElement('button');
+                unassignBtn.className = 'btn-close-term';
+                unassignBtn.textContent = '×';
+                unassignBtn.title = 'Clear pane assignment';
+                unassignBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    paneAssignments[i] = null;
+                    saveLayoutSettings();
+                    renderPaneGrid();
+                    renderSidebarList();
+                });
+                actionsEl.appendChild(unassignBtn);
+            }
+
+            headerEl.appendChild(titleEl);
+            headerEl.appendChild(actionsEl);
+            paneEl.appendChild(headerEl);
+
+            const contentEl = document.createElement('div');
+            contentEl.className = 'pane-content';
+
+            if (assignedName) {
+                let entry = terminalsMap.get(assignedName);
+                if (!entry) {
+                    createTerminalView(assignedName, contentEl);
+                } else {
+                    if (entry.container.parentNode !== contentEl) {
+                        contentEl.appendChild(entry.container);
+                    }
+                    entry.container.classList.add('active');
+                }
+            } else {
+                const emptySlot = document.createElement('div');
+                emptySlot.className = 'pane-empty-slot';
+                emptySlot.textContent = 'Click terminal in sidebar to assign';
+                contentEl.appendChild(emptySlot);
+            }
+
+            paneEl.appendChild(contentEl);
+            paneGridEl.appendChild(paneEl);
+        }
+
+        for (const [name, entry] of terminalsMap.entries()) {
+            if (!paneAssignments.includes(name)) {
+                entry.container.classList.remove('active');
+            }
+        }
+    }
+
+    function checkLayoutFloorAndFit() {
+        const rect = paneGridEl.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return;
+
+        let neededFallback = false;
+        let fallbackMode = currentLayout;
+
+        if (currentLayout === '2x2' && (rect.width < 500 || rect.height < 300)) {
+            fallbackMode = '2h';
+            neededFallback = true;
+        }
+        if ((fallbackMode === '2h' && rect.width < 400) || (fallbackMode === '2v' && rect.height < 250)) {
+            fallbackMode = '1';
+            neededFallback = true;
+        }
+
+        if (neededFallback) {
+            fallbackBannerEl.classList.add('visible');
+            paneGridEl.className = `pane-grid layout-${fallbackMode}`;
+        } else {
+            fallbackBannerEl.classList.remove('visible');
+            paneGridEl.className = `pane-grid layout-${currentLayout}`;
+        }
+
+        batchFitVisiblePanes();
+    }
+
+    function batchFitVisiblePanes() {
+        requestAnimationFrame(() => {
+            const slotCount = getSlotCount(currentLayout);
+            for (let i = 0; i < slotCount; i++) {
+                const name = paneAssignments[i];
+                if (name) {
+                    const entry = terminalsMap.get(name);
+                    if (entry && entry.fitAddon) {
+                        try {
+                            entry.fitAddon.fit();
+                            if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
+                                entry.ws.send(JSON.stringify({
+                                    t: 'resize',
+                                    cols: entry.term.cols,
+                                    rows: entry.term.rows
+                                }));
+                            }
+                        } catch { /* ignore */ }
+                    }
+                }
+            }
+        });
     }
 
     const DEFAULT_ROLES = ['coder', 'planner', 'reviewer', 'lead', 'analyst', 'intern'];
@@ -160,8 +551,6 @@
             });
             if (res.ok) {
                 const data = await res.json();
-                // getSetting returns the raw value under `value`; accept an array of
-                // role strings or an object map of role -> visible.
                 const v = data && data.value;
                 if (Array.isArray(v) && v.length > 0) { return v.filter(r => typeof r === 'string'); }
                 if (v && typeof v === 'object') {
@@ -169,11 +558,11 @@
                     if (on.length > 0) { return on; }
                 }
             }
-        } catch { /* fall through to defaults */ }
+        } catch { /* fall through */ }
         return DEFAULT_ROLES;
     }
 
-    async function onNewTerminalClicked() {
+    async function onNewTerminalClicked(targetWorktreePath) {
         const picker = document.getElementById('role-picker');
         const optionsEl = document.getElementById('role-picker-options');
         if (!picker || !optionsEl) { return; }
@@ -189,25 +578,30 @@
             btn.textContent = role;
             btn.addEventListener('click', () => {
                 picker.hidden = true;
-                createTerminal(role);
+                createTerminal(role, targetWorktreePath);
             });
             optionsEl.appendChild(btn);
         }
         picker.hidden = false;
     }
 
-    async function createTerminal(role) {
+    async function createTerminal(role, worktreePath) {
         try {
+            const payload = { role };
+            if (worktreePath) {
+                payload.cwd = worktreePath;
+                payload.worktreePath = worktreePath;
+            }
             const res = await fetch('/terminals/verb/ptyCreateTerminal', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ role })
+                body: JSON.stringify(payload)
             });
             if (res.ok) {
                 const data = await res.json();
                 if (data.success && data.terminal) {
                     await fetchTerminalList();
-                    switchActiveTerminal(data.terminal.friendlyName);
+                    assignToFocusedPane(data.terminal.friendlyName);
                 } else if (data && data.error) {
                     console.error('[Terminals] Create rejected:', data.error);
                 }
@@ -228,10 +622,16 @@
             });
             const data = res.ok ? await res.json() : null;
             if (data && data.success) {
-                // The socket URL is keyed by name, so the old view must go; the
-                // renamed terminal re-attaches lazily on next selection.
                 destroyTerminalView(name);
+                for (let i = 0; i < paneAssignments.length; i++) {
+                    if (paneAssignments[i] === name) { paneAssignments[i] = next; }
+                }
                 if (activeTerminalName === name) { activeTerminalName = next; }
+                if (terminalBadges.has(name)) {
+                    terminalBadges.set(next, terminalBadges.get(name));
+                    terminalBadges.delete(name);
+                }
+                saveLayoutSettings();
             }
             await fetchTerminalList();
         } catch (err) {
@@ -239,7 +639,6 @@
         }
     }
 
-    /** Swap the name label for an input, commit on Enter/blur, cancel on Escape. */
     function beginInlineRename(nameEl, currentName) {
         const input = document.createElement('input');
         input.className = 'item-name-input';
@@ -272,26 +671,24 @@
                 body: JSON.stringify({ name })
             });
             destroyTerminalView(name);
+            for (let i = 0; i < paneAssignments.length; i++) {
+                if (paneAssignments[i] === name) { paneAssignments[i] = null; }
+            }
             if (activeTerminalName === name) { activeTerminalName = null; }
+            terminalBadges.delete(name);
+            saveLayoutSettings();
             await fetchTerminalList();
         } catch (err) {
             console.error('[Terminals] Failed to close terminal:', err);
         }
     }
 
-    /**
-     * Full teardown for one terminal view. Closing the socket alone left the xterm
-     * instance, its ResizeObserver and its container alive with the map entry still
-     * present — so `terminalsMap.has(name)` stayed true forever, which both leaked a
-     * renderer per closed terminal and let the reconnect guard resurrect a socket
-     * for a terminal that no longer exists.
-     */
     function destroyTerminalView(name) {
         const entry = terminalsMap.get(name);
         if (!entry) { return; }
         if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
         if (entry.animationFrameId) { cancelAnimationFrame(entry.animationFrameId); entry.animationFrameId = null; }
-        entry.exited = true; // stops ws.onclose from scheduling another attempt
+        entry.exited = true;
         if (entry.ws) {
             try { entry.ws.close(); } catch { /* ignore */ }
             entry.ws = null;
@@ -308,35 +705,10 @@
         terminalsMap.delete(name);
     }
 
-    function switchActiveTerminal(name) {
-        activeTerminalName = name;
-        renderSidebarList();
-
-        for (const [tName, entry] of terminalsMap.entries()) {
-            if (tName === name) {
-                entry.container.classList.add('active');
-                if (entry.fitAddon) {
-                    try { entry.fitAddon.fit(); } catch { /* ignore */ }
-                }
-            } else {
-                entry.container.classList.remove('active');
-            }
-        }
-
-        if (name) {
-            emptyStateEl.style.display = 'none';
-            if (!terminalsMap.has(name)) {
-                createTerminalView(name);
-            }
-        } else {
-            emptyStateEl.style.display = 'flex';
-        }
-    }
-
-    function createTerminalView(name) {
+    function createTerminalView(name, targetContainer) {
         const container = document.createElement('div');
         container.className = 'terminal-view-host active';
-        mainEl.appendChild(container);
+        targetContainer.appendChild(container);
 
         if (typeof window.Terminal === 'undefined') {
             console.warn('[Terminals] xterm.js library not loaded');
@@ -424,14 +796,16 @@
 
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
         let wsUrl = `${protocol}//${location.host}/ws/terminal?name=${encodeURIComponent(entry.name)}`;
-        if (window.__SB_TERMINAL_TOKEN__) {
-            wsUrl += `&token=${encodeURIComponent(window.__SB_TERMINAL_TOKEN__)}`;
+        const terminalToken = (document.body && document.body.dataset && document.body.dataset.terminalToken)
+            || window.__SB_TERMINAL_TOKEN__;
+        if (terminalToken) {
+            wsUrl += `&token=${encodeURIComponent(terminalToken)}`;
         }
         const ws = new WebSocket(wsUrl);
         entry.ws = ws;
 
         ws.onopen = () => {
-            entry.reconnectDelay = 500; // reset on success
+            entry.reconnectDelay = 500;
             if (entry.fitAddon) {
                 try {
                     entry.fitAddon.fit();
@@ -449,7 +823,7 @@
                 const frame = JSON.parse(event.data);
                 if (frame.t === 'out' && typeof frame.data === 'string') {
                     if (frame.seq && frame.seq <= entry.lastSeq) {
-                        return; // Dedup
+                        return;
                     }
                     if (frame.seq) {
                         entry.lastSeq = frame.seq;
@@ -458,15 +832,11 @@
                     entry.batchQueue.push(rawData);
                     scheduleBatchFlush(entry);
                 } else if (frame.t === 'error') {
-                    // e.g. 4404 no-such-terminal from the gateway's attach path.
                     entry.exited = true;
                     entry.term.write(`\r\n\x1b[31m[${frame.message || 'Terminal unavailable'}]\x1b[0m\r\n`);
                     entry.term.options.disableStdin = true;
                 } else if (frame.t === 'exit') {
                     const exitCode = typeof frame.code === 'number' ? frame.code : 0;
-                    // Latch it: ws.onclose fires immediately after and must not
-                    // schedule a reconnect. Relying on fleetList's status raced the
-                    // list refresh, so a dead terminal re-attached at least once.
                     entry.exited = true;
                     entry.term.write(`\r\n\x1b[31m[Process Exited with code ${exitCode}]\x1b[0m\r\n`);
                     entry.term.options.disableStdin = true;
@@ -504,6 +874,66 @@
         });
     }
 
+    function handleAgentCompleted(msg) {
+        const { planTitle, role, terminalName } = msg;
+
+        let targetTerm = terminalName;
+        if (!targetTerm && role) {
+            const match = fleetList.find(t => t.role === role);
+            if (match) targetTerm = match.friendlyName;
+        }
+
+        if (targetTerm) {
+            terminalBadges.set(targetTerm, 'DONE');
+            renderSidebarList();
+            renderPaneGrid();
+        }
+
+        showCompletionToast(planTitle || 'Agent Task', role || 'Agent', targetTerm);
+
+        if (osNotifyEnabled && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+            try {
+                new Notification(`Agent Completed: ${role || 'Agent'}`, {
+                    body: planTitle || 'Task completed'
+                });
+            } catch { /* ignore */ }
+        }
+    }
+
+    function showCompletionToast(title, role, termName) {
+        const toast = document.createElement('div');
+        toast.className = 'completion-toast';
+
+        const content = document.createElement('div');
+        content.className = 'toast-content';
+
+        const titleEl = document.createElement('div');
+        titleEl.className = 'toast-title';
+        titleEl.textContent = `Completed: ${role}`;
+
+        const bodyEl = document.createElement('div');
+        bodyEl.className = 'toast-body';
+        bodyEl.textContent = title + (termName ? ` (${termName})` : '');
+
+        content.appendChild(titleEl);
+        content.appendChild(bodyEl);
+
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'toast-close';
+        closeBtn.textContent = '×';
+        closeBtn.addEventListener('click', () => {
+            if (toast.parentNode) toast.parentNode.removeChild(toast);
+        });
+
+        toast.appendChild(content);
+        toast.appendChild(closeBtn);
+        toastContainerEl.appendChild(toast);
+
+        setTimeout(() => {
+            if (toast.parentNode) toast.parentNode.removeChild(toast);
+        }, 8000);
+    }
+
     function applyThemeToAllTerminals(theme) {
         for (const entry of terminalsMap.values()) {
             if (entry.term) {
@@ -517,6 +947,17 @@
                 };
             }
         }
+    }
+
+    function debounce(fn, ms) {
+        let timer = null;
+        return function(...args) {
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(() => {
+                timer = null;
+                fn.apply(this, args);
+            }, ms);
+        };
     }
 
     if (document.readyState === 'loading') {

@@ -240,6 +240,249 @@
             font-size: 13px;
         }
 
+        /* Layout & Pane Grid */
+        .layout-toolbar {
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            z-index: 10;
+        }
+        .layout-picker {
+            display: flex;
+            gap: 4px;
+        }
+        .btn-layout {
+            background: transparent;
+            border: 1px solid var(--border-bright);
+            color: var(--text-secondary);
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 6px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .btn-layout:hover {
+            color: var(--text-primary);
+            border-color: var(--accent-teal);
+        }
+        .btn-layout.active {
+            background: rgba(0, 229, 255, 0.15);
+            border-color: var(--accent-teal);
+            color: var(--accent-teal);
+        }
+        .notify-toggle-label {
+            font-size: 10px;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        /* Worktree Groups */
+        .worktree-group {
+            margin-bottom: 8px;
+        }
+        .worktree-group-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 4px 6px;
+            background: rgba(255, 255, 255, 0.02);
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            cursor: pointer;
+        }
+        .worktree-group-header:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.05);
+        }
+        .worktree-title-area {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            overflow: hidden;
+        }
+        .worktree-collapse-icon {
+            font-size: 10px;
+            transition: transform 0.15s ease;
+        }
+        .worktree-group.collapsed .worktree-collapse-icon {
+            transform: rotate(-90deg);
+        }
+        .worktree-name {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .worktree-count {
+            font-size: 9px;
+            background: var(--border-color);
+            color: var(--text-secondary);
+            padding: 1px 4px;
+            border-radius: 8px;
+        }
+        .btn-group-new {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 11px;
+            cursor: pointer;
+            padding: 0 4px;
+        }
+        .btn-group-new:hover { color: var(--accent-teal); }
+        .worktree-items {
+            padding-left: 6px;
+            margin-top: 4px;
+        }
+        .worktree-group.collapsed .worktree-items {
+            display: none;
+        }
+
+        /* Grid container & Panes */
+        .pane-grid {
+            flex: 1;
+            display: grid;
+            gap: 4px;
+            padding: 4px;
+            position: relative;
+            background: var(--bg-color);
+            width: 100%;
+            height: 100%;
+            box-sizing: border-box;
+        }
+        .pane-grid.layout-1 { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+        .pane-grid.layout-2h { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+        .pane-grid.layout-2v { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+        .pane-grid.layout-2x2 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+
+        .terminal-pane {
+            position: relative;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .terminal-pane.focused {
+            border-color: var(--accent-teal);
+        }
+        .pane-header {
+            height: 22px;
+            background: var(--panel-bg2);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 8px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            user-select: none;
+        }
+        .pane-title {
+            font-weight: 600;
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .pane-badge {
+            background: var(--accent-teal);
+            color: #000;
+            font-size: 9px;
+            font-weight: 700;
+            padding: 1px 5px;
+            border-radius: 3px;
+        }
+        .pane-content {
+            flex: 1;
+            position: relative;
+        }
+        .pane-empty-slot {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-style: italic;
+        }
+
+        /* Toasts */
+        .toast-container {
+            position: absolute;
+            bottom: 12px;
+            right: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            z-index: 100;
+            pointer-events: none;
+        }
+        .completion-toast {
+            pointer-events: auto;
+            background: #14181c;
+            border: 1px solid var(--accent-teal);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            border-radius: 4px;
+            padding: 8px 12px;
+            min-width: 220px;
+            max-width: 320px;
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 8px;
+            animation: toast-in 0.2s ease-out;
+        }
+        @keyframes toast-in {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .toast-content {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .toast-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--accent-teal);
+        }
+        .toast-body {
+            font-size: 11px;
+            color: var(--text-primary);
+        }
+        .toast-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 12px;
+            padding: 0;
+        }
+        .toast-close:hover { color: var(--text-primary); }
+
+        .layout-fallback-banner {
+            background: rgba(248, 81, 73, 0.15);
+            color: #f85149;
+            border-bottom: 1px solid #f85149;
+            padding: 4px 12px;
+            font-size: 11px;
+            display: none;
+        }
+        .layout-fallback-banner.visible { display: block; }
+
         /* Browser-only gap: without this a plain browser stops painting dark
            scrollbars and form controls on a black surface. Unscoped on purpose —
            this panel has no light presentation. */
@@ -296,9 +539,25 @@
         <div id="terminals-list" class="terminals-list"></div>
     </div>
     <div id="terminals-main" class="terminals-main">
+        <div class="layout-toolbar">
+            <div class="layout-picker">
+                <button type="button" class="btn-layout active" data-layout="1">1</button>
+                <button type="button" class="btn-layout" data-layout="2h">2h</button>
+                <button type="button" class="btn-layout" data-layout="2v">2v</button>
+                <button type="button" class="btn-layout" data-layout="2x2">2x2</button>
+            </div>
+            <label class="notify-toggle-label">
+                <input type="checkbox" id="notify-toggle"> OS Notifications
+            </label>
+        </div>
+        <div id="layout-fallback-banner" class="layout-fallback-banner">
+            Window too small for requested layout — using simpler layout floor.
+        </div>
+        <div id="pane-grid" class="pane-grid layout-1"></div>
         <div id="empty-state" class="empty-state">
             No terminal selected. Click "+ New" to spawn a terminal.
         </div>
+        <div id="toast-container" class="toast-container"></div>
     </div>
 
     <!-- SHARED_DEFAULTS_SCRIPT -->

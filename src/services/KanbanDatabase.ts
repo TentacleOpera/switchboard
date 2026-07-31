@@ -147,6 +147,7 @@ CREATE TABLE IF NOT EXISTS plans (
     routed_to         TEXT DEFAULT '',
     dispatched_agent  TEXT DEFAULT '',
     dispatched_ide    TEXT DEFAULT '',
+    dispatched_terminal TEXT DEFAULT '',
     dispatched_at     TEXT DEFAULT NULL,
     clickup_task_id   TEXT DEFAULT '',
     linear_issue_id   TEXT DEFAULT '',
@@ -261,6 +262,10 @@ const MIGRATION_V7_SQL = [
     `ALTER TABLE plans ADD COLUMN routed_to TEXT DEFAULT ''`,
     `ALTER TABLE plans ADD COLUMN dispatched_agent TEXT DEFAULT ''`,
     `ALTER TABLE plans ADD COLUMN dispatched_ide TEXT DEFAULT ''`,
+];
+
+const MIGRATION_V40_SQL = [
+    `ALTER TABLE plans ADD COLUMN dispatched_terminal TEXT DEFAULT ''`,
 ];
 
 const MIGRATION_V9_SQL = [
@@ -9184,6 +9189,7 @@ FROM plans
         routedTo: string;
         dispatchedAgent: string;
         dispatchedIde: string;
+        dispatchedTerminal?: string;
     }): Promise<boolean> {
         const normalized = this._ensureRelativePlanFile(planFile);
         // dispatched_at = now marks the card as "agent working" (the activity-light source).
@@ -9191,9 +9197,10 @@ FROM plans
         // (marker parse) or clearStaleWorkingState (timeout sweep) — both NULL it.
         // NOTE: For feature cards, the working flag is derived from subtasks' dispatched_at
         // values, but we still write/clear the feature row's own dispatched_at for dispatch-identity.
+        const terminalName = info.dispatchedTerminal || '';
         return this._persistedUpdate(
-            'UPDATE plans SET routed_to = ?, dispatched_agent = ?, dispatched_ide = ?, dispatched_at = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
-            [info.routedTo, info.dispatchedAgent, info.dispatchedIde, new Date().toISOString(), new Date().toISOString(), normalized, workspaceId]
+            'UPDATE plans SET routed_to = ?, dispatched_agent = ?, dispatched_ide = ?, dispatched_terminal = ?, dispatched_at = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [info.routedTo, info.dispatchedAgent, info.dispatchedIde, terminalName, new Date().toISOString(), new Date().toISOString(), normalized, workspaceId]
         );
     }
 

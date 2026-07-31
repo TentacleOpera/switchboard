@@ -8023,7 +8023,12 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                             additionalInstructions: dispatchSpec.triggerPrompt,
                             instruction,
                             workspaceRoot: workspaceRoot || undefined,
-                            targetTerminalOverride
+                            targetTerminalOverride,
+                            // Per-surface fleet selection: an HTTP-originated dispatch (browser
+                            // cockpit / CLI / orchestrator) may land in a PTY, which those callers
+                            // can display; an in-process sidebar drag may not. See
+                            // ConfiguredKanbanDispatchOptions.apiOriginated.
+                            apiOriginated: !!msg?.apiOriginated
                         });
                         if (dispatched && plannerCursorLocationKey && tvp) {
                             await tvp.advancePlannerRotationCursor(plannerCursorLocationKey, 1);
@@ -8106,7 +8111,9 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                                 plannerCursorLocationKey = locationKey;
                             }
                         }
-                        const dispatched = await this._seams().commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot, targetTerminalOverride);
+                        // Trailing arg is the per-surface fleet discriminator — see the
+                        // custom-user branch above and ConfiguredKanbanDispatchOptions.
+                        const dispatched = await this._seams().commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot, targetTerminalOverride, !!msg?.apiOriginated);
                         if (dispatched && workspaceRoot) {
                             // Advance the rotation cursor AFTER successful dispatch so a failed dispatch
                             // doesn't skip a terminal (consistent with _distributePlannerDispatch).

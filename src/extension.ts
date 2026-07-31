@@ -1466,8 +1466,12 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(mappingsChangedDisposable);
 
     // Helper commands for Kanban ↔ sidebar delegation
-    const triggerFromKanbanDisposable = registerSwitchboardCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string) => {
-        return await taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction, workspaceRoot, { targetTerminalOverride, persistColumnOnError: true } as any);
+    // `apiOriginated` is the per-surface fleet discriminator (see
+    // ConfiguredKanbanDispatchOptions). It is appended LAST and is optional so every
+    // existing positional caller — and the pair-programming tests — keep working
+    // unchanged and default to VS Code terminals.
+    const triggerFromKanbanDisposable = registerSwitchboardCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string, apiOriginated?: boolean) => {
+        return await taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction, workspaceRoot, { targetTerminalOverride, persistColumnOnError: true, apiOriginated: !!apiOriginated } as any);
     });
     context.subscriptions.push(triggerFromKanbanDisposable);
 

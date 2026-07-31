@@ -3,17 +3,46 @@
 .vscode-test/**
 out/**
 node_modules/**
-!node_modules/node-pty/**
+# node-pty is a native module: it cannot be webpack-bundled, so it must ship in
+# node_modules and load its prebuild at runtime (lib/utils.js resolves
+# `prebuilds/<platform>-<arch>/`).
+#
+# READ BEFORE EDITING — a blanket `!node_modules/node-pty/**` is WRONG.
+# vsce's filter is `!ignore.some(...) || negate.some(...)`: a negation wins
+# UNCONDITIONALLY over every ignore pattern, regardless of line order. So a
+# blanket negation silently re-includes the 28 MB of `.pdb` debug symbols that
+# the `**/*.pdb` rule below is trying to drop, and drags in the build-from-source
+# trees (src/, deps/, third_party/ ≈ 3.8 MB) that the runtime never touches.
+# That is the difference between a ~3 MB and a ~30 MB Windows VSIX, and the
+# Marketplace's per-VSIX upload cap sits in the 25–50 MB window.
+#
+# The negations are therefore enumerated by what the runtime actually loads.
+# `scripts/package-targets.sh` additionally stages only the CURRENT target's
+# prebuild directory, so a single VSIX never carries all four platforms.
+!node_modules/node-pty/package.json
+# Scoped to *.js so this negation cannot re-include lib/**/*.map past `**/*.map`.
+!node_modules/node-pty/lib/**/*.js
+!node_modules/node-pty/prebuilds/**/*.node
+!node_modules/node-pty/prebuilds/**/*.dll
+!node_modules/node-pty/prebuilds/**/*.exe
+!node_modules/node-pty/prebuilds/*/spawn-helper
 **/*.pdb
 
 # Source files
 src/**
-!dist/**
+# NOTE: there is deliberately no `!dist/**` here. Nothing above ignores dist/, so the
+# negation was a no-op for inclusion — but negations override ignores UNCONDITIONALLY,
+# so it silently re-included every dist/**/*.map (20 MB for extension.js.map alone)
+# past the `**/*.map` rule below. Same trap as the node-pty one; see the header comment.
 dist/templates/**
 **/dist/templates/**
 
 # Build files
-*.map
+# `**/*.map` not `*.map` — the bare form only matches the repo root, so every
+# dist/**/*.map shipped: 20 MB for extension.js.map alone, ~29 MB in total, which
+# on its own pushed the VSIX past the Marketplace upload cap. The bundle is built
+# with --devtool hidden-source-map, so nothing references these at runtime.
+**/*.map
 **/.vscode-test.*
 webpack.config.js
 **/tsconfig.json
@@ -49,6 +78,14 @@ switchboard/**
 **/.env.*
 
 # Dev utilities (not extension runtime)
+# design_system/ is 23 MB of source design assets (including the vestigial Geist
+# font family) with ZERO runtime references. The fonts the panels actually load live
+# under designs/ and are served via /static/designs/ — that directory stays.
+design_system/**
+# Staging directory used by scripts/package-targets.sh. Belt-and-braces: the script
+# keeps it under node_modules/ so it cannot be packaged, but a stale root-level one
+# from an older run must never end up in a VSIX either.
+.vsce-prebuild-stash/**
 docs/**
 old skills/**
 old\ skills/**

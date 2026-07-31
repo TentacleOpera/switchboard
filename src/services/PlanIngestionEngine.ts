@@ -139,6 +139,12 @@ export class PlanIngestionEngine {
 
     private _regenerateFeatureFile?: (workspaceRoot: string, featureId: string) => Promise<void>;
 
+    private _onWorkingStateCleared?: (record: KanbanPlanRecord, workspaceRoot: string) => void;
+
+    public setOnWorkingStateCleared(cb: (record: KanbanPlanRecord, workspaceRoot: string) => void): void {
+        this._onWorkingStateCleared = cb;
+    }
+
     public setFeatureFileRegenerator(cb: (workspaceRoot: string, featureId: string) => Promise<void>): void {
         this._regenerateFeatureFile = cb;
     }
@@ -845,10 +851,16 @@ export class PlanIngestionEngine {
                 if (updatedRecord.dispatchedAt) {
                     try {
                         await db.clearWorkingState(relativePath, workspaceId);
+                        const clearedRecord = { ...updatedRecord };
                         updatedRecord.dispatchedAt = null;
                         this._host.logger.appendLine(
                             `[GlobalPlanWatcher] Plan file edit cleared working state for: ${relativePath}`
                         );
+                        if (this._onWorkingStateCleared) {
+                            try { this._onWorkingStateCleared(clearedRecord, workspaceRoot); } catch (cbErr) {
+                                this._host.logger.appendLine(`[GlobalPlanWatcher] onWorkingStateCleared callback failed: ${cbErr}`);
+                            }
+                        }
                     } catch (clearErr) {
                         this._host.logger.appendLine(
                             `[GlobalPlanWatcher] clearWorkingState failed for ${relativePath}: ${clearErr}`

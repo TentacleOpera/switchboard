@@ -811,7 +811,12 @@
     "verb-returns:check": "node scripts/check-verb-return-contract.js",
     "verb-returns:baseline": "node scripts/check-verb-return-contract.js --write",
     "mirror:check": "node scripts/check-claude-mirror.js",
-    "release": "bash scripts/publish-release.sh"
+    "release": "bash scripts/publish-release.sh",
+    "package:targets": "bash scripts/package-targets.sh",
+    "publish:marketplace": "bash scripts/publish-marketplace.sh",
+    "test:contract:vsix-packaging": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/vsix-packaging-contract.test.js",
+    "test:contract:pty-route-surface": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-route-surface-contract.test.js",
+    "test:contract:terminal-token-transport": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-token-transport-contract.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",
@@ -859,13 +864,5 @@
     "@mermaid-js/mermaid-cli": {
       "optional": true
     }
-  },
-  "files": [
-    "dist",
-    "src/webview",
-    "icons",
-    "designs",
-    "icon.png",
-    "README.md"
-  ]
+  }
 }

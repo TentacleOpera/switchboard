@@ -52,6 +52,25 @@ jobs:
       - name: PTY host gating contract (single load site, probe exported, no bundled binary)
         run: npm run test:contract:pty-host-gating
 
+      # The PTY verb surface must exist ONLY on /terminals/verb/. That is what stops
+      # the VS Code sidebar board (which posts to /kanban/verb/) from spawning a
+      # terminal it has no way to display — a routing guarantee, not a convention.
+      - name: PTY route surface contract (/terminals/verb only, nothing in the generated surface)
+        run: npm run test:contract:pty-route-surface
+
+      # /ws/terminal is an RCE-grade channel. This pins the gateway's empty-token
+      # rejection, the untouched HTTP loopback-trust path the skill ecosystem rides
+      # on, and the CSP-legal token transport (a nonce-less inline <script> is
+      # blocked, which silently produces terminals that render but never stream).
+      - name: Terminal token transport contract (gateway auth + CSP-legal injection)
+        run: npm run test:contract:terminal-token-transport
+
+      # .vscodeignore negations override ignores UNCONDITIONALLY, so a blanket
+      # un-ignore of node-pty silently re-includes 28 MB of .pdb debug symbols past
+      # the Marketplace upload cap. This runs vsce's real filter over the real tree.
+      - name: VSIX packaging contract (no debug symbols, runtime files present, publish mechanics)
+        run: npm run test:contract:vsix-packaging
+
       - name: Design asset route security contract
         run: npm run test:contract:design-asset
 
