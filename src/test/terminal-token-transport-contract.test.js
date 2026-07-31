@@ -198,6 +198,74 @@ function get(port, pathname, headers) {
         );
     });
 
+    // --- the token must land on the REAL body tag --------------------------
+    // The two source-grep checks above both passed while the shipped panel was dead:
+    // terminals.html grew a CSS comment mentioning the body tag in prose, and the
+    // first-match `.replace('<body', ...)` stamped the token into that comment. The
+    // real body tag rendered bare, terminals.js read no token, every /ws/terminal
+    // upgrade 401'd, and the browser fleet showed terminals that accepted no input.
+    // Grepping source cannot see that — these checks render and inspect the output.
+    const { getPanelHtmlById, injectBodyAttributes } = require(path.join(REPO_ROOT, 'out', 'services', 'headlessPanelHtml.js'));
+
+    /** The body tag as a browser would parse it: the first one after </head>. */
+    function realBodyTag(html) {
+        const headEnd = html.search(/<\/head\s*>/i);
+        assert.ok(headEnd > -1, 'panel HTML must have a </head>');
+        const match = /<body\b[^>]*>/i.exec(html.slice(headEnd));
+        assert.ok(match, 'panel HTML must have a <body> tag after </head>');
+        return match[0];
+    }
+
+    await test('injectBodyAttributes ignores a <body> written in prose before </head>', () => {
+        const html = '<html><head><style>/* the class lands on <body> somehow */</style></head>\n<body>\n</body></html>';
+        const out = injectBodyAttributes(html, 'data-terminal-token="deadbeef"');
+        assert.ok(
+            /data-terminal-token="deadbeef"/.test(realBodyTag(out)),
+            'attributes must land on the real body tag, not the first textual "<body" occurrence.'
+        );
+        assert.ok(
+            !/data-terminal-token/.test(out.slice(0, out.search(/<\/head\s*>/i))),
+            'nothing may be injected into <head> — a comment or inline CSS mentioning the tag is not the tag.'
+        );
+    });
+
+    await test('injectBodyAttributes preserves attributes already on the tag', () => {
+        const out = injectBodyAttributes('<html><head></head><body class="cyber-theme-enabled"></body></html>', 'data-panel="terminals"');
+        const tag = realBodyTag(out);
+        assert.ok(/data-panel="terminals"/.test(tag) && /class="cyber-theme-enabled"/.test(tag),
+            'injection must add attributes without dropping existing ones');
+    });
+
+    await test('every rendered panel carries its host attributes on the real body tag', () => {
+        for (const id of ['board', 'project', 'memo', 'planning', 'design', 'setup', 'terminals']) {
+            const result = getPanelHtmlById(id, REPO_ROOT, REPO_ROOT, {}, 'cyber-theme-enabled');
+            assert.ok(result && result.html, `${id} panel must render`);
+            const tag = realBodyTag(result.html);
+            assert.ok(/data-panel="/.test(tag), `${id}: data-panel must be on the real body tag, not stamped into <head>`);
+            assert.ok(/data-host-capabilities="/.test(tag), `${id}: data-host-capabilities must be on the real body tag`);
+            assert.ok(/class="cyber-theme-enabled"/.test(tag), `${id}: the theme class must be on the real body tag`);
+        }
+    });
+
+    await test('the rendered terminals panel carries data-terminal-token on the real body tag', () => {
+        // End-to-end over the exact composition the host uses: getPanelHtmlById first
+        // (workspace root / panel id / capabilities / theme), then the token appended to
+        // the already-rendered HTML.
+        const result = getPanelHtmlById('terminals', REPO_ROOT, REPO_ROOT, {}, 'cyber-theme-enabled');
+        const html = injectBodyAttributes(result.html, `data-terminal-token="${'a'.repeat(64)}"`);
+        const tag = realBodyTag(html);
+        assert.ok(
+            /data-terminal-token="a{64}"/.test(tag),
+            'the terminals panel must render the token on its real body tag — terminals.js reads '
+            + 'document.body.dataset.terminalToken, and without it every /ws/terminal upgrade 401s: '
+            + 'terminals that render but accept no input.'
+        );
+        assert.ok(
+            !/data-terminal-token/.test(html.slice(0, html.search(/<\/head\s*>/i))),
+            'the token must not be injected into <head> (a CSS comment mentioning the body tag is not the tag).'
+        );
+    });
+
     if (failures > 0) {
         console.error(`\n${failures} contract check(s) failed.\n`);
         process.exit(1);

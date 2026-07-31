@@ -32,8 +32,9 @@
             --accent-teal-dim: color-mix(in srgb, var(--accent-teal) 40%, transparent);
             --accent-green: #4ec9b0;
             --accent-red: #f85149;
-            --font-family: 'Hanken Grotesk', var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
-            --font-mono: var(--vscode-editor-font-family, 'SF Mono', Monaco, 'Cascadia Code', 'Consolas', monospace);
+            --font-family: 'Hanken Grotesk', Menlo, Consolas, sans-serif;
+            --font-mono:   Menlo, Consolas, monospace;
+            --font-code:   Menlo, Consolas, monospace;
         }
 
         /* Afterburner IS the :root palette (matches kanban/project/setup) — this
@@ -71,7 +72,6 @@
         #memo-status { font-size: 11px; color: var(--text-secondary); min-height: 14px; display: block; margin-top: 8px; }
 
         .section-label {
-            font-family: var(--font-mono);
             font-size: 10px;
             text-transform: uppercase;
             letter-spacing: 2px;
@@ -84,7 +84,7 @@
            to the panel header the way project.html/kanban.html do, so the panel
            is not shipping a font that no selector can match. */
         .memo-header .section-label {
-            font-family: 'GeistPixel', var(--font-mono);
+            font-family: 'GeistPixel', var(--font-code);
             font-size: 11px;
             letter-spacing: 1.5px;
         }
@@ -95,7 +95,6 @@
             color: var(--text-secondary);
             padding: 8px;
             font-size: 10px;
-            font-family: var(--font-mono);
             text-transform: uppercase;
             letter-spacing: 1.2px;
             cursor: pointer;
@@ -132,7 +131,6 @@
             color: var(--text-primary);
             border: 1px solid var(--border-color);
             padding: 8px;
-            font-family: var(--font-mono);
             font-size: 12px;
         }
         .modal-textarea:hover,

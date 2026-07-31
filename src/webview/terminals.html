@@ -30,8 +30,57 @@
             --text-secondary: #8C8C8C;
             --accent-primary: #00e5ff;
             --accent-teal: var(--accent-primary);
-            --font-family: 'Hanken Grotesk', var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
-            --font-mono: var(--vscode-editor-font-family, 'SF Mono', Monaco, 'Cascadia Code', 'Consolas', monospace);
+            --font-family: 'Hanken Grotesk', Menlo, Consolas, sans-serif;
+            --font-mono:   Menlo, Consolas, monospace;
+            --font-code:   Menlo, Consolas, monospace;
+
+            /* Terminal surface tokens — the ONLY place these colours are written.
+               terminals.js reads them via getComputedStyle to build xterm's theme,
+               so the panel chrome and the terminal can never drift apart. */
+            --term-surface:   #171717;                    /* matches the docs reading surface */
+            --term-grid:      rgba(0, 229, 255, 0.03);    /* afterburner: cyan grid */
+            --term-grid-size: 32px;
+            --term-selection: rgba(0, 229, 255, 0.3);
+        }
+
+        /* ── Themes ────────────────────────────────────────────────────────────
+           `theme-claudify` / `cyber-theme-enabled` arrive on the body element two
+           ways (do not write the tag literally here — see rewriteBodyTag):
+           injected server-side by applyThemeClass() (headlessPanelHtml.ts) on first
+           paint, and swapped live by applyThemeToAllTerminals() when the host sends
+           switchboardThemeChanged. Both surfaces use the same #171717 base as the
+           planning/design docs panels; only the grid tint and accent differ. */
+        body.theme-claudify {
+            /* --accent-teal derives from --accent-primary ON :root, so it resolves to
+               cyan there and would inherit cyan even after --accent-primary changes.
+               The whole family has to be redeclared here, not just the source. */
+            --accent-primary: #D97757;
+            --accent-teal:    #D97757;
+            --term-grid:      rgba(255, 255, 255, 0.03);  /* claudify: neutral grey grid */
+            --term-selection: rgba(217, 119, 87, 0.3);
+        }
+        body.cyber-theme-enabled,
+        body.theme-claudify {
+            background-color: var(--term-surface);
+            background-image:
+                linear-gradient(var(--term-grid) 1px, transparent 1px),
+                linear-gradient(90deg, var(--term-grid) 1px, transparent 1px);
+            background-size: var(--term-grid-size) var(--term-grid-size),
+                             var(--term-grid-size) var(--term-grid-size);
+        }
+        /* Let the body grid read through the chrome. The terminal rectangle itself
+           stays opaque — xterm's WebGL renderer paints theme.background as a flat
+           fill and cannot reproduce a gradient grid, and making it transparent would
+           force allowTransparency and give up the fast opaque render path. */
+        body.cyber-theme-enabled .terminals-main,
+        body.theme-claudify .terminals-main {
+            background: transparent;
+        }
+        body.cyber-theme-enabled .terminals-sidebar,
+        body.theme-claudify .terminals-sidebar {
+            background: rgba(10, 10, 10, 0.55);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
         }
         body {
             margin: 0;
@@ -163,7 +212,10 @@
             background: rgba(255, 255, 255, 0.04);
         }
         .terminal-item.active {
-            background: rgba(0, 229, 255, 0.08);
+            /* Derived from the accent, not a literal cyan — this sat under a
+               var()-driven border, so claudify rendered a terracotta border around
+               a cyan fill. */
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
             border-color: var(--accent-teal);
         }
         .item-info {
@@ -270,7 +322,7 @@
             border-color: var(--accent-teal);
         }
         .btn-layout.active {
-            background: rgba(0, 229, 255, 0.15);
+            background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
             border-color: var(--accent-teal);
             color: var(--accent-teal);
         }
@@ -563,6 +615,8 @@
     <!-- SHARED_DEFAULTS_SCRIPT -->
     <script nonce="{{NONCE}}" src="{{XTERM_JS_URI}}"></script>
     <script nonce="{{NONCE}}" src="{{XTERM_ADDON_FIT_URI}}"></script>
+    <script nonce="{{NONCE}}" src="{{XTERM_ADDON_WEBGL_URI}}"></script>
+    <script nonce="{{NONCE}}" src="{{XTERM_ADDON_CANVAS_URI}}"></script>
     <script nonce="{{NONCE}}" src="{{TERMINALS_JS_URI}}"></script>
 </body>
 </html>

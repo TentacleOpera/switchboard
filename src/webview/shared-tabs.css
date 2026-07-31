@@ -16,7 +16,6 @@
   border: 1px solid transparent;
   border-bottom: none;
   color: var(--text-secondary);
-  font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 1px;
   text-transform: uppercase;

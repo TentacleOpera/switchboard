@@ -79,9 +79,48 @@ function injectTransportShim(content: string, nonce: string, marker: string, fir
     return content.replace(firstScript, `${shim}\n${firstScript}`);
 }
 
+/**
+ * Rewrite a panel's real `<body>` tag.
+ *
+ * Anchored AFTER `</head>` for a load-bearing reason: a naive first-match
+ * `content.replace(/<body/, ...)` matches the first *textual* occurrence, which is
+ * not necessarily the tag. terminals.html grew a CSS comment mentioning `<body>` in
+ * prose, and all three injections (workspace root / panel id / host capabilities,
+ * the theme class, and TaskViewerProvider's data-terminal-token) stacked onto the
+ * comment instead. The real `<body>` shipped bare, so terminals.js read no token,
+ * every /ws/terminal upgrade 401'd against rejectWhenTokenEmpty, and the browser
+ * fleet rendered terminals that accepted no input.
+ *
+ * `<body` cannot legally appear before `</head>`, so the first match past that
+ * boundary is the tag itself — prose, inline CSS, and inline JS in <head> are all
+ * excluded by construction. Every panel HTML has `</head>`; if one somehow does not,
+ * fall back to scanning from the start rather than silently skipping the injection.
+ */
+function rewriteBodyTag(content: string, rewrite: (attrs: string) => string): string {
+    const headEnd = content.search(/<\/head\s*>/i);
+    const from = headEnd === -1 ? 0 : headEnd;
+    const match = /<body\b([^>]*)>/i.exec(content.slice(from));
+    if (!match) {
+        console.error('[headlessPanelHtml] no <body> tag found — body attributes NOT injected.');
+        return content;
+    }
+    const start = from + match.index;
+    return content.slice(0, start) + rewrite(match[1]) + content.slice(start + match[0].length);
+}
+
+/**
+ * Add attributes to a panel's real `<body>` tag, preserving the ones already there.
+ * Exported because TaskViewerProvider appends the terminal session token to the
+ * already-rendered HTML and must use the same anchor — see rewriteBodyTag.
+ */
+export function injectBodyAttributes(content: string, attrs: string): string {
+    if (!attrs) return content;
+    return rewriteBodyTag(content, existing => `<body ${attrs}${existing}>`);
+}
+
 function applyThemeClass(content: string, themeClass?: string): string {
     if (!themeClass) return content;
-    return content.replace(/<body\b([^>]*)>/i, (_match, attrs: string) => {
+    return rewriteBodyTag(content, attrs => {
         const withoutClass = attrs.replace(/\s*class="[^"]*"/i, '');
         return `<body${withoutClass} class="${htmlEscapeJson(themeClass)}">`;
     });
@@ -135,7 +174,7 @@ export function getBoardHtml(repoRoot: string, workspaceRoot: string, capabiliti
     content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', `<script nonce="${nonce}">`, true);
     const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
     const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="kanban" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
-    content = content.replace(/<body/, `<body ${bodyAttr}`);
+    content = injectBodyAttributes(content, bodyAttr);
     content = applyThemeClass(content, themeClass);
 
     // Icon replacements (kanban.html uses {{ICON_*}} placeholders).
@@ -206,7 +245,7 @@ export function getProjectHtml(repoRoot: string, workspaceRoot: string, capabili
     content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', firstScript);
     const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
     const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="project" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
-    content = content.replace(/<body/, `<body ${bodyAttr}`);
+    content = injectBodyAttributes(content, bodyAttr);
     content = applyThemeClass(content, themeClass);
     return { html: content, csp };
 }
@@ -244,7 +283,7 @@ export function getPlanningHtml(repoRoot: string, workspaceRoot: string, capabil
     content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', firstScript);
     const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
     const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="planning" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
-    content = content.replace(/<body/, `<body ${bodyAttr}`);
+    content = injectBodyAttributes(content, bodyAttr);
     content = applyThemeClass(content, themeClass);
     return { html: content, csp };
 }
@@ -282,7 +321,7 @@ export function getDesignHtml(repoRoot: string, workspaceRoot: string, capabilit
     content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', firstScript);
     const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
     const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="design" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
-    content = content.replace(/<body/, `<body ${bodyAttr}`);
+    content = injectBodyAttributes(content, bodyAttr);
     content = applyThemeClass(content, themeClass);
     return { html: content, csp };
 }
@@ -307,7 +346,7 @@ export function getSetupHtml(repoRoot: string, workspaceRoot: string, capabiliti
     content = content.replace(/\{\{GEIST_PIXEL_FONT_URI\}\}/g, '/static/designs/GeistPixel-Square.woff2');
     const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
     const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="setup" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
-    content = content.replace(/<body/, `<body ${bodyAttr}`);
+    content = injectBodyAttributes(content, bodyAttr);
     content = applyThemeClass(content, themeClass);
     return { html: content, csp };
 }
@@ -331,7 +370,7 @@ export function getMemoHtml(repoRoot: string, workspaceRoot: string, capabilitie
     content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', `<script nonce="${nonce}" src="/static/webview/memo.js"></script>`);
     const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
     const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="memo" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
-    content = content.replace(/<body/, `<body ${bodyAttr}`);
+    content = injectBodyAttributes(content, bodyAttr);
     content = applyThemeClass(content, themeClass);
     return { html: content, csp };
 }
@@ -353,12 +392,14 @@ export function getTerminalsHtml(repoRoot: string, workspaceRoot: string, capabi
     content = content.replace(/\{\{XTERM_JS_URI\}\}/g, '/static/webview/vendor/xterm/xterm.js');
     content = content.replace(/\{\{XTERM_CSS_URI\}\}/g, '/static/webview/vendor/xterm/xterm.css');
     content = content.replace(/\{\{XTERM_ADDON_FIT_URI\}\}/g, '/static/webview/vendor/xterm/addon-fit.js');
+    content = content.replace(/\{\{XTERM_ADDON_WEBGL_URI\}\}/g, '/static/webview/vendor/xterm/addon-webgl.js');
+    content = content.replace(/\{\{XTERM_ADDON_CANVAS_URI\}\}/g, '/static/webview/vendor/xterm/addon-canvas.js');
     content = content.replace(/\{\{HANKEN_FONT_URI\}\}/g, '/static/designs/HankenGrotesk-Variable.woff2');
     content = content.replace(/\{\{GEIST_PIXEL_FONT_URI\}\}/g, '/static/designs/GeistPixel-Square.woff2');
     content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', `<script nonce="${nonce}" src="/static/webview/terminals.js"></script>`);
     const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
     const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="terminals" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
-    content = content.replace(/<body/, `<body ${bodyAttr}`);
+    content = injectBodyAttributes(content, bodyAttr);
     content = applyThemeClass(content, themeClass);
     return { html: content, csp };
 }

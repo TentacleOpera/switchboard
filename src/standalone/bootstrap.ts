@@ -370,14 +370,44 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     ingestionEngine.onPlanDiscovered((_root, _filePath) => {
         try { void pushFullState(); } catch (e) { console.error('[bootstrap] ingestion-driven pushFullState failed:', e); }
     });
+    // Completion push. Fires ONLY from the plan-file-edit clear site in
+    // PlanIngestionEngine — never from the stale-state timeout sweep, because a timeout
+    // is an abandonment, not a completion. Fire-and-forget by contract: a panel that was
+    // closed when the agent finished simply misses it (same ephemeral semantics as the
+    // board's activity light), so failures here are logged and swallowed.
     ingestionEngine.setOnWorkingStateCleared((record) => {
-        if (!server) return;
-        server.broadcastWs('agentCompleted', {
-            planFile: record.planFile,
-            planTitle: record.topic,
-            role: record.dispatchedAgent,
-            terminalName: record.dispatchedTerminal || undefined,
-        });
+        void (async () => {
+            if (!server) { return; }
+            let terminalName = (record.dispatchedTerminal || '').trim();
+            let worktreePath: string | undefined;
+            try {
+                const activeWorktrees = await db.getWorktrees();
+                worktreePath = matchWorktreePath(activeWorktrees, record);
+            } catch { /* worktree lookup is best-effort — the toast still names plan+role */ }
+            // Fallback for rows dispatched before the dispatched_terminal column existed
+            // (and for extension-host dispatches, which don't record it). Mirrors the
+            // dispatch selection rule above: exact role+worktree, then ANY role already
+            // living in that worktree, then a role match anywhere. Still unresolved →
+            // omit terminalName; the toast names plan and role, the badge is best-effort.
+            if (!terminalName && ptyReady) {
+                try {
+                    const active = ptyFleetService.listActive();
+                    const role = record.dispatchedAgent || '';
+                    const match = worktreePath
+                        ? active.find(t => t.worktreePath === worktreePath && t.role === role)
+                            || active.find(t => t.worktreePath === worktreePath)
+                        : active.find(t => t.role === role);
+                    terminalName = match?.friendlyName || '';
+                } catch { /* fleet unavailable — omit terminalName */ }
+            }
+            server.broadcastWs('agentCompleted', {
+                planFile: record.planFile,
+                planTitle: record.topic,
+                role: record.dispatchedAgent,
+                worktreePath: worktreePath || undefined,
+                terminalName: terminalName || undefined,
+            });
+        })().catch(e => console.error('[bootstrap] agentCompleted broadcast failed:', e));
     });
     await ingestionEngine.initialize();
     log(opts, 'PlanIngestionEngine initialized (headless)');

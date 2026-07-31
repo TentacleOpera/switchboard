@@ -17,7 +17,7 @@ const { html } = getMemoHtml(REPO_ROOT, '/tmp/ws', undefined, 'cyber-theme-enabl
 
 // Canonical tokens present; ad-hoc ones gone.
 assert.match(html, /--accent-primary:\s*#00e5ff/i);
-assert.match(html, /--font-mono:/);
+assert.match(html, /--font-code:/);
 assert.match(html, /--accent-green:\s*#4ec9b0/i);
 assert.match(html, /--accent-red:\s*#f85149/i);
 assert.ok(!/#00f0ff/i.test(html), 'non-canonical accent #00f0ff still present');

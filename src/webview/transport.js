@@ -208,7 +208,8 @@
                 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);' +
                 'z-index:2147483647;max-width:80vw;padding:10px 16px;border-radius:4px;' +
                 'background:#2b1416;color:#ff6b6b;border:1px solid #ff6b6b;' +
-                'font:12px/1.4 var(--vscode-font-family,system-ui,sans-serif);' +
+                'font-size:12px;line-height:1.4;' +
+                'font-family:var(--font-family, var(--font, system-ui, sans-serif));' +
                 'white-space:pre-wrap;pointer-events:none;';
             (document.body || document.documentElement).appendChild(host);
         }

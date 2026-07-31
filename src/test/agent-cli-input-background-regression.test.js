@@ -12,7 +12,7 @@ function run() {
 
     assert.match(
         source,
-        /\.startup-row input\[type="text"\] \{[\s\S]*background: #0a0a0a;[\s\S]*color: var\(--text-primary\);[\s\S]*border: 1px solid var\(--border-color\);[\s\S]*font-family: var\(--font-mono\);[\s\S]*font-size: 11px;[\s\S]*\}/m,
+        /\.startup-row input\[type="text"\] \{[\s\S]*background: #0a0a0a;[\s\S]*color: var\(--text-primary\);[\s\S]*border: 1px solid var\(--border-color\);[\s\S]*font-family: var\(--font-code\);[\s\S]*font-size: 11px;[\s\S]*\}/m,
         'Expected CLI command text inputs to use the dark themed startup-row styling.'
     );
 

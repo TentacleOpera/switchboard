@@ -15,6 +15,7 @@ import {
     getProjectHtml as sharedGetProjectHtml,
     getPanelsManifest as sharedGetPanelsManifest,
     getPanelHtmlById as sharedGetPanelHtmlById,
+    injectBodyAttributes,
 } from './headlessPanelHtml';
 import type { FSWatcher, Dirent, Stats } from 'fs';
 import * as os from 'os';
@@ -720,6 +721,50 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (!this._oversightPass) return;
         this._oversightPass.attachWatcher(watcher);
         void this._oversightPass.resumeFromDisk(this._filterMappedRoots(this._getWorkspaceRoots()));
+    }
+
+    /**
+     * Extension-host half of the `agentCompleted` push consumed by the browser Terminals
+     * panel. Mirrors the standalone bootstrap wiring verbatim: fire-and-forget, gated on
+     * the plan-file-edit clear site only (never the stale-state timeout sweep — a timeout
+     * is an abandonment, not a completion), and additive on the wire, so webviews that do
+     * not listen for it are unaffected.
+     *
+     * `terminalName` falls back to a role+worktree fleet match because extension-host
+     * dispatch does not write `dispatched_terminal`; when nothing resolves the field is
+     * omitted and the panel shows a toast without pane targeting.
+     */
+    public broadcastAgentCompleted(record: KanbanPlanRecord, workspaceRoot: string): void {
+        void (async () => {
+            const server = this._apiServerForBroadcast ?? this._localApiServer;
+            if (!server) { return; }
+            let terminalName = (record.dispatchedTerminal || '').trim();
+            let worktreePath: string | undefined;
+            try {
+                const db = await this._getKanbanDb(workspaceRoot);
+                if (db) {
+                    worktreePath = matchWorktreePath(await db.getWorktrees(), record);
+                }
+            } catch { /* best-effort — the toast still names plan and role */ }
+            if (!terminalName && this._ptyFleetService) {
+                try {
+                    const active = this._ptyFleetService.listActive();
+                    const role = this._normalizeAgentKey(record.dispatchedAgent || '');
+                    const match = worktreePath
+                        ? active.find(t => t.worktreePath === worktreePath && this._normalizeAgentKey(t.role) === role)
+                            || active.find(t => t.worktreePath === worktreePath)
+                        : active.find(t => this._normalizeAgentKey(t.role) === role);
+                    terminalName = match?.friendlyName || '';
+                } catch { /* fleet unavailable — omit terminalName */ }
+            }
+            server.broadcastWs('agentCompleted', {
+                planFile: record.planFile,
+                planTitle: record.topic,
+                role: record.dispatchedAgent,
+                worktreePath: worktreePath || undefined,
+                terminalName: terminalName || undefined,
+            });
+        })().catch(e => console.error('[TaskViewerProvider] agentCompleted broadcast failed:', e));
     }
 
     private _initEventHandlers() {
@@ -1984,9 +2029,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             // The token is hex (crypto.randomBytes) so it needs no escaping,
                             // but it is escaped anyway to keep that a local property.
                             const attrSafeToken = this._terminalSessionToken.replace(/[^a-zA-Z0-9]/g, '');
+                            // injectBodyAttributes, not a bare `.replace('<body', ...)`:
+                            // that matched the first TEXTUAL `<body` and landed the token
+                            // inside a CSS comment in terminals.html that mentions the tag
+                            // in prose, leaving the real body bare and every upgrade 401ing.
                             return {
                                 ...result,
-                                html: result.html.replace('<body', `<body data-terminal-token="${attrSafeToken}"`)
+                                html: injectBodyAttributes(result.html, `data-terminal-token="${attrSafeToken}"`)
                             };
                         }
                         return result || null;

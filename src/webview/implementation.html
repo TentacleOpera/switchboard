@@ -40,8 +40,9 @@
             --glow-green-btn: 0 0 6px rgba(78, 201, 176, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.08);
             --glow-cyan: 0 0 8px rgba(55, 148, 255, 0.3);
 
-            --font-family: 'Hanken Grotesk', var(--vscode-font-family, 'Segoe UI', 'Roboto', sans-serif);
-            --font-mono: var(--vscode-editor-font-family, 'Consolas', 'Courier New', monospace);
+            --font-family: 'Hanken Grotesk', Menlo, Consolas, sans-serif;
+            --font-mono:   Menlo, Consolas, monospace;
+            --font-code:   Menlo, Consolas, monospace;
         }
         body.theme-claudify {
             --accent-primary: #D97757;
@@ -441,14 +442,13 @@
         }
 
         .activity-time {
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             font-size: 10px;
             color: var(--accent-green);
             letter-spacing: 0.7px;
         }
 
         .activity-type {
-            font-family: var(--font-mono);
             font-size: 11px;
             color: var(--text-primary);
             text-transform: uppercase;
@@ -461,7 +461,7 @@
         }
 
         .activity-payload {
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             font-size: 10px;
             color: var(--text-secondary);
             white-space: pre-wrap;
@@ -1147,7 +1147,7 @@
         }
 
         .orchestrator-timer {
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             font-size: 18px;
             font-weight: 700;
             color: var(--accent-green);
@@ -1234,7 +1234,7 @@
             color: var(--text-primary);
             border: 1px solid var(--border-color);
             padding: 6px 8px;
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             font-size: 11px;
         }
 
@@ -1320,7 +1320,7 @@
             background: rgba(255,255,255,0.06);
             padding: 1px 4px;
             border-radius: 3px;
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             font-size: 11px;
         }
         .markdown-body pre {
@@ -1328,7 +1328,7 @@
             padding: 6px 8px;
             border-radius: 4px;
             overflow-x: auto;
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             font-size: 11px;
         }
         .markdown-body pre code {

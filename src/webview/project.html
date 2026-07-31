@@ -43,8 +43,8 @@
             --card-border: 1px solid #333333;
             --text-primary: #e0e0e0;
             --text-secondary: #8C8C8C;
-            --font-family: 'Hanken Grotesk', var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
-            --font-mono: var(--vscode-editor-font-family, 'SF Mono', Monaco, 'Cascadia Code', monospace);
+            --font-family: 'Hanken Grotesk', Menlo, Consolas, sans-serif;
+            --font-code:   Menlo, Consolas, monospace;
             --spacing-unit: 8px;
             --spacing-xs: calc(var(--spacing-unit) / 2);
             --spacing-sm: var(--spacing-unit);
@@ -227,7 +227,7 @@
             height: 100%;
             background: #000;
             color: #ccc;
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             font-size: 12px;
             border: none;
             padding: 12px;
@@ -796,7 +796,7 @@
             color: var(--vscode-editor-foreground, #cccccc);
             tab-size: 4;
         }#kanban-preview-content code, #features-preview-content code, #constitution-preview-content code, #system-preview-content code, #tuning-preview-content code, #projects-preview-content code {
-            font-family: var(--vscode-editor-font-family, 'SF Mono', Monaco, Menlo, Consolas, monospace);
+            font-family: var(--font-code);
             font-size: 1em; /* Match VS Code: inline code is same size as surrounding text */
             line-height: 1.357em;
             color: var(--accent-teal);
@@ -1026,7 +1026,7 @@
             color: var(--text-primary);
             border: 1px solid var(--border-color);
             border-radius: 3px;
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             font-size: 10px;
             padding: 4px 8px;
             margin: 0 8px 6px 8px;

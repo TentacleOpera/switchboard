@@ -940,6 +940,15 @@ export async function activate(context: vscode.ExtensionContext) {
     // advance (the activity-light OFF-switch). Also resumes a pass interrupted
     // by an extension reload from .switchboard/oversight-state.md.
     taskViewerProvider.attachOversightWatcher(globalPlanWatcher);
+    // Host parity for the browser Terminals panel's completion toast: the standalone
+    // bootstrap wires the same engine seam to LocalApiServer.broadcastWs. Wired here
+    // (not in the watcher) because the fleet + api server both live on the provider.
+    // Distinct consumer from attachOversightWatcher above — that one drives the
+    // oversight pass off onPlanDiscovered; this one only fires on the gated
+    // dispatched_at non-null→null transition, so neither double-triggers the other.
+    globalPlanWatcher.getEngine().setOnWorkingStateCleared((record, wsRoot) => {
+        taskViewerProvider.broadcastAgentCompleted(record, wsRoot);
+    });
     context.subscriptions.push(taskViewerProvider);
     if (workspaceRoot) {
         void taskViewerProvider.deregisterAllTerminals(true).then(() => {

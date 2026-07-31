@@ -31,8 +31,8 @@
             --accent-orange: #d18616;
             --glow-green: 0 0 10px rgba(78, 201, 176, 0.6), 0 0 20px rgba(78, 201, 176, 0.25);
             --glow-red: 0 0 10px rgba(248, 81, 73, 0.6), 0 0 20px rgba(248, 81, 73, 0.25);
-            --font-family: 'Hanken Grotesk', var(--vscode-font-family, 'Segoe UI', 'Roboto', sans-serif);
-            --font-mono: var(--vscode-editor-font-family, 'SF Mono', Monaco, 'Cascadia Code', 'Consolas', monospace);
+            --font-family: 'Hanken Grotesk', Menlo, Consolas, sans-serif;
+            --font-code:   Menlo, Consolas, monospace;
         }
 
         body.theme-claudify {
@@ -165,8 +165,10 @@
             color: var(--text-primary);
             border: 1px solid var(--border-color);
             padding: 6px 8px;
-            font-family: var(--font-mono);
             font-size: 11px;
+        }
+        .startup-row input {
+            font-family: var(--font-code);
         }
 
         .startup-row input:focus,
@@ -275,7 +277,7 @@
         }
 
         .db-path-display {
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             font-size: 10px;
             color: var(--text-secondary);
             background: var(--bg-dim);
@@ -318,7 +320,7 @@
         .db-custom-path-input {
             width: 100%;
             padding: 6px 10px;
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             font-size: 10px;
             background: var(--bg-dim);
             border: 1px solid var(--border-dim);

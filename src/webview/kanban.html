@@ -35,8 +35,8 @@
             --glow-teal: 0 0 10px color-mix(in srgb, var(--accent-teal) 50%, transparent);
             --accent-red: #da3633;
             --accent-orange: #d29922;
-            --font-family: 'Hanken Grotesk', var(--vscode-font-family, system-ui, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
-            --font-mono: var(--vscode-editor-font-family, Menlo, Monaco, Consolas, 'Cascadia Code', monospace);
+            --font-family: 'Hanken Grotesk', Menlo, Consolas, sans-serif;
+            --font-code:   Menlo, Consolas, monospace;
         }
         body.theme-claudify {
             --accent-primary: #D97757;
@@ -778,7 +778,7 @@
         }
 
         .column-count {
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             font-size: 10px;
             color: var(--accent-teal);
             background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
@@ -1198,7 +1198,7 @@
         .startup-row input[type="text"] {
           background:#0a0a0a; color:var(--text-primary);
           border:1px solid var(--border-color); border-radius:3px;
-          padding:3px 6px; font-size:10px; font-family:var(--font-mono);
+          padding:3px 6px; font-size:10px; font-family:var(--font-code);
         }
         .prompts-role-tab {
           font-family:var(--font-mono); font-size:10px; padding:3px 8px;
@@ -1231,7 +1231,7 @@
 
         .agents-tab-custom-agent-item-command {
           flex: 1;
-          font-family: var(--font-mono);
+          font-family: var(--font-code);
           color: var(--text-secondary);
           font-size: 10px;
         }
@@ -1864,7 +1864,7 @@
         }
 
         .autoban-timer-badge {
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             font-size: 9px;
             letter-spacing: 0.5px;
             color: var(--text-secondary);
@@ -2249,7 +2249,7 @@
         }
 
         .plan-id {
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             font-size: 10px;
             color: var(--text-secondary);
             margin-bottom: 4px;
@@ -2434,7 +2434,7 @@
             background: #1a1a1a;
             padding: 2px 6px;
             border-radius: 3px;
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             margin-top: 4px;
             color: var(--accent-teal);
         }
@@ -2543,7 +2543,7 @@
             padding: 8px;
             border: 1px solid var(--border-color);
             border-radius: 4px;
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             font-size: 12px;
             background: #0d0d0d;
             color: var(--text-primary);
@@ -4212,6 +4212,45 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // clearing it prematurely; auto-expires so it can never get stuck.
         let optimisticMoveUntil = 0;
         const OPTIMISTIC_MOVE_WINDOW_MS = 2000; // covers the 350ms dispatch + backend round-trip
+
+        // Ledger of pending optimistic moves: Map<cardId, targetColumn>
+        const pendingOptimisticMoves = new Map();
+        let suppressedRenderPending = false;
+        let optimisticExpiryTimer = null;
+
+        function armOptimisticGuard(entries) {
+            if (Array.isArray(entries)) {
+                entries.forEach(({ id, targetColumn }) => {
+                    if (id && targetColumn) pendingOptimisticMoves.set(id, targetColumn);
+                });
+            }
+            optimisticMoveUntil = Date.now() + OPTIMISTIC_MOVE_WINDOW_MS;
+            if (optimisticExpiryTimer) clearTimeout(optimisticExpiryTimer);
+            optimisticExpiryTimer = setTimeout(() => {
+                optimisticExpiryTimer = null;
+                if (Date.now() >= optimisticMoveUntil && suppressedRenderPending) {
+                    suppressedRenderPending = false;
+                    postKanbanMessage({ type: 'refresh' });
+                }
+            }, OPTIMISTIC_MOVE_WINDOW_MS + 50);
+        }
+
+        function clearOptimisticGuard() {
+            optimisticMoveUntil = 0;
+            pendingOptimisticMoves.clear();
+            if (optimisticExpiryTimer) {
+                clearTimeout(optimisticExpiryTimer);
+                optimisticExpiryTimer = null;
+            }
+        }
+
+        function resolveOptimisticGuard(ids) {
+            if (!ids) return;
+            const list = Array.isArray(ids) ? ids : Array.from(ids);
+            list.forEach(id => {
+                if (id) pendingOptimisticMoves.delete(id);
+            });
+        }
         let currentWorkspaceRoot = '';
         try {
             const attr = document.body?.dataset?.initialWorkspaceRoot;
@@ -5018,54 +5057,58 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         }
 
         /**
-         * Move cards optimistically in the DOM before backend processing.
-         * @param {string[]} sessionIds - Session IDs to move
-         * @param {string} sourceColumn - Logical source column (may be 'CODED_AUTO')
-         * @param {string} targetColumn - Logical target column
+         * Pure DOM primitive to move card elements between column containers.
+         * @param {Array<{id: string, targetColumn: string}>} entries
          */
-        function moveCardsOptimistically(sessionIds, sourceColumn, targetColumn) {
-            // When coders are collapsed, the target DOM container is CODED_AUTO, not the
-            // individual coder column. Resolve the DOM target while keeping the logical
-            // targetColumn for card.column updates.
-            const domTargetColumn = resolveDomColumn(targetColumn);
+        function moveCardElements(entries) {
+            if (!Array.isArray(entries) || !entries.length) return;
 
-            const targetBody = document.getElementById('col-' + domTargetColumn);
-            if (!targetBody) return;
-
-            // Remove empty state from target if present
-            const emptyState = targetBody.querySelector('.empty-state');
-            if (emptyState) emptyState.remove();
-
-            // Track which source DOM columns need empty-state check and count decrements
-            // Key: DOM column ID, Value: count of cards moved from that DOM col
             const sourceDomColCounts = {};
-            let actualMovedCount = 0;
+            const targetDomColCounts = {};
 
-            sessionIds.forEach(id => {
+            entries.forEach(({ id, targetColumn }) => {
+                const domTargetColumn = resolveDomColumn(targetColumn);
+                const targetBody = document.getElementById('col-' + domTargetColumn);
+                if (!targetBody) return;
+
                 const cardEl = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
                 if (!cardEl) return;
 
-                // Resolve actual source column from currentCards (cards have no data-column attribute)
                 const cardData = currentCards.find(c => (c.planId || c.sessionId) === id);
-                const actualColumn = cardData ? cardData.column : sourceColumn;
-
-                // When coders are collapsed, actual coder columns display in CODED_AUTO DOM container
+                const actualColumn = cardData ? cardData.column : targetColumn;
                 const sourceDomCol = resolveDomColumn(actualColumn);
 
-                // Move card to target with arrival animation
+                const emptyState = targetBody.querySelector('.empty-state');
+                if (emptyState) emptyState.remove();
+
+                const cardTs = parseInt(cardEl.dataset.ts || '0', 10);
+                const existingCards = Array.from(targetBody.querySelectorAll('.kanban-card'));
+                let inserted = false;
+                for (const child of existingCards) {
+                    if (child === cardEl) continue;
+                    const childTs = parseInt(child.dataset.ts || '0', 10);
+                    if (cardTs > childTs) {
+                        targetBody.insertBefore(cardEl, child);
+                        inserted = true;
+                        break;
+                    }
+                }
+                if (!inserted) {
+                    targetBody.appendChild(cardEl);
+                }
+
+                cardEl.classList.remove('card-dropped');
+                void cardEl.offsetWidth;
                 cardEl.classList.add('card-dropped');
-                targetBody.appendChild(cardEl);
+                cardEl.addEventListener('animationend', () => cardEl.classList.remove('card-dropped'), { once: true });
 
-                // Update currentCards so subsequent lookups see the new column
-                if (cardData) cardData.column = targetColumn;
-
-                // Track for post-loop empty state + count updates
                 if (!sourceDomColCounts[sourceDomCol]) sourceDomColCounts[sourceDomCol] = 0;
                 sourceDomColCounts[sourceDomCol]++;
-                actualMovedCount++;
+
+                if (!targetDomColCounts[domTargetColumn]) targetDomColCounts[domTargetColumn] = 0;
+                targetDomColCounts[domTargetColumn]++;
             });
 
-            // Update source column empty states and counts
             Object.entries(sourceDomColCounts).forEach(([domCol, movedCount]) => {
                 const sourceBody = document.getElementById('col-' + domCol);
                 if (sourceBody && sourceBody.querySelectorAll('.kanban-card').length === 0) {
@@ -5073,33 +5116,40 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
                 const srcCount = document.getElementById('count-' + domCol);
                 if (srcCount) {
-                    srcCount.textContent = String(Math.max(0, parseInt(srcCount.textContent || '0') - movedCount));
+                    srcCount.textContent = String(Math.max(0, parseInt(srcCount.textContent || '0', 10) - movedCount));
                 }
             });
 
-            // Increment target count by actual moved count (not sessionIds.length)
-            const tgtCount = document.getElementById('count-' + domTargetColumn);
-            if (tgtCount) {
-                tgtCount.textContent = String((parseInt(tgtCount.textContent || '0') + actualMovedCount));
-            }
+            Object.entries(targetDomColCounts).forEach(([domCol, movedCount]) => {
+                const tgtCount = document.getElementById('count-' + domCol);
+                if (tgtCount) {
+                    tgtCount.textContent = String(parseInt(tgtCount.textContent || '0', 10) + movedCount);
+                }
+            });
+        }
 
-            // Keep the render-guard signature in sync with the optimistic model.
-            // currentCards[].column was just mutated above; recompute so a subsequent
-            // stale updateBoard (same columns, only lastActivity differs) does not
-            // trigger a spurious re-render that reverts the move.
+        /**
+         * Move cards optimistically in the DOM before backend processing.
+         * @param {string[]} sessionIds - Session IDs to move
+         * @param {string} sourceColumn - Logical source column (may be 'CODED_AUTO')
+         * @param {string} targetColumn - Logical target column
+         */
+        function moveCardsOptimistically(sessionIds, sourceColumn, targetColumn) {
+            const domTargetColumn = resolveDomColumn(targetColumn);
+            const targetBody = document.getElementById('col-' + domTargetColumn);
+            if (!targetBody) return;
+
+            const entries = sessionIds.map(id => ({ id, targetColumn }));
+
+            moveCardElements(entries);
+
+            sessionIds.forEach(id => {
+                const cardData = currentCards.find(c => (c.planId || c.sessionId) === id);
+                if (cardData) cardData.column = targetColumn;
+            });
+
             lastBoardSignature = buildBoardSignature(currentCards);
-
-            // Arm the render guard HERE, in the shared primitive — not at each call site.
-            // Every button-triggered optimistic move (per-card Copy Prompt, column
-            // moveSelected/moveAll/promptSelected/promptAll) funnels through this function.
-            // The backend round-trip (promptSelected → generate prompt → moveCardToColumn →
-            // dispatch) is async and slow; a routine updateBoard refresh that lands before it
-            // finishes carries the PRE-move positions, and without this guard the updateBoard
-            // handler re-renders and snaps the card back — the "waiting for the backend" lag.
-            // DO NOT move this back out to individual call sites: arming per-path is exactly
-            // what keeps regressing, because new/edited button paths forget to re-add it.
-            // (Drag paths arm their own guard since they do bespoke DOM work without this helper.)
-            optimisticMoveUntil = Date.now() + OPTIMISTIC_MOVE_WINDOW_MS;
+            armOptimisticGuard(entries);
         }
 
         /** Get all selected session IDs within a specific column. */
@@ -5215,9 +5265,29 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             return columnDefinitions.find(def => def.id === col) || null;
         }
 
-        // NOTE: If you change which card fields are included here, ensure any fields
-        // used by the workingChanged check in the updateBoard handler are preserved.
-        // Otherwise, working-state changes will be swallowed during the optimistic window.
+        // Positional signature (workspaceRoot | id | column) for checking position agreement during guard.
+        function buildPositionSignature(cards) {
+            if (!Array.isArray(cards) || cards.length === 0) return '';
+            return cards
+                .map(card => `${card.workspaceRoot || ''}|${card.planId || card.sessionId || ''}|${card.column}`)
+                .sort()
+                .join('||');
+        }
+
+        function applyPendingOptimisticMoves(cards) {
+            if (!Array.isArray(cards) || cards.length === 0 || pendingOptimisticMoves.size === 0) {
+                return cards;
+            }
+            return cards.map(card => {
+                const id = card.planId || card.sessionId;
+                if (id && pendingOptimisticMoves.has(id)) {
+                    return { ...card, column: pendingOptimisticMoves.get(id) };
+                }
+                return card;
+            });
+        }
+
+        // Full board signature including presentational fields and working state.
         function buildBoardSignature(cards) {
             if (!Array.isArray(cards) || cards.length === 0) return '';
             return cards
@@ -6489,6 +6559,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             return category.toLowerCase().replace(' ', '-');
         }
 
+        function applyWorkingClass(cardEl, isWorking) {
+            if (!cardEl) return;
+            if (isWorking) {
+                cardEl.classList.add('is-working');
+                cardEl.setAttribute('title', 'Agent working…');
+            } else {
+                cardEl.classList.remove('is-working');
+                cardEl.removeAttribute('title');
+            }
+        }
+
         function createCardHtml(card) {
             const shortTopic = card.topic.length > 50 ? card.topic.substring(0, 47) + '...' : card.topic;
             const complexityValue = card.complexity || 'Unknown';
@@ -6578,8 +6659,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                    </button>`;
             const cardId = escapeAttr(card.planId || card.sessionId || '');
             const reviewTooltip = card.isFeature ? 'Review feature' : 'Review plan';
+            const t = card.lastActivity ? new Date(card.lastActivity).getTime() : 0;
+            const tsVal = isNaN(t) ? 0 : t;
             return `
-                <div class="kanban-card${completedClass}${featureClass}${workingClass}" draggable="true"${workingTitle} data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}">
+                <div class="kanban-card${completedClass}${featureClass}${workingClass}" draggable="true"${workingTitle} data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}" data-ts="${tsVal}">
                     <div class="card-topic">${featureBadge}${escapeHtml(shortTopic)}</div>
                     <div class="card-meta">${cardMetaContent}</div>
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
@@ -6949,7 +7032,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 // that reverts the move and loses feature styling — same bug as the main
                 // validIds path below.
                 lastBoardSignature = buildBoardSignature(currentCards);
-                optimisticMoveUntil = Date.now() + OPTIMISTIC_MOVE_WINDOW_MS;  // arm/extend the render guard
+                const draggedEntries = Array.from(dispatchGroups.values()).flatMap(g => g.sessionIds.map(id => ({ id, targetColumn: g.targetColumn })));
+                armOptimisticGuard(draggedEntries);  // arm/extend the render guard
 
                 setTimeout(() => {
                     dispatchGroups.forEach(group => {
@@ -7143,7 +7227,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             // Keep the render-guard signature in sync with the optimistic mutation.
             lastBoardSignature = buildBoardSignature(currentCards);
-            optimisticMoveUntil = Date.now() + OPTIMISTIC_MOVE_WINDOW_MS;  // arm/extend the render guard
+            armOptimisticGuard(validIds.map(id => ({ id, targetColumn: effectiveTargetColumn })));  // arm/extend the render guard
 
 
 
@@ -7346,41 +7430,64 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const idsToMove = new Set(Array.isArray(msg.sessionIds) ? msg.sessionIds : []);
                     const targetCol = msg.targetColumn;
                     if (!idsToMove.size || !targetCol) break;
-                    let changed = false;
-                    const moveCard = (card) => {
-                        const cardKey = card.planId || card.sessionId;        // planId-primary, mirrors backend _cardMatchesIds
+
+                    const entriesToMove = [];
+                    const updatedCards = currentCards.map(card => {
+                        const cardKey = card.planId || card.sessionId;
                         if (idsToMove.has(cardKey) || (card.sessionId && idsToMove.has(card.sessionId))) {
-                            changed = true;
+                            if (card.column !== targetCol) {
+                                entriesToMove.push({ id: cardKey, targetColumn: targetCol });
+                            }
                             return { ...card, column: targetCol };
                         }
                         return card;
-                    };
-                    currentCards = currentCards.map(moveCard);
-                    // Keep the unfiltered cache in sync so occupancy counts track the move.
-                    allCards = allCards.map(moveCard);
-                    if (changed) {
+                    });
+
+                    currentCards = updatedCards;
+                    allCards = allCards.map(card => {
+                        const cardKey = card.planId || card.sessionId;
+                        if (idsToMove.has(cardKey) || (card.sessionId && idsToMove.has(card.sessionId))) {
+                            return { ...card, column: targetCol };
+                        }
+                        return card;
+                    });
+
+                    if (entriesToMove.length > 0) {
+                        moveCardElements(entriesToMove);
                         lastBoardSignature = buildBoardSignature(currentCards);
-                        renderBoard(currentCards);
                     }
+                    resolveOptimisticGuard(msg.sessionIds);
                     break;
                 }
                 case 'moveCardsFailed': {
                     const failed = Array.isArray(msg.failures) ? msg.failures : []; // [{id, sourceColumn, reason}]
                     if (!failed.length) break;
                     const byId = new Map(failed.map(f => [f.id, f]));
-                    let changed = false;
-                    const revertCard = (card) => {
+                    const entriesToRevert = [];
+
+                    currentCards = currentCards.map(card => {
                         const key = card.planId || card.sessionId;
                         const f = byId.get(key) || (card.sessionId && byId.get(card.sessionId));
-                        if (f) { changed = true; return { ...card, column: f.sourceColumn }; }
+                        if (f) {
+                            if (card.column !== f.sourceColumn) {
+                                entriesToRevert.push({ id: key, targetColumn: f.sourceColumn });
+                            }
+                            return { ...card, column: f.sourceColumn };
+                        }
                         return card;
-                    };
-                    currentCards = currentCards.map(revertCard);
-                    // Keep the unfiltered cache in sync so occupancy counts track the revert.
-                    allCards = allCards.map(revertCard);
-                    if (changed) {
+                    });
+                    allCards = allCards.map(card => {
+                        const key = card.planId || card.sessionId;
+                        const f = byId.get(key) || (card.sessionId && byId.get(card.sessionId));
+                        if (f) return { ...card, column: f.sourceColumn };
+                        return card;
+                    });
+
+                    resolveOptimisticGuard(failed.map(f => f.id));
+
+                    if (entriesToRevert.length > 0) {
+                        moveCardElements(entriesToRevert);
                         lastBoardSignature = buildBoardSignature(currentCards);
-                        renderBoard(currentCards);
                     }
                     showStatusBarMessage(`${failed.length} plan(s) not advanced: ${failed[0]?.reason || 'database update failed'}`, { isError: true });
                     break;
@@ -7390,7 +7497,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // local boardProjectFilter client-side, mirroring the project panel's
                     // kanban tab. The backend now sends unfiltered cards; the board owns
                     // its view filter so browser and webview never reset each other.
-                    allCards = Array.isArray(msg.cards) ? msg.cards : [];
+                    allCards = applyPendingOptimisticMoves(Array.isArray(msg.cards) ? msg.cards : []);
                     const nextCards = applyBoardProjectFilter(allCards);
                     const nextFeatureWorktrees = msg.featureWorktrees || {};
                     const featureWorktreesChanged = JSON.stringify(currentFeatureWorktrees) !== JSON.stringify(nextFeatureWorktrees);
@@ -7436,26 +7543,37 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     const optimisticActive = Date.now() < optimisticMoveUntil;
                     if (nextBoardSignature !== lastBoardSignature) {
-                        let workingChanged = false;
                         if (optimisticActive) {
-                            workingChanged = nextCards.some(nc => {
-                                const cur = currentCards.find(cc => (cc.planId || cc.sessionId) === (nc.planId || nc.sessionId));
-                                return !!cur && !!nc.working !== !!cur.working;
-                            });
-                        }
-                        if (optimisticActive && !workingChanged) {
-                            // Optimistic drag in-flight: backend hasn't processed the move yet, so
-                            // nextCards is stale w.r.t. the user's intent. Absorb the data (so the next
-                            // authoritative render — a moveCards delta or a post-window updateBoard —
-                            // has the freshest baseline) but DO NOT renderBoard: a full DOM replacement
-                            // here would revert the optimistic move and strip feature styling/animation.
-                            // currentFeatureWorktrees is already updated above; worktree visuals render
-                            // when the window expires.
-                            currentCards = nextCards;
-                            lastBoardSignature = buildBoardSignature(currentCards);
-                            lastAllCardsSignature = nextAllCardsSignature;
-                            if (justFinished.length) pendingFinished.push(...justFinished); // carry forward
+                            const nextPosSig = buildPositionSignature(nextCards);
+                            const curPosSig = buildPositionSignature(currentCards);
+                            if (nextPosSig === curPosSig && nextCards.length > 0) {
+                                let hasOtherChanges = false;
+                                nextCards.forEach(nc => {
+                                    const id = nc.planId || nc.sessionId;
+                                    const cur = currentCards.find(cc => (cc.planId || cc.sessionId) === id);
+                                    if (!cur) return;
+                                    if (!!nc.working !== !!cur.working) {
+                                        const cardEl = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
+                                        applyWorkingClass(cardEl, !nc.working ? false : !!nc.working);
+                                        cur.working = nc.working;
+                                        cur.lastActivity = nc.lastActivity;
+                                    }
+                                    if (nc.topic !== cur.topic || nc.complexity !== cur.complexity || nc.planFile !== cur.planFile) {
+                                        hasOtherChanges = true;
+                                    }
+                                });
+                                lastBoardSignature = buildBoardSignature(currentCards);
+                                lastAllCardsSignature = nextAllCardsSignature;
+                                if (justFinished.length) pendingFinished.push(...justFinished);
+                                if (hasOtherChanges) suppressedRenderPending = true;
+                            } else {
+                                // Positions differ while optimistic active: suppress full renderBoard
+                                // to avoid reverting optimistic moves on screen, but carry forward finish state.
+                                if (justFinished.length) pendingFinished.push(...justFinished);
+                                suppressedRenderPending = true;
+                            }
                         } else {
+                            suppressedRenderPending = false;
                             lastBoardSignature = nextBoardSignature;
                             lastAllCardsSignature = nextAllCardsSignature;
                             console.log('[Kanban WV] signature changed, calling renderBoard with', nextCards.length, 'cards');
@@ -7475,7 +7593,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             // Filtered view unchanged but the unfiltered cache changed (e.g.
                             // a card added to a hidden project): refresh occupancy counts
                             // without a full DOM rebuild.
-                            refreshColumnCounts();
+                            if (!optimisticActive) {
+                                refreshColumnCounts();
+                            }
                             lastAllCardsSignature = nextAllCardsSignature;
                         }
                     }
@@ -7666,7 +7786,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         columns = columnDefinitions.map(col => col.id);
                         autobanColumns = columnDefinitions.filter(col => col.autobanEnabled).map(col => col.id);
                         lastBoardSignature = '';
-                        optimisticMoveUntil = 0;  // a deliberate workspace switch ends any in-flight drag guard
+                        clearOptimisticGuard();  // a deliberate workspace switch ends any in-flight drag guard
                         renderColumns();
                         renderBoard(currentCards);
                         updateAllColumnAgents();
@@ -8345,7 +8465,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
                 const sourceWorkspaceRoot = Array.from(sourceWorkspaces)[0];
                 lastBoardSignature = '';  // Ensure the refresh triggered by selectWorkspace is not short-circuited
-                optimisticMoveUntil = 0;  // a deliberate workspace switch ends any in-flight drag guard
+                clearOptimisticGuard();  // a deliberate workspace switch ends any in-flight drag guard
                 postKanbanMessage({
                     type: 'reassignPlansWorkspace',
                     sessionIds: sessionIds,
@@ -8404,7 +8524,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (isDifferentWorkspace) {
                 // Switch workspace context (triggers full board refresh)
                 lastBoardSignature = '';
-                optimisticMoveUntil = 0;  // a deliberate workspace switch ends any in-flight drag guard
+                clearOptimisticGuard();  // a deliberate workspace switch ends any in-flight drag guard
                 postKanbanMessage({
                     type: 'selectWorkspace',
                     workspaceRoot: selectedWorkspaceRoot,

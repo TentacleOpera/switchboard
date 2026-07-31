@@ -110,6 +110,14 @@ const extensionConfig = {
                 {
                     from: 'node_modules/@xterm/addon-fit/lib/addon-fit.js',
                     to: 'webview/vendor/xterm/addon-fit.js'
+                },
+                {
+                    from: 'node_modules/@xterm/addon-webgl/lib/addon-webgl.js',
+                    to: 'webview/vendor/xterm/addon-webgl.js'
+                },
+                {
+                    from: 'node_modules/@xterm/addon-canvas/lib/addon-canvas.js',
+                    to: 'webview/vendor/xterm/addon-canvas.js'
                 }
             ]
         })

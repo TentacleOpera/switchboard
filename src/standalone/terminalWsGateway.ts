@@ -16,9 +16,61 @@ export const PING_INTERVAL_MS = 30000;
  */
 export const DRAIN_POLL_MS = 250;
 
+/**
+ * Coalescing window for pty output, in ms.
+ *
+ * node-pty emits a callback per read, which during interactive output means many
+ * tiny chunks. Forwarding each one as its own frame made the browser pay a
+ * JSON.parse + decode + xterm write per chunk — the dominant cost in the webview,
+ * and the reason browser terminals felt laggy next to VS Code's (whose pty host
+ * buffers writes before handing them to the renderer). One flush per window
+ * collapses that into a single frame, a single scrollback entry, and a single
+ * backpressure check.
+ *
+ * ~6ms is under one 60Hz frame, so coalescing never costs a rendered frame of
+ * latency: the client rAF-batches writes anyway.
+ */
+export const OUTPUT_FLUSH_MS = 6;
+
+/**
+ * Ceiling on one coalesced frame. A `yes`-style firehose would otherwise join
+ * into a single multi-megabyte frame that stalls the client's decode and defeats
+ * backpressure (which can only act between frames). Whole chunks only — never
+ * split one — so a surrogate pair can't be cut across two separately-UTF-8-encoded
+ * payloads. Leftovers flush on the next tick.
+ */
+export const MAX_FLUSH_BYTES = 128 * 1024;
+
 interface ScrollbackChunk {
     seq: number;
     data: string;
+}
+
+interface PendingOutput {
+    parts: string[];
+    bytes: number;
+    timer?: NodeJS.Timeout;
+}
+
+/**
+ * Wire format for output frames: 4-byte big-endian seq, then the raw UTF-8 bytes.
+ *
+ * Output used to travel as `JSON.stringify({t:'out', seq, data: base64})`. Base64
+ * inflates by a third, JSON escaping inflates again, and the client paid
+ * `JSON.parse` + `atob` + a char-by-char `Uint8Array.from` on every frame. Binary
+ * frames cost one `DataView` read and one `TextDecoder` pass over bytes that were
+ * never re-encoded.
+ *
+ * Control frames (hello/exit/error/pong) stay JSON text — they are rare, and
+ * keeping them human-readable keeps the protocol debuggable. The client
+ * discriminates on frame type: string = control, ArrayBuffer = output.
+ */
+function encodeOutputFrame(seq: number, payload: string): Buffer {
+    const body = Buffer.from(payload, 'utf8');
+    const frame = Buffer.allocUnsafe(4 + body.length);
+    frame.writeUInt32BE(seq >>> 0, 0);
+    body.copy(frame, 4);
+    return frame;
 }
 
 interface ScrollbackBuffer {
@@ -51,6 +103,7 @@ export class TerminalWsGateway {
 
     private scrollbackBuffers = new Map<string, ScrollbackBuffer>();
     private terminalSubscriptions = new Map<string, { dispose: () => void }>();
+    private pendingOutput = new Map<string, PendingOutput>();
     private pausedTerminals = new Set<string>();
     private clients = new Set<ClientState>();
     private pingInterval?: NodeJS.Timeout;
@@ -98,34 +151,77 @@ export class TerminalWsGateway {
         const buffer: ScrollbackBuffer = { chunks: [], totalBytes: 0, nextSeq: 1 };
         this.scrollbackBuffers.set(t.name, buffer);
 
+        // Accumulate only. Everything expensive — seq assignment, ring-buffer
+        // append, UTF-8 encode, fan-out, backpressure — happens once per flush
+        // window in flushOutput, not once per pty read.
         const sub = t.onData((chunk: string) => {
-            // Append to ring buffer under this terminal's monotonic seq.
-            const seq = buffer.nextSeq++;
-            buffer.chunks.push({ seq, data: chunk });
-            buffer.totalBytes += chunk.length;
+            let pending = this.pendingOutput.get(t.name);
+            if (!pending) {
+                pending = { parts: [], bytes: 0 };
+                this.pendingOutput.set(t.name, pending);
+            }
+            pending.parts.push(chunk);
+            pending.bytes += chunk.length;
+            this.scheduleFlush(t.name);
+        });
+
+        this.terminalSubscriptions.set(t.name, sub);
+    }
+
+    private scheduleFlush(terminalName: string): void {
+        const pending = this.pendingOutput.get(terminalName);
+        if (!pending || pending.timer) { return; }
+        pending.timer = setTimeout(() => {
+            pending.timer = undefined;
+            this.flushOutput(terminalName);
+        }, OUTPUT_FLUSH_MS);
+    }
+
+    /**
+     * Emit one coalesced frame for a terminal: one seq, one scrollback entry, one
+     * encode, one send per client, one backpressure check.
+     */
+    private flushOutput(terminalName: string): void {
+        const pending = this.pendingOutput.get(terminalName);
+        if (!pending || pending.parts.length === 0) { return; }
+
+        // Take whole chunks up to the cap; anything left rides the next tick.
+        const taken: string[] = [];
+        let takenBytes = 0;
+        while (pending.parts.length > 0 && takenBytes < MAX_FLUSH_BYTES) {
+            const part = pending.parts.shift()!;
+            taken.push(part);
+            takenBytes += part.length;
+        }
+        pending.bytes -= takenBytes;
+
+        const combined = taken.join('');
+        const buffer = this.scrollbackBuffers.get(terminalName);
+        let seq = 0;
+
+        if (buffer) {
+            seq = buffer.nextSeq++;
+            buffer.chunks.push({ seq, data: combined });
+            buffer.totalBytes += combined.length;
             while (buffer.totalBytes > MAX_SCROLLBACK_BYTES && buffer.chunks.length > 1) {
                 const removed = buffer.chunks.shift()!;
                 buffer.totalBytes -= removed.data.length;
             }
+        }
 
-            // Fan out to attached clients — same seq for everyone.
-            const base64Data = Buffer.from(chunk, 'utf8').toString('base64');
-            const targetClients = Array.from(this.clients).filter(c => c.terminalName === t.name);
+        const frame = encodeOutputFrame(seq, combined);
+        const targetClients = Array.from(this.clients).filter(c => c.terminalName === terminalName);
+        for (const client of targetClients) {
+            this.safeSendBinary(client.ws, frame);
+        }
 
-            for (const client of targetClients) {
-                if (client.ws.readyState === WebSocket.OPEN) {
-                    this.safeSend(client.ws, {
-                        t: 'out',
-                        seq,
-                        data: base64Data,
-                    });
-                }
-            }
+        this.checkBackpressure(terminalName, targetClients);
 
-            this.checkBackpressure(t.name, targetClients);
-        });
-
-        this.terminalSubscriptions.set(t.name, sub);
+        // More than one cap's worth arrived in a single window — keep draining
+        // rather than waiting for the next pty read to re-arm the timer.
+        if (pending.parts.length > 0) {
+            this.scheduleFlush(terminalName);
+        }
     }
 
     private untrackTerminalData(name: string, exitCode?: number): void {
@@ -134,7 +230,14 @@ export class TerminalWsGateway {
             sub.dispose();
             this.terminalSubscriptions.delete(name);
         }
+
+        // Drain before announcing the exit. A process that prints and immediately
+        // dies leaves its last output sitting in the coalescing window; dropping
+        // the buffer here would swallow exactly the lines the operator needs.
+        this.drainPending(name);
+
         this.scrollbackBuffers.delete(name);
+        this.pendingOutput.delete(name);
         this.pausedTerminals.delete(name);
 
         // Notify and close attached clients
@@ -144,6 +247,19 @@ export class TerminalWsGateway {
                 try { client.ws.close(); } catch { /* ignore */ }
                 this.clients.delete(client);
             }
+        }
+    }
+
+    /** Flush everything queued for a terminal synchronously, then disarm its timer. */
+    private drainPending(name: string): void {
+        const pending = this.pendingOutput.get(name);
+        if (!pending) { return; }
+        while (pending.parts.length > 0) {
+            this.flushOutput(name);
+        }
+        if (pending.timer) {
+            clearTimeout(pending.timer);
+            pending.timer = undefined;
         }
     }
 
@@ -225,12 +341,18 @@ export class TerminalWsGateway {
             return;
         }
 
+        // A reconnecting client tells us how far it already rendered so replay can
+        // start from the tail instead of shipping the whole ring and relying on the
+        // client to discard the prefix.
+        const rawLastSeq = Number(reqUrl.searchParams.get('lastSeq'));
+        const lastSeq = Number.isFinite(rawLastSeq) && rawLastSeq > 0 ? rawLastSeq : 0;
+
         this.wss.handleUpgrade(req, socket, head, (ws) => {
-            this.setupClient(ws, terminal);
+            this.setupClient(ws, terminal, lastSeq);
         });
     }
 
-    private setupClient(ws: WebSocket, terminal: ExtendedTerminalHandle): void {
+    private setupClient(ws: WebSocket, terminal: ExtendedTerminalHandle, lastSeq = 0): void {
         const client: ClientState = {
             ws,
             terminalName: terminal.name,
@@ -251,19 +373,24 @@ export class TerminalWsGateway {
             seq: buffer ? buffer.nextSeq - 1 : 0,
         });
 
-        // Replay scrollback BEFORE any live frame. This loop is synchronous, and
-        // node's single-threaded model means no `onData` callback can interleave
-        // with it — so replay-then-live ordering holds without an explicit buffer.
-        // Chunks keep their original seqs, so a re-attaching client dedupes the
-        // prefix it has already rendered instead of double-writing it.
-        if (buffer) {
-            for (const chunk of buffer.chunks) {
-                const base64Data = Buffer.from(chunk.data, 'utf8').toString('base64');
-                this.safeSend(ws, {
-                    t: 'out',
-                    seq: chunk.seq,
-                    data: base64Data,
-                });
+        // Replay scrollback BEFORE any live frame. This block is synchronous, and
+        // node's single-threaded model means no flush can interleave with it — so
+        // replay-then-live ordering holds without an explicit buffer.
+        //
+        // Sent as ONE concatenated frame, not one frame per chunk: 256 KB of ring
+        // used to arrive as a burst of hundreds of JSON frames the moment a tab
+        // opened, which is what made attaching feel like a stall. The frame carries
+        // the highest replayed seq, and only chunks newer than the client's
+        // `lastSeq` are included, so a re-attaching client can write the whole
+        // payload without re-rendering the prefix it already has.
+        if (buffer && buffer.chunks.length > 0) {
+            const missed = lastSeq > 0
+                ? buffer.chunks.filter(c => c.seq > lastSeq)
+                : buffer.chunks;
+            if (missed.length > 0) {
+                const replaySeq = missed[missed.length - 1].seq;
+                const combined = missed.map(c => c.data).join('');
+                this.safeSendBinary(ws, encodeOutputFrame(replaySeq, combined));
             }
         }
 
@@ -338,6 +465,20 @@ export class TerminalWsGateway {
         }
     }
 
+    /**
+     * Send a pre-encoded output frame. `binary: true` is explicit because `ws`
+     * infers the opcode from the argument type, and a future refactor handing this
+     * a string would silently flip the frame to text and break the client's
+     * string-vs-ArrayBuffer discriminator.
+     */
+    private safeSendBinary(ws: WebSocket, frame: Buffer): void {
+        if (ws.readyState === WebSocket.OPEN) {
+            try {
+                ws.send(frame, { binary: true });
+            } catch { /* ignore */ }
+        }
+    }
+
     public dispose(): void {
         if (this.pingInterval) {
             clearInterval(this.pingInterval);
@@ -345,6 +486,10 @@ export class TerminalWsGateway {
         if (this.drainInterval) {
             clearInterval(this.drainInterval);
         }
+        for (const pending of this.pendingOutput.values()) {
+            if (pending.timer) { clearTimeout(pending.timer); }
+        }
+        this.pendingOutput.clear();
         for (const client of this.clients) {
             try { client.ws.close(); } catch { /* ignore */ }
         }

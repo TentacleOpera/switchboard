@@ -16,7 +16,15 @@
  * GENERATED, and `src/webview/vendor/` is gitignored. Bumping the dependency and
  * re-running the build refreshes both, or fails loudly here.
  *
- * Run automatically by `npm run compile` / `watch` / `pretest`.
+ * Run automatically by `npm run compile` / `watch` / `pretest` / `package`.
+ *
+ * `package` (and therefore `vscode:prepublish` → `vsce package`) is on that list
+ * for a reason: webpack's CopyPlugin does NOT fail when a vendored asset is absent
+ * from node_modules — verified by deleting `@xterm/addon-webgl` and watching the
+ * production build succeed with the file simply missing from `dist/`. That ships a
+ * VSIX whose terminals silently fall back to the slow DOM renderer, with nothing in
+ * the build log to say so. This script is the only thing that turns that into a
+ * loud failure, so it must run before every webpack invocation, not just dev ones.
  */
 const fs = require('fs');
 const path = require('path');
@@ -28,6 +36,12 @@ const ASSETS = [
     ['@xterm/xterm/lib/xterm.js', 'xterm/xterm.js'],
     ['@xterm/xterm/css/xterm.css', 'xterm/xterm.css'],
     ['@xterm/addon-fit/lib/addon-fit.js', 'xterm/addon-fit.js'],
+    // Renderers. xterm's built-in default is the DOM renderer (a span per cell);
+    // these two are what close the gap with VS Code's terminal. Both are required
+    // assets, not optional — terminals.js degrades gracefully if a global is
+    // missing, but a missing file here means silently shipping the slow path.
+    ['@xterm/addon-webgl/lib/addon-webgl.js', 'xterm/addon-webgl.js'],
+    ['@xterm/addon-canvas/lib/addon-canvas.js', 'xterm/addon-canvas.js'],
 ];
 
 // src/ ONLY. `dist/webview/vendor/` is owned by webpack's CopyPlugin, which is

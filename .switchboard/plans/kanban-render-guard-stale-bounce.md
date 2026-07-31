@@ -293,3 +293,7 @@ Note for the implementer: these tests read `src/webview/kanban.html` directly an
 ## Recommendation
 
 Complexity 7 → **Send to Lead Coder.**
+
+## Completion Report
+
+Implemented kanban render guard fixes in `src/webview/kanban.html` to stop stale board updates from bouncing optimistically moved cards and eliminate unnecessary full-board DOM rebuilds. Refactored `moveCards` and `moveCardsFailed` to use targeted DOM moves (`moveCardElements`), added pending optimistic move overlay helpers, updated `updateBoard` to use positional signature matching and in-place activity light toggles (`applyWorkingClass`), and added `src/test/kanban-render-guard-contract.test.js`. All contract tests (`test:contract:drag-guard` and `test:contract:render-guard`) pass cleanly with no issues encountered.

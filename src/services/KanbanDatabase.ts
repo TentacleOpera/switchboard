@@ -62,6 +62,10 @@ export interface KanbanPlanRecord {
     routedTo: string;        // agent role dispatched to: 'lead' | 'coder' | 'intern' | ''
     dispatchedAgent: string; // terminal/tool name: 'claude cli', 'copilot cli', etc.
     dispatchedIde: string;   // IDE name: 'Visual Studio Code', 'Cursor', 'Windsurf', etc.
+    /** Friendly name of the exact terminal this card was dispatched to. '' for rows dispatched
+     *  before V57 and for hosts that don't record it — consumers must treat empty as "unknown"
+     *  and fall back to a role+worktree fleet match, never assume a name is present. */
+    dispatchedTerminal?: string;
     dispatchedAt?: string | null; // ISO timestamp the card was dispatched; NULL = not working. Activity-light source.
     clickupTaskId?: string;
     linearIssueId?: string;
@@ -264,10 +268,6 @@ const MIGRATION_V7_SQL = [
     `ALTER TABLE plans ADD COLUMN dispatched_ide TEXT DEFAULT ''`,
 ];
 
-const MIGRATION_V40_SQL = [
-    `ALTER TABLE plans ADD COLUMN dispatched_terminal TEXT DEFAULT ''`,
-];
-
 const MIGRATION_V9_SQL = [
     `ALTER TABLE plans ADD COLUMN clickup_task_id TEXT DEFAULT ''`,
     `CREATE INDEX IF NOT EXISTS idx_plans_clickup_task ON plans(workspace_id, clickup_task_id)`,
@@ -378,6 +378,15 @@ const MIGRATION_V54_SQL = [
 const MIGRATION_V56_SQL = [
     `ALTER TABLE stitch_screens ADD COLUMN summary TEXT NOT NULL DEFAULT ''`,
     `ALTER TABLE stitch_screens ADD COLUMN suggestions_json TEXT NOT NULL DEFAULT ''`,
+];
+
+// V57: record WHICH terminal a card was dispatched to, so the completion broadcast can
+// point its badge at the right pane instead of guessing by role. Additive and idempotent,
+// mirroring the routed_to / dispatched_agent / dispatched_ide trio (V7). The column is
+// also present in SCHEMA_TABLES_SQL, so _ensureSchemaColumns() reconciles any DB whose
+// version was stamped past 57 without the ALTER actually landing.
+const MIGRATION_V57_SQL = [
+    `ALTER TABLE plans ADD COLUMN dispatched_terminal TEXT DEFAULT ''`,
 ];
 
 
@@ -739,7 +748,8 @@ const ORPHAN_PURGE_CONFIRMATION_DELAY_MS = 350;
 
 const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
                        repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
-                       brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide, dispatched_at,
+                       brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
+                       dispatched_terminal, dispatched_at,
                        clickup_task_id, linear_issue_id, notion_page_id, worktree_id, worktree_status, is_feature, feature_id,
                        workspace_name, project_id`;
 
@@ -7850,6 +7860,16 @@ export class KanbanDatabase {
             await this.setMigrationVersion(56);
             console.log('[KanbanDatabase] V56 migration completed: stitch_screens summary/suggestions_json columns present');
         }
+
+        // V57: plans.dispatched_terminal (completion-broadcast pane targeting).
+        const v57 = await this.getMigrationVersion();
+        if (v57 < 57) {
+            for (const sql of MIGRATION_V57_SQL) {
+                try { this._db.exec(sql); } catch { /* column already exists */ }
+            }
+            await this.setMigrationVersion(57);
+            console.log('[KanbanDatabase] V57 migration completed: dispatched_terminal column added to plans');
+        }
     }
 
     /**
@@ -9380,6 +9400,8 @@ FROM plans
                     routedTo: String(row.routed_to || ""),
                     dispatchedAgent: String(row.dispatched_agent || ""),
                     dispatchedIde: String(row.dispatched_ide || ""),
+                    // Absent from SELECT lists that predate V57 → undefined → "" (unknown).
+                    dispatchedTerminal: String(row.dispatched_terminal || ""),
                     dispatchedAt: row.dispatched_at !== null && row.dispatched_at !== undefined ? String(row.dispatched_at) : null,
                     clickupTaskId: String(row.clickup_task_id || ""),
                     linearIssueId: String(row.linear_issue_id || ""),

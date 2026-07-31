@@ -22,9 +22,9 @@ Why all three, stated plainly: layers 1 and 2 are predicates, and predicates onl
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Make `~/.switchboard` Unreachable From a Test Process (state-home seam + fail-closed guard)](../plans/sandbox-switchboard-state-home-in-tests.md) — **PLAN REVIEWED**
-- [ ] [Make a Bad Integration-Config Write Non-Destructive and a Stale ClickUp Workspace ID Self-Healing](../plans/integration-config-write-guards-and-stale-id-heal.md) — **PLAN REVIEWED**
-- [ ] [Back Up `integration-config.json` on Every Significant Write, and Make Restoring It a Ten-Second Operation](../plans/integration-config-backup-on-write-and-restore.md) — **PLAN REVIEWED**
+- [ ] [Make `~/.switchboard` Unreachable From a Test Process (state-home seam + fail-closed guard)](../plans/sandbox-switchboard-state-home-in-tests.md) — **CODER CODED**
+- [ ] [Make a Bad Integration-Config Write Non-Destructive and a Stale ClickUp Workspace ID Self-Healing](../plans/integration-config-write-guards-and-stale-id-heal.md) — **CODER CODED**
+- [ ] [Back Up `integration-config.json` on Every Significant Write, and Make Restoring It a Ten-Second Operation](../plans/integration-config-backup-on-write-and-restore.md) — **CODER CODED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

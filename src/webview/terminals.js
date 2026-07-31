@@ -2,7 +2,12 @@
     'use strict';
 
     let activeTerminalName = null;
-    let currentLayout = '1'; // '1', '2h', '2v', '2x2'
+    let currentLayout = '1'; // '1', '2h', '2v', '2x2' — what the USER picked (persisted)
+    // What is actually RENDERED. Diverges from currentLayout only when the pane-size floor
+    // trips. Every render path reads this, never currentLayout, so a floored layout cannot
+    // silently revert on the next re-render (which would leave the banner lying).
+    let effectiveLayout = '1';
+    let initialAssignmentDone = false;
     let focusedPaneIndex = 0;
     let paneAssignments = []; // [terminalName or null, ...] length based on currentLayout
     const collapsedWorktrees = new Set();
@@ -36,7 +41,170 @@
         return new TextDecoder().decode(bytes);
     }
 
+    /** One decoder for every terminal — constructing one per frame is not free. */
+    const outputDecoder = new TextDecoder('utf-8');
+
+    /** Backstop flush interval for when requestAnimationFrame is not running. */
+    const BATCH_FALLBACK_MS = 200;
+
+    /**
+     * Resolve the mono font stack to a concrete value.
+     *
+     * `fontFamily: 'var(--font-mono)'` survives the DOM renderer (an inline style
+     * resolves the var against :root) but is meaningless to a canvas/WebGL
+     * renderer, which passes the string straight to `ctx.font` where `var()` is
+     * invalid — yielding a silent fallback and wrong glyph metrics. Resolve it here
+     * so the GPU renderers measure the same font the DOM one drew.
+     */
+    function resolveMonoFont() {
+        try {
+            const resolved = getComputedStyle(document.documentElement)
+                .getPropertyValue('--font-mono')
+                .trim();
+            if (resolved) { return resolved; }
+        } catch { /* fall through */ }
+        return 'Menlo, Monaco, "Courier New", monospace';
+    }
+
+    /**
+     * Attach the fastest renderer this browser will give us.
+     *
+     * xterm's default is the DOM renderer — a span per cell, relaid out by the
+     * browser every frame. That is the single largest reason browser terminals
+     * trailed VS Code's, which runs WebGL by default. Order is WebGL → canvas →
+     * DOM, each step a strictly slower but strictly more compatible fallback.
+     *
+     * MUST be called after `term.open()`: both addons need the terminal's element
+     * to exist before they can create a drawing surface.
+     *
+     * Returns a holder rather than the addon itself because a context loss swaps
+     * the live addon out underneath us — teardown has to dispose whichever one is
+     * current, not the one that happened to be attached at creation.
+     */
+    function attachRenderer(term) {
+        const holder = { current: null };
+        if (window.WebglAddon && window.WebglAddon.WebglAddon) {
+            try {
+                const webgl = new window.WebglAddon.WebglAddon();
+                // A lost context (GPU reset, driver crash, too many live contexts)
+                // leaves the addon painting nothing at all. Drop to canvas rather
+                // than leaving the operator with a blank terminal.
+                webgl.onContextLoss(() => {
+                    console.warn('[Terminals] WebGL context lost — falling back to canvas renderer');
+                    try { webgl.dispose(); } catch { /* ignore */ }
+                    holder.current = attachCanvasRenderer(term);
+                });
+                term.loadAddon(webgl);
+                holder.current = webgl;
+                return holder;
+            } catch (err) {
+                console.warn('[Terminals] WebGL renderer unavailable, falling back:', err);
+            }
+        }
+        holder.current = attachCanvasRenderer(term);
+        return holder;
+    }
+
+    /** Theme classes the host swaps between; mirrors planning.js's set. */
+    const ALL_THEME_CLASSES = ['theme-claudify', 'cyber-theme-enabled'];
+
+    /**
+     * Settle on a theme class before the first terminal is built.
+     *
+     * Three ways this panel gets loaded, and only one of them carries a theme:
+     *  - Extension host: applyThemeClass() stamps the class server-side. Respect it.
+     *  - Browser shell: the standalone host passes no themeClass at all, and the
+     *    shell only posts `switchboardThemeChanged` when the toggle is CLICKED —
+     *    never to a newly built iframe. So inherit from the parent's body, which is
+     *    same-origin and already carries the shell's own class.
+     *  - Direct navigation to /terminals: no parent, no injection — fall back to
+     *    afterburner, the same default the shell and handleGetThemeSetting use.
+     * Without this the panel renders unthemed until someone toggles the theme.
+     */
+    function resolveInitialTheme() {
+        if (ALL_THEME_CLASSES.some(cls => document.body.classList.contains(cls))) {
+            return;
+        }
+        try {
+            const parentBody = window.parent && window.parent !== window
+                ? window.parent.document.body
+                : null;
+            if (parentBody) {
+                const inherited = ALL_THEME_CLASSES.find(cls => parentBody.classList.contains(cls));
+                if (inherited) {
+                    document.body.classList.add(inherited);
+                    return;
+                }
+            }
+        } catch { /* cross-origin parent — fall through to the default */ }
+        document.body.classList.add('cyber-theme-enabled');
+    }
+
+    /**
+     * Reflect a theme name onto <body> so the CSS variables follow.
+     *
+     * The host sends only a name in `switchboardThemeChanged`; the panel used to
+     * act on it by recolouring xterm alone, so the surrounding chrome kept the
+     * theme it was served with and the two disagreed until a reload. Removes only
+     * the classes that should not be present, leaving unrelated ones
+     * (cyber-animation-disabled, etc.) alone.
+     */
+    function setThemeBodyClass(theme) {
+        if (!theme) { return; }
+        const desired = theme === 'claudify' ? 'theme-claudify' : 'cyber-theme-enabled';
+        for (const cls of ALL_THEME_CLASSES) {
+            if (cls !== desired) { document.body.classList.remove(cls); }
+        }
+        document.body.classList.add(desired);
+    }
+
+    /**
+     * Build xterm's theme from the panel's own CSS variables.
+     *
+     * terminals.html is the single source of truth for the palette, including the
+     * per-theme overrides on body.theme-claudify / body.cyber-theme-enabled. Three
+     * copies of these colours used to exist — the Terminal constructor, the
+     * theme-change handler, and the CSS — so a fresh load rendered the terminal in
+     * whatever the constructor hardcoded regardless of the active theme, and only a
+     * manual theme toggle brought it into line.
+     *
+     * Read off <body>, not documentElement: the theme class lives there, and custom
+     * properties inherit, so this picks up both the :root defaults and the
+     * body-level overrides in one pass.
+     */
+    function buildTerminalTheme() {
+        const cs = getComputedStyle(document.body);
+        const pick = (name, fallback) => {
+            const value = (cs.getPropertyValue(name) || '').trim();
+            return value || fallback;
+        };
+        return {
+            // Must stay opaque — see the .terminals-main note in terminals.html.
+            background: pick('--term-surface', '#171717'),
+            foreground: pick('--text-primary', '#e0e0e0'),
+            cursor: pick('--accent-teal', '#00e5ff'),
+            selectionBackground: pick('--term-selection', 'rgba(0, 229, 255, 0.3)'),
+        };
+    }
+
+    function attachCanvasRenderer(term) {
+        if (window.CanvasAddon && window.CanvasAddon.CanvasAddon) {
+            try {
+                const canvas = new window.CanvasAddon.CanvasAddon();
+                term.loadAddon(canvas);
+                return canvas;
+            } catch (err) {
+                console.warn('[Terminals] Canvas renderer unavailable, using DOM renderer:', err);
+            }
+        }
+        return null;
+    }
+
     function init() {
+        // Before any terminal is constructed — buildTerminalTheme() reads the CSS
+        // variables this class selects.
+        resolveInitialTheme();
+
         if (btnNew) {
             btnNew.addEventListener('click', () => onNewTerminalClicked());
         }
@@ -90,8 +258,13 @@
             }
         });
 
+        // Window resize re-evaluates the floor ONLY. It deliberately does not fit/resize
+        // the panes: each terminal container carries its own debounced ResizeObserver
+        // (createTerminalView), which fires for exactly the panes whose box actually
+        // changed. Fitting here as well sent two fit() passes and two {t:'resize'} frames
+        // per terminal for every window drag.
         window.addEventListener('resize', debounce(() => {
-            checkLayoutFloorAndFit();
+            applyLayoutFloor({ fit: false });
         }, 150));
 
         loadLayoutSettings().then(() => {
@@ -145,6 +318,7 @@
         if (['1', '2h', '2v', '2x2'].includes(savedMode)) {
             currentLayout = savedMode;
         }
+        effectiveLayout = currentLayout;
         if (Array.isArray(savedPanes)) {
             paneAssignments = savedPanes;
         }
@@ -177,6 +351,9 @@
                     sanitizePaneAssignments();
                     renderSidebarList();
                     renderPaneGrid();
+                    // First paint is also the first chance to measure the grid, so the
+                    // floor is evaluated here rather than only on a later resize.
+                    applyLayoutFloor();
                 }
             }
         } catch (err) {
@@ -186,6 +363,9 @@
 
     function sanitizePaneAssignments() {
         const liveNames = new Set(fleetList.map(t => t.friendlyName));
+        // Sized by the USER's layout, not the floored one — a temporarily floored window
+        // must not truncate (and then persist away) the assignments of the panes it is
+        // merely declining to render.
         const slotCount = getSlotCount(currentLayout);
 
         paneAssignments = paneAssignments.slice(0, slotCount);
@@ -193,6 +373,8 @@
             paneAssignments.push(null);
         }
 
+        // Stale-slot drop: a persisted layout may name terminals that died while the page
+        // was closed. Drop those slots individually — never discard the whole layout.
         for (let i = 0; i < paneAssignments.length; i++) {
             if (paneAssignments[i] && !liveNames.has(paneAssignments[i])) {
                 paneAssignments[i] = null;
@@ -203,9 +385,14 @@
             activeTerminalName = null;
         }
 
-        if (!paneAssignments.some(name => name !== null) && fleetList.length > 0) {
-            paneAssignments[0] = fleetList[0].friendlyName;
-            activeTerminalName = fleetList[0].friendlyName;
+        // Seed pane 0 on FIRST load only. Re-seeding on every list refresh would undo a
+        // deliberate pane clear the moment any terminalsChanged broadcast arrived.
+        if (!initialAssignmentDone && fleetList.length > 0) {
+            initialAssignmentDone = true;
+            if (!paneAssignments.some(name => name !== null)) {
+                paneAssignments[0] = fleetList[0].friendlyName;
+                activeTerminalName = fleetList[0].friendlyName;
+            }
         }
     }
 
@@ -367,6 +554,10 @@
     function setLayoutMode(mode) {
         if (!['1', '2h', '2v', '2x2'].includes(mode)) return;
         currentLayout = mode;
+        // Adopt the pick optimistically so the render below is the ONLY render on the
+        // common (fits-fine) path — applyLayoutFloor then re-renders only if the new
+        // layout actually trips the floor.
+        effectiveLayout = mode;
 
         document.querySelectorAll('.btn-layout').forEach(btn => {
             btn.classList.toggle('active', btn.getAttribute('data-layout') === mode);
@@ -374,11 +565,11 @@
 
         sanitizePaneAssignments();
         renderPaneGrid();
-        checkLayoutFloorAndFit();
+        applyLayoutFloor();
     }
 
     function assignToFocusedPane(terminalName) {
-        if (focusedPaneIndex < 0 || focusedPaneIndex >= getSlotCount(currentLayout)) {
+        if (focusedPaneIndex < 0 || focusedPaneIndex >= getSlotCount(effectiveLayout)) {
             focusedPaneIndex = 0;
         }
 
@@ -400,9 +591,12 @@
     }
 
     function renderPaneGrid() {
-        const slotCount = getSlotCount(currentLayout);
-        paneGridEl.className = `pane-grid layout-${currentLayout}`;
+        const slotCount = getSlotCount(effectiveLayout);
+        paneGridEl.className = `pane-grid layout-${effectiveLayout}`;
         paneGridEl.innerHTML = '';
+
+        // A floored layout can leave the focus on a pane that is no longer rendered.
+        if (focusedPaneIndex >= slotCount) { focusedPaneIndex = 0; }
 
         for (let i = 0; i < slotCount; i++) {
             const paneEl = document.createElement('div');
@@ -489,36 +683,52 @@
         }
     }
 
-    function checkLayoutFloorAndFit() {
+    /**
+     * Resolve the layout the window can actually render. Below the floor xterm shows a
+     * handful of unreadable columns, so we step DOWN to the next-simpler layout rather
+     * than subdivide further.
+     */
+    function resolveFlooredLayout() {
         const rect = paneGridEl.getBoundingClientRect();
-        if (rect.width <= 0 || rect.height <= 0) return;
+        // Zero box = panel hidden or not laid out yet. Assume the user's pick; the next
+        // real resize re-evaluates.
+        if (rect.width <= 0 || rect.height <= 0) { return currentLayout; }
 
-        let neededFallback = false;
-        let fallbackMode = currentLayout;
-
-        if (currentLayout === '2x2' && (rect.width < 500 || rect.height < 300)) {
-            fallbackMode = '2h';
-            neededFallback = true;
+        let mode = currentLayout;
+        if (mode === '2x2' && (rect.width < 500 || rect.height < 300)) {
+            mode = rect.width >= 400 ? '2h' : '2v';
         }
-        if ((fallbackMode === '2h' && rect.width < 400) || (fallbackMode === '2v' && rect.height < 250)) {
-            fallbackMode = '1';
-            neededFallback = true;
-        }
+        if (mode === '2h' && rect.width < 400) { mode = '1'; }
+        if (mode === '2v' && rect.height < 250) { mode = '1'; }
+        return mode;
+    }
 
-        if (neededFallback) {
-            fallbackBannerEl.classList.add('visible');
-            paneGridEl.className = `pane-grid layout-${fallbackMode}`;
-        } else {
-            fallbackBannerEl.classList.remove('visible');
-            paneGridEl.className = `pane-grid layout-${currentLayout}`;
-        }
+    /**
+     * Apply the floor. Re-renders when the pane COUNT changes, because the floor is not a
+     * CSS-only concern: leaving four pane elements in a two-column grid just reflows them
+     * into two implicit rows — i.e. 2x2 again — which is exactly the unreadable grid the
+     * floor exists to prevent.
+     */
+    function applyLayoutFloor(opts) {
+        const fit = !opts || opts.fit !== false;
+        const resolved = resolveFlooredLayout();
+        const changed = resolved !== effectiveLayout;
+        effectiveLayout = resolved;
 
-        batchFitVisiblePanes();
+        fallbackBannerEl.classList.toggle('visible', effectiveLayout !== currentLayout);
+
+        if (changed) {
+            renderPaneGrid();
+            batchFitVisiblePanes();
+            return;
+        }
+        paneGridEl.className = `pane-grid layout-${effectiveLayout}`;
+        if (fit) { batchFitVisiblePanes(); }
     }
 
     function batchFitVisiblePanes() {
         requestAnimationFrame(() => {
-            const slotCount = getSlotCount(currentLayout);
+            const slotCount = getSlotCount(effectiveLayout);
             for (let i = 0; i < slotCount; i++) {
                 const name = paneAssignments[i];
                 if (name) {
@@ -688,6 +898,7 @@
         if (!entry) { return; }
         if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
         if (entry.animationFrameId) { cancelAnimationFrame(entry.animationFrameId); entry.animationFrameId = null; }
+        if (entry.batchFallbackTimer) { clearTimeout(entry.batchFallbackTimer); entry.batchFallbackTimer = null; }
         entry.exited = true;
         if (entry.ws) {
             try { entry.ws.close(); } catch { /* ignore */ }
@@ -695,6 +906,13 @@
         }
         if (entry.resizeObserver) {
             try { entry.resizeObserver.disconnect(); } catch { /* ignore */ }
+        }
+        // Before term.dispose(): the GPU renderers hold a WebGL context / canvas
+        // that browsers cap per page (~16 contexts), so leaking one per closed
+        // terminal eventually forces every terminal back to the DOM renderer.
+        if (entry.rendererAddon && entry.rendererAddon.current) {
+            try { entry.rendererAddon.current.dispose(); } catch { /* ignore */ }
+            entry.rendererAddon.current = null;
         }
         if (entry.term) {
             try { entry.term.dispose(); } catch { /* ignore */ }
@@ -718,13 +936,8 @@
         const term = new window.Terminal({
             cursorBlink: true,
             fontSize: 13,
-            fontFamily: 'var(--font-mono)',
-            theme: {
-                background: '#000000',
-                foreground: '#e0e0e0',
-                cursor: '#00e5ff',
-                selectionBackground: 'rgba(0, 229, 255, 0.3)',
-            }
+            fontFamily: resolveMonoFont(),
+            theme: buildTerminalTheme(),
         });
 
         let fitAddon = null;
@@ -734,6 +947,7 @@
         }
 
         term.open(container);
+        const rendererAddon = attachRenderer(term);
         if (fitAddon) {
             try { fitAddon.fit(); } catch { /* ignore */ }
         }
@@ -743,10 +957,12 @@
             container,
             term,
             fitAddon,
+            rendererAddon,
             ws: null,
             lastSeq: 0,
             batchQueue: [],
             animationFrameId: null,
+            batchFallbackTimer: null,
             reconnectTimer: null,
             reconnectDelay: 500,
             resizeObserver: null,
@@ -801,7 +1017,15 @@
         if (terminalToken) {
             wsUrl += `&token=${encodeURIComponent(terminalToken)}`;
         }
+        // Tell the server how far we already rendered so it replays only the tail.
+        // On a first connect this is 0 and we get the whole ring.
+        if (entry.lastSeq > 0) {
+            wsUrl += `&lastSeq=${encodeURIComponent(entry.lastSeq)}`;
+        }
         const ws = new WebSocket(wsUrl);
+        // Output arrives as binary frames; without this they'd surface as Blobs and
+        // force an async read on the hot path.
+        ws.binaryType = 'arraybuffer';
         entry.ws = ws;
 
         ws.onopen = () => {
@@ -820,8 +1044,27 @@
 
         ws.onmessage = (event) => {
             try {
+                // Binary = pty output (4-byte BE seq + UTF-8 payload). String =
+                // JSON control frame. See encodeOutputFrame in terminalWsGateway.ts.
+                if (typeof event.data !== 'string') {
+                    const view = new DataView(event.data);
+                    if (view.byteLength < 4) { return; }
+                    const seq = view.getUint32(0, false);
+                    if (seq && seq <= entry.lastSeq) {
+                        return;
+                    }
+                    if (seq) {
+                        entry.lastSeq = seq;
+                    }
+                    entry.batchQueue.push(outputDecoder.decode(new Uint8Array(event.data, 4)));
+                    scheduleBatchFlush(entry);
+                    return;
+                }
+
                 const frame = JSON.parse(event.data);
                 if (frame.t === 'out' && typeof frame.data === 'string') {
+                    // Legacy text framing — retained so a browser tab left open
+                    // across a server downgrade still renders instead of going mute.
                     if (frame.seq && frame.seq <= entry.lastSeq) {
                         return;
                     }
@@ -863,23 +1106,47 @@
     }
 
     function scheduleBatchFlush(entry) {
-        if (entry.animationFrameId) return;
-        entry.animationFrameId = requestAnimationFrame(() => {
-            entry.animationFrameId = null;
-            if (entry.batchQueue.length > 0) {
-                const combined = entry.batchQueue.join('');
-                entry.batchQueue = [];
-                entry.term.write(combined);
-            }
-        });
+        if (!entry.animationFrameId) {
+            entry.animationFrameId = requestAnimationFrame(() => {
+                entry.animationFrameId = null;
+                flushBatch(entry);
+            });
+        }
+        // rAF is parked while the tab sits in the background, so a chatty terminal
+        // would bank its entire output in batchQueue and land it as one enormous
+        // write the moment the operator switches back. The timer keeps it draining.
+        if (!entry.batchFallbackTimer) {
+            entry.batchFallbackTimer = setTimeout(() => {
+                entry.batchFallbackTimer = null;
+                flushBatch(entry);
+            }, BATCH_FALLBACK_MS);
+        }
+    }
+
+    function flushBatch(entry) {
+        if (entry.batchFallbackTimer) {
+            clearTimeout(entry.batchFallbackTimer);
+            entry.batchFallbackTimer = null;
+        }
+        if (entry.batchQueue.length === 0) { return; }
+        const combined = entry.batchQueue.join('');
+        entry.batchQueue = [];
+        entry.term.write(combined);
     }
 
     function handleAgentCompleted(msg) {
-        const { planTitle, role, terminalName } = msg;
+        const { planTitle, role, terminalName, worktreePath } = msg;
 
+        // The host resolves terminalName from the plan's dispatched_terminal column and
+        // already falls back to a role+worktree fleet match. This client-side pass is the
+        // last resort (host too old to send either field). It scopes by worktree first —
+        // three coders in three checkouts all match on role alone, so a role-only match
+        // would badge whichever happened to be listed first.
         let targetTerm = terminalName;
         if (!targetTerm && role) {
-            const match = fleetList.find(t => t.role === role);
+            const match = (worktreePath && fleetList.find(t => t.worktreePath === worktreePath && t.role === role))
+                || (worktreePath && fleetList.find(t => t.worktreePath === worktreePath))
+                || (!worktreePath && fleetList.find(t => t.role === role));
             if (match) targetTerm = match.friendlyName;
         }
 
@@ -935,16 +1202,13 @@
     }
 
     function applyThemeToAllTerminals(theme) {
+        // Body class first: buildTerminalTheme reads the CSS variables it selects,
+        // so recolouring before the swap would just re-read the outgoing theme.
+        setThemeBodyClass(theme);
+        const nextTheme = buildTerminalTheme();
         for (const entry of terminalsMap.values()) {
             if (entry.term) {
-                const bg = theme === 'claudify' ? '#181615' : '#000000';
-                const fg = theme === 'claudify' ? '#e0dcd3' : '#e0e0e0';
-                entry.term.options.theme = {
-                    background: bg,
-                    foreground: fg,
-                    cursor: '#00e5ff',
-                    selectionBackground: 'rgba(0, 229, 255, 0.3)'
-                };
+                entry.term.options.theme = nextTheme;
             }
         }
     }
