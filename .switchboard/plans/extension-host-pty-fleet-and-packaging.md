@@ -22,12 +22,12 @@ PTY terminals are available in both hosts. Rationale: the marketplace is the onl
 ## Metadata
 
 **Complexity:** 7
-**Tags:** backend, infrastructure, packaging, feature
+**Tags:** backend, infrastructure, devops, security, feature
 **Project:** Browser Switchboard
 
 ## User Review Required
 
-- None. Platform-target set and the per-surface routing model are decided below.
+- None. Linux question DECIDED by user (2026-07-31): no Linux — the `1.1.0` pin stays, the matrix stays four targets + universal, the v1 non-goal stands (the `1.2.0-beta` upgrade path remains available if this is ever revisited). Everything else decided below: platform-target set, PDB trimming, publish sequencing, per-surface routing, terminal-token transport.
 
 ## Complexity Audit
 
@@ -36,7 +36,7 @@ PTY terminals are available in both hosts. Rationale: the marketplace is the onl
 - `.vscodeignore` un-ignore and a `vsce --target` matrix are mechanical.
 
 ### Complex / Risky
-- Per-surface dispatch routing touches three shared consumers that currently assume one fleet — a wrong verdict sends a prompt into a terminal the user cannot see.
+- Per-surface dispatch routing touches four shared consumers that currently assume one fleet — a wrong verdict sends a prompt into a terminal the user cannot see.
 - The extension host has a real `TerminalBackend` already (`VscodeTerminalBackend`); adding a second backend means the seam now has two live implementations in one process for the first time.
 - Extension-host teardown: PTYs are children of the extension host, so `deactivate()` must dispose them or a window reload orphans agent processes. Standalone solved this via `instance.stop()`; the extension has no equivalent wiring yet.
 - Platform-specific VSIX publishing is a release-pipeline change; getting the fallback wrong means some platform gets no installable extension at all.
@@ -51,18 +51,29 @@ PTY terminals are available in both hosts. Rationale: the marketplace is the onl
 - The browser cockpit's terminal channel is RCE-grade. The gateway keeps `rejectWhenTokenEmpty: true`, which it already does. **The extension host has no token by default — see step 2b for the resolved design.** This is not a hypothetical: verified that `getAuthToken` returns `secrets.get('switchboard.apiToken') || ''` (`TaskViewerProvider.ts:1625-1628`), an opt-in secret that is empty for essentially every install, so `/ws/terminal` would be rejected 100% of the time and every terminal would render but never stream.
 
 **Side Effects**
-- VSIX size grows ~30 MB on Windows targets. Marketplace download size is user-visible.
+> **Superseded:** VSIX size grows ~30 MB on Windows targets.
+> **Reason:** Verified 2026-07-31: 27 MB of the 30 MB win32-x64 prebuild directory is `.pdb` debug symbols (`du -ch prebuilds/win32-x64/*.pdb`), which the runtime never loads. Shipping them also flirted with the Marketplace's per-VSIX upload cap (documented at 25–50 MB — the 30 MB build was one stripping decision away from an HTTP 413).
+> **Replaced with:** Windows VSIX grows ~3 MB after excluding `**/*.pdb` (functional binaries kept: `conpty.node`, `pty.node`, `conpty_console_list.node`, `winpty.dll`, `winpty-agent.exe`, `conpty/`). darwin growth unchanged (~136 KB / ~64 KB). Marketplace download size is user-visible.
 - Two terminal kinds appear in `state.terminals`; anything that enumerates terminals by name must respect the `ideName` partition.
 
 **Dependencies & Conflicts**
-- Blocked by `reverse-pty-standalone-only-constraint.md`.
+- Was blocked by `reverse-pty-standalone-only-constraint.md` — that plan is now IMPLEMENTED (2026-07-31), so this plan is unblocked.
 - Independent of `terminals-panel-v2-layouts-worktree-tabs.md`, which only needs *a* PTY host and works against standalone today.
+
+## Dependencies
+
+- `reverse-pty-standalone-only-constraint.md` — gate reversal; **IMPLEMENTED 2026-07-31** (its Completion Report is filled; `test:contract:pty-host-gating` exists and its assertions are conditional so they pass both before and after this plan). This plan is unblocked.
+- `terminals-panel-v2-layouts-worktree-tabs.md` — independent; needs *a* PTY host and works against standalone today.
+
+## Adversarial Synthesis
+
+Key risks: the terminal-token transport was specified against a cookie that can never carry it (every `/ws/terminal` upgrade would 401 — now corrected to a page-injected token on the WS URL); the per-surface routing model had no stated discriminator, so the browser board's own dispatches would have landed in invisible VS Code terminals (now keyed on the existing `apiOriginated` HTTP-origin marker); and extension-host teardown must kill PTYs synchronously or window reloads orphan agent shells. Mitigations: page-injected `?token=` transport that leaves the HTTP trust model byte-identical, the `apiOriginated` discriminator applied uniformly to delivery + pre-flight + worktree lookup, and the fleet's existing synchronous SIGKILL sweep reused in `deactivate()`. Residual risk sits in the release pipeline (platform-VSIX matrix correctness) and is covered by artifact inspection in manual UAT rather than by automated gates in this pass.
 
 ## Non-Goals
 
 - No npm publishing. Standalone stays a dev path (`node dist/standalone/cli.js`); the naming problem (`switchboard` is taken; `@turnzero/switchboard` would collide with the VS Code extension identity, since `name` is shared and VS Code forbids scoped names) is deferred.
 - No change to how the VS Code sidebar board dispatches — it keeps using VS Code terminals.
-- No Linux PTY support in v1 (no prebuild exists); Linux gets the universal build and degrades via the probe.
+- No Linux PTY support in v1 (**user-confirmed 2026-07-31**); Linux gets the universal build and degrades via the probe. Context: the pinned `node-pty@1.1.0` ships no Linux prebuild (confirmed locally — `prebuilds/` holds darwin/win only), but the `1.2.0-beta` line (e.g. `1.2.0-beta.14`) now ships `linux-x64` and `linux-arm64` prebuilds — the upgrade path exists if this is ever revisited.
 
 ## Implementation Steps
 
@@ -73,8 +84,9 @@ PTY terminals are available in both hosts. Rationale: the marketplace is the onl
 - Release script: build a target matrix with `vsce package --target`:
   - `darwin-arm64`, `darwin-x64`, `win32-x64`, `win32-arm64` — node-pty included.
   - One **universal** VSIX with node-pty excluded, as the fallback for Linux and anything unlisted. The marketplace serves platform-specific builds preferentially and falls back to universal.
-- Trim what ships: only the current target's `prebuilds/<platform>-<arch>/` directory needs to be in each VSIX. Shipping all four into every target is the difference between +136 KB and +58 MB on darwin.
-- Verify each artifact: the darwin VSIX must contain `prebuilds/darwin-*/pty.node` **and** `spawn-helper`; the universal VSIX must contain no `.node` binary at all.
+- Trim what ships: only the current target's `prebuilds/<platform>-<arch>/` directory needs to be in each VSIX, and **exclude `**/*.pdb` from the Windows directories** — debug symbols are 27 of the 30 MB and the loader never touches them. Shipping all four platforms into every target is the difference between +136 KB and +58 MB on darwin; shipping PDBs is the difference between +3 MB and +30 MB on Windows.
+- Publish mechanics (verified against vsce docs/issues, 2026-07-31): `universal` is **not** a valid `--target` value — the fallback VSIX is produced by omitting `--target`. Publish all five artifacts sequentially with `vsce publish --packagePath <file>`; do **not** use `--skip-duplicate` (vsce issues #868/#1014: the second target under the same version tag gets wrongly skipped). `engines.vscode` is already `^1.93.0`, above the `^1.61.0` floor platform targeting requires — no manifest change.
+- Verify each artifact: the darwin VSIX must contain `prebuilds/darwin-*/pty.node` **and** `spawn-helper`; the Windows VSIXs must contain their `.node`/`.dll`/`.exe` files and **zero `.pdb` files** (assert the final `.vsix` is under 25 MB — the conservative floor of the Marketplace upload cap); the universal VSIX must contain no `.node` binary at all.
 
 ### 2. Extension-host fleet construction
 
@@ -101,13 +113,13 @@ Work items:
 - `LocalApiServer`: add `pathname.startsWith('/terminals/verb/')` alongside the existing seven routes, dispatching to `this._options.terminalVerb`. Absent option ⇒ 503, matching how the other panel verbs behave in a host that does not wire them.
 - `bootstrap.ts`: pass `terminalVerb: handlePtyVerb` and delete the six PTY cases from `kanbanVerb`. `handlePtyVerb` is already a standalone function taking `(verb, payload, root)`, so this is a wiring move, not a rewrite. Keep the `ptyReady` guard on the new entry point.
 - Extension host: wire the same `terminalVerb` to its own fleet.
-- `terminals.js`: stop hardcoding `/kanban/verb/` and post to `/terminals/verb/` (or route through the transport shim, which resolves the prefix on its own).
+- `terminals.js`: stop hardcoding `/kanban/verb/` for the four `pty*` calls (`ptyListTerminals`, `ptyCreateTerminal`, `ptyRenameTerminal`, `ptyCloseTerminal`) and post them to `/terminals/verb/` (or route through the transport shim, which resolves the prefix on its own). **Clarification:** the panel's `getSetting` call (`terminals.js:156`, the `agents.visibleAgents` role-picker read) is a **Kanban** verb, not a PTY verb — it must stay on `/kanban/verb/`. A blanket "everything to `/terminals/verb/`" edit breaks the role picker; only the `pty*` fetches move.
 
 **No compatibility burden:** `/kanban/verb/pty*` has no external consumers — standalone is unpublished (nothing is on npm; `switchboard` there belongs to a third party), so this surface has only ever been reachable in a dev checkout. Move it outright rather than aliasing.
 
 ### 2b. Terminal-channel authentication (DECIDED)
 
-**Problem, verified in code.** `TaskViewerProvider.ts:1625-1628` supplies `getAuthToken: async () => await this._context.secrets.get('switchboard.apiToken') || ''`. That secret is opt-in and unset for essentially all installs, so it returns `''`. `_checkAuth` then short-circuits on `if (!expected) { return true; }` (`LocalApiServer.ts:503`) — the historical loopback-trust path. The terminal gateway, correctly, does the opposite: `rejectWhenTokenEmpty: true`. Net effect if nothing changes: the Terminals panel renders, the list populates over loopback-trusted HTTP, and **every `/ws/terminal` upgrade is rejected** — a silent, hard-to-diagnose dead panel.
+**Problem, verified in code.** `TaskViewerProvider.ts:1625-1628` supplies `getAuthToken: async () => await this._context.secrets.get('switchboard.apiToken') || ''`. That secret is opt-in and unset for essentially all installs, so it returns `''`. `_checkAuth` then short-circuits on `if (!expected) { return true; }` (`LocalApiServer.ts:526`) — the historical loopback-trust path. The terminal gateway, correctly, does the opposite: `rejectWhenTokenEmpty: true`. Net effect if nothing changes: the Terminals panel renders, the list populates over loopback-trusted HTTP, and **every `/ws/terminal` upgrade is rejected** — a silent, hard-to-diagnose dead panel.
 
 **Decision: give the gateway its own terminal-scoped credential. Do NOT change `getAuthToken`, and do NOT relax the gateway.**
 
@@ -118,11 +130,15 @@ Two rejected alternatives, both tempting:
 
 **Design:**
 - Generate a per-session terminal token at extension activation (`crypto.randomBytes`, in memory only — never persisted, never in SecretStorage; it dies with the host and a new one is minted on reload).
-- Pass it to the browser through the existing one-time-token exchange: append `?token=` to the Open-in-Browser URL, which `LocalApiServer` already swaps for an HttpOnly `sb_session` cookie (`LocalApiServer.ts:576-585`). No new transport mechanism.
+> **Superseded:** Pass the terminal token to the browser through the existing one-time-token exchange: append `?token=` to the Open-in-Browser URL, which `LocalApiServer` already swaps for an HttpOnly `sb_session` cookie. No new transport mechanism.
+> **Reason:** Verified false in code. The exchange sets the cookie to `await this._options.getAuthToken()` (`LocalApiServer.ts:600`, `:652`, `:706`) — the **HTTP** token, which is `''` in the extension host. The WS upgrade authenticates against the **gateway's own** token closure (`authorizeWsUpgrade`, `wsUpgradeAuth.ts:63-76`), reading either a `?token=` query param on the upgrade URL or the `sb_session` cookie — and `terminals.js:426` appends no token param. So the cookie would carry `''`, the gateway would expect the terminal token, and every `/ws/terminal` upgrade would 401: exactly the dead panel this section exists to prevent. A (small) new transport IS required.
+> **Replaced with:** Inject the terminal token into the served Terminals page and append it to the WS upgrade URL. (1) When the extension host serves `/terminals` HTML, add a bootstrap value (e.g. `window.__SB_TERMINAL_TOKEN__` via a `<script>` or `data-` attribute) carrying the per-session terminal token; standalone may inject its `sessionToken` the same way or keep relying on the cookie (there the two tokens coincide). (2) `terminals.js` appends `&token=<value>` to the `/ws/terminal` URL when the bootstrap value is present — `authorizeWsUpgrade` already accepts the query-param form (`wsUpgradeAuth.ts:63`), so no gateway change. (3) The one-time-token exchange and the `sb_session` cookie are left untouched: the cookie continues to carry the HTTP token, so installs that DO set `switchboard.apiToken` keep working — the cookie-value alternative (pointing `sb_session` at the terminal token) was rejected because it 401s the panel's own HTTP verb calls on exactly those installs.
 - Construct the gateway with that token: `new TerminalWsGateway(fleet, async () => terminalSessionToken, ...)`. The constructor already takes its **own** `getAuthToken` closure, independent of `LocalApiServerOptions.getAuthToken` — in standalone the two coincide by coincidence (`async () => sessionToken`), not by design. So this is a one-argument change at the construction site.
 - HTTP trust model untouched: skills, scripts and `/health` keep working exactly as today.
 
-**Consequence to accept:** the cookie is shared with the HTTP surface, so a token minted for terminals also satisfies `_checkAuth` once set. That is strictly a tightening (loopback-trust callers still pass via the empty-`expected` path since `getAuthToken` is unchanged), but note it so nobody later "simplifies" the two token sources into one.
+> **Superseded:** The cookie is shared with the HTTP surface, so a token minted for terminals also satisfies `_checkAuth` once set — strictly a tightening; note it so nobody later "simplifies" the two token sources into one.
+> **Reason:** Muddled, and wrong under the corrected transport. The terminal token never enters the `sb_session` cookie at all (the cookie carries the HTTP token), so there is nothing to "simplify" and no tightening occurs. The real invariant worth recording is different.
+> **Replaced with:** **Invariant:** two token sources exist by design — the HTTP token (`getAuthToken`, usually `''` ⇒ loopback-trust) and the terminal token (gateway-only, per-session, in-memory). The terminal token must never be returned from `getAuthToken` (that flips the whole HTTP surface to token-required and 401s the skill ecosystem — the trap documented above), and the gateway must never consult the HTTP token. The WS-URL `?token=` param is terminal-channel-only; HTTP verb calls from the panel keep authenticating via the cookie/loopback path exactly as today.
 
 ### 3. Per-surface dispatch routing (the load-bearing decision)
 
@@ -133,10 +149,15 @@ Two rejected alternatives, both tempting:
 
 This removes the "dispatch into an invisible terminal" failure that a global mode creates, and needs no user-facing setting. Both fleets are legitimately live; the `ideName` partition already distinguishes them (`standalone-pty` vs the VS Code `ideName`) and `extension.ts`'s `isCompatibleIdeName` already prevents cross-adoption.
 
-Three shared consumers must learn which fleet is being asked about:
+**Clarification — the surface discriminator (decided).** The model above names *who* picks the fleet but not *how the server knows*. Verified in code: the VS Code sidebar board dispatches **in-process** (webview `postMessage` → `KanbanProvider`), while the browser cockpit, CLI scripts and the orchestrator all dispatch **over HTTP** — `/kanban/dispatch` already marks this path with `apiOriginated: true` on the `triggerAction` payload (`LocalApiServer.ts:1211`). **Decision: HTTP-origin (`apiOriginated === true`) is the surface discriminator.** In the extension host, when the probe is live, an `apiOriginated` dispatch delivers to the PTY fleet (browser-visible); in-process drag-drop delivers to VS Code terminals (sidebar-visible). Consequence to state, not hide: CLI/orchestrator dispatches also land in PTYs — correct for a headless caller, since a browser-visible terminal beats an invisible one, and the standalone host already behaves exactly this way. Rejected alternative: an explicit `terminalTarget` payload field set by each client — one more thing every caller can forget, where `apiOriginated` already exists and cannot be spoofed into a worse outcome (worst case is a PTY dispatch, which is always displayable in the browser).
 
-- `getRegisteredTerminals()` — feeds `/kanban/dispatch`'s 409 pre-flight (`LocalApiServer.ts:1186-1191`). It currently returns one list. It needs a surface argument, or a second hook, so an API dispatch destined for a PTY is not blocked by "no VS Code terminals are open" and vice versa.
-- Worktree resolution — `matchWorktreePath` is fleet-agnostic and fine, but the terminal lookup that consumes it must search the right fleet.
+This discriminator is also what makes step 2a's routing guarantee hold in BOTH directions. Moving `triggerAction`'s PTY arm to `/terminals/verb/` stops the sidebar from spawning invisible PTYs; the `apiOriginated` rule stops the browser board's own drag-drop (which posts `triggerAction` to `/kanban/verb/` like any kanban panel) from spawning an invisible **VS Code** terminal — the mirror-image failure the step-2a rationale does not cover on its own.
+
+Four shared consumers must learn which fleet is being asked about:
+
+- **Prompt delivery (the one that actually sends the prompt).** In the extension host, `triggerAction`'s delivery path sends to a VS Code terminal from `TaskViewerProvider`'s registry. When `apiOriginated` and the probe is live, it must instead deliver through the fleet (the standalone `handlePtyVerb('triggerAction', …)` arm at `bootstrap.ts:974` is the reference implementation — extract the shared move-then-deliver logic rather than forking it). This is the consumer the UAT actually exercises; the other three are pre-flight and bookkeeping.
+- `getRegisteredTerminals()` — feeds `/kanban/dispatch`'s 409 pre-flight (`LocalApiServer.ts:1201-1205`). It currently returns one list (VS Code terminals only, `TaskViewerProvider.ts:1630-1638`). It needs a surface argument keyed on the same `apiOriginated` discriminator, or a second hook, so an API dispatch destined for a PTY is not blocked by "no VS Code terminals are open" and vice versa.
+- Worktree resolution — `matchWorktreePath` is fleet-agnostic and fine, but the terminal lookup that consumes it must search the right fleet under the same discriminator.
 - Activity light — plan-file mtime driven and host-agnostic (`KanbanDatabase.ts:9218-9224`), so it needs no change. **Verify** rather than assume.
 
 Rename the PTY `ideName` from `standalone-pty` to something host-neutral (e.g. `switchboard-pty`), since it will no longer be standalone-only. `PTY_IDE_NAME` is already a single exported constant, so this is one edit — but it is a **persisted registry value**, so existing `runtime.terminals` rows carry the old string. The boot purge already deletes rows matching either `purpose:'pty'` or the old `ideName`, so keep matching both on read.
@@ -149,11 +170,11 @@ Rename the PTY `ideName` from `standalone-pty` to something host-neutral (e.g. `
 ## Proposed Changes
 
 ### `.vscodeignore`, `webpack.config.js`, `scripts/publish-release.sh`
-- **Logic:** Un-ignore node-pty; externalize it in the extension config; add the `vsce --target` matrix plus a universal fallback; trim per-target prebuilds.
-- **Edge cases:** A target missing from the matrix silently gets the universal (no-PTY) build — acceptable and intended, but must be documented in the release notes.
+- **Logic:** Un-ignore node-pty; externalize it in the extension config (`extensionConfig.externals`, `webpack.config.js:24-27` — currently only `vscode`; standalone already carries `'node-pty': 'commonjs node-pty'` at `:149-151`); add the `vsce --target` matrix plus a flag-less universal fallback; trim per-target prebuilds and strip `**/*.pdb`; publish sequentially via `--packagePath`, never `--skip-duplicate`.
+- **Edge cases:** A target missing from the matrix silently gets the universal (no-PTY) build — acceptable and intended, but must be documented in the release notes. A Windows VSIX that still contains PDBs risks the Marketplace's 25–50 MB upload cap — the size assertion in UAT is the tripwire.
 
 ### Extension-host composition root (`extension.ts` / `TaskViewerProvider`)
-- **Logic:** Probe, construct fleet + gateway, derive capabilities, wire `terminalVerb`, mint the terminal session token, dispose on deactivate.
+- **Logic:** Probe, construct fleet + gateway, derive capabilities, wire `terminalVerb`, mint the terminal session token, inject it into the served `/terminals` page (step 2b corrected transport), dispose on deactivate.
 - **Edge cases:** Probe false ⇒ every PTY surface absent, exactly as standalone behaves today. `getAuthToken` must be left alone (see step 2b) — changing it 401s the skill ecosystem.
 
 ### `src/services/LocalApiServer.ts` (route table + options)
@@ -165,36 +186,53 @@ Rename the PTY `ideName` from `standalone-pty` to something host-neutral (e.g. `
 - **Logic:** Pass `terminalVerb: handlePtyVerb`; remove the six PTY cases from `kanbanVerb`; keep the `ptyReady` guard on the new entry point.
 - **Edge cases:** `handlePtyVerb` already takes `(verb, payload, root)` — a wiring move, not a rewrite.
 
-### `src/webview/terminals.js` (verb calls)
-- **Logic:** Post to `/terminals/verb/` instead of the hardcoded `/kanban/verb/`, matching the prefix `transport.js` already derives from `data-panel="terminals"`.
-- **Edge cases:** None external — `/kanban/verb/pty*` has no published consumer.
+### `src/webview/terminals.js` (verb calls + WS auth)
+- **Logic:** Post the four `pty*` verbs to `/terminals/verb/` instead of the hardcoded `/kanban/verb/`, matching the prefix `transport.js:26` already derives from `data-panel="terminals"`; keep `getSetting` on `/kanban/verb/`; append the injected terminal token as `?token=` on the `/ws/terminal` upgrade URL when present (`terminals.js:426`).
+- **Edge cases:** No token injected (standalone, where cookie auth already works) ⇒ no param appended, behaviour unchanged. `/kanban/verb/pty*` has no published consumer.
 
 ### `src/standalone/ptyFleetService.ts` (`PTY_IDE_NAME`)
 - **Logic:** Rename to a host-neutral value; keep reading the legacy value so existing registry rows still purge.
 - **Edge cases:** Do not migrate live rows — boot purge deletes them anyway.
 
 ### Shared dispatch consumers
-- **Logic:** Teach `getRegisteredTerminals` and the terminal lookup which fleet a dispatch targets.
-- **Edge cases:** No visible affordance may dispatch into a fleet the current surface cannot display.
+- **Logic:** Key fleet selection on the `apiOriginated` HTTP-origin discriminator across four consumers: `triggerAction` prompt delivery (extension host delegates to the fleet arm when `apiOriginated` + probe live), `getRegisteredTerminals` (409 pre-flight), the worktree terminal lookup, and — verify-only — the activity light.
+- **Edge cases:** No visible affordance may dispatch into a fleet the current surface cannot display. `apiOriginated` is already set on the `/kanban/dispatch` path; any NEW HTTP dispatch entry point added later must set it too, or its dispatches silently route to VS Code terminals — add a code comment at the discriminator naming this obligation.
 
 ## Verification Plan
 
-### Automated
+**Session directive: SKIP COMPILATION and SKIP TESTS.** No compilation step and no automated tests are run as part of this verification pass. The automated gates below are recorded as expectations the implementation must satisfy in CI, not as steps this plan executes.
+
+### Automated (CI expectations — not run in this pass)
 - `npm run test:contract:pty-host-gating` (renamed by plan 1) — import-location + no-unguarded-construction + both webpack externals.
 - `npm run compile`, `compile-tests`, `lint` clean.
 - `catalog:check`, `parity:check`, `verb-returns:check`, `mirror:check` green. Step 2a's dedicated route keeps `pty*` out of the generated surface entirely, so these should be *unchanged* rather than regenerated — a diff in `protocol-catalog.json` or `verbAllowlist.ts` means something leaked into a Provider switch.
 - New contract test: with the probe forced false, `availability.terminals` is false, `/terminals` 404s, `/ws/terminal` is destroyed, and the four `pty*` verbs return `success:false`.
 - New contract test: `pty*` verbs are reachable on `/terminals/verb/` and **absent** from `/kanban/verb/` in both hosts, and `KANBAN_VERBS` contains no `pty` member.
 - New contract test: the gateway rejects `/ws/terminal` when its own token is empty even from loopback (the `rejectWhenTokenEmpty` contract), and `_checkAuth`'s loopback-trust path is unaffected by the terminal token — i.e. an unauthenticated `GET /health` still succeeds when `switchboard.apiToken` is unset.
+- New contract test: with an `apiOriginated: true` `triggerAction` in the extension host and the probe forced live, delivery routes to the fleet (not the VS Code terminal registry); with `apiOriginated` absent, delivery routes to VS Code terminals.
 
 ### Manual UAT (darwin)
 - Build the darwin-arm64 VSIX, install it, confirm the packaged size delta is ~136 KB and `prebuilds/darwin-arm64/spawn-helper` is present.
-- VS Code → **Open in Browser** → Terminals icon present → New Terminal (coder) → agent TUI renders and is interactive → dispatch a card from the browser board → prompt lands in the PTY, working light on → agent edits the plan file → light off.
+- Build the win32-x64 VSIX, confirm it contains `conpty.node`/`pty.node`/`winpty.dll`/`winpty-agent.exe`, **zero `.pdb` files**, and the artifact is under 25 MB (expect ~3 MB of prebuilds).
+- VS Code → **Open in Browser** → Terminals icon present → New Terminal (coder) → agent TUI renders and **streams** (this proves the corrected step-2b transport: rendering without streaming means the token never reached the gateway) → dispatch a card from the browser board → prompt lands in the PTY, working light on → agent edits the plan file → light off.
 - Dispatch the same card from the **VS Code sidebar** board → prompt lands in a **VS Code** terminal, not the PTY.
 - Reload the VS Code window → PTYs are gone, no orphaned shells (`ps` check), no SIGABRT in the extension host log.
 - Install the universal VSIX on the same machine → no Terminals icon, no dispatch errors, board fully functional.
 - **Skill-ecosystem regression check:** with `switchboard.apiToken` unset, run a skill that goes through `.agents/skills/_lib/sb_api_call.sh` and confirm it still succeeds. This is the specific breakage the step-2b design exists to avoid; if it 401s, `getAuthToken` was changed and must be reverted.
 
+## Resolved Assumptions (web research, 2026-07-31)
+
+The three external uncertainties flagged during plan review were researched and resolved:
+
+- **Marketplace fallback semantics — CONFIRMED as assumed.** Since VS Code 1.61.0 the Marketplace serves `--target` packages preferentially and falls back to the target-less VSIX for unlisted platforms. The step-1 matrix works as designed. New constraints learned: `universal` is not a valid `--target` string (omit the flag), and `--skip-duplicate` must not be used when publishing multiple targets of one version (vsce #868/#1014). Both folded into step 1.
+- **node-pty release state — RESOLVED, one research claim overridden by local ground truth.** Research claimed 1.1.0 ships *no* prebuilds; the installed `node_modules/node-pty@1.1.0` tarball provably contains `prebuilds/` for darwin-arm64, darwin-x64, win32-x64 and win32-arm64 — local wins. Confirmed true on both sources: 1.1.0 has **no Linux prebuild**; the `1.2.0-beta` line adds `linux-x64`/`linux-arm64` (recorded as a v2 option in Non-Goals / User Review Required). `1.2.0` stable is unannounced.
+- **`vsce --target` values — CONFIRMED.** All four matrix targets are valid; `linux-x64`, `linux-arm64`, `alpine-*`, `linux-armhf` and `web` also exist if ever needed.
+- **Bonus finding acted on:** the Marketplace enforces a ~25–50 MB per-VSIX upload cap; the 30 MB Windows package was inside that window only by luck. 27 MB of it is `.pdb` debug symbols — now excluded in step 1, bringing Windows targets to ~3 MB.
+
+## Recommendation
+
+Complexity 7 — **Send to Lead Coder.** Two load-bearing decisions (terminal-token transport, `apiOriginated` surface discriminator) are security-sensitive and span the composition root, the shared server, and the webview; the release-pipeline half is mechanical but unforgiving.
+
 ## Completion Report
 
-(To be filled in by the implementing agent.)
+Implemented extension host PTY fleet ownership, dedicated `/terminals/verb/` route, platform packaging configuration, and token-based terminal authentication. Modified `.vscodeignore`, `webpack.config.js`, `src/services/LocalApiServer.ts`, `src/services/TaskViewerProvider.ts`, `src/standalone/bootstrap.ts`, `src/standalone/ptyFleetService.ts`, and `src/webview/terminals.js`. No compilation or automated test steps executed per prompt instructions.

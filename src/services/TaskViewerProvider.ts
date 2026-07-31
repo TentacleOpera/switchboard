@@ -19,6 +19,9 @@ import {
 import type { FSWatcher, Dirent, Stats } from 'fs';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import { isPtyAvailable } from '../standalone/ptyBackend';
+import { PtyFleetService } from '../standalone/ptyFleetService';
+import { TerminalWsGateway } from '../standalone/terminalWsGateway';
 
 import * as cp from 'child_process';
 import { promisify } from 'util';
@@ -423,6 +426,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private readonly _julesDiagnosticsChannel = vscode.window.createOutputChannel('Switchboard Jules Diagnostics');
     private readonly _apiServerDiagnosticsChannel = vscode.window.createOutputChannel('Switchboard API Server');
     private _needsSetup: boolean = false;
+    private _ptyFleetService?: PtyFleetService;
+    private _terminalWsGateway?: TerminalWsGateway;
+    private _terminalSessionToken: string = '';
 
     // --- Single-flight coalescing guards (refresh-storm circuit-breaker) ---
     // Coalesce overlapping _refreshRunSheets / _syncFilesAndRefreshRunSheets calls
@@ -1614,6 +1620,53 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const cacheService = this._getCacheService(effectiveRoot);
         const allRoots = this._filterMappedRoots(this._getWorkspaceRoots());
 
+        const ptyReady = isPtyAvailable();
+        if (ptyReady) {
+            const db = await this._getKanbanDb(effectiveRoot);
+            if (db) {
+                this._ptyFleetService = new PtyFleetService(effectiveRoot, db);
+                void PtyFleetService.purgePtyTerminals(db);
+                this._terminalSessionToken = crypto.randomBytes(32).toString('hex');
+                const token = this._terminalSessionToken;
+                this._terminalWsGateway = new TerminalWsGateway(this._ptyFleetService, async () => token);
+            }
+        }
+
+        const handlePtyVerb = async (verb: string, payload: any, root?: string): Promise<any> => {
+            if (!ptyReady || !this._ptyFleetService) {
+                return { success: false, error: 'PTY host unavailable on this platform/installation' };
+            }
+            switch (verb) {
+                case 'ptyCreateTerminal': {
+                    const terminal = await this._ptyFleetService.create(payload.role || 'coder', payload.name, payload.cwd, payload.worktreePath);
+                    return { success: true, terminal: { friendlyName: terminal.friendlyName, role: terminal.role, status: terminal.status } };
+                }
+                case 'ptyCloseTerminal': {
+                    const ok = this._ptyFleetService.kill(payload.name);
+                    return { success: ok };
+                }
+                case 'ptyListTerminals': {
+                    return {
+                        success: true,
+                        terminals: this._ptyFleetService.list().map(t => ({
+                            friendlyName: t.friendlyName,
+                            role: t.role,
+                            status: t.status,
+                            pid: t.pty.pid,
+                            startTime: t.startTime,
+                            worktreePath: t.worktreePath
+                        }))
+                    };
+                }
+                case 'ptyRenameTerminal': {
+                    const ok = this._ptyFleetService.rename(payload.name, payload.alias);
+                    return { success: ok };
+                }
+                default:
+                    return { success: false, error: `Unknown terminal verb '${verb}'` };
+            }
+        };
+
         this._localApiServer = new LocalApiServer({
             workspaceRoot: effectiveRoot,
             clickupMetadataPath: cacheService['_clickupMetadataPath'],
@@ -1626,6 +1679,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // Retrieve from VS Code SecretStorage - returns empty string if not set
                 return await this._context.secrets.get('switchboard.apiToken') || '';
             },
+            terminalWsGateway: this._terminalWsGateway,
+            terminalVerb: (verb: string, payload: any, wsRoot?: string) => handlePtyVerb(verb, payload, wsRoot),
             allRoots: allRoots,
             getRegisteredTerminals: () => {
                 // Live dispatch targets only — a disposed terminal lingers in the
@@ -1634,6 +1689,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 this._registeredTerminals?.forEach((term, name) => {
                     if (term.exitStatus === undefined) { names.push(name); }
                 });
+                if (this._ptyFleetService) {
+                    for (const ptyTerm of this._ptyFleetService.listActive()) {
+                        if (!names.includes(ptyTerm.friendlyName)) {
+                            names.push(ptyTerm.friendlyName);
+                        }
+                    }
+                }
                 return names;
             },
             getSelectedWorkspaceRoot: () => this._kanbanProvider?.getCurrentWorkspaceRoot() ?? null,
@@ -1831,7 +1893,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     terminalDispatch: true,
                     automation: true,
                     orchestrator: true,
-                    terminalFleet: false,
+                    terminalFleet: ptyReady,
                     mcpTerminals: false,
                     secretsEntry: false,
                 };
@@ -1871,7 +1933,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         return sharedGetProjectHtml(repoRoot, currentWsRoot(), caps, getTheme());
                     },
                     getShellHtml: async () => sharedGetShellHtml(repoRoot, getTheme()),
-                    getPanelsManifest: () => sharedGetPanelsManifest({ design: true, setup: true, planning: true }),
+                    getPanelsManifest: () => sharedGetPanelsManifest({ design: true, setup: true, planning: true, terminals: ptyReady }),
                     getPanelHtml: async (id: string) => {
                         const caps = {
                             ...baseHostCapabilities,
@@ -1879,6 +1941,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             integrationsConfigured: await computeIntegrationsConfigured()
                         };
                         const result = sharedGetPanelHtmlById(id, repoRoot, currentWsRoot(), caps, getTheme());
+                        if (result && id === 'terminals' && this._terminalSessionToken) {
+                            const scriptTag = `<script>window.__SB_TERMINAL_TOKEN__=${JSON.stringify(this._terminalSessionToken)};</script>`;
+                            return {
+                                ...result,
+                                html: result.html.replace('</head>', `${scriptTag}</head>`)
+                            };
+                        }
                         return result || null;
                     },
                     staticRoutes: {
@@ -18284,7 +18353,17 @@ What would you like to find?`;
             });
         }
 
-        if (!terminal) return false;
+        if (!terminal) {
+            if (this._ptyFleetService) {
+                const ptyHandle = this._ptyFleetService.get(terminalName) ||
+                    this._ptyFleetService.list().find(t => this._normalizeAgentKey(this._stripIdeSuffix(t.friendlyName)) === this._normalizeAgentKey(this._stripIdeSuffix(terminalName)));
+                if (ptyHandle) {
+                    ptyHandle.pty.write(payload + '\r');
+                    return true;
+                }
+            }
+            return false;
+        }
 
         // Serialize the full /clear + prompt sequence per terminal so two
         // overlapping dispatches to the SAME terminal cannot interleave. Key on
@@ -20856,9 +20935,17 @@ What would you like to find?`;
         this._recentMirrorProcessed.forEach(t => clearTimeout(t));
         this._julesDiagnosticsChannel.dispose();
         this._apiServerDiagnosticsChannel.dispose();
-        if (this._apiServerWatchdogTimer) {
-            clearInterval(this._apiServerWatchdogTimer);
-            this._apiServerWatchdogTimer = undefined;
+        if (this._terminalWsGateway) {
+            try { this._terminalWsGateway.dispose(); } catch {}
+            this._terminalWsGateway = undefined;
+        }
+        if (this._ptyFleetService) {
+            try {
+                for (const item of this._ptyFleetService.list()) {
+                    try { item.pty.kill('SIGKILL'); } catch {}
+                }
+            } catch {}
+            this._ptyFleetService = undefined;
         }
         void this._stopLocalApiServer();
     }

@@ -61,7 +61,7 @@
 
     async function fetchTerminalList() {
         try {
-            const res = await fetch('/kanban/verb/ptyListTerminals', {
+            const res = await fetch('/terminals/verb/ptyListTerminals', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({})
@@ -198,7 +198,7 @@
 
     async function createTerminal(role) {
         try {
-            const res = await fetch('/kanban/verb/ptyCreateTerminal', {
+            const res = await fetch('/terminals/verb/ptyCreateTerminal', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ role })
@@ -221,7 +221,7 @@
         const next = (alias || '').trim();
         if (!next || next === name) { return; }
         try {
-            const res = await fetch('/kanban/verb/ptyRenameTerminal', {
+            const res = await fetch('/terminals/verb/ptyRenameTerminal', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name, alias: next })
@@ -266,7 +266,7 @@
 
     async function closeTerminal(name) {
         try {
-            await fetch('/kanban/verb/ptyCloseTerminal', {
+            await fetch('/terminals/verb/ptyCloseTerminal', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name })
@@ -423,7 +423,10 @@
         }
 
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${location.host}/ws/terminal?name=${encodeURIComponent(entry.name)}`;
+        let wsUrl = `${protocol}//${location.host}/ws/terminal?name=${encodeURIComponent(entry.name)}`;
+        if (window.__SB_TERMINAL_TOKEN__) {
+            wsUrl += `&token=${encodeURIComponent(window.__SB_TERMINAL_TOKEN__)}`;
+        }
         const ws = new WebSocket(wsUrl);
         entry.ws = ws;
 

@@ -11,7 +11,7 @@ export const SIGTERM_GRACE_MS = 3000;
  * Registry owner tag. The extension's `isCompatibleIdeName` partition (see
  * extension.ts) uses this to leave PTY rows alone instead of adopting them.
  */
-export const PTY_IDE_NAME = 'standalone-pty';
+export const PTY_IDE_NAME = 'switchboard-pty';
 
 export interface FleetTerminalInfo {
     friendlyName: string;

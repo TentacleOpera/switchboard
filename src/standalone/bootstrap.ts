@@ -1246,6 +1246,8 @@ Each plan file must include:
         allRoots: [workspaceRoot],
         getKanbanDatabase: async () => db,
         kanbanVerb,
+        terminalVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
+            handlePtyVerb(verb, payload, workspaceRootArg || payload?.workspaceRoot || workspaceRoot),
         planningVerb,
         designVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
             designProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),

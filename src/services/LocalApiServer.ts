@@ -132,6 +132,7 @@ interface LocalApiServerOptions {
      * headless/test harnesses (returns 503).
      */
     kanbanVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
+    terminalVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     /**
      * Names of currently registered, live terminal agents (dispatch targets).
      * Surfaced on GET /health as `terminals` so external managers (the
@@ -1627,6 +1628,40 @@ export class LocalApiServer {
      * extracted verb returns `{ success, ... }`; the body is passed through with
      * HTTP status derived from `success`.
      */
+    private async _handleTerminalVerb(verb: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+
+        const terminalVerb = this._options.terminalVerb;
+        if (!terminalVerb) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Terminal verb dispatch not available' }));
+            return;
+        }
+        if (!verb) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing verb in path' }));
+            return;
+        }
+
+        try {
+            const rawBody = await this._parseJsonBody(req);
+            const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
+            delete body.type;
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
+            const result = await terminalVerb(verb, body, workspaceRoot);
+            const ok = !result || result.success !== false;
+            res.writeHead(ok ? 200 : 502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result ?? { success: true }));
+        } catch (err) {
+            console.error(`[LocalApiServer] terminalVerb '${verb}' error:`, err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : `terminal verb '${verb}' failed` }));
+        }
+    }
+
     private async _handleKanbanVerb(verb: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
             this._sendUnauthorized(res);
@@ -3328,6 +3363,9 @@ export class LocalApiServer {
                 await this._handleKanbanFeaturesAssign(req, res);
             } else if (pathname === '/kanban/features/reconcile' && req.method === 'POST') {
                 await this._handleKanbanReconcileFeatures(req, res);
+            } else if (pathname.startsWith('/terminals/verb/') && req.method === 'POST') {
+                const verb = decodeURIComponent(pathname.slice('/terminals/verb/'.length));
+                await this._handleTerminalVerb(verb, req, res);
             } else if (pathname.startsWith('/kanban/verb/') && req.method === 'POST') {
                 // A2b per-verb burn-down rail: /kanban/verb/<name> → KanbanService.
                 const verb = decodeURIComponent(pathname.slice('/kanban/verb/'.length));

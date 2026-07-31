@@ -3,6 +3,8 @@
 .vscode-test/**
 out/**
 node_modules/**
+!node_modules/node-pty/**
+**/*.pdb
 
 # Source files
 src/**
