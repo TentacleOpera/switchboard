@@ -1,0 +1,5 @@
+<!-- source: icons/icon-refresh.svg -->
+<!-- fill is ignored under CSS mask; fill="#45e0e6" is frozen for parity check -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <path fill="#45e0e6" fill-rule="evenodd" d="M8 3a5 5 0 1 0 4.546 2.914.75.75 0 0 1 1.36-.63A6.5 6.5 0 1 1 8 1.5V.75a.75.75 0 0 1 1.28-.53l2.25 2.25a.75.75 0 0 1 0 1.06l-2.25 2.25A.75.75 0 0 1 8 5.25V3z"/>
+</svg>

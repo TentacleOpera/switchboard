@@ -1,0 +1,5 @@
+<!-- source: icons/icon-overflow.svg -->
+<!-- fill is ignored under CSS mask; fill="#45e0e6" is frozen for parity check -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <path fill="#45e0e6" fill-rule="evenodd" d="M3 8a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zm6.5 0a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zM16 8a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z"/>
+</svg>

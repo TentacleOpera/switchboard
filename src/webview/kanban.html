@@ -20,6 +20,24 @@
             font-style: normal;
             font-display: swap;
         }
+        .sb-icon {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            vertical-align: -0.125em;
+            background-color: currentColor;
+            flex-shrink: 0;
+            mask-repeat: no-repeat;
+            mask-position: center;
+            mask-size: contain;
+        }
+        .sb-icon-sm { width: 10px; height: 10px; }
+        .sb-icon-xs { width: 6px; height: 6px; }
+        .sb-icon-dot { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tZG90LnN2ZyAtLT4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2Ij4KICA8Y2lyY2xlIGN4PSI4IiBjeT0iOCIgcj0iNSIgZmlsbD0iIzQ1ZTBlNiIvPgo8L3N2Zz4='); }
+        .sb-icon-drag-handle { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tZHJhZy1oYW5kbGUuc3ZnIC0tPgo8c3ZnIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgdmlld0JveD0iMCAwIDE2IDE2IiB3aWR0aD0iMTYiIGhlaWdodD0iMTYiPgogIDxwYXRoIGZpbGw9IiM0NWUwZTYiIGZpbGwtcnVsZT0iZXZlbm9kZCIgZD0iTTYgM2ExLjUgMS41IDAgMSAxLTMgMCAxLjUgMS41IDAgMCAxIDMgMHptNyAwYTEuNSAxLjUgMCAxIDEtMyAwIDEuNSAxLjUgMCAwIDEgMyAwek02IDhhMS41IDEuNSAwIDEgMS0zIDAgMS41IDEuNSAwIDAgMSAzIDB6bTcgMGExLjUgMS41IDAgMSAxLTMgMCAxLjUgMS41IDAgMCAxIDMgMHptLTcgNWExLjUgMS41IDAgMSAxLTMgMCAxLjUgMS41IDAgMCAxIDMgMHptNyAwYTEuNSAxLjUgMCAxIDEtMyAwIDEuNSAxLjUgMCAwIDEgMyAweiIvPgo8L3N2Zz4='); }
+        .sb-icon-bolt { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tYm9sdC5zdmcgLS0+CjxzdmcgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB2aWV3Qm94PSIwIDAgMTYgMTYiIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+CiAgPHBhdGggZmlsbD0iIzQ1ZTBlNiIgZmlsbC1ydWxlPSJldmVub2RkIiBkPSJNOS41IDBMMiA5aDV2N2w3LjUtOUg5VjB6Ii8+Cjwvc3ZnPg=='); }
+        .sb-icon-tree-elbow { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tdHJlZS1lbGJvdy5zdmcgLS0+CjxzdmcgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB2aWV3Qm94PSIwIDAgMTYgMTYiIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+CiAgPHBhdGggZmlsbD0iIzQ1ZTBlNiIgZmlsbC1ydWxlPSJldmVub2RkIiBkPSJNMyAwdjEwaDEwdjJIMVYwaDJ6Ii8+Cjwvc3ZnPg=='); }
+        .sb-icon-chevron-right { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tY2hldnJvbi1yaWdodC5zdmcgLS0+CjwhLS0gZmlsbCBpcyBpZ25vcmVkIHVuZGVyIENTUyBtYXNrOyBmaWxsPSIjNDVlMGU2IiBpcyBmcm96ZW4gZm9yIHBhcml0eSBjaGVjayAtLT4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2Ij4KICA8cGF0aCBmaWxsPSIjNDVlMGU2IiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik02LjIyIDMuMjJhLjc1Ljc1IDAgMCAxIDEuMDYgMGw0LjI1IDQuMjVhLjc1Ljc1IDAgMCAxIDAgMS4wNmwtNC4yNSA0LjI1YS43NS43NSAwIDAgMS0xLjA2LTEuMDZMOS45NCA4IDYuMjIgNC4yOGEuNzUsjcAwIDAgMSAwLTEuMDZ6Ii8+Cjwvc3ZnPg=='); }
         :root {
             --bg-color: #1a1a1a;
             --panel-bg: #000000;
@@ -1194,7 +1212,17 @@
           border-color:var(--accent-teal-dim); color:var(--accent-teal);
           background:color-mix(in srgb,var(--accent-teal) 8%,transparent);
         }
-        .prompts-role-tab.has-override::after { content:' ●'; color:var(--accent-teal); }
+        .prompts-role-tab.has-override::after {
+          content: '';
+          display: inline-block;
+          width: 6px;
+          height: 6px;
+          margin-left: 4px;
+          background-color: var(--accent-teal);
+          mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tZG90LnN2ZyAtLT4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2Ij4KICA8Y2lyY2xlIGN4PSI4IiBjeT0iOCIgcj0iNSIgZmlsbD0iIzQ1ZTBlNiIvPgo8L3N2Zz4=');
+          mask-size: contain;
+          mask-repeat: no-repeat;
+        }
 
         /* Custom Agents List Styles */
         .agents-tab-custom-agent-item {
@@ -1506,7 +1534,15 @@
         }
 
         .autoban-indicator.is-active::before {
-            content: '⚡ ';
+            content: '';
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            margin-right: 4px;
+            background-color: currentColor;
+            mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tYm9sdC5zdmcgLS0+CjxzdmcgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB2aWV3Qm94PSIwIDAgMTYgMTYiIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+CiAgPHBhdGggZmlsbD0iIzQ1ZTBlNiIgZmlsbC1ydWxlPSJldmVub2RkIiBkPSJNOS41IDBMMiA5aDV2N2w3LjUtOUg5VjB6Ii8+Cjwvc3ZnPg==');
+            mask-size: contain;
+            mask-repeat: no-repeat;
             animation: autobanPulse 2s ease-in-out infinite;
         }
 
@@ -2250,12 +2286,17 @@
         }
 
         .dep-connector::before {
-            content: '└─';
+            content: '';
+            display: inline-block;
+            width: 12px;
+            height: 12px;
             position: absolute;
             left: 0;
             top: 0;
-            color: var(--border-bright);
-            font-size: 10px;
+            background-color: var(--border-bright);
+            mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tdHJlZS1lbGJvdy5zdmcgLS0+CjxzdmcgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB2aWV3Qm94PSIwIDAgMTYgMTYiIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+CiAgPHBhdGggZmlsbD0iIzQ1ZTBlNiIgZmlsbC1ydWxlPSJldmVub2RkIiBkPSJNMyAwdjEwaDEwdjJIMVYwaDJ6Ii8+Cjwvc3ZnPg==');
+            mask-size: contain;
+            mask-repeat: no-repeat;
         }
 
         .dep-link {
@@ -2488,7 +2529,17 @@
         }
         .addon-subsection-accordion > summary.addon-subsection-header::-webkit-details-marker { display: none; }
         .addon-subsection-accordion > summary.addon-subsection-header::before {
-            content: '▸'; margin-right: 8px; transition: transform 0.15s ease; display: inline-block;
+            content: '';
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            margin-right: 8px;
+            vertical-align: -0.125em;
+            background-color: currentColor;
+            mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tY2hldnJvbi1yaWdodC5zdmcgLS0+CjwhLS0gZmlsbCBpcyBpZ25vcmVkIHVuZGVyIENTUyBtYXNrOyBmaWxsPSIjNDVlMGU2IiBpcyBmcm96ZW4gZm9yIHBhcml0eSBjaGVjayAtLT4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2Ij4KICA8cGF0aCBmaWxsPSIjNDVlMGU2IiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik02LjIyIDMuMjJhLjc1Ljc1IDAgMCAxIDEuMDYgMGw0LjI1IDQuMjVhLjc1Ljc1IDAgMCAxIDAgMS4wNmwtNC4yNSA0LjI1YS43NS43NSAwIDAgMS0xLjA2LTEuMDZMOS45NCA4IDYuMjIgNC4yOGEuNzUsjcAwIDAgMSAwLTEuMDZ6Ii8+Cjwvc3ZnPg==');
+            mask-size: contain;
+            mask-repeat: no-repeat;
+            transition: transform 0.15s ease;
         }
         .addon-subsection-accordion[open] > summary.addon-subsection-header::before { transform: rotate(90deg); }
         .addon-subsection-body { padding: 8px 12px 12px; }
@@ -3587,7 +3638,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         { value: 'notSpecified', label: 'Not Specified', tooltip: 'Emit no push clause' }
                     ] },
                     { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
-                    { id: 'useWorktreesPerPlan', label: 'Agent-Managed Worktrees', group: 'features', tooltip: 'Opt into agent-managed orchestration: the agent uses its native subagent/orchestration capabilities to process each subtask in an isolated git worktree, then reviews and merges. Off = the agent implements subtasks directly — no worktrees, no subagents.', default: false },
+                    { id: 'useWorktreesPerPlan', label: 'Agent-Managed Worktrees', group: 'features', tooltip: 'Give each subtask its own isolated git worktree to prevent file conflicts. Off = subtasks are implemented in the main working tree. Whether the agent uses subagents is controlled separately by Feature Subagent Policy.', default: false },
                     {
                         id: 'featureSubagentPolicy', label: 'Feature Subagent Policy', tooltip: 'Control how the agent handles subagent spawning for feature dispatches',
                         type: 'radio', group: 'features', default: 'default', options: [

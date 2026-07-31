@@ -790,7 +790,7 @@ export function ensureCompletionDirective(text: string): string {
 export const NO_SUBAGENTS_DIRECTIVE = "SUBAGENT POLICY: You are strictly forbidden from spawning or invoking any subagents. Handle all tasks yourself.";
 export const CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE = (name: string) =>
     `SUBAGENT POLICY: You are authorized to use the "${name}" subagent for this task. Do not spawn or invoke any other subagents.`;
-export const WORKTREES_PER_PLAN_DIRECTIVE = 'Where possible, process each plan as an isolated unit using your native subagent or orchestration capabilities, creating a dedicated git worktree per plan to prevent file conflicts between concurrent tasks.';
+export const WORKTREES_PER_PLAN_DIRECTIVE = 'Where possible, process each plan as an isolated unit, creating a dedicated git worktree per plan to prevent file conflicts between concurrent tasks.';
 
 /**
  * Context bundle for `resolveFeatureOrchestrationDirective`. The per-subtask/high-low
@@ -801,29 +801,21 @@ interface FeatureOrchestrationDirectiveContext {
 }
 
 /**
- * Single selector for the feature orchestration directive. The worktree/subagent
- * orchestration clause is gated on `worktreesEnabled` (the dispatched role's
- * `useWorktreesPerPlan` opt-in): ON → the agent self-provisions worktrees + dispatches
- * subagents (the opt-in end-to-end orchestration flow); OFF (default) → the agent
- * implements the subtasks directly, no worktrees/subagents. `feature_worktree_mode` is
- * validated for a warning only. Unknown mode values log a warning and proceed.
+ * Single selector for the feature orchestration directive.
+ * The worktree clause is gated on `worktreesEnabled` (`useWorktreesPerPlan`).
+ * Subagent policy is driven exclusively by `policy` — `default` emits no subagent language,
+ * leaving subagent decisions entirely to the execution platform.
  */
 export function buildFeatureSubagentClause(
     policy: string | undefined,
     customName: string | undefined,
     worktreesEnabled: boolean
 ): string {
-    const activePolicy = policy || 'default';
-    if (activePolicy === 'default') {
-        return worktreesEnabled
-            ? `Use your native subagent or orchestration capabilities to handle each subtask. If your tool supports worktree-per-plan isolation, activate it now. If you do not support subagents, handle each subtask sequentially in the order listed below. `
-            : `Handle the subtasks yourself in a sensible order — do NOT create git worktrees or spawn subagents for this dispatch. `;
-    }
-
     const worktreeClause = worktreesEnabled
         ? `Use a dedicated git worktree for each subtask to prevent file conflicts (worktree-per-plan isolation). `
-        : `Do NOT create git worktrees for this dispatch; implement the subtasks directly. `;
+        : `Do NOT create git worktrees for this dispatch. `;
 
+    const activePolicy = policy || 'default';
     let subagentClause = '';
     if (activePolicy === 'noSubagents') {
         subagentClause = `You are strictly forbidden from spawning or invoking any subagents. Handle all subtasks yourself. `;
@@ -868,6 +860,7 @@ export function resolveFeatureOrchestrationDirective(
     const subagentAndWorktreePart = buildFeatureSubagentClause(policy, customSubagentName, worktreesEnabled);
     return `FEATURE MODE: You are implementing the feature "${featureTopic}" which consists of ${subtaskCount} subtask(s).\n` +
         subagentAndWorktreePart +
+        `Work through the subtasks in a sensible order.\n` +
         `All subtasks are part of a single delivery unit — do not treat them as independent tickets.\n` +
         `Before starting, briefly tell the user how you are handling these subtasks (e.g. order, grouping, and any review/verification pass you plan to run).`;
 }
@@ -1880,6 +1873,7 @@ export function buildCustomAgentPrompt(
             addons?.featureCustomSubagentName,
             addons?.useWorktreesPerPlan === true
         ).trim();
+        subagentBlock += '\nWork through the subtasks in a sensible order.';
     } else {
         // Non-feature dispatch — general Subagent Policy, unchanged from today.
         const noSubagentsEnabled = addons?.subagentPolicy === 'noSubagents';

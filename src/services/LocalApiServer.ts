@@ -1663,24 +1663,16 @@ export class LocalApiServer {
         }
     }
 
-    private async _handleKanbanVerb(verb: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-        if (!await this._checkAuth(req, true)) {
-            this._sendUnauthorized(res);
-            return;
-        }
-
-        const kanbanVerb = this._options.kanbanVerb;
-        if (!kanbanVerb) {
-            res.writeHead(503, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Kanban verb dispatch not available' }));
-            return;
-        }
-        if (!verb) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Missing verb in path' }));
-            return;
-        }
-
+    /**
+     * Every body arriving on a verb rail is, by definition, NOT the in-process VS Code
+     * sidebar — it came over HTTP from a browser panel, a CLI script or the orchestrator,
+     * all of which can display a PTY. Stamping here (rather than per entry point) is what
+     * makes the discriminator impossible to forget; the previous per-caller convention
+     * left every browser panel dispatching into invisible VS Code terminals.
+     *
+     * Note this sets ONLY the fleet-selection flag. `bypassTriggerGate` stays opt-in per
+     * endpoint so a browser drag-drop still honours the CLI-triggers setting.
+     */
     private _stampHttpSurface(body: any): any {
         body.apiOriginated = true;
         return body;

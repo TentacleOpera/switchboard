@@ -23,6 +23,25 @@
             background-size: 200px 100%;
             animation: skeleton-shimmer 1.5s infinite ease-in-out;
         }
+        .sb-icon {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            vertical-align: -0.125em;
+            background-color: currentColor;
+            flex-shrink: 0;
+            mask-repeat: no-repeat;
+            mask-position: center;
+            mask-size: contain;
+        }
+        .sb-icon-sm { width: 10px; height: 10px; }
+        .sb-icon-xs { width: 6px; height: 6px; }
+        .sb-icon-reset-view { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tcmVzZXQtdmlldy5zdmcgLS0+CjwhLS0gZmlsbCBpcyBpZ25vcmVkIHVuZGVyIENTUyBtYXNrOyBmaWxsPSIjNDVlMGU2IiBpcyBmcm96ZW4gZm9yIHBhcml0eSBjaGVjayAtLT4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2Ij4KICA8cGF0aCBmaWxsPSIjNDVlMGU2IiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik04IDJhNiA2IDAgMSAwIDYgNiAxIDEgMCAxIDEgMiAwIDggOCAwIDEgMS0yLjM0LTUuNjZsLTEuNDIgMS40MmExIDEgMCAwIDEtMS43LS43MVYxYTEgMSAwIDAgMSAxLTFoMi4wNWExIDEgMCAwIDEgLjcxIDEuNzFsLTEuNDUgMS40NUE3Ljk2IDcuOTYgMCAwIDEgOCAyeiIvPgo8L3N2Zz4='); }
+        .sb-icon-fit-view { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tZml0LXZpZXcuc3ZnIC0tPgo8IS0tIGZpbGwgaXMgaWdub3JlZCB1bmRlciBDU1MgbWFhazsgZmlsbD0iIzQ1ZTBlNiIgaXMgZnJvemVuIGZvciBwYXJpdHkgY2hlY2sgLS0+CjxzdmcgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB2aWV3Qm94PSIwIDAgMTYgMTYiIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+CiAgPHBhdGggZmlsbD0iIzQ1ZTBlNiIgZmlsbC1ydWxlPSJldmVub2RkIiBkPSJNMSAxaDR2MkgzdjJIMVYxeG0xMCAwaDR2NGgtMlYzaC0yVDF6TTEgMTFoMnYyaDJ2Mkgxdi00em0xMiAyaC0ydjJoNHYtNGgtMnYyeiIvPgo8L3N2Zz4='); }
+        .sb-icon-pan { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tcGFuLnN2ZyAtLT4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2Ij4KICA8cGF0aCBmaWxsPSIjNDVlMGU2IiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik04IDBsMyAzSDl2NGg0VjVsMyAzLTMgM3YtMkg5djRoMmwtMyAzLTMtM2gyVjlIM3YyTDAgOGwzLTN2Mmg0VjNINWwzLTN6Ii8+Cjwvc3ZnPg=='); }
+        .sb-icon-close { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tY2xvc2Uuc3ZnIC0tPgo8IS0tIGZpbGwgaXMgaWdub3JlZCB1bmRlciBDU1MgbWFhazsgZmlsbD0iIzQ1ZTBlNiIgaXMgZnJvemVuIGZvciBwYXJpdHkgY2hlY2sgLS0+CjxzdmcgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB2aWV3Qm94PSIwIDAgMTYgMTYiIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+CiAgPHBhdGggZmlsbD0iIzQ1ZTBlNiIgZmlsbC1ydWxlPSJldmVub2RkIiBkPSJNMy43MiAzLjcyYS43NS43NSAwIDAgMSAxLjA2IDBMOCA2Ljk0bDMuMjItMy4yMmEuNzUsjcAwIDEgMSAxLjA2IDEuMDZMOS4wNiA4bDMuMjIgMy4yMmEuNzUsjcAwIDEgMS0xLjA2IDEuMDZMOCA5LjA2bC0zLjIyIDMuMjJhLjc1Ljc1IDAgMCAxLTEuMDYtMS4wNkw2Ljk0IDggMy43MiA0Ljc4YS43NS43NSAwIDAgMSAwLTEuMDZ6Ii8+Cjwvc3ZnPg=='); }
+        .sb-icon-chevron-right { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tY2hldnJvbi1yaWdodC5zdmcgLS0+CjwhLS0gZmlsbCBpcyBpZ25vcmVkIHVuZGVyIENTUyBtYXNrOyBmaWxsPSIjNDVlMGU2IiBpcyBmcm96ZW4gZm9yIHBhcml0eSBjaGVjayAtLT4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2Ij4KICA8cGF0aCBmaWxsPSIjNDVlMGU2IiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik02LjIyIDMuMjJhLjc1Ljc1IDAgMCAxIDEuMDYgMGw0LjI1IDQuMjVhLjc1Ljc1IDAgMCAxIDAgMS4wNmwtNC4yNSA0LjI1YS43NS43NSAwIDAgMS0xLjA2LTEuMDZMOS45NCA4IDYuMjIgNC4yOGEuNzUsjcAwIDAgMSAwLTEuMDZ6Ii8+Cjwvc3ZnPg=='); }
+        .sb-icon-chevron-down { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tY2hldnJvbi1kb3duLnN2ZyAtLT4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2Ij4KICA8cGF0aCBmaWxsPSIjNDVlMGU2IiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0zLjIyIDYuMjJhLjc1Ljc1IDAgMCAxIDEuMDYgMEw4IDkuOTRsMy43Mi0zLjcyYS43NS43NSAwIDEgMSAxLjA2IDEuMDZsLTQuMjUgNC4yNWEuNzUsjcAwIDAgMS0xLjA2IDBMMy4yMiA3LjI4YS43NS43NSAwIDAgMSAwLTEuMDZ6Ii8+Cjwvc3ZnPg=='); }
         @font-face {
             font-family: 'GeistPixel';
             src: url('{{GEIST_PIXEL_FONT_URI}}') format('woff2');
@@ -3655,8 +3674,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                     <div class="zoom-toolbar">
                                         <button class="zoom-btn" data-action="zoom-in" title="Zoom In (Scroll)">+</button>
                                         <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (Scroll)">−</button>
-                                        <button class="zoom-btn" data-action="reset" title="Reset view — 100% size">⟲</button>
-                                        <button class="zoom-btn" data-action="fit" title="Fit to View (Double-click)">⤢</button>
+                                        <button class="zoom-btn" data-action="reset" title="Reset view — 100% size"><span class="sb-icon sb-icon-reset-view" aria-hidden="true"></span></button>
+                                        <button class="zoom-btn" data-action="fit" title="Fit to View (Double-click)"><span class="sb-icon sb-icon-fit-view" aria-hidden="true"></span></button>
                                     </div>
                                 </div>
                                 <div id="json-preview-container-design"
@@ -3803,11 +3822,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                 </div>
                                 <div class="zoom-event-layer"></div>
                                 <div class="zoom-toolbar">
-                                    <button class="zoom-btn" data-action="pan" title="Pan mode — drag or scroll to move the canvas">✥</button>
+                                    <button class="zoom-btn" data-action="pan" title="Pan mode — drag or scroll to move the canvas"><span class="sb-icon sb-icon-pan" aria-hidden="true"></span></button>
                                     <button class="zoom-btn" data-action="zoom-in" title="Zoom In (hold Space + Scroll)">+</button>
                                     <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (hold Space + Scroll)">−</button>
-                                    <button class="zoom-btn" data-action="reset" title="Reset view — 100% size">⟲</button>
-                                    <button class="zoom-btn" data-action="fit" title="Fit whole page to view (Double-click)">⤢</button>
+                                    <button class="zoom-btn" data-action="reset" title="Reset view — 100% size"><span class="sb-icon sb-icon-reset-view" aria-hidden="true"></span></button>
+                                    <button class="zoom-btn" data-action="fit" title="Fit whole page to view (Double-click)"><span class="sb-icon sb-icon-fit-view" aria-hidden="true"></span></button>
                                 </div>
                             </div>
                         </div>
@@ -3871,11 +3890,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                      stays fully interactive. -->
                                 <div class="zoom-event-layer"></div>
                                 <div class="zoom-toolbar">
-                                    <button class="zoom-btn" data-action="pan" title="Pan mode — drag or scroll to move the canvas">✥</button>
+                                    <button class="zoom-btn" data-action="pan" title="Pan mode — drag or scroll to move the canvas"><span class="sb-icon sb-icon-pan" aria-hidden="true"></span></button>
                                     <button class="zoom-btn" data-action="zoom-in" title="Zoom In (hold Space + Scroll)">+</button>
                                     <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (hold Space + Scroll)">−</button>
-                                    <button class="zoom-btn" data-action="reset" title="Reset view — 100% size">⟲</button>
-                                    <button class="zoom-btn" data-action="fit" title="Fit whole page to view (Double-click)">⤢</button>
+                                    <button class="zoom-btn" data-action="reset" title="Reset view — 100% size"><span class="sb-icon sb-icon-reset-view" aria-hidden="true"></span></button>
+                                    <button class="zoom-btn" data-action="fit" title="Fit whole page to view (Double-click)"><span class="sb-icon sb-icon-fit-view" aria-hidden="true"></span></button>
                                 </div>
                             </div>
                         </div>
@@ -3920,8 +3939,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                 <div class="zoom-toolbar">
                                     <button class="zoom-btn" data-action="zoom-in" title="Zoom In (Scroll)">+</button>
                                     <button class="zoom-btn" data-action="zoom-out" title="Zoom Out (Scroll)">−</button>
-                                    <button class="zoom-btn" data-action="reset" title="Reset view — 100% size">⟲</button>
-                                    <button class="zoom-btn" data-action="fit" title="Fit to View (Double-click)">⤢</button>
+                                    <button class="zoom-btn" data-action="reset" title="Reset view — 100% size"><span class="sb-icon sb-icon-reset-view" aria-hidden="true"></span></button>
+                                    <button class="zoom-btn" data-action="fit" title="Fit to View (Double-click)"><span class="sb-icon sb-icon-fit-view" aria-hidden="true"></span></button>
                                 </div>
                             </div>
                         </div>

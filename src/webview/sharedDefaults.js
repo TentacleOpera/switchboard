@@ -139,7 +139,7 @@ const ROLE_ADDONS = {
         { id: 'skipCompilation', label: 'Do not recompile the project', tooltip: 'Skip project compilation step to save tokens', default: true },
         { id: 'skipTests', label: 'Do not run automated tests', tooltip: 'Skip automated test execution to save tokens', default: true },
         SUBAGENT_POLICY_RADIO,
-        { id: 'useWorktreesPerPlan', label: 'Agent-Managed Worktrees', group: 'features', tooltip: 'Opt into agent-managed orchestration: the agent uses its native subagent/orchestration capabilities to process each subtask in an isolated git worktree, then reviews and merges. Off = the agent implements subtasks directly — no worktrees, no subagents.', default: false },
+        { id: 'useWorktreesPerPlan', label: 'Agent-Managed Worktrees', group: 'features', tooltip: 'Give each subtask its own isolated git worktree to prevent file conflicts. Off = subtasks are implemented in the main working tree. Whether the agent uses subagents is controlled separately by Feature Subagent Policy.', default: false },
         { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
         FEATURE_SUBAGENT_POLICY_RADIO,
         FEATURE_WORKFLOW_FILE_PATH_ADDON
@@ -160,7 +160,7 @@ const ROLE_ADDONS = {
         { id: 'skipCompilation', label: 'Do not recompile the project', tooltip: 'Skip project compilation step to save tokens', default: true },
         { id: 'skipTests', label: 'Do not run automated tests', tooltip: 'Skip automated test execution to save tokens', default: true },
         SUBAGENT_POLICY_RADIO,
-        { id: 'useWorktreesPerPlan', label: 'Agent-Managed Worktrees', group: 'features', tooltip: 'Opt into agent-managed orchestration: the agent uses its native subagent/orchestration capabilities to process each subtask in an isolated git worktree, then reviews and merges. Off = the agent implements subtasks directly — no worktrees, no subagents.', default: false },
+        { id: 'useWorktreesPerPlan', label: 'Agent-Managed Worktrees', group: 'features', tooltip: 'Give each subtask its own isolated git worktree to prevent file conflicts. Off = subtasks are implemented in the main working tree. Whether the agent uses subagents is controlled separately by Feature Subagent Policy.', default: false },
         { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
         FEATURE_SUBAGENT_POLICY_RADIO,
         FEATURE_WORKFLOW_FILE_PATH_ADDON
@@ -207,7 +207,7 @@ const ROLE_ADDONS = {
         { id: 'skipCompilation', label: 'Do not recompile the project', tooltip: 'Skip project compilation step to save tokens', default: true },
         { id: 'skipTests', label: 'Do not run automated tests', tooltip: 'Skip automated test execution to save tokens', default: true },
         SUBAGENT_POLICY_RADIO,
-        { id: 'useWorktreesPerPlan', label: 'Agent-Managed Worktrees', group: 'features', tooltip: 'Opt into agent-managed orchestration: the agent uses its native subagent/orchestration capabilities to process each subtask in an isolated git worktree, then reviews and merges. Off = the agent implements subtasks directly — no worktrees, no subagents.', default: false },
+        { id: 'useWorktreesPerPlan', label: 'Agent-Managed Worktrees', group: 'features', tooltip: 'Give each subtask its own isolated git worktree to prevent file conflicts. Off = subtasks are implemented in the main working tree. Whether the agent uses subagents is controlled separately by Feature Subagent Policy.', default: false },
         { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
         FEATURE_SUBAGENT_POLICY_RADIO,
         FEATURE_WORKFLOW_FILE_PATH_ADDON

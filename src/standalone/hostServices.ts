@@ -303,7 +303,10 @@ export class StandaloneHostState implements HostMemento {
  */
 export function createHeadlessHostSeams(workspaceRoot: string): HostSeams {
     const pathConfig = new StandaloneHostPathConfigProvider(workspaceRoot);
-    const secrets = new StandaloneHostSecrets(workspaceRoot);
+    // Factory, not `new` — StandaloneHostSecrets moved to encryptedSecretsStore and now
+    // takes (storePath, keyPath); createStandaloneHostSecrets owns the global-store path
+    // resolution and the legacy workspace-secrets migration.
+    const secrets = createStandaloneHostSecrets(workspaceRoot);
 
     return {
         pathConfig,

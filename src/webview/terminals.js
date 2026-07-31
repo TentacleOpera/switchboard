@@ -398,6 +398,18 @@
         }, 6000);
     }
 
+    /**
+     * The toast's Undo button reads the CURRENT undoSnapshot, not the one that was live
+     * when the toast was shown. So any mutation that replaces or clears the snapshot
+     * without announcing itself must also retract the toast — otherwise the visible
+     * message describes one action while its Undo reverts a different one.
+     */
+    function hidePaneToast() {
+        if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+        const toastEl = document.getElementById('pane-toast');
+        if (toastEl) { toastEl.classList.remove('visible'); }
+    }
+
     function sanitizePaneAssignments() {
         const liveNames = new Set(fleetList.map(t => t.friendlyName));
         const maxSlots = getMaxSlotCount();
@@ -413,11 +425,22 @@
         // was closed. Drop those slots individually — never discard the whole layout.
         for (let i = 0; i < paneAssignments.length; i++) {
             if (paneAssignments[i] && !liveNames.has(paneAssignments[i])) {
-                const dropped = paneAssignments[i];
                 paneAssignments[i] = null;
-                if (undoSnapshot && (undoSnapshot.name === dropped || undoSnapshot.displaced === dropped)) {
-                    undoSnapshot = null;
-                }
+            }
+        }
+
+        // Undo invalidation. The snapshot restores a WHOLE arrangement, so it is only
+        // safe while every name it would put back is still live. Checking names against
+        // the drop loop above is not enough: closeTerminal() nulls its own slots BEFORE
+        // this refresh lands, so the loop never sees the dead name and the snapshot
+        // outlived the terminal — Undo then restored a name with no session, and the
+        // pane opened a WebSocket to a terminal that no longer exists.
+        if (undoSnapshot) {
+            const wouldRestore = undoSnapshot.slots.filter(Boolean);
+            if (undoSnapshot.name) { wouldRestore.push(undoSnapshot.name); }
+            if (wouldRestore.some(n => !liveNames.has(n))) {
+                undoSnapshot = null;
+                hidePaneToast();
             }
         }
 
@@ -629,8 +652,23 @@
 
         let target = focusedPaneIndex;
         if (paneAssignments[target]) {
+            let free = -1;
             for (let i = 0; i < rendered; i++) {
-                if (!paneAssignments[i]) { target = i; break; }
+                if (!paneAssignments[i]) { free = i; break; }
+            }
+            if (free !== -1) {
+                target = free;
+            } else if (existingIndex !== -1 && existingIndex < rendered) {
+                // Every rendered pane is full AND this terminal already occupies one of
+                // them. Moving it would evict a bystander and leave the terminal's old
+                // pane empty — one click clearing two panes for zero gain, which is the
+                // defect this function exists to remove. Follow the terminal instead.
+                focusedPaneIndex = existingIndex;
+                activeTerminalName = terminalName;
+                terminalBadges.delete(terminalName);
+                renderSidebarList();
+                renderPaneGrid();
+                return;
             }
         }
 
@@ -650,6 +688,10 @@
 
         if (displaced) {
             showPaneToast(`Pane ${target + 1}: ${displaced} → ${terminalName}`, undoLastAssignment);
+        } else {
+            // Nothing was destroyed, but undoSnapshot was just replaced — retract any
+            // toast still on screen from the previous mutation.
+            hidePaneToast();
         }
 
         saveLayoutSettings();
@@ -660,6 +702,7 @@
 
     function undoLastAssignment() {
         if (!undoSnapshot) { return; }
+        hidePaneToast();
         paneAssignments = undoSnapshot.slots;
         focusedPaneIndex = Math.min(undoSnapshot.paneIndex, getSlotCount(effectiveLayout) - 1);
         activeTerminalName = paneAssignments[focusedPaneIndex] || null;
@@ -926,6 +969,14 @@
                     if (paneAssignments[i] === name) { paneAssignments[i] = next; }
                 }
                 if (activeTerminalName === name) { activeTerminalName = next; }
+                // The undo snapshot must follow the rename too. Left alone it holds the
+                // OLD name, which sanitizePaneAssignments cannot see (the live slots now
+                // carry the new one), so Undo would restore a name with no session.
+                if (undoSnapshot) {
+                    undoSnapshot.slots = undoSnapshot.slots.map(n => (n === name ? next : n));
+                    if (undoSnapshot.name === name) { undoSnapshot.name = next; }
+                    if (undoSnapshot.displaced === name) { undoSnapshot.displaced = next; }
+                }
                 if (terminalBadges.has(name)) {
                     terminalBadges.set(next, terminalBadges.get(name));
                     terminalBadges.delete(name);

@@ -3215,7 +3215,7 @@
         state.docsSectionCollapsed[collapseKey] = isCollapsed;
 
         const updateCollapsedUI = () => {
-            chevronSpan.textContent = isCollapsed ? '▸ ' : '▾ ';
+            chevronSpan.className = 'sb-icon sb-icon-sm ' + (isCollapsed ? 'sb-icon-chevron-right' : 'sb-icon-chevron-down');
             contentDiv.style.display = isCollapsed ? 'none' : 'block';
         };
         header.addEventListener('click', (e) => {
@@ -4092,7 +4092,7 @@
                 state.docsSectionCollapsed[sourceId] = isCollapsed;
                 
                 const updateCollapsedUI = () => {
-                    chevronSpan.textContent = isCollapsed ? '▸ ' : '▾ ';
+                    chevronSpan.className = 'sb-icon sb-icon-sm ' + (isCollapsed ? 'sb-icon-chevron-right' : 'sb-icon-chevron-down');
                     contentDiv.style.display = isCollapsed ? 'none' : 'block';
                 };
                 

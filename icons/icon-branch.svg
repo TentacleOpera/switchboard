@@ -1,0 +1,5 @@
+<!-- source: icons/icon-branch.svg -->
+<!-- fill is ignored under CSS mask; fill="#45e0e6" is frozen for parity check -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <path fill="#45e0e6" fill-rule="evenodd" d="M11.75 2.5a1.75 1.75 0 1 0-1.5 2.607v1.893a.75.75 0 0 1-.75.75h-3a1.75 1.75 0 0 0-1.75 1.75v1.893a1.75 1.75 0 1 0 1.5 0V9.5a.25.25 0 0 1 .25-.25h3a2.25 2.25 0 0 0 2.25-2.25V5.107a1.75 1.75 0 0 0 0-2.607zM4.25 11.75a.25.25 0 1 1 0 .5.25.25 0 0 1 0-.5zm7.5-8.5a.25.25 0 1 1 0 .5.25.25 0 0 1 0-.5z"/>
+</svg>

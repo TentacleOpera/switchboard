@@ -1,0 +1,5 @@
+<!-- source: icons/icon-arrow-child.svg -->
+<!-- fill is ignored under CSS mask; fill="#45e0e6" is frozen for parity check -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <path fill="#45e0e6" fill-rule="evenodd" d="M3 2v6h7.17l-2.58-2.58a.75.75 0 0 1 1.06-1.06l3.86 3.86a.75.75 0 0 1 0 1.06l-3.86 3.86a.75.75 0 1 1-1.06-1.06L10.17 9.5H1.5a.75.75 0 0 1-.75-.75V2a.75.75 0 0 1 1.5 0z"/>
+</svg>

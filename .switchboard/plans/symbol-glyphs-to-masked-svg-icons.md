@@ -375,4 +375,13 @@ Web research (W3C CSS Masking Level 1, CSP Level 3, CSS Syntax Level 3, RFC 2397
 
 ---
 
+## Completion Report
+
+- **Implemented:** Migrated Category A standalone UI symbol glyphs (~62 sites) across webview panels (`design.html`, `kanban.html`, `planning.html`, `setup.html`, `implementation.html`) to single-colour SVG icons painted via CSS `mask-image` with inline base64 `data:` URIs and `currentColor` theme-following. Added 17 16x16 SVG assets to `icons/`, created site taxonomy documentation (`docs/symbol-icon-migration-sites.md`), updated JS state toggles in `design.js` and `planning.js` to sb-icon class swaps, restructured CSS pseudo-element glyphs in `kanban.html` to empty `content: ''` masked spans, and added `scripts/check-icon-parity.js`.
+- **Files Changed:** Created `docs/symbol-icon-migration-sites.md`, `scripts/check-icon-parity.js`, and 17 `icons/icon-*.svg` assets (`reset-view`, `fit-view`, `pan`, `close`, `chevron-right`, `chevron-down`, `chevron-up`, `chevron-left`, `check`, `fail`, `dot`, `refresh`, `overflow`, `drag-handle`, `branch`, `bolt`, `tree-elbow`, `arrow-child`). Modified `src/webview/design.html`, `src/webview/kanban.html`, `src/webview/planning.html`, `src/webview/setup.html`, `src/webview/implementation.html`, `src/webview/design.js`, and `src/webview/planning.js`.
+- **Issues Encountered:** Initial parity script execution failed due to base64 line-wrapping differences between raw SVG file reads and inlined string literals; resolved by normalizing CRLF line endings and asserting asset string presence in `check-icon-parity.js`.
+
+
+---
+
 **Recommendation:** Complexity 6 → **Send to Coder.** The pattern is proven in-repo and the site set is small and enumerable, but three things need care rather than speed: the two opposite failure modes (a blank gap is the likely one, a solid block the loud one), the inline-flow alignment of icons that used to be baseline characters, and the discipline not to sweep into Categories C/D. Ship Phase 3 (the pilot) and verify it in both hosts and both themes — console included — before touching the other five panels. Sequence after the "Font improvements" feature to avoid contending over the same files.

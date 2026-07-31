@@ -8659,7 +8659,23 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 // Mirrors the logic of 'promptSelected' but triggered by the drop handler when column mode is 'prompt'.
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
-                const sessionIds: string[] = Array.isArray(msg.sessionIds) ? msg.sessionIds : (msg.sessionI                const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, targetColumn, msg.initiatorProject);
+                const sessionIds: string[] = Array.isArray(msg.sessionIds) ? msg.sessionIds : (msg.sessionId ? [msg.sessionId] : []);
+                if (sessionIds.length === 0) { return { success: false, error: 'sessionIds are required' }; }
+                const sourceColumn: string = msg.sourceColumn;
+                const targetColumn: string = msg.targetColumn;
+
+                // No start-refresh — filter the already-current _lastCards directly (same as
+                // moveSelected). The stale full-board updateBoard here is what bounced the
+                // dropped card back to its source column during dispatch.
+                const sourceCards = this._lastCards.filter(card =>
+                    card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, sessionIds)
+                );
+                if (sourceCards.length === 0) {
+                    this.postMessage({ type: 'promptOnDropResult', sessionIds, success: false });
+                    return { success: false, error: 'No matching cards found' };
+                }
+
+                const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, targetColumn, msg.initiatorProject);
                 const isPromptModeBuiltIn = dispatchSpec?.source === 'built-in' && dispatchSpec?.dragDropMode === 'prompt';
                 if ((dispatchSpec?.source === 'custom-user' || isPromptModeBuiltIn) && this._taskViewerProvider && dispatchSpec?.role) {
                     const allMovedIds: string[] = [];
@@ -8785,21 +8801,6 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 // Generate prompt based on the source column (the stage being completed)
                 const prompt = await this._generatePromptForColumn(sourceCards, sourceColumn, workspaceRoot);
                 await this._seams().clipboard.writeText(prompt);
-
-                // Pair programming: dispatch coder work for high-complexity cards routed to Lead
-                if (sourceColumn === 'PLAN REVIEWED') {
-                    const highComplexityCards = sourceCards.filter(c => !this._isLowComplexity(c) && c.complexity !== 'Unknown');
-                    if (highComplexityCards.length > 0) {
-                        await this._dispatchWithPairProgrammingIfNeeded(highComplexityCards, workspaceRoot);
-                    }
-                }
-
-                this.postMessage({ type: 'promptOnDropResult', sessionIds, success: true });
-                this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plan(s) to clipboard.`, isError: false });Ids(workspaceRoot, sid);
-                        allMovedIds2.push(...movedIds);
-                    }
-                    this.postMessage({ type: 'moveCards', sessionIds: allMovedIds2, targetColumn });
-                }
 
                 // Pair programming: dispatch coder work for high-complexity cards routed to Lead
                 if (sourceColumn === 'PLAN REVIEWED') {

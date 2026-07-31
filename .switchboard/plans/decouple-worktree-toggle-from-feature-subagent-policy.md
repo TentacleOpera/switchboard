@@ -256,3 +256,8 @@ Also check `src/test/agent-prompt-builder-subagents.test.js` — it covers the n
 
 - The planner role renders a Feature Subagent Policy radio (`kanban.html:3165-3184`) whose value is deliberately discarded at `agentPromptBuilder.ts:861`. Same class of defect — a control shown but not honoured. Hide or disable it for the planner role.
 - The coder feature path (`:1522`) and custom-agent feature path (`:1927`) disagree on whether `worktreePerPlanActive` is forced true in feature mode for the git block. Pre-existing inconsistency; reconcile in a separate plan if it causes divergent git-guardrail behaviour.
+
+## Completion Report
+
+Decoupled the Agent-Managed Worktrees toggle (`useWorktreesPerPlan`) from subagent directives so subagent behavior is exclusively controlled by Feature Subagent Policy (`featureSubagentPolicy`). Updated `buildFeatureSubagentClause`, `resolveFeatureOrchestrationDirective`, `WORKTREES_PER_PLAN_DIRECTIVE`, `buildCustomAgentPrompt`, UI tooltips in `sharedDefaults.js` and `kanban.html`, and prompt builder test suites. Modified files: `src/services/agentPromptBuilder.ts`, `src/webview/sharedDefaults.js`, `src/webview/kanban.html`, and `src/services/__tests__/agentPromptBuilder.test.ts`. No issues encountered.
+
