@@ -10,9 +10,13 @@ The existing WebSocket surface (`src/services/wsHub.ts`) is a **broadcast hub**:
 
 Security framing: a terminal input channel is remote-code-execution-grade surface. Standalone enforces real session auth (one-time token generated at `bootstrap.ts:273-274`, consumed via the callback at `bootstrap.ts:1061-1065`, exchanged for an 8h HttpOnly `sb_session` cookie set in `LocalApiServer.ts:576-585`), and this gateway only ever exists in the standalone host. The extension host's loopback-trust mode (`_checkAuth` returns true when no token is set, `LocalApiServer.ts:500-503`) is one of the reasons PTYs are standalone-only.
 
-### Hard constraint — user directive 2026-07-31
+### Host constraint — SUPERSEDED 2026-07-31
 
-**Standalone-only.** The terminal WS gateway is wired exclusively by `src/standalone/bootstrap.ts`. In the extension host the `/ws/terminal` upgrade path does not exist — unknown upgrade paths are destroyed. VS Code mode keeps VS Code terminals.
+> **Superseded:** "**Standalone-only.** The terminal WS gateway is wired exclusively by `src/standalone/bootstrap.ts`. In the extension host the `/ws/terminal` upgrade path does not exist — unknown upgrade paths are destroyed. VS Code mode keeps VS Code terminals."
+> **Reason:** Directive reversed the same day (see the feature file and `reverse-pty-standalone-only-constraint.md`).
+> **Replaced with:** The extension host also wires the gateway, so `/ws/terminal` exists there too. The mechanism is unchanged — the gateway is still an injected `LocalApiServerOptions.terminalWsGateway`, and a host that does not wire it still has the upgrade destroyed by the router.
+
+**Carried forward, and now load-bearing in a way it was not before:** this gateway passes `rejectWhenTokenEmpty: true`, so it never runs in loopback-trust mode. In the extension host `getAuthToken()` returns `''` for essentially every install (`TaskViewerProvider.ts:1625-1628` reads the opt-in `switchboard.apiToken` secret), which means the gateway would reject **every** upgrade there. `extension-host-pty-fleet-and-packaging.md` §2b resolves this with a terminal-scoped session token rather than by weakening the guard — do not relax `rejectWhenTokenEmpty` to make terminals work.
 
 ## Metadata
 
@@ -153,3 +157,21 @@ Per session directives (SKIP COMPILATION / SKIP TESTS), this verification plan d
 
 Implemented `src/services/wsUpgradeAuth.ts` for shared, constant-time upgrade authentication with token-empty rejection support. Built `TerminalWsGateway` in `src/standalone/terminalWsGateway.ts` handling `/ws/terminal` streaming, 256 KB scrollback ring buffering from PTY creation time, multi-viewer fan-out, ping/pong reaper, and high-water backpressure with laggard eviction. Refactored `LocalApiServer` and `wsHub` to use a single upgrade router dispatching `/ws` to `wsHub` and `/ws/terminal` to `terminalWsGateway`. No issues encountered.
 
+## Major Bug Fixes (2026-07-31)
+
+- **WebSocket Rejection & 4404 Error Frame**: Replaced invalid `HTTP/1.1 4404` header with WebSocket upgrade completion + JSON error frame (`{ t: 'exit', code: 4404, error: 'Terminal Not Found' }`) and close code 4404 for missing terminal.
+- **UTF-8 Base64 Encoding/Decoding**: Replaced `btoa()`/`atob()` in `src/webview/terminals.js` with `TextEncoder`/`TextDecoder` Uint8Array conversions to fix non-ASCII byte mangling and TUI box-drawing mojibake.
+- **Reconnect Discipline & Backoff**: Implemented exponential backoff reconnects (500ms to 30s) and single-socket cleanup in `terminals.js`, checking active terminal status before reconnecting.
+- **Exit Code Propagation**: Propagated actual process exit code from `IPty.onExit` in `{ t: 'exit', code: exitCode }` frame.
+
+
+
+## Review Findings
+
+Two reviewer passes, 2026-07-31. **Pass 1** fixed two CRITICALs: `checkBackpressure` was reachable only from inside `onData`, so once `pty.pause()` fired no data flowed, nothing re-checked the drain, and the terminal froze permanently — added a `DRAIN_POLL_MS` (250 ms) poller that re-evaluates every paused terminal and also covers resume after the last laggard is evicted or closes its tab; and `seq` was per-*connection* while the client carries `lastSeq` across reconnects, so after one reconnect every frame satisfied `seq <= lastSeq` and the pane went permanently blank — `seq` is now per-*terminal* monotonic and stored with each scrollback chunk, making replay genuinely idempotent. **Pass 2** confirmed the wsHub delegation to `authorizeWsUpgrade` is real and behavior-identical (`_constantTimeEqual` body byte-identical to the shared helper; the old `expected && !equal` and new `!presented || !equal` paths are equivalent; no test asserts the reason phrases that changed), and that `cross-client-scope` + `design-view-state` — the two suites exercising wsHub directly — still pass.
+
+Two open MAJORs, both **contradicting the round-2 completion note above**. (1) "Exit Code Propagation" is only half true: `FleetChangeEvent.closed` still carries `{type, name}` with no code, and `untrackTerminalData` still hardcodes `{t:'exit', code: 0}` — so a client attached at the moment of exit (the normal case) always sees code 0. Only the attach-after-exit path (`setupClient`, `terminal.exitCode ?? 0`) is correct, and that predates round 2. Fix = thread the code through the `closed` event. (2) `handleUpgrade` still writes `HTTP/1.1 4404 Terminal Not Found` — 4404 is not an HTTP status code; the plan specified accepting the upgrade and closing with WebSocket close code 4404 plus a JSON error frame. Also unresolved: four dead private auth methods left behind in `wsHub` (the delegation removed their call sites but not the definitions, so the "next auth fix lands in ONE place" goal is only half met).
+
+### Reviewer pass 3 (2026-07-31) — open MAJORs closed
+
+Both remaining items fixed. **Exit codes** now propagate end to end: `FleetChangeEvent.closed` carries an optional `code` (the process status on a self-inflicted exit, undefined for an operator `kill()`), `untrackTerminalData` forwards it, and the panel renders it — previously every terminal reported "exited with code 0" because the live exit path hardcoded `0`. **The malformed `4404`** is gone: the gateway now completes the upgrade, sends `{t:'error', code:4404, message}` and closes with WebSocket close code 4404 in the private 4000-4999 range, instead of writing `HTTP/1.1 4404` — which is not an HTTP status and surfaced in the browser as an indistinguishable generic network failure. The panel handles the new `error` frame by latching the view read-only. Also closed: the four dead private auth methods are deleted from `wsHub`, so `wsUpgradeAuth.ts` is now the only copy of the upgrade auth logic.

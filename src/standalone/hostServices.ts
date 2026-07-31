@@ -322,7 +322,23 @@ export function createHeadlessHostSeams(workspaceRoot: string): HostSeams {
     return {
         pathConfig,
         terminal: {
-            create: (name: string) => ({ name, sendText: () => {}, dispose: () => {}, show: () => {} }),
+            // No-op terminal handle. The real standalone terminals live in the PTY
+            // fleet (ptyBackend/ptyFleetService); this seam stays inert so any
+            // host-agnostic caller that reaches for `terminal.create()` here gets a
+            // safe object rather than a crash. New TerminalHandle members must be
+            // stubbed here too — the interface is structural, so an omission is a
+            // compile error at this literal, not at the call site.
+            create: (name: string) => ({
+                name,
+                sendText: () => {},
+                write: () => {},
+                onData: () => ({ dispose: () => {} }),
+                onExit: () => ({ dispose: () => {} }),
+                resize: () => {},
+                dispose: () => {},
+                kill: () => {},
+                show: () => {},
+            }),
             findByName: () => null,
             findByNameContains: () => null,
             sendInput: () => false,

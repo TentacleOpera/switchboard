@@ -152,12 +152,12 @@
             return;
         }
         for (const panel of manifest) {
-            if (panel.enabled === false) {
-                const icon = buildIcon(panel);
-                icons.set(panel.id, icon);
-                strip.appendChild(icon);
-                continue;
-            }
+            // A panel the host did not enable is OMITTED, not greyed out. `enabled`
+            // reflects a capability this host does not have at all (e.g. Terminals
+            // exists only in standalone, and only when node-pty loaded), so a
+            // disabled icon is a dead control the user can never turn on — it just
+            // reads as "broken". Panels that are merely empty stay enabled.
+            if (panel.enabled === false) { continue; }
             const icon = buildIcon(panel);
             const frame = buildFrame(panel);
             icons.set(panel.id, icon);

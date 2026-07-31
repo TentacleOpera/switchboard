@@ -83,6 +83,71 @@
             overflow-y: auto;
             padding: 6px;
         }
+        .role-picker {
+            padding: 8px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--panel-bg);
+        }
+        .role-picker[hidden] { display: none; }
+        .role-picker-title {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+        }
+        .role-picker-options {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-bottom: 6px;
+        }
+        .role-option {
+            background: transparent;
+            border: 1px solid var(--border-bright);
+            color: var(--text-primary);
+            border-radius: 3px;
+            padding: 3px 7px;
+            font-size: 11px;
+            font-family: inherit;
+            cursor: pointer;
+            text-transform: capitalize;
+        }
+        .role-option:hover {
+            border-color: var(--accent-teal);
+            color: var(--accent-teal);
+        }
+        .role-picker-cancel {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 11px;
+            font-family: inherit;
+            cursor: pointer;
+            padding: 0;
+        }
+        .role-picker-cancel:hover { color: var(--text-primary); }
+        .item-name-input {
+            font-size: 12px;
+            font-weight: 600;
+            font-family: inherit;
+            background: var(--panel-bg);
+            color: var(--text-primary);
+            border: 1px solid var(--accent-teal);
+            border-radius: 2px;
+            padding: 1px 3px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .btn-rename-term {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 11px;
+            padding: 0 4px;
+        }
+        .btn-rename-term:hover { color: var(--accent-teal); }
         .terminal-item {
             padding: 8px 10px;
             border-radius: 4px;
@@ -174,6 +239,43 @@
             color: var(--text-secondary);
             font-size: 13px;
         }
+
+        /* Browser-only gap: without this a plain browser stops painting dark
+           scrollbars and form controls on a black surface. Unscoped on purpose —
+           this panel has no light presentation. */
+        :root { color-scheme: dark; }
+
+        /* Scrollbar styling — same block as the sibling browser panels, plus
+           -corner. The --vscode-* var is absent in a browser and falls through to
+           this panel's own token, so one declaration serves both hosts. */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-corner {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--vscode-scrollbarSlider-background, var(--border-bright));
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--vscode-scrollbarSlider-hoverBackground, var(--text-secondary));
+        }
+
+        /* Firefox only. DO NOT hoist these two properties out of the @supports
+           gate: Chromium 121+ and Safari 17.4+ ignore EVERY ::-webkit-scrollbar
+           rule on a scroller that declares scrollbar-width or scrollbar-color,
+           so an ungated copy silently deletes the 6px styling above. */
+        @supports not selector(::-webkit-scrollbar) {
+            :root {
+                scrollbar-width: thin;
+                scrollbar-color: var(--border-bright) transparent;
+            }
+        }
     </style>
 </head>
 <body>
@@ -181,6 +283,15 @@
         <div class="sidebar-header">
             <span class="sidebar-title">PTY Fleet</span>
             <button id="btn-new-terminal" class="btn-new-terminal">+ New</button>
+        </div>
+        <!-- Role picker. Inline (not a modal) and dismissed by picking or by the
+             Cancel button — never a confirm gate. window.prompt() was the previous
+             implementation; it cannot be populated from agents.visibleAgents and
+             reads as a browser chrome dialog rather than part of the panel. -->
+        <div id="role-picker" class="role-picker" hidden>
+            <div class="role-picker-title">New terminal — pick a role</div>
+            <div id="role-picker-options" class="role-picker-options"></div>
+            <button type="button" id="role-picker-cancel" class="role-picker-cancel">Cancel</button>
         </div>
         <div id="terminals-list" class="terminals-list"></div>
     </div>

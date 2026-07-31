@@ -113,17 +113,10 @@ export class WsHub {
         }
     }
 
-    private _parseCookies(req: any): Record<string, string> {
-        const raw = req.headers?.cookie || '';
-        const result: Record<string, string> = {};
-        for (const part of raw.split(';')) {
-            const [k, ...rest] = part.trim().split('=');
-            if (k && rest.length > 0) {
-                result[k] = decodeURIComponent(rest.join('='));
-            }
-        }
-        return result;
-    }
+    // Cookie parsing, Host/Origin allowlisting and the constant-time token compare
+    // used to live here as private methods. They now live in wsUpgradeAuth.ts and
+    // are shared with the terminal gateway — deliberately deleted rather than left
+    // behind, so the next auth fix has exactly one place to land.
 
     /**
      * Validate Origin + token, then complete the WS upgrade.
@@ -133,42 +126,16 @@ export class WsHub {
             this._wss = new WebSocketServer({ noServer: true });
         }
 
-        // Host-header allowlist — the primary DNS-rebinding defense, applied to the WS
-        // Upgrade as well as the HTTP surface. A rebound attacker page still sends its
-        // own hostname in the Host header (it controls the resolved IP, not the string
-        // the browser sends), so a non-localhost Host is rejected before the upgrade.
-        // Every legitimate client (a browser, or the `ws` npm client connecting to
-        // ws://127.0.0.1:<port>) sends a localhost Host; a missing Host is allowed for
-        // exotic non-browser callers, which are not subject to DNS rebinding anyway.
-        const host = req.headers['host'];
-        if (host && !this._isAllowedHost(host)) {
-            socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+        const auth = await authorizeWsUpgrade(req, () => this._options.getAuthToken());
+        if (!auth.authorized) {
+            const status = auth.statusCode || 401;
+            const msg = auth.reason || 'Unauthorized';
+            socket.write(`HTTP/1.1 ${status} ${msg}\r\n\r\n`);
             socket.destroy();
             return;
         }
 
-        // Origin validation — DNS-rebinding mitigation. Only allow localhost origins
-        // (or no origin, which non-browser clients like curl don't send).
-        const origin = req.headers['origin'];
-        if (origin) {
-            if (!this._isLocalhostOrigin(origin)) {
-                socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
-                socket.destroy();
-                return;
-            }
-        }
-
-        // Token validation: prefer ?token= query param, then the sb_session cookie.
         const reqUrl = new URL(req.url || '', `http://${req.headers.host || '127.0.0.1'}`);
-        const cookies = this._parseCookies(req);
-        const presented = reqUrl.searchParams.get('token') || cookies['sb_session'] || '';
-        const expected = await this._options.getAuthToken();
-        // Extension path: no token configured => accept the loopback connection.
-        if (expected && !this._constantTimeEqual(presented, expected)) {
-            socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-            socket.destroy();
-            return;
-        }
 
         // All checks passed — complete the upgrade.
         this._wss.handleUpgrade(req, socket, head, async (ws) => {
@@ -238,34 +205,6 @@ export class WsHub {
                 handleDisconnect();
             });
         });
-    }
-
-    private _isLocalhostOrigin(origin: string): boolean {
-        try {
-            const u = new URL(origin);
-            const h = u.hostname;
-            // URL.hostname wraps IPv6 in brackets, so accept both forms.
-            return h === '127.0.0.1' || h === 'localhost' || h === '::1' || h === '[::1]';
-        } catch {
-            return false;
-        }
-    }
-
-    private _isAllowedHost(host: string): boolean {
-        const lower = host.toLowerCase();
-        if (lower.startsWith('127.0.0.1:') || lower.startsWith('localhost:')) { return true; }
-        if (lower === '127.0.0.1' || lower === 'localhost' || lower === '[::1]') { return true; }
-        if (lower.startsWith('[::1]:')) { return true; }
-        return false;
-    }
-
-    private _constantTimeEqual(a: string, b: string): boolean {
-        if (a.length !== b.length) return false;
-        let diff = 0;
-        for (let i = 0; i < b.length; i++) {
-            diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-        }
-        return diff === 0;
     }
 
     private _safeSend(ws: WebSocket, data: any): void {

@@ -7,15 +7,37 @@ export const HIGH_WATER_MARK_BYTES = 1024 * 1024; // 1 MB
 export const LOW_WATER_MARK_BYTES = 256 * 1024; // 256 KB
 export const HIGH_WATER_GRACE_MS = 30000; // 30s
 export const PING_INTERVAL_MS = 30000;
+/**
+ * How often a paused terminal re-checks whether its clients have drained.
+ *
+ * Load-bearing: the high/low-water check is otherwise only reachable from inside
+ * `onData`, and a paused pty by definition produces no data — so pause() with no
+ * independent timer is a permanent freeze, not backpressure.
+ */
+export const DRAIN_POLL_MS = 250;
+
+interface ScrollbackChunk {
+    seq: number;
+    data: string;
+}
 
 interface ScrollbackBuffer {
-    chunks: string[];
+    chunks: ScrollbackChunk[];
     totalBytes: number;
+    /**
+     * Monotonic output counter for THIS TERMINAL — not per-connection.
+     *
+     * Per-connection numbering restarted at 1 on every reconnect while the client
+     * carries its `lastSeq` forward, so after one reconnect every frame satisfied
+     * `seq <= lastSeq` and the terminal went permanently blank. Terminal-scoped
+     * seqs make replay genuinely idempotent: a re-attaching client drops the
+     * prefix it already rendered and writes only the tail it missed.
+     */
+    nextSeq: number;
 }
 
 interface ClientState {
     ws: WebSocket;
-    seq: number;
     terminalName: string;
     isAlive: boolean;
     highWaterStart?: number;
@@ -32,6 +54,7 @@ export class TerminalWsGateway {
     private pausedTerminals = new Set<string>();
     private clients = new Set<ClientState>();
     private pingInterval?: NodeJS.Timeout;
+    private drainInterval?: NodeJS.Timeout;
 
     constructor(
         fleetService: PtyFleetService,
@@ -44,6 +67,7 @@ export class TerminalWsGateway {
 
         this.initFleetListeners();
         this.startPingReaper();
+        this.startDrainPoller();
     }
 
     public setBroadcastWs(broadcastWs: (verb: string, payload: any) => void): void {
@@ -60,7 +84,7 @@ export class TerminalWsGateway {
             if (event.type === 'created') {
                 this.trackTerminalData(event.terminal);
             } else if (event.type === 'closed') {
-                this.untrackTerminalData(event.name);
+                this.untrackTerminalData(event.name, event.code);
             }
             if (this.broadcastWs) {
                 this.broadcastWs('terminalsChanged', {});
@@ -71,28 +95,28 @@ export class TerminalWsGateway {
     private trackTerminalData(t: ExtendedTerminalHandle): void {
         if (this.terminalSubscriptions.has(t.name)) return;
 
-        const buffer: ScrollbackBuffer = { chunks: [], totalBytes: 0 };
+        const buffer: ScrollbackBuffer = { chunks: [], totalBytes: 0, nextSeq: 1 };
         this.scrollbackBuffers.set(t.name, buffer);
 
         const sub = t.onData((chunk: string) => {
-            // Append to ring buffer
-            buffer.chunks.push(chunk);
+            // Append to ring buffer under this terminal's monotonic seq.
+            const seq = buffer.nextSeq++;
+            buffer.chunks.push({ seq, data: chunk });
             buffer.totalBytes += chunk.length;
             while (buffer.totalBytes > MAX_SCROLLBACK_BYTES && buffer.chunks.length > 1) {
                 const removed = buffer.chunks.shift()!;
-                buffer.totalBytes -= removed.length;
+                buffer.totalBytes -= removed.data.length;
             }
 
-            // Fan out to attached clients
+            // Fan out to attached clients — same seq for everyone.
             const base64Data = Buffer.from(chunk, 'utf8').toString('base64');
             const targetClients = Array.from(this.clients).filter(c => c.terminalName === t.name);
 
             for (const client of targetClients) {
                 if (client.ws.readyState === WebSocket.OPEN) {
-                    client.seq++;
                     this.safeSend(client.ws, {
                         t: 'out',
-                        seq: client.seq,
+                        seq,
                         data: base64Data,
                     });
                 }
@@ -104,7 +128,7 @@ export class TerminalWsGateway {
         this.terminalSubscriptions.set(t.name, sub);
     }
 
-    private untrackTerminalData(name: string): void {
+    private untrackTerminalData(name: string, exitCode?: number): void {
         const sub = this.terminalSubscriptions.get(name);
         if (sub) {
             sub.dispose();
@@ -116,7 +140,7 @@ export class TerminalWsGateway {
         // Notify and close attached clients
         for (const client of Array.from(this.clients)) {
             if (client.terminalName === name) {
-                this.safeSend(client.ws, { t: 'exit', code: 0 });
+                this.safeSend(client.ws, { t: 'exit', code: exitCode ?? 0 });
                 try { client.ws.close(); } catch { /* ignore */ }
                 this.clients.delete(client);
             }
@@ -189,8 +213,15 @@ export class TerminalWsGateway {
 
         const terminal = this.fleetService.get(name);
         if (!terminal) {
-            socket.write('HTTP/1.1 4404 Terminal Not Found\r\n\r\n');
-            socket.destroy();
+            // 4404 is an APPLICATION close code, not an HTTP status — writing
+            // "HTTP/1.1 4404" produced a malformed handshake the browser reported as
+            // a generic network failure, with no way for the client to distinguish
+            // "no such terminal" from "server down". Complete the upgrade, name the
+            // reason in a JSON frame, then close in the 4000-4999 private range.
+            this.wss.handleUpgrade(req, socket, head, (ws) => {
+                this.safeSend(ws, { t: 'error', code: 4404, message: `No such terminal: ${name}` });
+                try { ws.close(4404, 'Terminal not found'); } catch { /* already gone */ }
+            });
             return;
         }
 
@@ -202,40 +233,42 @@ export class TerminalWsGateway {
     private setupClient(ws: WebSocket, terminal: ExtendedTerminalHandle): void {
         const client: ClientState = {
             ws,
-            seq: 0,
             terminalName: terminal.name,
             isAlive: true,
         };
         this.clients.add(client);
 
-        // Hello frame
-        client.seq++;
+        const buffer = this.scrollbackBuffers.get(terminal.name);
+
+        // Hello frame carries the terminal's current high-water seq so a client can
+        // tell how far ahead the stream already is.
         this.safeSend(ws, {
             t: 'hello',
             name: terminal.name,
             role: terminal.role,
             cols: terminal.pty.cols || 80,
             rows: terminal.pty.rows || 24,
-            seq: client.seq,
+            seq: buffer ? buffer.nextSeq - 1 : 0,
         });
 
-        // Replay scrollback
-        const buffer = this.scrollbackBuffers.get(terminal.name);
-        if (buffer && buffer.chunks.length > 0) {
+        // Replay scrollback BEFORE any live frame. This loop is synchronous, and
+        // node's single-threaded model means no `onData` callback can interleave
+        // with it — so replay-then-live ordering holds without an explicit buffer.
+        // Chunks keep their original seqs, so a re-attaching client dedupes the
+        // prefix it has already rendered instead of double-writing it.
+        if (buffer) {
             for (const chunk of buffer.chunks) {
-                client.seq++;
-                const base64Data = Buffer.from(chunk, 'utf8').toString('base64');
+                const base64Data = Buffer.from(chunk.data, 'utf8').toString('base64');
                 this.safeSend(ws, {
                     t: 'out',
-                    seq: client.seq,
+                    seq: chunk.seq,
                     data: base64Data,
                 });
             }
         }
 
         if (terminal.status === 'exited') {
-            client.seq++;
-            this.safeSend(ws, { t: 'exit', code: terminal.exitCode ?? 0, seq: client.seq });
+            this.safeSend(ws, { t: 'exit', code: terminal.exitCode ?? 0 });
         }
 
         ws.on('pong', () => {
@@ -267,6 +300,22 @@ export class TerminalWsGateway {
         });
     }
 
+    /**
+     * Re-evaluates backpressure for every paused terminal on a timer. Without this
+     * a pause is terminal (see DRAIN_POLL_MS): no data flows, so nothing calls
+     * checkBackpressure, so resume() never fires. Also the only path that resumes
+     * after the last laggard is evicted or closes its tab.
+     */
+    private startDrainPoller(): void {
+        this.drainInterval = setInterval(() => {
+            if (this.pausedTerminals.size === 0) { return; }
+            for (const name of Array.from(this.pausedTerminals)) {
+                const targetClients = Array.from(this.clients).filter(c => c.terminalName === name);
+                this.checkBackpressure(name, targetClients);
+            }
+        }, DRAIN_POLL_MS);
+    }
+
     private startPingReaper(): void {
         this.pingInterval = setInterval(() => {
             for (const client of Array.from(this.clients)) {
@@ -292,6 +341,9 @@ export class TerminalWsGateway {
     public dispose(): void {
         if (this.pingInterval) {
             clearInterval(this.pingInterval);
+        }
+        if (this.drainInterval) {
+            clearInterval(this.drainInterval);
         }
         for (const client of this.clients) {
             try { client.ws.close(); } catch { /* ignore */ }

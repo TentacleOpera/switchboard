@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-07-30T09:25:15.103Z",
+  "generatedAt": "2026-07-31T00:23:52.724Z",
   "summary": {
     "totalArms": 599,
     "totalVerbs": 512,
@@ -13,7 +13,7 @@
       "TaskViewer": 108,
       "Setup": 110
     },
-    "apiEndpointCount": 66,
+    "apiEndpointCount": 69,
     "manualReviewCount": 4
   },
   "providers": {
@@ -101,10 +101,6 @@
         "promptAll",
         "promptOnDrop",
         "promptSelected",
-        "ptyCloseTerminal",
-        "ptyCreateTerminal",
-        "ptyListTerminals",
-        "ptyRenameTerminal",
         "rePlanSelected",
         "ready",
         "reassignPlansWorkspace",
@@ -1793,167 +1789,167 @@
         },
         {
           "verb": "getTicketSyncStatuses",
-          "line": 6517,
+          "line": 6537,
           "dynamic": false
         },
         {
           "verb": "readLocalTicketFile",
-          "line": 6547,
+          "line": 6567,
           "dynamic": false
         },
         {
           "verb": "ticketAttachImage",
-          "line": 6579,
+          "line": 6599,
           "dynamic": false
         },
         {
           "verb": "importTicketSubtasks",
-          "line": 6623,
+          "line": 6643,
           "dynamic": false
         },
         {
           "verb": "syncAllTickets",
-          "line": 6658,
+          "line": 6678,
           "dynamic": false
         },
         {
           "verb": "copyToClipboard",
-          "line": 6742,
+          "line": 6762,
           "dynamic": false
         },
         {
           "verb": "copyDiagramPrompt",
-          "line": 6796,
+          "line": 6816,
           "dynamic": false
         },
         {
           "verb": "fetchMoveTargets",
-          "line": 6810,
+          "line": 6830,
           "dynamic": false
         },
         {
           "verb": "moveTicket",
-          "line": 6860,
+          "line": 6880,
           "dynamic": false
         },
         {
           "verb": "improveFeature",
-          "line": 6889,
+          "line": 6909,
           "dynamic": false
         },
         {
           "verb": "changeTicketStatus",
-          "line": 6966,
+          "line": 6986,
           "dynamic": false
         },
         {
           "verb": "postTicketComment",
-          "line": 6994,
+          "line": 7014,
           "dynamic": false
         },
         {
           "verb": "loadTicketComments",
-          "line": 7022,
+          "line": 7042,
           "dynamic": false
         },
         {
           "verb": "postTicketReply",
-          "line": 7057,
+          "line": 7077,
           "dynamic": false
         },
         {
           "verb": "downloadAttachment",
-          "line": 7085,
+          "line": 7105,
           "dynamic": false
         },
         {
           "verb": "viewAttachments",
-          "line": 7115,
+          "line": 7135,
           "dynamic": false
         },
         {
           "verb": "openAttachment",
-          "line": 7163,
+          "line": 7183,
           "dynamic": false
         },
         {
           "verb": "revealAttachment",
-          "line": 7188,
+          "line": 7208,
           "dynamic": false
         },
         {
           "verb": "clickupCreateTask",
-          "line": 7213,
+          "line": 7233,
           "dynamic": false
         },
         {
           "verb": "linearCreateIssue",
-          "line": 7287,
+          "line": 7307,
           "dynamic": false
         },
         {
           "verb": "convertToSubtask",
-          "line": 7372,
+          "line": 7392,
           "dynamic": false
         },
         {
           "verb": "ticketsAskAgent",
-          "line": 7415,
+          "line": 7435,
           "dynamic": false
         },
         {
           "verb": "createOnlineDocument",
-          "line": 7453,
+          "line": 7473,
           "dynamic": false
         },
         {
           "verb": "setUploadLocation",
-          "line": 7550,
+          "line": 7570,
           "dynamic": false
         },
         {
           "verb": "syncDocToOnline",
-          "line": 7574,
+          "line": 7594,
           "dynamic": false
         },
         {
           "verb": "getSyncConfig",
-          "line": 7631,
+          "line": 7651,
           "dynamic": false
         },
         {
           "verb": "loadInsights",
-          "line": 7647,
+          "line": 7667,
           "dynamic": false
         },
         {
           "verb": "readInsight",
-          "line": 7669,
+          "line": 7689,
           "dynamic": false
         },
         {
           "verb": "runTuningExtract",
-          "line": 7693,
+          "line": 7713,
           "dynamic": false
         },
         {
           "verb": "runTuningGovernance",
-          "line": 7730,
+          "line": 7750,
           "dynamic": false
         },
         {
           "verb": "updateInsightStatus",
-          "line": 7739,
+          "line": 7759,
           "dynamic": false
         },
         {
           "verb": "deleteInsight",
-          "line": 7753,
+          "line": 7773,
           "dynamic": false
         },
         {
           "verb": "copyInsightLink",
-          "line": 7767,
+          "line": 7787,
           "dynamic": false
         }
       ]
@@ -2880,112 +2876,112 @@
         },
         {
           "verb": "getRecentActivity",
-          "line": 12101,
-          "dynamic": false
-        },
-        {
-          "verb": "updateAutobanState",
           "line": 12107,
           "dynamic": false
         },
         {
-          "verb": "addAutobanTerminal",
-          "line": 12129,
+          "verb": "updateAutobanState",
+          "line": 12113,
           "dynamic": false
         },
         {
-          "verb": "removeAutobanTerminal",
+          "verb": "addAutobanTerminal",
           "line": 12135,
           "dynamic": false
         },
         {
-          "verb": "resetAutobanPools",
+          "verb": "removeAutobanTerminal",
           "line": 12141,
           "dynamic": false
         },
         {
+          "verb": "resetAutobanPools",
+          "line": 12147,
+          "dynamic": false
+        },
+        {
           "verb": "pipelineStart",
-          "line": 12145,
+          "line": 12151,
           "dynamic": false
         },
         {
           "verb": "pipelineStop",
-          "line": 12152,
-          "dynamic": false
-        },
-        {
-          "verb": "pipelinePause",
-          "line": 12155,
-          "dynamic": false
-        },
-        {
-          "verb": "pipelineUnpause",
           "line": 12158,
           "dynamic": false
         },
         {
-          "verb": "pipelineSetInterval",
+          "verb": "pipelinePause",
           "line": 12161,
           "dynamic": false
         },
         {
+          "verb": "pipelineUnpause",
+          "line": 12164,
+          "dynamic": false
+        },
+        {
+          "verb": "pipelineSetInterval",
+          "line": 12167,
+          "dynamic": false
+        },
+        {
           "verb": "airlock_sendToCoder",
-          "line": 12166,
+          "line": 12172,
           "dynamic": false
         },
         {
           "verb": "airlock_syncRepo",
-          "line": 12171,
+          "line": 12177,
           "dynamic": false
         },
         {
           "verb": "kanban_workflowEvent",
-          "line": 12174,
+          "line": 12180,
           "dynamic": false
         },
         {
           "verb": "getDbPath",
-          "line": 12179,
+          "line": 12185,
           "dynamic": false
         },
         {
           "verb": "setLocalDb",
-          "line": 12184,
+          "line": 12190,
           "dynamic": false
         },
         {
           "verb": "editDbPath",
-          "line": 12188,
+          "line": 12194,
           "dynamic": false
         },
         {
           "verb": "testDbConnection",
-          "line": 12231,
+          "line": 12237,
           "dynamic": false
         },
         {
           "verb": "setCustomDbPath",
-          "line": 12256,
+          "line": 12262,
           "dynamic": false
         },
         {
           "verb": "setPresetDbPath",
-          "line": 12260,
+          "line": 12266,
           "dynamic": false
         },
         {
           "verb": "queryArchives",
-          "line": 12264,
+          "line": 12270,
           "dynamic": false
         },
         {
           "verb": "resetDatabase",
-          "line": 12291,
+          "line": 12297,
           "dynamic": false
         },
         {
           "verb": "sendToTerminal",
-          "line": 12295,
+          "line": 12301,
           "dynamic": false
         }
       ]
@@ -15932,7 +15928,7 @@
       "verb": "memoError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 12028,
+      "line": 12029,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -15944,7 +15940,7 @@
       "verb": "memoPromptResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 12035,
+      "line": 12041,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -15957,7 +15953,7 @@
       "verb": "memoContent",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 12076,
+      "line": 12082,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -15969,7 +15965,7 @@
       "verb": "memoPromptResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 12084,
+      "line": 12090,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -15984,7 +15980,7 @@
       "verb": "dbPathUpdated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 12181,
+      "line": 12187,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": "dynamic"
@@ -15993,7 +15989,7 @@
       "verb": "dbPathUpdated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 12225,
+      "line": 12231,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16005,7 +16001,7 @@
       "verb": "dbConnectionResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 12237,
+      "line": 12243,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16017,7 +16013,7 @@
       "verb": "dbConnectionResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 12243,
+      "line": 12249,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16030,7 +16026,7 @@
       "verb": "dbConnectionResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 12251,
+      "line": 12257,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16043,7 +16039,7 @@
       "verb": "memoContent",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 12650,
+      "line": 12656,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16055,7 +16051,7 @@
       "verb": "selectSession",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 14018,
+      "line": 14024,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16067,7 +16063,7 @@
       "verb": "selectSession",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 15885,
+      "line": 15891,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16079,7 +16075,7 @@
       "verb": "selectSession",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 16139,
+      "line": 16145,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16091,7 +16087,7 @@
       "verb": "selectSession",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 16144,
+      "line": 16150,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16103,7 +16099,7 @@
       "verb": "copyPlanLinkResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 16433,
+      "line": 16439,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16117,7 +16113,7 @@
       "verb": "copyPlanLinkResult",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 16491,
+      "line": 16497,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16132,7 +16128,7 @@
       "verb": "runSheets",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 17581,
+      "line": 17587,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16147,7 +16143,7 @@
       "verb": "runSheets",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 17592,
+      "line": 17598,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16161,7 +16157,7 @@
       "verb": "runSheets",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 17647,
+      "line": 17653,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16175,7 +16171,7 @@
       "verb": "refresh",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 17749,
+      "line": 17755,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16186,7 +16182,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 18429,
+      "line": 18435,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16199,7 +16195,7 @@
       "verb": "airlock_syncStart",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 18441,
+      "line": 18447,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16210,7 +16206,7 @@
       "verb": "airlock_syncComplete",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 18449,
+      "line": 18455,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16221,7 +16217,7 @@
       "verb": "airlock_syncError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 18453,
+      "line": 18459,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16233,7 +16229,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 18456,
+      "line": 18462,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16246,7 +16242,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 18467,
+      "line": 18473,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16259,7 +16255,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 18648,
+      "line": 18654,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16273,7 +16269,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 18664,
+      "line": 18670,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16286,7 +16282,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 18674,
+      "line": 18680,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16299,7 +16295,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 18695,
+      "line": 18701,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16312,7 +16308,7 @@
       "verb": "planCreated",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 18921,
+      "line": 18927,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16323,7 +16319,7 @@
       "verb": "insertContextFile",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19487,
+      "line": 19493,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16336,7 +16332,7 @@
       "verb": "setupStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19497,
+      "line": 19503,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16348,7 +16344,7 @@
       "verb": "onboardingProgress",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19505,
+      "line": 19511,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16360,7 +16356,7 @@
       "verb": "onboardingProgress",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19507,
+      "line": 19513,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16372,7 +16368,7 @@
       "verb": "onboardingProgress",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19510,
+      "line": 19516,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16385,7 +16381,7 @@
       "verb": "setupStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19523,
+      "line": 19529,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16397,7 +16393,7 @@
       "verb": "terminalStatuses",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19528,
+      "line": 19534,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16409,7 +16405,7 @@
       "verb": "terminalStatuses",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19529,
+      "line": 19535,
       "receiver": "this._kanbanProvider?",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16421,7 +16417,7 @@
       "verb": "sessionStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19568,
+      "line": 19574,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16435,7 +16431,7 @@
       "verb": "sessionStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19575,
+      "line": 19581,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16449,7 +16445,7 @@
       "verb": "julesStatus",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 19863,
+      "line": 19869,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16462,7 +16458,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20275,
+      "line": 20281,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16475,7 +16471,7 @@
       "verb": "actionTriggered",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20294,
+      "line": 20300,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16488,7 +16484,7 @@
       "verb": "terminalStatuses",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20550,
+      "line": 20556,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16502,7 +16498,7 @@
       "verb": "terminalStatuses",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20551,
+      "line": 20557,
       "receiver": "this._kanbanProvider?",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16516,7 +16512,7 @@
       "verb": "terminalStatuses",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20572,
+      "line": 20578,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16531,7 +16527,7 @@
       "verb": "terminalStatuses",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20579,
+      "line": 20585,
       "receiver": "this._kanbanProvider?",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16546,7 +16542,7 @@
       "verb": "airlock_coderError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20696,
+      "line": 20702,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16558,7 +16554,7 @@
       "verb": "airlock_coderError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20701,
+      "line": 20707,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16570,7 +16566,7 @@
       "verb": "airlock_coderError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20720,
+      "line": 20726,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16582,7 +16578,7 @@
       "verb": "airlock_coderSent",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20730,
+      "line": 20736,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16593,7 +16589,7 @@
       "verb": "airlock_coderError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20733,
+      "line": 20739,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16605,7 +16601,7 @@
       "verb": "airlock_syncComplete",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20741,
+      "line": 20747,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -16616,7 +16612,7 @@
       "verb": "airlock_syncError",
       "direction": "push",
       "file": "src/services/TaskViewerProvider.ts",
-      "line": 20744,
+      "line": 20750,
       "receiver": "this",
       "provider": "TaskViewer",
       "payloadKeys": [
@@ -17758,7 +17754,7 @@
       "verb": "sbInspectToggle",
       "direction": "push",
       "file": "src/webview/planning.js",
-      "line": 9304,
+      "line": 9317,
       "receiver": "frame.contentWindow?",
       "payloadKeys": [
         "type",
@@ -17769,7 +17765,7 @@
       "verb": "switchboardThemeChanged",
       "direction": "push",
       "file": "src/webview/shell.js",
-      "line": 118,
+      "line": 131,
       "receiver": "frame.contentWindow?",
       "payloadKeys": [
         "type",
@@ -19647,7 +19643,7 @@
       "verb": "memoLoad",
       "direction": "request",
       "file": "src/webview/memo.js",
-      "line": 116,
+      "line": 150,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19658,7 +19654,7 @@
       "verb": "memoSave",
       "direction": "request",
       "file": "src/webview/memo.js",
-      "line": 125,
+      "line": 159,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19670,7 +19666,7 @@
       "verb": "memoClear",
       "direction": "request",
       "file": "src/webview/memo.js",
-      "line": 145,
+      "line": 179,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19681,7 +19677,7 @@
       "verb": "memoGeneratePrompt",
       "direction": "request",
       "file": "src/webview/memo.js",
-      "line": 163,
+      "line": 197,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19694,7 +19690,7 @@
       "verb": "memoGeneratePrompt",
       "direction": "request",
       "file": "src/webview/memo.js",
-      "line": 176,
+      "line": 210,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19707,7 +19703,7 @@
       "verb": "persistTabState",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 131,
+      "line": 138,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19720,7 +19716,7 @@
       "verb": "listLocalFolders",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 492,
+      "line": 499,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19731,7 +19727,7 @@
       "verb": "linearLoadAutomationCatalog",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 692,
+      "line": 699,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19742,7 +19738,7 @@
       "verb": "clickupLoadSpaceTags",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 699,
+      "line": 706,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19754,7 +19750,7 @@
       "verb": "loadTicketAssignees",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 778,
+      "line": 785,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19768,7 +19764,7 @@
       "verb": "linearUpdateIssueAssignee",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 928,
+      "line": 935,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19781,7 +19777,7 @@
       "verb": "clickupUpdateTaskAssignees",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 935,
+      "line": 942,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19795,7 +19791,7 @@
       "verb": "linearUpdateIssueAssignee",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 949,
+      "line": 956,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19808,7 +19804,7 @@
       "verb": "clickupUpdateTaskAssignees",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 956,
+      "line": 963,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19822,7 +19818,7 @@
       "verb": "linearUpdateIssuePriority",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 1149,
+      "line": 1156,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19835,7 +19831,7 @@
       "verb": "clickupUpdateTaskPriority",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 1185,
+      "line": 1192,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19848,7 +19844,7 @@
       "verb": "linearUpdateIssueLabels",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 1235,
+      "line": 1242,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19861,7 +19857,7 @@
       "verb": "clickupUpdateTaskTags",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 1242,
+      "line": 1249,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19874,7 +19870,7 @@
       "verb": "fetchMoveTargets",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 1421,
+      "line": 1428,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19888,7 +19884,7 @@
       "verb": "loadTicketMembers",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 1661,
+      "line": 1668,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19902,7 +19898,7 @@
       "verb": "loadTicketComments",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 1759,
+      "line": 1766,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19915,7 +19911,7 @@
       "verb": "postTicketReply",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 1975,
+      "line": 1982,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19931,7 +19927,7 @@
       "verb": "readLocalTicketFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 2486,
+      "line": 2493,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19944,7 +19940,7 @@
       "verb": "readLocalTicketFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 2488,
+      "line": 2495,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19957,7 +19953,7 @@
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 2684,
+      "line": 2691,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19968,7 +19964,7 @@
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 2687,
+      "line": 2694,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19979,7 +19975,7 @@
       "verb": "listPlanningHtmlFolders",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 2691,
+      "line": 2698,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -19990,7 +19986,7 @@
       "verb": "refreshSource",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 2692,
+      "line": 2699,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20001,7 +19997,7 @@
       "verb": "createPlansInit",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 2696,
+      "line": 2703,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -20011,7 +20007,7 @@
       "verb": "importResearchDoc",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 2757,
+      "line": 2764,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20024,7 +20020,7 @@
       "verb": "createPlansPickFolder",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 2903,
+      "line": 2910,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -20034,7 +20030,7 @@
       "verb": "createPlansDownloadZip",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 2907,
+      "line": 2914,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20046,7 +20042,7 @@
       "verb": "createPlansCopyPrompt",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 2914,
+      "line": 2921,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20058,7 +20054,7 @@
       "verb": "createPlansCopyPrompt",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 2917,
+      "line": 2924,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20071,7 +20067,7 @@
       "verb": "createPlansPasteBack",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 2924,
+      "line": 2931,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20082,7 +20078,7 @@
       "verb": "createPlansImproveSource",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 2927,
+      "line": 2934,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -20092,7 +20088,7 @@
       "verb": "appendToPlannerPrompt",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 3088,
+      "line": 3095,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20106,7 +20102,7 @@
       "verb": "linkToDocument",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 3100,
+      "line": 3107,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20120,7 +20116,7 @@
       "verb": "importFullDoc",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 3116,
+      "line": 3123,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20134,7 +20130,7 @@
       "verb": "serveAndOpenHtml",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 3124,
+      "line": 3131,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20148,7 +20144,7 @@
       "verb": "linkToFolder",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 3262,
+      "line": 3269,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20159,7 +20155,7 @@
       "verb": "linkToFolder",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 3309,
+      "line": 3316,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20170,7 +20166,7 @@
       "verb": "linkToFolder",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 3338,
+      "line": 3345,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20181,7 +20177,7 @@
       "verb": "linkToFolder",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 3359,
+      "line": 3366,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20192,7 +20188,7 @@
       "verb": "fetchChildren",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 3416,
+      "line": 3423,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20204,7 +20200,7 @@
       "verb": "deleteLocalDoc",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 3451,
+      "line": 3458,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20218,7 +20214,7 @@
       "verb": "fetchPageContent",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 3528,
+      "line": 3535,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20232,7 +20228,7 @@
       "verb": "fetchPreview",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 3537,
+      "line": 3544,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20246,7 +20242,7 @@
       "verb": "fetchPreview",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 3547,
+      "line": 3554,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20260,7 +20256,7 @@
       "verb": "fetchDocPages",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 3558,
+      "line": 3565,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20273,7 +20269,7 @@
       "verb": "removeLocalFolder",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 3606,
+      "line": 3613,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20285,7 +20281,7 @@
       "verb": "linkToFolder",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 3876,
+      "line": 3883,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20296,7 +20292,7 @@
       "verb": "createLocalDoc",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 3882,
+      "line": 3889,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20307,7 +20303,7 @@
       "verb": "importResearchDoc",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 3897,
+      "line": 3904,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20318,7 +20314,7 @@
       "verb": "linkToFolder",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 3937,
+      "line": 3944,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20329,7 +20325,7 @@
       "verb": "createLocalDoc",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 3943,
+      "line": 3950,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20340,7 +20336,7 @@
       "verb": "importResearchDoc",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 3953,
+      "line": 3960,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20351,7 +20347,7 @@
       "verb": "refreshSource",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 4022,
+      "line": 4029,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20362,7 +20358,7 @@
       "verb": "createOnlineDocument",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 4033,
+      "line": 4040,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20374,7 +20370,7 @@
       "verb": "setUploadLocation",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 4043,
+      "line": 4050,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20385,7 +20381,7 @@
       "verb": "fetchContainers",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 4057,
+      "line": 4064,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20396,7 +20392,7 @@
       "verb": "fetchAntigravityArtifact",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 4244,
+      "line": 4251,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20408,7 +20404,7 @@
       "verb": "fetchPageContent",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 4539,
+      "line": 4546,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20422,7 +20418,7 @@
       "verb": "fetchImportedDocs",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 4655,
+      "line": 4662,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -20432,7 +20428,7 @@
       "verb": "fetchFilteredDocs",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 4700,
+      "line": 4707,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20445,7 +20441,7 @@
       "verb": "savePlanningContainerSelection",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 4744,
+      "line": 4751,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20457,7 +20453,7 @@
       "verb": "fetchFilteredDocs",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 4751,
+      "line": 4758,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20470,7 +20466,7 @@
       "verb": "fetchFilteredDocs",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 4774,
+      "line": 4781,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20483,7 +20479,7 @@
       "verb": "fetchPageContent",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 4938,
+      "line": 4945,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20497,7 +20493,7 @@
       "verb": "fetchDocsFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 5111,
+      "line": 5118,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20509,7 +20505,7 @@
       "verb": "deleteImportedDoc",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 5120,
+      "line": 5127,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20521,7 +20517,7 @@
       "verb": "syncToSource",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 5128,
+      "line": 5135,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20532,7 +20528,7 @@
       "verb": "resolveDuplicate",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 5197,
+      "line": 5204,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20546,7 +20542,7 @@
       "verb": "ticketsRootChanged",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 5294,
+      "line": 5301,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20557,7 +20553,7 @@
       "verb": "ticketsDefaultRoot",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 5296,
+      "line": 5303,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -20567,7 +20563,7 @@
       "verb": "ticketsRootChanged",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 5306,
+      "line": 5313,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20578,7 +20574,7 @@
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 5367,
+      "line": 5374,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20589,7 +20585,7 @@
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 5373,
+      "line": 5380,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20600,7 +20596,7 @@
       "verb": "fetchKanbanPlans",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 5431,
+      "line": 5438,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20611,7 +20607,7 @@
       "verb": "refreshSource",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 5713,
+      "line": 5720,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20622,7 +20618,7 @@
       "verb": "fetchImportedDocs",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 5714,
+      "line": 5721,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -20632,7 +20628,7 @@
       "verb": "refreshSource",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 5797,
+      "line": 5804,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20643,7 +20639,7 @@
       "verb": "fetchImportedDocs",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 5810,
+      "line": 5817,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -20653,7 +20649,7 @@
       "verb": "fetchPreview",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 5828,
+      "line": 5835,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20666,7 +20662,7 @@
       "verb": "viewAttachments",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 6457,
+      "line": 6470,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20680,7 +20676,7 @@
       "verb": "fetchImportedDocs",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 6507,
+      "line": 6520,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -20690,7 +20686,7 @@
       "verb": "fetchPreview",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 6600,
+      "line": 6613,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20704,7 +20700,7 @@
       "verb": "saveFileContent",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 6641,
+      "line": 6654,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20718,7 +20714,7 @@
       "verb": "refreshTicketsDelta",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 6718,
+      "line": 6731,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20731,7 +20727,7 @@
       "verb": "linearLoadAutomationCatalog",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 6729,
+      "line": 6742,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20742,7 +20738,7 @@
       "verb": "clickupLoadFolders",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 6916,
+      "line": 6929,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20754,7 +20750,7 @@
       "verb": "clickupLoadSpaceTags",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 6931,
+      "line": 6944,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20766,7 +20762,7 @@
       "verb": "clickupLoadLists",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 6954,
+      "line": 6967,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20779,7 +20775,7 @@
       "verb": "clickupLoadListStatuses",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7019,
+      "line": 7032,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20791,7 +20787,7 @@
       "verb": "refreshTicketsDelta",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7028,
+      "line": 7041,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20804,7 +20800,7 @@
       "verb": "importFullDoc",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7364,
+      "line": 7377,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20817,7 +20813,7 @@
       "verb": "importFullDoc",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7382,
+      "line": 7395,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20830,7 +20826,7 @@
       "verb": "planShown",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7476,
+      "line": 7489,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20841,7 +20837,7 @@
       "verb": "fetchKanbanPlanPreview",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7485,
+      "line": 7498,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20853,7 +20849,7 @@
       "verb": "importPlans",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7545,
+      "line": 7558,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -20863,7 +20859,7 @@
       "verb": "submitComment",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7670,
+      "line": 7683,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20878,7 +20874,7 @@
       "verb": "copyKanbanPlanPrompt",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7858,
+      "line": 7871,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20891,7 +20887,7 @@
       "verb": "moveKanbanPlanColumn",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7890,
+      "line": 7903,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20904,7 +20900,7 @@
       "verb": "getFeatureDetails",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7916,
+      "line": 7929,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20916,7 +20912,7 @@
       "verb": "addSubtaskToFeature",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7928,
+      "line": 7941,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20929,7 +20925,7 @@
       "verb": "deleteFeature",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7937,
+      "line": 7950,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20942,7 +20938,7 @@
       "verb": "removeSubtaskFromFeature",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 7951,
+      "line": 7964,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20954,7 +20950,7 @@
       "verb": "deleteKanbanPlan",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8019,
+      "line": 8032,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20967,7 +20963,7 @@
       "verb": "moveKanbanPlanColumn",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8021,
+      "line": 8034,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20980,7 +20976,7 @@
       "verb": "setKanbanPlanComplexity",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8047,
+      "line": 8060,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -20993,7 +20989,7 @@
       "verb": "fetchKanbanPlanLog",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8072,
+      "line": 8085,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21005,7 +21001,7 @@
       "verb": "deleteKanbanPlan",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8081,
+      "line": 8094,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21018,7 +21014,7 @@
       "verb": "renderMarkdownLive",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8463,
+      "line": 8476,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21030,7 +21026,7 @@
       "verb": "fetchKanbanPlanPreview",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8515,
+      "line": 8528,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21042,7 +21038,7 @@
       "verb": "fetchPreview",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8523,
+      "line": 8536,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21056,7 +21052,7 @@
       "verb": "fetchDocsFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8531,
+      "line": 8544,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21068,7 +21064,7 @@
       "verb": "importFullDoc",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8560,
+      "line": 8573,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21081,7 +21077,7 @@
       "verb": "syncToSource",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8581,
+      "line": 8594,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21092,7 +21088,7 @@
       "verb": "createLocalDoc",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8674,
+      "line": 8687,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21106,7 +21102,7 @@
       "verb": "draftImproveLocalDoc",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8716,
+      "line": 8729,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21119,7 +21115,7 @@
       "verb": "saveFileContent",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8732,
+      "line": 8745,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21133,7 +21129,7 @@
       "verb": "saveOnlineDocFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8741,
+      "line": 8754,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21145,7 +21141,7 @@
       "verb": "saveFileContent",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8773,
+      "line": 8786,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21159,7 +21155,7 @@
       "verb": "getProjectContextEnabled",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8831,
+      "line": 8844,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21170,7 +21166,7 @@
       "verb": "getProjectPrd",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8889,
+      "line": 8902,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21182,7 +21178,7 @@
       "verb": "saveProjectPrd",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8912,
+      "line": 8925,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21196,7 +21192,7 @@
       "verb": "saveProjectPrd",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8933,
+      "line": 8946,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21209,7 +21205,7 @@
       "verb": "readConstitutionFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8966,
+      "line": 8979,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21221,7 +21217,7 @@
       "verb": "saveConstitutionFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 8990,
+      "line": 9003,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21234,7 +21230,7 @@
       "verb": "saveConstitutionFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9009,
+      "line": 9022,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21246,7 +21242,7 @@
       "verb": "fetchPreview",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9145,
+      "line": 9158,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21260,7 +21256,7 @@
       "verb": "listPlanningHtmlFolders",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9160,
+      "line": 9173,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21271,7 +21267,7 @@
       "verb": "removePlanningHtmlFolder",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9203,
+      "line": 9216,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21283,7 +21279,7 @@
       "verb": "addPlanningHtmlFolder",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9219,
+      "line": 9232,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21294,7 +21290,7 @@
       "verb": "copyArtifactPrompt",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9282,
+      "line": 9295,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21306,7 +21302,7 @@
       "verb": "sendArtifactPromptToTerminal",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9290,
+      "line": 9303,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21319,7 +21315,7 @@
       "verb": "sendHtmlTweakPrompt",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9360,
+      "line": 9373,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21331,7 +21327,7 @@
       "verb": "copyHtmlTweakPrompt",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9388,
+      "line": 9401,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21342,7 +21338,7 @@
       "verb": "refreshSource",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9415,
+      "line": 9428,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21353,7 +21349,7 @@
       "verb": "refreshSource",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9477,
+      "line": 9490,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21364,7 +21360,7 @@
       "verb": "addTicketsFolder",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9484,
+      "line": 9497,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21375,7 +21371,7 @@
       "verb": "addLocalFolder",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9487,
+      "line": 9500,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21386,7 +21382,7 @@
       "verb": "addLocalFolder",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9490,
+      "line": 9503,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21397,7 +21393,7 @@
       "verb": "moveTicket",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9678,
+      "line": 9691,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21411,7 +21407,7 @@
       "verb": "switchTicketsProvider",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9724,
+      "line": 9737,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21423,7 +21419,7 @@
       "verb": "ticketsRootChanged",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9741,
+      "line": 9754,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21434,7 +21430,7 @@
       "verb": "importAllTickets",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9771,
+      "line": 9784,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21448,7 +21444,7 @@
       "verb": "importAllTickets",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9798,
+      "line": 9811,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21462,7 +21458,7 @@
       "verb": "copyToClipboard",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9815,
+      "line": 9828,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21475,7 +21471,7 @@
       "verb": "syncAllTickets",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9838,
+      "line": 9851,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21487,7 +21483,7 @@
       "verb": "saveLocalTicketFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9877,
+      "line": 9890,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21501,7 +21497,7 @@
       "verb": "pushTicket",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9893,
+      "line": 9906,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21514,7 +21510,7 @@
       "verb": "deleteTicketConfirmed",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9904,
+      "line": 9917,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21527,7 +21523,7 @@
       "verb": "copyDiagramPrompt",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9945,
+      "line": 9958,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21538,7 +21534,7 @@
       "verb": "viewAttachments",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 9965,
+      "line": 9978,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21552,7 +21548,7 @@
       "verb": "postTicketComment",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10005,
+      "line": 10018,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21567,7 +21563,7 @@
       "verb": "refreshTicketsDelta",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10042,
+      "line": 10055,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21580,7 +21576,7 @@
       "verb": "refreshTicketsDelta",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10074,
+      "line": 10087,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21593,7 +21589,7 @@
       "verb": "refreshTicketsDelta",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10085,
+      "line": 10098,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21606,7 +21602,7 @@
       "verb": "refreshTicketsDelta",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10103,
+      "line": 10116,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21620,7 +21616,7 @@
       "verb": "refreshTicketsDelta",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10115,
+      "line": 10128,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21634,7 +21630,7 @@
       "verb": "downloadAttachment",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10145,
+      "line": 10158,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21650,7 +21646,7 @@
       "verb": "openExternalUrl",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10302,
+      "line": 10315,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21661,7 +21657,7 @@
       "verb": "readLocalTicketFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10334,
+      "line": 10347,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21674,7 +21670,7 @@
       "verb": "linearLoadTaskDetails",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10337,
+      "line": 10350,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21686,7 +21682,7 @@
       "verb": "readLocalTicketFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10345,
+      "line": 10358,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21699,7 +21695,7 @@
       "verb": "clickupLoadTaskDetails",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10347,
+      "line": 10360,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21711,7 +21707,7 @@
       "verb": "importTicketSubtasks",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10356,
+      "line": 10369,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21724,7 +21720,7 @@
       "verb": "changeTicketStatus",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10456,
+      "line": 10469,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21738,7 +21734,7 @@
       "verb": "convertToSubtask",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10615,
+      "line": 10628,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21752,7 +21748,7 @@
       "verb": "renderMarkdownLive",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10757,
+      "line": 10770,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21767,7 +21763,7 @@
       "verb": "ticketAttachImage",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10776,
+      "line": 10789,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21781,7 +21777,7 @@
       "verb": "openAttachment",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10944,
+      "line": 10957,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21793,7 +21789,7 @@
       "verb": "revealAttachment",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10955,
+      "line": 10968,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21805,7 +21801,7 @@
       "verb": "downloadAttachment",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10970,
+      "line": 10983,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21821,7 +21817,7 @@
       "verb": "openAttachment",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 10986,
+      "line": 10999,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21833,7 +21829,7 @@
       "verb": "readLocalTicketFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11280,
+      "line": 11293,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21846,7 +21842,7 @@
       "verb": "linearLoadTaskDetails",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11282,
+      "line": 11295,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21858,7 +21854,7 @@
       "verb": "readLocalTicketFile",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11297,
+      "line": 11310,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21871,7 +21867,7 @@
       "verb": "clickupLoadTaskDetails",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11299,
+      "line": 11312,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21883,7 +21879,7 @@
       "verb": "clickupLoadFolders",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11690,
+      "line": 11707,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21895,7 +21891,7 @@
       "verb": "clickupSaveSpaceSelection",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11706,
+      "line": 11723,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21908,7 +21904,7 @@
       "verb": "clickupLoadFolders",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11712,
+      "line": 11729,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21920,7 +21916,7 @@
       "verb": "clickupLoadSpaceTags",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11717,
+      "line": 11734,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21932,7 +21928,7 @@
       "verb": "clickupSaveSpaceSelection",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11726,
+      "line": 11743,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21945,7 +21941,7 @@
       "verb": "clickupLoadLists",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11756,
+      "line": 11773,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21958,7 +21954,7 @@
       "verb": "clickupLoadLists",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11763,
+      "line": 11780,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21971,7 +21967,7 @@
       "verb": "clickupSaveFolderSelection",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11783,
+      "line": 11800,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21984,7 +21980,7 @@
       "verb": "clickupLoadLists",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11790,
+      "line": 11807,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -21997,7 +21993,7 @@
       "verb": "clickupLoadLists",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11797,
+      "line": 11814,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22010,7 +22006,7 @@
       "verb": "clickupSaveFolderSelection",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11809,
+      "line": 11826,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22023,7 +22019,7 @@
       "verb": "clickupSaveListSelection",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11848,
+      "line": 11865,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22040,7 +22036,7 @@
       "verb": "refreshTicketsDelta",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 11880,
+      "line": 11897,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22054,7 +22050,7 @@
       "verb": "linearLoadProject",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12121,
+      "line": 12161,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22065,7 +22061,7 @@
       "verb": "linearLoadTaskDetails",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12128,
+      "line": 12168,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22077,7 +22073,7 @@
       "verb": "clickupLoadProject",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12139,
+      "line": 12179,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22092,7 +22088,7 @@
       "verb": "clickupLoadProject",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12151,
+      "line": 12191,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22108,7 +22104,7 @@
       "verb": "clickupLoadTaskDetails",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12166,
+      "line": 12206,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22120,7 +22116,7 @@
       "verb": "clickupLoadSpaces",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12176,
+      "line": 12216,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22131,7 +22127,7 @@
       "verb": "copyToClipboard",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12276,
+      "line": 12316,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22144,7 +22140,7 @@
       "verb": "ticketsAskAgent",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12297,
+      "line": 12337,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22159,7 +22155,7 @@
       "verb": "listLocalTicketFiles",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12339,
+      "line": 12379,
       "receiver": "vscode",
       "payloadKeys": "dynamic"
     },
@@ -22167,7 +22163,7 @@
       "verb": "getTicketSyncStatuses",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12357,
+      "line": 12397,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22180,7 +22176,7 @@
       "verb": "setupTicketsWatcher",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12494,
+      "line": 12534,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22191,7 +22187,7 @@
       "verb": "ticketsDefaultRoot",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12496,
+      "line": 12536,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -22201,7 +22197,7 @@
       "verb": "getSyncConfig",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12563,
+      "line": 12603,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -22211,7 +22207,7 @@
       "verb": "fetchContainers",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12628,
+      "line": 12668,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22222,7 +22218,7 @@
       "verb": "fetchContainers",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12635,
+      "line": 12675,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22233,7 +22229,7 @@
       "verb": "syncDocToOnline",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12734,
+      "line": 12774,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -22249,7 +22245,7 @@
       "verb": "fetchRoots",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12774,
+      "line": 12814,
       "receiver": "vscode",
       "payloadKeys": [
         "type"
@@ -22259,7 +22255,7 @@
       "verb": "refreshSource",
       "direction": "request",
       "file": "src/webview/planning.js",
-      "line": 12775,
+      "line": 12815,
       "receiver": "vscode",
       "payloadKeys": [
         "type",
@@ -24570,6 +24566,16 @@
   ],
   "apiEndpoints": [
     {
+      "path": "/ws",
+      "method": "GET",
+      "prefix": false
+    },
+    {
+      "path": "/ws/terminal",
+      "method": "GET",
+      "prefix": false
+    },
+    {
       "path": "/health",
       "method": "GET",
       "prefix": false
@@ -24890,6 +24896,11 @@
       "prefix": false
     },
     {
+      "path": "/terminals",
+      "method": "GET",
+      "prefix": false
+    },
+    {
       "path": "/design/asset",
       "method": "GET",
       "prefix": false
@@ -24904,19 +24915,19 @@
     {
       "kind": "dynamic-postMessage-type",
       "file": "src/webview/planning.js",
-      "line": 3739,
+      "line": 3746,
       "raw": "vscode.postMessage({ type: removeType, folderPath: entry.path, workspaceRoot });"
     },
     {
       "kind": "dynamic-postMessage-type",
       "file": "src/webview/planning.js",
-      "line": 10505,
+      "line": 10518,
       "raw": "vscode.postMessage({"
     },
     {
       "kind": "dynamic-postMessage-type",
       "file": "src/webview/planning.js",
-      "line": 12185,
+      "line": 12225,
       "raw": "vscode.postMessage({"
     },
     {

@@ -43,6 +43,15 @@ jobs:
       - name: Claude mirror drift check
         run: npm run mirror:check
 
+      # PTY terminals run in BOTH hosts (standalone-only was reversed 2026-07-31).
+      # This gate no longer forbids node-pty in the extension bundle — it pins the
+      # two structural facts that keep the availability gate auditable: exactly one
+      # module loads the native binding, and it exports the probe every capability
+      # flag derives from. The no-bundled-binary check needs dist/, so this step
+      # must stay AFTER "Compile extension" above.
+      - name: PTY host gating contract (single load site, probe exported, no bundled binary)
+        run: npm run test:contract:pty-host-gating
+
       - name: Design asset route security contract
         run: npm run test:contract:design-asset
 

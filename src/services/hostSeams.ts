@@ -195,6 +195,16 @@ export class VscodeHostPathConfigProvider implements HostPathConfigProvider {
 // TaskViewerProvider.ts:2994-3010, extension.ts:354-387.
 // The node-pty implementation is B3, not here.
 
+/**
+ * Unsubscribe handle for the terminal output/exit listeners. Deliberately NOT
+ * the global `Disposable` from lib.esnext.disposable — that one requires a
+ * `[Symbol.dispose]` member, which neither node-pty's `IDisposable` nor the
+ * no-op host stubs provide.
+ */
+export interface TerminalDisposable {
+    dispose(): void;
+}
+
 export interface TerminalHandle {
     readonly name: string;
     /** Send text/input to the terminal. */
@@ -202,9 +212,9 @@ export interface TerminalHandle {
     /** Raw write to terminal. */
     write(data: string): void;
     /** Subscribe to terminal output chunks. */
-    onData(cb: (chunk: string) => void): Disposable;
+    onData(cb: (chunk: string) => void): TerminalDisposable;
     /** Subscribe to terminal exit code. */
-    onExit(cb: (code: number | undefined) => void): Disposable;
+    onExit(cb: (code: number | undefined) => void): TerminalDisposable;
     /** Resize terminal dimensions. */
     resize(cols: number, rows: number): void;
     /** Dispose/kill the terminal. */

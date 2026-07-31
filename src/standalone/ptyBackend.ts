@@ -23,6 +23,35 @@ function getPtyModule(): typeof import('node-pty') {
     return ptyModule!;
 }
 
+let ptyAvailable: boolean | undefined;
+
+/**
+ * Can this machine actually spawn PTYs?
+ *
+ * `node-pty` is an OPTIONAL dependency (it ships no Linux prebuild, and its
+ * install hook falls back to `node-gyp rebuild` — see the backend plan's
+ * dependency decision), so a perfectly healthy install can legitimately lack it.
+ * Every PTY-facing capability flag must derive from this probe: without it
+ * standalone advertises a Terminals rail tab and un-hidden dispatch buttons that
+ * throw on first click.
+ *
+ * Probed once and cached — the answer cannot change while the process lives.
+ * Loads the module for real (rather than resolving a path) so a present-but-
+ * unloadable binary counts as unavailable.
+ */
+export function isPtyAvailable(): boolean {
+    if (ptyAvailable === undefined) {
+        try {
+            getPtyModule();
+            ptyAvailable = true;
+        } catch (err) {
+            ptyAvailable = false;
+            console.warn('[PtyBackend] node-pty unavailable — PTY terminals disabled for this session:', err instanceof Error ? err.message : err);
+        }
+    }
+    return ptyAvailable;
+}
+
 export interface PtySpawnOptions {
     name: string;
     shell?: string;

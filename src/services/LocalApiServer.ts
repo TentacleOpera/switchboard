@@ -778,6 +778,21 @@ export class LocalApiServer {
             return;
         }
         try {
+            // Honour the manifest's `enabled` flag. The rail omits disabled panels,
+            // but the route table is shared by both hosts, so without this a panel
+            // the host never enabled is still reachable by typing its URL — e.g.
+            // /terminals in the extension host, which would render a Terminals panel
+            // whose verbs aren't in KANBAN_VERBS and whose WS upgrade is destroyed.
+            // Absent from the manifest entirely => not gated (unknown ids still 404
+            // below via getPanelHtml).
+            const manifest = this._options.serveStatic.getPanelsManifest?.();
+            const entry = Array.isArray(manifest) ? manifest.find((p: any) => p && p.id === id) : undefined;
+            if (entry && entry.enabled === false) {
+                res.writeHead(404, { 'Content-Type': 'text/plain' });
+                res.end('Panel not found or not enabled');
+                return;
+            }
+
             const result = await this._options.serveStatic.getPanelHtml(id);
             if (!result) {
                 res.writeHead(404, { 'Content-Type': 'text/plain' });

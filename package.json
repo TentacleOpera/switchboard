@@ -761,8 +761,8 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run package",
-    "compile": "webpack",
-    "watch": "webpack --watch",
+    "compile": "node scripts/sync-webview-vendor.js && webpack",
+    "watch": "node scripts/sync-webview-vendor.js && webpack --watch",
     "package": "webpack --mode production --devtool hidden-source-map",
     "compile-tests": "tsc -p tsconfig.test.json",
     "watch-tests": "tsc -p . -w --outDir out",
@@ -777,6 +777,7 @@
     "test:contract:research-modal": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/research-modal-contract.test.js",
     "test:contract:request-id-wire": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/research-modal-request-id-wire-contract.test.js",
     "test:contract:reviewer-prompt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/autoban-reviewer-prompt-regression.test.js",
+    "test:contract:pty-host-gating": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-host-gating-contract.test.js",
     "test:contract:verb-engine": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/verb-engine-headless-seams.test.js",
     "test:contract:verb-engine-kanban": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/verb-engine-kanban-headless.test.js",
     "test:contract:verb-engine-planning": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/verb-engine-planning-headless.test.js",
@@ -802,6 +803,7 @@
     "test:contract:global-config-sandbox": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/global-config-sandbox.test.js",
     "test:integration:all": "npm run test:regression:plan-sync && npm run test:regression:native-project-api && node --require ./src/test/bootstrap/sandboxStateHome.js src/test/integrations/run-integration-tests.js all",
     "clean:switchboard": "node -e \"const fs=require('fs'),p=require('path'),d=p.join('.switchboard');['inbox','outbox','cooldowns'].forEach(f=>{try{fs.rmSync(p.join(d,f),{recursive:true,force:true})}catch{}});['bridge_debug.log','auth_token'].forEach(f=>{try{fs.unlinkSync(p.join(d,f))}catch{}});console.log('Switchboard transient state cleaned.')\"",
+    "vendor:sync": "node scripts/sync-webview-vendor.js",
     "catalog:generate": "node scripts/generate-protocol-catalog.js --write && node scripts/generate-verb-allowlist.js --write",
     "catalog:check": "node scripts/generate-protocol-catalog.js && node scripts/generate-verb-allowlist.js",
     "parity:check": "node scripts/check-protocol-parity.js",
@@ -845,11 +847,13 @@
     "mermaid": "^11.14.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
-    "node-pty": "^1.1.0",
     "sql.js": "^1.14.1",
     "uuid": "^9.0.1",
     "ws": "8.21.0",
     "zod": "^3.23.8"
+  },
+  "optionalDependencies": {
+    "node-pty": "1.1.0"
   },
   "peerDependenciesMeta": {
     "@mermaid-js/mermaid-cli": {

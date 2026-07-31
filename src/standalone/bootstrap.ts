@@ -24,8 +24,10 @@ import {
     type HostCapabilities,
 } from '../services/headlessPanelHtml';
 import { PlanIngestionEngine } from '../services/PlanIngestionEngine';
+import { matchWorktreePath } from '../services/worktreeResolver';
 import { createStandalonePlanIngestionHost, readPlanScannerCustomSourceDirs } from './planIngestionHost';
-import { PtyFleetService } from './ptyFleetService';
+import { PtyFleetService, PTY_IDE_NAME } from './ptyFleetService';
+import { isPtyAvailable } from './ptyBackend';
 import { TerminalWsGateway } from './terminalWsGateway';
 import { sendPromptToPty } from './ptyPromptDelivery';
 
@@ -226,6 +228,22 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     const configProvider = new StandaloneHostPathConfigProvider(workspaceRoot);
     KanbanDatabase.setPathConfigProvider(configProvider);
 
+    /**
+     * Clear-before-prompt parity with the extension's terminal dispatch, which
+     * reads these two keys off the `switchboard` configuration section
+     * (`TaskViewerProvider.ts:4094-4095`, defaults true / 2000ms clamped 0-10000).
+     *
+     * Read through configProvider, NOT the kanban.db `config` table: these are
+     * host settings, and `_rawValue` resolves the section-relative key, the
+     * `switchboard.`-prefixed form and the env override. Pointing them at the db
+     * would read a key nothing ever writes in standalone, silently pinning
+     * clear-before-prompt on and making the board's toggle inert.
+     */
+    const getPromptDeliveryOptions = () => ({
+        clearBeforePrompt: configProvider.getConfigBoolean('terminal.clearBeforePrompt', true),
+        clearBeforePromptDelayMs: configProvider.getConfigNumber('terminal.clearBeforePromptDelay', 2000),
+    });
+
     const secrets = new StandaloneHostSecrets(workspaceRoot);
     const db = KanbanDatabase.forWorkspace(workspaceRoot);
 
@@ -384,11 +402,20 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // secretStorage is already created above (line 252) with createStandaloneSecretStorage.
     // Its get() is async (returns Promise<string|undefined>), so integrationsConfigured
     // must be computed inside the async getters, not captured synchronously.
+    // node-pty is an optional dependency, so every PTY-facing surface is gated on
+    // one probe. Without this, an install that legitimately skipped the optional
+    // native module still advertises a Terminals tab and un-hidden dispatch
+    // buttons, both of which throw on first use.
+    const ptyReady = isPtyAvailable();
+    if (!ptyReady) {
+        log(opts, 'node-pty is unavailable — PTY terminals and board dispatch are disabled for this session (the board, plans and panels are unaffected).');
+    }
+
     const baseStandaloneCapabilities: HostCapabilities = {
-        terminalDispatch: true,
+        terminalDispatch: ptyReady,
         automation: false,
         orchestrator: false,
-        terminalFleet: true,
+        terminalFleet: ptyReady,
         mcpTerminals: false,
         secretsEntry: false,
     };
@@ -420,7 +447,9 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // surfaces its verbs through the other panels), so the manifest only gates
     // design/setup. When the extension is the host it wires the same verbs and
     // passes no availability override.
-    const getPanelsManifest = () => sharedGetPanelsManifest({ design: true, setup: true, terminals: true });
+    // `terminals` is fail-closed in getPanelsManifest (=== true), so gating it on
+    // the probe hides the rail tab entirely when node-pty could not load.
+    const getPanelsManifest = () => sharedGetPanelsManifest({ design: true, setup: true, terminals: ptyReady });
     const getPanelHtml = async (id: string): Promise<{ html: string; csp?: string } | null> => {
         const result = sharedGetPanelHtmlById(id, repoRoot, workspaceRoot, await getStandaloneCaps());
         if (!result) { return null; }
@@ -662,6 +691,20 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                     }
                     const nextCol = getNextKanbanColumn(column);
                     if (!nextCol) { return { success: false, error: `No next column from ${column}` }; }
+
+                    // Dispatch variant: in the extension these buttons move the cards
+                    // AND fire the target column's drop action (the move↔dispatch
+                    // coupling). A column dispatches when its drop mode is 'cli' and it
+                    // has a role; 'prompt' columns are copy-only and stay move-only.
+                    // Custom columns are not in DEFAULT_KANBAN_COLUMNS, so they keep the
+                    // conservative move-only behaviour rather than silently dispatching.
+                    const targetDef = DEFAULT_KANBAN_COLUMNS.find(c => c.id === nextCol);
+                    const isDispatchColumn = !!targetDef && targetDef.dragDropMode === 'cli' && !!targetDef.role;
+                    if (ptyReady && isDispatchColumn) {
+                        // triggerAction performs the move itself, so don't move twice.
+                        return await handlePtyVerb('triggerAction', { ...payload, column, sessionIds }, root);
+                    }
+
                     await moveSessionsToColumn(sessionIds, column, nextCol);
                     server.broadcastWs('moveCards', { sessionIds, targetColumn: nextCol });
                     server.broadcastWs('showStatusMessage', { message: `Moved ${sessionIds.length} plan(s) to ${nextCol}.`, isError: false });
@@ -854,6 +897,12 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     return { success: true, sessionId };
                 }
 
+                // Restored 2026-07-31: these three were deleted during the PTY fleet
+                // work. They are unrelated to PTY and are guarded by a dedicated
+                // contract test ("the three UI verbs route to the provider's real
+                // dispatcher and push state", headless-feature-management-contract).
+                // Do not remove — without them feature management in standalone falls
+                // through to the default "not implemented" arm.
                 case 'createFeature':
                 case 'promoteToFeature':
                 case 'addSubtaskToFeature': {
@@ -862,6 +911,37 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     return result;
                 }
 
+                case 'ptyCreateTerminal':
+                case 'ptyCloseTerminal':
+                case 'ptyListTerminals':
+                case 'ptyRenameTerminal':
+                case 'triggerAction':
+                case 'sendToTerminal': {
+                    // Defense in depth for the optional native module: the capability
+                    // flags already hide these affordances, but a page loaded before a
+                    // restart (or a direct API caller) can still reach the verb. Fail
+                    // with a readable error instead of an unhandled spawn exception.
+                    if (!ptyReady) {
+                        return { success: false, error: 'PTY terminals are unavailable: the optional node-pty module could not be loaded on this machine.' };
+                    }
+                    return await handlePtyVerb(verb, payload, root);
+                }
+
+                default:
+                    return { success: false, error: `Verb '${verb}' not implemented in standalone mode` };
+            }
+        } catch (err) {
+            console.error(`[bootstrap] kanbanVerb '${verb}' failed:`, err);
+            return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+    };
+
+    /**
+     * PTY-backed verb arms, split out so the single `ptyReady` guard above covers
+     * all of them rather than being repeated per case.
+     */
+    const handlePtyVerb = async (verb: string, payload: any, root: string): Promise<any> => {
+        switch (verb) {
                 case 'ptyCreateTerminal': {
                     const terminal = await ptyFleetService.create(payload.role || 'coder', payload.name, payload.cwd, payload.worktreePath);
                     return { success: true, terminal: { friendlyName: terminal.friendlyName, role: terminal.role, status: terminal.status } };
@@ -892,54 +972,81 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 }
 
                 case 'triggerAction': {
-                    const column: string = payload.column;
-                    let sessionIds: string[] = Array.isArray(payload.sessionIds) ? payload.sessionIds : [];
-                    const planFile: string = payload.planFile;
-                    if (!column && !planFile) { return { success: false, error: 'Missing column or planFile' }; }
+                    const sourceColumn: string | undefined = payload.column;
+                    const explicitTarget: string | undefined = payload.targetColumn;
+                    const planFile: string | undefined = payload.planFile;
+                    const sessionIds: string[] = Array.isArray(payload.sessionIds)
+                        ? payload.sessionIds
+                        : (payload.sessionId ? [payload.sessionId] : []);
 
-                    const nextCol = column ? getNextKanbanColumn(column) : undefined;
+                    if (!explicitTarget && !sourceColumn && !planFile && sessionIds.length === 0) {
+                        return { success: false, error: 'Missing sessionId/sessionIds, planFile, column or targetColumn' };
+                    }
+
                     const workspaceId = await getWorkspaceId();
                     if (!workspaceId) { return { success: false, error: 'No workspace ID' }; }
 
                     const records: any[] = [];
-                    if (planFile) {
-                        const p = await db.getPlanByFile(planFile);
-                        if (p) records.push(p);
-                    } else if (sessionIds.length > 0) {
+                    if (sessionIds.length > 0) {
                         for (const sid of sessionIds) {
                             const p = await db.getPlanBySessionId(sid);
                             if (p) records.push(p);
                         }
+                    } else if (planFile) {
+                        const p = await db.getPlanByPlanFile(planFile, workspaceId);
+                        if (p) records.push(p);
                     }
-
                     if (records.length === 0) { return { success: false, error: 'No matching plans' }; }
 
-                    const targetRole = payload.role || (nextCol ? getRoleForTargetColumn(nextCol) : 'coder');
+                    const targetColumn = explicitTarget || (sourceColumn ? getNextKanbanColumn(sourceColumn) : null);
+                    const targetRole = payload.role || (targetColumn ? getRoleForTargetColumn(targetColumn) : 'coder');
                     const prompt = await buildPromptForCards(targetRole, records, root);
+                    if (!prompt) { return { success: false, error: 'Failed to build dispatch prompt' }; }
 
-                    let terminal = ptyFleetService.list().find(t => t.role === targetRole && t.status === 'active');
+                    // getWorktrees() takes no arguments — it already filters status='active'
+                    // in SQL and is scoped to this workspace's db.
+                    const activeWorktrees = await db.getWorktrees();
+                    const matchedWtPath = records[0] ? matchWorktreePath(activeWorktrees, records[0]) : undefined;
+
+                    // Mirrors _findTerminalNameByWorktreePathAndRole's strictRole
+                    // semantics (TaskViewerProvider.ts:7747-7778): exact role+worktree
+                    // first, then ANY role already living in that worktree. Without the
+                    // path-only fallback a worktree holding one agent spawns a second
+                    // terminal in the same checkout on every differently-routed dispatch.
+                    const active = ptyFleetService.listActive();
+                    let terminal = matchedWtPath
+                        ? active.find(t => t.worktreePath === matchedWtPath && t.role === targetRole)
+                            || active.find(t => t.worktreePath === matchedWtPath)
+                        : active.find(t => t.role === targetRole);
+
                     if (!terminal) {
-                        terminal = await ptyFleetService.create(targetRole, undefined, root);
+                        terminal = await ptyFleetService.create(targetRole, undefined, matchedWtPath || root, matchedWtPath);
                     }
 
-                    await sendPromptToPty(terminal, prompt);
+                    await sendPromptToPty(terminal, prompt, getPromptDeliveryOptions());
 
                     for (const rec of records) {
-                        if (rec.planFile) {
-                            try {
-                                await db.updateDispatchInfoByPlanFile(rec.planFile);
-                            } catch (err) {
-                                console.warn('[bootstrap] Failed to update dispatch info:', err);
-                            }
+                        if (!rec.planFile) { continue; }
+                        try {
+                            await db.updateDispatchInfoByPlanFile(rec.planFile, rec.workspaceId || workspaceId, {
+                                routedTo: targetColumn || rec.kanbanColumn || '',
+                                dispatchedAgent: targetRole,
+                                dispatchedIde: PTY_IDE_NAME,
+                            });
+                        } catch (err) {
+                            console.warn('[bootstrap] Failed to update dispatch info:', err);
                         }
                     }
 
-                    if (column && nextCol && sessionIds.length > 0) {
-                        await moveSessionsToColumn(sessionIds, column, nextCol);
-                        server.broadcastWs('moveCards', { sessionIds, targetColumn: nextCol });
+                    if (targetColumn && sessionIds.length > 0) {
+                        const moveFrom = sourceColumn || records[0]?.kanbanColumn;
+                        if (moveFrom && moveFrom !== targetColumn) {
+                            await moveSessionsToColumn(sessionIds, moveFrom, targetColumn);
+                            server.broadcastWs('moveCards', { sessionIds, targetColumn });
+                        }
                     }
                     server.broadcastWs('showStatusMessage', { message: `Dispatched ${records.length} plan(s) to ${terminal.friendlyName}.`, isError: false });
-                    return { success: true, targetColumn: nextCol, terminalName: terminal.friendlyName };
+                    return { success: true, targetColumn, terminalName: terminal.friendlyName };
                 }
 
                 case 'sendToTerminal': {
@@ -949,16 +1056,12 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         const role = payload.role || 'coder';
                         handle = await ptyFleetService.create(role, terminalName, root);
                     }
-                    await sendPromptToPty(handle, text || '');
+                    await sendPromptToPty(handle, text || '', getPromptDeliveryOptions());
                     return { success: true };
                 }
 
                 default:
-                    return { success: false, error: `Verb '${verb}' not implemented in standalone mode` };
-            }
-        } catch (err) {
-            console.error(`[bootstrap] kanbanVerb '${verb}' failed:`, err);
-            return { success: false, error: err instanceof Error ? err.message : String(err) };
+                    return { success: false, error: `PTY verb '${verb}' not implemented in standalone mode` };
         }
     };
 
@@ -1057,21 +1160,33 @@ Each plan file must include:
             const prompt = buildMemoPlannerPrompt(issues, root);
 
             if (action === 'send') {
-                let plannerTerminal = ptyFleetService.list().find(t => t.role === 'planner' && t.status === 'active');
-                if (!plannerTerminal) {
-                    plannerTerminal = await ptyFleetService.create('planner', undefined, root);
+                try {
+                    let plannerTerminal = ptyFleetService.listActive().find(t => t.role === 'planner');
+                    if (!plannerTerminal) {
+                        plannerTerminal = await ptyFleetService.create('planner', undefined, root);
+                    }
+                    await sendPromptToPty(plannerTerminal, prompt, getPromptDeliveryOptions());
+                    const mp = memoPath(root);
+                    await fs.promises.writeFile(mp, '', 'utf8');
+                    return {
+                        success: true,
+                        type: 'memoPromptResult',
+                        message: `Sent prompt for ${issues.length} issue(s) to planner terminal. Memo cleared.`,
+                        memoCleared: true,
+                        action: 'send',
+                        prompt,
+                    };
+                } catch (err) {
+                    console.warn('[bootstrap] Failed to send memo prompt to planner terminal, falling back to copy:', err);
+                    return {
+                        success: true,
+                        type: 'memoPromptResult',
+                        message: `Failed to dispatch to planner terminal. Prompt for ${issues.length} issue(s) copied to clipboard instead.`,
+                        memoCleared: false,
+                        action: 'copy',
+                        prompt,
+                    };
                 }
-                await sendPromptToPty(plannerTerminal, prompt);
-                const mp = memoPath(root);
-                await fs.promises.writeFile(mp, '', 'utf8');
-                return {
-                    success: true,
-                    type: 'memoPromptResult',
-                    message: `Sent prompt for ${issues.length} issue(s) to planner terminal. Memo cleared.`,
-                    memoCleared: true,
-                    action: 'send',
-                    prompt,
-                };
             }
 
             const mp = memoPath(root);
@@ -1104,12 +1219,17 @@ Each plan file must include:
     };
 
     const ptyFleetService = new PtyFleetService(workspaceRoot, db);
-    PtyFleetService.syncPurgePtyTerminals(db);
+    // Awaited here, well before `server.start()` below: a ghost `purpose:'pty'`
+    // entry from a previous run would otherwise satisfy /kanban/dispatch's
+    // no-live-terminal pre-flight and route work at a dead pid.
+    await PtyFleetService.purgePtyTerminals(db);
 
-    const terminalWsGateway = new TerminalWsGateway(
-        ptyFleetService,
-        async () => sessionToken
-    );
+    // Only wired when PTYs actually work. Left undefined, LocalApiServer's upgrade
+    // router destroys `/ws/terminal` outright — the same posture the extension host
+    // has, rather than a gateway that accepts sockets for a fleet that can't spawn.
+    const terminalWsGateway = ptyReady
+        ? new TerminalWsGateway(ptyFleetService, async () => sessionToken)
+        : undefined;
 
     const options: any = {
         workspaceRoot,
@@ -1120,7 +1240,7 @@ Each plan file must include:
         getLinearService: () => linearService,
         getNotionService: () => notionService,
         getAuthToken: async () => sessionToken,
-        getRegisteredTerminals: () => ptyFleetService.list().map(t => t.friendlyName),
+        getRegisteredTerminals: () => ptyFleetService.listActive().map(t => t.friendlyName),
         terminalWsGateway,
         getSelectedWorkspaceRoot: () => workspaceRoot,
         allRoots: [workspaceRoot],
@@ -1216,6 +1336,8 @@ Each plan file must include:
         url,
         oneTimeToken,
         stop: async () => {
+            try { terminalWsGateway?.dispose(); } catch { /* ignore */ }
+            try { await ptyFleetService.disposeAll(); } catch { /* ignore */ }
             try { ingestionEngine.dispose(); } catch { /* ignore */ }
             try { (designProvider as any).dispose?.(); } catch { /* ignore */ }
             try { (setupProvider as any).dispose?.(); } catch { /* ignore */ }

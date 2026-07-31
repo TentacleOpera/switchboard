@@ -69,3 +69,9 @@ list_output.txt
 .switchboard/**/*.db-shm
 .switchboard/**/*.db-wal
 # <<< Switchboard managed exclusions <<<
+
+# Generated vendor assets for browser panels (xterm.js et al).
+# node_modules is the single source of truth; `npm run vendor:sync` (invoked by
+# compile/watch/pretest) writes both src/webview/vendor and dist/webview/vendor.
+# Never commit these — a checked-in copy silently rots when the dep is bumped.
+src/webview/vendor/
