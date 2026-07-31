@@ -336,6 +336,33 @@ export function getMemoHtml(repoRoot: string, workspaceRoot: string, capabilitie
     return { html: content, csp };
 }
 
+export function getTerminalsHtml(repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult {
+    const candidates = [
+        path.join(repoRoot, 'dist', 'webview', 'terminals.html'),
+        path.join(repoRoot, 'src', 'webview', 'terminals.html'),
+    ];
+    const htmlPath = findFile(candidates);
+    if (!htmlPath) {
+        return { html: '<html><body>Terminals panel HTML not found.</body></html>', csp: '' };
+    }
+    let content = fs.readFileSync(htmlPath, 'utf8');
+    const nonce = makeNonce();
+    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; frame-src 'none';`;
+    content = content.replace(/\{\{NONCE\}\}/g, nonce);
+    content = content.replace(/\{\{TERMINALS_JS_URI\}\}/g, '/static/webview/terminals.js');
+    content = content.replace(/\{\{XTERM_JS_URI\}\}/g, '/static/webview/vendor/xterm/xterm.js');
+    content = content.replace(/\{\{XTERM_CSS_URI\}\}/g, '/static/webview/vendor/xterm/xterm.css');
+    content = content.replace(/\{\{XTERM_ADDON_FIT_URI\}\}/g, '/static/webview/vendor/xterm/addon-fit.js');
+    content = content.replace(/\{\{HANKEN_FONT_URI\}\}/g, '/static/designs/HankenGrotesk-Variable.woff2');
+    content = content.replace(/\{\{GEIST_PIXEL_FONT_URI\}\}/g, '/static/designs/GeistPixel-Square.woff2');
+    content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', `<script nonce="${nonce}" src="/static/webview/terminals.js"></script>`);
+    const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
+    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="terminals" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
+    content = content.replace(/<body/, `<body ${bodyAttr}`);
+    content = applyThemeClass(content, themeClass);
+    return { html: content, csp };
+}
+
 export interface PanelManifestEntry {
     id: string;
     label: string;
@@ -348,20 +375,26 @@ export interface PanelAvailability {
     design?: boolean;
     setup?: boolean;
     planning?: boolean;
+    terminals?: boolean;
 }
 
 export function getPanelsManifest(availability?: PanelAvailability): PanelManifestEntry[] {
     const setupEnabled = availability?.setup !== false;
     const planningEnabled = availability?.planning !== false;
     const designEnabled = availability?.design !== false;
+    const terminalsEnabled = availability?.terminals === true; // Fail-closed!
     const iconDir = '/static/icons';
+    // nav-*.svg are single-color silhouettes (sci-fi flat redraws of the status
+    // bar codicons); shell.js renders .svg icons via CSS mask + currentColor so
+    // they follow the strip's idle/hover/active state colors.
     return [
-        { id: 'board', label: 'Board', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-78.png`, route: '/board', enabled: true },
-        { id: 'project', label: 'Project', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-24.png`, route: '/project', enabled: true },
-        { id: 'memo', label: 'Memo', icon: `${iconDir}/25-101-150 Sci-Fi Flat icons-118.png`, route: '/memo', enabled: true },
-        { id: 'planning', label: 'Artifacts', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-42.png`, route: '/planning', enabled: planningEnabled },
-        { id: 'design', label: 'Design', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-42.png`, route: '/design', enabled: designEnabled },
-        { id: 'setup', label: 'Setup', icon: `${iconDir}/25-1-100 Sci-Fi Flat icons-55.png`, route: '/setup', enabled: setupEnabled },
+        { id: 'board', label: 'Board', icon: `${iconDir}/nav-board.svg`, route: '/board', enabled: true },
+        { id: 'project', label: 'Project', icon: `${iconDir}/nav-project.svg`, route: '/project', enabled: true },
+        { id: 'memo', label: 'Memo', icon: `${iconDir}/nav-memo.svg`, route: '/memo', enabled: true },
+        { id: 'planning', label: 'Artifacts', icon: `${iconDir}/nav-artifacts.svg`, route: '/planning', enabled: planningEnabled },
+        { id: 'design', label: 'Design', icon: `${iconDir}/nav-design.svg`, route: '/design', enabled: designEnabled },
+        { id: 'setup', label: 'Setup', icon: `${iconDir}/nav-setup.svg`, route: '/setup', enabled: setupEnabled },
+        { id: 'terminals', label: 'Terminals', icon: `${iconDir}/nav-terminals.svg`, route: '/terminals', enabled: terminalsEnabled },
     ];
 }
 
@@ -373,6 +406,7 @@ export function getPanelHtmlById(id: string, repoRoot: string, workspaceRoot: st
         case 'planning': return getPlanningHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'design': return getDesignHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'setup': return getSetupHtml(repoRoot, workspaceRoot, capabilities, themeClass);
+        case 'terminals': return getTerminalsHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         default: return null;
     }
 }

@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { stateFile } from '../utils/stateHome';
 
 export interface GlobalConfig {
     migrationComplete?: boolean;
@@ -124,11 +125,11 @@ export const COMMS_JOB_ID = 'comms-monitor';
 
 export class GlobalIntegrationConfigService {
     private static getFilePath(): string {
-        return path.join(os.homedir(), '.switchboard', 'integration-config.json');
+        return stateFile('integration-config.json');
     }
 
     private static getCacheDir(): string {
-        return path.join(os.homedir(), '.switchboard', 'cache');
+        return stateFile('cache');
     }
 
     public static getGlobalCachePath(filename: string): string {
@@ -201,10 +202,89 @@ export class GlobalIntegrationConfigService {
         return globalConfig[provider] || null;
     }
 
-    public static async saveConfig(provider: 'clickup' | 'linear' | 'notion', config: any): Promise<void> {
+    public static providerConfigMeaningfulCount(provider: 'clickup' | 'linear' | 'notion', blob: any): number {
+        if (!blob || typeof blob !== 'object') return 0;
+        let count = 0;
+        if (provider === 'clickup') {
+            if (blob.workspaceId && String(blob.workspaceId).trim() !== '') count++;
+            if (blob.selectedSpaceId && String(blob.selectedSpaceId).trim() !== '') count++;
+            if (blob.selectedFolderId && String(blob.selectedFolderId).trim() !== '') count++;
+            if (blob.selectedListId && String(blob.selectedListId).trim() !== '') count++;
+            if (blob.columnMappings && typeof blob.columnMappings === 'object' && Object.keys(blob.columnMappings).length > 0) count++;
+            if (blob.customFields && typeof blob.customFields === 'object' && Object.keys(blob.customFields).length > 0) count++;
+        } else if (provider === 'linear') {
+            if (blob.teamId && String(blob.teamId).trim() !== '') count++;
+            if (blob.switchboardLabelId && String(blob.switchboardLabelId).trim() !== '') count++;
+            if (blob.columnToStateId && typeof blob.columnToStateId === 'object' && Object.keys(blob.columnToStateId).length > 0) count++;
+            if (Array.isArray(blob.includeProjectNames) && blob.includeProjectNames.length > 0) count++;
+        } else if (provider === 'notion') {
+            if (blob.workspaceId && String(blob.workspaceId).trim() !== '') count++;
+            if (blob.databaseId && String(blob.databaseId).trim() !== '') count++;
+        }
+        return count;
+    }
+
+    private static getProviderId(provider: 'clickup' | 'linear' | 'notion', blob: any): string | null {
+        if (!blob || typeof blob !== 'object') return null;
+        if (provider === 'clickup') return blob.workspaceId ? String(blob.workspaceId).trim() : null;
+        if (provider === 'linear') return blob.teamId ? String(blob.teamId).trim() : null;
+        if (provider === 'notion') return blob.workspaceId ? String(blob.workspaceId).trim() : null;
+        return null;
+    }
+
+    private static checkFormatWarning(provider: 'clickup' | 'linear' | 'notion', id: string | null): void {
+        if (!id) return;
+        if (provider === 'clickup' && !/^\d+$/.test(id)) {
+            console.warn(`[GlobalIntegrationConfigService] Warning: ClickUp workspaceId '${id}' is non-numeric.`);
+        } else if (provider === 'linear' && !/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(id)) {
+            console.warn(`[GlobalIntegrationConfigService] Warning: Linear teamId '${id}' is not UUID-shaped.`);
+        }
+    }
+
+    public static async saveConfig(
+        provider: 'clickup' | 'linear' | 'notion',
+        config: any,
+        options?: { replace?: boolean }
+    ): Promise<{ saved: boolean; reason?: string }> {
         const globalConfig = await this.loadGlobal();
-        globalConfig[provider] = config;
+        const stored = globalConfig[provider] || null;
+
+        let mergedConfig: any;
+        if (options?.replace || !stored) {
+            mergedConfig = { ...config };
+        } else {
+            // Shallow merge: absent keys in config retain stored value
+            mergedConfig = { ...stored };
+            for (const key of Object.keys(config)) {
+                mergedConfig[key] = config[key];
+            }
+        }
+
+        // Wipe guard
+        const incomingCount = this.providerConfigMeaningfulCount(provider, mergedConfig);
+        const existingCount = this.providerConfigMeaningfulCount(provider, stored);
+        if (incomingCount === 0 && existingCount > 0) {
+            const msg = `Refusing to overwrite non-empty ${provider} config with an empty value (wipe guard).`;
+            console.warn(`[GlobalIntegrationConfigService] ${msg}`);
+            return { saved: false, reason: msg };
+        }
+
+        // Identity continuity guard
+        const storedId = this.getProviderId(provider, stored);
+        const incomingId = this.getProviderId(provider, mergedConfig);
+        if (storedId && incomingId && storedId !== incomingId && !options?.replace) {
+            const idKey = provider === 'clickup' ? 'workspaceId' : (provider === 'linear' ? 'teamId' : 'workspaceId');
+            const msg = `Refusing identity change for ${provider} (${idKey}: stored '${storedId}' → incoming '${incomingId}'). Pass replace: true to override.`;
+            console.warn(`[GlobalIntegrationConfigService] ${msg}`);
+            return { saved: false, reason: msg };
+        }
+
+        // Format warning (warning only)
+        this.checkFormatWarning(provider, incomingId);
+
+        globalConfig[provider] = mergedConfig;
         await this.saveGlobal(globalConfig);
+        return { saved: true };
     }
 
     public static async clearConfig(provider: 'clickup' | 'linear' | 'notion'): Promise<void> {

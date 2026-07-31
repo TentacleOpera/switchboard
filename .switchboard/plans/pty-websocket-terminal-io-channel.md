@@ -148,3 +148,8 @@ Per session directives (SKIP COMPILATION / SKIP TESTS), this verification plan d
   - Laggard eviction constant named; pause/resume always paired (no path that pauses without a resume trigger).
   - No inline auth logic in the gateway — all via the factored helper.
 - **Manual UAT:** `npx switchboard` → create a coder PTY → attach with a scratch ws client → see the claude TUI banner stream; type into it; kill the tab and re-attach → scrollback replays. Attach a second client → both receive output; throttle one client (never read) → output pauses for all, then the laggard is evicted after the grace window and the healthy client resumes. In VS Code mode: `/ws/terminal` upgrade is destroyed.
+
+## Completion Report
+
+Implemented `src/services/wsUpgradeAuth.ts` for shared, constant-time upgrade authentication with token-empty rejection support. Built `TerminalWsGateway` in `src/standalone/terminalWsGateway.ts` handling `/ws/terminal` streaming, 256 KB scrollback ring buffering from PTY creation time, multi-viewer fan-out, ping/pong reaper, and high-water backpressure with laggard eviction. Refactored `LocalApiServer` and `wsHub` to use a single upgrade router dispatching `/ws` to `wsHub` and `/ws/terminal` to `terminalWsGateway`. No issues encountered.
+

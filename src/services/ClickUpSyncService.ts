@@ -369,23 +369,23 @@ export class ClickUpSyncService {
     // Persist the loaded workspace ID so future calls skip the API round-trip
     const existingConfig = config || this._createEmptyConfig();
     existingConfig.workspaceId = workspaceId;
-    await this.saveConfig(existingConfig);
+    await this.saveConfig(existingConfig, { replace: true });
     return workspaceId;
   }
 
   private async _ensureWorkspaceAndSpace(config: ClickUpConfig): Promise<void> {
-    if (!config.workspaceId) {
-      config.workspaceId = await this._loadWorkspaceId();
-    }
+    const { result, workspaceId } = await this._requestWithWorkspaceId(
+      (wsId) => `/team/${wsId}/space?archived=false`
+    );
+    config.workspaceId = workspaceId;
     if (config.spaceId) {
       return;
     }
 
-    const spacesResult = await this.httpRequest('GET', `/team/${config.workspaceId}/space?archived=false`);
-    if (spacesResult.status !== 200) {
+    if (result.status !== 200) {
       throw new Error('Failed to fetch ClickUp spaces.');
     }
-    const spaces = Array.isArray(spacesResult.data?.spaces) ? spacesResult.data.spaces : [];
+    const spaces = Array.isArray(result.data?.spaces) ? result.data.spaces : [];
     if (spaces.length === 0) {
       throw new Error('No spaces found in workspace.');
     }
@@ -557,13 +557,18 @@ export class ClickUpSyncService {
     };
   }
 
-  async saveConfig(config: ClickUpConfig): Promise<void> {
-    const normalized = this._normalizeConfig(config);
+  async saveConfig(config: ClickUpConfig, options?: { replace?: boolean }): Promise<{ saved: boolean; reason?: string }> {
+    const stored = await GlobalIntegrationConfigService.loadConfig('clickup');
+    const overlay = options?.replace ? config : { ...(stored || {}), ...config };
+    const normalized = this._normalizeConfig(overlay);
     if (!normalized) {
       throw new Error('ClickUp config normalization failed');
     }
-    await GlobalIntegrationConfigService.saveConfig('clickup', normalized);
-    this._config = normalized;
+    const res = await GlobalIntegrationConfigService.saveConfig('clickup', normalized, options);
+    if (res.saved !== false) {
+      this._config = normalized;
+    }
+    return res;
   }
 
   async listFolderLists(folderId?: string): Promise<ClickUpListSummary[]> {
@@ -864,6 +869,48 @@ export class ClickUpSyncService {
     return tasks;
   }
 
+  private _isWorkspaceIdFailure(status: number, data: any): boolean {
+    const ecode = (typeof data === 'object' && data !== null && typeof data.ECODE === 'string') ? data.ECODE : '';
+    if (status === 401 || ecode.startsWith('OAUTH_')) return false;
+    if (status === 403 || ecode.startsWith('ACCESS_')) return false;
+    if (status === 400 || status === 404 || ecode.startsWith('SHARD_') || ecode.startsWith('TEAM_')) return true;
+    return false;
+  }
+
+  private async _requestWithWorkspaceId(
+    buildPath: (workspaceId: string) => string,
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
+    body?: any
+  ): Promise<{ result: { status: number; data: any }; workspaceId: string }> {
+    const config = await this.loadConfig();
+    let workspaceId = String(config?.workspaceId || '').trim();
+    if (!workspaceId) {
+      workspaceId = await this._loadWorkspaceId();
+    }
+
+    let apiPath = buildPath(workspaceId);
+    let result = await this.httpRequest(method, apiPath, body);
+
+    if (result.status !== 200 && this._isWorkspaceIdFailure(result.status, result.data)) {
+      try {
+        const freshWorkspaceId = await this._loadWorkspaceId();
+        if (freshWorkspaceId) {
+          workspaceId = freshWorkspaceId;
+          const existingConfig = (await this.loadConfig()) || this._createEmptyConfig();
+          existingConfig.workspaceId = freshWorkspaceId;
+          await this.saveConfig(existingConfig, { replace: true });
+
+          apiPath = buildPath(workspaceId);
+          result = await this.httpRequest(method, apiPath, body);
+        }
+      } catch {
+        // Let original context or failure propagate
+      }
+    }
+
+    return { result, workspaceId };
+  }
+
   public async findList(listName: string): Promise<ClickUpList[]> {
     const config = await this.loadConfig();
     if (!config?.setupComplete) {
@@ -875,8 +922,9 @@ export class ClickUpSyncService {
       throw new Error('ClickUp list search requires a list name.');
     }
 
-    const workspaceId = String(config.workspaceId || '').trim() || await this._loadWorkspaceId();
-    const spacesResult = await this.httpRequest('GET', `/team/${workspaceId}/space?archived=false`);
+    const { result: spacesResult } = await this._requestWithWorkspaceId(
+      (wsId) => `/team/${wsId}/space?archived=false`
+    );
     if (spacesResult.status !== 200) {
       throw new Error('Failed to fetch ClickUp spaces.');
     }
@@ -969,19 +1017,20 @@ export class ClickUpSyncService {
       return this.getListTasks(normalizedListId);
     }
 
-    const workspaceId = String(config.workspaceId || '').trim() || await this._loadWorkspaceId();
     const tasks: ClickUpTask[] = [];
     let page = 0;
     while (true) {
-      let apiPath = `/team/${workspaceId}/task?subtasks=true&include_closed=true&include_markdown_description=true&page=${page}`;
-      if (normalizedQuery) {
-        apiPath += `&search=${encodeURIComponent(normalizedQuery)}`;
-      }
-      if (normalizedListId) {
-        apiPath += `&list_ids[]=${encodeURIComponent(normalizedListId)}`;
-      }
-
-      const result = await this.httpRequest('GET', apiPath);
+      const currentPage = page;
+      const { result } = await this._requestWithWorkspaceId((wsId) => {
+        let apiPath = `/team/${wsId}/task?subtasks=true&include_closed=true&include_markdown_description=true&page=${currentPage}`;
+        if (normalizedQuery) {
+          apiPath += `&search=${encodeURIComponent(normalizedQuery)}`;
+        }
+        if (normalizedListId) {
+          apiPath += `&list_ids[]=${encodeURIComponent(normalizedListId)}`;
+        }
+        return apiPath;
+      });
       if (result.status !== 200) {
         throw new Error(`Failed to search ClickUp tasks: ${result.status}`);
       }
@@ -1011,10 +1060,8 @@ export class ClickUpSyncService {
       throw new Error('ClickUp subtask lookup requires a parent task ID.');
     }
 
-    const workspaceId = String(config.workspaceId || '').trim() || await this._loadWorkspaceId();
-    const result = await this.httpRequest(
-      'GET',
-      `/team/${workspaceId}/task?parent=${encodeURIComponent(normalizedParentId)}&subtasks=true&include_markdown_description=true`
+    const { result } = await this._requestWithWorkspaceId(
+      (wsId) => `/team/${wsId}/task?parent=${encodeURIComponent(normalizedParentId)}&subtasks=true&include_markdown_description=true`
     );
     if (result.status !== 200) {
       throw new Error(`Failed to fetch ClickUp subtasks for ${normalizedParentId}: ${result.status}`);
@@ -1034,10 +1081,15 @@ export class ClickUpSyncService {
       throw new Error('ClickUp not configured');
     }
 
-    const workspaceId = String(config.workspaceId || '').trim() || await this._loadWorkspaceId();
-    const result = await this.httpRequest('GET', `/team/${workspaceId}/space?archived=false`);
+    const { result, workspaceId } = await this._requestWithWorkspaceId(
+      (wsId) => `/team/${wsId}/space?archived=false`
+    );
     if (result.status !== 200) {
-      throw new Error(`Failed to fetch ClickUp spaces: ${result.status}`);
+      const errText = (typeof result.data === 'object' && result.data?.err)
+        ? String(result.data.err)
+        : (typeof result.data === 'string' ? result.data : '');
+      const detail = errText ? `: ${errText}` : ` ${result.status}`;
+      throw new Error(`Failed to fetch ClickUp spaces (workspace ${workspaceId})${detail}`);
     }
 
     return (result.data?.spaces || [])

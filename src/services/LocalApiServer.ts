@@ -143,6 +143,7 @@ interface LocalApiServerOptions {
      * absent in headless/test harnesses (/health then omits the field).
      */
     getRegisteredTerminals?: () => string[];
+    terminalWsGateway?: any;
     /**
      * The board's currently selected workspace root (the kanban dropdown selection),
      * or null when no provider is loaded. Surfaced on GET /health as
@@ -392,13 +393,35 @@ export class LocalApiServer {
                 this._isListening = true;
                 console.log(`[LocalApiServer] Started on port ${this._port}`);
 
-                // Attach wsHub to the listening HTTP server.
+                // Attach wsHub + single upgrade router to the listening HTTP server.
                 this._wsHub = new WsHub({
                     server: this._server!,
                     getAuthToken: this._options.getAuthToken,
                     getFullState: this._options.getFullState,
                 });
-                this._wsHub.attach();
+                this._wsHub.attach(false);
+
+                if (this._options.terminalWsGateway) {
+                    (this._options.terminalWsGateway as any).setBroadcastWs?.((verb: string, payload: any) => {
+                        this.broadcastWs(verb, payload);
+                    });
+                }
+
+                this._server!.on('upgrade', async (req: http.IncomingMessage, socket: any, head: any) => {
+                    try {
+                        const reqUrl = new URL(req.url || '', `http://${req.headers.host || '127.0.0.1'}`);
+                        if (reqUrl.pathname === '/ws') {
+                            await this._wsHub!.handleUpgrade(req, socket, head);
+                        } else if (reqUrl.pathname === '/ws/terminal' && this._options.terminalWsGateway) {
+                            await this._options.terminalWsGateway.handleUpgrade(req, socket, head);
+                        } else {
+                            socket.destroy();
+                        }
+                    } catch (err) {
+                        console.error('[LocalApiServer] Upgrade router error:', err);
+                        try { socket.destroy(); } catch { /* ignore */ }
+                    }
+                });
 
                 resolve(this._port);
             });
@@ -3400,6 +3423,8 @@ export class LocalApiServer {
                 await this._handleServePanelById('design', req, res);
             } else if ((pathname === '/setup' || pathname === '/setup.html') && req.method === 'GET') {
                 await this._handleServePanelById('setup', req, res);
+            } else if ((pathname === '/terminals' || pathname === '/terminals.html') && req.method === 'GET') {
+                await this._handleServePanelById('terminals', req, res);
             } else if (pathname === '/design/asset' && req.method === 'GET') {
                 await this._handleDesignAsset(req, res);
             } else if (pathname.startsWith('/static/') && req.method === 'GET') {

@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{NONCE}}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; frame-src 'none';">
+    <title>Terminals</title>
+    <link rel="stylesheet" href="{{XTERM_CSS_URI}}">
+    <style>
+        @font-face {
+            font-family: 'Hanken Grotesk';
+            src: url('{{HANKEN_FONT_URI}}') format('woff2');
+            font-weight: 100 900;
+            font-style: normal;
+            font-display: swap;
+        }
+        @font-face {
+            font-family: 'GeistPixel';
+            src: url('{{GEIST_PIXEL_FONT_URI}}') format('woff2');
+            font-weight: 400;
+            font-style: normal;
+            font-display: swap;
+        }
+        :root {
+            --bg-color: #0d0d0d;
+            --panel-bg: #000000;
+            --panel-bg2: #050505;
+            --border-color: #333333;
+            --border-bright: #444444;
+            --text-primary: #e0e0e0;
+            --text-secondary: #8C8C8C;
+            --accent-primary: #00e5ff;
+            --accent-teal: var(--accent-primary);
+            --font-family: 'Hanken Grotesk', var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+            --font-mono: var(--vscode-editor-font-family, 'SF Mono', Monaco, 'Cascadia Code', 'Consolas', monospace);
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            font-family: var(--font-family);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+        .terminals-sidebar {
+            width: 220px;
+            background: var(--panel-bg2);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            user-select: none;
+        }
+        .sidebar-header {
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .sidebar-title {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+        }
+        .btn-new-terminal {
+            background: var(--accent-teal);
+            color: #000;
+            border: none;
+            padding: 4px 8px;
+            font-size: 11px;
+            font-weight: 600;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .btn-new-terminal:hover {
+            opacity: 0.9;
+        }
+        .terminals-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 6px;
+        }
+        .terminal-item {
+            padding: 8px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: transparent;
+            border: 1px solid transparent;
+        }
+        .terminal-item:hover {
+            background: rgba(255, 255, 255, 0.04);
+        }
+        .terminal-item.active {
+            background: rgba(0, 229, 255, 0.08);
+            border-color: var(--accent-teal);
+        }
+        .item-info {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            overflow: hidden;
+        }
+        .item-name {
+            font-size: 12px;
+            font-weight: 600;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .item-role {
+            font-size: 10px;
+            color: var(--text-secondary);
+            text-transform: capitalize;
+        }
+        .status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #4ec9b0;
+        }
+        .status-dot.exited {
+            background: #f85149;
+        }
+        .item-actions {
+            display: none;
+        }
+        .terminal-item:hover .item-actions {
+            display: flex;
+            gap: 4px;
+        }
+        .btn-close-term {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 12px;
+            padding: 0 4px;
+        }
+        .btn-close-term:hover {
+            color: #f85149;
+        }
+        .terminals-main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: var(--panel-bg);
+            position: relative;
+        }
+        .terminal-view-host {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            padding: 8px;
+            display: none;
+        }
+        .terminal-view-host.active {
+            display: block;
+        }
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="terminals-sidebar">
+        <div class="sidebar-header">
+            <span class="sidebar-title">PTY Fleet</span>
+            <button id="btn-new-terminal" class="btn-new-terminal">+ New</button>
+        </div>
+        <div id="terminals-list" class="terminals-list"></div>
+    </div>
+    <div id="terminals-main" class="terminals-main">
+        <div id="empty-state" class="empty-state">
+            No terminal selected. Click "+ New" to spawn a terminal.
+        </div>
+    </div>
+
+    <!-- SHARED_DEFAULTS_SCRIPT -->
+    <script nonce="{{NONCE}}" src="{{XTERM_JS_URI}}"></script>
+    <script nonce="{{NONCE}}" src="{{XTERM_ADDON_FIT_URI}}"></script>
+    <script nonce="{{NONCE}}" src="{{TERMINALS_JS_URI}}"></script>
+</body>
+</html>

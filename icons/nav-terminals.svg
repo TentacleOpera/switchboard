@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- Terminals — codicon `terminal` prompt chevron and cursor line, sci-fi flat -->
+  <path fill="#45e0e6" fill-rule="evenodd" d="
+    M1 2 H15 V14 H1 Z
+    M2 3 V13 H14 V3 Z
+    M4 5 L7.5 8.5 L4 12 L5 13 L9.5 8.5 L5 4 Z
+    M9 11 H13 V12 H9 Z
+  "/>
+</svg>

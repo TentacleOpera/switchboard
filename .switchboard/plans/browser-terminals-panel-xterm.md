@@ -150,3 +150,8 @@ Per session directives (SKIP COMPILATION / SKIP TESTS), this verification plan d
   - `bootstrap.ts` manifest call adds `terminals: true`; extension manifest call untouched; `terminalFleet` not set here (backend owns it).
   - Reconnect: single socket per terminal; `seq` dedup present; replay batched.
 - **Manual UAT (darwin):** `npx switchboard` → Terminals icon appears in the rail → New Terminal (coder) → claude TUI renders and is interactive (arrow keys, colors) → resize the window and the TUI reflows → toggle theme and colors follow → refresh the page and the terminal re-attaches with scrollback → open the same terminal in a second tab and both stay live. Dev flow (no dist build): panel and vendor assets still load. From VS Code's Open in Browser: no Terminals icon.
+
+## Completion Report
+
+Created `src/webview/terminals.html` and `src/webview/terminals.js` incorporating xterm.js and fit-addon UMD rendering, debounced `ResizeObserver`, WebSocket I/O streaming, seq-deduplication, and `requestAnimationFrame` replay batching. Added `@xterm/xterm` and `@xterm/addon-fit` dependencies and configured webpack CopyPlugin. Registered `getTerminalsHtml()`, fail-closed `availability.terminals === true` manifest gate in `src/services/headlessPanelHtml.ts`, `/terminals` route in `src/services/LocalApiServer.ts`, rail icon `icons/nav-terminals.svg`, and enabled `terminals: true` in `src/standalone/bootstrap.ts`. No issues encountered.
+

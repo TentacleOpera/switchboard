@@ -34,6 +34,16 @@
             --font: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             --font-mono: 'SF Mono', Menlo, Consolas, monospace;
         }
+        /* Claudify: retint the strip's highlight to the panels' terracotta accent
+           (mirrors body.theme-claudify in kanban.html — #D97757 / #E2A188). The
+           theme class arrives server-stamped on the body tag and is swapped live
+           by applyThemeToAll in shell.js. NOTE: never write a literal body tag in
+           comments here — applyThemeClass stamps the theme onto the FIRST match
+           in the file. */
+        body.theme-claudify {
+            --accent: #D97757;
+            --accent-dim: color-mix(in srgb, #D97757 40%, transparent);
+        }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         html, body { height: 100%; width: 100%; overflow: hidden; }
         body {
@@ -72,6 +82,20 @@
             transition: background 80ms ease, color 80ms ease, border-color 80ms ease;
             position: relative;
             flex: 0 0 36px;
+        }
+        /* Single-color SVG nav glyphs, painted with currentColor via CSS mask so
+           they follow the button's idle/hover/active colors (shell.js sets the
+           per-icon mask-image inline). */
+        .strip-glyph {
+            width: 20px;
+            height: 20px;
+            background-color: currentColor;
+            -webkit-mask-repeat: no-repeat;
+            mask-repeat: no-repeat;
+            -webkit-mask-position: center;
+            mask-position: center;
+            -webkit-mask-size: contain;
+            mask-size: contain;
         }
         .strip-icon:hover { background: var(--bg-elev); color: var(--text); }
         .strip-icon.is-active {

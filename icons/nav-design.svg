@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- Design — codicon `symbol-color` palette, sci-fi flat: octagonal plate, thumb-hole
+       cutout, paint-dot cutouts along the upper arc -->
+  <path fill="#45e0e6" fill-rule="evenodd" d="
+    M4.5 1.5 H11.5 L14.5 4.5 V11.5 L11.5 14.5 H4.5 L1.5 11.5 V4.5 Z
+    M10.4 10.4 a2.1 2.1 0 1 0 0.001 0 Z
+    M4.9 7.3 a1 1 0 1 0 0.001 0 Z
+    M6 4.6 a1 1 0 1 0 0.001 0 Z
+    M8.6 3.6 a1 1 0 1 0 0.001 0 Z
+    M11.2 4.6 a1 1 0 1 0 0.001 0 Z
+  "/>
+</svg>

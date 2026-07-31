@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- Theme toggle — codicon `color-mode`, sci-fi flat: chunky ring, right half filled -->
+  <path fill="#45e0e6" fill-rule="evenodd" d="
+    M8 1.25 a6.75 6.75 0 1 0 0.001 0 Z
+    M8 2.75 a5.25 5.25 0 1 1 -0.001 0 Z
+  "/>
+  <path fill="#45e0e6" d="M8 3.75 a4.25 4.25 0 0 1 0 8.5 Z"/>
+</svg>

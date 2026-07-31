@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- Artifacts — codicon `notebook` data slate, sci-fi flat: clipped plate, cutout title
+       band + text slits, side section tabs -->
+  <path fill="#45e0e6" fill-rule="evenodd" d="
+    M2 1 H9.5 L11.75 3.25 V15 H2 Z
+    M4 5 H9.75 V7 H4 Z
+    M4 9 H9.75 V10.25 H4 Z
+    M4 12 H8 V13.25 H4 Z
+  "/>
+  <path fill="#45e0e6" d="M13 2.5 H15 V5.25 H13 Z M13 6.75 H15 V9.5 H13 Z M13 11 H15 V13.75 H13 Z"/>
+</svg>

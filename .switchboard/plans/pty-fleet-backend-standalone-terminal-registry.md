@@ -182,3 +182,8 @@ Per session directives (SKIP COMPILATION / SKIP TESTS), this verification plan d
   - Boot purge runs synchronously before `LocalApiServer.start()`; shutdown implements SIGTERM → grace → SIGKILL with named constants.
   - Verb registrations come from the catalog + generator, not hand-edited generated output.
 - **Manual UAT (darwin):** `npx switchboard` in a test workspace → `curl POST /kanban/verb/ptyCreateTerminal {"role":"coder"}` with session cookie → `/health` lists the terminal with a real PID → `ps` shows the shell + claude process → `ptyCloseTerminal` reaps both. Restart the server with a stale `purpose:'pty'` entry seeded → entry is gone before the server accepts requests. In VS Code mode: extension boots unchanged, no fleet wiring exists, `pty*` verbs (if ever invoked) return `success:false`.
+
+## Completion Report
+
+Implemented standalone `node-pty` terminal backend and process fleet service in `src/standalone/ptyBackend.ts` and `src/standalone/ptyFleetService.ts`. Extended `TerminalHandle` interface in `src/services/hostSeams.ts` with write, data/exit listeners, and resize stubs. Configured `webpack.config.js` externals for standalone only, added `node-pty` dependency in `package.json`, added `pty*` verbs to `protocol-catalog.json` and `src/generated/verbAllowlist.ts`, and wired boot purge and fleet status in `src/standalone/bootstrap.ts`. No issues encountered.
+

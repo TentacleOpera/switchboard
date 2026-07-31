@@ -1,6 +1,8 @@
 import type { Server } from 'http';
 import { URL } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
+import { authorizeWsUpgrade } from './wsUpgradeAuth';
+
 
 /**
  * wsHub — Feature A · A2a
@@ -83,17 +85,19 @@ export class WsHub {
      * Attach the WS upgrade handler to the HTTP server. Must be called after
      * the HTTP server is listening.
      */
-    attach(): void {
+    attach(autoListen: boolean = true): void {
         this._wss = new WebSocketServer({ noServer: true });
 
-        this._options.server.on('upgrade', async (req, socket, head) => {
-            try {
-                await this._handleUpgrade(req, socket, head);
-            } catch (err) {
-                console.error('[wsHub] upgrade error:', err);
-                try { socket.destroy(); } catch { /* already gone */ }
-            }
-        });
+        if (autoListen) {
+            this._options.server.on('upgrade', async (req, socket, head) => {
+                try {
+                    await this.handleUpgrade(req, socket, head);
+                } catch (err) {
+                    console.error('[wsHub] upgrade error:', err);
+                    try { socket.destroy(); } catch { /* already gone */ }
+                }
+            });
+        }
 
         if (!this._pingInterval) {
             this._pingInterval = setInterval(() => {
@@ -124,7 +128,11 @@ export class WsHub {
     /**
      * Validate Origin + token, then complete the WS upgrade.
      */
-    private async _handleUpgrade(req: any, socket: any, head: any): Promise<void> {
+    public async handleUpgrade(req: any, socket: any, head: any): Promise<void> {
+        if (!this._wss) {
+            this._wss = new WebSocketServer({ noServer: true });
+        }
+
         // Host-header allowlist — the primary DNS-rebinding defense, applied to the WS
         // Upgrade as well as the HTTP surface. A rebound attacker page still sends its
         // own hostname in the Host header (it controls the resolved IP, not the string
@@ -151,7 +159,7 @@ export class WsHub {
         }
 
         // Token validation: prefer ?token= query param, then the sb_session cookie.
-        const reqUrl = new URL(req.url || '', `http://${req.headers.host}`);
+        const reqUrl = new URL(req.url || '', `http://${req.headers.host || '127.0.0.1'}`);
         const cookies = this._parseCookies(req);
         const presented = reqUrl.searchParams.get('token') || cookies['sb_session'] || '';
         const expected = await this._options.getAuthToken();
@@ -163,7 +171,7 @@ export class WsHub {
         }
 
         // All checks passed — complete the upgrade.
-        this._wss!.handleUpgrade(req, socket, head, async (ws) => {
+        this._wss.handleUpgrade(req, socket, head, async (ws) => {
             const originatorId = reqUrl.searchParams.get('originatorId') || undefined;
             // `?scope=` absent → undefined (never declared → singleton fallback).
             // `?scope=` present but empty → null (explicitly "no project filter") —

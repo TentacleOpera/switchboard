@@ -155,3 +155,8 @@ Per session directives (SKIP COMPILATION / SKIP TESTS), this verification plan d
   - Gate-split verdict table present in the change; no un-hidden button maps to an unimplemented verb.
   - Extension-host dispatch files (`terminalUtils.ts`, extension verb arms) untouched by the diff.
 - **Manual UAT (darwin):** `npx switchboard` → create a coder PTY (or rely on lazy spawn) → select a card → dispatch from the board → prompt lands in the terminal (visible in the Terminals panel), card's working light turns on → agent edits the plan file → light turns off. `curl POST /kanban/dispatch` with a plan file path succeeds end-to-end with the dispatched-at verification. First dispatch to a fresh role: prompt arrives only after the agent's TUI is up. In VS Code mode, regression-check one normal terminal dispatch to confirm nothing in the shared paths changed.
+
+## Completion Report
+
+Created `src/standalone/ptyPromptDelivery.ts` providing bracketed-paste prompt delivery (`\x1b[200~ ... \x1b[201~`), chunked writes, CLI agent double-confirm `\r`, clear-before-prompt handling, and per-terminal lock serialization. Implemented `triggerAction`, `sendToTerminal`, and `memoGeneratePrompt` dispatch arms in `src/standalone/bootstrap.ts`, updating `dispatched_at` timestamps in `KanbanDatabase`. Split CSS capability gating in `src/webview/transport.js` between `terminalDispatch` and `automation`. Flipped `terminalDispatch: true` in `baseStandaloneCapabilities`. No issues encountered.
+

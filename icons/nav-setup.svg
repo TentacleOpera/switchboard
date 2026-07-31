@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- Setup — codicon `rocket`, sci-fi flat: chunky angular rocket at 45° with porthole
+       cutout, fins, nozzle and speed dashes -->
+  <g transform="rotate(45 8 8)" fill="#45e0e6">
+    <path fill-rule="evenodd" d="
+      M8 0.6 L10 3.4 V9.6 H6 V3.4 Z
+      M8 4 a1.4 1.4 0 1 0 0.001 0 Z
+    "/>
+    <path d="M5.6 6.8 V10.4 H4.2 L3.4 8.6 Z"/>
+    <path d="M10.4 6.8 V10.4 H11.8 L12.6 8.6 Z"/>
+    <path d="M6.7 10.2 H9.3 L8.7 11.8 H7.3 Z"/>
+    <path d="M7.3 12.6 H8.7 V13.4 H7.3 Z"/>
+    <path d="M7.5 14.2 H8.5 V15 H7.5 Z"/>
+  </g>
+</svg>

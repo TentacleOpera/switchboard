@@ -17,10 +17,10 @@ The related plan standalone-secrets-bridge-global-encrypted-store.md is delibera
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Standalone PTY Fleet Backend: node-pty TerminalBackend and Registry Integration](../plans/pty-fleet-backend-standalone-terminal-registry.md) — **PLAN REVIEWED**
-- [ ] [PTY Terminal I/O over WebSocket: Attach Protocol, Scrollback Replay, and Backpressure](../plans/pty-websocket-terminal-io-channel.md) — **PLAN REVIEWED**
-- [ ] [Browser Terminals Panel: xterm.js Rail Tab in the Standalone Shell](../plans/browser-terminals-panel-xterm.md) — **PLAN REVIEWED**
-- [ ] [Standalone Agent Dispatch onto the PTY Fleet](../plans/standalone-dispatch-via-pty-fleet.md) — **PLAN REVIEWED**
+- [ ] [Standalone PTY Fleet Backend: node-pty TerminalBackend and Registry Integration](../plans/pty-fleet-backend-standalone-terminal-registry.md) — **LEAD CODED**
+- [ ] [PTY Terminal I/O over WebSocket: Attach Protocol, Scrollback Replay, and Backpressure](../plans/pty-websocket-terminal-io-channel.md) — **LEAD CODED**
+- [ ] [Browser Terminals Panel: xterm.js Rail Tab in the Standalone Shell](../plans/browser-terminals-panel-xterm.md) — **LEAD CODED**
+- [ ] [Standalone Agent Dispatch onto the PTY Fleet](../plans/standalone-dispatch-via-pty-fleet.md) — **LEAD CODED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

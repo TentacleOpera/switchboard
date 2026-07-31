@@ -43,6 +43,14 @@
         }
     }
 
+    function buildMaskedGlyph(iconUrl) {
+        const glyph = document.createElement('span');
+        glyph.className = 'strip-glyph';
+        glyph.style.webkitMaskImage = 'url("' + iconUrl + '")';
+        glyph.style.maskImage = 'url("' + iconUrl + '")';
+        return glyph;
+    }
+
     function buildIcon(panel) {
         const btn = document.createElement('button');
         btn.className = 'strip-icon';
@@ -51,7 +59,12 @@
         btn.dataset.panel = panel.id;
         btn.setAttribute('aria-label', panel.label || panel.id);
         if (panel.enabled === false) { btn.disabled = true; }
-        if (panel.icon && (panel.icon.startsWith('/') || panel.icon.includes('.'))) {
+        if (panel.icon && panel.icon.endsWith('.svg')) {
+            // Single-color SVG: render via CSS mask + currentColor so the glyph
+            // follows the strip's idle/hover/active colors (an <img> would stay
+            // the file's baked-in fill).
+            btn.appendChild(buildMaskedGlyph(panel.icon));
+        } else if (panel.icon && (panel.icon.startsWith('/') || panel.icon.includes('.'))) {
             const img = document.createElement('img');
             img.src = panel.icon;
             img.alt = panel.label || panel.id;
@@ -83,7 +96,7 @@
         btn.type = 'button';
         btn.setAttribute('aria-label', 'Toggle Theme');
         btn.style.marginTop = 'auto';
-        btn.textContent = '🎨';
+        btn.appendChild(buildMaskedGlyph('/static/icons/nav-theme.svg'));
         const label = document.createElement('span');
         label.className = 'strip-label';
         label.textContent = 'Toggle Theme';

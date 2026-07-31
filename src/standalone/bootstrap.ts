@@ -25,6 +25,9 @@ import {
 } from '../services/headlessPanelHtml';
 import { PlanIngestionEngine } from '../services/PlanIngestionEngine';
 import { createStandalonePlanIngestionHost, readPlanScannerCustomSourceDirs } from './planIngestionHost';
+import { PtyFleetService } from './ptyFleetService';
+import { TerminalWsGateway } from './terminalWsGateway';
+import { sendPromptToPty } from './ptyPromptDelivery';
 
 import { ClickUpSyncService } from '../services/ClickUpSyncService';
 import { LinearSyncService } from '../services/LinearSyncService';
@@ -382,10 +385,10 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // Its get() is async (returns Promise<string|undefined>), so integrationsConfigured
     // must be computed inside the async getters, not captured synchronously.
     const baseStandaloneCapabilities: HostCapabilities = {
-        terminalDispatch: false,
+        terminalDispatch: true,
         automation: false,
         orchestrator: false,
-        terminalFleet: false,
+        terminalFleet: true,
         mcpTerminals: false,
         secretsEntry: false,
     };
@@ -417,7 +420,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // surfaces its verbs through the other panels), so the manifest only gates
     // design/setup. When the extension is the host it wires the same verbs and
     // passes no availability override.
-    const getPanelsManifest = () => sharedGetPanelsManifest({ design: true, setup: true });
+    const getPanelsManifest = () => sharedGetPanelsManifest({ design: true, setup: true, terminals: true });
     const getPanelHtml = async (id: string): Promise<{ html: string; csp?: string } | null> => {
         const result = sharedGetPanelHtmlById(id, repoRoot, workspaceRoot, await getStandaloneCaps());
         if (!result) { return null; }
@@ -859,6 +862,97 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     return result;
                 }
 
+                case 'ptyCreateTerminal': {
+                    const terminal = await ptyFleetService.create(payload.role || 'coder', payload.name, payload.cwd, payload.worktreePath);
+                    return { success: true, terminal: { friendlyName: terminal.friendlyName, role: terminal.role, status: terminal.status } };
+                }
+
+                case 'ptyCloseTerminal': {
+                    const ok = ptyFleetService.kill(payload.name);
+                    return { success: ok };
+                }
+
+                case 'ptyListTerminals': {
+                    return {
+                        success: true,
+                        terminals: ptyFleetService.list().map(t => ({
+                            friendlyName: t.friendlyName,
+                            role: t.role,
+                            status: t.status,
+                            pid: t.pty.pid,
+                            startTime: t.startTime,
+                            worktreePath: t.worktreePath
+                        }))
+                    };
+                }
+
+                case 'ptyRenameTerminal': {
+                    const ok = ptyFleetService.rename(payload.name, payload.alias);
+                    return { success: ok };
+                }
+
+                case 'triggerAction': {
+                    const column: string = payload.column;
+                    let sessionIds: string[] = Array.isArray(payload.sessionIds) ? payload.sessionIds : [];
+                    const planFile: string = payload.planFile;
+                    if (!column && !planFile) { return { success: false, error: 'Missing column or planFile' }; }
+
+                    const nextCol = column ? getNextKanbanColumn(column) : undefined;
+                    const workspaceId = await getWorkspaceId();
+                    if (!workspaceId) { return { success: false, error: 'No workspace ID' }; }
+
+                    const records: any[] = [];
+                    if (planFile) {
+                        const p = await db.getPlanByFile(planFile);
+                        if (p) records.push(p);
+                    } else if (sessionIds.length > 0) {
+                        for (const sid of sessionIds) {
+                            const p = await db.getPlanBySessionId(sid);
+                            if (p) records.push(p);
+                        }
+                    }
+
+                    if (records.length === 0) { return { success: false, error: 'No matching plans' }; }
+
+                    const targetRole = payload.role || (nextCol ? getRoleForTargetColumn(nextCol) : 'coder');
+                    const prompt = await buildPromptForCards(targetRole, records, root);
+
+                    let terminal = ptyFleetService.list().find(t => t.role === targetRole && t.status === 'active');
+                    if (!terminal) {
+                        terminal = await ptyFleetService.create(targetRole, undefined, root);
+                    }
+
+                    await sendPromptToPty(terminal, prompt);
+
+                    for (const rec of records) {
+                        if (rec.planFile) {
+                            try {
+                                await db.updateDispatchInfoByPlanFile(rec.planFile);
+                            } catch (err) {
+                                console.warn('[bootstrap] Failed to update dispatch info:', err);
+                            }
+                        }
+                    }
+
+                    if (column && nextCol && sessionIds.length > 0) {
+                        await moveSessionsToColumn(sessionIds, column, nextCol);
+                        server.broadcastWs('moveCards', { sessionIds, targetColumn: nextCol });
+                    }
+                    server.broadcastWs('showStatusMessage', { message: `Dispatched ${records.length} plan(s) to ${terminal.friendlyName}.`, isError: false });
+                    return { success: true, targetColumn: nextCol, terminalName: terminal.friendlyName };
+                }
+
+                case 'sendToTerminal': {
+                    const { terminalName, text } = payload;
+                    let handle = ptyFleetService.get(terminalName);
+                    if (!handle) {
+                        const role = payload.role || 'coder';
+                        handle = await ptyFleetService.create(role, terminalName, root);
+                    }
+                    await sendPromptToPty(handle, text || '');
+                    return { success: true };
+                }
+
                 default:
                     return { success: false, error: `Verb '${verb}' not implemented in standalone mode` };
             }
@@ -961,8 +1055,25 @@ Each plan file must include:
                 return { success: true, type: 'memoPromptResult', message: 'No entries to process.', memoCleared: false };
             }
             const prompt = buildMemoPlannerPrompt(issues, root);
-            // Headless degrade: no planner terminal → always copy. Return the
-            // prompt in the body; transport.js copies it client-side.
+
+            if (action === 'send') {
+                let plannerTerminal = ptyFleetService.list().find(t => t.role === 'planner' && t.status === 'active');
+                if (!plannerTerminal) {
+                    plannerTerminal = await ptyFleetService.create('planner', undefined, root);
+                }
+                await sendPromptToPty(plannerTerminal, prompt);
+                const mp = memoPath(root);
+                await fs.promises.writeFile(mp, '', 'utf8');
+                return {
+                    success: true,
+                    type: 'memoPromptResult',
+                    message: `Sent prompt for ${issues.length} issue(s) to planner terminal. Memo cleared.`,
+                    memoCleared: true,
+                    action: 'send',
+                    prompt,
+                };
+            }
+
             const mp = memoPath(root);
             await fs.promises.writeFile(mp, '', 'utf8');
             return {
@@ -992,6 +1103,14 @@ Each plan file must include:
         }
     };
 
+    const ptyFleetService = new PtyFleetService(workspaceRoot, db);
+    PtyFleetService.syncPurgePtyTerminals(db);
+
+    const terminalWsGateway = new TerminalWsGateway(
+        ptyFleetService,
+        async () => sessionToken
+    );
+
     const options: any = {
         workspaceRoot,
         port: opts.port,
@@ -1001,7 +1120,8 @@ Each plan file must include:
         getLinearService: () => linearService,
         getNotionService: () => notionService,
         getAuthToken: async () => sessionToken,
-        getRegisteredTerminals: () => [],
+        getRegisteredTerminals: () => ptyFleetService.list().map(t => t.friendlyName),
+        terminalWsGateway,
         getSelectedWorkspaceRoot: () => workspaceRoot,
         allRoots: [workspaceRoot],
         getKanbanDatabase: async () => db,

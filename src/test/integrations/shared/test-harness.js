@@ -1,5 +1,6 @@
 'use strict';
 
+require('../../bootstrap/sandboxStateHome.js');
 const fs = require('fs');
 const path = require('path');
 

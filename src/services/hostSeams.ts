@@ -199,8 +199,18 @@ export interface TerminalHandle {
     readonly name: string;
     /** Send text/input to the terminal. */
     sendText(text: string, addNewLine?: boolean): void;
+    /** Raw write to terminal. */
+    write(data: string): void;
+    /** Subscribe to terminal output chunks. */
+    onData(cb: (chunk: string) => void): Disposable;
+    /** Subscribe to terminal exit code. */
+    onExit(cb: (code: number | undefined) => void): Disposable;
+    /** Resize terminal dimensions. */
+    resize(cols: number, rows: number): void;
     /** Dispose/kill the terminal. */
     dispose(): void;
+    /** Kill the terminal. */
+    kill(): void;
     /** Show the terminal in the panel. */
     show(preserveFocus?: boolean): void;
 }
@@ -274,7 +284,12 @@ export class VscodeTerminalBackend implements TerminalBackend {
         return {
             name: terminal.name,
             sendText: (text: string, addNewLine?: boolean) => terminal.sendText(text, addNewLine),
+            write: (data: string) => terminal.sendText(data, false),
+            onData: () => ({ dispose: () => {} }),
+            onExit: () => ({ dispose: () => {} }),
+            resize: () => {},
             dispose: () => terminal.dispose(),
+            kill: () => terminal.dispose(),
             show: (preserveFocus?: boolean) => terminal.show(preserveFocus),
         };
     }

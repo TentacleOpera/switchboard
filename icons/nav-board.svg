@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- Board — codicon `table` grid, sci-fi flat: solid plate, clipped corner, cutout cells -->
+  <path fill="#45e0e6" fill-rule="evenodd" d="
+    M1 1 H11.5 L15 4.5 V15 H1 Z
+    M3 3.5 H12 V5.5 H3 Z
+    M3 7 H7.75 V9.75 H3 Z
+    M9.25 7 H13 V9.75 H9.25 Z
+    M3 11.25 H7.75 V13 H3 Z
+    M9.25 11.25 H13 V13 H9.25 Z
+  "/>
+</svg>

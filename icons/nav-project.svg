@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- Project — codicon `project` window frame, sci-fi flat: layered title-bar plate with
+       rivet studs + body plate with readout lines -->
+  <path fill="#45e0e6" fill-rule="evenodd" d="
+    M1 1 H12 L15 4 V4.75 H1 Z
+    M3.1 2.15 a0.75 0.75 0 1 0 0.001 0 Z
+    M5.6 2.15 a0.75 0.75 0 1 0 0.001 0 Z
+    M1 6.25 H15 V15 H1 Z
+    M3 8.25 H13 V9.5 H3 Z
+    M3 10.75 H13 V12 H3 Z
+    M3 13.25 H9.5 V14.5 H3 Z
+  "/>
+</svg>

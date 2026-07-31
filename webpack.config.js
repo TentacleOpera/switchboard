@@ -97,6 +97,18 @@ const extensionConfig = {
                 {
                     from: path.resolve(__dirname, 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
                     to: 'sql-wasm.wasm'
+                },
+                {
+                    from: 'node_modules/@xterm/xterm/lib/xterm.js',
+                    to: 'webview/vendor/xterm/xterm.js'
+                },
+                {
+                    from: 'node_modules/@xterm/xterm/css/xterm.css',
+                    to: 'webview/vendor/xterm/xterm.css'
+                },
+                {
+                    from: 'node_modules/@xterm/addon-fit/lib/addon-fit.js',
+                    to: 'webview/vendor/xterm/addon-fit.js'
                 }
             ]
         })
@@ -133,6 +145,9 @@ const standaloneConfig = {
     },
     node: {
         __dirname: false
+    },
+    externals: {
+        'node-pty': 'commonjs node-pty'
     },
     plugins: [
         new webpack.BannerPlugin({

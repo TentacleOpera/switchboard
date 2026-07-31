@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- Memo — codicon `comment-discussion` twin bubbles, sci-fi flat: angular comm panels,
+       front panel carved out of the back one, transmission slits -->
+  <path fill="#45e0e6" fill-rule="evenodd" d="
+    M1 1.5 H11 V6 H5.9 V9.2 H4.6 L2.8 11.3 V8.7 H1 Z
+  "/>
+  <path fill="#45e0e6" fill-rule="evenodd" d="
+    M7.2 7.3 H15 V12.7 H12.9 V15.2 L10.4 12.7 H7.2 Z
+    M8.9 9.1 H13.3 V10.1 H8.9 Z
+    M8.9 11 H11.9 V12 H8.9 Z
+  "/>
+</svg>

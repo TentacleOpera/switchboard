@@ -324,23 +324,33 @@
                 document.body.classList.add('host-terminal-dispatch-false');
                 const style = document.createElement('style');
                 style.textContent = `
-.host-terminal-dispatch-false #btn-autoban,
-.host-terminal-dispatch-false #btn-manager-pass,
-.host-terminal-dispatch-false #btn-cli-triggers,
-.host-terminal-dispatch-false #btn-remote-control,
-.host-terminal-dispatch-false .autoban-timers-inline,
-.host-terminal-dispatch-false #btn-pause-autoban-timer,
-.host-terminal-dispatch-false #btn-reset-autoban-timer,
 .host-terminal-dispatch-false #clear-terminal-before-prompt-label,
-.host-terminal-dispatch-false button[data-action="julesSelected"],
 .host-terminal-dispatch-false button[data-action="moveSelected"],
 .host-terminal-dispatch-false button[data-action="moveAll"],
-.host-terminal-dispatch-false button[data-action="rePlanSelected"],
-.host-terminal-dispatch-false #btn-build-via-planner,
-.host-terminal-dispatch-false #btn-update-via-planner,
-.host-terminal-dispatch-false #btn-build-system,
-.host-terminal-dispatch-false #btn-build-prd-via-planner,
 .host-terminal-dispatch-false #memo-send-btn {
+    display: none !important;
+}
+`;
+                document.head.appendChild(style);
+            }
+
+            if (caps.automation === false) {
+                document.body.classList.add('host-automation-false');
+                const style = document.createElement('style');
+                style.textContent = `
+.host-automation-false #btn-autoban,
+.host-automation-false #btn-manager-pass,
+.host-automation-false #btn-cli-triggers,
+.host-automation-false #btn-remote-control,
+.host-automation-false .autoban-timers-inline,
+.host-automation-false #btn-pause-autoban-timer,
+.host-automation-false #btn-reset-autoban-timer,
+.host-automation-false button[data-action="julesSelected"],
+.host-automation-false button[data-action="rePlanSelected"],
+.host-automation-false #btn-build-via-planner,
+.host-automation-false #btn-update-via-planner,
+.host-automation-false #btn-build-system,
+.host-automation-false #btn-build-prd-via-planner {
     display: none !important;
 }
 `;

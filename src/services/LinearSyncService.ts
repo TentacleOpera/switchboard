@@ -272,7 +272,7 @@ export class LinearSyncService {
             raw.includeProjectNames = [resolvedName];
             delete raw.projectId;
             // Save migrated config
-            await GlobalIntegrationConfigService.saveConfig('linear', raw);
+            await GlobalIntegrationConfigService.saveConfig('linear', raw, { replace: true });
           } else {
             console.warn(`[LinearSync] Failed to resolve legacy projectId to name, deferring migration. API may be unavailable.`);
           }
@@ -295,15 +295,20 @@ export class LinearSyncService {
     return this._config?.selectedProjectName || '';
   }
 
-  async saveConfig(config: LinearConfig): Promise<void> {
-    const normalized = this._normalizeConfig(config);
+  async saveConfig(config: LinearConfig, options?: { replace?: boolean }): Promise<{ saved: boolean; reason?: string }> {
+    const stored = await GlobalIntegrationConfigService.loadConfig('linear');
+    const overlay = options?.replace ? config : { ...(stored || {}), ...config };
+    const normalized = this._normalizeConfig(overlay);
     if (!normalized) {
       throw new Error('Linear config normalization failed');
     }
-    await GlobalIntegrationConfigService.saveConfig('linear', normalized);
-    this._config = normalized;
-    this._cachedProjects = null;
-    this._cachedMembers = null;
+    const res = await GlobalIntegrationConfigService.saveConfig('linear', normalized, options);
+    if (res.saved !== false) {
+      this._config = normalized;
+      this._cachedProjects = null;
+      this._cachedMembers = null;
+    }
+    return res;
   }
 
   async saveAutomationSettings(

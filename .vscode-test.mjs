@@ -8,4 +8,7 @@ export default defineConfig({
                'out/services/__tests__/agentPromptBuilder.test.js',
                'out/test/kanban-complexity.test.js',
        ],
+       mocha: {
+               preload: ['./src/test/bootstrap/sandboxStateHome.js']
+       }
 });
