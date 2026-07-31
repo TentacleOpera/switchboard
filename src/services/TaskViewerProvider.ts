@@ -196,7 +196,6 @@ type ConfiguredKanbanDispatchOptions = {
     persistColumnOnError?: boolean;
     /**
      * Per-surface dispatch discriminator. True when this dispatch arrived over HTTP
-     * (`POST /kanban/dispatch` sets `apiOriginated: true` on the triggerAction payload)
      * — i.e. from the browser cockpit, a CLI script or the orchestrator. False/absent
      * means an in-process webview dispatch from the VS Code sidebar.
      *
@@ -204,10 +203,21 @@ type ConfiguredKanbanDispatchOptions = {
      * to a PTY (visible in the browser Terminals panel); an in-process dispatch may not
      * (the sidebar cannot display a PTY, so delivering there is a silent black hole).
      *
-     * OBLIGATION: any NEW HTTP dispatch entry point added later MUST set this, or its
-     * dispatches silently route to VS Code terminals the caller cannot see.
+     * Set centrally by LocalApiServer's verb rails — every HTTP entry point gets it
+     * for free. Do NOT re-derive it per call site; that is what left the browser
+     * panels routing into VS Code terminals they could not see.
      */
     apiOriginated?: boolean;
+    /**
+     * Bypass the CLI-triggers gate (KanbanProvider `_cliTriggersEnabled`). That gate
+     * exists to stop an ACCIDENTAL drag-drop from auto-dispatching; it must still
+     * apply to a browser drag-drop, which is the same accident on a different surface.
+     *
+     * Only an explicit manager command sets this — today just POST /kanban/dispatch.
+     * Deliberately separate from `apiOriginated`: a browser drag IS api-originated
+     * (it may use the PTY fleet) but is NOT an explicit command (the gate still binds).
+     */
+    bypassTriggerGate?: boolean;
 };
 
 type ClickUpSetupColumnState = {
@@ -7804,9 +7814,10 @@ Each plan file must include:
         return !!found;
     }
 
-    private async _getAgentNameForRoleGlobal(role: string, skipStatePath?: string | null): Promise<string | undefined> {
+    private async _getAgentNameForRoleGlobal(role: string, skipStatePath?: string | null, allowPtyFleet: boolean = false): Promise<string | undefined> {
         const allRoots = this._filterMappedRoots(this._getWorkspaceRoots());
         const candidates: string[] = [];
+        const isEligible = (info: any) => allowPtyFleet || !(info?.purpose === 'pty' || info?.ideName === PTY_IDE_NAME);
 
         for (const root of allRoots) {
             const statePath = this._resolveStateFilePath(root);
@@ -7820,6 +7831,7 @@ Each plan file must include:
                 let foundInRoot = false;
                 if (state.terminals) {
                     for (const [name, info] of Object.entries(state.terminals) as [string, any][]) {
+                        if (!isEligible(info)) continue;
                         if (info.role === role) {
                             candidates.push(name);
                             foundInRoot = true;
@@ -7854,9 +7866,10 @@ Each plan file must include:
         return candidates[0];
     }
 
-    private async _getAgentNameForRole(role: string, workspaceRoot?: string): Promise<string | undefined> {
+    private async _getAgentNameForRole(role: string, workspaceRoot?: string, allowPtyFleet: boolean = false): Promise<string | undefined> {
         const statePath = this._resolveStateFilePath(workspaceRoot);
         let localMatch: string | undefined = undefined;
+        const isEligible = (info: any) => allowPtyFleet || !(info?.purpose === 'pty' || info?.ideName === PTY_IDE_NAME);
 
         if (statePath) {
             try {
@@ -7866,6 +7879,7 @@ Each plan file must include:
 
                     if (state.terminals) {
                         for (const [name, info] of Object.entries(state.terminals) as [string, any][]) {
+                            if (!isEligible(info)) continue;
                             if (info.role === role) {
                                 localMatch = name;
                                 break;
@@ -7891,7 +7905,7 @@ Each plan file must include:
             return localMatch;
         }
 
-        return this._getAgentNameForRoleGlobal(role, statePath);
+        return this._getAgentNameForRoleGlobal(role, statePath, allowPtyFleet);
     }
 
     private async _resolveAgentTerminalForPlan(
@@ -7915,7 +7929,7 @@ Each plan file must include:
                 .find(t => this._normalizeAgentKey(t.role) === normalizedRole);
             if (match) { return match.friendlyName; }
         }
-        return this._getAgentNameForRole(role, workspaceRoot);
+        return this._getAgentNameForRole(role, workspaceRoot, allowPtyFleet);
     }
 
     /**
@@ -11948,7 +11962,7 @@ Each plan file must include:
 
                     case 'triggerAgentAction':
                         if (data.role && data.sessionFile) {
-                            await this._handleTriggerAgentAction(data.role, data.sessionFile, data.instruction);
+                            await this._handleTriggerAgentAction(data.role, data.sessionFile, data.instruction, data.workspaceRoot, { apiOriginated: !!data.apiOriginated } as any);
                         }
                         return { success: true };
                     case 'sendAnalystMessage':
@@ -12495,6 +12509,22 @@ What would you like to find?`;
                         if (typeof input !== 'string') {
                             console.error('[TaskViewer] sendToTerminal rejected: invalid input');
                             return { success: false, error: 'invalid input' };
+                        }
+
+                        // PTY fleet first for HTTP-originated calls, mirroring
+                        // _attemptDirectTerminalPush. Without this arm the verb cannot reach
+                        // a PTY at all in the extension host: PTYs live in _ptyFleetService,
+                        // not in _registeredTerminals and not in the HostTerminal seam, so
+                        // every browser "send to terminal" failed as "not found or not local".
+                        if (data?.apiOriginated && this._ptyFleetService) {
+                            const normalized = this._normalizeAgentKey(this._stripIdeSuffix(name));
+                            const ptyHandle = this._ptyFleetService.get(name)
+                                || this._ptyFleetService.listActive().find(t =>
+                                    this._normalizeAgentKey(this._stripIdeSuffix(t.friendlyName)) === normalized);
+                            if (ptyHandle && ptyHandle.status === 'active') {
+                                ptyHandle.sendText(input, true);
+                                return { success: true };
+                            }
                         }
 
                         // Resolve terminal: registered terminals first (exact → suffix-aware → case-insensitive),
@@ -18386,7 +18416,14 @@ What would you like to find?`;
         }, allowPtyFleet);
         if (pushed) return true;
 
-        this._seams().ui.showWarningMessage(`Could not deliver prompt to '${targetAgent}'. The terminal is not running in VS Code.`);
+        const ptyMatch = !allowPtyFleet && this._ptyFleetService
+            ? this._ptyFleetService.listActive().find(t =>
+                this._normalizeAgentKey(this._stripIdeSuffix(t.friendlyName))
+                === this._normalizeAgentKey(this._stripIdeSuffix(targetAgent)))
+            : undefined;
+        this._seams().ui.showWarningMessage(ptyMatch
+            ? `'${targetAgent}' is a browser terminal (Switchboard Terminals panel), so the VS Code sidebar cannot dispatch to it. Dispatch from the browser board, or open a VS Code agent terminal for this role.`
+            : `Could not deliver prompt to '${targetAgent}'. No live agent terminal with that name was found.`);
         return false;
     }
 

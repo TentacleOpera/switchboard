@@ -13,7 +13,7 @@ import {
     SKIP_COMPILATION_DIRECTIVE,
     SKIP_TESTS_DIRECTIVE,
 } from '../services/agentPromptBuilder';
-import { StandaloneHostPathConfigProvider, StandaloneHostSecrets, StandaloneHostState } from './hostServices';
+import { StandaloneHostPathConfigProvider, StandaloneHostSecrets, createStandaloneHostSecrets, StandaloneHostState } from './hostServices';
 import {
     getShellHtml as sharedGetShellHtml,
     getBoardHtml as sharedGetBoardHtml,
@@ -244,7 +244,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         clearBeforePromptDelayMs: configProvider.getConfigNumber('terminal.clearBeforePromptDelay', 2000),
     });
 
-    const secrets = new StandaloneHostSecrets(workspaceRoot);
+    const secrets = createStandaloneHostSecrets(workspaceRoot);
     const db = KanbanDatabase.forWorkspace(workspaceRoot);
 
     // The database must exist on disk before ensureReady() can initialise it.
@@ -456,7 +456,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         orchestrator: false,
         terminalFleet: ptyReady,
         mcpTerminals: false,
-        secretsEntry: false,
+        secretsEntry: true,
     };
     const computeIntegrationsConfigured = async () => {
         try {
@@ -1302,6 +1302,7 @@ Each plan file must include:
         getPlanningAssetRoots: (wsRoot: string) => planningProvider.getPlanningAssetRoots(wsRoot),
         setupVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
             setupProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),
+        allowSecretWritesOverHttp: true,
         taskViewerVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
             taskViewerProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),
         createFeature: async (wsRoot: string, name: string, planIds: string[], description?: string) => {

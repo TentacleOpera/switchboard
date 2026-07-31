@@ -50,7 +50,7 @@
     /**
      * Resolve the mono font stack to a concrete value.
      *
-     * `fontFamily: 'var(--font-mono)'` survives the DOM renderer (an inline style
+     * `fontFamily: 'var(--font-code)'` survives the DOM renderer (an inline style
      * resolves the var against :root) but is meaningless to a canvas/WebGL
      * renderer, which passes the string straight to `ctx.font` where `var()` is
      * invalid — yielding a silent fallback and wrong glyph metrics. Resolve it here
@@ -59,7 +59,7 @@
     function resolveMonoFont() {
         try {
             const resolved = getComputedStyle(document.documentElement)
-                .getPropertyValue('--font-mono')
+                .getPropertyValue('--font-code')
                 .trim();
             if (resolved) { return resolved; }
         } catch { /* fall through */ }
@@ -272,14 +272,24 @@
         });
     }
 
+    const LAYOUTS = {
+        '1':   { slots: 1, minW: 0,   minH: 0   },
+        '2h':  { slots: 2, minW: 400, minH: 0   },
+        '2v':  { slots: 2, minW: 0,   minH: 250 },
+        '2x2': { slots: 4, minW: 500, minH: 300 },
+        '2x3': { slots: 6, minW: 750, minH: 300 },
+        '3x3': { slots: 9, minW: 750, minH: 450 },
+    };
+
+    const LAYOUT_FLOOR_ORDER = ['3x3', '2x3', '2x2', '2h', '2v', '1'];
+    const LAYOUT_MODES = Object.keys(LAYOUTS);
+
     function getSlotCount(layout) {
-        switch (layout) {
-            case '2h': return 2;
-            case '2v': return 2;
-            case '2x2': return 4;
-            case '1':
-            default: return 1;
-        }
+        return (LAYOUTS[layout] || LAYOUTS['1']).slots;
+    }
+
+    function getMaxSlotCount() {
+        return Math.max(...LAYOUT_MODES.map(m => LAYOUTS[m].slots));
     }
 
     async function loadSetting(key, defaultVal) {
@@ -315,7 +325,7 @@
         const savedCollapsed = await loadSetting('terminals.collapsedWorktrees', []);
         const savedNotify = await loadSetting('terminals.osNotify', false);
 
-        if (['1', '2h', '2v', '2x2'].includes(savedMode)) {
+        if (LAYOUT_MODES.includes(savedMode)) {
             currentLayout = savedMode;
         }
         effectiveLayout = currentLayout;
@@ -361,23 +371,53 @@
         }
     }
 
+    /** Single-level undo of the last assignment mutation. Cleared when the terminal it
+     *  would restore stops being live (see sanitizePaneAssignments). */
+    let undoSnapshot = null; // { slots: [...paneAssignments], name, displaced, paneIndex }
+    let toastTimer = null;
+
+    function showPaneToast(text, onUndo) {
+        const toastEl = document.getElementById('pane-toast');
+        const toastTextEl = document.getElementById('pane-toast-text');
+        const toastUndoBtn = document.getElementById('pane-toast-undo');
+        if (!toastEl || !toastTextEl || !toastUndoBtn) { return; }
+
+        if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+
+        toastTextEl.textContent = text;
+        toastUndoBtn.onclick = () => {
+            if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+            toastEl.classList.remove('visible');
+            if (onUndo) { onUndo(); }
+        };
+
+        toastEl.classList.add('visible');
+        toastTimer = setTimeout(() => {
+            toastEl.classList.remove('visible');
+            toastTimer = null;
+        }, 6000);
+    }
+
     function sanitizePaneAssignments() {
         const liveNames = new Set(fleetList.map(t => t.friendlyName));
-        // Sized by the USER's layout, not the floored one — a temporarily floored window
-        // must not truncate (and then persist away) the assignments of the panes it is
-        // merely declining to render.
-        const slotCount = getSlotCount(currentLayout);
+        const maxSlots = getMaxSlotCount();
 
-        paneAssignments = paneAssignments.slice(0, slotCount);
-        while (paneAssignments.length < slotCount) {
+        while (paneAssignments.length < maxSlots) {
             paneAssignments.push(null);
+        }
+        if (paneAssignments.length > maxSlots) {
+            paneAssignments.length = maxSlots;
         }
 
         // Stale-slot drop: a persisted layout may name terminals that died while the page
         // was closed. Drop those slots individually — never discard the whole layout.
         for (let i = 0; i < paneAssignments.length; i++) {
             if (paneAssignments[i] && !liveNames.has(paneAssignments[i])) {
+                const dropped = paneAssignments[i];
                 paneAssignments[i] = null;
+                if (undoSnapshot && (undoSnapshot.name === dropped || undoSnapshot.displaced === dropped)) {
+                    undoSnapshot = null;
+                }
             }
         }
 
@@ -484,9 +524,11 @@
 
             for (const item of group.items) {
                 const itemDiv = document.createElement('div');
-                const isAssigned = paneAssignments.includes(item.friendlyName);
+                const paneIndex = paneAssignments.indexOf(item.friendlyName);
                 const isFocused = activeTerminalName === item.friendlyName;
-                itemDiv.className = 'terminal-item' + (isFocused ? ' active' : '');
+                itemDiv.className = 'terminal-item'
+                    + (isFocused ? ' active' : '')
+                    + (paneIndex !== -1 ? ' assigned' : '');
 
                 const info = document.createElement('div');
                 info.className = 'item-info';
@@ -501,6 +543,14 @@
 
                 info.appendChild(termNameEl);
                 info.appendChild(roleEl);
+
+                if (paneIndex !== -1) {
+                    const paneChip = document.createElement('span');
+                    paneChip.className = 'pane-index-chip';
+                    paneChip.textContent = `P${paneIndex + 1}`;
+                    paneChip.title = `Showing in pane ${paneIndex + 1}`;
+                    info.appendChild(paneChip);
+                }
 
                 if (terminalBadges.has(item.friendlyName)) {
                     const badge = document.createElement('span');
@@ -552,7 +602,7 @@
     }
 
     function setLayoutMode(mode) {
-        if (!['1', '2h', '2v', '2x2'].includes(mode)) return;
+        if (!LAYOUT_MODES.includes(mode)) return;
         currentLayout = mode;
         // Adopt the pick optimistically so the render below is the ONLY render on the
         // common (fits-fine) path — applyLayoutFloor then re-renders only if the new
@@ -569,21 +619,51 @@
     }
 
     function assignToFocusedPane(terminalName) {
-        if (focusedPaneIndex < 0 || focusedPaneIndex >= getSlotCount(effectiveLayout)) {
+        const rendered = getSlotCount(effectiveLayout);
+        if (focusedPaneIndex < 0 || focusedPaneIndex >= rendered) {
             focusedPaneIndex = 0;
         }
 
         const existingIndex = paneAssignments.indexOf(terminalName);
-        if (existingIndex !== -1 && existingIndex !== focusedPaneIndex) {
+        if (existingIndex === focusedPaneIndex) { return; }
+
+        let target = focusedPaneIndex;
+        if (paneAssignments[target]) {
+            for (let i = 0; i < rendered; i++) {
+                if (!paneAssignments[i]) { target = i; break; }
+            }
+        }
+
+        const displaced = paneAssignments[target] || null;
+        undoSnapshot = { slots: paneAssignments.slice(), name: terminalName, displaced, paneIndex: target };
+
+        if (existingIndex !== -1) {
             paneAssignments[existingIndex] = null;
         }
 
-        paneAssignments[focusedPaneIndex] = terminalName;
+        paneAssignments[target] = terminalName;
+        focusedPaneIndex = target;
         activeTerminalName = terminalName;
         if (terminalBadges.has(terminalName)) {
             terminalBadges.delete(terminalName);
         }
 
+        if (displaced) {
+            showPaneToast(`Pane ${target + 1}: ${displaced} → ${terminalName}`, undoLastAssignment);
+        }
+
+        saveLayoutSettings();
+        renderSidebarList();
+        renderPaneGrid();
+        batchFitVisiblePanes();
+    }
+
+    function undoLastAssignment() {
+        if (!undoSnapshot) { return; }
+        paneAssignments = undoSnapshot.slots;
+        focusedPaneIndex = Math.min(undoSnapshot.paneIndex, getSlotCount(effectiveLayout) - 1);
+        activeTerminalName = paneAssignments[focusedPaneIndex] || null;
+        undoSnapshot = null;
         saveLayoutSettings();
         renderSidebarList();
         renderPaneGrid();
@@ -621,7 +701,11 @@
 
             const assignedName = paneAssignments[i];
             if (assignedName) {
-                titleEl.textContent = assignedName;
+                const idxEl = document.createElement('span');
+                idxEl.className = 'pane-index-chip';
+                idxEl.textContent = `P${i + 1}`;
+                titleEl.appendChild(idxEl);
+                titleEl.appendChild(document.createTextNode(assignedName));
                 if (terminalBadges.has(assignedName)) {
                     const badgeSpan = document.createElement('span');
                     badgeSpan.className = 'pane-badge';
@@ -635,11 +719,14 @@
             const actionsEl = document.createElement('div');
             if (assignedName) {
                 const unassignBtn = document.createElement('button');
-                unassignBtn.className = 'btn-close-term';
-                unassignBtn.textContent = '×';
-                unassignBtn.title = 'Clear pane assignment';
+                unassignBtn.className = 'btn-unassign-pane';
+                unassignBtn.textContent = '⊟';
+                unassignBtn.title = 'Remove from pane (terminal keeps running)';
                 unassignBtn.addEventListener('click', (e) => {
                     e.stopPropagation();
+                    const targetName = paneAssignments[i];
+                    undoSnapshot = { slots: paneAssignments.slice(), name: null, displaced: targetName, paneIndex: i };
+                    showPaneToast(`Pane ${i + 1} cleared (${targetName} still running)`, undoLastAssignment);
                     paneAssignments[i] = null;
                     saveLayoutSettings();
                     renderPaneGrid();
@@ -694,13 +781,15 @@
         // real resize re-evaluates.
         if (rect.width <= 0 || rect.height <= 0) { return currentLayout; }
 
-        let mode = currentLayout;
-        if (mode === '2x2' && (rect.width < 500 || rect.height < 300)) {
-            mode = rect.width >= 400 ? '2h' : '2v';
+        const start = LAYOUT_FLOOR_ORDER.indexOf(currentLayout);
+        if (start === -1) { return '1'; }
+
+        for (let i = start; i < LAYOUT_FLOOR_ORDER.length; i++) {
+            const mode = LAYOUT_FLOOR_ORDER[i];
+            const spec = LAYOUTS[mode];
+            if (rect.width >= spec.minW && rect.height >= spec.minH) { return mode; }
         }
-        if (mode === '2h' && rect.width < 400) { mode = '1'; }
-        if (mode === '2v' && rect.height < 250) { mode = '1'; }
-        return mode;
+        return '1';
     }
 
     /**

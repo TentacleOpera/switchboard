@@ -187,3 +187,20 @@ Key risks: (1) concurrent `_save()` from two standalone hosts racing on one glob
 - **CLI mapping:** `npx switchboard secrets set clickup X` → `secrets list` shows `switchboard.clickup.apiToken` (names only, no values); `secrets delete clickup` removes it; unknown short name errors with the alias list.
 - **403 gate:** in the extension host, confirm the secret-write verbs still 403; in standalone, confirm `setClickUpToken` reaches the handler and persists. Confirm `sb_session` carries `SameSite=Strict`.
 - **End-to-end UAT:** enter a ClickUp token in VS Code Setup → close VS Code → `npx switchboard` → Tickets/board provider affordances un-gate and `POST /api/clickup` proxies successfully; then in a clean environment (no editor ever run), enter a token via the standalone Setup panel in the browser and confirm the same.
+
+## Completion Report
+
+Implemented machine-global encrypted secrets store (`~/.switchboard/secrets.enc`), one-way secrets mirror from VS Code SecretStorage into the global store, legacy workspace secrets migration, CLI aliases/list/delete subcommands, and opt-in HTTP secret write gate for standalone host.
+
+Files changed:
+- `src/services/encryptedSecretsStore.ts` (NEW)
+- `src/standalone/hostServices.ts`
+- `src/standalone/vscodeShim.ts`
+- `src/standalone/cli.ts`
+- `src/services/LocalApiServer.ts`
+- `src/standalone/bootstrap.ts`
+- `src/extension.ts`
+- `.gitignore`
+- `docs/headless-switchboard.md`
+
+No issues encountered during implementation. Verification performed via manual inspections and structural code checks.

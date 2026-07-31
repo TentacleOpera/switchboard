@@ -211,7 +211,6 @@
 
         .workspace-filter-select {
             font-size: 11px;
-            font-family: var(--font-mono);
             letter-spacing: 0.5px;
             padding: 3px 8px;
             background: var(--panel-bg2);
@@ -502,7 +501,6 @@
         #tickets-subtasks-nav .subtask-nav-status {
             font-size: 11px;
             color: var(--text-secondary);
-            font-family: var(--font-mono);
         }
 
         /* Planning Cards */
@@ -562,7 +560,6 @@
         .planning-status {
             font-size: 10px;
             color: var(--text-secondary);
-            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
             padding: 4px 0;
         }
 
@@ -628,7 +625,6 @@
             color: var(--text-primary);
             border: 1px solid var(--border-color);
             border-radius: 2px;
-            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
         }
 
         .planning-input {
@@ -639,7 +635,6 @@
             color: var(--text-primary);
             border: 1px solid var(--border-color);
             border-radius: 2px;
-            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
             box-sizing: border-box;
         }
 
@@ -650,7 +645,6 @@
         .planning-hint {
             font-size: 9px;
             color: var(--text-secondary);
-            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
             padding: 4px 0;
         }
 
@@ -662,7 +656,7 @@
             background: var(--card-bg);
             border: 1px solid var(--border-color);
             border-radius: 4px;
-            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            font-family: var(--font-code);
             white-space: pre-line;
             line-height: 1.4;
         }
@@ -680,7 +674,6 @@
             padding: 4px 0;
             color: #f14c4c;
             font-size: 10px;
-            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
         }
 
         #tree-pane,
@@ -2519,7 +2512,7 @@
             height: 100%;
             background: var(--panel-bg);
             color: var(--text-primary);
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             font-size: 13px;
             border: none;
             padding: 16px;
@@ -2572,7 +2565,6 @@
             font-size: 11px;
             color: var(--text-secondary, #888);
             margin-bottom: 6px;
-            font-family: var(--font-mono, monospace);
         }
         .selected-preview {
             font-size: 12px;
@@ -3084,7 +3076,7 @@
         .tickets-comment-date {
             font-size: 11px;
             color: var(--text-secondary);
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             margin-left: 8px;
         }
 
@@ -3117,7 +3109,7 @@
         .cm-thread-date {
             font-size: 11px;
             color: var(--text-secondary);
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
         }
         .cm-thread-body {
             font-size: 13px;
@@ -3169,7 +3161,7 @@
         .cm-reply-date {
             font-size: 10px;
             color: var(--text-secondary);
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
         }
         .cm-reply-body {
             font-size: 12px;
@@ -3310,7 +3302,6 @@
             color: var(--text-primary);
             border: 1px solid var(--border-color);
             border-radius: 2px;
-            font-family: var(--font-mono);
             font-size: 10px;
         }
 
@@ -3322,7 +3313,6 @@
             border-radius: 2px;
             cursor: pointer;
             font-size: 9px;
-            font-family: var(--font-mono);
         }
 
         .tickets-hierarchy-nav button:hover {
@@ -3350,7 +3340,7 @@
         .tickets-mode-switch { display: flex; gap: 4px; flex: 1; min-width: 0; }
         .tickets-mode-btn {
             flex: 1; background: transparent; border: 1px solid var(--border-color, #333);
-            color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px;
+            color: var(--text-secondary); font-size: 10px;
             letter-spacing: 1px; text-transform: uppercase; padding: 4px 6px;
             cursor: pointer; border-radius: 3px;
         }
@@ -3367,7 +3357,7 @@
             padding: 6px 10px;
             border-bottom: 1px solid var(--border-color, #333);
             background: var(--panel-bg2, #1a1a2e);
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             font-size: 11px;
             color: var(--text-secondary);
             flex-wrap: wrap;
@@ -3441,7 +3431,6 @@
             background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
         }
         .kanban-meta-dropdown {
-            font-family: var(--font-mono);
             font-size: 11px;
             background: var(--panel-bg, #0d1117);
             color: var(--accent-teal);
@@ -3474,7 +3463,7 @@
             max-height: 70vh;
             display: flex;
             flex-direction: column;
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             font-size: 11px;
         }
         .kanban-log-modal h3 {
@@ -3506,7 +3495,6 @@
             margin-top: 12px;
             align-self: flex-end;
             padding: 4px 12px;
-            font-family: var(--font-mono);
             font-size: 11px;
             background: transparent;
             border: 1px solid var(--accent-teal-dim);
@@ -3587,7 +3575,6 @@
   border: 1px solid transparent;
   border-bottom: none;
   color: var(--text-secondary);
-  font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 1px;
   text-transform: uppercase;
@@ -3652,7 +3639,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             padding: 10px 16px;
             border-radius: 6px;
             font-size: 12px;
-            font-family: var(--font-mono);
             line-height: 1.4;
             box-shadow: 0 4px 12px rgba(0,0,0,0.4);
             animation: toast-slide-in 0.2s ease-out;
@@ -3681,11 +3667,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         .cp-wrap { max-width: 760px; margin: 0 auto; padding: 24px 20px 40px; overflow-y: auto; height: 100%; box-sizing: border-box; }
         .cp-intro { font-size: 13px; color: var(--text-secondary); line-height: 1.6; margin-bottom: 20px; }
         .cp-section { margin-bottom: 20px; padding: 14px 16px; background: var(--panel-bg2); border: 1px solid var(--border-color); border-radius: 4px; }
-        .cp-label { font-size: 10px; font-family: var(--font-mono); letter-spacing: 1px; color: var(--accent-teal); margin-bottom: 10px; }
+        .cp-label { font-size: 10px; letter-spacing: 1px; color: var(--accent-teal); margin-bottom: 10px; }
         .cp-radio { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; margin-bottom: 8px; cursor: pointer; line-height: 1.5; }
         .cp-radio input { margin-top: 2px; flex: none; }
         .cp-input { width: 100%; box-sizing: border-box; padding: 6px 8px; margin-bottom: 8px; background: var(--panel-bg); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 3px; font-size: 12px; }
-        .cp-textarea { width: 100%; box-sizing: border-box; min-height: 160px; padding: 8px; background: var(--panel-bg); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 3px; font-family: var(--font-mono); font-size: 11px; resize: vertical; margin-bottom: 8px; }
+        .cp-textarea { width: 100%; box-sizing: border-box; min-height: 160px; padding: 8px; background: var(--panel-bg); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 3px; font-family: var(--font-code); font-size: 11px; resize: vertical; margin-bottom: 8px; }
         .cp-row { display: flex; align-items: center; gap: 10px; }
         .cp-hint { font-size: 11px; color: var(--text-secondary); }
         .cp-optional { opacity: 0.85; }

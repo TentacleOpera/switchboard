@@ -892,19 +892,25 @@ export class ClickUpSyncService {
     let result = await this.httpRequest(method, apiPath, body);
 
     if (result.status !== 200 && this._isWorkspaceIdFailure(result.status, result.data)) {
+      let freshWorkspaceId: string | null = null;
       try {
-        const freshWorkspaceId = await this._loadWorkspaceId();
-        if (freshWorkspaceId) {
-          workspaceId = freshWorkspaceId;
-          const existingConfig = (await this.loadConfig()) || this._createEmptyConfig();
-          existingConfig.workspaceId = freshWorkspaceId;
-          await this.saveConfig(existingConfig, { replace: true });
+        freshWorkspaceId = await this._loadWorkspaceId();
+      } catch (err: any) {
+        throw new Error(`Failed to heal ClickUp workspace ID '${workspaceId}': ${err?.message || err}`);
+      }
 
-          apiPath = buildPath(workspaceId);
-          result = await this.httpRequest(method, apiPath, body);
+      if (freshWorkspaceId) {
+        workspaceId = freshWorkspaceId;
+        const existingConfig = (await this.loadConfig()) || this._createEmptyConfig();
+        existingConfig.workspaceId = freshWorkspaceId;
+        try {
+          await this.saveConfig(existingConfig, { replace: true });
+        } catch {
+          // If persistence fails/is refused, continue in-memory with fresh ID
         }
-      } catch {
-        // Let original context or failure propagate
+
+        apiPath = buildPath(workspaceId);
+        result = await this.httpRequest(method, apiPath, body);
       }
     }
 
@@ -1088,8 +1094,8 @@ export class ClickUpSyncService {
       const errText = (typeof result.data === 'object' && result.data?.err)
         ? String(result.data.err)
         : (typeof result.data === 'string' ? result.data : '');
-      const detail = errText ? `: ${errText}` : ` ${result.status}`;
-      throw new Error(`Failed to fetch ClickUp spaces (workspace ${workspaceId})${detail}`);
+      const detail = errText ? `: ${result.status} - ${errText}` : `: ${result.status}`;
+      throw new Error(`Failed to fetch ClickUp spaces for workspace ${workspaceId}${detail}`);
     }
 
     return (result.data?.spaces || [])
@@ -2687,7 +2693,7 @@ export class ClickUpSyncService {
       const hasExistingSetup = !!config.folderId || this._hasMappedLists(config) || Object.values(config.customFields).some(Boolean) || config.setupComplete;
 
       if (!config.workspaceId) {
-        config.workspaceId = await this._loadWorkspaceId();
+        config.workspaceId = await this.loadWorkspaceIdIfNeeded();
       }
 
       const needsFolder = options.createFolder || options.createLists || options.createCustomFields || options.enableRealtimeSync;
@@ -2902,8 +2908,8 @@ export class ClickUpSyncService {
   private async _findTaskByPlanId(planId: string, config: ClickUpConfig): Promise<string | null> {
     if (config.customFields.planId) {
       try {
-        const result = await this.httpRequest('GET',
-          `/team/${config.workspaceId}/task` +
+        const { result } = await this._requestWithWorkspaceId((wsId) =>
+          `/team/${wsId}/task` +
           `?custom_fields=[{"field_id":"${config.customFields.planId}","operator":"=","value":"${planId}"}]` +
           `&include_closed=true`
         );
@@ -2914,8 +2920,8 @@ export class ClickUpSyncService {
     }
 
     try {
-      const result = await this.httpRequest('GET',
-        `/team/${config.workspaceId}/task?tags[]=switchboard:${encodeURIComponent(planId)}&include_closed=true`
+      const { result } = await this._requestWithWorkspaceId((wsId) =>
+        `/team/${wsId}/task?tags[]=switchboard:${encodeURIComponent(planId)}&include_closed=true`
       );
       if (result.status === 200 && result.data?.tasks?.length > 0) {
         return result.data.tasks[0].id;

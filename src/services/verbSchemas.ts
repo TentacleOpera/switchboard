@@ -229,6 +229,7 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             targetColumn: { type: 'string', required: true },
             workspaceRoot: { type: 'string' },
             apiOriginated: { type: 'boolean' },
+            bypassTriggerGate: { type: 'boolean' },
         },
     },
     triggerBatchAction: {
@@ -1067,6 +1068,7 @@ export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
             name: { type: 'string', required: true },
             input: { type: 'string', required: true },
             paced: { type: 'boolean' },
+            apiOriginated: { type: 'boolean' },
         },
     },
     ready: {},

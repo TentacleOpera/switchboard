@@ -90,7 +90,7 @@
                 resize: none;
                 background: transparent;
                 color: var(--text-color, #c9d1d9);
-                font-family: var(--font-monospace, monospace);
+                font-family: var(--font-code);
                 font-size: 13px;
                 padding: 12px;
                 box-sizing: border-box;

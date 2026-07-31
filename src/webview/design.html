@@ -229,7 +229,6 @@
 
         .workspace-filter-select {
             font-size: 11px;
-            font-family: var(--font-mono);
             letter-spacing: 0.5px;
             padding: 3px 8px;
             background: var(--panel-bg2);
@@ -491,7 +490,6 @@
         #tickets-subtasks-nav .subtask-nav-status {
             font-size: 11px;
             color: var(--text-secondary);
-            font-family: var(--font-mono);
         }
 
         /* Planning Cards */
@@ -551,7 +549,6 @@
         .planning-status {
             font-size: 10px;
             color: var(--text-secondary);
-            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
             padding: 4px 0;
         }
 
@@ -617,7 +614,6 @@
             color: var(--text-primary);
             border: 1px solid var(--border-color);
             border-radius: 2px;
-            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
         }
 
         .planning-input {
@@ -628,7 +624,6 @@
             color: var(--text-primary);
             border: 1px solid var(--border-color);
             border-radius: 2px;
-            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
             box-sizing: border-box;
         }
 
@@ -639,7 +634,6 @@
         .planning-hint {
             font-size: 9px;
             color: var(--text-secondary);
-            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
             padding: 4px 0;
         }
 
@@ -651,7 +645,7 @@
             background: var(--card-bg);
             border: 1px solid var(--border-color);
             border-radius: 4px;
-            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            font-family: var(--font-code);
             white-space: pre-line;
             line-height: 1.4;
         }
@@ -669,7 +663,6 @@
             padding: 4px 0;
             color: #f14c4c;
             font-size: 10px;
-            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
         }
 
         #tree-pane,
@@ -2378,7 +2371,7 @@
             height: 100%;
             background: var(--panel-bg);
             color: var(--text-primary);
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             font-size: 13px;
             border: none;
             padding: 16px;
@@ -2432,7 +2425,6 @@
             font-size: 11px;
             color: var(--text-secondary, #888);
             margin-bottom: 6px;
-            font-family: var(--font-mono, monospace);
         }
         .selected-preview {
             font-size: 12px;
@@ -2701,7 +2693,7 @@
         .tickets-comment-date {
             font-size: 11px;
             color: var(--text-secondary);
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             margin-left: 8px;
         }
 
@@ -2766,7 +2758,6 @@
             color: var(--text-primary);
             border: 1px solid var(--border-color);
             border-radius: 2px;
-            font-family: var(--font-mono);
             font-size: 10px;
         }
 
@@ -2778,7 +2769,6 @@
             border-radius: 2px;
             cursor: pointer;
             font-size: 9px;
-            font-family: var(--font-mono);
         }
 
         .tickets-hierarchy-nav button:hover {
@@ -2810,7 +2800,7 @@
             padding: 6px 10px;
             border-bottom: 1px solid var(--border-color, #333);
             background: var(--panel-bg2, #1a1a2e);
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             font-size: 11px;
             color: var(--text-secondary);
             flex-wrap: wrap;
@@ -2838,7 +2828,6 @@
             background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
         }
         .kanban-meta-dropdown {
-            font-family: var(--font-mono);
             font-size: 11px;
             background: var(--panel-bg, #0d1117);
             color: var(--accent-teal);
@@ -2871,7 +2860,7 @@
             max-height: 70vh;
             display: flex;
             flex-direction: column;
-            font-family: var(--font-mono);
+            font-family: var(--font-code);
             font-size: 11px;
         }
         .kanban-log-modal h3 {
@@ -2903,7 +2892,6 @@
             margin-top: 12px;
             align-self: flex-end;
             padding: 4px 12px;
-            font-family: var(--font-mono);
             font-size: 11px;
             background: transparent;
             border: 1px solid var(--accent-teal-dim);
@@ -3544,7 +3532,6 @@
   border: 1px solid transparent;
   border-bottom: none;
   color: var(--text-secondary);
-  font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 1px;
   text-transform: uppercase;
@@ -3673,7 +3660,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                     </div>
                                 </div>
                                 <div id="json-preview-container-design"
-                                     style="display: none; flex: 1; overflow: auto; padding: 16px; font-family: var(--font-mono);">
+                                     style="display: none; flex: 1; overflow: auto; padding: 16px;">
                                 </div>
                             </div>
                         </div>
@@ -4158,7 +4145,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     </div>
                     <div style="display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px;">
                         <label for="design-system-tokens" style="font-size: 11px; color: var(--text-secondary);">Design Tokens (JSON String)</label>
-                        <textarea id="design-system-tokens" rows="8" style="font-family: var(--font-mono);" placeholder='{ "colors": { "primary": "#000000" } }'></textarea>
+                        <textarea id="design-system-tokens" rows="8"  placeholder='{ "colors": { "primary": "#000000" } }'></textarea>
                     </div>
                     <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px;">
                         <button id="btn-cancel-design-system" class="strip-btn">Cancel</button>
@@ -4208,7 +4195,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     </div>
                 </div>
                 <div style="display: flex; gap: 12px; align-items: center;">
-                    <div id="inspect-readout" style="display: flex; align-items: center; gap: 12px; font-size: 12px; font-family: var(--font-mono);">
+                    <div id="inspect-readout" style="display: flex; align-items: center; gap: 12px; font-size: 12px;">
                         <!-- Swatch and color/dimension values -->
                     </div>
                     <button id="btn-inspect-close" class="strip-btn" style="padding: 2px 8px; font-size: 10px; border-color: var(--accent-orange, #ff5f00); color: var(--accent-orange, #ff5f00);">Exit</button>

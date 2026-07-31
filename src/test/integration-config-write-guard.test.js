@@ -188,21 +188,86 @@ async function runTests() {
         }
         console.log('✓ 9d: Classification table verified');
 
-        // Test 10: Legible terminal failure
+        // Test 8: Refusal is observable and does not poison cache
+        const initialCfg8 = { workspaceId: '6909707', selectedSpaceId: 'sp-good' };
+        await clickUpService.saveConfig(initialCfg8, { replace: true });
+        const res8 = await clickUpService.saveConfig({ workspaceId: 'ws-123' });
+        assert.strictEqual(res8.saved, false);
+        const loaded8 = await GlobalIntegrationConfigService.loadConfig('clickup');
+        assert.strictEqual(loaded8.selectedSpaceId, 'sp-good');
+        assert.strictEqual(loaded8.workspaceId, '6909707');
+        console.log('✓ 8: Refusal is observable and does not poison cache');
+
+        // Test 9b: Heal still resolves when persistence is refused
+        const httpsMock9b = installHttpsMock();
+        await clickUpService.saveConfig({ workspaceId: 'ws-123', setupComplete: true }, { replace: true });
+        httpsMock9b.queueJson(400, { err: 'Invalid workspace id: ws-123', ECODE: 'SHARD_024' }, (req) => req.path.includes('/team/ws-123/space'));
+        httpsMock9b.queueJson(200, { teams: [{ id: '9999999', name: 'Other Team' }] }, (req) => req.path === '/api/v2/team');
+        httpsMock9b.queueJson(200, { spaces: [{ id: 'sp9b', name: 'Space 9b' }] }, (req) => req.path.includes('/team/9999999/space'));
+
+        // Save stored config as 6909707 so that 9999999 save attempt will be refused by identity continuity guard if replace: false
+        // (the heal passes replace: true so it persists, but even if save throws or is refused, in-memory works)
+        const spaces9b = await clickUpService.getSpaces();
+        assert.strictEqual(spaces9b.length, 1);
+        assert.strictEqual(spaces9b[0].id, 'sp9b');
+        httpsMock9b.restore();
+        console.log('✓ 9b: Heal resolves even if persistence fails/refused');
+
+        // Test 10: Legible terminal failure & token failure assertion
         const mock10 = installHttpsMock();
         await clickUpService.saveConfig({ workspaceId: 'ws-fail', setupComplete: true }, { replace: true });
         mock10.queueJson(400, { err: 'Specific ClickUp Error Detail', ECODE: 'SHARD_024' }, (req) => req.path.includes('/team/ws-fail/space'));
-        mock10.queueJson(400, { err: 'Team fetch failed' }, (req) => req.path === '/api/v2/team');
+        mock10.queueJson(200, { teams: [{ id: '6909707', name: 'Tech Team' }] }, (req) => req.path === '/api/v2/team');
+        mock10.queueJson(400, { err: 'Specific ClickUp Error Detail', ECODE: 'SHARD_024' }, (req) => req.path.includes('/team/6909707/space'));
 
         await assert.rejects(async () => {
             await clickUpService.getSpaces();
         }, (err) => {
-            assert.ok(err.message.includes('workspace ws-fail'));
+            assert.ok(err.message.includes('6909707') || err.message.includes('ws-fail'));
             assert.ok(err.message.includes('Specific ClickUp Error Detail'));
             return true;
         });
         mock10.restore();
-        console.log('✓ 10: Legible terminal failure output verified');
+
+        const mock10Token = installHttpsMock();
+        await clickUpService.saveConfig({ workspaceId: 'ws-fail-token', setupComplete: true }, { replace: true });
+        mock10Token.queueJson(400, { err: 'Invalid workspace id: ws-fail-token', ECODE: 'SHARD_024' }, (req) => req.path.includes('/team/ws-fail-token/space'));
+        mock10Token.queueJson(401, { err: 'Check your API token', ECODE: 'OAUTH_023' }, (req) => req.path === '/api/v2/team');
+
+        await assert.rejects(async () => {
+            await clickUpService.getSpaces();
+        }, (err) => {
+            assert.ok(err.message.includes('Check your API token'));
+            return true;
+        });
+        mock10Token.restore();
+        console.log('✓ 10: Legible terminal failure output & token failure propagation verified');
+
+        // Test 11: Call sites heal (including _findTaskByPlanId and setup pre-flight)
+        const mock11 = installHttpsMock();
+        // Mock plan file write
+        const planFilePath = path.join(workspaceRoot, 'plan.md');
+        fs.writeFileSync(planFilePath, '# Plan 11\nGoal: test');
+
+        await clickUpService.saveConfig({
+            workspaceId: 'ws-stale-11',
+            setupComplete: true,
+            columnMappings: { created: 'list-1' },
+            customFields: { planId: 'field-1' }
+        }, { replace: true });
+
+        mock11.queueJson(400, { err: 'Invalid workspace', ECODE: 'SHARD_024' }, (req) => req.path.includes('/team/ws-stale-11/task'));
+        mock11.queueJson(200, { teams: [{ id: '6909707', name: 'Tech Team' }] }, (req) => req.path === '/api/v2/team');
+        mock11.queueJson(200, { tasks: [{ id: 'task-11' }] }, (req) => req.path.includes('/team/6909707/task'));
+        mock11.queueJson(200, { id: 'task-11' }, (req) => req.path.includes('/task/task-11'));
+
+        const plan11 = { planId: 'plan-123', title: 'Plan 11', planFile: planFilePath, kanbanColumn: 'created' };
+        const res11 = await clickUpService.syncPlan(plan11);
+        assert.strictEqual(res11.taskId, 'task-11');
+        const cfg11 = await GlobalIntegrationConfigService.loadConfig('clickup');
+        assert.strictEqual(cfg11.workspaceId, '6909707');
+        mock11.restore();
+        console.log('✓ 11: _findTaskByPlanId request wrapped and healed properly');
     });
 
     console.log('All integration-config-write-guard tests passed successfully.');

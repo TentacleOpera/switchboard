@@ -31,7 +31,6 @@
             --accent-primary: #00e5ff;
             --accent-teal: var(--accent-primary);
             --font-family: 'Hanken Grotesk', Menlo, Consolas, sans-serif;
-            --font-mono:   Menlo, Consolas, monospace;
             --font-code:   Menlo, Consolas, monospace;
 
             /* Terminal surface tokens — the ONLY place these colours are written.
@@ -414,6 +413,21 @@
         .pane-grid.layout-2h { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
         .pane-grid.layout-2v { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
         .pane-grid.layout-2x2 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+        .pane-grid.layout-2x3 { grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr); }
+        .pane-grid.layout-3x3 { grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); }
+
+        .pane-grid.layout-2x3 .pane-header,
+        .pane-grid.layout-3x3 .pane-header {
+            padding: 2px 4px;
+            font-size: 10px;
+        }
+        .pane-grid.layout-2x3 .pane-title,
+        .pane-grid.layout-3x3 .pane-title {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            min-width: 0;
+        }
 
         .terminal-pane {
             position: relative;
@@ -426,6 +440,60 @@
         }
         .terminal-pane.focused {
             border-color: var(--accent-teal);
+            box-shadow: inset 0 0 0 1px var(--accent-teal);
+        }
+
+        .btn-unassign-pane {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 11px;
+            line-height: 1;
+            padding: 1px 4px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .btn-unassign-pane:hover {
+            color: var(--text-primary);
+            border-color: var(--accent-teal);
+        }
+        .pane-index-chip {
+            font-size: 9px;
+            font-weight: 700;
+            padding: 0 3px;
+            margin-right: 4px;
+            border-radius: 2px;
+            color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 18%, transparent);
+        }
+        .terminal-item.assigned .item-name { color: var(--text-primary); }
+
+        .pane-toast {
+            position: absolute;
+            bottom: 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: none;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 10px;
+            font-size: 11px;
+            border: 1px solid var(--border-bright);
+            border-radius: 4px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            z-index: 40;
+        }
+        .pane-toast.visible { display: flex; }
+        .pane-toast button {
+            background: transparent;
+            border: 1px solid var(--accent-teal);
+            color: var(--accent-teal);
+            font-size: 10px;
+            font-weight: 700;
+            padding: 1px 6px;
+            border-radius: 3px;
+            cursor: pointer;
         }
         .pane-header {
             height: 22px;
@@ -597,6 +665,8 @@
                 <button type="button" class="btn-layout" data-layout="2h">2h</button>
                 <button type="button" class="btn-layout" data-layout="2v">2v</button>
                 <button type="button" class="btn-layout" data-layout="2x2">2x2</button>
+                <button type="button" class="btn-layout" data-layout="2x3">2x3</button>
+                <button type="button" class="btn-layout" data-layout="3x3">3x3</button>
             </div>
             <label class="notify-toggle-label">
                 <input type="checkbox" id="notify-toggle"> OS Notifications
@@ -605,6 +675,7 @@
         <div id="layout-fallback-banner" class="layout-fallback-banner">
             Window too small for requested layout — using simpler layout floor.
         </div>
+        <div id="pane-toast" class="pane-toast"><span id="pane-toast-text"></span><button type="button" id="pane-toast-undo">Undo</button></div>
         <div id="pane-grid" class="pane-grid layout-1"></div>
         <div id="empty-state" class="empty-state">
             No terminal selected. Click "+ New" to spawn a terminal.

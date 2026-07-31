@@ -50,6 +50,8 @@ list_output.txt
 # >>> Switchboard managed exclusions >>>
 # Switchboard runtime state (per-session, not shareable)
 .switchboard/*
+.switchboard/secrets.enc*
+.switchboard/.master-key*
 !.switchboard/reviews/
 !.switchboard/plans/
 !.switchboard/features/

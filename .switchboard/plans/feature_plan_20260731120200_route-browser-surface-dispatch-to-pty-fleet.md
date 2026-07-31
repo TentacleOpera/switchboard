@@ -372,3 +372,8 @@ Sweep the sibling arms that dispatch (`sendAnalystMessage`, `dispatchProjectMana
 
 **Manual — standalone host unaffected**
 22. Boot the standalone CLI (no extension). Confirm browser dispatch and `sendToTerminal` still work — that host has its own PTY arms and must be untouched by this change.
+
+## Completion Report
+
+Routed HTTP/browser-surface dispatches to active PTY terminals by stamping `apiOriginated: true` on HTTP verb rails, introducing `bypassTriggerGate` for explicit manager endpoints, enabling `allowPtyFleet` filtering in global and local agent resolution, adding PTY support to `sendToTerminal`, and refining warning messages. Files changed: `src/services/LocalApiServer.ts`, `src/services/TaskViewerProvider.ts`, `src/services/KanbanProvider.ts`, `src/extension.ts`, and `src/services/verbSchemas.ts`. No issues encountered during implementation.
+

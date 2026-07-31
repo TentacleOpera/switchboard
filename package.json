@@ -129,6 +129,11 @@
         "category": "Switchboard"
       },
       {
+        "command": "switchboard.restoreIntegrationConfig",
+        "title": "Switchboard: Restore Integration Config from Backup",
+        "category": "Switchboard"
+      },
+      {
         "command": "switchboard.openPlanningPanel",
         "title": "Switchboard: Open Artifacts Panel",
         "category": "Switchboard"
@@ -790,6 +795,7 @@
     "test:contract:design-view-state": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/design-view-state-seats-contract.test.js",
     "test:contract:stitch-html-tab": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/stitch-html-tab-contract.test.js",
     "test:contract:shim-injection": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/webview-shim-injection-contract.test.js",
+    "test:contract:db-backup-retention": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-db-backup-retention.test.js",
     "test:contract:panel-scrollbars": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/browser-panel-scrollbar-contract.test.js",
     "test:contract:rendermarkdown": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/sharedUtils-renderMarkdown.test.js",
     "test:contract:drag-guard": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-card-button-drag-guard.test.js",

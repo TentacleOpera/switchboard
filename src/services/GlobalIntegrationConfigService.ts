@@ -173,7 +173,124 @@ export class GlobalIntegrationConfigService {
         return globalConfig[provider] || null;
     }
 
+    public static readonly CHURN_PATHS = [
+        'clickup.lastSync',
+        'linear.lastSync',
+        'notion.lastSync',
+        'mcpMonitor.sourceLastCheckAt',
+        'scheduler.jobs'
+    ];
+
+    private static _canonicalStringify(obj: any): string {
+        if (obj === null || typeof obj !== 'object') {
+            return JSON.stringify(obj);
+        }
+        if (Array.isArray(obj)) {
+            return '[' + obj.map((item) => this._canonicalStringify(item)).join(',') + ']';
+        }
+        const keys = Object.keys(obj).sort();
+        return '{' + keys.map((k) => JSON.stringify(k) + ':' + this._canonicalStringify(obj[k])).join(',') + '}';
+    }
+
+    private static _stripChurnFields(config: GlobalConfig): GlobalConfig {
+        const copy = structuredClone(config);
+        if (copy.clickup && 'lastSync' in copy.clickup) delete copy.clickup.lastSync;
+        if (copy.linear && 'lastSync' in copy.linear) delete copy.linear.lastSync;
+        if (copy.notion && 'lastSync' in copy.notion) delete copy.notion.lastSync;
+        if (copy.mcpMonitor) {
+            delete copy.mcpMonitor.sourceLastCheckAt;
+            if (Object.keys(copy.mcpMonitor).length === 0) {
+                delete copy.mcpMonitor;
+            }
+        }
+        if (copy.scheduler?.jobs && Array.isArray(copy.scheduler.jobs)) {
+            for (const job of copy.scheduler.jobs) {
+                if (job.sourceConfig?.sourceLastCheckAt) {
+                    delete job.sourceConfig.sourceLastCheckAt;
+                }
+            }
+        }
+        return copy;
+    }
+
+    public static isSignificantWrite(existingConfig: GlobalConfig, incomingConfig: GlobalConfig): boolean {
+        const strippedExisting = this._stripChurnFields(existingConfig);
+        const strippedIncoming = this._stripChurnFields(incomingConfig);
+        return this._canonicalStringify(strippedExisting) !== this._canonicalStringify(strippedIncoming);
+    }
+
+    private static _snapshotBeforeWrite(reason: string, incomingConfig: GlobalConfig): void {
+        try {
+            const filePath = this.getFilePath();
+            if (!fs.existsSync(filePath)) {
+                return;
+            }
+
+            let existingContent = '';
+            try {
+                existingContent = fs.readFileSync(filePath, 'utf8');
+            } catch {
+                return;
+            }
+
+            let existingConfig: GlobalConfig | null = null;
+            try {
+                existingConfig = JSON.parse(existingContent);
+            } catch {
+                // Unparseable existing file -> always snapshot
+            }
+
+            if (existingConfig !== null && !this.isSignificantWrite(existingConfig, incomingConfig)) {
+                return;
+            }
+
+            const backupDir = stateFile('configbackup');
+            if (!fs.existsSync(backupDir)) {
+                fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+            }
+
+            const now = new Date();
+            const tsStr = now.toISOString().replace(/[:.]/g, '-');
+            const sanitizedReason = reason.replace(/[^a-zA-Z0-9_-]/g, '_');
+            const hex = Math.floor(Math.random() * 0x10000).toString(16).padStart(4, '0');
+            const filename = `integration-config.${tsStr}.${sanitizedReason}.${hex}.json`;
+            const backupPath = path.join(backupDir, filename);
+
+            fs.copyFileSync(filePath, backupPath);
+            fs.chmodSync(backupPath, 0o600);
+
+            this._pruneSnapshots(backupDir);
+        } catch (err) {
+            console.error('[GlobalIntegrationConfigService] Failed to snapshot config:', err);
+        }
+    }
+
+    private static _pruneSnapshots(backupDir: string): void {
+        try {
+            const files = fs.readdirSync(backupDir);
+            const snapshotFiles = files
+                .filter((f) => /^integration-config\..+\.json$/.test(f))
+                .map((f) => ({
+                    filename: f,
+                    fullPath: path.join(backupDir, f)
+                }))
+                .sort((a, b) => a.filename.localeCompare(b.filename));
+
+            if (snapshotFiles.length > 10) {
+                const toRemove = snapshotFiles.slice(0, snapshotFiles.length - 10);
+                for (const item of toRemove) {
+                    try {
+                        fs.unlinkSync(item.fullPath);
+                    } catch {}
+                }
+            }
+        } catch (err) {
+            console.error('[GlobalIntegrationConfigService] Failed to prune snapshots:', err);
+        }
+    }
+
     public static async saveGlobal(config: GlobalConfig): Promise<void> {
+        this._snapshotBeforeWrite('save', config);
         const filePath = this.getFilePath();
         const dir = path.dirname(filePath);
         if (!fs.existsSync(dir)) {
@@ -474,6 +591,7 @@ export class GlobalIntegrationConfigService {
         }
         fresh.scheduler = migrated;
         try {
+            this._snapshotBeforeWrite('scheduler-migration', fresh);
             const filePath = this.getFilePath();
             const dir = path.dirname(filePath);
             if (!fs.existsSync(dir)) {

@@ -280,3 +280,9 @@ Require `src/test/integrations/shared/test-harness.js` so the file inherits stat
 ## Recommendation
 
 Complexity 5 → **Send to Coder.**
+
+## Completion Report
+
+Implemented automated snapshot backups and interactive restore for `~/.switchboard/integration-config.json`. `GlobalIntegrationConfigService` now snapshots the pre-write config state into `stateFile('configbackup')` before any significant write (using canonical key-sorted stringify to filter out timer churn such as `lastSync` and `sourceLastCheckAt`), keeping the newest 10 backups. Wired the `switchboard.restoreIntegrationConfig` VS Code command to present a QuickPick picker displaying backup timestamps, reasons, and key integration field summaries, supporting both whole-file restore and selective field-level restore with age warnings.
+
+Files changed/added: `src/services/GlobalIntegrationConfigService.ts`, `src/extension.ts`, `package.json`, and `src/test/integration-config-backup.test.js`.

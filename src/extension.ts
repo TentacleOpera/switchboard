@@ -40,6 +40,8 @@ import { ResearchImportService } from './services/ResearchImportService';
 import { showTemporaryNotification } from './utils/showTemporaryNotification';
 import { MigrationService } from './services/MigrationService';
 import { switchboardCommandRegistry } from './services/commandRegistry';
+import { stateFile } from './utils/stateHome';
+import { GlobalIntegrationConfigService } from './services/GlobalIntegrationConfigService';
 
 /**
  * Verb Engine · 1 — register a `switchboard.*` command in BOTH the host-agnostic
@@ -641,6 +643,45 @@ export async function activate(context: vscode.ExtensionContext) {
 
     kanbanProvider = new KanbanProvider(context.extensionUri, context, outputChannel);
     const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
+
+    // Machine-global secrets store setup & one-way mirror from VS Code SecretStorage
+    const MIRRORED_SECRET_KEYS = new Set([
+        'switchboard.clickup.apiToken',
+        'switchboard.linear.apiToken',
+        'switchboard.notion.apiToken',
+        'switchboard.stitch.apiKey',
+    ]);
+    const { StandaloneHostSecrets } = require('./services/encryptedSecretsStore');
+    const { stateFile } = require('./utils/stateHome');
+    const globalSecrets = new StandaloneHostSecrets(stateFile('secrets.enc'), stateFile('.master-key'));
+
+    const syncSecretToGlobalStore = async (key: string) => {
+        if (!MIRRORED_SECRET_KEYS.has(key)) return;
+        try {
+            const val = await context.secrets.get(key);
+            if (val && val.trim().length > 0) {
+                await globalSecrets.store(key, val);
+            } else {
+                await globalSecrets.delete(key);
+            }
+        } catch (err) {
+            console.warn(`[Switchboard] Secrets mirror failed for ${key}:`, err);
+        }
+    };
+
+    // 1. Activation backfill sweep
+    (async () => {
+        for (const key of MIRRORED_SECRET_KEYS) {
+            await syncSecretToGlobalStore(key);
+        }
+    })().catch(err => console.warn('[Switchboard] Secrets activation sweep error:', err));
+
+    // 2. On change listener
+    context.subscriptions.push(
+        context.secrets.onDidChange((e) => {
+            void syncSecretToGlobalStore(e.key);
+        })
+    );
 
     // Phase 1 Workstream A: start the idle-eviction sweep + apply the resident-DB budget
     // from settings. The sweep evicts cached KanbanDatabase instances idle > 10 min
@@ -1479,8 +1520,8 @@ export async function activate(context: vscode.ExtensionContext) {
     // ConfiguredKanbanDispatchOptions). It is appended LAST and is optional so every
     // existing positional caller — and the pair-programming tests — keep working
     // unchanged and default to VS Code terminals.
-    const triggerFromKanbanDisposable = registerSwitchboardCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string, apiOriginated?: boolean) => {
-        return await taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction, workspaceRoot, { targetTerminalOverride, persistColumnOnError: true, apiOriginated: !!apiOriginated } as any);
+    const triggerFromKanbanDisposable = registerSwitchboardCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string, apiOriginated?: boolean, bypassTriggerGate?: boolean) => {
+        return await taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction, workspaceRoot, { targetTerminalOverride, persistColumnOnError: true, apiOriginated: !!apiOriginated, bypassTriggerGate: !!bypassTriggerGate } as any);
     });
     context.subscriptions.push(triggerFromKanbanDisposable);
 
@@ -2473,6 +2514,159 @@ export async function activate(context: vscode.ExtensionContext) {
         await taskViewerProvider.forceRefreshIntegrationCache(workspaceRoot);
     });
     context.subscriptions.push(refreshIntegrationCacheDisposable);
+
+    const restoreIntegrationConfigDisposable = vscode.commands.registerCommand('switchboard.restoreIntegrationConfig', async () => {
+        const backupDir = stateFile('configbackup');
+        if (!fs.existsSync(backupDir)) {
+            vscode.window.showInformationMessage(`No backup snapshots found in ${backupDir}`);
+            return;
+        }
+
+        const files = fs.readdirSync(backupDir)
+            .filter((f: string) => /^integration-config\..+\.json$/.test(f))
+            .sort((a: string, b: string) => b.localeCompare(a)); // Newest first
+
+        if (files.length === 0) {
+            vscode.window.showInformationMessage(`No backup snapshots found in ${backupDir}`);
+            return;
+        }
+
+        interface SnapshotItem extends vscode.QuickPickItem {
+            filename: string;
+            fullPath: string;
+            content: string;
+            parsedConfig: any;
+        }
+
+        const items: SnapshotItem[] = files.map((filename: string) => {
+            const fullPath = path.join(backupDir, filename);
+            let content = '';
+            let parsed: any = null;
+            try {
+                content = fs.readFileSync(fullPath, 'utf8');
+                parsed = JSON.parse(content);
+            } catch {}
+
+            // Parse timestamp & reason from filename: integration-config.<ts>.<reason>.<hex>.json
+            const parts = filename.split('.');
+            const tsStr = parts[1] || '';
+            const reason = parts[2] || 'unknown';
+
+            let label = filename;
+            if (tsStr) {
+                const dateStr = tsStr.replace(/^(\d{4}-\d{2}-\d{2}T\d{2})-(\d{2})-(\d{2})-(\d{3}Z)$/, '$1:$2:$3.$4');
+                const d = new Date(dateStr);
+                if (!isNaN(d.getTime())) {
+                    label = d.toLocaleString();
+                }
+            }
+
+            let detail = 'Unreadable — raw restore';
+            if (parsed) {
+                const clickupId = parsed.clickup?.workspaceId ? `ClickUp ws:${parsed.clickup.workspaceId}` : 'ClickUp:none';
+                const linearId = parsed.linear?.teamId ? `Linear team:${parsed.linear.teamId}` : 'Linear:none';
+                const setup = parsed.clickup?.setupComplete || parsed.linear?.setupComplete ? 'setupComplete' : 'incomplete';
+                const selectedList = parsed.clickup?.selectedListId ? `list:${parsed.clickup.selectedListId}` : 'no-list';
+                detail = `${clickupId} | ${linearId} | ${setup} | ${selectedList}`;
+            }
+
+            return {
+                label,
+                description: `reason: ${reason}`,
+                detail,
+                filename,
+                fullPath,
+                content,
+                parsedConfig: parsed
+            };
+        });
+
+        const selected = await vscode.window.showQuickPick(items, {
+            placeHolder: 'Select a backup snapshot to restore'
+        });
+
+        if (!selected) {
+            return;
+        }
+
+        const modeItem = await vscode.window.showQuickPick([
+            { label: 'Restore whole file', description: 'Replaces integration-config.json entirely with chosen snapshot', id: 'whole' },
+            { label: 'Restore selected fields (Advanced)', description: 'Select specific fields to restore from snapshot', id: 'fields' }
+        ], {
+            placeHolder: 'Choose restore mode'
+        });
+
+        if (!modeItem) {
+            return;
+        }
+
+        if (modeItem.id === 'whole') {
+            await GlobalIntegrationConfigService.saveGlobal(selected.parsedConfig || {});
+            const choice = await vscode.window.showInformationMessage('Integration config restored.', 'Reload Window');
+            if (choice === 'Reload Window') {
+                await vscode.commands.executeCommand('workbench.action.reloadWindow');
+            }
+        } else {
+            // Field-level restore
+            if (!selected.parsedConfig) {
+                vscode.window.showErrorMessage('Cannot perform field-level restore on unparseable snapshot.');
+                return;
+            }
+
+            const currentConfig: Record<string, any> = (await GlobalIntegrationConfigService.loadGlobal()) || {};
+            const availableFields: { label: string; description: string; keyPath: string[]; snapshotValue: any }[] = [];
+
+            // Traverse clickup & linear fields
+            for (const provider of ['clickup', 'linear', 'notion']) {
+                const snapProv = selected.parsedConfig[provider];
+                if (snapProv && typeof snapProv === 'object') {
+                    for (const key of Object.keys(snapProv)) {
+                        const val = snapProv[key];
+                        if (val !== undefined && val !== null && val !== '') {
+                            availableFields.push({
+                                label: `${provider}.${key}`,
+                                description: `Snapshot value: ${JSON.stringify(val)} (from ${selected.label})`,
+                                keyPath: [provider, key],
+                                snapshotValue: val
+                            });
+                        }
+                    }
+                }
+            }
+
+            if (availableFields.length === 0) {
+                vscode.window.showInformationMessage('No non-empty fields available in selected snapshot.');
+                return;
+            }
+
+            const fieldSelection = await vscode.window.showQuickPick(availableFields.map((f) => ({
+                label: f.label,
+                description: f.description,
+                fieldObj: f
+            })), {
+                placeHolder: 'Select field to restore (note: age matches snapshot date above)',
+                canPickMany: true
+            });
+
+            if (!fieldSelection || fieldSelection.length === 0) {
+                return;
+            }
+
+            const newConfig: Record<string, any> = structuredClone(currentConfig);
+            for (const item of fieldSelection) {
+                const [prov, key] = item.fieldObj.keyPath;
+                if (!newConfig[prov]) newConfig[prov] = {};
+                newConfig[prov][key] = item.fieldObj.snapshotValue;
+            }
+
+            await GlobalIntegrationConfigService.saveGlobal(newConfig);
+            const choice = await vscode.window.showInformationMessage(`Restored ${fieldSelection.length} field(s).`, 'Reload Window');
+            if (choice === 'Reload Window') {
+                await vscode.commands.executeCommand('workbench.action.reloadWindow');
+            }
+        }
+    });
+    context.subscriptions.push(restoreIntegrationConfigDisposable);
 
     // Trigger prefetch of last-accessed integration data after activation (with delay)
     if (workspaceRoot) {

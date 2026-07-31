@@ -262,3 +262,8 @@ Extend the grid block (currently `src/webview/terminals.html:412-415`):
 **Regression**
 16. Pick `1` and confirm single-pane behaviour is unchanged.
 17. Confirm `POST /terminals/verb/ptyListTerminals` still returns the full fleet and the sidebar worktree grouping/count badges (`Na/Mx`) are correct with 9 terminals across two worktrees.
+
+## Completion Report
+
+Implemented single-source-of-truth `LAYOUTS` table and `LAYOUT_FLOOR_ORDER` supporting 6-slot (`2x3`) and 9-slot (`3x3`) layout options. Updated picker toolbar, validation sites, layout floor walk, assignment sizing, and added dense pane header styling in CSS. Files changed: `src/webview/terminals.js` and `src/webview/terminals.html`. No issues encountered during implementation.
+

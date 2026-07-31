@@ -199,6 +199,7 @@ interface LocalApiServerOptions {
      */
     getPlanningAssetRoots?: (workspaceRoot: string) => string[];
     setupVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
+    allowSecretWritesOverHttp?: boolean;
     taskViewerVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     cleanupWorktree?: (
         workspaceRoot: string,
@@ -1209,7 +1210,7 @@ export class LocalApiServer {
             // 4. Fire the exact arm a webview drag fires: it persists the move FIRST,
             //    then dispatches (the known move↔dispatch coupling order).
             const dispatchedAtBefore = record.dispatchedAt ?? null;
-            await kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, apiOriginated: true }, workspaceRoot);
+            await kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, apiOriginated: true, bypassTriggerGate: true }, workspaceRoot);
 
             // 5. Verify against the DB — report what happened, not what was requested.
             const after: any = await db.getPlanByPlanId(record.planId);
@@ -1680,6 +1681,29 @@ export class LocalApiServer {
             return;
         }
 
+    private _stampHttpSurface(body: any): any {
+        body.apiOriginated = true;
+        return body;
+    }
+
+    private async _handleKanbanVerb(verb: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+
+        const kanbanVerb = this._options.kanbanVerb;
+        if (!kanbanVerb) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Kanban verb dispatch not available' }));
+            return;
+        }
+        if (!verb) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing verb in path' }));
+            return;
+        }
+
         try {
             const rawBody = await this._parseJsonBody(req);
             // Strip any client-supplied `type` — the verb from the URL path is
@@ -1688,6 +1712,8 @@ export class LocalApiServer {
             // dispatch a DIFFERENT action than the one the allowlist checked.
             const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
             delete body.type;
+            delete body.bypassTriggerGate;
+            this._stampHttpSurface(body);
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
             const result = await kanbanVerb(verb, body, workspaceRoot);
             const ok = !result || result.success !== false;
@@ -1715,6 +1741,8 @@ export class LocalApiServer {
             const rawBody = await this._parseJsonBody(req);
             const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
             delete body.type;
+            delete body.bypassTriggerGate;
+            this._stampHttpSurface(body);
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
             const result = await planningVerb(verb, body, workspaceRoot);
             const ok = !result || result.success !== false;
@@ -1736,7 +1764,7 @@ export class LocalApiServer {
             'stitchSaveApiKey',
             'stitchSaveAuthConfig',
         ]);
-        if (SECRET_WRITE_VERBS.has(verb)) {
+        if (!this._options.allowSecretWritesOverHttp && SECRET_WRITE_VERBS.has(verb)) {
             res.writeHead(403, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: `Secret-write verb '${verb}' is editor-only and denied over HTTP.` }));
             return;
@@ -1778,7 +1806,7 @@ export class LocalApiServer {
             'setLinearToken',
             'setNotionToken',
         ]);
-        if (SECRET_WRITE_VERBS.has(verb)) {
+        if (!this._options.allowSecretWritesOverHttp && SECRET_WRITE_VERBS.has(verb)) {
             res.writeHead(403, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: `Secret-write verb '${verb}' is editor-only and denied over HTTP.` }));
             return;
@@ -1822,6 +1850,8 @@ export class LocalApiServer {
             const rawBody = await this._parseJsonBody(req);
             const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
             delete body.type;
+            delete body.bypassTriggerGate;
+            this._stampHttpSurface(body);
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
             const result = await taskViewerVerb(verb, body, workspaceRoot);
             const ok = !result || result.success !== false;

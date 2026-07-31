@@ -60,10 +60,7 @@ export class SecretStorage {
     }
 
     async keys(): Promise<string[]> {
-        // StandaloneHostSecrets doesn't expose enumeration; return an empty array.
-        // The ingestion path only uses get/store/delete by known key — keys() is
-        // only used by setup UIs that aren't reachable headless.
-        return [];
+        return this._secrets.keys();
     }
 
     async get(key: string): Promise<string | undefined> {

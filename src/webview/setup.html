@@ -135,7 +135,6 @@
         }
 
         .section-label {
-            font-family: var(--font-mono);
             font-size: 10px;
             text-transform: uppercase;
             letter-spacing: 2px;
@@ -150,7 +149,6 @@
             color: var(--text-secondary);
             text-transform: uppercase;
             letter-spacing: 1px;
-            font-family: var(--font-mono);
             margin-bottom: 2px;
         }
 
@@ -189,7 +187,6 @@
         .action-btn {
             border-radius: 2px;
             cursor: pointer;
-            font-family: var(--font-mono);
             text-transform: uppercase;
             letter-spacing: 1.2px;
             transition: all 0.2s ease;
@@ -267,7 +264,6 @@
             display: flex;
             align-items: center;
             gap: 8px;
-            font-family: var(--font-mono);
             font-size: 10px;
             font-weight: 600;
             color: var(--text-secondary);
@@ -389,7 +385,6 @@
         }
 
         .modal-title {
-            font-family: var(--font-mono);
             font-size: 12px;
             letter-spacing: 1.6px;
             color: var(--accent-green);
@@ -402,7 +397,6 @@
             margin-bottom: 4px;
             color: var(--text-secondary);
             font-size: 10px;
-            font-family: var(--font-mono);
             text-transform: uppercase;
             letter-spacing: 1px;
         }
@@ -428,7 +422,6 @@
             border: 1px solid var(--border-color);
             color: var(--text-primary);
             padding: 8px 10px;
-            font-family: var(--font-mono);
             font-size: 11px;
             margin-bottom: 10px;
         }
@@ -601,7 +594,6 @@
   border: 1px solid transparent;
   border-bottom: none;
   color: var(--text-secondary);
-  font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 1px;
   text-transform: uppercase;
@@ -680,9 +672,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 10px; line-height: 1.5;">
                         Switchboard found old scaffolding that can be safely removed: a leftover <code style="font-size:10px;">.agent/</code> directory or unwanted scaffold files in a non-Switchboard workspace.
                     </div>
-                    <div id="agent-dir-cleanup-roots" style="font-size: 10px; color: var(--text-secondary); margin-bottom: 10px; font-family: var(--font-mono); line-height: 1.6;"></div>
+                    <div id="agent-dir-cleanup-roots" style="font-size: 10px; color: var(--text-secondary); margin-bottom: 10px; line-height: 1.6;"></div>
                     <button id="btn-agent-dir-cleanup" class="action-btn" style="width: 100%;">CLEAN UP SELECTED SCAFFOLDING</button>
-                    <div id="agent-dir-cleanup-status" style="display:none; margin-top:8px; font-size:11px; color:var(--accent-teal); font-family:var(--font-mono);"></div>
+                    <div id="agent-dir-cleanup-status" style="display:none; margin-top:8px; font-size:11px; color:var(--accent-teal);"></div>
                 </div>
 
                 <div style="margin-bottom: 16px; border-bottom: 1px solid var(--border-dim); padding-bottom: 12px;">
@@ -693,11 +685,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <button id="btn-open-docs" class="secondary-btn" style="flex: 1;">OPEN DOCS</button>
                     </div>
                 </div>
-                <div style="font-size: 10px; color: var(--text-secondary); margin: 12px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 12px 0 4px; letter-spacing: 1px;">
                     GIT IGNORE STRATEGY
                 </div>
                 <div class="startup-row" style="display:flex; flex-direction:column; gap:6px; align-items:stretch; margin-top:6px;">
-                    <select id="git-ignore-strategy" style="width:100%; box-sizing:border-box; font-family:var(--font-mono); font-size:11px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; border-radius:4px;">
+                    <select id="git-ignore-strategy" style="width:100%; box-sizing:border-box; font-size:11px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; border-radius:4px;">
                         <option value="targetedGitignore">targetedGitignore — .gitignore (targeted, recommended)</option>
                         <option value="localExclude">localExclude - .git/info/exclude (local only)</option>
                         <option value="custom">custom — .gitignore (you manage the rules)</option>
@@ -708,29 +700,29 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <label for="git-ignore-rules" style="font-size:11px; color:var(--text-secondary);">Ignore rules (one glob per line)</label>
                     <textarea id="git-ignore-rules" class="modal-textarea" style="min-height:96px; font-size:11px;" readonly placeholder="Rules displayed here (read-only for preset strategies)"></textarea>
                 </div>
-                <div id="git-ignore-target-status" style="font-size:10px; color:var(--text-secondary); margin-top:2px; font-family:var(--font-mono);">
+                <div id="git-ignore-target-status" style="font-size:10px; color:var(--text-secondary); margin-top:2px;">
                     Target: .gitignore (targeted)
                 </div>
-                <div id="git-ignore-warning" style="font-size:10px; color:var(--text-secondary); line-height:1.4; font-family:var(--font-mono);">
+                <div id="git-ignore-warning" style="font-size:10px; color:var(--text-secondary); line-height:1.4;">
                     Preset strategies are read-only. Switchboard updates only its fenced managed block and preserves unrelated rules. Cloud coders (e.g., Jules) require .switchboard/plans/ and .switchboard/features/ to be in the repository, so avoid blanket .switchboard/* rules unless you intentionally want to hide plans from git.
                 </div>
-                <div id="setup-save-status" style="min-height:14px; margin-top:6px; font-size:10px; color:var(--text-secondary); font-family:var(--font-mono);"></div>
-                <div style="font-size: 10px; color: var(--text-secondary); margin: 12px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                <div id="setup-save-status" style="min-height:14px; margin-top:6px; font-size:10px; color:var(--text-secondary);"></div>
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 12px 0 4px; letter-spacing: 1px;">
                     AGENT PROTOCOL TARGET
                 </div>
                 <div class="startup-row" style="display:flex; flex-direction:column; gap:6px; align-items:stretch; margin-top:6px;">
-                    <select id="protocol-target" style="width:100%; box-sizing:border-box; font-family:var(--font-mono); font-size:11px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; border-radius:4px;">
+                    <select id="protocol-target" style="width:100%; box-sizing:border-box; font-size:11px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; border-radius:4px;">
                         <option value="both">Both — AGENTS.md + CLAUDE.md & .claude/ skills (recommended)</option>
                         <option value="agents">Antigravity only — AGENTS.md</option>
                         <option value="claude">Claude Code only — CLAUDE.md + .claude/ skills</option>
                     </select>
                 </div>
-                <div style="font-size:10px; color:var(--text-secondary); line-height:1.4; font-family:var(--font-mono); margin-top:4px;">
+                <div style="font-size:10px; color:var(--text-secondary); line-height:1.4; margin-top:4px;">
                     Antigravity reads <code style="font-size:10px;">AGENTS.md</code>; Claude Code reads <code style="font-size:10px;">CLAUDE.md</code> and discovers skills in <code style="font-size:10px;">.claude/skills/</code>. Selecting Claude Code generates native <code style="font-size:10px;">/memo</code>, <code style="font-size:10px;">/clickup-api</code> (etc.) slash commands and a permission allow-list so Bash proxy skills don't prompt.
                     <br><br>
                     Note: in Claude Code, skills <strong>hot-reload mid-session</strong>, but <code style="font-size:10px;">CLAUDE.md</code> and the permission settings load only at session start — <strong>restart Claude Code</strong> for those to take effect. If the "Accept, do not ask again" prompt narrows your allow-list, re-run Switchboard setup to restore it.
                 </div>
-                <div style="font-size: 10px; color: var(--text-secondary); margin: 12px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 12px 0 4px; letter-spacing: 1px;">
                     WORKFLOW SETTINGS
                 </div>
 
@@ -769,7 +761,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </div>
 
                 <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border-dim);">
-                    <div style="font-size: 10px; color: var(--accent-orange); margin-bottom: 8px; line-height: 1.4; font-family: var(--font-mono);">
+                    <div style="font-size: 10px; color: var(--accent-orange); margin-bottom: 8px; line-height: 1.4;">
                         ⚠ Press this button if your .switchboard directory, agents.md or agent folder gets deleted. Do not touch otherwise.
                     </div>
                     <button id="btn-initialize" class="secondary-btn w-full">REINITIALISE PLUGIN</button>
@@ -779,7 +771,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
 
         <div class="shared-tab-content" id="db-sync-fields" data-tab-content="database">
-                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; letter-spacing: 1px;">
                     PLAN INGESTION
                 </div>
                 <label class="startup-row" style="display:block; margin-top:6px;">
@@ -801,7 +793,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             </div>
 
         <div class="shared-tab-content" id="control-plane-fields" data-tab-content="control-plane">
-                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; letter-spacing: 1px;">
                     EXTERNAL SWITCHBOARD CONFIGURATION
                 </div>
                 <div style="font-size: 11px; color: var(--text-secondary); margin: 8px 0; padding: 8px; background: var(--panel-bg); border-left: 2px solid var(--accent-teal); border-radius: 2px;">
@@ -814,7 +806,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             </div>
 
         <div class="shared-tab-content" id="mappings-fields" data-tab-content="mappings">
-                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; letter-spacing: 1px;">
                     WORKSPACE-TO-DATABASE ROUTING
                 </div>
                 <div style="font-size: 11px; color: var(--text-secondary); margin: 8px 0; padding: 8px; background: var(--panel-bg); border-left: 2px solid var(--accent-warning); border-radius: 2px;">
@@ -829,19 +821,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <button id="btn-add-mapping" class="secondary-btn" style="flex:1;">Add New Database</button>
                     <button id="btn-save-mappings" class="secondary-btn" style="flex:1;">Save Mappings</button>
                 </div>
-                <div id="workspace-mapping-status" style="font-size:10px; color:var(--text-secondary); margin-top:8px; font-family:var(--font-mono); white-space:pre-wrap;"></div>
+                <div id="workspace-mapping-status" style="font-size:10px; color:var(--text-secondary); margin-top:8px; white-space:pre-wrap;"></div>
                 <div class="setup-option-group" style="display: flex; flex-direction: column; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-dim);">
                     <div style="display:flex; flex-direction:column; gap:4px;">
                         <span class="setup-label-text" style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Migrate Settings</span>
                         <span class="setup-label-desc" style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Settings are now global by default. Copy your local database settings for this repository to your global settings.</span>
                     </div>
                     <button id="btn-copy-db-settings" class="secondary-btn" style="margin-top: 4px;">Copy DB Settings to Global</button>
-                    <div id="copy-db-settings-status" style="font-size: 10px; color: var(--text-secondary); font-family: var(--font-mono); display: none;"></div>
+                    <div id="copy-db-settings-status" style="font-size: 10px; color: var(--text-secondary); display: none;"></div>
                 </div>
             </div>
 
         <div class="shared-tab-content" id="clickup-fields" data-tab-content="clickup">
-                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; letter-spacing: 1px;">
                     Configure ClickUp integration for plan sync, issue import, and custom field mapping.
                 </div>
 
@@ -876,7 +868,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                 Custom Ticket Import Location
                             </span>
                             <div style="display:flex; gap:8px; margin-top:4px;">
-                                <input id="clickup-ticket-import-folder" class="ticket-import-folder-input" type="text" placeholder="e.g. /Users/me/Tickets" style="flex:1; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; border-radius:4px;">
+                                <input id="clickup-ticket-import-folder" class="ticket-import-folder-input" type="text" placeholder="e.g. /Users/me/Tickets" style="flex:1; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-size:11px; border-radius:4px;">
                                 <button id="btn-browse-clickup-ticket-folder" class="secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
                             </div>
                         </label>
@@ -1038,7 +1030,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                     <button id="btn-clickup-add-rule" class="secondary-btn w-full">ADD RULE</button>
                                     <button id="btn-clickup-save-automation" class="action-btn w-full">SAVE AUTOMATION</button>
                                 </div>
-                                <div style="font-size:9px; font-family:var(--font-mono); letter-spacing:1px; color:var(--text-secondary); margin:8px 0 4px;">RULES</div>
+                                <div style="font-size:9px; letter-spacing:1px; color:var(--text-secondary); margin:8px 0 4px;">RULES</div>
                                 <div id="clickup-automation-rules-list" style="display:flex; flex-direction:column; gap:8px;"></div>
                             </div>
                         </div>
@@ -1047,7 +1039,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         </div>
 
         <div class="shared-tab-content" id="linear-fields" data-tab-content="linear">
-                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; letter-spacing: 1px;">
                     Configure Linear integration for plan sync, issue import, and workflow state mapping.
                 </div>
 
@@ -1082,7 +1074,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                 Custom Ticket Import Location
                             </span>
                             <div style="display:flex; gap:8px; margin-top:4px;">
-                                <input id="linear-ticket-import-folder" class="ticket-import-folder-input" type="text" placeholder="e.g. /Users/me/Tickets" style="flex:1; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; border-radius:4px;">
+                                <input id="linear-ticket-import-folder" class="ticket-import-folder-input" type="text" placeholder="e.g. /Users/me/Tickets" style="flex:1; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-size:11px; border-radius:4px;">
                                 <button id="btn-browse-linear-ticket-folder" class="secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
                             </div>
                         </label>
@@ -1243,7 +1235,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                     <button id="btn-linear-add-rule" class="secondary-btn w-full">ADD RULE</button>
                                     <button id="btn-linear-save-automation" class="action-btn w-full">SAVE AUTOMATION</button>
                                 </div>
-                                <div style="font-size:9px; font-family:var(--font-mono); letter-spacing:1px; color:var(--text-secondary); margin:8px 0 4px;">RULES</div>
+                                <div style="font-size:9px; letter-spacing:1px; color:var(--text-secondary); margin:8px 0 4px;">RULES</div>
                                 <div id="linear-automation-rules-list" style="display:flex; flex-direction:column; gap:8px;"></div>
                             </div>
                         </div>
@@ -1252,7 +1244,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         </div>
 
         <div class="shared-tab-content" id="notion-fields" data-tab-content="notion">
-                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; letter-spacing: 1px;">
                     Configure Notion integration for design document fetching.
                 </div>
 
@@ -1289,7 +1281,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
 
         <div class="shared-tab-content" id="plan-scanner-fields" data-tab-content="plan-scanner">
-            <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+            <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; letter-spacing: 1px;">
                 File watchers pick up new plans instantly. Switchboard also scans once at startup to import any plans created while the extension was not running — this startup scan always happens. The Scan Speed below controls how often that scan <em>repeats</em> as a fallback for missed events — both external IDE folders (Antigravity / Cursor / Claude Code / Windsurf-Devin) and the internal <code>.switchboard/plans</code> directory. Set to <strong>Off</strong> to disable the recurring scan while keeping the startup pass.
             </div>
 
@@ -1390,7 +1382,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Play the full-screen ULTRACODE slam when Feature Ultracode is switched on in the kanban board.</span>
                     </div>
                 </label>
-                <div id="cyber-animation-status" style="min-height:14px; margin-top:6px; font-size:10px; color:var(--accent-teal); font-family:var(--font-mono);"></div>
+                <div id="cyber-animation-status" style="min-height:14px; margin-top:6px; font-size:10px; color:var(--accent-teal);"></div>
             </div>
             <div id="theme-colour-icons-settings">
                 <div class="subsection-header">
@@ -1403,12 +1395,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Show kanban toolbar icons in color at rest (terracotta for Claudify) instead of grey with a color click-flash.</span>
                     </div>
                 </label>
-                <div id="colour-kanban-icons-status" style="min-height:14px; margin-top:6px; font-size:10px; color:var(--accent-teal); font-family:var(--font-mono);"></div>
+                <div id="colour-kanban-icons-status" style="min-height:14px; margin-top:6px; font-size:10px; color:var(--accent-teal);"></div>
             </div>
         </div>
 
         <div class="shared-tab-content" id="status-bar-fields" data-tab-content="status-bar">
-            <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+            <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; letter-spacing: 1px;">
                 STATUS BAR CONTROLS
             </div>
             <div class="hint-text" style="margin-bottom: 12px; font-size: 10px; color: var(--text-secondary); line-height: 1.4;">
@@ -1464,7 +1456,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </div>
             </label>
 
-            <div style="font-size: 10px; color: var(--text-secondary); margin: 14px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+            <div style="font-size: 10px; color: var(--text-secondary); margin: 14px 0 4px; letter-spacing: 1px;">
                 MEMO HOTKEY
             </div>
             <div class="hint-text" style="margin-bottom: 8px; font-size: 10px; color: var(--text-secondary); line-height: 1.4;">
@@ -1626,7 +1618,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                     <!-- Board state export: where the kanban board state gets mirrored for remote/web-agent visibility. -->
                     <div style="margin-top: 20px; border-top: 1px solid var(--border-color); padding-top: 16px;">
-                        <div style="font-size: 10px; color: var(--text-secondary); margin: 0 0 8px; font-family: var(--font-mono); letter-spacing: 1px;">
+                        <div style="font-size: 10px; color: var(--text-secondary); margin: 0 0 8px; letter-spacing: 1px;">
                             BOARD STATE EXPORT
                         </div>
                         <div style="font-size: 11px; color: var(--text-secondary); margin: 8px 0; line-height: 1.5;">
@@ -1775,13 +1767,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             </div>
             <div id="prompt-role-tabs" style="display:flex; gap:4px; flex-wrap:wrap; margin-bottom:10px;"></div>
             <details id="prompt-preview-details" style="margin-bottom:10px;">
-                <summary style="font-size:10px; font-family:var(--font-mono); letter-spacing:1px; cursor:pointer; color:var(--text-secondary); user-select:none;">
+                <summary style="font-size:10px; letter-spacing:1px; cursor:pointer; color:var(--text-secondary); user-select:none;">
                     DEFAULT PROMPT PREVIEW (read only)
                 </summary>
                 <div style="font-size:9px; color:var(--text-secondary); margin:4px 0 6px; line-height:1.4;">
                     Base prompt structure only. Toggle options are applied at dispatch time on top of any override.
                 </div>
-                <textarea id="prompt-preview-text" class="modal-textarea" rows="10" readonly style="font-family:var(--font-mono); font-size:10px; opacity:0.7; cursor:default; resize:vertical;" placeholder="Loading preview..."></textarea>
+                <textarea id="prompt-preview-text" class="modal-textarea" rows="10" readonly style="font-size:10px; opacity:0.7; cursor:default; resize:vertical;" placeholder="Loading preview..."></textarea>
             </details>
             <label class="modal-label" for="prompt-override-mode">Mode</label>
             <select id="prompt-override-mode" class="modal-input">
@@ -1868,7 +1860,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             return `
             <div class="db-card" data-db-index="${index}" style="border:1px solid var(--border-color); border-radius:4px; padding:12px; margin-bottom:12px; background:var(--panel-bg2, rgba(255,255,255,0.03));">
-                <div style="font-family:var(--font-mono); font-size:10px; color:var(--accent-teal, #4fd1c5); margin-bottom:6px; word-break:break-all; font-weight:bold;">${escapeHtml(db.dbPath)}${mappedBadge}</div>
+                <div style="font-size:10px; color:var(--accent-teal, #4fd1c5); margin-bottom:6px; word-break:break-all; font-weight:bold;">${escapeHtml(db.dbPath)}${mappedBadge}</div>
                 <div style="margin-bottom:12px; border-left:2px solid var(--border-color); padding-left:8px;">${foldersList}</div>
 
                 <div class="db-subsection" style="margin-top:0; padding-top:0; border-top:none;">
@@ -1938,7 +1930,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             } else {
                 let selectHtml = `<div style="margin-bottom:12px;">
                     <div style="font-size:11px; font-weight:bold; color:var(--text-secondary); margin-bottom:6px;">Select Database Workspace:</div>
-                    <select id="db-selector" style="width:100%; box-sizing:border-box; font-family:var(--font-mono); font-size:11px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; border-radius:4px;">`;
+                    <select id="db-selector" style="width:100%; box-sizing:border-box; font-size:11px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; border-radius:4px;">`;
                 
                 databases.forEach((db, index) => {
                     let label = db.parentFolder;
@@ -3082,7 +3074,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const wrapper = document.createElement('div');
             wrapper.style.cssText = 'display:flex; flex-direction:column; gap:4px;';
             const label = document.createElement('div');
-            label.style.cssText = 'font-size:9px; font-family:var(--font-mono); letter-spacing:1px; color:var(--text-secondary);';
+            label.style.cssText = 'font-size:9px; letter-spacing:1px; color:var(--text-secondary);';
             label.textContent = labelText;
             wrapper.appendChild(label);
             wrapper.appendChild(control);
@@ -3116,7 +3108,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 labelRow.style.cssText = 'display:flex; align-items:center; gap:8px;';
 
                 const label = document.createElement('div');
-                label.style.cssText = 'font-size:10px; font-family:var(--font-mono); letter-spacing:1px; color:var(--text-primary); flex:1;';
+                label.style.cssText = 'font-size:10px; letter-spacing:1px; color:var(--text-primary); flex:1;';
                 label.textContent = column.label || column.columnId;
 
                 const status = document.createElement('div');
@@ -4126,26 +4118,26 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     </div>
                 </div>
                 <div style="display:flex; gap:8px; margin-bottom:8px;">
-                    <input type="text" data-field="name" placeholder="Mapping name" value="${mapping.name || ''}" style="flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px;">
+                    <input type="text" data-field="name" placeholder="Mapping name" value="${mapping.name || ''}" style="flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-size:11px;">
                     <button data-action="remove" class="secondary-btn" style="padding:6px 12px; font-size:10px;">Remove</button>
                 </div>
                 <div style="margin-bottom:8px;">
                     <label style="display:block; font-size:10px; color:var(--text-secondary); margin-bottom:4px;">Parent Folder: <span style="font-weight:normal;">The folder that owns the .switchboard/ directory. Database will be created here (Create mode) or this is where .switchboard/ lives (Connect mode).</span></label>
                     <div style="display:flex; gap:4px;">
-                        <input type="text" data-field="parentFolder" placeholder="e.g. /Users/patrickvuleta/Documents/Gitlab" value="${mapping.parentFolder || ''}" style="flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px;">
+                        <input type="text" data-field="parentFolder" placeholder="e.g. /Users/patrickvuleta/Documents/Gitlab" value="${mapping.parentFolder || ''}" style="flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-size:11px;">
                         <button data-action="browseParentFolder" class="secondary-btn" style="padding:6px 12px; font-size:10px;">Browse</button>
                     </div>
                 </div>
                 <div class="connect-mode-fields" style="${mode === 'create' ? 'display:none;' : ''} margin-bottom:8px;">
                     <label style="display:block; font-size:10px; color:var(--text-secondary); margin-bottom:4px;">Database Path: <span style="font-weight:normal;">Select an existing kanban.db file to share across workspaces.</span></label>
                     <div style="display:flex; gap:4px;">
-                        <input type="text" data-field="dbPath" placeholder="Database path" value="${mapping.dbPath || ''}" style="flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px;">
+                        <input type="text" data-field="dbPath" placeholder="Database path" value="${mapping.dbPath || ''}" style="flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-size:11px;">
                         <button data-action="browseDbPath" class="secondary-btn" style="padding:6px 12px; font-size:10px;">Browse</button>
                     </div>
                 </div>
                 <div class="create-mode-fields" style="${mode === 'connect' ? 'display:none;' : ''} margin-bottom:8px;">
                     <label style="display:block; font-size:10px; color:var(--text-secondary); margin-bottom:4px;">Derived Database Path:</label>
-                    <div data-field="derivedDbPath" style="flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-secondary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; margin-bottom:8px;">
+                    <div data-field="derivedDbPath" style="flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-secondary); padding:6px 8px; font-size:11px; margin-bottom:8px;">
                         ${mapping.parentFolder ? mapping.parentFolder + '/.switchboard/kanban.db' : 'Auto-computed from parent folder'}
                     </div>
                     <button data-action="initDb" class="secondary-btn" style="padding:6px 12px; font-size:10px;">Initialize Database</button>
@@ -4157,7 +4149,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </div>
                 <div style="margin-bottom:8px;">
                     <label style="display:block; font-size:10px; color:var(--text-secondary); margin-bottom:4px;">Child Workspace Folders: <span style="font-weight:normal;">Additional workspace folders that should use this same database (one per line).</span></label>
-                    <textarea data-field="workspaceFolders" placeholder="Child folders that share this database (one per line)" style="width:100%; min-height:60px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; resize:vertical;">${(mapping.workspaceFolders || []).join('\n')}</textarea>
+                    <textarea data-field="workspaceFolders" placeholder="Child folders that share this database (one per line)" style="width:100%; min-height:60px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-size:11px; resize:vertical;">${(mapping.workspaceFolders || []).join('\n')}</textarea>
                     <button data-action="browseFolders" class="secondary-btn" style="margin-top:4px; padding:4px 12px; font-size:10px;">Add Folder</button>
                 </div>
                 <input type="hidden" data-field="id" value="${mapping.id || ''}">

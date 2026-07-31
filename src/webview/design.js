@@ -4335,7 +4335,6 @@
             pathSpan.className = 'folder-path';
             pathSpan.textContent = path;
             pathSpan.title = path;
-            pathSpan.style.fontFamily = 'var(--font-mono)';
             pathSpan.style.fontSize = '11px';
 
             const removeBtn = document.createElement('button');
@@ -5110,7 +5109,6 @@
             const idLabel = document.createElement('span');
             idLabel.style.fontSize = '10px';
             idLabel.style.color = 'var(--text-secondary)';
-            idLabel.style.fontFamily = 'var(--font-mono)';
             idLabel.textContent = ds.id;
 
             headerRow.appendChild(title);

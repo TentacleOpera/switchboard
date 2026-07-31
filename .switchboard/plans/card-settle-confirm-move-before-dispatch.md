@@ -354,3 +354,7 @@ All other uncertainties raised during the improve pass were code-answerable and 
 ## Agent Recommendation
 
 **Complexity 7 → Send to Lead Coder.**
+
+## Completion Summary
+
+Implemented card settle latency optimization by confirming column moves before agent dispatch rather than after. Updated `KanbanProvider.ts` (`triggerAction`, `triggerBatchAction`, and `promptOnDrop`) to persist column moves and post targeted `moveCards` / `moveCardsFailed` deltas immediately. In `kanban.html`, added a `recentlyDropped` map animation fence to carry `.card-dropped` across full re-renders, and removed the obsolete 350ms `setTimeout` delays on drag dispatch paths. No issues encountered during implementation.

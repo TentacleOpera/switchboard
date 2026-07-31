@@ -231,3 +231,8 @@ Follow the existing `kanban-database-*.test.js` convention: plain `node` script,
 ## Recommendation
 
 Complexity 5 → **Send to Coder.**
+
+## Completion Report
+
+Implemented format-agnostic timestamp parsing, per-reason rate-limiting (30-minute throttle for `pre-migration`, unthrottled for `bulk-change`), per-reason content deduplicating, and per-reason retention pruning (cap of 2 backups per reason) in `writeDbBackup` and extracted `_pruneDbBackups` in `KanbanDatabase.ts`. Added unit test suite `src/test/kanban-db-backup-retention.test.js` and npm test script `test:contract:db-backup-retention` in `package.json`. No issues encountered during implementation.
+

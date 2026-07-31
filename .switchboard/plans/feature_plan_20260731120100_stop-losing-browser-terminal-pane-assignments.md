@@ -382,3 +382,8 @@ Plus the toast element next to the existing fallback banner (near `src/webview/t
 **Regression**
 20. Confirm the `#layout-fallback-banner` still appears/hides on the floor transitions and that the new toast does not overlap or suppress it.
 21. Confirm no console errors across all of the above, and no leaked WebSockets after closing every terminal.
+
+## Completion Report
+
+Prevented layout downshifts from truncating stored pane assignments, updated eviction logic to prefer free rendered slots with transient toast and single-level undo, added distinct `⊟` unassign buttons, and rendered `P<n>` chips on sidebar items and pane headers. Files changed: `src/webview/terminals.js` and `src/webview/terminals.html`. No issues encountered during implementation.
+

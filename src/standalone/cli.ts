@@ -6,6 +6,16 @@ import { startHeadlessSwitchboard } from './bootstrap';
 
 function usage(): string {
     return `Usage: npx switchboard [options]
+       npx switchboard secrets set <clickup|linear|notion|stitch|apiToken|key> <value>
+       npx switchboard secrets list
+       npx switchboard secrets delete <clickup|linear|notion|stitch|apiToken|key>
+
+Aliases for secrets commands:
+  clickup   -> switchboard.clickup.apiToken
+  linear    -> switchboard.linear.apiToken
+  notion    -> switchboard.notion.apiToken
+  stitch    -> switchboard.stitch.apiKey
+  apiToken  -> switchboard.apiToken
 
 Options:
   --workspace <path>   Workspace root to serve (default: cwd)
@@ -13,6 +23,18 @@ Options:
   --no-open            Do not open a browser
   --help               Show this help
 `;
+}
+
+const SECRET_ALIASES: Record<string, string> = {
+    clickup: 'switchboard.clickup.apiToken',
+    linear: 'switchboard.linear.apiToken',
+    notion: 'switchboard.notion.apiToken',
+    stitch: 'switchboard.stitch.apiKey',
+    apiToken: 'switchboard.apiToken',
+};
+
+function resolveSecretKey(inputKey: string): string {
+    return SECRET_ALIASES[inputKey] || inputKey;
 }
 
 function parseArgs(argv: string[]): { workspace?: string; port?: number; noOpen: boolean; help: boolean } {
@@ -97,18 +119,45 @@ async function main() {
 
     if (process.argv[2] === 'secrets') {
         const sub = process.argv[3];
+        const { createStandaloneHostSecrets } = require('./hostServices');
+        const secrets = createStandaloneHostSecrets(workspaceRoot);
+
         if (sub === 'set') {
-            const secretKey = process.argv[4];
+            const rawKey = process.argv[4];
             const secretValue = process.argv[5];
-            if (!secretKey || !secretValue) {
-                console.error('Usage: npx switchboard secrets set <clickup|linear|notion|apiToken> <value>');
+            if (!rawKey || !secretValue) {
+                console.error('Usage: npx switchboard secrets set <clickup|linear|notion|stitch|apiToken|key> <value>');
                 process.exit(1);
             }
-            const { StandaloneHostSecrets } = require('./hostServices');
-            const secrets = new StandaloneHostSecrets(workspaceRoot);
+            const secretKey = resolveSecretKey(rawKey);
             await secrets.store(secretKey, secretValue);
             console.log(`[switchboard] Secret '${secretKey}' saved securely to standalone store.`);
             process.exit(0);
+        } else if (sub === 'list') {
+            const keys = await secrets.keys();
+            if (keys.length === 0) {
+                console.log('[switchboard] No secrets stored in standalone store.');
+            } else {
+                console.log('[switchboard] Stored secrets (keys only):');
+                for (const k of keys) {
+                    console.log(`  - ${k}`);
+                }
+            }
+            process.exit(0);
+        } else if (sub === 'delete' || sub === 'rm') {
+            const rawKey = process.argv[4];
+            if (!rawKey) {
+                console.error('Usage: npx switchboard secrets delete <clickup|linear|notion|stitch|apiToken|key>');
+                process.exit(1);
+            }
+            const secretKey = resolveSecretKey(rawKey);
+            await secrets.delete(secretKey);
+            console.log(`[switchboard] Secret '${secretKey}' deleted from standalone store.`);
+            process.exit(0);
+        } else {
+            console.error(`Unknown secrets subcommand '${sub}'.`);
+            console.error(usage());
+            process.exit(1);
         }
     }
 

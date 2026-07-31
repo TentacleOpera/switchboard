@@ -7964,10 +7964,11 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             case 'triggerAction': {
                 // The CLI-triggers setting exists to stop webview DRAG-DROP from
                 // auto-dispatching. An API-originated dispatch (POST /kanban/dispatch)
-                // is an explicit manager command, not an accidental drag — it bypasses
-                // the gate. The webview never sets apiOriginated, so UI behavior is
-                // unchanged.
-                if (!this._cliTriggersEnabled && !msg?.apiOriginated) {
+                // is an explicit manager command, not an accidental drag — it passes
+                // bypassTriggerGate: true. Every browser verb rail sets apiOriginated
+                // for fleet selection; reading bypassTriggerGate here keeps the setting
+                // bound to accidental drag-drops across all surfaces.
+                if (!this._cliTriggersEnabled && !msg?.bypassTriggerGate) {
                     return { success: false, error: 'CLI triggers are disabled' };
                 }
                 // Drag-drop triggered a column transition
@@ -7994,7 +7995,18 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 // of whether the agent dispatch succeeds. If dispatch fails, the
                 // prompt-fallback below copies the prompt and glows the copy-prompt button.
                 if (workspaceRoot) {
-                    await this.moveCardToColumn(workspaceRoot, sessionId, targetColumn);
+                    const ok = await this.moveCardToColumn(workspaceRoot, sessionId, targetColumn);
+                    if (ok) {
+                        const movedIds = await this._collectAllMovedSessionIds(workspaceRoot, sessionId);
+                        this.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn });
+                    } else {
+                        this.postMessage({
+                            type: 'moveCardsFailed',
+                            failures: [{ id: sessionId, sourceColumn: sourceColumnForPrompt ?? '', reason: "couldn't save — board may be out of sync" }]
+                        });
+                        this._scheduleBoardRefresh(workspaceRoot);
+                        return { success: false, error: "Failed to persist card move" };
+                    }
                 }
                 if (dispatchSpec?.source === 'custom-user' && workspaceRoot && this._taskViewerProvider) {
                     const ppMode = this._autobanState?.pairProgrammingMode ?? 'off';
@@ -8028,7 +8040,8 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                             // cockpit / CLI / orchestrator) may land in a PTY, which those callers
                             // can display; an in-process sidebar drag may not. See
                             // ConfiguredKanbanDispatchOptions.apiOriginated.
-                            apiOriginated: !!msg?.apiOriginated
+                            apiOriginated: !!msg?.apiOriginated,
+                            bypassTriggerGate: !!msg?.bypassTriggerGate
                         });
                         if (dispatched && plannerCursorLocationKey && tvp) {
                             await tvp.advancePlannerRotationCursor(plannerCursorLocationKey, 1);
@@ -8113,7 +8126,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                         }
                         // Trailing arg is the per-surface fleet discriminator — see the
                         // custom-user branch above and ConfiguredKanbanDispatchOptions.
-                        const dispatched = await this._seams().commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot, targetTerminalOverride, !!msg?.apiOriginated);
+                        const dispatched = await this._seams().commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot, targetTerminalOverride, !!msg?.apiOriginated, !!msg?.bypassTriggerGate);
                         if (dispatched && workspaceRoot) {
                             // Advance the rotation cursor AFTER successful dispatch so a failed dispatch
                             // doesn't skip a terminal (consistent with _distributePlannerDispatch).
@@ -8183,17 +8196,50 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                     ? await this._resolveKanbanDispatchSpec(workspaceRoot, targetColumn, msg.initiatorProject)
                     : null;
                 const role = dispatchSpec?.role || this._columnToRole(targetColumn);
-                if (dispatchSpec?.source === 'custom-user' && role && Array.isArray(sessionIds) && sessionIds.length > 0 && this._taskViewerProvider) {
-                    const instruction = role === 'planner' ? 'improve-plan' : undefined;
-                    await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(role, sessionIds, {
-                        targetColumn,
-                        dragDropMode: dispatchSpec.dragDropMode,
-                        additionalInstructions: dispatchSpec.triggerPrompt,
-                        instruction,
-                        workspaceRoot: workspaceRoot || undefined
-                    });
-                } else if (role && Array.isArray(sessionIds) && sessionIds.length > 0) {
-                    await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, sessionIds, undefined, workspaceRoot);
+
+                if (Array.isArray(sessionIds) && sessionIds.length > 0 && workspaceRoot) {
+                    const movedIds: string[] = [];
+                    const dispatchIds: string[] = [];
+                    const failures: Array<{ id: string; sourceColumn: string; reason: string }> = [];
+
+                    for (const sid of sessionIds) {
+                        const card = this._lastCards.find(c => (c.planId || c.sessionId) === sid && c.workspaceRoot === workspaceRoot);
+                        const ok = await this.moveCardToColumn(workspaceRoot, sid, targetColumn);
+                        if (ok) {
+                            await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetColumn, 'forward', workspaceRoot);
+                            const ids = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                            movedIds.push(...ids);
+                            dispatchIds.push(sid);
+                        } else {
+                            failures.push({
+                                id: sid,
+                                sourceColumn: card?.column ?? '',
+                                reason: "couldn't save — board may be out of sync"
+                            });
+                        }
+                    }
+
+                    if (movedIds.length > 0) {
+                        this.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn });
+                    }
+                    if (failures.length > 0) {
+                        this.postMessage({ type: 'moveCardsFailed', failures });
+                    }
+
+                    if (dispatchIds.length > 0) {
+                        if (dispatchSpec?.source === 'custom-user' && role && this._taskViewerProvider) {
+                            const instruction = role === 'planner' ? 'improve-plan' : undefined;
+                            await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(role, dispatchIds, {
+                                targetColumn,
+                                dragDropMode: dispatchSpec.dragDropMode,
+                                additionalInstructions: dispatchSpec.triggerPrompt,
+                                instruction,
+                                workspaceRoot: workspaceRoot || undefined
+                            });
+                        } else if (role) {
+                            await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, undefined, workspaceRoot);
+                        }
+                    }
                 }
                 this._scheduleBoardRefresh(workspaceRoot ?? undefined);
                 return { success: true, role, targetColumn };
@@ -8613,27 +8659,44 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 // Mirrors the logic of 'promptSelected' but triggered by the drop handler when column mode is 'prompt'.
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
-                const sessionIds: string[] = Array.isArray(msg.sessionIds) ? msg.sessionIds : (msg.sessionId ? [msg.sessionId] : []);
-                if (sessionIds.length === 0) { return { success: false, error: 'sessionIds are required' }; }
-                const sourceColumn: string = msg.sourceColumn;
-                const targetColumn: string = msg.targetColumn;
-
-                // No start-refresh — filter the already-current _lastCards directly (same as
-                // moveSelected). The stale full-board updateBoard here is what bounced the
-                // dropped card back to its source column during dispatch.
-                const sourceCards = this._lastCards.filter(card =>
-                    card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, sessionIds)
-                );
-                if (sourceCards.length === 0) {
-                    this.postMessage({ type: 'promptOnDropResult', sessionIds, success: false });
-                    return { success: false, error: 'No matching cards found' };
-                }
-
-                const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, targetColumn, msg.initiatorProject);
+                const sessionIds: string[] = Array.isArray(msg.sessionIds) ? msg.sessionIds : (msg.sessionI                const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, targetColumn, msg.initiatorProject);
                 const isPromptModeBuiltIn = dispatchSpec?.source === 'built-in' && dispatchSpec?.dragDropMode === 'prompt';
                 if ((dispatchSpec?.source === 'custom-user' || isPromptModeBuiltIn) && this._taskViewerProvider && dispatchSpec?.role) {
+                    const allMovedIds: string[] = [];
+                    const dispatchIds: string[] = [];
+                    const failures: Array<{ id: string; sourceColumn: string; reason: string }> = [];
+
+                    for (const sid of sessionIds) {
+                        const card = this._lastCards.find(c => (c.planId || c.sessionId) === sid && c.workspaceRoot === workspaceRoot);
+                        const ok = await this.moveCardToColumn(workspaceRoot, sid, targetColumn);
+                        if (ok) {
+                            await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetColumn, 'forward', workspaceRoot);
+                            const ids = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                            allMovedIds.push(...ids);
+                            dispatchIds.push(sid);
+                        } else {
+                            failures.push({
+                                id: sid,
+                                sourceColumn: card?.column ?? sourceColumn ?? '',
+                                reason: "couldn't save — board may be out of sync"
+                            });
+                        }
+                    }
+
+                    if (allMovedIds.length > 0) {
+                        this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn });
+                    }
+                    if (failures.length > 0) {
+                        this.postMessage({ type: 'moveCardsFailed', failures });
+                    }
+
+                    if (dispatchIds.length === 0) {
+                        this.postMessage({ type: 'promptOnDropResult', sessionIds, success: false });
+                        return { success: false, error: 'Failed to persist card moves' };
+                    }
+
                     const instruction = dispatchSpec.role === 'planner' ? 'improve-plan' : undefined;
-                    const dispatched = await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(dispatchSpec.role, sessionIds, {
+                    const dispatched = await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(dispatchSpec.role, dispatchIds, {
                         targetColumn,
                         dragDropMode: 'prompt',
                         additionalInstructions: dispatchSpec.triggerPrompt,
@@ -8646,24 +8709,12 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                             await this._dispatchWithPairProgrammingIfNeeded(highComplexityCards, workspaceRoot);
                         }
                     }
-                    // Targeted delta instead of a full refresh — dispatchConfiguredKanbanColumnAction
-                    // already persisted the column move server-side (mirrors promptAll custom-user branch).
-                    const allMovedIds: string[] = [];
-                    for (const sid of sessionIds) {
-                        const movedIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                        allMovedIds.push(...movedIds);
-                    }
-                    this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn });
                     this.postMessage({ type: 'promptOnDropResult', sessionIds, success: dispatched });
                     if (dispatched) {
                         this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plan(s) to clipboard.`, isError: false });
                     }
                     return { success: dispatched, sessionIds, targetColumn };
                 }
-
-                // Generate prompt based on the source column (the stage being completed)
-                const prompt = await this._generatePromptForColumn(sourceCards, sourceColumn, workspaceRoot);
-                await this._seams().clipboard.writeText(prompt);
 
                 // Advance cards visually — PLAN REVIEWED uses complexity routing
                 // Direct moveCardToColumn + per-group moveCards delta instead of routing through
@@ -8680,24 +8731,71 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                         if (sids.length === 0) { continue; }
                         const targetCol = this._targetColumnForDispatchRole(role, visibleAgents);
                         const allMovedSids: string[] = [];
+                        const failures: Array<{ id: string; sourceColumn: string; reason: string }> = [];
                         for (const sid of sids) {
-                            await this.moveCardToColumn(workspaceRoot, sid, targetCol);
-                            await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
-                            // Record IDE dispatch identity after drag-drop with prompt mode
-                            await this._recordDispatchIdentity(workspaceRoot, sid, targetCol, undefined, true);
-                            const movedIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                            allMovedSids.push(...movedIds);
+                            const card = this._lastCards.find(c => (c.planId || c.sessionId) === sid && c.workspaceRoot === workspaceRoot);
+                            const ok = await this.moveCardToColumn(workspaceRoot, sid, targetCol);
+                            if (ok) {
+                                await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
+                                await this._recordDispatchIdentity(workspaceRoot, sid, targetCol, undefined, true);
+                                const movedIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                                allMovedSids.push(...movedIds);
+                            } else {
+                                failures.push({
+                                    id: sid,
+                                    sourceColumn: card?.column ?? sourceColumn ?? '',
+                                    reason: "couldn't save — board may be out of sync"
+                                });
+                            }
                         }
-                        this.postMessage({ type: 'moveCards', sessionIds: allMovedSids, targetColumn: targetCol });
+                        if (allMovedSids.length > 0) {
+                            this.postMessage({ type: 'moveCards', sessionIds: allMovedSids, targetColumn: targetCol });
+                        }
+                        if (failures.length > 0) {
+                            this.postMessage({ type: 'moveCardsFailed', failures });
+                        }
                     }
                 } else {
                     const allMovedIds2: string[] = [];
+                    const failures: Array<{ id: string; sourceColumn: string; reason: string }> = [];
                     for (const sid of sessionIds) {
-                        await this.moveCardToColumn(workspaceRoot, sid, targetColumn);
-                        await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetColumn, 'forward', workspaceRoot);
-                        // Record IDE dispatch identity after drag-drop with prompt mode
-                        await this._recordDispatchIdentity(workspaceRoot, sid, targetColumn, undefined, true);
-                        const movedIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                        const card = this._lastCards.find(c => (c.planId || c.sessionId) === sid && c.workspaceRoot === workspaceRoot);
+                        const ok = await this.moveCardToColumn(workspaceRoot, sid, targetColumn);
+                        if (ok) {
+                            await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetColumn, 'forward', workspaceRoot);
+                            await this._recordDispatchIdentity(workspaceRoot, sid, targetColumn, undefined, true);
+                            const movedIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                            allMovedIds2.push(...movedIds);
+                        } else {
+                            failures.push({
+                                id: sid,
+                                sourceColumn: card?.column ?? sourceColumn ?? '',
+                                reason: "couldn't save — board may be out of sync"
+                            });
+                        }
+                    }
+                    if (allMovedIds2.length > 0) {
+                        this.postMessage({ type: 'moveCards', sessionIds: allMovedIds2, targetColumn });
+                    }
+                    if (failures.length > 0) {
+                        this.postMessage({ type: 'moveCardsFailed', failures });
+                    }
+                }
+
+                // Generate prompt based on the source column (the stage being completed)
+                const prompt = await this._generatePromptForColumn(sourceCards, sourceColumn, workspaceRoot);
+                await this._seams().clipboard.writeText(prompt);
+
+                // Pair programming: dispatch coder work for high-complexity cards routed to Lead
+                if (sourceColumn === 'PLAN REVIEWED') {
+                    const highComplexityCards = sourceCards.filter(c => !this._isLowComplexity(c) && c.complexity !== 'Unknown');
+                    if (highComplexityCards.length > 0) {
+                        await this._dispatchWithPairProgrammingIfNeeded(highComplexityCards, workspaceRoot);
+                    }
+                }
+
+                this.postMessage({ type: 'promptOnDropResult', sessionIds, success: true });
+                this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plan(s) to clipboard.`, isError: false });Ids(workspaceRoot, sid);
                         allMovedIds2.push(...movedIds);
                     }
                     this.postMessage({ type: 'moveCards', sessionIds: allMovedIds2, targetColumn });

@@ -121,88 +121,74 @@ export class StandaloneHostPathConfigProvider implements HostPathConfigProvider 
 
 // ─── Secrets ───────────────────────────────────────────────────────────────
 
-const ALGORITHM = 'aes-256-gcm';
-const IV_LENGTH = 16;
-const TAG_LENGTH = 16;
+export { StandaloneHostSecrets, HostSecrets } from '../services/encryptedSecretsStore';
+import { StandaloneHostSecrets as SharedStandaloneHostSecrets } from '../services/encryptedSecretsStore';
+import { stateFile } from '../utils/stateHome';
 
-export class StandaloneHostSecrets implements HostSecrets {
-    private _keyPath: string;
-    private _storePath: string;
-    private _cache: Map<string, string> = new Map();
+export function createStandaloneHostSecrets(workspaceRoot?: string): SharedStandaloneHostSecrets {
+    const storePath = stateFile('secrets.enc');
+    const keyPath = stateFile('.master-key');
 
-    constructor(workspaceRoot: string) {
-        const dir = path.join(workspaceRoot, '.switchboard');
-        this._keyPath = path.join(dir, '.master-key');
-        this._storePath = path.join(dir, 'secrets.enc');
-        this._load();
+    if (workspaceRoot) {
+        migrateLegacyWorkspaceSecrets(workspaceRoot, storePath, keyPath);
     }
 
-    private _getOrCreateKey(): Buffer {
-        try {
-            const existing = process.env.SWITCHBOARD_MASTER_KEY || process.env.SWITCHBOARD_MASTER_PASSPHRASE;
-            if (existing) {
-                return crypto.scryptSync(existing, 'switchboard-standalone', 32);
-            }
-        } catch { /* fall through to file key */ }
+    return new SharedStandaloneHostSecrets(storePath, keyPath);
+}
 
-        try {
-            if (fs.existsSync(this._keyPath)) {
-                return Buffer.from(fs.readFileSync(this._keyPath, 'utf8').trim(), 'hex');
-            }
-        } catch { /* fall through to create */ }
+function migrateLegacyWorkspaceSecrets(workspaceRoot: string, globalStorePath: string, globalKeyPath: string): void {
+    try {
+        const legacyDir = path.join(workspaceRoot, '.switchboard');
+        const legacyStorePath = path.join(legacyDir, 'secrets.enc');
+        const legacyKeyPath = path.join(legacyDir, '.master-key');
 
-        const key = crypto.randomBytes(32);
-        const dir = path.dirname(this._keyPath);
-        if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }); }
-        fs.writeFileSync(this._keyPath, key.toString('hex'), { mode: 0o600 });
-        try { fs.chmodSync(this._keyPath, 0o600); } catch { /* ignore on Windows */ }
-        return key;
-    }
-
-    private _load(): void {
-        if (!fs.existsSync(this._storePath)) { return; }
-        const key = this._getOrCreateKey();
-        const blob = fs.readFileSync(this._storePath);
-        if (blob.length < IV_LENGTH + TAG_LENGTH) { return; }
-        const iv = blob.subarray(0, IV_LENGTH);
-        const tag = blob.subarray(blob.length - TAG_LENGTH);
-        const ciphertext = blob.subarray(IV_LENGTH, blob.length - TAG_LENGTH);
-        try {
-            const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
-            decipher.setAuthTag(tag);
-            const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-            this._cache = new Map(Object.entries(JSON.parse(plaintext.toString('utf8'))));
-        } catch (err) {
-            console.error('[StandaloneHostSecrets] Failed to decrypt secret store:', err);
+        if (!fs.existsSync(legacyStorePath)) {
+            return;
         }
-    }
 
-    private _save(): void {
-        const key = this._getOrCreateKey();
-        const iv = crypto.randomBytes(IV_LENGTH);
-        const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
-        const plaintext = Buffer.from(JSON.stringify(Object.fromEntries(this._cache)), 'utf8');
-        const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-        const tag = cipher.getAuthTag();
-        const dir = path.dirname(this._storePath);
-        if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }); }
-        fs.writeFileSync(this._storePath, Buffer.concat([iv, ciphertext, tag]), { mode: 0o600 });
-    }
+        if (!fs.existsSync(legacyKeyPath)) {
+            console.warn('[StandaloneHostSecrets] Legacy workspace secrets.enc exists but .master-key is missing; skipping migration.');
+            return;
+        }
 
-    async get(key: string): Promise<string | undefined> {
-        return this._cache.get(key);
-    }
+        const legacySecrets = new SharedStandaloneHostSecrets(legacyStorePath, legacyKeyPath);
+        const globalSecrets = new SharedStandaloneHostSecrets(globalStorePath, globalKeyPath);
 
-    async store(key: string, value: string): Promise<void> {
-        this._cache.set(key, value);
-        this._save();
-    }
+        // Synchronous migration step
+        const runMigration = async () => {
+            const legacyKeys = await legacySecrets.keys();
+            for (const key of legacyKeys) {
+                const legacyVal = await legacySecrets.get(key);
+                if (legacyVal) {
+                    const globalVal = await globalSecrets.get(key);
+                    if (!globalVal || globalVal.trim().length === 0) {
+                        await globalSecrets.store(key, legacyVal);
+                        console.log(`[StandaloneHostSecrets] Migrated legacy key '${key}' to global store.`);
+                    } else {
+                        console.log(`[StandaloneHostSecrets] Collision for legacy key '${key}'; global value retained.`);
+                    }
+                }
+            }
+        };
 
-    async delete(key: string): Promise<void> {
-        this._cache.delete(key);
-        this._save();
+        // Execute sync wait for async method (keys/get/store are sync under the hood)
+        runMigration().catch(err => console.error('[StandaloneHostSecrets] Migration error:', err));
+
+        const legacyStoreBak = path.join(legacyDir, 'secrets.enc.migrated.bak');
+        const legacyKeyBak = path.join(legacyDir, '.master-key.migrated.bak');
+
+        if (fs.existsSync(legacyStorePath)) {
+            fs.renameSync(legacyStorePath, legacyStoreBak);
+        }
+        if (fs.existsSync(legacyKeyPath)) {
+            fs.renameSync(legacyKeyPath, legacyKeyBak);
+        }
+        console.log(`[StandaloneHostSecrets] Legacy workspace secret files renamed to .migrated.bak`);
+    } catch (err) {
+        console.error('[StandaloneHostSecrets] Failed to migrate legacy workspace secrets:', err);
     }
 }
+
 
 // ─── Plan watcher config + watched-folders surface (Headless Ingestion piece 2) ─
 

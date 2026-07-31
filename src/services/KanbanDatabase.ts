@@ -6544,25 +6544,180 @@ export class KanbanDatabase {
         console.log(`[KanbanDatabase] _convertAbsoluteToRelativePaths: converted ${toConvert.length} record(s)`);
     }
 
+    /**
+     * Maximum number of backup files to keep PER REASON.
+     * With 2 reasons ('pre-migration' and 'bulk-change'), worst case footprint is 2 * 2 * ~5 MB = ~20 MB.
+     */
+    private static readonly BACKUP_RETENTION_CAP_PER_REASON = 2;
+
+    /**
+     * Minimum interval (in ms) between DB backups PER REASON.
+     * Unknown reasons default to 0 (no rate-limit throttling).
+     */
+    private static readonly BACKUP_REASON_THROTTLES_MS: Record<string, number> = {
+        'pre-migration': 30 * 60 * 1000, // 30 minutes
+        'bulk-change': 0 // Never throttle bulk changes
+    };
+
+    private static _parseBackupFilename(filename: string): { reasonGroup: string; timestampMs: number } {
+        const prefix = 'kanban.db.backup.';
+        if (!filename.startsWith(prefix)) {
+            return { reasonGroup: 'unknown', timestampMs: 0 };
+        }
+        const rest = filename.slice(prefix.length);
+
+        // Try anchor to end first: <reason>.<ISO-timestamp>
+        const endMatch = rest.match(/^(.*)\.(\d{4}-\d{2}-\d{2}T[\d-]+Z)$/);
+        if (endMatch) {
+            const reasonGroup = endMatch[1];
+            const isoStr = endMatch[2].replace(/-/g, (m, offset) => (offset > 10 ? ':' : m)).replace(/:([0-9]{3}Z)$/, '.$1');
+            const ts = Date.parse(isoStr);
+            return {
+                reasonGroup,
+                timestampMs: isNaN(ts) ? 0 : ts
+            };
+        }
+
+        // Unanchored fallback match
+        const unanchoredMatch = rest.match(/(\d{4}-\d{2}-\d{2}T[\d-]+Z)/);
+        if (unanchoredMatch) {
+            const tsStr = unanchoredMatch[1];
+            const idx = rest.indexOf(tsStr);
+            const reasonGroup = idx > 1 ? rest.slice(0, idx - 1) : 'unknown';
+            const isoStr = tsStr.replace(/-/g, (m, offset) => (offset > 10 ? ':' : m)).replace(/:([0-9]{3}Z)$/, '.$1');
+            const ts = Date.parse(isoStr);
+            return {
+                reasonGroup,
+                timestampMs: isNaN(ts) ? 0 : ts
+            };
+        }
+
+        return { reasonGroup: rest, timestampMs: 0 };
+    }
+
+    private async _pruneDbBackups(backupDir: string): Promise<void> {
+        const allFiles = (await fs.promises.readdir(backupDir))
+            .filter(f => f.startsWith('kanban.db.backup.'));
+
+        // Group files by parsed reason
+        const grouped = new Map<string, Array<{ filename: string; timestampMs: number }>>();
+
+        for (const filename of allFiles) {
+            const parsed = KanbanDatabase._parseBackupFilename(filename);
+            let tsMs = parsed.timestampMs;
+            if (tsMs === 0) {
+                try {
+                    const stat = await fs.promises.stat(path.join(backupDir, filename));
+                    tsMs = stat.mtimeMs;
+                } catch {
+                    tsMs = 0;
+                }
+            }
+            const list = grouped.get(parsed.reasonGroup) || [];
+            list.push({ filename, timestampMs: tsMs });
+            grouped.set(parsed.reasonGroup, list);
+        }
+
+        const cap = KanbanDatabase.BACKUP_RETENTION_CAP_PER_REASON;
+        for (const [_, files] of grouped.entries()) {
+            // Sort descending by timestamp (newest first)
+            files.sort((a, b) => b.timestampMs - a.timestampMs);
+            const toDelete = files.slice(cap);
+            for (const item of toDelete) {
+                await fs.promises.unlink(path.join(backupDir, item.filename)).catch(() => { /* best effort */ });
+            }
+        }
+    }
+
     public async writeDbBackup(reason: string): Promise<void> {
         if (!this._workspaceRoot || !this._db) return;
         try {
             const backupDir = path.join(this._workspaceRoot, '.switchboard', 'dbbackup');
             await fs.promises.mkdir(backupDir, { recursive: true });
 
-            const ts = new Date().toISOString().replace(/[:.]/g, '-');
             const cleanReason = reason.replace(/[^a-zA-Z0-9_-]/g, '_');
-            const backupPath = path.join(backupDir, `kanban.db.backup.${cleanReason}.${ts}`);
+
+            // (d) Rate-limit check per reason
+            const minIntervalMs = KanbanDatabase.BACKUP_REASON_THROTTLES_MS[reason] ?? 0;
+            if (minIntervalMs > 0) {
+                const existingFiles = (await fs.promises.readdir(backupDir))
+                    .filter(f => f.startsWith('kanban.db.backup.'));
+
+                let newestTsMs = 0;
+                for (const f of existingFiles) {
+                    const parsed = KanbanDatabase._parseBackupFilename(f);
+                    if (parsed.reasonGroup === cleanReason) {
+                        let ts = parsed.timestampMs;
+                        if (ts === 0) {
+                            try {
+                                const stat = await fs.promises.stat(path.join(backupDir, f));
+                                ts = stat.mtimeMs;
+                            } catch {
+                                ts = 0;
+                            }
+                        }
+                        if (ts > newestTsMs) {
+                            newestTsMs = ts;
+                        }
+                    }
+                }
+
+                if (newestTsMs > 0) {
+                    const ageMs = Date.now() - newestTsMs;
+                    if (ageMs >= 0 && ageMs < minIntervalMs) {
+                        console.log(`[KanbanDatabase] Skipping DB backup (${reason}): throttled (${Math.round(ageMs / 1000)}s < ${minIntervalMs / 1000}s)`);
+                        return;
+                    }
+                }
+            }
+
             const data = this._db.export();
+
+            // (c) Content-dedupe check per reason
+            const existingFilesForReason = (await fs.promises.readdir(backupDir))
+                .filter(f => f.startsWith('kanban.db.backup.'));
+
+            let newestFileForReason: { filename: string; timestampMs: number } | null = null;
+            for (const f of existingFilesForReason) {
+                const parsed = KanbanDatabase._parseBackupFilename(f);
+                if (parsed.reasonGroup === cleanReason) {
+                    let ts = parsed.timestampMs;
+                    if (ts === 0) {
+                        try {
+                            const stat = await fs.promises.stat(path.join(backupDir, f));
+                            ts = stat.mtimeMs;
+                        } catch {
+                            ts = 0;
+                        }
+                    }
+                    if (!newestFileForReason || ts > newestFileForReason.timestampMs) {
+                        newestFileForReason = { filename: f, timestampMs: ts };
+                    }
+                }
+            }
+
+            if (newestFileForReason) {
+                const newestPath = path.join(backupDir, newestFileForReason.filename);
+                try {
+                    const stat = await fs.promises.stat(newestPath);
+                    if (stat.size === data.length) {
+                        const existingBuf = await fs.promises.readFile(newestPath);
+                        const newBuf = Buffer.from(data);
+                        if (existingBuf.equals(newBuf)) {
+                            console.log(`[KanbanDatabase] Skipping DB backup (${reason}): byte-identical to newest snapshot for reason`);
+                            return;
+                        }
+                    }
+                } catch {
+                    /* if stat/read fails, fail toward writing backup */
+                }
+            }
+
+            const ts = new Date().toISOString().replace(/[:.]/g, '-');
+            const backupPath = path.join(backupDir, `kanban.db.backup.${cleanReason}.${ts}`);
             await fs.promises.writeFile(backupPath, Buffer.from(data));
 
-            // Keep only the 5 most recent backups
-            const files = (await fs.promises.readdir(backupDir))
-                .filter(f => f.startsWith('kanban.db.backup.'))
-                .sort();
-            for (const old of files.slice(0, Math.max(0, files.length - 5))) {
-                await fs.promises.unlink(path.join(backupDir, old)).catch(() => { /* best effort */ });
-            }
+            await this._pruneDbBackups(backupDir);
         } catch (e) {
             console.error(`[KanbanDatabase] Failed to write DB backup (${reason}):`, e);
         }
