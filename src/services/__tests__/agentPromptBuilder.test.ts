@@ -340,7 +340,8 @@ suite('agentPromptBuilder', () => {
 
         test('feature-mode overrides custom plannerWorkflowPath', () => {
             const prompt = buildKanbanBatchPrompt('planner', makeFeaturePlans(), { featureMode: true, plannerWorkflowPath: '.custom/workflows/my-planner.md' });
-            assert.ok(prompt.includes('improve-feature.md'), 'Should use improve-feature.md');
+            // Path is the skill, not the retired flat improve-feature.md (four-front-doors refactor).
+            assert.ok(prompt.includes('.agents/skills/improve-feature/SKILL.md'), 'Should use improve-feature SKILL.md');
             assert.ok(!prompt.includes('.custom/workflows/my-planner.md'), 'Should override custom plannerWorkflowPath');
         });
 
@@ -415,8 +416,9 @@ suite('agentPromptBuilder', () => {
 
         test('custom agent feature prompt emits neutral ordering line and respects policy matrix', () => {
             const plans = makeFeaturePlans();
+            // isFeature is derived from the plans (makeFeaturePlans()[0].isFeature === true),
+            // NOT from addons — CustomAgentAddons has no isFeature key.
             const customPrompt = buildCustomAgentPrompt(plans, 'custom-agent', {
-                isFeature: true,
                 featureSubagentPolicy: 'default',
                 useWorktreesPerPlan: false
             });

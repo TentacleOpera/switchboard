@@ -21,6 +21,12 @@ The browser shell is a 48px icon strip plus iframes (`shell.html:188-191`) — n
 - **Complexity:** 2
 - **Tags:** frontend, backend, ui, feature
 
+## User Review Required
+
+- **No confirmation gate.** Both clear buttons fire on click — `/clear` is sent immediately, no dialog. This matches `CLAUDE.md` and the existing Agents-tab clear, but it is irreversible for the agent's in-context history.
+- **Button placement.** Per-terminal `⌫` appears twice (sidebar item and pane header); Clear All lands in the layout toolbar next to the OS-notifications toggle.
+- **Silent success on exited terminals.** Clicking clear on a dead (red-dot) terminal returns success without writing anything — no toast, no error. Chosen for parity with `closeTerminal`'s tolerance; flag if you want visible feedback instead.
+
 ## Complexity Audit
 
 ### Routine
@@ -42,21 +48,38 @@ The browser shell is a 48px icon strip plus iframes (`shell.html:188-191`) — n
 - **Icon idiom.** `terminals.html` / `terminals.js` are not part of the in-flight symbol-glyph→masked-SVG migration (`docs/symbol-icon-migration-sites.md` covers only `design.*` / `planning.*`). Text glyphs match the neighbours (`✎`, `×`, `⊟`).
 - **Declaration order in `bootstrap.ts`.** `handlePtyVerb` is defined at line 982; that's fine for anything it closes over that is declared later, since the call happens after initialisation.
 - **Out of scope (noted, not fixed).** `switchboard.clearAllTerminals` iterates `registeredTerminals` (`vscode.Terminal` objects) only, so it does not reach PTY fleet terminals even under the extension host (`extension.ts:2726-2732`). Separate surface, separate gap; this plan does not touch `extension.ts`.
+- **Write-after-exit race.** A terminal can die between the `status === 'active'` check (or `listActive()` snapshot) and the actual `handle.write`. node-pty's write-after-exit behavior is not something to rely on — the shared `clearPty` helper swallows write errors so a mid-flight exit can never turn a clear click into a 502.
+
+## Dependencies
+
+None. Self-contained change; no external sessions or other plans required.
+
+## Adversarial Synthesis
+
+Key risks: a PTY dying between the active-check and the write turns Clear All into a 502 (fixed by making `clearPty` error-tolerant and collecting per-terminal failures instead of `Promise.all` reject-all), and a verb arm landed in only one of the two `handlePtyVerb` hosts silently no-ops under VS Code (pinned by the both-hosts manual verification step). The remaining design decision — writing `/clear` rather than touching xterm — is the only option that actually resets agent context; a client-side `term.clear()` would clear pixels while leaving the agent's context intact, passing a visual check while failing the real goal.
 
 ## Proposed Changes
 
 ### 1. `src/standalone/ptyPromptDelivery.ts` — the write, on its own
+
+> **Superseded:** `clearPty` as a bare `withTerminalLock(handle.name, () => { handle.write('/clear\r'); })` with no error handling.
+> **Reason:** A terminal can exit between the caller's `status === 'active'` check (or the `listActive()` snapshot) and the write. An unchecked throw escapes the lock, rejects the verb, and surfaces as a 502 — worst of all inside Clear All, where one dead pty fails the whole batch. Making the shared helper tolerant fixes both arms at the single choke point.
+> **Replaced with:** the same helper wrapped in try/catch that swallows write failures (dead pty = nothing to clear = success):
 
 ```ts
 /**
  * Send the agent-CLI context reset to a PTY — the same bytes sendPromptToPty
  * writes for clearBeforePrompt, lifted out so a UI button can reach them without
  * dispatching a prompt. Stays in this module to reuse withTerminalLock: a clear
- * issued outside it can splice into an in-flight chunked paste.
+ * issued outside it can splice into an in-flight chunked paste. Write errors are
+ * swallowed: a PTY that died between the active-check and the write has no
+ * context left to reset, so the clear has effectively succeeded.
  */
 export async function clearPty(handle: ExtendedTerminalHandle): Promise<void> {
     return withTerminalLock(handle.name, async () => {
-        handle.write('/clear\r');
+        try {
+            handle.write('/clear\r');
+        } catch { /* PTY died between check and write — nothing to clear */ }
     });
 }
 ```
@@ -79,6 +102,8 @@ case 'ptyClearAllTerminals': {
     return { success: true, cleared: active.length };
 }
 ```
+
+Note: with `clearPty` itself error-tolerant (change 1), `Promise.all` here can no longer reject on a dead pty — no `allSettled` needed. The tolerance lives in the helper, not the arms, so both hosts inherit it by import.
 
 ### 3. `src/services/TaskViewerProvider.ts` — the same two arms, after line 1750
 
@@ -194,11 +219,18 @@ Every assertion in the file is driven off this array, so the new verbs are autom
 
 ## Verification Plan
 
-1. `npm run compile-tests`, then `node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-route-surface-contract.test.js` — with the extended `PTY_VERBS`, this proves both verbs route correctly, stay off the kanban rail, stay out of the generated surface, and are posted from `terminals.js` to `/terminals/verb/`.
+> **Superseded:** Step 1 — `npm run compile-tests`, then `node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-route-surface-contract.test.js` to prove both verbs route correctly, stay off the kanban rail, stay out of the generated surface, and are posted from `terminals.js` to `/terminals/verb/`.
+> **Reason:** Session directive: no project compilation and no automated tests in this verification plan. The contract-test edit (change 6) still ships — it is required so the suite passes next time anyone runs it — it is simply not executed here.
+> **Replaced with:** Step 1 — eyeball-check the extended `PTY_VERBS` array in `pty-route-surface-contract.test.js` and confirm by code inspection that both new verbs are posted only to `/terminals/verb/` from `terminals.js` and appear in both `handlePtyVerb` switches. Run the full contract test in a later session where compilation/tests are permitted.
+
+1. **Static check** — confirm `PTY_VERBS` lists the six verbs, both `handlePtyVerb` switches (bootstrap + TaskViewerProvider) have both arms, and `terminals.js` posts only to `/terminals/verb/`. (Replaces the contract-test run; see superseded note above.)
 2. `npm run lint`.
 3. **Per-terminal clear** — in the browser panel (`http://127.0.0.1:<port>/terminals`, port from `.switchboard/api-server-port.txt`), spawn two agent terminals and give both some output. Click the sidebar `⌫` on the first: that agent clears, the second is untouched. Repeat with the pane-header `⌫`.
 4. **Clear All** — three terminals up, one not assigned to any pane. All three agents clear; assign the third to a pane afterwards and confirm it shows a cleared session.
 5. **Both hosts** — repeat steps 3 and 4 against the extension host (same URL with the VS Code extension running). This is what a `bootstrap.ts`-only change would pass in the browser and fail here.
 6. **Exited terminal** — exit a shell (red dot), click clear: no error, no 502 in the network tab.
-7. **Clear during dispatch** — dispatch a long prompt from the board and click clear while the paste is still streaming; the prompt arrives intact rather than spliced with `/clear`.
-8. **No confirm gate** — every click acts immediately, no dialog, no second click.
+7. **Exit mid-clear** — start a clear-all, then kill one terminal's process from outside while it runs: the verb still returns success and the other terminals clear (pins the error-tolerant `clearPty`).
+8. **Clear during dispatch** — dispatch a long prompt from the board and click clear while the paste is still streaming; the prompt arrives intact rather than spliced with `/clear`.
+9. **No confirm gate** — every click acts immediately, no dialog, no second click.
+
+**Recommendation: Send to Intern** (complexity 2 — template-driven verb arms and buttons; the only subtleties, both-hosts coverage and the error-tolerant helper, are fully specified above).

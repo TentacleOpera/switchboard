@@ -846,9 +846,10 @@ export function resolveFeatureOrchestrationDirective(
     }
     // Planner role: improve-feature / improve-plan restructure plan files; they do NOT ship
     // product code and never spawn subagents. Bypass buildFeatureSubagentClause (whose
-    // execution-coded verbs — "Handle the subtasks yourself", "Handle all subtasks yourself",
-    // "Use your native subagent…" — would contradict the planner's job and mis-route agents
-    // into writing product code) and emit a fixed planner-coded subtask clause inline. The
+    // execution-coded verbs — "Handle all subtasks yourself", "Use your native subagent…",
+    // "Use a dedicated git worktree for each subtask" — would contradict the planner's job
+    // and mis-route agents into writing product code) and emit a fixed planner-coded
+    // subtask clause inline. The
     // subagent-policy levers (featureUseSubagentsEnabled / featureNoSubagentsEnabled /
     // featureCustomSubagentName) are meaningless for planners and intentionally ignored.
     if (role === 'planner') {
