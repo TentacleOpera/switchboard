@@ -28,7 +28,7 @@ import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService
 import { buildFetchPlansPrompt } from './schedulerPresets';
 import { KanbanMigration } from './KanbanMigration';
 import { reviveWithRetention } from '../utils/reviveWithRetention';
-
+import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
 import { KANBAN_VERBS } from '../generated/verbAllowlist';
@@ -1555,20 +1555,6 @@ export class KanbanProvider implements vscode.Disposable {
             await this.open(undefined, col);
         });
     }
-
-        this._panel.onDidChangeViewState(
-            (e) => {
-                if (e.webviewPanel.visible && this._currentWorkspaceRoot) {
-                    this._refreshBoard(this._currentWorkspaceRoot);
-                }
-            },
-            null,
-            this._disposables
-        );
-
-        this._setupSessionWatcher();
-    }
-
 
     /**
      * Dispose legacy session/state file watchers.
@@ -7311,10 +7297,21 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 // cards even if host-side dedup caches consider the state already pushed.
                 if (this._panel && workspaceRoot) {
                     try {
-                        const scope = this._webviewScopeOrUndefined;
-                        const snapshotMessages = await this.getFullStateMessages(workspaceRoot, scope);
+                        // Editor panel has no per-connection scope (that's a browser-WS
+                        // concept the broadcaster supplies via postMessage's callback
+                        // form). Pass undefined so the scope accessors resolve to the
+                        // editor's OWN in-memory config rather than a scoped lookup.
+                        const snapshotMessages = await this.getFullStateMessages(workspaceRoot, undefined);
                         for (const msg of snapshotMessages) {
-                            this._panel.webview.postMessage(msg);
+                            // pushWebviewOnly, NOT push(): this resync is for the ONE
+                            // webview that just mounted. push() would also mirror the
+                            // whole board snapshot to every connected WS client, which
+                            // neither asked for it nor needs it.
+                            if (this._broadcaster) {
+                                this._broadcaster.pushWebviewOnly(msg);
+                            } else {
+                                this.postMessage(msg);
+                            }
                         }
                     } catch (err) {
                         console.error('[KanbanProvider] ready full-state snapshot pull failed:', err);
