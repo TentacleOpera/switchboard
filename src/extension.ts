@@ -42,6 +42,7 @@ import { MigrationService } from './services/MigrationService';
 import { switchboardCommandRegistry } from './services/commandRegistry';
 import { stateFile } from './utils/stateHome';
 import { GlobalIntegrationConfigService } from './services/GlobalIntegrationConfigService';
+import { StandaloneHostSecrets as EncryptedSecretsStore } from './services/encryptedSecretsStore';
 
 /**
  * Verb Engine · 1 — register a `switchboard.*` command in BOTH the host-agnostic
@@ -651,17 +652,31 @@ export async function activate(context: vscode.ExtensionContext) {
         'switchboard.notion.apiToken',
         'switchboard.stitch.apiKey',
     ]);
-    const { StandaloneHostSecrets } = require('./services/encryptedSecretsStore');
-    const { stateFile } = require('./utils/stateHome');
-    const globalSecrets = new StandaloneHostSecrets(stateFile('secrets.enc'), stateFile('.master-key'));
+    // Constructing the store touches ~/.switchboard (and stateFile() throws in an
+    // unsandboxed test process). The mirror is a convenience for standalone mode —
+    // it must never be able to take activation down with it.
+    let globalSecrets: EncryptedSecretsStore | undefined;
+    try {
+        globalSecrets = new EncryptedSecretsStore(stateFile('secrets.enc'), stateFile('.master-key'));
+    } catch (err) {
+        console.warn('[Switchboard] Machine-global secrets store unavailable; standalone mirror disabled:', err);
+    }
 
-    const syncSecretToGlobalStore = async (key: string) => {
-        if (!MIRRORED_SECRET_KEYS.has(key)) return;
+    /**
+     * `allowDelete` is the whole safety story here. On a real `onDidChange` an
+     * empty read means the user cleared the token, so the mirror propagates the
+     * delete. During the activation backfill an empty read means only "the editor
+     * never held this key" — deleting there would wipe tokens a standalone user
+     * entered via `npx switchboard secrets set` or the browser Setup panel on
+     * every single VS Code launch.
+     */
+    const syncSecretToGlobalStore = async (key: string, allowDelete: boolean) => {
+        if (!globalSecrets || !MIRRORED_SECRET_KEYS.has(key)) { return; }
         try {
             const val = await context.secrets.get(key);
             if (val && val.trim().length > 0) {
                 await globalSecrets.store(key, val);
-            } else {
+            } else if (allowDelete) {
                 await globalSecrets.delete(key);
             }
         } catch (err) {
@@ -669,17 +684,17 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     };
 
-    // 1. Activation backfill sweep
+    // 1. Activation backfill sweep — write-only, never deletes.
     (async () => {
         for (const key of MIRRORED_SECRET_KEYS) {
-            await syncSecretToGlobalStore(key);
+            await syncSecretToGlobalStore(key, false);
         }
     })().catch(err => console.warn('[Switchboard] Secrets activation sweep error:', err));
 
-    // 2. On change listener
+    // 2. On change listener — the only path allowed to propagate deletes.
     context.subscriptions.push(
         context.secrets.onDidChange((e) => {
-            void syncSecretToGlobalStore(e.key);
+            void syncSecretToGlobalStore(e.key, true);
         })
     );
 

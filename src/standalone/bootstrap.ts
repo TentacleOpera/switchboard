@@ -13,7 +13,7 @@ import {
     SKIP_COMPILATION_DIRECTIVE,
     SKIP_TESTS_DIRECTIVE,
 } from '../services/agentPromptBuilder';
-import { StandaloneHostPathConfigProvider, StandaloneHostSecrets, createStandaloneHostSecrets, StandaloneHostState } from './hostServices';
+import { StandaloneHostPathConfigProvider, createStandaloneHostSecrets, StandaloneHostState } from './hostServices';
 import {
     getShellHtml as sharedGetShellHtml,
     getBoardHtml as sharedGetBoardHtml,

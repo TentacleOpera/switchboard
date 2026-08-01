@@ -138,6 +138,15 @@ jobs:
       - name: Kanban DB backup retention contract (per-reason cap, throttle, dedupe)
         run: npm run test:contract:db-backup-retention
 
+      # The machine-global secrets store is the ONLY copy of a standalone user's API
+      # tokens. Three separate paths silently destroyed them and all three read fine
+      # in a diff: an un-awaited migration loop that renamed the legacy store away
+      # before importing from it, an activation sweep that deleted every key the
+      # keychain did not hold, and a decrypt failure that condemned a healthy store
+      # written by a host holding SWITCHBOARD_MASTER_PASSPHRASE. Keep this wired.
+      - name: Standalone secrets bridge contract (migration receipts, mirror direction, no destructive decrypt)
+        run: npm run test:contract:secrets-bridge
+
       - name: Tickets sidebar list scoping contract
         run: npm run test:contract:tickets-sidebar-scoping
 

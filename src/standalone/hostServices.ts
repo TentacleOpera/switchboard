@@ -1,6 +1,5 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import * as crypto from 'crypto';
 import * as os from 'os';
 import type { HostSeams, HostPathConfigProvider, HostSecrets } from '../services/hostSeams';
 
@@ -152,41 +151,52 @@ function migrateLegacyWorkspaceSecrets(workspaceRoot: string, globalStorePath: s
         }
 
         const legacySecrets = new SharedStandaloneHostSecrets(legacyStorePath, legacyKeyPath);
+
+        // The store renames itself away when it cannot be decrypted. If that just
+        // happened there is nothing to import and nothing to prove — leave the key
+        // file where it is instead of orphaning it beside a .corrupt-*.bak.
+        if (!fs.existsSync(legacyStorePath)) {
+            console.warn('[StandaloneHostSecrets] Legacy workspace secrets.enc was unreadable; leaving .master-key in place for manual recovery.');
+            return;
+        }
+
         const globalSecrets = new SharedStandaloneHostSecrets(globalStorePath, globalKeyPath);
 
-        // Synchronous migration step
-        const runMigration = async () => {
-            const legacyKeys = await legacySecrets.keys();
-            for (const key of legacyKeys) {
-                const legacyVal = await legacySecrets.get(key);
-                if (legacyVal) {
-                    const globalVal = await globalSecrets.get(key);
-                    if (!globalVal || globalVal.trim().length === 0) {
-                        await globalSecrets.store(key, legacyVal);
-                        console.log(`[StandaloneHostSecrets] Migrated legacy key '${key}' to global store.`);
-                    } else {
-                        console.log(`[StandaloneHostSecrets] Collision for legacy key '${key}'; global value retained.`);
-                    }
-                }
+        // Fully synchronous, deliberately. The caller hands the returned store
+        // straight to every service, so no read may observe a half-migrated
+        // state — and the renames below happen the moment this loop ends. An
+        // async loop here would suspend at the first `await`, let the renames
+        // run, and then read an already-renamed legacy store: it would import
+        // nothing and silently retire the user's only copy of their tokens.
+        for (const key of legacySecrets.keysSync()) {
+            const legacyVal = legacySecrets.getSync(key);
+            if (!legacyVal) { continue; }
+            const globalVal = globalSecrets.getSync(key);
+            if (!globalVal || globalVal.trim().length === 0) {
+                globalSecrets.storeSync(key, legacyVal);
+                console.log(`[StandaloneHostSecrets] Migrated legacy key '${key}' to global store.`);
+            } else {
+                console.log(`[StandaloneHostSecrets] Collision for legacy key '${key}'; global value retained.`);
             }
-        };
-
-        // Execute sync wait for async method (keys/get/store are sync under the hood)
-        runMigration().catch(err => console.error('[StandaloneHostSecrets] Migration error:', err));
-
-        const legacyStoreBak = path.join(legacyDir, 'secrets.enc.migrated.bak');
-        const legacyKeyBak = path.join(legacyDir, '.master-key.migrated.bak');
-
-        if (fs.existsSync(legacyStorePath)) {
-            fs.renameSync(legacyStorePath, legacyStoreBak);
         }
+
+        // Rename, never unlink — and never clobber a .bak from an earlier migration.
+        fs.renameSync(legacyStorePath, uniqueBackupPath(path.join(legacyDir, 'secrets.enc.migrated.bak')));
         if (fs.existsSync(legacyKeyPath)) {
-            fs.renameSync(legacyKeyPath, legacyKeyBak);
+            fs.renameSync(legacyKeyPath, uniqueBackupPath(path.join(legacyDir, '.master-key.migrated.bak')));
         }
         console.log(`[StandaloneHostSecrets] Legacy workspace secret files renamed to .migrated.bak`);
     } catch (err) {
         console.error('[StandaloneHostSecrets] Failed to migrate legacy workspace secrets:', err);
     }
+}
+
+/** First free path in the `<base>`, `<base>.1`, `<base>.2`… series. */
+function uniqueBackupPath(base: string): string {
+    if (!fs.existsSync(base)) { return base; }
+    let counter = 1;
+    while (fs.existsSync(`${base}.${counter}`)) { counter++; }
+    return `${base}.${counter}`;
 }
 
 

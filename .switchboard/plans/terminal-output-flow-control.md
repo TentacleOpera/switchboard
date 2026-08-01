@@ -117,7 +117,11 @@ None blocking. Sibling plans in the same feature may land in any order; the reco
 Add alongside the existing byte watermarks (keep those; they become the secondary guard):
 
 - `LOW_WATER_CHARS = 5000`, `HIGH_WATER_CHARS = 100000`, `MAX_PAUSE_MS = 10000`.
-- `ClientState` (`:91-96`) gains `unackedChars: number` (init `0`) and `pausedSince?: number`.
+- `ClientState` (`:91-96`) gains `unackedChars: number` (init `0`).
+
+> **Superseded:** `ClientState` also gains `pausedSince?: number`.
+> **Reason:** The pause decision is per-terminal (`pausedTerminals` set, `pty.pause()`), not per-client. A per-client stamp is ambiguous with several attached clients — which client's stamp did the pausing? — and a client attached after the pause began would carry no stamp at all, silently breaking the `MAX_PAUSE_MS` safety valve.
+> **Replaced with:** Track `pausedSince` per terminal — a `Map<string, number>` parallel to `pausedTerminals`, stamped on the transition into pause and cleared on resume.
 
 Document why two independent watermarks coexist: bytes measure the transport (correct for remote/tunnelled clients), chars measure the renderer (correct for loopback). Either may pause; both must clear to resume.
 
@@ -135,7 +139,7 @@ Resolve the `ClientState` by `ws` identity, ignore unknown clients, and subtract
 
 #### (c) `checkBackpressure` decides on the worse of the two signals
 
-Rework (`:266-309`) to compute `maxUnacked` alongside the existing `maxBuffered`, and pause when `maxBuffered > HIGH_WATER_MARK_BYTES || maxUnacked > HIGH_WATER_CHARS`; resume only when `maxBuffered < LOW_WATER_MARK_BYTES && maxUnacked < LOW_WATER_CHARS`. Stamp `pausedSince` on the transition into pause and clear it on resume.
+Rework (`:266-309`) to compute `maxUnacked` alongside the existing `maxBuffered`, and pause when `maxBuffered > HIGH_WATER_MARK_BYTES || maxUnacked > HIGH_WATER_CHARS`; resume only when `maxBuffered < LOW_WATER_MARK_BYTES && maxUnacked < LOW_WATER_CHARS`. Stamp the per-terminal `pausedSince` on the transition into pause and clear it on resume.
 
 Add the safety valve: if `pausedSince` is set and `Date.now() - pausedSince > MAX_PAUSE_MS`, force-resume, zero every attached client's `unackedChars`, and `console.warn` with the terminal name. A stuck counter must degrade to lag, never to silence.
 
@@ -207,6 +211,13 @@ New `src/test/terminal-flow-control-contract.test.js`, following the source-text
 7. **Hidden panel.** Start a firehose, switch to the Board panel for 30 s, switch back. Output must be current, not a banked avalanche — this is the `BATCH_FALLBACK_MS` path surviving the refactor.
 8. **Nine terminals.** In the 3x3 layout with nine active agents, confirm the page stays interactive and no terminal starves.
 9. **Regression suite.** Run the contract tests. Confirm the five known-red tests at HEAD are unchanged — stash-verify before attributing any red test to this work.
+
+## Uncertain Assumptions
+
+The following are external (third-party/OS) claims that cannot be verified from this repository. The user was advised to run web research to confirm them before implementation; a ready-to-run research prompt was supplied in chat.
+
+- VS Code's pty-host char-count flow-control constants are exactly `HighWatermarkChars = 100000`, `LowWatermarkChars = 5000`, `CharCountAckSize = 5000` — the values this plan adopts as `HIGH_WATER_CHARS` / `LOW_WATER_CHARS` / `ACK_CHUNK_CHARS`.
+- Chrome's loopback WebSocket behaviour: the server-side `ws.bufferedAmount` stays near zero over loopback because the browser's network service drains the socket eagerly into a mojo pipe on a thread separate from the (potentially blocked) renderer.
 
 ## Recommendation
 

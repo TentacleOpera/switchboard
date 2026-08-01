@@ -49,7 +49,9 @@ The honest framing is that this plan removes our contribution to the problem and
 
 - `src/webview/terminals.js` — binary input frames, paste instrumentation.
 - `src/standalone/terminalWsGateway.ts` — binary input decode, chunked paced writes, input high-water notice.
-- `src/standalone/ptyBackend.ts` — a write primitive that reports queue depth.
+> **Superseded:** Scope included `src/standalone/ptyBackend.ts` — "a write primitive that reports queue depth".
+> **Reason:** node-pty's `IPty.write(data: string | Buffer): void` returns nothing (verified against `node_modules/node-pty/typings/node-pty.d.ts:176`); there is no queue-depth signal to surface. See Proposed Changes (e).
+> **Replaced with:** `ptyBackend.ts` is out of scope. Queue depth is tracked by the gateway itself via its own `queuedBytes` counter in the input FIFO.
 
 ## Metadata
 
@@ -96,7 +98,9 @@ None.
 
 - **Paste completion becomes slightly slower and much smoother.** Chunked, paced writes finish marginally later than one blocking write, but the gateway keeps serving output throughout, so the terminal stays alive rather than freezing and catching up.
 - **The old JSON input path is removed from the client.** Any external tool posting `{t:'input'}` frames to `/ws/terminal` would break — the server keeps accepting the JSON form for exactly this reason (see Migration).
-- **`ptyBackend`'s `write` grows a return value.** Its `TerminalHandle` shape is shared with `hostSeams.ts:215` and the no-op host stubs (`hostSeams.ts:298`, `hostServices.ts:324`); widening the interface touches those.
+> **Superseded:** `ptyBackend`'s `write` grows a return value, touching the shared `TerminalHandle` interface (`hostSeams.ts:208-215`) and the no-op host stubs (`hostSeams.ts:298`, `hostServices.ts:324`).
+> **Reason:** node-pty's `write` returns `void` — the interface widening would change a shared shape for zero information gained. Removed; see Proposed Changes (e).
+> **Replaced with:** No side effect on `ptyBackend` or `TerminalHandle`; neither file is modified.
 
 ### Dependencies & Conflicts
 
@@ -162,11 +166,11 @@ Clear the queue and its drain state in `untrackTerminalData` (`:227-251`), next 
 
 ### `src/standalone/ptyBackend.ts`
 
-#### (e) Report the write outcome
+#### (e) Report the write outcome — REMOVED
 
-`write` (`:89-91`) currently returns `void`. Widen it to return the node-pty write result so the gateway can see whether the socket accepted the data, and widen the `TerminalHandle` interface at `hostSeams.ts:215` accordingly. Update the two no-op stubs (`hostSeams.ts:298`, `hostServices.ts:324`) to match.
-
-Keep this minimal — it is one return value, not a new backpressure mechanism. The gateway's pacing is time-based by design; node-pty's queue depth is a diagnostic, not a control input.
+> **Superseded:** Widen `write` (`:89-91`) to return the node-pty write result so the gateway can see whether the socket accepted the data; widen the `TerminalHandle` interface at `hostSeams.ts:215` and update the two no-op stubs (`hostSeams.ts:298`, `hostServices.ts:324`) to match.
+> **Reason:** node-pty's `IPty.write(data: string | Buffer): void` returns nothing (`node_modules/node-pty/typings/node-pty.d.ts:176`). There is no write result to surface — the widening would churn a shared interface and two stubs for zero information.
+> **Replaced with:** No interface change. The gateway's pacing stays time-based (`setImmediate` between 4096-byte slices), and input-queue depth is measured by the gateway's own `queuedBytes` counter in (d) — the diagnostic `ptyBackend` could not have provided.
 
 ### Client-side handling of the throttle notice
 
@@ -201,6 +205,12 @@ New `src/test/terminal-input-path-contract.test.js`, on the existing source-text
 9. **Two terminals.** Paste into terminal A while terminal B is producing output. Confirm B keeps rendering throughout — this is the `setImmediate` yield doing its job.
 10. **Stale-tab compatibility.** With a tab open, restart the standalone server and confirm the old tab's input still works via the retained JSON branch until it reconnects.
 11. **Regression suite.** Run the contract tests; stash-verify the five known-red tests at HEAD before attributing failures here.
+
+## Uncertain Assumptions
+
+The following is an external (OS-level) claim that cannot be verified from this repository. The user was advised to run web research to confirm it before implementation; a ready-to-run research prompt was supplied in chat.
+
+- The kernel pty master→slave buffer is "single-digit KB", so a 100 KB write reaches the reading process as a dozen-plus separate reads regardless of how it was written (this drives the bracketed-paste split analysis and the 4096-byte `INPUT_CHUNK_BYTES` choice).
 
 ## Recommendation
 

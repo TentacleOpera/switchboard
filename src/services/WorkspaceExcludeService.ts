@@ -27,6 +27,14 @@ export class WorkspaceExcludeService {
         '.switchboard/**/*.db',
         '.switchboard/**/*.db-shm',
         '.switchboard/**/*.db-wal',
+        '',
+        '# Encrypted secret store and its master key. The live store is machine-global',
+        '# (~/.switchboard) but legacy per-workspace stores — plus the .migrated.bak and',
+        '# .corrupt-*.bak renames migration leaves behind — can still sit in a workspace.',
+        '# Named explicitly rather than relying on the .switchboard/* glob above: these',
+        '# are credentials, and a fork that drops the glob must still never commit them.',
+        '.switchboard/secrets.enc*',
+        '.switchboard/.master-key*',
     ];
 
     constructor(private readonly workspaceRoot: string) {}

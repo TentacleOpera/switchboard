@@ -33,8 +33,24 @@ const SECRET_ALIASES: Record<string, string> = {
     apiToken: 'switchboard.apiToken',
 };
 
+/**
+ * Resolve a CLI secret argument to the key a service actually reads, or exit.
+ *
+ * The bug this command exists to fix was writing a token under a key nothing
+ * reads, so a bare unrecognised word must be a hard error rather than a
+ * pass-through. Fully-qualified keys (anything dotted) still pass through as the
+ * escape hatch for keys the alias table has not caught up with.
+ */
 function resolveSecretKey(inputKey: string): string {
-    return SECRET_ALIASES[inputKey] || inputKey;
+    const aliased = SECRET_ALIASES[inputKey];
+    if (aliased) { return aliased; }
+    if (inputKey.includes('.')) { return inputKey; }
+    console.error(`Unknown secret name '${inputKey}'. Use one of:`);
+    for (const [alias, resolved] of Object.entries(SECRET_ALIASES)) {
+        console.error(`  ${alias.padEnd(9)} -> ${resolved}`);
+    }
+    console.error('...or pass a fully-qualified key such as switchboard.clickup.apiToken.');
+    process.exit(1);
 }
 
 function parseArgs(argv: string[]): { workspace?: string; port?: number; noOpen: boolean; help: boolean } {

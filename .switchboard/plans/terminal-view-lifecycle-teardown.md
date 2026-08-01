@@ -166,6 +166,12 @@ Extend `src/test/terminal-flow-control-contract.test.js` if it exists by then, o
 9. **Context cap.** Open twelve terminals across the 3x3 layout plus swaps and confirm via the console that later terminals take the canvas renderer instead of any existing terminal going blank or losing its WebGL context.
 10. **Regression suite.** Run the contract tests; stash-verify the five known-red tests at HEAD before attributing failures here.
 
+## Uncertain Assumptions
+
+The following is an external (browser-platform) claim that cannot be verified from this repository. The user was advised to run web research to confirm it before implementation; a ready-to-run research prompt was supplied in chat.
+
+- Browsers cap live WebGL contexts at roughly 16 per page and silently kill the oldest context beyond the cap — the behaviour `MAX_WEBGL_CONTEXTS = 12` is chosen against. The exact cap and eviction policy vary by browser and platform.
+
 ## Recommendation
 
 Complexity 5 → **Standard coder.**
