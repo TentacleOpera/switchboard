@@ -5072,26 +5072,57 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         }
 
         /**
+         * Map a logical column to the DOM container that displays it, mirroring
+         * renderBoard's display rules: BACKLOG cards are hidden outside backlog view and
+         * occupy the CREATED slot inside it, CREATED cards are hidden inside it, and coder
+         * columns roll up into CODED_AUTO when collapsed. Returns null when a card in that
+         * column is not displayed at all — callers treat that as "cannot move this element",
+         * which is the signal to fall back to a full render.
+         */
+        function resolveDisplayColumn(logicalCol) {
+            if (!logicalCol) return null;
+            let col = logicalCol;
+            if (showingBacklog) {
+                if (col === 'CREATED') return null;
+                if (col === 'BACKLOG') col = 'CREATED';
+            } else if (col === 'BACKLOG') {
+                return null;
+            }
+            const domCol = resolveDomColumn(col);
+            if (domCol === 'CODED_AUTO') return domCol;
+            return (columns.includes(domCol) || CODED_IDS.includes(domCol)) ? domCol : null;
+        }
+
+        /**
          * Pure DOM primitive to move card elements between column containers.
-         * @param {Array<{id: string, targetColumn: string}>} entries
+         * Targets are per-entry so a revert can send each card to its own column.
+         * `sourceColumn` is OPTIONAL but callers that have already mutated the model MUST
+         * pass it — without it the source lookup reads the post-move column and the count
+         * decrement + empty-state restore land on the target column instead of the one the
+         * card actually left.
+         * @param {Array<{id: string, targetColumn: string, sourceColumn?: string}>} entries
+         * @returns {string[]} ids whose element could not be moved (missing container or
+         *   missing element). Subtask/unknown ids land here too, so callers must classify
+         *   before deciding whether a full render is warranted.
          */
         function moveCardElements(entries) {
-            if (!Array.isArray(entries) || !entries.length) return;
+            const unresolved = [];
+            if (!Array.isArray(entries) || !entries.length) return unresolved;
 
             const sourceDomColCounts = {};
             const targetDomColCounts = {};
 
-            entries.forEach(({ id, targetColumn }) => {
-                const domTargetColumn = resolveDomColumn(targetColumn);
-                const targetBody = document.getElementById('col-' + domTargetColumn);
-                if (!targetBody) return;
+            entries.forEach(({ id, targetColumn, sourceColumn }) => {
+                const domTargetColumn = resolveDisplayColumn(targetColumn);
+                const targetBody = domTargetColumn ? document.getElementById('col-' + domTargetColumn) : null;
+                if (!targetBody) { unresolved.push(id); return; }
 
                 const cardEl = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
-                if (!cardEl) return;
+                if (!cardEl) { unresolved.push(id); return; }
 
                 const cardData = currentCards.find(c => (c.planId || c.sessionId) === id);
-                const actualColumn = cardData ? cardData.column : targetColumn;
-                const sourceDomCol = resolveDomColumn(actualColumn);
+                const actualColumn = sourceColumn || (cardData ? cardData.column : targetColumn);
+                const sourceDomCol = resolveDisplayColumn(actualColumn) || resolveDomColumn(actualColumn);
 
                 const emptyState = targetBody.querySelector('.empty-state');
                 if (emptyState) emptyState.remove();
@@ -5111,6 +5142,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 if (!inserted) {
                     targetBody.appendChild(cardEl);
                 }
+
+                // The copy-prompt button carries the card's column as a data attribute, baked
+                // at render time; runCopyPrompt derives the next column from it. Moving the
+                // element without a re-render would leave it pointing at the column the card
+                // just left, so keep the attribute honest here.
+                const copyBtn = cardEl.querySelector('.card-btn.copy');
+                if (copyBtn) copyBtn.dataset.column = targetColumn;
 
                 recentlyDropped.set(id, Date.now() + 400);
                 cardEl.classList.remove('card-dropped');
@@ -5142,6 +5180,21 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     tgtCount.textContent = String(parseInt(tgtCount.textContent || '0', 10) + movedCount);
                 }
             });
+
+            return unresolved;
+        }
+
+        /**
+         * True when an unresolved id belongs to a card that SHOULD have a DOM element.
+         * Cascade payloads carry subtask ids (never rendered — renderBoard drops
+         * card.featureId) and ids from other boards entirely; neither is an error, so only
+         * a renderable card we failed to move justifies a full rebuild.
+         */
+        function unresolvedNeedsRender(unresolved) {
+            return unresolved.some(id => {
+                const card = currentCards.find(c => (c.planId || c.sessionId) === id);
+                return !!card && !card.featureId;
+            });
         }
 
         /**
@@ -5157,7 +5210,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             const entries = sessionIds.map(id => ({ id, targetColumn }));
 
-            moveCardElements(entries);
+            // Called before the model mutation below, so the source column resolves from
+            // currentCards — no explicit sourceColumn needed here.
+            const unresolved = moveCardElements(entries);
 
             sessionIds.forEach(id => {
                 const cardData = currentCards.find(c => (c.planId || c.sessionId) === id);
@@ -5166,6 +5221,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             lastBoardSignature = buildBoardSignature(currentCards);
             armOptimisticGuard(entries);
+
+            // A renderable card we could not place (e.g. the target column is hidden in the
+            // current backlog view) would otherwise sit in the wrong column with no render
+            // left to repair it — the guard we just armed suppresses them.
+            if (unresolvedNeedsRender(unresolved)) {
+                renderBoard(currentCards);
+                lastBoardSignature = buildBoardSignature(currentCards);
+            }
         }
 
         /** Get all selected session IDs within a specific column. */
@@ -6403,8 +6466,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             });
 
             function runCopyPrompt(btn) {
-                const column = btn.dataset.column || btn.closest('.kanban-column')?.dataset?.column;
                 const sessionId = btn.dataset.planId || btn.dataset.session || '';
+                // Model first: data-column is a render-time snapshot, and a targeted DOM move
+                // (moveCardElements) relocates the element without regenerating its markup.
+                // Deriving the next column from a stale attribute dispatches the wrong prompt
+                // to the wrong column.
+                const modelColumn = currentCards.find(c => (c.planId || c.sessionId) === sessionId)?.column;
+                const column = modelColumn || btn.dataset.column || btn.closest('.kanban-column')?.dataset?.column;
                 
                 // Optimistic UI: highlight target column and move card immediately
                 let nextCol = null;
@@ -7211,6 +7279,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 targetBody.addEventListener('animationend', () => targetBody.classList.remove('highlight'), { once: true });
             }
 
+            // Ledger entries for the guard: only cards this loop actually moved. Arming an
+            // id whose element or container was missing would overlay a column the model
+            // never took, and every push would then disagree on position for the full window.
+            const movedEntries = [];
+
             validIds.forEach(id => {
                 const card = currentCards.find(c => (c.planId || c.sessionId) === id);
                 const cardEl = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
@@ -7236,6 +7309,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                     // Update in-memory state (use effective column so backend is consistent)
                     card.column = effectiveTargetColumn;
+                    movedEntries.push({ id, targetColumn: effectiveTargetColumn });
 
                     // Trigger drop animation
                     recentlyDropped.set(id, Date.now() + 400);
@@ -7250,7 +7324,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             // Keep the render-guard signature in sync with the optimistic mutation.
             lastBoardSignature = buildBoardSignature(currentCards);
-            armOptimisticGuard(validIds.map(id => ({ id, targetColumn: effectiveTargetColumn })));  // arm/extend the render guard
+            armOptimisticGuard(movedEntries);  // arm/extend the render guard
 
 
 
@@ -7451,11 +7525,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (!idsToMove.size || !targetCol) break;
 
                     const entriesToMove = [];
+                    const matchedKeys = [];
                     const updatedCards = currentCards.map(card => {
-                        const cardKey = card.planId || card.sessionId;
+                        const cardKey = card.planId || card.sessionId;        // planId-primary, mirrors backend _cardMatchesIds
                         if (idsToMove.has(cardKey) || (card.sessionId && idsToMove.has(card.sessionId))) {
+                            matchedKeys.push(cardKey);
+                            // Only a real column difference is work. The post-drop confirm
+                            // repeats a move moveCardsOptimistically already applied, so it
+                            // must produce no DOM work, no render and no signature churn.
                             if (card.column !== targetCol) {
-                                entriesToMove.push({ id: cardKey, targetColumn: targetCol });
+                                // sourceColumn is captured HERE, before the reassignment below
+                                // hides it — moveCardElements bills the count decrement to it.
+                                entriesToMove.push({ id: cardKey, targetColumn: targetCol, sourceColumn: card.column });
                             }
                             return { ...card, column: targetCol };
                         }
@@ -7463,6 +7544,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     });
 
                     currentCards = updatedCards;
+                    // Keep the unfiltered cache in sync so occupancy counts track the move.
                     allCards = allCards.map(card => {
                         const cardKey = card.planId || card.sessionId;
                         if (idsToMove.has(cardKey) || (card.sessionId && idsToMove.has(card.sessionId))) {
@@ -7471,11 +7553,28 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         return card;
                     });
 
+                    // The truth has landed for these ids — a stale overlay would keep forcing
+                    // a column the backend may have since changed. Clear by both the id the
+                    // backend sent and the key the ledger was armed with.
+                    resolveOptimisticGuard(msg.sessionIds.concat(matchedKeys));
+
                     if (entriesToMove.length > 0) {
-                        moveCardElements(entriesToMove);
                         lastBoardSignature = buildBoardSignature(currentCards);
+                        if (Date.now() < optimisticMoveUntil) {
+                            // Guard armed: a rebuild here would stomp an in-flight drop
+                            // animation or a second drag. Move just the named elements and
+                            // let the guard-expiry refresh regenerate the column-dependent
+                            // card markup (prompt label, backlog/recover buttons).
+                            const unresolved = moveCardElements(entriesToMove);
+                            suppressedRenderPending = true;
+                            if (unresolvedNeedsRender(unresolved)) renderBoard(currentCards);
+                        } else {
+                            // No guard in flight, so nothing to protect. Rebuild so the moved
+                            // cards' column-dependent markup is regenerated; the no-op
+                            // short-circuit above already spares the common post-drop confirm.
+                            renderBoard(currentCards);
+                        }
                     }
-                    resolveOptimisticGuard(msg.sessionIds);
                     break;
                 }
                 case 'moveCardsFailed': {
@@ -7483,18 +7582,24 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (!failed.length) break;
                     const byId = new Map(failed.map(f => [f.id, f]));
                     const entriesToRevert = [];
+                    const revertedKeys = [];
 
                     currentCards = currentCards.map(card => {
                         const key = card.planId || card.sessionId;
                         const f = byId.get(key) || (card.sessionId && byId.get(card.sessionId));
                         if (f) {
+                            revertedKeys.push(key);
+                            // Per-card target: a revert sends each card to its own source
+                            // column, and sourceColumn here is the column it is being pulled
+                            // OFF (the optimistic one), captured before the reassignment.
                             if (card.column !== f.sourceColumn) {
-                                entriesToRevert.push({ id: key, targetColumn: f.sourceColumn });
+                                entriesToRevert.push({ id: key, targetColumn: f.sourceColumn, sourceColumn: card.column });
                             }
                             return { ...card, column: f.sourceColumn };
                         }
                         return card;
                     });
+                    // Keep the unfiltered cache in sync so occupancy counts track the revert.
                     allCards = allCards.map(card => {
                         const key = card.planId || card.sessionId;
                         const f = byId.get(key) || (card.sessionId && byId.get(card.sessionId));
@@ -7502,11 +7607,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         return card;
                     });
 
-                    resolveOptimisticGuard(failed.map(f => f.id));
+                    // Drop the ledger entries BEFORE the signature recompute below, or the
+                    // abandoned overlay gets baked back into the baseline.
+                    resolveOptimisticGuard(failed.map(f => f.id).concat(revertedKeys));
 
                     if (entriesToRevert.length > 0) {
-                        moveCardElements(entriesToRevert);
                         lastBoardSignature = buildBoardSignature(currentCards);
+                        if (Date.now() < optimisticMoveUntil) {
+                            const unresolved = moveCardElements(entriesToRevert);
+                            suppressedRenderPending = true;
+                            if (unresolvedNeedsRender(unresolved)) renderBoard(currentCards);
+                        } else {
+                            renderBoard(currentCards);
+                        }
                     }
                     showStatusBarMessage(`${failed.length} plan(s) not advanced: ${failed[0]?.reason || 'database update failed'}`, { isError: true });
                     break;
@@ -7566,25 +7679,29 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             const nextPosSig = buildPositionSignature(nextCards);
                             const curPosSig = buildPositionSignature(currentCards);
                             if (nextPosSig === curPosSig && nextCards.length > 0) {
-                                let hasOtherChanges = false;
                                 nextCards.forEach(nc => {
                                     const id = nc.planId || nc.sessionId;
                                     const cur = currentCards.find(cc => (cc.planId || cc.sessionId) === id);
                                     if (!cur) return;
                                     if (!!nc.working !== !!cur.working) {
                                         const cardEl = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
-                                        applyWorkingClass(cardEl, !nc.working ? false : !!nc.working);
+                                        applyWorkingClass(cardEl, !!nc.working);
+                                        // Merge forward ONLY what was just applied to the DOM;
+                                        // every other field stays at its rendered value so the
+                                        // signature keeps describing the screen.
                                         cur.working = nc.working;
                                         cur.lastActivity = nc.lastActivity;
-                                    }
-                                    if (nc.topic !== cur.topic || nc.complexity !== cur.complexity || nc.planFile !== cur.planFile) {
-                                        hasOtherChanges = true;
                                     }
                                 });
                                 lastBoardSignature = buildBoardSignature(currentCards);
                                 lastAllCardsSignature = nextAllCardsSignature;
                                 if (justFinished.length) pendingFinished.push(...justFinished);
-                                if (hasOtherChanges) suppressedRenderPending = true;
+                                // Anything the payload carried that was NOT applied to the DOM
+                                // (topic, complexity, feature rollups, a lone lastActivity bump)
+                                // leaves the two signatures apart. Derive the flag from that
+                                // rather than a hand-listed field set, so a field added to
+                                // buildBoardSignature can never be silently swallowed.
+                                if (lastBoardSignature !== nextBoardSignature) suppressedRenderPending = true;
                             } else {
                                 // Positions differ while optimistic active: suppress full renderBoard
                                 // to avoid reverting optimistic moves on screen, but carry forward finish state.

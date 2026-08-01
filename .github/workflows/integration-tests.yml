@@ -118,6 +118,9 @@ jobs:
       - name: Kanban card-button drag guard contract
         run: npm run test:contract:drag-guard
 
+      - name: Kanban optimistic render guard contract
+        run: npm run test:contract:render-guard
+
       - name: Tickets sidebar list scoping contract
         run: npm run test:contract:tickets-sidebar-scoping
 

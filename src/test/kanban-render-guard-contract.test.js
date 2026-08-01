@@ -2,6 +2,24 @@ const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
 
+// Every renderBoard( call inside a move handler must come AFTER the handler has consulted
+// optimisticMoveUntil. A rebuild ahead of that check is the unguarded full redraw that
+// stomps an in-flight drop animation and reverts an optimistic move.
+function assertRenderBoardIsGuardGated(handlerBody, handlerName) {
+    const guardIdx = handlerBody.indexOf('optimisticMoveUntil');
+    let searchFrom = 0;
+    for (;;) {
+        const renderIdx = handlerBody.indexOf('renderBoard(', searchFrom);
+        if (renderIdx === -1) return;
+        assert.strictEqual(
+            guardIdx !== -1 && guardIdx < renderIdx,
+            true,
+            `${handlerName} must check optimisticMoveUntil before any renderBoard( call`
+        );
+        searchFrom = renderIdx + 1;
+    }
+}
+
 function testKanbanRenderGuardContract() {
     const kanbanHtmlPath = path.join(__dirname, '../webview/kanban.html');
     const kanbanHtml = fs.readFileSync(kanbanHtmlPath, 'utf8');
@@ -27,43 +45,51 @@ function testKanbanRenderGuardContract() {
         'updateBoard optimisticActive branch must not contain currentCards = nextCards'
     );
 
-    // 3. moveCards does not rebuild the board with renderBoard(currentCards)
+    // 3. moveCards moves elements, and never rebuilds the board while the guard is armed.
+    //    A rebuild is still the correct repair once the window has closed (card markup is
+    //    column-dependent), so the assertion is on ORDER: the guard check must gate it.
     const moveCardsIdx = kanbanHtml.indexOf("case 'moveCards':");
     assert.strictEqual(moveCardsIdx !== -1, true, "case 'moveCards': must exist");
     const moveCardsEnd = kanbanHtml.indexOf("case 'moveCardsFailed':", moveCardsIdx);
     const moveCardsBody = kanbanHtml.slice(moveCardsIdx, moveCardsEnd);
     assert.strictEqual(
-        moveCardsBody.includes('renderBoard('),
-        false,
-        'moveCards handler must not call renderBoard'
-    );
-    assert.strictEqual(
         moveCardsBody.includes('moveCardElements('),
         true,
         'moveCards handler must reference moveCardElements primitive'
     );
+    assertRenderBoardIsGuardGated(moveCardsBody, 'moveCards');
 
-    // 4. moveCardsFailed does not rebuild the board with renderBoard
+    // 4. moveCardsFailed: same contract.
     const moveFailedIdx = kanbanHtml.indexOf("case 'moveCardsFailed':");
     assert.strictEqual(moveFailedIdx !== -1, true, "case 'moveCardsFailed': must exist");
     const moveFailedEnd = kanbanHtml.indexOf("case 'updateBoard':", moveFailedIdx);
     const moveFailedBody = kanbanHtml.slice(moveFailedIdx, moveFailedEnd);
     assert.strictEqual(
-        moveFailedBody.includes('renderBoard('),
-        false,
-        'moveCardsFailed handler must not call renderBoard'
-    );
-    assert.strictEqual(
         moveFailedBody.includes('moveCardElements('),
         true,
         'moveCardsFailed handler must reference moveCardElements primitive'
     );
+    assertRenderBoardIsGuardGated(moveFailedBody, 'moveCardsFailed');
 
     // 5. moveCards compares column before adding entry to move
     assert.strictEqual(
         moveCardsBody.includes('card.column !== targetCol'),
         true,
         'moveCards must check card.column !== targetCol'
+    );
+
+    // 5b. Both handlers reassign currentCards before moving elements, so they MUST hand the
+    //     primitive an explicit sourceColumn — otherwise the count decrement and empty-state
+    //     restore land on the target column instead of the one the card left.
+    assert.strictEqual(
+        /entriesToMove\.push\(\{[^}]*sourceColumn:/.test(moveCardsBody),
+        true,
+        'moveCards must pass an explicit sourceColumn captured before the model reassignment'
+    );
+    assert.strictEqual(
+        /entriesToRevert\.push\(\{[^}]*sourceColumn:/.test(moveFailedBody),
+        true,
+        'moveCardsFailed must pass an explicit sourceColumn captured before the model reassignment'
     );
 
     // 6. Guard arming uses armOptimisticGuard helper
