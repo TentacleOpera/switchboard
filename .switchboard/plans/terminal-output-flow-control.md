@@ -222,3 +222,10 @@ Confirmed by web research (2026-08-01); treat as settled — do not re-research.
 ## Recommendation
 
 Complexity 7 → **Send to Lead Coder.** This is the keystone of the feature; the other three plans are cheaper and safer once it lands.
+
+## Completion Summary
+
+Implemented end-to-end ack/credit-based backpressure and page-level output batching for browser terminals. Added char-count watermarks (5000 / 100000), gateway `ack` frame processing with safety valve force-resuming after 10s, and client-side acking from `term.write` callbacks. Replaced per-terminal flushes with single shared page-level intervals/drains on both backend and webview frontend.
+Files modified/created: `src/standalone/terminalWsGateway.ts`, `src/webview/terminals.js`, `src/test/terminal-flow-control-contract.test.js`.
+No issues encountered during implementation.
+

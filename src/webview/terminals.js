@@ -26,13 +26,12 @@
     const fallbackBannerEl = document.getElementById('layout-fallback-banner');
     const notifyToggleEl = document.getElementById('notify-toggle');
 
-    function utf8ToBase64(str) {
-        const bytes = new TextEncoder().encode(str);
-        let bin = '';
-        for (let i = 0; i < bytes.length; i++) {
-            bin += String.fromCharCode(bytes[i]);
-        }
-        return btoa(bin);
+    function encodeInputFrame(str) {
+        const body = new TextEncoder().encode(str);
+        const frame = new Uint8Array(1 + body.length);
+        frame[0] = 0x01; // input opcode
+        frame.set(body, 1);
+        return frame.buffer;
     }
 
     function base64ToUtf8(b64) {
@@ -66,6 +65,30 @@
         return 'Menlo, Monaco, "Courier New", monospace';
     }
 
+    const DETACH_GRACE_MS = 15000;
+    const detachTimers = new Map();
+    const MAX_WEBGL_CONTEXTS = 12;
+    let liveWebglContexts = 0;
+
+    function armDetachTimer(name) {
+        if (detachTimers.has(name)) return;
+        const timerId = setTimeout(() => {
+            detachTimers.delete(name);
+            if (!paneAssignments.includes(name)) {
+                destroyTerminalView(name);
+            }
+        }, DETACH_GRACE_MS);
+        detachTimers.set(name, timerId);
+    }
+
+    function cancelDetachTimer(name) {
+        const timerId = detachTimers.get(name);
+        if (timerId) {
+            clearTimeout(timerId);
+            detachTimers.delete(name);
+        }
+    }
+
     /**
      * Attach the fastest renderer this browser will give us.
      *
@@ -81,9 +104,9 @@
      * the live addon out underneath us — teardown has to dispose whichever one is
      * current, not the one that happened to be attached at creation.
      */
-    function attachRenderer(term) {
+    function attachRenderer(term, entry) {
         const holder = { current: null };
-        if (window.WebglAddon && window.WebglAddon.WebglAddon) {
+        if (window.WebglAddon && window.WebglAddon.WebglAddon && liveWebglContexts < MAX_WEBGL_CONTEXTS) {
             try {
                 const webgl = new window.WebglAddon.WebglAddon();
                 // A lost context (GPU reset, driver crash, too many live contexts)
@@ -91,11 +114,15 @@
                 // than leaving the operator with a blank terminal.
                 webgl.onContextLoss(() => {
                     console.warn('[Terminals] WebGL context lost — falling back to canvas renderer');
+                    if (entry) entry.isWebgl = false;
+                    liveWebglContexts = Math.max(0, liveWebglContexts - 1);
                     try { webgl.dispose(); } catch { /* ignore */ }
                     holder.current = attachCanvasRenderer(term);
                 });
                 term.loadAddon(webgl);
                 holder.current = webgl;
+                if (entry) entry.isWebgl = true;
+                liveWebglContexts++;
                 return holder;
             } catch (err) {
                 console.warn('[Terminals] WebGL renderer unavailable, falling back:', err);
@@ -244,6 +271,11 @@
                 }
                 saveSetting('terminals.osNotify', osNotifyEnabled);
             });
+        }
+
+        const btnClearAll = document.getElementById('btn-clear-all');
+        if (btnClearAll) {
+            btnClearAll.addEventListener('click', () => withClearingFeedback(btnClearAll, clearAllTerminals));
         }
 
         window.addEventListener('message', (event) => {
@@ -598,6 +630,16 @@
                 });
                 actions.appendChild(renameBtn);
 
+                const clearBtn = document.createElement('button');
+                clearBtn.className = 'btn-clear-term';
+                clearBtn.textContent = '⌫';
+                clearBtn.title = 'Clear terminal (sends /clear)';
+                clearBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    withClearingFeedback(clearBtn, () => clearTerminal(item.friendlyName));
+                });
+                actions.appendChild(clearBtn);
+
                 const closeBtn = document.createElement('button');
                 closeBtn.className = 'btn-close-term';
                 closeBtn.textContent = '×';
@@ -761,6 +803,16 @@
 
             const actionsEl = document.createElement('div');
             if (assignedName) {
+                const paneClearBtn = document.createElement('button');
+                paneClearBtn.className = 'btn-unassign-pane';
+                paneClearBtn.textContent = '⌫';
+                paneClearBtn.title = 'Clear terminal (sends /clear)';
+                paneClearBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    withClearingFeedback(paneClearBtn, () => clearTerminal(assignedName));
+                });
+                actionsEl.appendChild(paneClearBtn);
+
                 const unassignBtn = document.createElement('button');
                 unassignBtn.className = 'btn-unassign-pane';
                 unassignBtn.textContent = '⊟';
@@ -809,6 +861,9 @@
         for (const [name, entry] of terminalsMap.entries()) {
             if (!paneAssignments.includes(name)) {
                 entry.container.classList.remove('active');
+                armDetachTimer(name);
+            } else {
+                cancelDetachTimer(name);
             }
         }
     }
@@ -956,6 +1011,8 @@
     async function renameTerminal(name, alias) {
         const next = (alias || '').trim();
         if (!next || next === name) { return; }
+        cancelDetachTimer(name);
+        cancelDetachTimer(next);
         try {
             const res = await fetch('/terminals/verb/ptyRenameTerminal', {
                 method: 'POST',
@@ -1033,12 +1090,53 @@
         }
     }
 
+    async function clearTerminal(name) {
+        try {
+            await fetch('/terminals/verb/ptyClearTerminal', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name })
+            });
+            if (terminalBadges.delete(name)) { renderSidebarList(); renderPaneGrid(); }
+        } catch (err) {
+            console.error('[Terminals] Failed to clear terminal:', err);
+        }
+    }
+
+    async function clearAllTerminals() {
+        try {
+            await fetch('/terminals/verb/ptyClearAllTerminals', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            terminalBadges.clear();
+            renderSidebarList();
+            renderPaneGrid();
+        } catch (err) {
+            console.error('[Terminals] Failed to clear all terminals:', err);
+        }
+    }
+
+    function withClearingFeedback(btn, run) {
+        if (btn.disabled) { return; }
+        btn.disabled = true;
+        run();
+        setTimeout(() => { btn.disabled = false; }, 600);
+    }
+
+    const ACK_CHUNK_CHARS = 5000;
+    const pendingBatchEntries = new Set();
+    let sharedBatchRafId = null;
+    let sharedBatchFallbackTimer = null;
+
     function destroyTerminalView(name) {
+        cancelDetachTimer(name);
         const entry = terminalsMap.get(name);
         if (!entry) { return; }
+        entry.disposed = true;
         if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
-        if (entry.animationFrameId) { cancelAnimationFrame(entry.animationFrameId); entry.animationFrameId = null; }
-        if (entry.batchFallbackTimer) { clearTimeout(entry.batchFallbackTimer); entry.batchFallbackTimer = null; }
+        pendingBatchEntries.delete(entry);
         entry.exited = true;
         if (entry.ws) {
             try { entry.ws.close(); } catch { /* ignore */ }
@@ -1051,7 +1149,12 @@
         // that browsers cap per page (~16 contexts), so leaking one per closed
         // terminal eventually forces every terminal back to the DOM renderer.
         if (entry.rendererAddon && entry.rendererAddon.current) {
-            try { entry.rendererAddon.current.dispose(); } catch { /* ignore */ }
+            try {
+                entry.rendererAddon.current.dispose();
+                if (entry.isWebgl) {
+                    liveWebglContexts = Math.max(0, liveWebglContexts - 1);
+                }
+            } catch { /* ignore */ }
             entry.rendererAddon.current = null;
         }
         if (entry.term) {
@@ -1078,6 +1181,7 @@
             fontSize: 13,
             fontFamily: resolveMonoFont(),
             theme: buildTerminalTheme(),
+            scrollback: 1000,
         });
 
         let fitAddon = null;
@@ -1086,28 +1190,34 @@
             term.loadAddon(fitAddon);
         }
 
-        term.open(container);
-        const rendererAddon = attachRenderer(term);
-        if (fitAddon) {
-            try { fitAddon.fit(); } catch { /* ignore */ }
-        }
-
         const entry = {
             name,
             container,
             term,
             fitAddon,
-            rendererAddon,
+            rendererAddon: null,
+            isWebgl: false,
             ws: null,
             lastSeq: 0,
             batchQueue: [],
-            animationFrameId: null,
-            batchFallbackTimer: null,
+            pendingAckChars: 0,
+            bytesWritten: 0,
+            writeThrowCount: 0,
+            largestInputDataLen: 0,
+            totalInputChars: 0,
             reconnectTimer: null,
             reconnectDelay: 500,
             resizeObserver: null,
-            exited: false
+            exited: false,
+            disposed: false
         };
+
+        term.open(container);
+        const rendererAddon = attachRenderer(term, entry);
+        entry.rendererAddon = rendererAddon;
+        if (fitAddon) {
+            try { fitAddon.fit(); } catch { /* ignore */ }
+        }
         terminalsMap.set(name, entry);
 
         let resizeTimer = null;
@@ -1133,11 +1243,10 @@
 
         term.onData((data) => {
             if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
-                const base64Data = utf8ToBase64(data);
-                entry.ws.send(JSON.stringify({
-                    t: 'input',
-                    data: base64Data
-                }));
+                if (!entry.largestInputDataLen) entry.largestInputDataLen = 0;
+                if (data.length > entry.largestInputDataLen) entry.largestInputDataLen = data.length;
+                entry.totalInputChars = (entry.totalInputChars || 0) + data.length;
+                entry.ws.send(encodeInputFrame(data));
             }
         });
 
@@ -1149,6 +1258,7 @@
             try { entry.ws.close(); } catch { /* ignore */ }
             entry.ws = null;
         }
+        entry.pendingAckChars = 0;
 
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
         let wsUrl = `${protocol}//${location.host}/ws/terminal?name=${encodeURIComponent(entry.name)}`;
@@ -1214,6 +1324,8 @@
                     const rawData = base64ToUtf8(frame.data);
                     entry.batchQueue.push(rawData);
                     scheduleBatchFlush(entry);
+                } else if (frame.t === 'inputThrottled') {
+                    entry.term.write(`\r\n\x1b[2m[Pasting input queued: ${frame.queued || 0} bytes...]\x1b[0m\r\n`);
                 } else if (frame.t === 'error') {
                     entry.exited = true;
                     entry.term.write(`\r\n\x1b[31m[${frame.message || 'Terminal unavailable'}]\x1b[0m\r\n`);
@@ -1246,33 +1358,78 @@
     }
 
     function scheduleBatchFlush(entry) {
-        if (!entry.animationFrameId) {
-            entry.animationFrameId = requestAnimationFrame(() => {
-                entry.animationFrameId = null;
-                flushBatch(entry);
+        if (!entry) return;
+        pendingBatchEntries.add(entry);
+        if (!sharedBatchRafId) {
+            sharedBatchRafId = requestAnimationFrame(() => {
+                sharedBatchRafId = null;
+                drainAllBatches();
             });
         }
-        // rAF is parked while the tab sits in the background, so a chatty terminal
-        // would bank its entire output in batchQueue and land it as one enormous
-        // write the moment the operator switches back. The timer keeps it draining.
-        if (!entry.batchFallbackTimer) {
-            entry.batchFallbackTimer = setTimeout(() => {
-                entry.batchFallbackTimer = null;
-                flushBatch(entry);
+        if (!sharedBatchFallbackTimer) {
+            sharedBatchFallbackTimer = setTimeout(() => {
+                sharedBatchFallbackTimer = null;
+                drainAllBatches();
             }, BATCH_FALLBACK_MS);
         }
     }
 
-    function flushBatch(entry) {
-        if (entry.batchFallbackTimer) {
-            clearTimeout(entry.batchFallbackTimer);
-            entry.batchFallbackTimer = null;
+    function drainAllBatches() {
+        if (sharedBatchFallbackTimer) {
+            clearTimeout(sharedBatchFallbackTimer);
+            sharedBatchFallbackTimer = null;
         }
+        if (pendingBatchEntries.size === 0) return;
+        const entries = Array.from(pendingBatchEntries);
+        pendingBatchEntries.clear();
+        for (const entry of entries) {
+            flushBatch(entry);
+        }
+    }
+
+    function flushBatch(entry) {
+        if (!entry || entry.exited || !entry.term) { return; }
         if (entry.batchQueue.length === 0) { return; }
         const combined = entry.batchQueue.join('');
         entry.batchQueue = [];
-        entry.term.write(combined);
+        try {
+            entry.term.write(combined, () => onWriteParsed(entry, combined.length));
+        } catch (err) {
+            entry.writeThrowCount = (entry.writeThrowCount || 0) + 1;
+            console.error(`[Terminals] term.write failed for terminal ${entry.name}:`, err);
+        }
     }
+
+    function onWriteParsed(entry, length) {
+        if (!entry || entry.exited) return;
+        entry.bytesWritten = (entry.bytesWritten || 0) + length;
+        entry.pendingAckChars = (entry.pendingAckChars || 0) + length;
+        if (entry.pendingAckChars >= ACK_CHUNK_CHARS) {
+            const toAck = entry.pendingAckChars;
+            entry.pendingAckChars = 0;
+            if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
+                try {
+                    entry.ws.send(JSON.stringify({ t: 'ack', chars: toAck }));
+                } catch { /* ignore */ }
+            }
+        }
+    }
+
+    window.__sbTerminalStats = function() {
+        const stats = {};
+        for (const [name, entry] of terminalsMap.entries()) {
+            stats[name] = {
+                lastSeq: entry.lastSeq,
+                batchQueueLength: entry.batchQueue ? entry.batchQueue.length : 0,
+                pendingAckChars: entry.pendingAckChars || 0,
+                bytesWritten: entry.bytesWritten || 0,
+                writeThrowCount: entry.writeThrowCount || 0,
+                largestInputDataLen: entry.largestInputDataLen || 0,
+                totalInputChars: entry.totalInputChars || 0
+            };
+        }
+        return stats;
+    };
 
     function handleAgentCompleted(msg) {
         const { planTitle, role, terminalName, worktreePath } = msg;

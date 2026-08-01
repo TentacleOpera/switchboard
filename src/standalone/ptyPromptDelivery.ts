@@ -52,3 +52,20 @@ export async function sendPromptToPty(
         }
     });
 }
+
+/**
+ * Send the agent-CLI context reset to a PTY — the same bytes sendPromptToPty
+ * writes for clearBeforePrompt, lifted out so a UI button can reach them without
+ * dispatching a prompt. Stays in this module to reuse withTerminalLock: a clear
+ * issued outside it can splice into an in-flight chunked paste. Write errors are
+ * swallowed: a PTY that died between the active-check and the write has no
+ * context left to reset, so the clear has effectively succeeded.
+ */
+export async function clearPty(handle: ExtendedTerminalHandle): Promise<void> {
+    return withTerminalLock(handle.name, async () => {
+        try {
+            handle.write('/clear\r');
+        } catch { /* PTY died between check and write — nothing to clear */ }
+    });
+}
+

@@ -26,6 +26,30 @@ import { authorizeWsUpgrade } from './wsUpgradeAuth';
  * going silently stale.
  */
 
+export const SURFACES = {
+    common: 'common',
+    kanban: 'kanban',
+    terminals: 'terminals',
+    planning: 'planning',
+    design: 'design',
+    setup: 'setup',
+    memo: 'memo',
+} as const;
+
+export type SurfaceType = typeof SURFACES[keyof typeof SURFACES];
+
+export const PANEL_SURFACES: Record<string, string[]> = {
+    board: [SURFACES.kanban, SURFACES.common],
+    kanban: [SURFACES.kanban, SURFACES.common],
+    terminals: [SURFACES.terminals, SURFACES.common],
+    planning: [SURFACES.planning, SURFACES.common],
+    design: [SURFACES.design, SURFACES.common],
+    setup: [SURFACES.setup, SURFACES.common],
+    memo: [SURFACES.memo, SURFACES.common],
+};
+
+const VALID_SURFACES = new Set<string>(Object.values(SURFACES));
+
 export interface WsHubOptions {
     /** The http.Server to attach the WS upgrade handler to. */
     server: Server;
@@ -63,6 +87,7 @@ interface ConnectionMeta {
      *  `null` = explicitly declared "no project filter". The distinction is
      *  load-bearing — do not collapse the two. */
     project?: string | null;
+    surfaces?: Set<string>;
 }
 
 export class WsHub {
@@ -146,7 +171,18 @@ export class WsHub {
             const initialScope = reqUrl.searchParams.has('scope')
                 ? (reqUrl.searchParams.get('scope') || null)
                 : undefined;
-            const meta: ConnectionMeta = { ws, seq: 0, originatorId, isAlive: true, project: initialScope };
+
+            const rawSurfaces = reqUrl.searchParams.get('surfaces');
+            let surfaces: Set<string> | undefined;
+            if (rawSurfaces !== null) {
+                surfaces = new Set(
+                    rawSurfaces.split(',')
+                        .map(s => s.trim())
+                        .filter(s => VALID_SURFACES.has(s))
+                );
+            }
+
+            const meta: ConnectionMeta = { ws, seq: 0, originatorId, isAlive: true, project: initialScope, surfaces };
 
             ws.on('pong', () => {
                 meta.isAlive = true;
@@ -174,7 +210,10 @@ export class WsHub {
             // increments strictly monotonically from the snapshot baseline.
             if (this._options.getFullState) {
                 try {
-                    const state = await this._options.getFullState(meta.project);
+                    let state = await this._options.getFullState(meta.project);
+                    if (Array.isArray(state) && meta.surfaces) {
+                        state = state.filter((item: any) => !item.surface || meta.surfaces!.has(item.surface));
+                    }
                     this._safeSend(ws, {
                         type: '__resync',
                         seq: meta.seq, // 0 — the baseline; broadcasts increment from here
@@ -224,6 +263,10 @@ export class WsHub {
         const isFactory = typeof payload === 'function';
         const rendered = new Map<string, any>();
         for (const meta of this._connections) {
+            if (surface && meta.surfaces && !meta.surfaces.has(surface)) {
+                // Do NOT increment seq for skipped connection
+                continue;
+            }
             let body = payload;
             if (isFactory) {
                 const key = meta.project === undefined ? '\u0000undeclared'

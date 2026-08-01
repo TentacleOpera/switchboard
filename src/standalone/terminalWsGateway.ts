@@ -7,6 +7,20 @@ export const HIGH_WATER_MARK_BYTES = 1024 * 1024; // 1 MB
 export const LOW_WATER_MARK_BYTES = 256 * 1024; // 256 KB
 export const HIGH_WATER_GRACE_MS = 30000; // 30s
 export const PING_INTERVAL_MS = 30000;
+export const LOW_WATER_CHARS = 5000;
+export const HIGH_WATER_CHARS = 100000;
+export const MAX_PAUSE_MS = 10000;
+export const MAX_INPUT_FRAME_BYTES = 5 * 1024 * 1024; // 5 MB
+export const INPUT_CHUNK_BYTES = 4096;
+export const INPUT_HIGH_WATER_BYTES = 64 * 1024; // 64 KB
+export const INPUT_LOW_WATER_BYTES = 16 * 1024; // 16 KB
+
+interface InputQueue {
+    chunks: Buffer[];
+    queuedBytes: number;
+    draining: boolean;
+    throttled?: boolean;
+}
 /**
  * How often a paused terminal re-checks whether its clients have drained.
  *
@@ -49,7 +63,6 @@ interface ScrollbackChunk {
 interface PendingOutput {
     parts: string[];
     bytes: number;
-    timer?: NodeJS.Timeout;
 }
 
 /**
@@ -93,6 +106,7 @@ interface ClientState {
     terminalName: string;
     isAlive: boolean;
     highWaterStart?: number;
+    unackedChars: number;
 }
 
 export class TerminalWsGateway {
@@ -104,10 +118,112 @@ export class TerminalWsGateway {
     private scrollbackBuffers = new Map<string, ScrollbackBuffer>();
     private terminalSubscriptions = new Map<string, { dispose: () => void }>();
     private pendingOutput = new Map<string, PendingOutput>();
+    private pendingFlushTerminals = new Set<string>();
     private pausedTerminals = new Set<string>();
+    private pausedSince = new Map<string, number>();
     private clients = new Set<ClientState>();
+    private inputQueues = new Map<string, InputQueue>();
     private pingInterval?: NodeJS.Timeout;
     private drainInterval?: NodeJS.Timeout;
+    private sharedFlushInterval?: NodeJS.Timeout;
+
+    private enqueueInput(terminalName: string, buf: Buffer): void {
+        const handle = this.fleetService.get(terminalName);
+        if (!handle) return;
+        let queue = this.inputQueues.get(terminalName);
+        if (!queue) {
+            queue = { chunks: [], queuedBytes: 0, draining: false };
+            this.inputQueues.set(terminalName, queue);
+        }
+        queue.chunks.push(buf);
+        queue.queuedBytes += buf.length;
+
+        if (queue.queuedBytes > INPUT_HIGH_WATER_BYTES && !queue.throttled) {
+            queue.throttled = true;
+            const targetClients = Array.from(this.clients).filter(c => c.terminalName === terminalName);
+            for (const client of targetClients) {
+                this.safeSend(client.ws, { t: 'inputThrottled', queued: queue.queuedBytes });
+            }
+        }
+
+        if (!queue.draining) {
+            queue.draining = true;
+            this.drainInputQueue(terminalName);
+        }
+    }
+
+    private drainInputQueue(terminalName: string): void {
+        const queue = this.inputQueues.get(terminalName);
+        const handle = this.fleetService.get(terminalName);
+        if (!queue || !handle || queue.chunks.length === 0) {
+            if (queue) {
+                queue.draining = false;
+                if (queue.queuedBytes < INPUT_LOW_WATER_BYTES && queue.throttled) {
+                    queue.throttled = false;
+                }
+            }
+            return;
+        }
+
+        const first = queue.chunks[0];
+        if (first.length > INPUT_CHUNK_BYTES) {
+            const sliceLen = this.findSafeBoundary(first, INPUT_CHUNK_BYTES);
+            const chunkToDrain = first.subarray(0, sliceLen);
+            const remaining = first.subarray(sliceLen);
+            queue.chunks[0] = remaining;
+            queue.queuedBytes -= sliceLen;
+            try {
+                handle.write(chunkToDrain.toString('utf8'));
+            } catch (err) {
+                console.warn(`[TerminalWsGateway] Failed to write input chunk to ${terminalName}:`, err);
+            }
+        } else {
+            const chunkToDrain = queue.chunks.shift()!;
+            queue.queuedBytes -= chunkToDrain.length;
+            try {
+                handle.write(chunkToDrain.toString('utf8'));
+            } catch (err) {
+                console.warn(`[TerminalWsGateway] Failed to write input chunk to ${terminalName}:`, err);
+            }
+        }
+
+        if (queue.queuedBytes < INPUT_LOW_WATER_BYTES && queue.throttled) {
+            queue.throttled = false;
+        }
+
+        if (queue.chunks.length > 0) {
+            setImmediate(() => this.drainInputQueue(terminalName));
+        } else {
+            queue.draining = false;
+        }
+    }
+
+    private findSafeBoundary(buf: Buffer, maxLen: number): number {
+        let pos = maxLen;
+        while (pos > 0 && (buf[pos] & 0xc0) === 0x80) {
+            pos--;
+        }
+        let escPos = -1;
+        for (let i = Math.max(0, pos - 16); i < pos; i++) {
+            if (buf[i] === 0x1b) {
+                escPos = i;
+            }
+        }
+        if (escPos !== -1) {
+            let terminated = false;
+            for (let i = escPos + 1; i < pos; i++) {
+                const c = buf[i];
+                if ((c >= 0x40 && c <= 0x7e) || c === 0x7e) {
+                    terminated = true;
+                    break;
+                }
+            }
+            if (!terminated && escPos > 0) {
+                pos = escPos;
+            }
+        }
+        return pos > 0 ? pos : maxLen;
+    }
 
     constructor(
         fleetService: PtyFleetService,
@@ -140,7 +256,7 @@ export class TerminalWsGateway {
                 this.untrackTerminalData(event.name, event.code);
             }
             if (this.broadcastWs) {
-                this.broadcastWs('terminalsChanged', {});
+                this.broadcastWs('terminalsChanged', {}, 'terminals');
             }
         });
     }
@@ -170,11 +286,24 @@ export class TerminalWsGateway {
 
     private scheduleFlush(terminalName: string): void {
         const pending = this.pendingOutput.get(terminalName);
-        if (!pending || pending.timer) { return; }
-        pending.timer = setTimeout(() => {
-            pending.timer = undefined;
-            this.flushOutput(terminalName);
-        }, OUTPUT_FLUSH_MS);
+        if (!pending || pending.parts.length === 0) { return; }
+        this.pendingFlushTerminals.add(terminalName);
+        if (!this.sharedFlushInterval) {
+            this.sharedFlushInterval = setInterval(() => this.flushAllPending(), OUTPUT_FLUSH_MS);
+        }
+    }
+
+    private flushAllPending(): void {
+        if (this.pendingFlushTerminals.size === 0) {
+            if (this.sharedFlushInterval) {
+                clearInterval(this.sharedFlushInterval);
+                this.sharedFlushInterval = undefined;
+            }
+            return;
+        }
+        for (const name of Array.from(this.pendingFlushTerminals)) {
+            this.flushOutput(name);
+        }
     }
 
     /**
@@ -183,7 +312,10 @@ export class TerminalWsGateway {
      */
     private flushOutput(terminalName: string): void {
         const pending = this.pendingOutput.get(terminalName);
-        if (!pending || pending.parts.length === 0) { return; }
+        if (!pending || pending.parts.length === 0) {
+            this.pendingFlushTerminals.delete(terminalName);
+            return;
+        }
 
         // Take whole chunks up to the cap; anything left rides the next tick.
         const taken: string[] = [];
@@ -213,14 +345,15 @@ export class TerminalWsGateway {
         const targetClients = Array.from(this.clients).filter(c => c.terminalName === terminalName);
         for (const client of targetClients) {
             this.safeSendBinary(client.ws, frame);
+            client.unackedChars += combined.length;
         }
 
         this.checkBackpressure(terminalName, targetClients);
 
         // More than one cap's worth arrived in a single window — keep draining
         // rather than waiting for the next pty read to re-arm the timer.
-        if (pending.parts.length > 0) {
-            this.scheduleFlush(terminalName);
+        if (pending.parts.length === 0) {
+            this.pendingFlushTerminals.delete(terminalName);
         }
     }
 
@@ -238,7 +371,10 @@ export class TerminalWsGateway {
 
         this.scrollbackBuffers.delete(name);
         this.pendingOutput.delete(name);
+        this.pendingFlushTerminals.delete(name);
         this.pausedTerminals.delete(name);
+        this.pausedSince.delete(name);
+        this.inputQueues.delete(name);
 
         // Notify and close attached clients
         for (const client of Array.from(this.clients)) {
@@ -257,10 +393,7 @@ export class TerminalWsGateway {
         while (pending.parts.length > 0) {
             this.flushOutput(name);
         }
-        if (pending.timer) {
-            clearTimeout(pending.timer);
-            pending.timer = undefined;
-        }
+        this.pendingFlushTerminals.delete(name);
     }
 
     private checkBackpressure(terminalName: string, targetClients: ClientState[]): void {
@@ -268,12 +401,16 @@ export class TerminalWsGateway {
         if (!handle) return;
 
         let maxBuffered = 0;
+        let maxUnacked = 0;
         const now = Date.now();
 
         for (const client of targetClients) {
             const buffered = client.ws.bufferedAmount;
             if (buffered > maxBuffered) {
                 maxBuffered = buffered;
+            }
+            if (client.unackedChars > maxUnacked) {
+                maxUnacked = client.unackedChars;
             }
 
             if (buffered > HIGH_WATER_MARK_BYTES) {
@@ -291,17 +428,35 @@ export class TerminalWsGateway {
             }
         }
 
-        if (maxBuffered > HIGH_WATER_MARK_BYTES && !this.pausedTerminals.has(terminalName)) {
+        const pausedTime = this.pausedSince.get(terminalName);
+        if (pausedTime && now - pausedTime > MAX_PAUSE_MS) {
+            console.warn(`[TerminalWsGateway] Terminal ${terminalName} paused longer than MAX_PAUSE_MS (${MAX_PAUSE_MS}ms). Force resuming.`);
+            try {
+                handle.pty.resume();
+            } catch (err) {
+                console.warn(`[TerminalWsGateway] Failed to force resume terminal ${terminalName}:`, err);
+            }
+            this.pausedTerminals.delete(terminalName);
+            this.pausedSince.delete(terminalName);
+            for (const client of targetClients) {
+                client.unackedChars = 0;
+            }
+            return;
+        }
+
+        if ((maxBuffered > HIGH_WATER_MARK_BYTES || maxUnacked > HIGH_WATER_CHARS) && !this.pausedTerminals.has(terminalName)) {
             try {
                 handle.pty.pause();
                 this.pausedTerminals.add(terminalName);
+                this.pausedSince.set(terminalName, now);
             } catch (err) {
                 console.warn(`[TerminalWsGateway] Failed to pause terminal ${terminalName}:`, err);
             }
-        } else if (maxBuffered < LOW_WATER_MARK_BYTES && this.pausedTerminals.has(terminalName)) {
+        } else if (maxBuffered < LOW_WATER_MARK_BYTES && maxUnacked < LOW_WATER_CHARS && this.pausedTerminals.has(terminalName)) {
             try {
                 handle.pty.resume();
                 this.pausedTerminals.delete(terminalName);
+                this.pausedSince.delete(terminalName);
             } catch (err) {
                 console.warn(`[TerminalWsGateway] Failed to resume terminal ${terminalName}:`, err);
             }
@@ -357,6 +512,7 @@ export class TerminalWsGateway {
             ws,
             terminalName: terminal.name,
             isAlive: true,
+            unackedChars: 0,
         };
         this.clients.add(client);
 
@@ -404,12 +560,35 @@ export class TerminalWsGateway {
 
         ws.on('message', (msg) => {
             try {
+                if (Buffer.isBuffer(msg) || msg instanceof ArrayBuffer || ArrayBuffer.isView(msg)) {
+                    const buf = Buffer.from(msg as any);
+                    if (buf.length < 1) return;
+                    const opcode = buf[0];
+                    if (opcode === 0x01) {
+                        const payload = buf.subarray(1);
+                        if (payload.length > MAX_INPUT_FRAME_BYTES) {
+                            console.warn(`[TerminalWsGateway] Input frame size ${payload.length} exceeds max (${MAX_INPUT_FRAME_BYTES}) for ${terminal.name}`);
+                            return;
+                        }
+                        this.enqueueInput(terminal.name, payload);
+                    }
+                    return;
+                }
                 const parsed = JSON.parse(msg.toString());
                 if (parsed.t === 'input' && typeof parsed.data === 'string') {
-                    const decoded = Buffer.from(parsed.data, 'base64').toString('utf8');
-                    terminal.write(decoded);
+                    const decoded = Buffer.from(parsed.data, 'base64');
+                    if (decoded.length > MAX_INPUT_FRAME_BYTES) {
+                        console.warn(`[TerminalWsGateway] Legacy input frame size ${decoded.length} exceeds max for ${terminal.name}`);
+                        return;
+                    }
+                    this.enqueueInput(terminal.name, decoded);
                 } else if (parsed.t === 'resize' && typeof parsed.cols === 'number' && typeof parsed.rows === 'number') {
                     terminal.resize(parsed.cols, parsed.rows);
+                } else if (parsed.t === 'ack' && typeof parsed.chars === 'number') {
+                    const acked = Math.max(0, Math.min(parsed.chars, client.unackedChars));
+                    client.unackedChars -= acked;
+                    const targetClients = Array.from(this.clients).filter(c => c.terminalName === client.terminalName);
+                    this.checkBackpressure(client.terminalName, targetClients);
                 } else if (parsed.t === 'ping') {
                     this.safeSend(ws, { t: 'pong' });
                 }
@@ -486,10 +665,13 @@ export class TerminalWsGateway {
         if (this.drainInterval) {
             clearInterval(this.drainInterval);
         }
-        for (const pending of this.pendingOutput.values()) {
-            if (pending.timer) { clearTimeout(pending.timer); }
+        if (this.sharedFlushInterval) {
+            clearInterval(this.sharedFlushInterval);
+            this.sharedFlushInterval = undefined;
         }
+        this.pendingFlushTerminals.clear();
         this.pendingOutput.clear();
+        this.inputQueues.clear();
         for (const client of this.clients) {
             try { client.ws.close(); } catch { /* ignore */ }
         }

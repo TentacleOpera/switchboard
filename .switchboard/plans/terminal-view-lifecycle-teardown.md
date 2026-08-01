@@ -175,3 +175,10 @@ Confirmed by web research (2026-08-01); treat as settled — do not re-research.
 ## Recommendation
 
 Complexity 5 → **Standard coder.**
+
+## Completion Summary
+
+Implemented grace-period disposal (15s) for terminals unassigned from grid panes, avoiding resource leaks of WebSockets, xterm instances, and WebGL contexts. Added context capping (`MAX_WEBGL_CONTEXTS = 12`) to prevent GPU context loss cascades across panels, explicit xterm scrollback sizing (1000 lines), and distinct `disposed` flag for safe teardown.
+Files modified: `src/webview/terminals.js`, `src/test/terminal-flow-control-contract.test.js`.
+No issues encountered during implementation.
+

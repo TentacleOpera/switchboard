@@ -187,7 +187,8 @@
             width: 100%;
             box-sizing: border-box;
         }
-        .btn-rename-term {
+        .btn-rename-term,
+        .btn-clear-term {
             background: none;
             border: none;
             color: var(--text-secondary);
@@ -195,7 +196,13 @@
             font-size: 11px;
             padding: 0 4px;
         }
-        .btn-rename-term:hover { color: var(--accent-teal); }
+        .btn-rename-term:hover,
+        .btn-clear-term:hover { color: var(--accent-teal); }
+        .toolbar-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
         .terminal-item {
             padding: 8px 10px;
             border-radius: 4px;
@@ -668,9 +675,12 @@
                 <button type="button" class="btn-layout" data-layout="2x3">2x3</button>
                 <button type="button" class="btn-layout" data-layout="3x3">3x3</button>
             </div>
-            <label class="notify-toggle-label">
-                <input type="checkbox" id="notify-toggle"> OS Notifications
-            </label>
+            <div class="toolbar-actions">
+                <button type="button" id="btn-clear-all" class="btn-layout" title="Send /clear to every terminal">Clear All</button>
+                <label class="notify-toggle-label">
+                    <input type="checkbox" id="notify-toggle"> OS Notifications
+                </label>
+            </div>
         </div>
         <div id="layout-fallback-banner" class="layout-fallback-banner">
             Window too small for requested layout — using simpler layout floor.

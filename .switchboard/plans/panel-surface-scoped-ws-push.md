@@ -195,3 +195,10 @@ New `src/test/ws-surface-scoping-contract.test.js`, on the existing source-text 
 ## Recommendation
 
 Complexity 6 → **Send to Lead Coder.** The change is small but the failure mode is silent, and the released-build compatibility constraint is unforgiving.
+
+## Completion Summary
+
+Implemented surface-scoped WebSocket pushes and connect-time resync filtering across wsHub and transport.js. Added exported `SURFACES` and `PANEL_SURFACES` maps, query parameter parsing on upgrade, fail-open handling for undeclared/untagged connections, and surface tagging across state loops and verb broadcast sites.
+Files modified/created: `src/services/wsHub.ts`, `src/webview/transport.js`, `src/standalone/bootstrap.ts`, `src/standalone/terminalWsGateway.ts`, `src/test/ws-surface-scoping-contract.test.js`.
+No issues encountered during implementation.
+

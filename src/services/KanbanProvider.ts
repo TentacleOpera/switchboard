@@ -27,7 +27,7 @@ import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { buildFetchPlansPrompt } from './schedulerPresets';
 import { KanbanMigration } from './KanbanMigration';
-import { reviveWithRetention } from '../utils/reviveWithRetention';
+import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveWithRetention';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
@@ -1442,13 +1442,18 @@ export class KanbanProvider implements vscode.Disposable {
     /**
      * Open or reveal the Kanban panel in the editor area.
      */
-    public async open(tab?: string, column?: vscode.ViewColumn) {
+    public async open(tab?: string, column?: vscode.ViewColumn, restoredState?: any) {
         const targetColumn = column ?? vscode.ViewColumn.One;
+        // preserveFocus is a REVIVAL affordance, not an open affordance: a panel coming
+        // back after a reload must not steal focus, but a user who invoked the KANBAN
+        // command asked for this panel and expects it focused. `column` is supplied only
+        // by reviveWithRetention, so it is the honest discriminator.
+        const isRevival = column !== undefined;
         if (tab) {
             this._pendingTab = tab;
         }
         if (this._panel) {
-            this._panel.reveal(targetColumn, true);
+            this._panel.reveal(targetColumn, isRevival);
             // Switch the visible tab immediately — do NOT gate on fullSync.
             // The DB is kept in sync proactively by TaskViewerProvider's file watchers
             // (plan watcher, brain watcher, etc.), which call refreshUI on every file
@@ -1471,7 +1476,7 @@ export class KanbanProvider implements vscode.Disposable {
         this._panel = vscode.window.createWebviewPanel(
             'switchboard-kanban',
             'KANBAN',
-            { viewColumn: targetColumn, preserveFocus: true },
+            { viewColumn: targetColumn, preserveFocus: isRevival },
             {
                 enableScripts: true,
                 retainContextWhenHidden: true,
@@ -1481,7 +1486,7 @@ export class KanbanProvider implements vscode.Disposable {
 
         this._panel.iconPath = vscode.Uri.joinPath(this._extensionUri, 'icon.svg');
 
-        const html = await this._getHtml(this._panel.webview);
+        const html = injectInitialWebviewState(await this._getHtml(this._panel.webview), restoredState);
         this._panel.webview.html = html;
 
         this._panel.webview.onDidReceiveMessage(
@@ -1551,9 +1556,9 @@ export class KanbanProvider implements vscode.Disposable {
         panel: vscode.WebviewPanel,
         state: any
     ): Promise<void> {
-        await reviveWithRetention(panel, async (col) => {
-            await this.open(undefined, col);
-        });
+        await reviveWithRetention(panel, async (col, restoredState) => {
+            await this.open(undefined, col, restoredState);
+        }, state);
     }
 
     /**

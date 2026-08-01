@@ -28,8 +28,9 @@ import { matchWorktreePath } from '../services/worktreeResolver';
 import { createStandalonePlanIngestionHost, readPlanScannerCustomSourceDirs } from './planIngestionHost';
 import { PtyFleetService, PTY_IDE_NAME } from './ptyFleetService';
 import { isPtyAvailable } from './ptyBackend';
+import { SURFACES } from '../services/wsHub';
 import { TerminalWsGateway } from './terminalWsGateway';
-import { sendPromptToPty } from './ptyPromptDelivery';
+import { sendPromptToPty, clearPty } from './ptyPromptDelivery';
 
 import { ClickUpSyncService } from '../services/ClickUpSyncService';
 import { LinearSyncService } from '../services/LinearSyncService';
@@ -305,7 +306,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         try {
             const workspaceId = await getWorkspaceId();
             if (!workspaceId) {
-                server.broadcastWs('showStatusMessage', { message: 'No workspace configured yet.', isError: false });
+                server.broadcastWs('showStatusMessage', { message: 'No workspace configured yet.', isError: false }, SURFACES.common);
                 return;
             }
             const cards = await buildBoardCards(db, workspaceId, workspaceRoot, configProvider);
@@ -321,14 +322,14 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
             const allWorkspaceProjects: Record<string, string[]> = { [workspaceRoot]: projects };
 
             const state = [
-                { type: 'updateColumns', columns: DEFAULT_KANBAN_COLUMNS },
-                { type: 'updateWorkspaceSelection', workspaceRoot, workspaces: workspaceItems, activeFilter: null, projectFilter, projects, allWorkspaceProjects, controlPlaneMode: 'none', controlPlaneRoot: null, effectiveControlPlaneRoot: workspaceRoot, explicitControlPlaneRoot: workspaceRoot, pendingCandidate: null, repoScopeFilter: null, projectContextEnabled: false },
-                { type: 'cliTriggersState', enabled: false },
-                { type: 'switchboardThemeNameSetting', theme: 'afterburner' },
-                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: false, routingConfig: {}, featureWorktrees },
+                { type: 'updateColumns', columns: DEFAULT_KANBAN_COLUMNS, surface: SURFACES.kanban },
+                { type: 'updateWorkspaceSelection', workspaceRoot, workspaces: workspaceItems, activeFilter: null, projectFilter, projects, allWorkspaceProjects, controlPlaneMode: 'none', controlPlaneRoot: null, effectiveControlPlaneRoot: workspaceRoot, explicitControlPlaneRoot: workspaceRoot, pendingCandidate: null, repoScopeFilter: null, projectContextEnabled: false, surface: SURFACES.kanban },
+                { type: 'cliTriggersState', enabled: false, surface: SURFACES.kanban },
+                { type: 'switchboardThemeNameSetting', theme: 'afterburner', surface: SURFACES.common },
+                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: false, routingConfig: {}, featureWorktrees, surface: SURFACES.kanban },
             ];
             for (const msg of state) {
-                server.broadcastWs(msg.type, msg);
+                server.broadcastWs(msg.type, msg, msg.surface);
             }
         } catch (err) {
             console.error('[bootstrap] pushFullState failed:', err);
@@ -350,11 +351,11 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         const workspaceItems = [{ value: workspaceRoot, label: path.basename(workspaceRoot) }];
         const allWorkspaceProjects: Record<string, string[]> = { [workspaceRoot]: projects };
         return [
-            { type: 'updateColumns', columns: DEFAULT_KANBAN_COLUMNS },
-            { type: 'updateWorkspaceSelection', workspaceRoot, workspaces: workspaceItems, activeFilter: null, projectFilter, projects, allWorkspaceProjects, controlPlaneMode: 'none', controlPlaneRoot: null, effectiveControlPlaneRoot: workspaceRoot, explicitControlPlaneRoot: workspaceRoot, pendingCandidate: null, repoScopeFilter: null, projectContextEnabled: false },
-            { type: 'cliTriggersState', enabled: false },
-            { type: 'switchboardThemeNameSetting', theme: 'afterburner' },
-            { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: false, routingConfig: {}, featureWorktrees },
+            { type: 'updateColumns', columns: DEFAULT_KANBAN_COLUMNS, surface: SURFACES.kanban },
+            { type: 'updateWorkspaceSelection', workspaceRoot, workspaces: workspaceItems, activeFilter: null, projectFilter, projects, allWorkspaceProjects, controlPlaneMode: 'none', controlPlaneRoot: null, effectiveControlPlaneRoot: workspaceRoot, explicitControlPlaneRoot: workspaceRoot, pendingCandidate: null, repoScopeFilter: null, projectContextEnabled: false, surface: SURFACES.kanban },
+            { type: 'cliTriggersState', enabled: false, surface: SURFACES.kanban },
+            { type: 'switchboardThemeNameSetting', theme: 'afterburner', surface: SURFACES.common },
+            { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: false, routingConfig: {}, featureWorktrees, surface: SURFACES.kanban },
         ];
     };
 
@@ -406,7 +407,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                 role: record.dispatchedAgent,
                 worktreePath: worktreePath || undefined,
                 terminalName: terminalName || undefined,
-            });
+            }, SURFACES.common);
         })().catch(e => console.error('[bootstrap] agentCompleted broadcast failed:', e));
     });
     await ingestionEngine.initialize();
@@ -692,7 +693,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                         if (key === 'selectedRole') { value = undefined; }
                         else if (key.startsWith('roleConfig_')) { value = undefined; }
                     }
-                    server.broadcastWs('settingResult', { key, value });
+                    server.broadcastWs('settingResult', { key, value }, SURFACES.common);
                     return { success: true, key, value };
                 }
 
@@ -745,8 +746,8 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                     }
 
                     await moveSessionsToColumn(sessionIds, column, nextCol);
-                    server.broadcastWs('moveCards', { sessionIds, targetColumn: nextCol });
-                    server.broadcastWs('showStatusMessage', { message: `Moved ${sessionIds.length} plan(s) to ${nextCol}.`, isError: false });
+                    server.broadcastWs('moveCards', { sessionIds, targetColumn: nextCol }, SURFACES.kanban);
+                    server.broadcastWs('showStatusMessage', { message: `Moved ${sessionIds.length} plan(s) to ${nextCol}.`, isError: false }, SURFACES.common);
                     return { success: true, column, targetColumn: nextCol, moved: sessionIds.length };
                 }
 
@@ -777,8 +778,8 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                     const prompt = await buildPromptForCards(role, records, root);
 
                     await moveSessionsToColumn(sessionIds, column, nextCol);
-                    server.broadcastWs('moveCards', { sessionIds, targetColumn: nextCol });
-                    server.broadcastWs('showStatusMessage', { message: `Copied prompt for ${records.length} plan(s) and advanced to ${nextCol}.`, isError: false });
+                    server.broadcastWs('moveCards', { sessionIds, targetColumn: nextCol }, SURFACES.kanban);
+                    server.broadcastWs('showStatusMessage', { message: `Copied prompt for ${records.length} plan(s) and advanced to ${nextCol}.`, isError: false }, SURFACES.common);
                     return { success: true, prompt, targetColumn: nextCol };
                 }
 
@@ -801,8 +802,8 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                     const sessionIds: string[] = Array.isArray(payload.sessionIds) ? payload.sessionIds : (payload.sessionId ? [payload.sessionId] : []);
                     if (sessionIds.length === 0) { return { success: false, error: 'No sessionIds' }; }
                     await moveSessionsToColumn(sessionIds, 'ACCEPTANCE TESTED', 'COMPLETED');
-                    server.broadcastWs('moveCards', { sessionIds, targetColumn: 'COMPLETED' });
-                    server.broadcastWs('showStatusMessage', { message: `Completed ${sessionIds.length} plan(s).`, isError: false });
+                    server.broadcastWs('moveCards', { sessionIds, targetColumn: 'COMPLETED' }, SURFACES.kanban);
+                    server.broadcastWs('showStatusMessage', { message: `Completed ${sessionIds.length} plan(s).`, isError: false }, SURFACES.common);
                     return { success: true };
                 }
 
@@ -905,7 +906,7 @@ ${skillContent}
 ${existingContent ? existingContent : '(file is empty or does not exist yet — author a complete plan at the path above)'}
 
 Read the current content above. Deepen the problem analysis, verify every file path/line number against the real codebase, and refine the Proposed Changes and Verification Plan per the skill instructions. Write the improved markdown directly to the local file path, preserving any YAML frontmatter. Do NOT modify any database or kanban card. Report back with a summary of what you deepened.`;
-                        server.broadcastWs('showStatusMessage', { message: 'Improve-plan prompt copied to clipboard. Paste it into your agent.', isError: false });
+                        server.broadcastWs('showStatusMessage', { message: 'Improve-plan prompt copied to clipboard. Paste it into your agent.', isError: false }, SURFACES.common);
                         return { success: true, prompt };
                     } catch (e) {
                         return { success: false, error: e instanceof Error ? e.message : String(e) };
@@ -1010,6 +1011,19 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     return { success: ok };
                 }
 
+                case 'ptyClearTerminal': {
+                    const handle = ptyFleetService.get(payload.name);
+                    if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
+                    if (handle.status === 'active') { await clearPty(handle); }
+                    return { success: true };
+                }
+
+                case 'ptyClearAllTerminals': {
+                    const active = ptyFleetService.listActive();
+                    await Promise.all(active.map(t => clearPty(t)));
+                    return { success: true, cleared: active.length };
+                }
+
                 case 'triggerAction': {
                     const sourceColumn: string | undefined = payload.column;
                     const explicitTarget: string | undefined = payload.targetColumn;
@@ -1082,10 +1096,10 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         const moveFrom = sourceColumn || records[0]?.kanbanColumn;
                         if (moveFrom && moveFrom !== targetColumn) {
                             await moveSessionsToColumn(sessionIds, moveFrom, targetColumn);
-                            server.broadcastWs('moveCards', { sessionIds, targetColumn });
+                            server.broadcastWs('moveCards', { sessionIds, targetColumn }, SURFACES.kanban);
                         }
                     }
-                    server.broadcastWs('showStatusMessage', { message: `Dispatched ${records.length} plan(s) to ${terminal.friendlyName}.`, isError: false });
+                    server.broadcastWs('showStatusMessage', { message: `Dispatched ${records.length} plan(s) to ${terminal.friendlyName}.`, isError: false }, SURFACES.common);
                     return { success: true, targetColumn, terminalName: terminal.friendlyName };
                 }
 

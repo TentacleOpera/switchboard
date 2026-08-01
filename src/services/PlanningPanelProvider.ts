@@ -38,7 +38,7 @@ import { buildWorkspaceItems } from './workspaceUtils';
 import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import { InsightManager } from './InsightManager';
 import { GovernanceFileKey } from './constitutionUtils';
-import { reviveWithRetention } from '../utils/reviveWithRetention';
+import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveWithRetention';
 
 import { getProjectPrdPath, sanitizeProjectSlug, buildPrdBuilderPrompt } from './prdUtils';
 import { classifyHttpError } from './errorMessages';
@@ -556,18 +556,23 @@ export class PlanningPanelProvider {
         });
     }
 
-    private async _doOpenProject(column?: vscode.ViewColumn): Promise<void> {
+    private async _doOpenProject(column?: vscode.ViewColumn, restoredState?: any): Promise<void> {
         const targetColumn = column ?? vscode.ViewColumn.One;
+        // `column` is supplied only by reviveWithRetention, so it doubles as the
+        // revival discriminator: preserveFocus on revival, focus on user-invoked open.
+        const isRevival = column !== undefined;
         this._lastWebviewRootsSignature = '';
         if (this._projectPanel) {
-            this._projectPanel.reveal(targetColumn, true);
+            // Reveal in place (undefined column) unless reviving into a captured group —
+            // passing a concrete column would YANK an already-open panel to that group.
+            this._projectPanel.reveal(column, true);
             return;
         }
 
         this._projectPanel = vscode.window.createWebviewPanel(
             'switchboard-project',
             'PROJECT',
-            { viewColumn: targetColumn, preserveFocus: true },
+            { viewColumn: targetColumn, preserveFocus: isRevival },
             {
                 enableScripts: true,
                 retainContextWhenHidden: true
@@ -592,7 +597,7 @@ export class PlanningPanelProvider {
         this._projectPanel.iconPath = vscode.Uri.joinPath(this._extensionUri, 'icon.svg');
         this._updateWebviewRoots();
 
-        this._projectPanel.webview.html = this._getProjectHtml(this._projectPanel.webview);
+        this._projectPanel.webview.html = injectInitialWebviewState(this._getProjectHtml(this._projectPanel.webview), restoredState);
 
         this._projectPanel.webview.onDidReceiveMessage(
             async message => {
@@ -736,8 +741,10 @@ export class PlanningPanelProvider {
         return htmlContent;
     }
 
-    public async open(column?: vscode.ViewColumn): Promise<void> {
+    public async open(column?: vscode.ViewColumn, restoredState?: any): Promise<void> {
         const targetColumn = column ?? vscode.ViewColumn.One;
+        // preserveFocus only on revival — see _doOpenProject().
+        const isRevival = column !== undefined;
         // Force the next local-docs send to render (the dedup cache must not starve a
         // freshly revealed/created panel).
         this._lastLocalDocsSignature = '';
@@ -749,14 +756,14 @@ export class PlanningPanelProvider {
         // scripts, and freezing the panel on an infinite "Loading…" (stuck on Local Docs).
         this._lastWebviewRootsSignature = '';
         if (this._panel) {
-            this._panel.reveal(targetColumn, true);
+            this._panel.reveal(targetColumn, isRevival);
             return;
         }
 
         this._panel = vscode.window.createWebviewPanel(
             'switchboard-planning',
             'ARTIFACTS',
-            { viewColumn: targetColumn, preserveFocus: true },
+            { viewColumn: targetColumn, preserveFocus: isRevival },
             {
                 // enableScripts MUST be set at creation time, not left to depend solely on
                 // _updateWebviewRoots() — otherwise a stale dedup guard can leave a new panel
@@ -768,7 +775,7 @@ export class PlanningPanelProvider {
         this._panel.iconPath = vscode.Uri.joinPath(this._extensionUri, 'icon.svg');
         this._updateWebviewRoots();
 
-        this._panel.webview.html = this._getHtml(this._panel.webview);
+        this._panel.webview.html = injectInitialWebviewState(this._getHtml(this._panel.webview), restoredState);
 
         this._panel.webview.onDidReceiveMessage(
             async message => {
@@ -859,9 +866,9 @@ export class PlanningPanelProvider {
         panel: vscode.WebviewPanel,
         state: any
     ): Promise<void> {
-        await reviveWithRetention(panel, async col => {
-            await this.open(col);
-        });
+        await reviveWithRetention(panel, async (col, restoredState) => {
+            await this.open(col, restoredState);
+        }, state);
     }
 
     public async deserializeProjectPanel(
@@ -875,153 +882,18 @@ export class PlanningPanelProvider {
             panel.dispose();
             return;
         }
-        await reviveWithRetention(panel, async col => {
-            await this._doOpenProject(col);
-        });
+        await reviveWithRetention(panel, async (col, restoredState) => {
+            await this._doOpenProject(col, restoredState);
+        }, state);
     }
 
-    private async _hydratePanel(
-        panel: vscode.WebviewPanel,
-        isProject: boolean
-    ): Promise<void> {
-        // Critical: set localResourceRoots so the webview can load scripts.
-        // Reset the dedup guard first (mirrors open()/openProject()). Without this,
-        // when BOTH the Planning and Project panels are restored in the same session,
-        // the first _hydratePanel() caches the roots signature, and the second call
-        // short-circuits in _updateWebviewRoots() — leaving the second panel's
-        // webview.options (enableScripts + localResourceRoots) unset and its scripts
-        // blocked (stuck on "Loading…").
-        this._lastWebviewRootsSignature = '';
-        this._updateWebviewRoots();
-
-        panel.iconPath = vscode.Uri.joinPath(this._extensionUri, 'icon.svg');
-        panel.webview.html = isProject
-            ? this._getProjectHtml(panel.webview)
-            : this._getHtml(panel.webview);
-
-        panel.webview.onDidReceiveMessage(
-            async (msg) => {
-                try {
-                    await this._handleMessage(msg, isProject);
-                } catch (err) {
-                    console.error(`[${isProject ? 'ProjectPanel' : 'PlanningPanel'}] Message handler error:`, err);
-                    this._pushTo(panel, 'planning', { type: 'error', message: String(err) });
-                }
-            },
-            null,
-            this._disposables
-        );
-
-        if (!isProject) {
-            this._initPlanningService();
-        }
-
-        // Use the same dispose semantics as open(): for the planning panel,
-        // dispose all shared resources; for project panel, full cleanup mirroring
-        // openProject()'s onDidDispose (line 382-394) — null the ref, reset ready
-        // state, clear pending messages, and kill the ready timer. The previous
-        // version only nulled _projectPanel, leaving stale ready state that caused
-        // postMessageToProjectWebview to silently drop messages (no-op via optional
-        // chaining) instead of queueing them during the close→reopen window.
-        if (isProject) {
-            panel.onDidDispose(() => {
-                this._projectPanel = undefined;
-                this._projectPanelReady = false;
-                this._projectPanelOpening = undefined;
-                this._projectPanelRestoring = false;
-                this._pendingProjectMessages = [];
-                if (this._projectPanelReadyTimer) {
-                    clearTimeout(this._projectPanelReadyTimer);
-                    this._projectPanelReadyTimer = undefined;
-                }
-                this._projectPanelConfigDisposable?.dispose();
-                this._projectPanelConfigDisposable = undefined;
-            }, null, this._disposables);
-
-            panel.onDidChangeViewState(
-                (e) => {
-                    if (e.webviewPanel.visible) {
-                        this.postMessageToProjectWebview({ type: 'refreshKanbanPlans' });
-                    }
-                },
-                null,
-                this._disposables
-            );
-        } else {
-            panel.onDidDispose(() => {
-                this._broadcaster?.setWebview(null);
-                this.dispose();
-            }, null, this._disposables);
-        }
-
-        const theme = this._seams().pathConfig.getConfigStringWithDefault('theme.name', 'afterburner');
-        this._pushTo(panel, 'planning', { type: 'switchboardThemeChanged', theme });
-        const disabled = this._seams().pathConfig.getConfigBoolean('theme.disableCyberAnimation', false);
-        this._pushTo(panel, 'planning', { type: 'cyberAnimationSetting', disabled });
-        const scanlinesDisabled = this._seams().pathConfig.getConfigBoolean('theme.disableCyberScanlines', false);
-        this._pushTo(panel, 'planning', { type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
-
-        // For the Planning (non-Project) panel, replicate the live-update listeners and file
-        // watchers that open() registers, so a RESTORED panel auto-refreshes on external
-        // file/theme/workspace changes instead of going stale until the user reopens it.
-        // (Adapters self-register lazily in _handleMessage; periodic sync is intentionally NOT
-        // started here — deferred to the next explicit open() to avoid duplicate sync jobs.)
-        if (!isProject) {
-            this._disposables.push(
-                vscode.window.onDidChangeActiveColorTheme(() => {
-                    this.postMessageToWebview({ type: 'themeChanged' });
-                })
-            );
-
-            this._disposables.push(
-                vscode.workspace.onDidChangeConfiguration(e => {
-                    if (e.affectsConfiguration('switchboard.theme.disableCyberAnimation')) {
-                        const animDisabled = this._seams().pathConfig.getConfigBoolean('theme.disableCyberAnimation', false);
-                        this.postMessageToWebview({ type: 'cyberAnimationSetting', disabled: animDisabled });
-                    }
-                    if (e.affectsConfiguration('switchboard.theme.disableCyberScanlines')) {
-                        const scanlinesDisabled = this._seams().pathConfig.getConfigBoolean('theme.disableCyberScanlines', false);
-                        this.postMessageToWebview({ type: 'cyberScanlinesSetting', disabled: scanlinesDisabled });
-                    }
-                    if (e.affectsConfiguration('switchboard.theme.name')) {
-                        const themeName = this._seams().pathConfig.getConfigStringWithDefault('theme.name', 'afterburner');
-                        this.postMessageToWebview({ type: 'switchboardThemeChanged', theme: themeName });
-                    }
-                    if (e.affectsConfiguration('switchboard.theme.ultracodeAnimation')) {
-                        const enabled = this._seams().pathConfig.getConfigBoolean('theme.ultracodeAnimation', false);
-                        this.postMessageToWebview({ type: 'ultracodeAnimationSetting', enabled });
-                    }
-                })
-            );
-        } else {
-            this._registerProjectPanelConfigListener();
-        }
-
-            this._disposables.push(
-                vscode.workspace.onDidChangeWorkspaceFolders(() => {
-                    console.log('[PlanningPanel] Workspace folders changed, re-registering adapters');
-                    this._ensureAdaptersRegistered();
-                    this._setupKanbanPlansWatcher();
-                    this._setupFeatureDocsWatcher();
-                    this._setupConstitutionWatcher();
-                    this._setupInsightsWatcher();
-                    this.postMessageToWebview({
-                        type: 'workspaceItemsUpdated',
-                        items: buildWorkspaceItems(this._getWorkspaceRoots())
-                    });
-                })
-            );
-
-            const allRoots = this._getWorkspaceRoots();
-            const workspaceRoot = this._getWorkspaceRoot() || (allRoots.length > 0 ? allRoots[0] : undefined);
-            this._setupDocsFolderWatcher(workspaceRoot);
-            this._setupLocalFolderWatchers();
-            this._setupAntigravityWatcher();
-            this._setupKanbanPlansWatcher();
-            this._setupFeatureDocsWatcher();
-            this._setupConstitutionWatcher();
-            this._setupInsightsWatcher();
-    }
+    // NOTE: the former `_hydratePanel()` lived here. It was the adoption path used by
+    // `deserializeWebviewPanel`/`deserializeProjectPanel` to wire an already-created
+    // restored panel. Both deserialize paths now re-create through `open()` /
+    // `_doOpenProject()` (see utils/reviveWithRetention), which is the ONLY way a panel
+    // gets `retainContextWhenHidden`. The method had no remaining callers and every
+    // step it performed is done by the create paths, so it was removed rather than left
+    // as a second, divergent way to bring up a panel.
 
 
     public reveal(): void {

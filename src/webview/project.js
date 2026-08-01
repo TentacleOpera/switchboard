@@ -1,6 +1,20 @@
 (function() {
     const vscode = acquireVsCodeApi();
 
+    // Revived panels boot as a NEW webview (see utils/reviveWithRetention), so
+    // getState() is undefined and every setState-persisted preference would silently
+    // reset on each window reload. The host inlines the pre-reload payload into a
+    // <meta name="sb-initial-state"> tag (meta, not inline script: the strict panel CSPs
+    // block un-nonced inline scripts). Seed it once, before the first getState() read.
+    try {
+        if (vscode.getState() === undefined) {
+            const _sbSeedEl = document.querySelector('meta[name="sb-initial-state"]');
+            if (_sbSeedEl && _sbSeedEl.content) {
+                vscode.setState(JSON.parse(_sbSeedEl.content));
+            }
+        }
+    } catch (_) {}
+
     // Tab management
     const tabs = document.querySelectorAll('.shared-tab-btn');
     const tabContents = document.querySelectorAll('.shared-tab-content');

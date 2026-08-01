@@ -189,6 +189,27 @@ jobs:
       - name: HTML preview fluid width regression (injected script parses, fluid/intrinsic classifier)
         run: npm run test:contract:html-preview-fluid-width
 
+      # Wired during the assignee-filter review pass. Two defects the plan-compliance
+      # view missed: the option builder keyed strictly on assignee `id`, but the
+      # file-backed sidebar path (localTicketFilesListed) carries assignee NAMES only —
+      # so the dropdown listed nobody in the tab's steady state; and Linear/ClickUp share
+      # ONE <select> while caching its html per-provider, so a workspace round-trip left
+      # the other provider's options in the DOM and silently wiped the saved filter.
+      # This test pins the name-fallback identity, the single shared cache, and 1:1
+      # reset-site parity with the status filters (a missed reset = empty sidebar).
+      - name: Tickets assignee filter regression (name-fallback identity, shared cache, reset parity)
+        run: npm run test:contract:tickets-assignee-filter
+
+      # Wired during the panel-revival review pass. Restored panels are now re-created
+      # rather than adopted (retainContextWhenHidden is creation-time-only), which makes
+      # three things load-bearing and silently breakable: no listeners may be wired to the
+      # discarded panel (use-after-free on dispose ordering), the serialized setState
+      # payload must be forwarded into the new webview (or every persisted preference
+      # resets on each window reload), and preserveFocus must apply on revival ONLY (or
+      # user-invoked panel commands stop taking focus).
+      - name: Panel revival retention contract (no adoption, state forwarding, focus discipline)
+        run: npm run test:contract:panel-revival-retention
+
       # Wired during the scrollbar-styling review pass. The scrollbar block was
       # appended to project.html's <style> in a way that DELETED the preceding
       # `.review-mode-btn.active` rule and reused its closing brace, silently

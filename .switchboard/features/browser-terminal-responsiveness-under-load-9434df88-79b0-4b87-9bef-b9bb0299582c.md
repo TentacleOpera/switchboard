@@ -23,9 +23,9 @@ Land the flow-control plan first — it is the keystone and the other three are 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Terminal Output Flow Control: Ack-Based Backpressure and Page-Level Batching](../plans/terminal-output-flow-control.md) — **PLAN REVIEWED**
-- [ ] [Terminal View Lifecycle: Dispose Views That Leave a Pane](../plans/terminal-view-lifecycle-teardown.md) — **PLAN REVIEWED**
-- [ ] [Scope WS Pushes to the Panels That Asked For Them](../plans/panel-surface-scoped-ws-push.md) — **PLAN REVIEWED**
-- [ ] [Terminal Input Path: Binary Frames and Paced PTY Writes](../plans/terminal-input-paste-path.md) — **PLAN REVIEWED**
+- [ ] [Terminal Output Flow Control: Ack-Based Backpressure and Page-Level Batching](../plans/terminal-output-flow-control.md) — **LEAD CODED**
+- [ ] [Terminal View Lifecycle: Dispose Views That Leave a Pane](../plans/terminal-view-lifecycle-teardown.md) — **LEAD CODED**
+- [ ] [Scope WS Pushes to the Panels That Asked For Them](../plans/panel-surface-scoped-ws-push.md) — **LEAD CODED**
+- [ ] [Terminal Input Path: Binary Frames and Paced PTY Writes](../plans/terminal-input-paste-path.md) — **LEAD CODED**
 <!-- END SUBTASKS -->
 

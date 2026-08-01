@@ -234,3 +234,18 @@ Every assertion in the file is driven off this array, so the new verbs are autom
 9. **No confirm gate** — every click acts immediately, no dialog, no second click.
 
 **Recommendation: Send to Intern** (complexity 2 — template-driven verb arms and buttons; the only subtleties, both-hosts coverage and the error-tolerant helper, are fully specified above).
+
+## Completion Report
+
+Implemented per-terminal clear buttons (`⌫`) in the sidebar and pane headers, plus a `Clear All` button in the browser PTY terminal layout toolbar. Added backend verb arms `ptyClearTerminal` and `ptyClearAllTerminals` to both standalone and extension host PTY verb switch handlers, backed by an error-tolerant `clearPty` helper in `ptyPromptDelivery.ts` that reuses terminal lock serialisation. Updated contract test suite verb definitions in `pty-route-surface-contract.test.js`.
+
+Files changed:
+- `src/standalone/ptyPromptDelivery.ts`
+- `src/standalone/bootstrap.ts`
+- `src/services/TaskViewerProvider.ts`
+- `src/webview/terminals.js`
+- `src/webview/terminals.html`
+- `src/test/pty-route-surface-contract.test.js`
+
+No issues encountered.
+

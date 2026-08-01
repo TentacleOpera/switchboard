@@ -215,3 +215,10 @@ Confirmed by web research (2026-08-01); treat as settled — do not re-research.
 ## Recommendation
 
 Complexity 5 → **Standard coder**, with the caveat that the chunk-boundary logic is the whole plan. If verification item 3 is skipped, this ships silent data corruption.
+
+## Completion Summary
+
+Replaced base64 JSON input frames with binary frames (`0x01` opcode + UTF-8 payload). Implemented per-terminal input FIFO queue with 4096-byte chunk pacing (`setImmediate`), safe boundary scanning past UTF-8 continuation bytes and escape sequences, high/low watermark throttling notice (`inputThrottled`), and 5MB frame size capping.
+Files modified/created: `src/webview/terminals.js`, `src/standalone/terminalWsGateway.ts`, `src/test/terminal-input-path-contract.test.js`.
+No issues encountered during implementation.
+

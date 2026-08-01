@@ -23,7 +23,7 @@ import * as crypto from 'crypto';
 import { isPtyAvailable } from '../standalone/ptyBackend';
 import { PtyFleetService, PTY_IDE_NAME } from '../standalone/ptyFleetService';
 import { TerminalWsGateway } from '../standalone/terminalWsGateway';
-import { sendPromptToPty } from '../standalone/ptyPromptDelivery';
+import { sendPromptToPty, clearPty } from '../standalone/ptyPromptDelivery';
 
 import * as cp from 'child_process';
 import { promisify } from 'util';
@@ -1747,6 +1747,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 case 'ptyRenameTerminal': {
                     const ok = this._ptyFleetService.rename(payload.name, payload.alias);
                     return { success: ok };
+                }
+                case 'ptyClearTerminal': {
+                    const handle = this._ptyFleetService.get(payload.name);
+                    if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
+                    if (handle.status === 'active') { await clearPty(handle); }
+                    return { success: true };
+                }
+                case 'ptyClearAllTerminals': {
+                    const active = this._ptyFleetService.listActive();
+                    await Promise.all(active.map(t => clearPty(t)));
+                    return { success: true, cleared: active.length };
                 }
                 default:
                     return { success: false, error: `Unknown terminal verb '${verb}'` };

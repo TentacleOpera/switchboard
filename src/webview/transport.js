@@ -79,6 +79,16 @@
         }
     };
 
+    const PANEL_SURFACES_MAP = {
+        board: ['kanban', 'common'],
+        kanban: ['kanban', 'common'],
+        terminals: ['terminals', 'common'],
+        planning: ['planning', 'common'],
+        design: ['design', 'common'],
+        setup: ['setup', 'common'],
+        memo: ['memo', 'common'],
+    };
+
     function wsUrl() {
         const loc = window.location;
         const protocol = loc.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -92,6 +102,10 @@
             // Empty value = declared-null ("no project filter"); the server maps it
             // back to null. wsUrl() reads the LIVE scope so reconnects re-declare.
             params.push(`scope=${encodeURIComponent(pushScope ?? '')}`);
+        }
+        const panel = document.body && document.body.dataset ? document.body.dataset.panel : null;
+        if (panel && PANEL_SURFACES_MAP[panel]) {
+            params.push(`surfaces=${encodeURIComponent(PANEL_SURFACES_MAP[panel].join(','))}`);
         }
         if (params.length > 0) {
             url += `?${params.join('&')}`;

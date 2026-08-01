@@ -1,6 +1,20 @@
 (function() {
     const vscode = acquireVsCodeApi();
 
+    // Revived panels boot as a NEW webview (see utils/reviveWithRetention), so
+    // getState() is undefined and every setState-persisted preference would silently
+    // reset on each window reload. The host inlines the pre-reload payload into a
+    // <meta name="sb-initial-state"> tag (meta, not inline script: the strict panel CSPs
+    // block un-nonced inline scripts). Seed it once, before the first getState() read.
+    try {
+        if (vscode.getState() === undefined) {
+            const _sbSeedEl = document.querySelector('meta[name="sb-initial-state"]');
+            if (_sbSeedEl && _sbSeedEl.content) {
+                vscode.setState(JSON.parse(_sbSeedEl.content));
+            }
+        }
+    } catch (_) {}
+
     // Restore persisted state
     const persistedState = vscode.getState() || {};
 
@@ -587,8 +601,11 @@
 
     // Cached HTML strings for DOM guard comparisons
     let _lastTicketsStateFilterHtml = '';
-    let _lastTicketsLinearAssigneeFilterHtml = '';
-    let _lastTicketsClickUpAssigneeFilterHtml = '';
+    // ONE cache for the assignee select: unlike the state/status filters (two separate
+    // elements), Linear and ClickUp share a single `tickets-assignee-filter` element, so
+    // per-provider caches would report "unchanged" while the DOM held the other
+    // provider's options. Both builders emit the same string shape for direct comparison.
+    let _lastTicketsAssigneeFilterHtml = '';
     let _lastTicketsProjectPickerHtml = '';
     let _lastTicketsIssuesContainerHtml = '';
     let _lastTicketsDetailContentHtml = '';
@@ -10918,18 +10935,37 @@ Instructions:
         linearProjectStateFilterValue = stateFilter.value;
     }
 
+    // Assignee identity for the Tickets assignee filter. Prefer the stable remote id,
+    // but fall back to a name-derived key: the file-backed sidebar path
+    // (`localTicketFilesListed`) is this tab's steady state and carries assignee NAMES
+    // only — ticket-file frontmatter stores `assignees: Name, Name` with no ids, and the
+    // webview maps them to `{ username: name }` / `{ name }`. An id-only key therefore
+    // leaves the dropdown permanently empty on the path the user actually sees.
+    const TICKETS_ASSIGNEE_NAME_KEY_PREFIX = 'name:';
+    function _ticketsAssigneeKey(id, name) {
+        const rawId = (id === null || id === undefined) ? '' : String(id).trim();
+        if (rawId) return rawId;
+        const rawName = String(name || '').trim();
+        return rawName ? TICKETS_ASSIGNEE_NAME_KEY_PREFIX + rawName : '';
+    }
+    function _clickUpAssigneeIdentity(a) {
+        const name = String(a?.username || a?.email || (a?.id ?? '')).trim();
+        return { key: _ticketsAssigneeKey(a?.id, name), name };
+    }
+    function _linearAssigneeIdentity(assignee) {
+        const name = String(assignee?.name || assignee?.email || (assignee?.id ?? '')).trim();
+        return { key: _ticketsAssigneeKey(assignee?.id, name), name };
+    }
+
     function renderTicketsLinearAssigneeFilterOptions() {
         const { assigneeFilter } = getTicketsTabElements();
         if (!assigneeFilter) return;
 
         const assigneeMap = new Map();
         for (const issue of linearProjectIssues) {
-            if (issue?.assignee?.id) {
-                const id = String(issue.assignee.id);
-                const name = String(issue.assignee.name || issue.assignee.email || id).trim();
-                if (name && !assigneeMap.has(id)) {
-                    assigneeMap.set(id, name);
-                }
+            const { key, name } = _linearAssigneeIdentity(issue?.assignee);
+            if (key && name && !assigneeMap.has(key)) {
+                assigneeMap.set(key, name);
             }
         }
 
@@ -10939,9 +10975,9 @@ Instructions:
             `<option value="${escapeAttr(id)}">${escapeHtml(name)}</option>`
         ).join('')}`;
 
-        if (_lastTicketsLinearAssigneeFilterHtml !== newHtml) {
+        if (_lastTicketsAssigneeFilterHtml !== newHtml) {
             assigneeFilter.innerHTML = newHtml;
-            _lastTicketsLinearAssigneeFilterHtml = newHtml;
+            _lastTicketsAssigneeFilterHtml = newHtml;
         }
 
         const validValues = ['', TICKETS_ASSIGNEE_UNASSIGNED, ...assigneeMap.keys()];
@@ -11105,7 +11141,7 @@ Instructions:
             if (assigneeFilter === TICKETS_ASSIGNEE_UNASSIGNED) {
                 if (issue?.assignee) return false;
             } else if (assigneeFilter) {
-                if (String(issue?.assignee?.id || '') !== assigneeFilter) return false;
+                if (_linearAssigneeIdentity(issue?.assignee).key !== assigneeFilter) return false;
             }
             if (!search) return true;
             const haystack = [
@@ -11772,7 +11808,7 @@ Instructions:
             clickUpProjectAssigneeFilterValue = '';
             availableClickUpStatuses = [];
             _lastTicketsClickUpStateFilterHtml = '';
-            _lastTicketsClickUpAssigneeFilterHtml = '';
+            _lastTicketsAssigneeFilterHtml = '';
             // Move mode: browse the hierarchy for move-target selection without
             // persisting the browsing state. skip saveTicketsState() and
             // clickupSaveSpaceSelection so the user's active source is not
@@ -11839,7 +11875,7 @@ Instructions:
             clickUpProjectAssigneeFilterValue = '';
             availableClickUpStatuses = [];
             _lastTicketsClickUpStateFilterHtml = '';
-            _lastTicketsClickUpAssigneeFilterHtml = '';
+            _lastTicketsAssigneeFilterHtml = '';
             // Move mode: browse folders for move-target selection without persisting.
             // Skip saveTicketsState() and clickupSaveFolderSelection; still load lists
             // so the user can navigate to a target list.
@@ -11936,7 +11972,7 @@ Instructions:
             clickUpProjectAssigneeFilterValue = '';
             availableClickUpStatuses = [];
             _lastTicketsClickUpStateFilterHtml = '';
-            _lastTicketsClickUpAssigneeFilterHtml = '';
+            _lastTicketsAssigneeFilterHtml = '';
             saveTicketsState();
             if (listId) {
                 const spaceName = clickUpAvailableSpaces.find(s => s.id === clickUpSelectedSpaceId)?.name || '';
@@ -12019,12 +12055,9 @@ Instructions:
         for (const task of clickUpProjectIssues) {
             if (Array.isArray(task?.assignees)) {
                 for (const a of task.assignees) {
-                    if (a?.id != null) {
-                        const id = String(a.id);
-                        const name = String(a.username || a.email || id).trim();
-                        if (name && !assigneeMap.has(id)) {
-                            assigneeMap.set(id, name);
-                        }
+                    const { key, name } = _clickUpAssigneeIdentity(a);
+                    if (key && name && !assigneeMap.has(key)) {
+                        assigneeMap.set(key, name);
                     }
                 }
             }
@@ -12032,15 +12065,15 @@ Instructions:
 
         const sortedAssignees = Array.from(assigneeMap.entries()).sort((a, b) => a[1].localeCompare(b[1]));
 
-        const html = `
-            <option value="">All assignees</option>
-            <option value="${TICKETS_ASSIGNEE_UNASSIGNED}">Unassigned</option>
-            ${sortedAssignees.map(([id, name]) => `<option value="${escapeAttr(id)}">${escapeHtml(name)}</option>`).join('')}
-        `;
+        // Same single-line shape as the Linear builder: both write to the SAME select,
+        // so the cached string must be directly comparable across providers.
+        const html = `<option value="">All assignees</option><option value="${TICKETS_ASSIGNEE_UNASSIGNED}">Unassigned</option>${sortedAssignees.map(([id, name]) =>
+            `<option value="${escapeAttr(id)}">${escapeHtml(name)}</option>`
+        ).join('')}`;
 
-        if (_lastTicketsClickUpAssigneeFilterHtml !== html) {
+        if (_lastTicketsAssigneeFilterHtml !== html) {
             assigneeFilter.innerHTML = html;
-            _lastTicketsClickUpAssigneeFilterHtml = html;
+            _lastTicketsAssigneeFilterHtml = html;
         }
 
         const validValues = ['', TICKETS_ASSIGNEE_UNASSIGNED, ...assigneeMap.keys()];
@@ -12058,7 +12091,7 @@ Instructions:
             if (assigneeFilter === TICKETS_ASSIGNEE_UNASSIGNED) {
                 if (Array.isArray(task?.assignees) && task.assignees.length > 0) return false;
             } else if (assigneeFilter) {
-                if (!Array.isArray(task?.assignees) || !task.assignees.some(a => String(a?.id) === assigneeFilter)) return false;
+                if (!Array.isArray(task?.assignees) || !task.assignees.some(a => _clickUpAssigneeIdentity(a).key === assigneeFilter)) return false;
             }
             if (!search) return true;
             const haystack = [
@@ -12580,7 +12613,7 @@ Instructions:
         pendingClickUpDetailIssueId = '';
 
         _lastTicketsStateFilterHtml = '';
-        _lastTicketsLinearAssigneeFilterHtml = '';
+        _lastTicketsAssigneeFilterHtml = '';
         _lastTicketsProjectPickerHtml = '';
         _lastTicketsIssuesContainerHtml = '';
         _lastTicketsDetailContentHtml = '';
@@ -12588,7 +12621,6 @@ Instructions:
         _lastTicketsClickUpIssuesContainerHtml = '';
         _lastTicketsClickUpDetailContentHtml = '';
         _lastTicketsClickUpStateFilterHtml = '';
-        _lastTicketsClickUpAssigneeFilterHtml = '';
         _lastTicketsClickUpSubtasksNavHtml = '';
         _lastTicketsLinearSubtasksNavHtml = '';
         _lastTicketsTagsKey = '';

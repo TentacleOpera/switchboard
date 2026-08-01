@@ -17,7 +17,7 @@ import { PanelStateStore } from './PanelStateStore';
 import { buildWorkspaceItems } from './workspaceUtils';
 import { buildDesignSystemBlock } from './agentPromptBuilder';
 import { getProjectDesignSystemPath, setProjectDesignSystemPath, removeProjectDesignSystemPath } from './designSystemUtils';
-import { reviveWithRetention } from '../utils/reviveWithRetention';
+import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveWithRetention';
 
 import { STARTER_DESIGN_SYSTEM_HTML } from './designSystemStarterTemplate';
 
@@ -666,17 +666,20 @@ setTimeout(reportDims, 0);
         return !!this._panel;
     }
 
-    public async open(column?: vscode.ViewColumn): Promise<void> {
+    public async open(column?: vscode.ViewColumn, restoredState?: any): Promise<void> {
         const targetColumn = column ?? vscode.ViewColumn.One;
+        // preserveFocus only on revival — a user-invoked DESIGN command expects focus.
+        // `column` is supplied only by reviveWithRetention.
+        const isRevival = column !== undefined;
         if (this._panel) {
-            this._panel.reveal(targetColumn, true);
+            this._panel.reveal(targetColumn, isRevival);
             return;
         }
 
         this._panel = vscode.window.createWebviewPanel(
             'switchboard-design',
             'DESIGN',
-            { viewColumn: targetColumn, preserveFocus: true },
+            { viewColumn: targetColumn, preserveFocus: isRevival },
             {
                 enableScripts: true,
                 retainContextWhenHidden: true,
@@ -691,7 +694,7 @@ setTimeout(reportDims, 0);
         );
 
         this._panel.iconPath = vscode.Uri.joinPath(this._extensionUri, 'icon.svg');
-        this._panel.webview.html = this._getHtml(this._panel.webview);
+        this._panel.webview.html = injectInitialWebviewState(this._getHtml(this._panel.webview), restoredState);
 
         this._panel.webview.onDidReceiveMessage(
             async (message) => this._handleMessage(message),
@@ -786,9 +789,9 @@ setTimeout(reportDims, 0);
         panel: vscode.WebviewPanel,
         state: any
     ): Promise<void> {
-        await reviveWithRetention(panel, async (col) => {
-            await this.open(col);
-        });
+        await reviveWithRetention(panel, async (col, restoredState) => {
+            await this.open(col, restoredState);
+        }, state);
     }
 
     /**
