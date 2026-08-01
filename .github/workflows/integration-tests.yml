@@ -210,6 +210,35 @@ jobs:
       - name: Panel revival retention contract (no adoption, state forwarding, focus discipline)
         run: npm run test:contract:panel-revival-retention
 
+      # Wired during the terminal-responsiveness review pass. Every failure mode of an
+      # ack/credit scheme is SILENCE, not an error: a lost ack, a counter not reset on
+      # reconnect, a replay burst billed against the budget, or a disposed view still
+      # holding credit all produce a terminal that just stops printing. None of that is
+      # reachable from a behavioural test, so the mitigations are pinned as source-text
+      # contracts — including the two the first implementation got wrong (flushBatch
+      # guarding on `exited`, which threw away the final output of every exiting
+      # process, and the MAX_PAUSE_MS valve measuring elapsed pause instead of ack
+      # stall, which force-disabled backpressure every 10s under sustained load).
+      - name: Terminal flow control + view lifecycle contract (ack credit, page-level drain, WebGL cap)
+        run: npm run test:contract:terminal-flow-control
+
+      # The chunk-boundary logic is the entire input plan. A cut inside a multi-byte
+      # codepoint silently corrupts pasted text; a cut inside \x1b[200~ turns a paste
+      # into an escape plus literal text. Neither throws. This pins the CSI parse in
+      # particular — the first implementation treated the `[` introducer as a
+      # terminator, which declared every CSI sequence complete at its second byte.
+      - name: Terminal input path contract (binary frames, UTF-8/CSI-safe chunking, FIFO pacing)
+        run: npm run test:contract:terminal-input-path
+
+      # Every failure mode of surface scoping is a panel that silently stops updating.
+      # Pins the three traps: untagged-means-everyone, parse-before-resync, and
+      # every-panel-gets-`common`. Also pins the client/server panel-map mirror (a
+      # webview cannot import the .ts constant) and the deliberate absence of
+      # `project`, which must stay fail-open until PlanningPanelProvider stops tagging
+      # project-bound pushes as 'planning'.
+      - name: WS surface scoping contract (fail-open, resync filtering, producer tagging)
+        run: npm run test:contract:ws-surface-scoping
+
       # Wired during the scrollbar-styling review pass. The scrollbar block was
       # appended to project.html's <style> in a way that DELETED the preceding
       # `.review-mode-btn.active` rule and reused its closing brace, silently

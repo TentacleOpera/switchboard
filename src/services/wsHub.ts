@@ -26,11 +26,24 @@ import { authorizeWsUpgrade } from './wsUpgradeAuth';
  * going silently stale.
  */
 
+/**
+ * The push-routing vocabulary. Producers tag a push with one of these; a
+ * connection declares which ones it wants at upgrade time and the hub drops the
+ * rest before they cost a send, a frame and a `JSON.parse` in the panel.
+ *
+ * `common` is not optional garnish — theme, status messages and agent-completion
+ * are genuinely cross-panel, and a one-surface-per-panel map silently swallows
+ * them. Every panel's list includes it.
+ *
+ * `project` is in the vocabulary because PlanningPanelProvider already tags
+ * pushes with it, but see PANEL_SURFACES for why no panel SUBSCRIBES to it.
+ */
 export const SURFACES = {
     common: 'common',
     kanban: 'kanban',
     terminals: 'terminals',
     planning: 'planning',
+    project: 'project',
     design: 'design',
     setup: 'setup',
     memo: 'memo',
@@ -38,8 +51,21 @@ export const SURFACES = {
 
 export type SurfaceType = typeof SURFACES[keyof typeof SURFACES];
 
+/**
+ * Panel id (`document.body.dataset.panel`, stamped by headlessPanelHtml.ts) →
+ * the surfaces that panel subscribes to. Mirrored in `webview/transport.js`,
+ * which cannot import from a .ts module; the two must be changed together.
+ *
+ * DELIBERATELY ABSENT: `project`. The Project panel consumes messages that
+ * PlanningPanelProvider tags `'planning'` (`saveFileContentResult`,
+ * `chatPromptCopied` — project.js:1033, :796) as well as ones it tags
+ * `'project'`, because one provider serves both panels. Declaring a set for it
+ * would drop half of them and silently break saving in the Project panel. An
+ * undeclared panel receives EVERYTHING (fail-open), which is correct until the
+ * provider's tagging is untangled. Do not "complete" this map without fixing
+ * that first.
+ */
 export const PANEL_SURFACES: Record<string, string[]> = {
-    board: [SURFACES.kanban, SURFACES.common],
     kanban: [SURFACES.kanban, SURFACES.common],
     terminals: [SURFACES.terminals, SURFACES.common],
     planning: [SURFACES.planning, SURFACES.common],
@@ -172,14 +198,25 @@ export class WsHub {
                 ? (reqUrl.searchParams.get('scope') || null)
                 : undefined;
 
+            // Unknown surfaces are DISCARDED, not stored: an unrecognised name must
+            // never act as a wildcard, and an unbounded set of client-supplied strings
+            // held per connection is a free memory amplifier.
+            //
+            // `undefined` means "never declared" → receives everything. A declaration
+            // that survives filtering with nothing left (`?surfaces=`, or an all-unknown
+            // list from a newer client against an older server) collapses back to
+            // undefined rather than to an empty set — an empty set would mean "deliver
+            // nothing tagged", i.e. a connection that goes silently deaf. Fail open is
+            // the only safe reading of a declaration we could not understand.
             const rawSurfaces = reqUrl.searchParams.get('surfaces');
             let surfaces: Set<string> | undefined;
             if (rawSurfaces !== null) {
-                surfaces = new Set(
+                const parsed = new Set(
                     rawSurfaces.split(',')
                         .map(s => s.trim())
                         .filter(s => VALID_SURFACES.has(s))
                 );
+                surfaces = parsed.size > 0 ? parsed : undefined;
             }
 
             const meta: ConnectionMeta = { ws, seq: 0, originatorId, isAlive: true, project: initialScope, surfaces };
@@ -263,8 +300,16 @@ export class WsHub {
         const isFactory = typeof payload === 'function';
         const rendered = new Map<string, any>();
         for (const meta of this._connections) {
+            // Deliver unless ALL THREE hold: the push is tagged, the connection
+            // declared a set, and the tag is not in it. Untagged → everyone (roughly
+            // half the producers pass no surface, and treating that as "no
+            // subscribers" would delete them all). Undeclared → everyone (released
+            // clients predate this parameter).
+            //
+            // seq is deliberately NOT incremented on the skip path. Clients use seq to
+            // detect dropped pushes; incrementing here would show a filtered
+            // connection a permanent gap on every push it was never meant to see.
             if (surface && meta.surfaces && !meta.surfaces.has(surface)) {
-                // Do NOT increment seq for skipped connection
                 continue;
             }
             let body = payload;

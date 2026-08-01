@@ -27,6 +27,7 @@ import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { buildFetchPlansPrompt } from './schedulerPresets';
 import { KanbanMigration } from './KanbanMigration';
+import { SURFACES } from './wsHub';
 import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveWithRetention';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
@@ -1124,10 +1125,17 @@ export class KanbanProvider implements vscode.Disposable {
             const cpStatus = this.getControlPlaneSelectionStatus(root);
             const projectContextEnabled = await this._resolveProjectContextEnabled(root);
 
+            // Every entry carries its surface so wsHub can filter the connect-time
+            // resync per connection (see SURFACES / PANEL_SURFACES). Tag AS BUILT, not
+            // by post-processing the assembled array — the autoban entries below are
+            // spread in conditionally and a post-pass would ship them untagged, i.e.
+            // to every panel. An untagged entry is delivered to everyone by design;
+            // this whole array is board state, so nothing here is `common`.
             return [
-                { type: 'updateColumns', columns: filteredColumns },
+                { type: 'updateColumns', columns: filteredColumns, surface: SURFACES.kanban },
                 {
                     type: 'updateWorkspaceSelection',
+                    surface: SURFACES.kanban,
                     workspaceRoot: root,
                     workspaces: workspaceItems,
                     activeFilter: this._repoScopeFilter || null,
@@ -1142,16 +1150,16 @@ export class KanbanProvider implements vscode.Disposable {
                     repoScopeFilter: cpStatus.repoScopeFilter,
                     projectContextEnabled,
                 },
-                { type: 'cliTriggersState', enabled: cliEnabled },
-                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig, featureWorktrees },
+                { type: 'cliTriggersState', enabled: cliEnabled, surface: SURFACES.kanban },
+                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig, featureWorktrees, surface: SURFACES.kanban },
                 // Automation tab state rides the connect-time resync too, so the tab is
                 // populated even before its on-open getAutobanConfig verb returns.
                 // Omitted entirely when the sidebar hasn't relayed a state yet — pushing
                 // `state: undefined` would leave the UI on its loading placeholder.
                 ...(this._autobanState
                     ? [
-                        { type: 'updateAutobanConfig', state: this._autobanState },
-                        { type: 'updatePairProgrammingMode', mode: this._autobanState.pairProgrammingMode },
+                        { type: 'updateAutobanConfig', state: this._autobanState, surface: SURFACES.kanban },
+                        { type: 'updatePairProgrammingMode', mode: this._autobanState.pairProgrammingMode, surface: SURFACES.kanban },
                     ]
                     : []),
             ];

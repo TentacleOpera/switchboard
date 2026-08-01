@@ -1,85 +1,182 @@
-const assert = require('assert');
+'use strict';
+
+/**
+ * Source-text contract for the browser terminal ack/credit flow control and the
+ * view lifecycle that shares its files.
+ *
+ * Every failure mode of a credit scheme is SILENCE — a lost ack, a counter not
+ * reset on reconnect, a replay frame billed against the budget, or a disposed
+ * view still holding credit all produce a terminal that simply stops printing
+ * with no error anywhere. These assertions pin the structural mitigations, since
+ * none of them are observable from a unit test of behaviour.
+ */
+
 const fs = require('fs');
 const path = require('path');
+const assert = require('assert');
 
-describe('terminal-flow-control-contract', () => {
-    const gatewayPath = path.join(__dirname, '../standalone/terminalWsGateway.ts');
-    const terminalsJsPath = path.join(__dirname, '../webview/terminals.js');
+const gatewayCode = fs.readFileSync(path.join(__dirname, '../standalone/terminalWsGateway.ts'), 'utf8');
+const terminalsJs = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
 
-    const gatewayContent = fs.readFileSync(gatewayPath, 'utf8');
-    const terminalsJsContent = fs.readFileSync(terminalsJsPath, 'utf8');
+let passed = 0;
+let failed = 0;
 
-    it('terminals.js acks from write callback', () => {
-        assert.ok(terminalsJsContent.includes('term.write(combined, () => onWriteParsed(entry, combined.length))'), 'flushBatch must pass write callback');
-        assert.ok(terminalsJsContent.includes("t: 'ack'"), 'onWriteParsed must send ack frame');
-    });
+function test(name, fn) {
+    try {
+        fn();
+        console.log(`  ✅ ${name}`);
+        passed++;
+    } catch (e) {
+        console.error(`  ❌ ${name}\n     ${e.message}`);
+        failed++;
+    }
+}
 
-    it('flushBatch is try/catch guarded', () => {
-        assert.ok(/try\s*\{\s*entry\.term\.write/.test(terminalsJsContent), 'term.write must be wrapped in try block');
-    });
+/** Slice of a source file between two markers, for scoping an assertion to one function. */
+function block(code, startMarker, endMarker) {
+    const start = code.indexOf(startMarker);
+    assert.ok(start !== -1, `marker not found: ${startMarker}`);
+    const end = code.indexOf(endMarker, start);
+    assert.ok(end !== -1, `end marker not found: ${endMarker}`);
+    return code.substring(start, end);
+}
 
-    it('gateway handles ack frame with clamp', () => {
-        assert.ok(gatewayContent.includes("parsed.t === 'ack'"), 'gateway message handler must handle ack frame');
-        assert.ok(gatewayContent.includes('Math.max(0, Math.min(parsed.chars, client.unackedChars))'), 'gateway must clamp acked chars');
-    });
+// ---------------------------------------------------------------- flow control
 
-    it('replay is not counted against unackedChars', () => {
-        const setupClientBlock = gatewayContent.substring(
-            gatewayContent.indexOf('private setupClient('),
-            gatewayContent.indexOf('ws.on(\'pong\'')
-        );
-        assert.ok(!setupClientBlock.includes('unackedChars +='), 'setupClient replay section must not inflate unackedChars');
-    });
-
-    it('pause/resume gates on both byte and char watermarks', () => {
-        assert.ok(gatewayContent.includes('HIGH_WATER_CHARS'), 'HIGH_WATER_CHARS constant must be defined');
-        assert.ok(gatewayContent.includes('LOW_WATER_CHARS'), 'LOW_WATER_CHARS constant must be defined');
-        assert.ok(gatewayContent.includes('maxBuffered > HIGH_WATER_MARK_BYTES || maxUnacked > HIGH_WATER_CHARS'), 'pause condition must check maxBuffered or maxUnacked');
-        assert.ok(gatewayContent.includes('maxBuffered < LOW_WATER_MARK_BYTES && maxUnacked < LOW_WATER_CHARS'), 'resume condition must check maxBuffered and maxUnacked');
-    });
-
-    it('MAX_PAUSE_MS safety valve is present', () => {
-        assert.ok(gatewayContent.includes('MAX_PAUSE_MS'), 'MAX_PAUSE_MS constant must be defined');
-        assert.ok(gatewayContent.includes('now - pausedTime > MAX_PAUSE_MS'), 'safety valve check must be present');
-    });
-
-    it('no per-terminal animationFrameId in terminals.js entry shape', () => {
-        assert.ok(!terminalsJsContent.includes('animationFrameId: null'), 'entry shape must not have animationFrameId');
-    });
-
-    it('credit resets on attach', () => {
-        assert.ok(gatewayContent.includes('unackedChars: 0'), 'setupClient must initialize unackedChars to 0');
-    });
-
-    it('unassign arms disposal timer', () => {
-        assert.ok(terminalsJsContent.includes('armDetachTimer(name)'), 'renderPaneGrid unassigned branch must call armDetachTimer');
-    });
-
-    it('assignment cancels disposal timer', () => {
-        assert.ok(terminalsJsContent.includes('cancelDetachTimer(name)'), 'renderPaneGrid assigned branch must call cancelDetachTimer');
-    });
-
-    it('disposal clears detach timer', () => {
-        const destroyBlock = terminalsJsContent.substring(
-            terminalsJsContent.indexOf('function destroyTerminalView('),
-            terminalsJsContent.indexOf('terminalsMap.delete(name);')
-        );
-        assert.ok(destroyBlock.includes('cancelDetachTimer(name)'), 'destroyTerminalView must call cancelDetachTimer');
-    });
-
-    it('context cap exists and is enforced', () => {
-        assert.ok(terminalsJsContent.includes('MAX_WEBGL_CONTEXTS = 12'), 'MAX_WEBGL_CONTEXTS must be 12');
-        assert.ok(terminalsJsContent.includes('liveWebglContexts < MAX_WEBGL_CONTEXTS'), 'attachRenderer must check liveWebglContexts cap');
-    });
-
-    it('exited and disposed flags are distinct', () => {
-        assert.ok(terminalsJsContent.includes('disposed: false'), 'entry shape must contain disposed flag');
-        const oncloseIdx = terminalsJsContent.indexOf('ws.onclose =');
-        const oncloseBlock = terminalsJsContent.substring(oncloseIdx, oncloseIdx + 200);
-        assert.ok(oncloseBlock.includes('entry.exited'), 'ws.onclose guard must use entry.exited');
-    });
-
-    it('scrollback is explicit', () => {
-        assert.ok(terminalsJsContent.includes('scrollback: 1000'), 'Terminal constructor must set explicit scrollback');
-    });
+test('the ack is emitted from the xterm write callback, not from onmessage', () => {
+    assert.ok(
+        terminalsJs.includes('entry.term.write(combined, () => onWriteParsed(entry, combined.length))'),
+        'flushBatch must pass a write callback — acking on receipt measures the transport, which is the bug being fixed'
+    );
+    const onMessage = block(terminalsJs, 'ws.onmessage = (event) => {', 'ws.onclose = () =>');
+    assert.ok(!onMessage.includes("t: 'ack'"), 'ws.onmessage must not send an ack directly');
+    assert.ok(block(terminalsJs, 'function onWriteParsed(', 'window.__sbTerminalStats').includes("t: 'ack'"),
+        'onWriteParsed must be the only ack emitter');
 });
+
+test('flushBatch wraps term.write in try/catch', () => {
+    assert.ok(/try\s*\{\s*entry\.term\.write/.test(terminalsJs),
+        "xterm throws at 50 MB of pending data; unguarded, that escapes a rAF callback and the terminal never drains again");
+});
+
+test('flushBatch guards on disposed, NOT exited', () => {
+    const flush = block(terminalsJs, 'function flushBatch(entry)', 'function onWriteParsed(');
+    assert.ok(flush.includes('entry.disposed'), 'flushBatch must bail on a disposed view');
+    assert.ok(!/if \(!entry \|\| entry\.exited/.test(flush),
+        'guarding on exited drops the final output of an exiting process — the gateway drains before announcing exit, so that output is still queued here');
+});
+
+test('gateway handles the ack frame and clamps it', () => {
+    assert.ok(gatewayCode.includes("parsed.t === 'ack'"), 'gateway must have an ack branch');
+    assert.ok(gatewayCode.includes('Math.max(0, Math.min(parsed.chars, client.unackedChars))'),
+        'an unbounded or negative ack would let a client drive its own credit negative and disable its backpressure');
+});
+
+test('replay is excluded from the credit ledger on BOTH ends', () => {
+    const setup = block(gatewayCode, 'private setupClient(', "ws.on('pong'");
+    assert.ok(!setup.includes('unackedChars +='), 'setupClient must not bill the replay burst to the new client');
+    assert.ok(setup.includes('replayChars'), 'hello must carry the replay length so the client knows what not to ack');
+    assert.ok(terminalsJs.includes('entry.ackSuppressChars'),
+        'the client must suppress acks for replayed chars — otherwise it pays down credit it never consumed and backpressure is off for the first 256 KB after every reconnect');
+    const onWrite = block(terminalsJs, 'function onWriteParsed(', 'window.__sbTerminalStats');
+    assert.ok(onWrite.includes('entry.ackSuppressChars'), 'the suppression budget must be burned inside onWriteParsed');
+});
+
+test('pause is a disjunction and resume a conjunction of both watermarks', () => {
+    assert.ok(gatewayCode.includes('maxBuffered > HIGH_WATER_MARK_BYTES || maxUnacked > HIGH_WATER_CHARS'),
+        'either signal may pause: bytes measure the transport (correct when tunnelled), chars measure the renderer (correct over loopback)');
+    assert.ok(gatewayCode.includes('maxBuffered < LOW_WATER_MARK_BYTES && maxUnacked < LOW_WATER_CHARS'),
+        'both must clear to resume');
+    assert.ok(/HIGH_WATER_CHARS = 100000/.test(gatewayCode) && /LOW_WATER_CHARS = 5000/.test(gatewayCode),
+        'watermarks must match the VS Code pty-host constants this design is adopted from');
+});
+
+test('the MAX_PAUSE_MS valve measures ack STALL, not elapsed pause', () => {
+    assert.ok(gatewayCode.includes('now - pausedTime > MAX_PAUSE_MS'), 'safety valve must exist inside checkBackpressure');
+    const ackBranch = block(gatewayCode, "parsed.t === 'ack'", "parsed.t === 'ping'");
+    assert.ok(/pausedSince\.set\(/.test(ackBranch),
+        'ack progress must refresh the pause stamp, or a legitimately slow renderer has its backpressure force-disabled every MAX_PAUSE_MS');
+});
+
+test('credit is reset with the ClientState on every attach', () => {
+    const setup = block(gatewayCode, 'private setupClient(', 'this.clients.add(client)');
+    assert.ok(setup.includes('unackedChars: 0'),
+        'a reconnecting client\'s credit belongs to a socket that no longer exists; carrying it forward leaves the terminal paused with nobody able to ack it down');
+    const connect = block(terminalsJs, 'function connectTerminalSocket(entry)', 'const protocol =');
+    assert.ok(connect.includes('entry.pendingAckChars = 0') && connect.includes('entry.ackSuppressChars = 0'),
+        'both client-side accumulators must be zeroed on reconnect');
+});
+
+test('batching is page-level on both ends, with the hidden-panel fallback intact', () => {
+    assert.ok(!terminalsJs.includes('animationFrameId'), 'no per-entry rAF may remain');
+    assert.ok(terminalsJs.includes('pendingBatchEntries') && terminalsJs.includes('sharedBatchRafId'),
+        'the drain must be a single page-level rAF over a pending set');
+    assert.ok(terminalsJs.includes('sharedBatchFallbackTimer') && terminalsJs.includes('BATCH_FALLBACK_MS'),
+        'rAF is parked in a display:none iframe — the fallback timer is the only thing draining a hidden panel');
+    assert.ok(gatewayCode.includes('sharedFlushInterval') && gatewayCode.includes('pendingFlushTerminals'),
+        'the gateway must coalesce onto one shared flush tick rather than a timer per terminal');
+    assert.ok(block(gatewayCode, 'public dispose()', 'for (const client of this.clients)').includes('clearInterval(this.sharedFlushInterval)'),
+        'dispose must clear the shared flush interval');
+});
+
+test('debug stats are exposed', () => {
+    assert.ok(terminalsJs.includes('window.__sbTerminalStats'), 'there must be a way to diagnose a stuck counter in the field');
+});
+
+// ------------------------------------------------------------ view lifecycle
+
+test('unassign arms disposal and assignment cancels it', () => {
+    const tail = block(terminalsJs, 'for (const [name, entry] of terminalsMap.entries())', 'function resolveFlooredLayout');
+    assert.ok(tail.includes('armDetachTimer(name)'), 'the unassigned branch must arm a disposal timer');
+    assert.ok(tail.includes('cancelDetachTimer(name)'), 'the assigned branch must cancel any pending timer');
+});
+
+test('every disposal path clears the detach timer', () => {
+    const destroy = block(terminalsJs, 'function destroyTerminalView(name)', 'function createTerminalView(');
+    assert.ok(destroy.includes('cancelDetachTimer(name)'),
+        'PtyFleetService reuses freed names, so a stale timer could dispose a DIFFERENT terminal that inherited the name');
+    assert.ok(destroy.includes('pendingBatchEntries.delete(entry)'), 'disposal must drop the entry from the page-level drain set');
+    const rename = block(terminalsJs, 'async function renameTerminal(', 'try {');
+    assert.ok(rename.includes('cancelDetachTimer(name)') && rename.includes('cancelDetachTimer(next)'),
+        'rename must clear the timer under BOTH the old and the inherited new name');
+});
+
+test('the detach timer re-checks assignment before disposing', () => {
+    const arm = block(terminalsJs, 'function armDetachTimer(name)', 'function cancelDetachTimer(');
+    assert.ok(arm.includes('paneAssignments.includes(name)'),
+        'assignment can change without a re-render (assignToFocusedPane early-return), so the callback must re-check');
+});
+
+test('WebGL contexts are capped before construction, and released exactly once', () => {
+    assert.ok(terminalsJs.includes('MAX_WEBGL_CONTEXTS = 12'),
+        '12, not 16 — the other panels share the page context budget');
+    assert.ok(terminalsJs.includes('liveWebglContexts < MAX_WEBGL_CONTEXTS'),
+        'the cap must be checked BEFORE constructing WebglAddon; by the time onContextLoss fires the damage has landed on a different terminal');
+    const attach = block(terminalsJs, 'function attachRenderer(term, entry)', 'const ALL_THEME_CLASSES');
+    assert.ok(attach.includes('liveWebglContexts - 1'), 'context loss must decrement the counter');
+    assert.ok(/entry\.isWebgl = false;\s*\n\s*liveWebglContexts/.test(attach),
+        'the loss handler must clear isWebgl so destroyTerminalView cannot double-decrement');
+    const destroy = block(terminalsJs, 'function destroyTerminalView(name)', 'function createTerminalView(');
+    assert.ok(/if \(entry\.isWebgl\)\s*\{\s*\n\s*liveWebglContexts/.test(destroy),
+        'disposal must decrement only when this entry still holds a context');
+});
+
+test('exited and disposed stay distinct, and reconnect keys on exited', () => {
+    assert.ok(terminalsJs.includes('disposed: false') && terminalsJs.includes('exited: false'),
+        'both flags must exist on the entry shape');
+    const destroy = block(terminalsJs, 'function destroyTerminalView(name)', 'function createTerminalView(');
+    const disposedAt = destroy.indexOf('entry.exited = true');
+    const closeAt = destroy.indexOf('entry.ws.close()');
+    assert.ok(disposedAt !== -1 && closeAt !== -1 && disposedAt < closeAt,
+        'exited must be set BEFORE the socket is closed, or onclose reconnects a view that is being torn down');
+    const onclose = block(terminalsJs, 'ws.onclose = () => {', 'function scheduleBatchFlush');
+    assert.ok(onclose.includes('entry.exited'), 'the reconnect guard must key on exited');
+});
+
+test('scrollback is explicit', () => {
+    assert.ok(/scrollback: \d+,/.test(terminalsJs),
+        'left implicit, client memory is untracked against the server ring it now depends on for re-attach');
+});
+
+console.log(`\nResults: ${passed} passed, ${failed} failed.`);
+if (failed > 0) { process.exit(1); }

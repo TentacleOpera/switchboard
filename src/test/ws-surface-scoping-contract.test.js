@@ -1,55 +1,153 @@
-const assert = require('assert');
+'use strict';
+
+/**
+ * Source-text contract for per-connection WS surface scoping.
+ *
+ * Every failure mode here is a panel that silently stops updating, which is
+ * harder to notice and harder to attribute than the lag it replaces. Three
+ * specific traps, all pinned below: treating an untagged push as "no
+ * subscribers" (deletes roughly half the system's pushes at once); attaching the
+ * surface set after the resync is sent (leaks the single largest payload past
+ * the filter); and giving a panel exactly one surface (drops theme and
+ * status-message pushes, which are genuinely cross-panel).
+ */
+
 const fs = require('fs');
 const path = require('path');
+const assert = require('assert');
 
-describe('ws-surface-scoping-contract', () => {
-    const wsHubPath = path.join(__dirname, '../services/wsHub.ts');
-    const transportJsPath = path.join(__dirname, '../webview/transport.js');
-    const bootstrapPath = path.join(__dirname, '../standalone/bootstrap.ts');
+const wsHubCode = fs.readFileSync(path.join(__dirname, '../services/wsHub.ts'), 'utf8');
+const transportJs = fs.readFileSync(path.join(__dirname, '../webview/transport.js'), 'utf8');
+const bootstrapCode = fs.readFileSync(path.join(__dirname, '../standalone/bootstrap.ts'), 'utf8');
+const kanbanProviderCode = fs.readFileSync(path.join(__dirname, '../services/KanbanProvider.ts'), 'utf8');
+const headlessPanelCode = fs.readFileSync(path.join(__dirname, '../services/headlessPanelHtml.ts'), 'utf8');
 
-    const wsHubContent = fs.readFileSync(wsHubPath, 'utf8');
-    const transportJsContent = fs.readFileSync(transportJsPath, 'utf8');
-    const bootstrapContent = fs.readFileSync(bootstrapPath, 'utf8');
+let passed = 0;
+let failed = 0;
 
-    it('untagged surface is broadcast to everyone', () => {
-        assert.ok(wsHubContent.includes('if (surface && meta.surfaces && !meta.surfaces.has(surface))'), 'wsHub filter must check if surface is defined');
-    });
+function test(name, fn) {
+    try {
+        fn();
+        console.log(`  ✅ ${name}`);
+        passed++;
+    } catch (e) {
+        console.error(`  ❌ ${name}\n     ${e.message}`);
+        failed++;
+    }
+}
 
-    it('undeclared surfaces client receives everything', () => {
-        assert.ok(wsHubContent.includes('surfaces?: Set<string>'), 'surfaces on ConnectionMeta must be optional');
-    });
+function block(code, startMarker, endMarker) {
+    const start = code.indexOf(startMarker);
+    assert.ok(start !== -1, `marker not found: ${startMarker}`);
+    const end = code.indexOf(endMarker, start);
+    assert.ok(end !== -1, `end marker not found: ${endMarker}`);
+    return code.substring(start, end);
+}
 
-    it('surfaces query parameter is parsed during upgrade before resync', () => {
-        const handleUpgradeIdx = wsHubContent.indexOf('public async handleUpgrade(');
-        const parseSurfacesIdx = wsHubContent.indexOf('reqUrl.searchParams.get(\'surfaces\')');
-        const resyncIdx = wsHubContent.indexOf('type: \'__resync\'');
-        assert.ok(handleUpgradeIdx !== -1 && parseSurfacesIdx !== -1 && resyncIdx !== -1, 'handleUpgrade, parseSurfaces, and resync must exist');
-        assert.ok(parseSurfacesIdx > handleUpgradeIdx && parseSurfacesIdx < resyncIdx, 'surfaces parse must occur inside handleUpgrade before __resync');
-    });
+test('an untagged push and an undeclared connection both receive everything', () => {
+    assert.ok(wsHubCode.includes('if (surface && meta.surfaces && !meta.surfaces.has(surface))'),
+        'the skip must require ALL THREE of: tagged push, declared connection, tag absent — roughly half the producers pass no surface, and released clients predate the parameter');
+    assert.ok(wsHubCode.includes('surfaces?: Set<string>'),
+        'undefined must remain distinguishable from an empty set');
+});
 
-    it('unknown surfaces are filtered against VALID_SURFACES', () => {
-        assert.ok(wsHubContent.includes('VALID_SURFACES.has(s)'), 'surfaces parse must filter against VALID_SURFACES');
-    });
+test('a declaration that survives filtering with nothing left fails OPEN', () => {
+    assert.ok(/surfaces = parsed\.size > 0 \? parsed : undefined/.test(wsHubCode),
+        '?surfaces= or an all-unknown list would otherwise store an empty set, which means "deliver nothing tagged" — a silently deaf connection');
+});
 
-    it('updateBoard state item is tagged with surface', () => {
-        assert.ok(bootstrapContent.includes("surface: SURFACES.kanban"), 'updateBoard state item in bootstrap must be tagged');
-    });
+test('unknown surfaces are discarded, not stored', () => {
+    assert.ok(wsHubCode.includes('VALID_SURFACES.has(s)'),
+        'an unbounded set of client-supplied strings held per connection is a free memory amplifier, and an unrecognised surface must never act as a wildcard');
+});
 
-    it('transport.js reads dataset.panel in wsUrl', () => {
-        const wsUrlIdx = transportJsContent.indexOf('function wsUrl()');
-        const datasetPanelIdx = transportJsContent.indexOf('document.body.dataset.panel');
-        assert.ok(wsUrlIdx !== -1 && datasetPanelIdx !== -1, 'wsUrl and dataset.panel check must exist');
-        assert.ok(datasetPanelIdx > wsUrlIdx, 'dataset.panel check must occur inside wsUrl()');
-    });
+test('the surface set is parsed BEFORE the resync is sent', () => {
+    const upgrade = wsHubCode.indexOf('public async handleUpgrade(');
+    const parse = wsHubCode.indexOf("reqUrl.searchParams.get('surfaces')");
+    const resync = wsHubCode.indexOf("type: '__resync'");
+    assert.ok(upgrade !== -1 && parse !== -1 && resync !== -1, 'all three sites must exist');
+    assert.ok(parse > upgrade && parse < resync,
+        'the resync is the LARGEST payload — parsing after it sends leaks exactly the frame this change exists to filter');
+});
 
-    it('seq is not incremented when push is skipped', () => {
-        const broadcastBlock = wsHubContent.substring(
-            wsHubContent.indexOf('broadcast(verb: string'),
-            wsHubContent.indexOf('send(ws: WebSocket')
-        );
-        const continueIdx = broadcastBlock.indexOf('continue;');
-        const seqIncIdx = broadcastBlock.indexOf('meta.seq += 1;');
-        assert.ok(continueIdx !== -1 && seqIncIdx !== -1, 'continue and seq increment must exist in broadcast');
-        assert.ok(continueIdx < seqIncIdx, 'skip continue must precede meta.seq increment');
+test('the resync array is filtered per connection', () => {
+    assert.ok(/state\.filter\(\(item: any\) => !item\.surface \|\| meta\.surfaces!\.has\(item\.surface\)\)/.test(wsHubCode),
+        'the resync is a heterogeneous array; it must be filtered entry-by-entry with the same untagged-means-everyone rule');
+});
+
+test('seq is not incremented on the skip path', () => {
+    const broadcast = block(wsHubCode, 'broadcast(verb: string', 'send(ws: WebSocket');
+    assert.ok(broadcast.indexOf('continue;') < broadcast.indexOf('meta.seq += 1;'),
+        'clients use seq to detect dropped pushes; incrementing on skip shows a filtered connection a permanent gap');
+});
+
+test('every panel subscribes to `common` as well as its own surface', () => {
+    const map = block(wsHubCode, 'export const PANEL_SURFACES', '};');
+    const entries = map.match(/^\s+\w+: \[.*\],$/gm) || [];
+    assert.ok(entries.length >= 6, `expected the panel map to be populated, saw ${entries.length}`);
+    entries.forEach(line => {
+        assert.ok(line.includes('SURFACES.common'),
+            `theme, status messages and agentCompleted are cross-panel — a one-surface-per-panel map drops them: ${line.trim()}`);
     });
 });
+
+test('the panel map is a subset of the real /panels manifest, and `project` stays fail-open', () => {
+    const stamped = new Set(
+        (headlessPanelCode.match(/data-panel="(\w+)"/g) || []).map(m => m.replace(/.*"(\w+)"/, '$1'))
+    );
+    assert.ok(stamped.size > 0, 'headlessPanelHtml.ts must stamp data-panel');
+    const map = block(wsHubCode, 'export const PANEL_SURFACES', '};');
+    const keys = (map.match(/^\s+(\w+): \[/gm) || []).map(m => m.trim().replace(':', '').replace(' [', ''));
+    keys.forEach(k => assert.ok(stamped.has(k),
+        `PANEL_SURFACES key '${k}' matches no data-panel value — a key no panel stamps is dead config`));
+    assert.ok(!keys.includes('project'),
+        'the Project panel consumes messages PlanningPanelProvider tags \'planning\' (project.js saveFileContentResult / chatPromptCopied) as well as ones it tags \'project\'; declaring a set for it drops half of them and silently breaks saving');
+});
+
+test('the client mirror matches the server map exactly', () => {
+    const server = block(wsHubCode, 'export const PANEL_SURFACES', '};');
+    const client = block(transportJs, 'const PANEL_SURFACES_MAP = {', '};');
+    const serverKeys = (server.match(/^\s+(\w+): \[/gm) || []).map(m => m.trim().replace(/: \[$/, '')).sort();
+    const clientKeys = (client.match(/^\s+(\w+): \[/gm) || []).map(m => m.trim().replace(/: \[$/, '')).sort();
+    assert.deepStrictEqual(clientKeys, serverKeys,
+        'transport.js cannot import from a .ts module, so the two maps are kept in step by hand and must not drift');
+});
+
+test('the client declares from dataset.panel INSIDE wsUrl(), not at module scope', () => {
+    const wsUrlFn = block(transportJs, 'function wsUrl()', '\n    function ');
+    assert.ok(wsUrlFn.includes('document.body.dataset.panel'),
+        'captured at module scope, a reconnect would not re-declare — same reason the scope parameter is read live');
+    assert.ok(wsUrlFn.includes('surfaces='), 'the parameter must be appended here');
+    assert.ok(/if \(panel && PANEL_SURFACES_MAP\[panel\]\)/.test(wsUrlFn),
+        'an unmapped or absent panel must send NO surfaces parameter — that is the fail-open default, not an error');
+});
+
+test('the client does not double-filter', () => {
+    assert.ok(!/msg\.surface/.test(transportJs),
+        'a second client-side filter would only mask a producer mis-tag by making it look like a delivery problem');
+});
+
+test('every resync producer tags its entries', () => {
+    const bootstrapEntryLines = bootstrapCode.split('\n').filter(l => /^\s*\{ type: '/.test(l));
+    ['updateColumns', 'updateWorkspaceSelection', 'cliTriggersState', 'updateBoard'].forEach(type => {
+        const lines = bootstrapEntryLines.filter(l => l.includes(`type: '${type}'`));
+        assert.ok(lines.length > 0, `bootstrap.ts must build a '${type}' resync entry`);
+        lines.forEach(l => assert.ok(l.includes('surface: SURFACES.'),
+            `bootstrap.ts resync entry '${type}' must be tagged`));
+    });
+    const resync = block(kanbanProviderCode, 'public async getFullStateMessages(', '\n    /**');
+    assert.ok(resync.includes("type: 'updateBoard'") && /updateBoard[^\n]*surface: SURFACES\.kanban/.test(resync),
+        'the extension-hosted cockpit uses this producer — leaving it untagged ships the full board snapshot to every panel, which is the single largest payload the filter exists for');
+    assert.ok(/updateAutobanConfig[^\n]*surface: SURFACES\./.test(resync),
+        'the autoban entries are spread in CONDITIONALLY — tag them as built, or a post-pass ships them untagged');
+});
+
+test('producers use the shared constant, not string literals', () => {
+    assert.ok(bootstrapCode.includes("import { SURFACES } from '../services/wsHub'"),
+        'a mis-tag is a silent functional bug with no type-level protection, so the vocabulary must be a shared import');
+    const literalTagged = bootstrapCode.match(/broadcastWs\([^)]*,\s*'(kanban|terminals|common|planning|design|setup|memo)'\s*\)/g) || [];
+    assert.deepStrictEqual(literalTagged, [], `bootstrap.ts must not spell a surface as a literal: ${literalTagged.join(', ')}`);
+});
+
+console.log(`\nResults: ${passed} passed, ${failed} failed.`);
+if (failed > 0) { process.exit(1); }

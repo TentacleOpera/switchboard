@@ -113,7 +113,10 @@ export class TerminalWsGateway {
     private wss = new WebSocketServer({ noServer: true });
     private fleetService: PtyFleetService;
     private getAuthToken: () => Promise<string | undefined>;
-    private broadcastWs?: (verb: string, payload: any) => void;
+    // Third arg is the WS surface tag (see SURFACES in services/wsHub.ts). Typed
+    // here rather than imported so the standalone gateway keeps no dependency on
+    // the hub module; the value is a plain string on the wire either way.
+    private broadcastWs?: (verb: string, payload: any, surface?: string) => void;
 
     private scrollbackBuffers = new Map<string, ScrollbackBuffer>();
     private terminalSubscriptions = new Map<string, { dispose: () => void }>();
@@ -140,10 +143,7 @@ export class TerminalWsGateway {
 
         if (queue.queuedBytes > INPUT_HIGH_WATER_BYTES && !queue.throttled) {
             queue.throttled = true;
-            const targetClients = Array.from(this.clients).filter(c => c.terminalName === terminalName);
-            for (const client of targetClients) {
-                this.safeSend(client.ws, { t: 'inputThrottled', queued: queue.queuedBytes });
-            }
+            this.notifyInputThrottle(terminalName, true, queue.queuedBytes);
         }
 
         if (!queue.draining) {
@@ -158,9 +158,7 @@ export class TerminalWsGateway {
         if (!queue || !handle || queue.chunks.length === 0) {
             if (queue) {
                 queue.draining = false;
-                if (queue.queuedBytes < INPUT_LOW_WATER_BYTES && queue.throttled) {
-                    queue.throttled = false;
-                }
+                this.clearInputThrottleIfDrained(terminalName, queue);
             }
             return;
         }
@@ -187,9 +185,7 @@ export class TerminalWsGateway {
             }
         }
 
-        if (queue.queuedBytes < INPUT_LOW_WATER_BYTES && queue.throttled) {
-            queue.throttled = false;
-        }
+        this.clearInputThrottleIfDrained(terminalName, queue);
 
         if (queue.chunks.length > 0) {
             setImmediate(() => this.drainInputQueue(terminalName));
@@ -198,8 +194,46 @@ export class TerminalWsGateway {
         }
     }
 
+    /**
+     * Both halves of the throttle notice. The CLEAR is not cosmetic: the notice is
+     * the only signal the operator gets that a paste is still landing, so leaving
+     * it unclosed reads as "input is permanently throttled" long after the queue
+     * drained. Nothing is ever dropped in either state.
+     */
+    private notifyInputThrottle(terminalName: string, throttled: boolean, queuedBytes: number): void {
+        for (const client of this.clients) {
+            if (client.terminalName !== terminalName) { continue; }
+            this.safeSend(client.ws, { t: 'inputThrottled', throttled, queued: queuedBytes });
+        }
+    }
+
+    private clearInputThrottleIfDrained(terminalName: string, queue: InputQueue): void {
+        if (queue.throttled && queue.queuedBytes < INPUT_LOW_WATER_BYTES) {
+            queue.throttled = false;
+            this.notifyInputThrottle(terminalName, false, queue.queuedBytes);
+        }
+    }
+
+    /**
+     * Pick a cut point at or before `maxLen` that cannot corrupt the stream.
+     *
+     * Two hazards, both silent:
+     *  - cutting inside a multi-byte codepoint, which mangles pasted text;
+     *  - cutting inside an escape sequence, which turns `\x1b[200~` into a bare
+     *    ESC followed by literal `[200~` — worse than not chunking at all, since
+     *    the receiving app then treats a paste as typed input.
+     *
+     * CSI parsing is the load-bearing detail. `ESC [` is an INTRODUCER, not a
+     * terminator: a CSI sequence ends at its FINAL byte (0x40-0x7E) which comes
+     * after the parameter (0x30-0x3F) and intermediate (0x20-0x2F) bytes. Scanning
+     * for "any byte in 0x40-0x7E after the ESC" therefore matches the `[` itself
+     * and declares every CSI sequence complete at its second byte — which is
+     * exactly the bracketed-paste marker this guard exists to keep whole.
+     */
     private findSafeBoundary(buf: Buffer, maxLen: number): number {
         let pos = maxLen;
+        // buf[pos] is the first byte of the REMAINDER, so back up while it is a
+        // UTF-8 continuation byte (0b10xxxxxx) to land on a lead byte.
         while (pos > 0 && (buf[pos] & 0xc0) === 0x80) {
             pos--;
         }
@@ -209,26 +243,44 @@ export class TerminalWsGateway {
                 escPos = i;
             }
         }
-        if (escPos !== -1) {
-            let terminated = false;
-            for (let i = escPos + 1; i < pos; i++) {
-                const c = buf[i];
-                if ((c >= 0x40 && c <= 0x7e) || c === 0x7e) {
-                    terminated = true;
-                    break;
-                }
-            }
-            if (!terminated && escPos > 0) {
-                pos = escPos;
-            }
+        if (escPos !== -1 && !this.isEscapeSequenceComplete(buf, escPos, pos) && escPos > 0) {
+            pos = escPos;
         }
-        return pos > 0 ? pos : maxLen;
+        if (pos <= 0) {
+            // A single codepoint or escape sequence longer than the whole chunk.
+            // Impossible for well-formed input; write the slice rather than hang.
+            console.warn(`[TerminalWsGateway] No safe input chunk boundary within ${maxLen} bytes — writing unsplit slice`);
+            return maxLen;
+        }
+        return pos;
+    }
+
+    /** True when the escape sequence starting at `escPos` terminates before `end`. */
+    private isEscapeSequenceComplete(buf: Buffer, escPos: number, end: number): boolean {
+        let i = escPos + 1;
+        if (i >= end) { return false; }
+        const introducer = buf[i];
+        if (introducer === 0x5b /* [ */ || introducer === 0x5d /* ] */) {
+            // CSI (ESC [) / OSC (ESC ]). OSC ends on BEL or ST (ESC \); CSI ends on
+            // a final byte in 0x40-0x7E. Treating BEL/final-byte uniformly is enough
+            // here — we only need to know whether the sequence CLOSED before `end`.
+            for (i = escPos + 2; i < end; i++) {
+                const c = buf[i];
+                if (introducer === 0x5d && c === 0x07 /* BEL */) { return true; }
+                if (c >= 0x40 && c <= 0x7e) { return true; }
+            }
+            return false;
+        }
+        // Two-byte escape (ESC 7, ESC =, ESC ( B …): the next byte closes it, and
+        // intermediates in 0x20-0x2F extend it by one more.
+        if (introducer >= 0x20 && introducer <= 0x2f) { return escPos + 2 < end; }
+        return true;
     }
 
     constructor(
         fleetService: PtyFleetService,
         getAuthToken: () => Promise<string | undefined>,
-        broadcastWs?: (verb: string, payload: any) => void
+        broadcastWs?: (verb: string, payload: any, surface?: string) => void
     ) {
         this.fleetService = fleetService;
         this.getAuthToken = getAuthToken;
@@ -239,7 +291,7 @@ export class TerminalWsGateway {
         this.startDrainPoller();
     }
 
-    public setBroadcastWs(broadcastWs: (verb: string, payload: any) => void): void {
+    public setBroadcastWs(broadcastWs: (verb: string, payload: any, surface?: string) => void): void {
         this.broadcastWs = broadcastWs;
     }
 
@@ -428,9 +480,17 @@ export class TerminalWsGateway {
             }
         }
 
+        // Safety valve. The stamp is refreshed on every ack that actually moves the
+        // counter (see the 'ack' handler), so this measures TIME WITHOUT ACK
+        // PROGRESS, not total pause time. A genuinely slow renderer that keeps
+        // acking stays paused for as long as it needs — that is working
+        // backpressure, and force-resuming it every 10s would disable the feature
+        // under exactly the sustained load it exists for. Only a stalled counter
+        // (lost ack, dead renderer, disposed view) trips this, and it degrades to
+        // today's lag rather than to a silently dead terminal.
         const pausedTime = this.pausedSince.get(terminalName);
         if (pausedTime && now - pausedTime > MAX_PAUSE_MS) {
-            console.warn(`[TerminalWsGateway] Terminal ${terminalName} paused longer than MAX_PAUSE_MS (${MAX_PAUSE_MS}ms). Force resuming.`);
+            console.warn(`[TerminalWsGateway] Terminal ${terminalName} paused ${MAX_PAUSE_MS}ms with no ack progress. Force resuming.`);
             try {
                 handle.pty.resume();
             } catch (err) {
@@ -518,6 +578,29 @@ export class TerminalWsGateway {
 
         const buffer = this.scrollbackBuffers.get(terminal.name);
 
+        // Resolve the replay payload BEFORE the hello frame so hello can carry its
+        // length. Replay is deliberately excluded from this client's credit ledger
+        // (it is a catch-up burst up to MAX_SCROLLBACK_BYTES, larger than the whole
+        // high-water budget), but the client acks whatever it parses — including
+        // the replay. Without telling it how much to skip, a re-attaching client
+        // pays down up to 256 KB of credit it never consumed, zeroing unackedChars
+        // and disabling backpressure for the first quarter-megabyte of live output
+        // after a reconnect: precisely the eviction→reconnect→replay spiral this
+        // whole mechanism exists to break.
+        let replayFrame: Buffer | undefined;
+        let replayChars = 0;
+        if (buffer && buffer.chunks.length > 0) {
+            const missed = lastSeq > 0
+                ? buffer.chunks.filter(c => c.seq > lastSeq)
+                : buffer.chunks;
+            if (missed.length > 0) {
+                const replaySeq = missed[missed.length - 1].seq;
+                const combined = missed.map(c => c.data).join('');
+                replayChars = combined.length;
+                replayFrame = encodeOutputFrame(replaySeq, combined);
+            }
+        }
+
         // Hello frame carries the terminal's current high-water seq so a client can
         // tell how far ahead the stream already is.
         this.safeSend(ws, {
@@ -527,6 +610,7 @@ export class TerminalWsGateway {
             cols: terminal.pty.cols || 80,
             rows: terminal.pty.rows || 24,
             seq: buffer ? buffer.nextSeq - 1 : 0,
+            replayChars,
         });
 
         // Replay scrollback BEFORE any live frame. This block is synchronous, and
@@ -539,15 +623,8 @@ export class TerminalWsGateway {
         // the highest replayed seq, and only chunks newer than the client's
         // `lastSeq` are included, so a re-attaching client can write the whole
         // payload without re-rendering the prefix it already has.
-        if (buffer && buffer.chunks.length > 0) {
-            const missed = lastSeq > 0
-                ? buffer.chunks.filter(c => c.seq > lastSeq)
-                : buffer.chunks;
-            if (missed.length > 0) {
-                const replaySeq = missed[missed.length - 1].seq;
-                const combined = missed.map(c => c.data).join('');
-                this.safeSendBinary(ws, encodeOutputFrame(replaySeq, combined));
-            }
+        if (replayFrame) {
+            this.safeSendBinary(ws, replayFrame);
         }
 
         if (terminal.status === 'exited') {
@@ -587,6 +664,11 @@ export class TerminalWsGateway {
                 } else if (parsed.t === 'ack' && typeof parsed.chars === 'number') {
                     const acked = Math.max(0, Math.min(parsed.chars, client.unackedChars));
                     client.unackedChars -= acked;
+                    // Ack progress refreshes the pause stamp so MAX_PAUSE_MS measures a
+                    // STALLED counter, not a legitimately long pause.
+                    if (acked > 0 && this.pausedSince.has(client.terminalName)) {
+                        this.pausedSince.set(client.terminalName, Date.now());
+                    }
                     const targetClients = Array.from(this.clients).filter(c => c.terminalName === client.terminalName);
                     this.checkBackpressure(client.terminalName, targetClients);
                 } else if (parsed.t === 'ping') {

@@ -14,7 +14,12 @@
     let osNotifyEnabled = false;
 
     const terminalBadges = new Map(); // terminalName -> string label / count
-    const terminalsMap = new Map(); // name -> { handle, container, ws, term, fitAddon, lastSeq, batchQueue, animationFrameId, reconnectTimer, reconnectDelay, resizeObserver, exited }
+    // name -> { container, term, fitAddon, rendererAddon, isWebgl, ws, lastSeq, batchQueue,
+    //           pendingAckChars, ackSuppressChars, reconnectTimer, reconnectDelay,
+    //           resizeObserver, exited, disposed }
+    // Batching is page-level (pendingBatchEntries + one shared rAF), so entries hold no
+    // timer or frame id of their own.
+    const terminalsMap = new Map();
     let fleetList = [];
 
     const listEl = document.getElementById('terminals-list');
@@ -1181,6 +1186,11 @@
             fontSize: 13,
             fontFamily: resolveMonoFont(),
             theme: buildTerminalTheme(),
+            // Explicit, not xterm's implicit default, because it is now load-bearing:
+            // a view disposed on unassign re-attaches by replaying the gateway's
+            // MAX_SCROLLBACK_BYTES ring (256 KB ≈ 3000 lines at 80 cols). Keeping the
+            // client below that means disposal can never lose scrollback the operator
+            // could still have scrolled to. Change the two together.
             scrollback: 1000,
         });
 
@@ -1201,6 +1211,7 @@
             lastSeq: 0,
             batchQueue: [],
             pendingAckChars: 0,
+            ackSuppressChars: 0,
             bytesWritten: 0,
             writeThrowCount: 0,
             largestInputDataLen: 0,
@@ -1258,7 +1269,11 @@
             try { entry.ws.close(); } catch { /* ignore */ }
             entry.ws = null;
         }
+        // Both counters belong to the socket that just went away: the server issues a
+        // fresh zeroed credit ledger with the new ClientState, so carrying either one
+        // forward would ack characters the new counter never issued.
         entry.pendingAckChars = 0;
+        entry.ackSuppressChars = 0;
 
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
         let wsUrl = `${protocol}//${location.host}/ws/terminal?name=${encodeURIComponent(entry.name)}`;
@@ -1324,8 +1339,20 @@
                     const rawData = base64ToUtf8(frame.data);
                     entry.batchQueue.push(rawData);
                     scheduleBatchFlush(entry);
+                } else if (frame.t === 'hello') {
+                    // Chars the server replayed but did NOT bill to this connection's
+                    // credit ledger. See onWriteParsed.
+                    entry.ackSuppressChars = typeof frame.replayChars === 'number' && frame.replayChars > 0
+                        ? frame.replayChars
+                        : 0;
                 } else if (frame.t === 'inputThrottled') {
-                    entry.term.write(`\r\n\x1b[2m[Pasting input queued: ${frame.queued || 0} bytes...]\x1b[0m\r\n`);
+                    // Informational only — stdin stays enabled. Input is queued, never
+                    // dropped, so the operator can keep typing behind a large paste.
+                    if (frame.throttled === false) {
+                        entry.term.write(`\r\n\x1b[2m[Input queue drained]\x1b[0m\r\n`);
+                    } else {
+                        entry.term.write(`\r\n\x1b[2m[Pasting — input queued: ${frame.queued || 0} bytes…]\x1b[0m\r\n`);
+                    }
                 } else if (frame.t === 'error') {
                     entry.exited = true;
                     entry.term.write(`\r\n\x1b[31m[${frame.message || 'Terminal unavailable'}]\x1b[0m\r\n`);
@@ -1388,7 +1415,15 @@
     }
 
     function flushBatch(entry) {
-        if (!entry || entry.exited || !entry.term) { return; }
+        // `disposed`, NOT `exited`. They are different conditions and conflating them
+        // loses data: `exited` means the PROCESS ended, and the gateway deliberately
+        // drains its coalescing window before announcing the exit — so the exit frame
+        // routinely lands while that final output is still queued here, waiting on the
+        // shared rAF. Guarding on `exited` threw those last lines away, which is
+        // exactly the output an operator opens a dead terminal to read. `disposed`
+        // means the VIEW is gone (term.dispose() called), which is the only state in
+        // which writing is actually unsafe.
+        if (!entry || entry.disposed || !entry.term) { return; }
         if (entry.batchQueue.length === 0) { return; }
         const combined = entry.batchQueue.join('');
         entry.batchQueue = [];
@@ -1401,8 +1436,21 @@
     }
 
     function onWriteParsed(entry, length) {
-        if (!entry || entry.exited) return;
+        if (!entry || entry.disposed) return;
         entry.bytesWritten = (entry.bytesWritten || 0) + length;
+
+        // Replay is not on the server's credit ledger for this connection (see
+        // setupClient in terminalWsGateway.ts), so acking it would pay down credit
+        // we never consumed and switch backpressure off for the first stretch of
+        // live output after every reconnect. The server tells us how much to skip
+        // in the hello frame; burn that budget before acking anything.
+        if (entry.ackSuppressChars > 0) {
+            const skipped = Math.min(entry.ackSuppressChars, length);
+            entry.ackSuppressChars -= skipped;
+            length -= skipped;
+            if (length === 0) { return; }
+        }
+
         entry.pendingAckChars = (entry.pendingAckChars || 0) + length;
         if (entry.pendingAckChars >= ACK_CHUNK_CHARS) {
             const toAck = entry.pendingAckChars;
@@ -1422,6 +1470,7 @@
                 lastSeq: entry.lastSeq,
                 batchQueueLength: entry.batchQueue ? entry.batchQueue.length : 0,
                 pendingAckChars: entry.pendingAckChars || 0,
+                ackSuppressChars: entry.ackSuppressChars || 0,
                 bytesWritten: entry.bytesWritten || 0,
                 writeThrowCount: entry.writeThrowCount || 0,
                 largestInputDataLen: entry.largestInputDataLen || 0,

@@ -79,8 +79,20 @@
         }
     };
 
+    /**
+     * Mirror of PANEL_SURFACES in services/wsHub.ts — a webview cannot import from
+     * a .ts module, so the two are kept in step by hand. Keys are the panel ids
+     * headlessPanelHtml.ts stamps into `data-panel`.
+     *
+     * `project` is deliberately absent so the Project panel stays fail-open; see
+     * the comment on PANEL_SURFACES for why declaring a set for it breaks saving.
+     * A panel with no entry sends no `surfaces` parameter at all and receives the
+     * full stream, which is also what an older server does with the parameter.
+     *
+     * Debugging note: with this in effect, the WS frames visible in one panel's
+     * devtools are that panel's traffic only, not the whole system's.
+     */
     const PANEL_SURFACES_MAP = {
-        board: ['kanban', 'common'],
         kanban: ['kanban', 'common'],
         terminals: ['terminals', 'common'],
         planning: ['planning', 'common'],
