@@ -121,6 +121,13 @@ jobs:
       - name: Kanban optimistic render guard contract
         run: npm run test:contract:render-guard
 
+      # Retention used to sort backups by filename, which leads with the reason — so
+      # every `bulk-change` snapshot (taken right before a mass mutation of user plan
+      # data) sorted ahead of `pre-migration` and was always deleted first. This test
+      # pins per-reason retention, the throttle, and the per-reason content dedupe.
+      - name: Kanban DB backup retention contract (per-reason cap, throttle, dedupe)
+        run: npm run test:contract:db-backup-retention
+
       - name: Tickets sidebar list scoping contract
         run: npm run test:contract:tickets-sidebar-scoping
 

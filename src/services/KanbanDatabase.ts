@@ -6559,40 +6559,71 @@ export class KanbanDatabase {
         'bulk-change': 0 // Never throttle bulk changes
     };
 
-    private static _parseBackupFilename(filename: string): { reasonGroup: string; timestampMs: number } {
+    /** '2026-07-30T18-48-49-180Z' → epoch ms, or null when the stamp is not a real date. */
+    private static _parseBackupTimestamp(stamp: string): number | null {
+        // Dashes at offsets 4/7 are the date separators and stay; everything past the
+        // 'T' at offset 10 is a time separator. The trailing '-180Z' becomes '.180Z'.
+        const iso = stamp
+            .replace(/-/g, (m, offset) => (offset > 10 ? ':' : m))
+            .replace(/:([0-9]{3}Z)$/, '.$1');
+        const ts = Date.parse(iso);
+        return isNaN(ts) ? null : ts;
+    }
+
+    private static _parseBackupFilename(filename: string): { reasonGroup: string; timestampMs: number; hasTimestamp: boolean } {
         const prefix = 'kanban.db.backup.';
         if (!filename.startsWith(prefix)) {
-            return { reasonGroup: 'unknown', timestampMs: 0 };
+            return { reasonGroup: 'unknown', timestampMs: 0, hasTimestamp: false };
         }
         const rest = filename.slice(prefix.length);
 
-        // Try anchor to end first: <reason>.<ISO-timestamp>
+        // Anchor to the end first: <reason>.<ISO-timestamp>. A reason is sanitised to
+        // [a-zA-Z0-9_-], so it may legitimately contain digits and dashes — an
+        // unanchored first-match would lift a timestamp-shaped substring out of it.
         const endMatch = rest.match(/^(.*)\.(\d{4}-\d{2}-\d{2}T[\d-]+Z)$/);
         if (endMatch) {
-            const reasonGroup = endMatch[1];
-            const isoStr = endMatch[2].replace(/-/g, (m, offset) => (offset > 10 ? ':' : m)).replace(/:([0-9]{3}Z)$/, '.$1');
-            const ts = Date.parse(isoStr);
-            return {
-                reasonGroup,
-                timestampMs: isNaN(ts) ? 0 : ts
-            };
+            const ts = KanbanDatabase._parseBackupTimestamp(endMatch[2]);
+            if (ts !== null) {
+                return { reasonGroup: endMatch[1], timestampMs: ts, hasTimestamp: true };
+            }
         }
 
-        // Unanchored fallback match
+        // Unanchored fallback, for any legacy layout that buries the timestamp mid-name.
         const unanchoredMatch = rest.match(/(\d{4}-\d{2}-\d{2}T[\d-]+Z)/);
         if (unanchoredMatch) {
-            const tsStr = unanchoredMatch[1];
-            const idx = rest.indexOf(tsStr);
-            const reasonGroup = idx > 1 ? rest.slice(0, idx - 1) : 'unknown';
-            const isoStr = tsStr.replace(/-/g, (m, offset) => (offset > 10 ? ':' : m)).replace(/:([0-9]{3}Z)$/, '.$1');
-            const ts = Date.parse(isoStr);
-            return {
-                reasonGroup,
-                timestampMs: isNaN(ts) ? 0 : ts
-            };
+            const ts = KanbanDatabase._parseBackupTimestamp(unanchoredMatch[1]);
+            if (ts !== null) {
+                const idx = rest.indexOf(unanchoredMatch[1]);
+                return { reasonGroup: idx > 1 ? rest.slice(0, idx - 1) : 'unknown', timestampMs: ts, hasTimestamp: true };
+            }
         }
 
-        return { reasonGroup: rest, timestampMs: 0 };
+        // No usable timestamp. Group by the leading segment so the file lands in an
+        // EXISTING reason's bucket and stays prunable. Giving each undateable file its
+        // own group would mean a cap of one per file — i.e. an unbounded directory.
+        const dot = rest.indexOf('.');
+        return { reasonGroup: dot > 0 ? rest.slice(0, dot) : (rest || 'unknown'), timestampMs: 0, hasTimestamp: false };
+    }
+
+    /**
+     * Newest snapshot for one reason, used by both the rate limit and the content dedupe.
+     * Files whose timestamp cannot be parsed are ignored here on purpose: throttling or
+     * deduping against a file we cannot date would suppress a real snapshot, so this
+     * fails toward writing more backups.
+     */
+    private async _newestBackupForReason(backupDir: string, cleanReason: string): Promise<{ filename: string; timestampMs: number } | null> {
+        const files = (await fs.promises.readdir(backupDir))
+            .filter(f => f.startsWith('kanban.db.backup.'));
+
+        let newest: { filename: string; timestampMs: number } | null = null;
+        for (const f of files) {
+            const parsed = KanbanDatabase._parseBackupFilename(f);
+            if (!parsed.hasTimestamp || parsed.reasonGroup !== cleanReason) { continue; }
+            if (!newest || parsed.timestampMs > newest.timestampMs) {
+                newest = { filename: f, timestampMs: parsed.timestampMs };
+            }
+        }
+        return newest;
     }
 
     private async _pruneDbBackups(backupDir: string): Promise<void> {
@@ -6600,12 +6631,12 @@ export class KanbanDatabase {
             .filter(f => f.startsWith('kanban.db.backup.'));
 
         // Group files by parsed reason
-        const grouped = new Map<string, Array<{ filename: string; timestampMs: number }>>();
+        const grouped = new Map<string, Array<{ filename: string; timestampMs: number; hasTimestamp: boolean }>>();
 
         for (const filename of allFiles) {
             const parsed = KanbanDatabase._parseBackupFilename(filename);
             let tsMs = parsed.timestampMs;
-            if (tsMs === 0) {
+            if (!parsed.hasTimestamp) {
                 try {
                     const stat = await fs.promises.stat(path.join(backupDir, filename));
                     tsMs = stat.mtimeMs;
@@ -6614,14 +6645,19 @@ export class KanbanDatabase {
                 }
             }
             const list = grouped.get(parsed.reasonGroup) || [];
-            list.push({ filename, timestampMs: tsMs });
+            list.push({ filename, timestampMs: tsMs, hasTimestamp: parsed.hasTimestamp });
             grouped.set(parsed.reasonGroup, list);
         }
 
         const cap = KanbanDatabase.BACKUP_RETENTION_CAP_PER_REASON;
-        for (const [_, files] of grouped.entries()) {
-            // Sort descending by timestamp (newest first)
-            files.sort((a, b) => b.timestampMs - a.timestampMs);
+        for (const files of grouped.values()) {
+            // Dateable snapshots outrank undateable ones regardless of mtime: a file we
+            // cannot identify is the first thing we are willing to lose. mtime only
+            // orders the undateable ones among themselves (0, i.e. last, if stat fails).
+            files.sort((a, b) => {
+                if (a.hasTimestamp !== b.hasTimestamp) { return a.hasTimestamp ? -1 : 1; }
+                return b.timestampMs - a.timestampMs;
+            });
             const toDelete = files.slice(cap);
             for (const item of toDelete) {
                 await fs.promises.unlink(path.join(backupDir, item.filename)).catch(() => { /* best effort */ });
@@ -6637,74 +6673,41 @@ export class KanbanDatabase {
 
             const cleanReason = reason.replace(/[^a-zA-Z0-9_-]/g, '_');
 
-            // (d) Rate-limit check per reason
+            // One directory scan serves both the rate limit and the dedupe below.
+            const newestForReason = await this._newestBackupForReason(backupDir, cleanReason);
+
+            // (d) Rate-limit check per reason. Unknown reasons default to 0 = no throttle.
             const minIntervalMs = KanbanDatabase.BACKUP_REASON_THROTTLES_MS[reason] ?? 0;
-            if (minIntervalMs > 0) {
-                const existingFiles = (await fs.promises.readdir(backupDir))
-                    .filter(f => f.startsWith('kanban.db.backup.'));
-
-                let newestTsMs = 0;
-                for (const f of existingFiles) {
-                    const parsed = KanbanDatabase._parseBackupFilename(f);
-                    if (parsed.reasonGroup === cleanReason) {
-                        let ts = parsed.timestampMs;
-                        if (ts === 0) {
-                            try {
-                                const stat = await fs.promises.stat(path.join(backupDir, f));
-                                ts = stat.mtimeMs;
-                            } catch {
-                                ts = 0;
-                            }
-                        }
-                        if (ts > newestTsMs) {
-                            newestTsMs = ts;
-                        }
-                    }
-                }
-
-                if (newestTsMs > 0) {
-                    const ageMs = Date.now() - newestTsMs;
-                    if (ageMs >= 0 && ageMs < minIntervalMs) {
-                        console.log(`[KanbanDatabase] Skipping DB backup (${reason}): throttled (${Math.round(ageMs / 1000)}s < ${minIntervalMs / 1000}s)`);
-                        return;
-                    }
+            if (minIntervalMs > 0 && newestForReason) {
+                const ageMs = Date.now() - newestForReason.timestampMs;
+                // A negative age means a future-stamped file (clock adjustment, restored
+                // backup dir). Treat it as "no recent snapshot" rather than blocking
+                // writes until real time catches up.
+                if (ageMs >= 0 && ageMs < minIntervalMs) {
+                    console.log(`[KanbanDatabase] Skipping DB backup (${reason}): throttled (${Math.round(ageMs / 1000)}s < ${minIntervalMs / 1000}s)`);
+                    // Retention still applies on a skipped write — otherwise an install
+                    // whose newest snapshot is inside the throttle window would keep its
+                    // legacy over-cap files until the window happened to expire.
+                    await this._pruneDbBackups(backupDir);
+                    return;
                 }
             }
 
             const data = this._db.export();
 
-            // (c) Content-dedupe check per reason
-            const existingFilesForReason = (await fs.promises.readdir(backupDir))
-                .filter(f => f.startsWith('kanban.db.backup.'));
-
-            let newestFileForReason: { filename: string; timestampMs: number } | null = null;
-            for (const f of existingFilesForReason) {
-                const parsed = KanbanDatabase._parseBackupFilename(f);
-                if (parsed.reasonGroup === cleanReason) {
-                    let ts = parsed.timestampMs;
-                    if (ts === 0) {
-                        try {
-                            const stat = await fs.promises.stat(path.join(backupDir, f));
-                            ts = stat.mtimeMs;
-                        } catch {
-                            ts = 0;
-                        }
-                    }
-                    if (!newestFileForReason || ts > newestFileForReason.timestampMs) {
-                        newestFileForReason = { filename: f, timestampMs: ts };
-                    }
-                }
-            }
-
-            if (newestFileForReason) {
-                const newestPath = path.join(backupDir, newestFileForReason.filename);
+            // (c) Content-dedupe check, scoped per reason. Global scope would suppress a
+            // bulk-change snapshot whenever an identical pre-migration one existed.
+            if (newestForReason) {
+                const newestPath = path.join(backupDir, newestForReason.filename);
                 try {
                     const stat = await fs.promises.stat(newestPath);
+                    // Size pre-check: a genuine change costs one stat, not a 5 MB read.
                     if (stat.size === data.length) {
                         const existingBuf = await fs.promises.readFile(newestPath);
                         const newBuf = Buffer.from(data);
                         if (existingBuf.equals(newBuf)) {
                             console.log(`[KanbanDatabase] Skipping DB backup (${reason}): byte-identical to newest snapshot for reason`);
+                            await this._pruneDbBackups(backupDir);
                             return;
                         }
                     }
