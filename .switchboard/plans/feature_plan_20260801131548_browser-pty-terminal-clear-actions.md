@@ -249,3 +249,7 @@ Files changed:
 
 No issues encountered.
 
+## Review Findings
+
+Reviewed the implementation as landed in commit `9087436` (auto-commit labels lag by one plan). All six planned files match the spec: `clearPty` is error-tolerant and lock-serialised, both `handlePtyVerb` switches carry both arms, and `PTY_VERBS` is extended to six. Two fixes applied to `src/webview/terminals.js`: the `#btn-clear-all` button borrows `class="btn-layout"`, so the two unscoped `querySelectorAll('.btn-layout')` calls were sweeping it into layout-picker handling (inert only because of a `data-layout` null-check — now scoped to `.layout-picker .btn-layout`), and `clearAllTerminals()` unconditionally ran `renderPaneGrid()`, which empties the grid and reparents every live xterm container for no visual change when no badges exist (now guarded on `terminalBadges.size`). Validation: `compile-tests` clean, `lint` 0 errors (2426 pre-existing warnings), and contract tests `pty-route-surface` (9/9), `pty-host-gating`, `terminal-input-path` (10/10), `terminal-flow-control` (16/16), `ws-surface-scoping` (13/13) all pass; `test:contract:pty-route-surface` is wired into CI at `.github/workflows/integration-tests.yml:67`. Remaining risks are cosmetic and accepted: Clear All wipes `DONE` badges on exited terminals it never wrote to, and the 600 ms double-click guard on the sidebar/pane buttons is dropped when a badge-triggered re-render replaces the button — a duplicate `/clear` is idempotent.
+

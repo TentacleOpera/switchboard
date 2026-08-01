@@ -182,3 +182,7 @@ Implemented grace-period disposal (15s) for terminals unassigned from grid panes
 Files modified: `src/webview/terminals.js`, `src/test/terminal-flow-control-contract.test.js`.
 No issues encountered during implementation.
 
+## Review Findings
+
+Cleanest of the four subtasks — timer arm/cancel is symmetric, the name-reuse hazard is covered at every disposal site (including `renameTerminal`'s inherited new name), `entry.exited`-before-socket-close ordering is preserved, and the WebGL counter decrements exactly once because `onContextLoss` clears `isWebgl` before `destroyTerminalView` can double-count. One CRITICAL landed here via the shared file: `flushBatch` guarded on `entry.exited` rather than the `entry.disposed` flag this plan introduced (plan (e) explicitly warns the two must not be conflated), which silently discarded the last output of every exiting process — fixed, and pinned by a dedicated assertion. Minor cleanups: `scrollback: 1000` gained the comment tying it to the gateway's `MAX_SCROLLBACK_BYTES`, and the stale `terminalsMap` shape comment still listing the removed `animationFrameId` was rewritten. Lifecycle coverage moved into the rewritten `terminal-flow-control-contract.test.js` (arm/cancel, re-check before dispose, WebGL cap and single decrement, `exited` vs `disposed`, reconnect guard), now runnable and CI-wired. Remaining risk: the grace-window manual cases (swap-back, close/rename during grace, name reuse, layout floor) are unexercised by static tests.
+

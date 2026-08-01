@@ -257,7 +257,10 @@
             });
         }
 
-        const layoutBtns = document.querySelectorAll('.btn-layout');
+        // Scoped to the picker: #btn-clear-all borrows .btn-layout for its looks but is
+        // not a layout choice. An unscoped query binds this handler to it too, leaving
+        // the whole thing standing on the data-layout null-check below.
+        const layoutBtns = document.querySelectorAll('.layout-picker .btn-layout');
         layoutBtns.forEach(btn => {
             btn.addEventListener('click', () => {
                 const requested = btn.getAttribute('data-layout');
@@ -679,7 +682,7 @@
         // layout actually trips the floor.
         effectiveLayout = mode;
 
-        document.querySelectorAll('.btn-layout').forEach(btn => {
+        document.querySelectorAll('.layout-picker .btn-layout').forEach(btn => {
             btn.classList.toggle('active', btn.getAttribute('data-layout') === mode);
         });
 
@@ -1115,9 +1118,14 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({})
             });
-            terminalBadges.clear();
-            renderSidebarList();
-            renderPaneGrid();
+            // Only re-render if a badge actually went away. renderPaneGrid() empties the
+            // grid and reparents every live xterm container — too much teardown to run
+            // for no visual change, and the clear itself alters no pane state.
+            if (terminalBadges.size > 0) {
+                terminalBadges.clear();
+                renderSidebarList();
+                renderPaneGrid();
+            }
         } catch (err) {
             console.error('[Terminals] Failed to clear all terminals:', err);
         }
