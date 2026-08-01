@@ -8177,10 +8177,16 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                     : null;
                 const role = dispatchSpec?.role || this._columnToRole(targetColumn);
 
-                if (Array.isArray(sessionIds) && sessionIds.length > 0 && workspaceRoot) {
+                // Persist + confirm BEFORE dispatch (mirrors moveSelected's general branch):
+                // the card is authoritative a DB write after the drop, not a dispatch later.
+                // Without a resolved workspaceRoot there is nothing to persist against, so
+                // dispatch the raw ids and let the dispatch layer resolve the root itself —
+                // that is the pre-conversion behaviour and must not become a silent no-op.
+                let dispatchIds: string[] = Array.isArray(sessionIds) ? [...sessionIds] : [];
+                if (dispatchIds.length > 0 && workspaceRoot) {
                     const movedIds: string[] = [];
-                    const dispatchIds: string[] = [];
                     const failures: Array<{ id: string; sourceColumn: string; reason: string }> = [];
+                    dispatchIds = [];
 
                     for (const sid of sessionIds) {
                         const card = this._lastCards.find(c => (c.planId || c.sessionId) === sid && c.workspaceRoot === workspaceRoot);
@@ -8205,20 +8211,20 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                     if (failures.length > 0) {
                         this.postMessage({ type: 'moveCardsFailed', failures });
                     }
+                }
 
-                    if (dispatchIds.length > 0) {
-                        if (dispatchSpec?.source === 'custom-user' && role && this._taskViewerProvider) {
-                            const instruction = role === 'planner' ? 'improve-plan' : undefined;
-                            await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(role, dispatchIds, {
-                                targetColumn,
-                                dragDropMode: dispatchSpec.dragDropMode,
-                                additionalInstructions: dispatchSpec.triggerPrompt,
-                                instruction,
-                                workspaceRoot: workspaceRoot || undefined
-                            });
-                        } else if (role) {
-                            await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, undefined, workspaceRoot);
-                        }
+                if (dispatchIds.length > 0) {
+                    if (dispatchSpec?.source === 'custom-user' && role && this._taskViewerProvider) {
+                        const instruction = role === 'planner' ? 'improve-plan' : undefined;
+                        await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(role, dispatchIds, {
+                            targetColumn,
+                            dragDropMode: dispatchSpec.dragDropMode,
+                            additionalInstructions: dispatchSpec.triggerPrompt,
+                            instruction,
+                            workspaceRoot: workspaceRoot || undefined
+                        });
+                    } else if (role) {
+                        await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, undefined, workspaceRoot);
                     }
                 }
                 this._scheduleBoardRefresh(workspaceRoot ?? undefined);

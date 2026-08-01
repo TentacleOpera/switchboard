@@ -121,6 +121,16 @@ jobs:
       - name: Kanban optimistic render guard contract
         run: npm run test:contract:render-guard
 
+      # A dropped card must become authoritative a DB write after the drop, not a
+      # full agent dispatch later. The three drag arms persist → post `moveCards` →
+      # dispatch; the converted arms (moveSelected/moveAll) regressed on this once
+      # already and nothing guarded the drag arms. This also pins the recentlyDropped
+      # animation fence and the ONE surviving 350ms timer (completePlan's card-EXIT
+      # fence), so a cleanup sweep can neither reintroduce the drop-dispatch delay
+      # nor delete the exit fence as its twin.
+      - name: Kanban drag confirm-before-dispatch contract (persist→echo→dispatch, animation fence)
+        run: npm run test:contract:drag-confirm-order
+
       # Retention used to sort backups by filename, which leads with the reason — so
       # every `bulk-change` snapshot (taken right before a mass mutation of user plan
       # data) sorted ahead of `pre-migration` and was always deleted first. This test

@@ -6457,7 +6457,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         cardEl.classList.add('card-completing');
                         setTimeout(() => {
                             postKanbanMessage({ type: 'completePlan', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
-                        }, 350); // Slightly less than 400ms to ensure smooth handoff to the backend redraw
+                        }, 350); // Slightly less than the 400ms card-completing EXIT animation.
+                        // KEEP THIS ONE. The two 350ms timers on the drag-drop dispatch paths
+                        // were deleted (the card stays on screen there, and the recentlyDropped
+                        // fence now carries dropPulse across the confirm re-render). This timer
+                        // is a different case: it fences an exit animation on a card that is
+                        // LEAVING the DOM, so the backend removal must not truncate it.
                     } else {
                         // Fallback if DOM traversal fails
                         postKanbanMessage({ type: 'completePlan', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });

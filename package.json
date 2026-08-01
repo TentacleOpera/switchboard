@@ -800,6 +800,7 @@
     "test:contract:rendermarkdown": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/sharedUtils-renderMarkdown.test.js",
     "test:contract:drag-guard": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-card-button-drag-guard.test.js",
     "test:contract:render-guard": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-render-guard-contract.test.js",
+    "test:contract:drag-confirm-order": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-drag-confirm-before-dispatch.test.js",
     "test:contract:tickets-sidebar-scoping": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/tickets-sidebar-list-scoping.test.js",
     "test:contract:tickets-subtasks": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/tickets-subtask-embedding.test.js",
     "test:contract:project-pin-fill": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/project-pin-apply-if-empty-contract.test.js",
