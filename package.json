@@ -816,6 +816,7 @@
     "catalog:generate": "node scripts/generate-protocol-catalog.js --write && node scripts/generate-verb-allowlist.js --write",
     "catalog:check": "node scripts/generate-protocol-catalog.js && node scripts/generate-verb-allowlist.js",
     "parity:check": "node scripts/check-protocol-parity.js",
+    "icons:parity": "node scripts/check-icon-parity.js",
     "push-routing:check": "node scripts/check-push-routing.js",
     "verb-returns:check": "node scripts/check-verb-return-contract.js",
     "verb-returns:baseline": "node scripts/check-verb-return-contract.js --write",

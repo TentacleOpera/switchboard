@@ -212,12 +212,12 @@ New `src/test/terminal-flow-control-contract.test.js`, following the source-text
 8. **Nine terminals.** In the 3x3 layout with nine active agents, confirm the page stays interactive and no terminal starves.
 9. **Regression suite.** Run the contract tests. Confirm the five known-red tests at HEAD are unchanged — stash-verify before attributing any red test to this work.
 
-## Uncertain Assumptions
+## Resolved Assumptions
 
-The following are external (third-party/OS) claims that cannot be verified from this repository. The user was advised to run web research to confirm them before implementation; a ready-to-run research prompt was supplied in chat.
+Confirmed by web research (2026-08-01); treat as settled — do not re-research.
 
-- VS Code's pty-host char-count flow-control constants are exactly `HighWatermarkChars = 100000`, `LowWatermarkChars = 5000`, `CharCountAckSize = 5000` — the values this plan adopts as `HIGH_WATER_CHARS` / `LOW_WATER_CHARS` / `ACK_CHUNK_CHARS`.
-- Chrome's loopback WebSocket behaviour: the server-side `ws.bufferedAmount` stays near zero over loopback because the browser's network service drains the socket eagerly into a mojo pipe on a thread separate from the (potentially blocked) renderer.
+- **VS Code watermark constants confirmed.** `FlowControlConstants.HighWatermarkChars = 100000` and `LowWatermarkChars = 5000` (`src/vs/platform/terminal/common/terminal.ts`); pause/resume on `_unacknowledgedCharCount` lives in `src/vs/platform/terminal/node/terminalProcess.ts`; the renderer acks `data.length` from the `xterm.write(data, callback)` callback via `acknowledgeDataEvent` (`terminalInstance.ts` → `ptyService.ts`). This plan's `HIGH_WATER_CHARS` / `LOW_WATER_CHARS` match exactly. The ack-chunk granularity (`ACK_CHUNK_CHARS = 5000`) was not separately confirmed — it is internal tuning (ack frequency only, no correctness bearing), so any sane value stands.
+- **Chrome loopback WebSocket behaviour confirmed, and stronger than assumed.** Per the W3C spec, `bufferedAmount` tracks *outbound* `send()` bytes only. Incoming frames land in Chrome's Network Service process and cross to the renderer over a Mojo DataPipe (baseline capacity ~64 KB); a blocked renderer stalls the pipe, not the socket read, so server-side `bufferedAmount` stays near zero over loopback exactly as the root cause claims. TCP zero-window backpressure eventually engages only after the pipe *and* kernel buffers fill — far too late to protect the renderer.
 
 ## Recommendation
 

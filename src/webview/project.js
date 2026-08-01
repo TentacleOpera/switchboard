@@ -2780,7 +2780,7 @@
         itemDiv.dataset.ws = ws.workspaceRoot;
         if (selected) itemDiv.classList.add('selected');
         const marker = exists
-            ? '<span style="color: var(--accent-teal); font-weight: bold;">✓</span>'
+            ? '<span class="sb-icon sb-icon-sm sb-icon-check" style="color: var(--accent-teal);" aria-hidden="true"></span>'
             : '<span style="color: var(--text-secondary); opacity: 0.5;">•</span>';
         const copyLinkHtml = exists && filePath
             ? `<div class="doc-card-actions">

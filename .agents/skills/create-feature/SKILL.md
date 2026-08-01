@@ -109,7 +109,8 @@ get approval, then create the feature files.
 
 ## After Writing
 
-- Commit the new file to git (the features folder will be tracked once
-  `expose-features-folder-in-gitignore.md` is deployed).
+- Do NOT commit or push — creating a feature is a planning action. Leave the new
+  file in the working tree for the user. (The features folder will be tracked once
+  `expose-features-folder-in-gitignore.md` is deployed.)
 - Note to the user that the extension will automatically import the feature into the kanban DB on
   next activation via the GlobalPlanWatcherService.

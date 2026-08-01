@@ -3224,7 +3224,7 @@
         state.docsSectionCollapsed[collapseKey] = isCollapsed;
 
         const updateCollapsedUI = () => {
-            chevronSpan.className = 'sb-icon sb-icon-sm ' + (isCollapsed ? 'sb-icon-chevron-right' : 'sb-icon-chevron-down');
+            chevronSpan.className = 'section-chevron sb-icon sb-icon-sm ' + (isCollapsed ? 'sb-icon-chevron-right' : 'sb-icon-chevron-down');
             contentDiv.style.display = isCollapsed ? 'none' : 'block';
         };
         header.addEventListener('click', (e) => {
@@ -3410,8 +3410,8 @@
             }
 
             const icon = document.createElement('span');
-            icon.className = 'icon';
-            icon.textContent = '▶';
+            icon.className = 'icon sb-icon sb-icon-chevron-right';
+            icon.setAttribute('aria-hidden', 'true');
 
             const label = document.createElement('span');
             label.className = 'label';
@@ -3423,7 +3423,7 @@
             if (node.hasChildren) {
                 wrapper.addEventListener('click', () => {
                     const isExpanded = childContainer.style.display !== 'none';
-                    icon.textContent = isExpanded ? '▶' : '▼';
+                    icon.className = 'icon sb-icon ' + (isExpanded ? 'sb-icon-chevron-right' : 'sb-icon-chevron-down');
                     childContainer.style.display = isExpanded ? 'none' : 'block';
 
                     if (!isExpanded && !childContainer.dataset.loaded) {
@@ -4030,7 +4030,7 @@
                 
                 const refreshBtn = document.createElement('button');
                 refreshBtn.className = 'source-refresh-btn';
-                refreshBtn.textContent = '↻';
+                refreshBtn.innerHTML = '<span class=\'sb-icon sb-icon-sm sb-icon-refresh\' aria-hidden=\'true\'></span>';
                 refreshBtn.title = 'Refresh';
                 refreshBtn.addEventListener('click', (e) => {
                     e.stopPropagation();
@@ -4101,7 +4101,7 @@
                 state.docsSectionCollapsed[sourceId] = isCollapsed;
                 
                 const updateCollapsedUI = () => {
-                    chevronSpan.className = 'sb-icon sb-icon-sm ' + (isCollapsed ? 'sb-icon-chevron-right' : 'sb-icon-chevron-down');
+                    chevronSpan.className = 'section-chevron sb-icon sb-icon-sm ' + (isCollapsed ? 'sb-icon-chevron-right' : 'sb-icon-chevron-down');
                     contentDiv.style.display = isCollapsed ? 'none' : 'block';
                 };
                 
@@ -11202,7 +11202,7 @@ Instructions:
                 <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(task.id)}" data-provider="clickup" title="Link to ticket">Link</button>
                 ${openBtn}
                 <div class="overflow-menu" data-overflow-menu>
-                    <button type="button" class="card-icon-btn overflow-menu-trigger" data-overflow-trigger title="More actions">⋯</button>
+                    <button type="button" class="card-icon-btn overflow-menu-trigger" data-overflow-trigger title="More actions"><span class="sb-icon sb-icon-sm sb-icon-overflow" aria-hidden="true"></span></button>
                     <div class="overflow-menu-popover" data-overflow-popover>
                         <button type="button" class="card-icon-btn overflow-menu-item" data-move-ticket-id="${escapeAttr(task.id)}" data-provider="clickup" title="Move to another list">Move</button>
                     </div>
@@ -11235,7 +11235,7 @@ Instructions:
                 <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(issue.id)}" data-provider="linear" title="Link to ticket">Link</button>
                 ${openBtn}
                 <div class="overflow-menu" data-overflow-menu>
-                    <button type="button" class="card-icon-btn overflow-menu-trigger" data-overflow-trigger title="More actions">⋯</button>
+                    <button type="button" class="card-icon-btn overflow-menu-trigger" data-overflow-trigger title="More actions"><span class="sb-icon sb-icon-sm sb-icon-overflow" aria-hidden="true"></span></button>
                     <div class="overflow-menu-popover" data-overflow-popover>
                         <button type="button" class="card-icon-btn overflow-menu-item" data-move-ticket-id="${escapeAttr(issue.id)}" data-provider="linear" title="Move to another project">Move</button>
                     </div>
@@ -11251,7 +11251,7 @@ Instructions:
         const statusColor = _ticketStatusLightColor(statusName);
         const headerHtml = `
             <div class="ticket-status-group-header" data-status-name="${encodeURIComponent(statusName)}" style="display:flex;align-items:center;gap:6px;padding:6px 8px;cursor:pointer;user-select:none;border-bottom:1px solid var(--border-color);background:var(--panel-bg2,#1a1a2e);font-size:11px;font-weight:600;text-transform:uppercase;color:var(--text-secondary);">
-                <span class="accordion-arrow" style="${isCollapsed ? '' : 'transform:rotate(90deg);'}">▶</span>
+                <span class="accordion-arrow sb-icon sb-icon-sm sb-icon-chevron-right" style="${isCollapsed ? '' : 'transform:rotate(90deg);'}" aria-hidden="true"></span>
                 <span class="ticket-status-light" style="background:${escapeAttr(statusColor)};position:relative;top:0;right:0;"></span>
                 <span>${escapeHtml(statusName)}</span>
                 <span style="margin-left:auto;opacity:0.6;font-weight:400;">${count}</span>

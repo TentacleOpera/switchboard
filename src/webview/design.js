@@ -713,7 +713,7 @@
         state.docsSectionCollapsed[collapseKey] = isCollapsed;
 
         const updateCollapsedUI = () => {
-            chevronSpan.className = 'sb-icon sb-icon-sm ' + (isCollapsed ? 'sb-icon-chevron-right' : 'sb-icon-chevron-down');
+            chevronSpan.className = 'section-chevron sb-icon sb-icon-sm ' + (isCollapsed ? 'sb-icon-chevron-right' : 'sb-icon-chevron-down');
             contentDiv.style.display = isCollapsed ? 'none' : 'block';
         };
         header.addEventListener('click', (e) => {
@@ -1934,7 +1934,7 @@
                 state.stitchThumbnailStripCollapsed = isCollapsed;
                 saveState();
                 const arrow = stripCollapseBtn.querySelector('.strip-arrow');
-                if (arrow) arrow.textContent = isCollapsed ? '▼' : '▲';
+                if (arrow) arrow.className = 'strip-arrow sb-icon sb-icon-sm ' + (isCollapsed ? 'sb-icon-chevron-down' : 'sb-icon-chevron-up');
             });
         }
     }
@@ -2519,7 +2519,7 @@
         const arrowEl = stitchThumbnailStrip.querySelector('.strip-arrow');
         const count = screens.length;
         if (countEl) countEl.textContent = count + (count === 1 ? ' screen' : ' screens');
-        if (arrowEl) arrowEl.textContent = stitchThumbnailStrip.classList.contains('collapsed') ? '▼' : '▲';
+        if (arrowEl) arrowEl.className = 'strip-arrow sb-icon sb-icon-sm ' + (stitchThumbnailStrip.classList.contains('collapsed') ? 'sb-icon-chevron-down' : 'sb-icon-chevron-up');
         screens.forEach(screen => {
             const target = wrapper || stitchThumbnailStrip;
             if (screen.imageUrl) {

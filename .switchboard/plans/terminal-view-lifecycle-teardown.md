@@ -166,11 +166,11 @@ Extend `src/test/terminal-flow-control-contract.test.js` if it exists by then, o
 9. **Context cap.** Open twelve terminals across the 3x3 layout plus swaps and confirm via the console that later terminals take the canvas renderer instead of any existing terminal going blank or losing its WebGL context.
 10. **Regression suite.** Run the contract tests; stash-verify the five known-red tests at HEAD before attributing failures here.
 
-## Uncertain Assumptions
+## Resolved Assumptions
 
-The following is an external (browser-platform) claim that cannot be verified from this repository. The user was advised to run web research to confirm it before implementation; a ready-to-run research prompt was supplied in chat.
+Confirmed by web research (2026-08-01); treat as settled — do not re-research.
 
-- Browsers cap live WebGL contexts at roughly 16 per page and silently kill the oldest context beyond the cap — the behaviour `MAX_WEBGL_CONTEXTS = 12` is chosen against. The exact cap and eviction policy vary by browser and platform.
+- **WebGL context cap confirmed.** Chrome enforces 16 live WebGL contexts per domain/renderer process; the 17th request logs "Too many active WebGL contexts. Oldest context will be lost." and force-evicts the least-recently-used context, which receives `webglcontextlost`. WebKit/Safari enforces the same 16-context LRU policy (`WebGLRenderingContextBase.cpp`). Firefox defaults to 300 (`webgl.max-contexts-per-principal`) but destabilises well below that. `MAX_WEBGL_CONTEXTS = 12` (headroom for the five sibling panels on the same page) is correct for Chrome/Safari and conservative for Firefox.
 
 ## Recommendation
 

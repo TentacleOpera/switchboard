@@ -52,7 +52,7 @@ Restructuring is expected — but bounded:
 
 5. **Backfill the feature file's own description.** Ensure the feature has `## Goal`, `## How the Subtasks Achieve This`, and `## Dependencies & sequencing` (backfill from the subtasks if missing; don't overwrite existing content; never touch the auto-block). Optionally record the reconciled merge map / end-state here so a coder implements to one design.
 
-6. **Commit, push, and report.** Commit the improvements and the restructure (already committed before destructive ops per the guardrail). Report the before/after subtask set and the reconciliation outcome.
+6. **Report.** No commit, no push. Report the before/after subtask set and the reconciliation outcome, listing the files you created, rewrote, and deleted so the diff is legible.
 
 ## High/Low mode (complexity-tier consolidation)
 

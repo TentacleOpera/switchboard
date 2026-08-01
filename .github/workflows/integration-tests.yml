@@ -43,6 +43,14 @@ jobs:
       - name: Claude mirror drift check
         run: npm run mirror:check
 
+      # Masked-SVG icons have two representations (icons/icon-*.svg and the base64
+      # data: URI inlined into each panel's CSS). Both drift modes are silent on
+      # screen — a corrupt payload renders nothing, a missing .sb-icon-<name> rule
+      # renders a solid currentColor block — so neither compile nor lint can see
+      # them. This is the only gate that can.
+      - name: Icon parity check (asset <-> inlined base64, rule coverage)
+        run: npm run icons:parity
+
       # PTY terminals run in BOTH hosts (standalone-only was reversed 2026-07-31).
       # This gate no longer forbids node-pty in the extension bundle — it pins the
       # two structural facts that keep the availability gate auditable: exactly one

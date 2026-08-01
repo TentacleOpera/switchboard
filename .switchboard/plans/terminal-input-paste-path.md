@@ -206,11 +206,11 @@ New `src/test/terminal-input-path-contract.test.js`, on the existing source-text
 10. **Stale-tab compatibility.** With a tab open, restart the standalone server and confirm the old tab's input still works via the retained JSON branch until it reconnects.
 11. **Regression suite.** Run the contract tests; stash-verify the five known-red tests at HEAD before attributing failures here.
 
-## Uncertain Assumptions
+## Resolved Assumptions
 
-The following is an external (OS-level) claim that cannot be verified from this repository. The user was advised to run web research to confirm it before implementation; a ready-to-run research prompt was supplied in chat.
+Confirmed by web research (2026-08-01); treat as settled — do not re-research.
 
-- The kernel pty master→slave buffer is "single-digit KB", so a 100 KB write reaches the reading process as a dozen-plus separate reads regardless of how it was written (this drives the bracketed-paste split analysis and the 4096-byte `INPUT_CHUNK_BYTES` choice).
+- **Kernel pty read granularity confirmed.** Linux `N_TTY` defines `N_TTY_BUF_SIZE = 4096` (`include/linux/tty.h`); a large master `write(2)` is delivered to the slave as multiple reads capped at 4 KB in raw mode, and canonical-mode lines over 4095 bytes are split or truncated. macOS BSD pty buffers are comparable (1024–4096). `INPUT_CHUNK_BYTES = 4096` matches the Linux line-discipline buffer exactly. Corroborating precedent: iTerm2 deliberately chunks large pastes (256–1024-byte blocks with millisecond delays) to protect slave input buffers — the same pacing this plan adopts for event-loop and ordering reasons.
 
 ## Recommendation
 
