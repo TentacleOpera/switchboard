@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { buildKanbanBatchPrompt, columnToPromptRole } from '../agentPromptBuilder';
+import { buildKanbanBatchPrompt, columnToPromptRole, buildFeatureSubagentClause, buildCustomAgentPrompt } from '../agentPromptBuilder';
 
 suite('agentPromptBuilder', () => {
     const makePlans = (count: number) =>
@@ -362,17 +362,14 @@ suite('agentPromptBuilder', () => {
             assert.ok(prompt.includes('planning the feature'), 'Planner feature-mode prompt should use "planning the feature"');
             assert.ok(prompt.includes('Process the subtask plan files yourself'), 'Planner feature-mode prompt should use "Process the subtask plan files yourself"');
             assert.ok(!prompt.includes('implementing the feature'), 'Planner feature-mode prompt must NOT contain execution-coded "implementing the feature"');
-            assert.ok(!prompt.includes('Handle the subtasks yourself'), 'Planner feature-mode prompt must NOT contain execution-coded "Handle the subtasks yourself"');
+            assert.ok(!prompt.includes('Do NOT create git worktrees for this dispatch.'), 'Planner feature-mode prompt must NOT contain coder worktree clause');
         });
 
         test('coder feature-mode prompt keeps execution-coded directive (regression)', () => {
             const prompt = buildKanbanBatchPrompt('coder', makeFeaturePlans(), { featureMode: true, featureTopic: 'Test Feature', subtaskCount: 2 });
-            // The coder feature path (agentPromptBuilder.ts:1371-1421) bypasses featureDirectiveBlock
-            // and emits featureExecutionBlock ("EXECUTION MODE") + featureSubagentBlock ("Handle the
-            // subtasks yourself") instead. Assert the strings the path actually emits — NOT
-            // "implementing the feature", which lives only in featureDirectiveBlock (unused here).
             assert.ok(prompt.includes('EXECUTION MODE'), 'Coder feature-mode prompt should contain the "EXECUTION MODE" featureExecutionBlock');
-            assert.ok(prompt.includes('Handle the subtasks yourself'), 'Coder feature-mode prompt should still contain "Handle the subtasks yourself"');
+            assert.ok(prompt.includes('Do NOT create git worktrees for this dispatch.'), 'Coder feature-mode prompt should contain worktree clause');
+            assert.ok(!prompt.includes('subagent'), 'Coder feature-mode default prompt should contain no subagent wording');
             assert.ok(!prompt.includes('planning the feature'), 'Coder feature-mode prompt must NOT contain planner-coded "planning the feature"');
             assert.ok(!prompt.includes('Process the subtask plan files yourself'), 'Coder feature-mode prompt must NOT contain planner-coded "Process the subtask plan files yourself"');
         });
@@ -381,6 +378,51 @@ suite('agentPromptBuilder', () => {
             const prompt = buildKanbanBatchPrompt('planner', makeFeaturePlans(), { featureMode: true, featureTopic: 'Test Feature', subtaskCount: 2, featureNoSubagentsEnabled: true });
             assert.ok(!prompt.includes('Handle all subtasks yourself'), 'Planner feature-mode prompt must NOT contain the noSubagents clause "Handle all subtasks yourself"');
             assert.ok(prompt.includes('Process the subtask plan files yourself'), 'Planner feature-mode prompt should use the fixed planner-coded subtask clause regardless of subagent policy');
+        });
+
+        test('feature subagent policy and worktree matrix decoupling', () => {
+            // OFF + default policy
+            const promptOffDefault = buildFeatureSubagentClause('default', undefined, false);
+            assert.ok(promptOffDefault.includes('Do NOT create git worktrees for this dispatch.'));
+            assert.ok(!promptOffDefault.includes('subagent'));
+
+            // ON + default policy
+            const promptOnDefault = buildFeatureSubagentClause('default', undefined, true);
+            assert.ok(promptOnDefault.includes('Use a dedicated git worktree for each subtask to prevent file conflicts (worktree-per-plan isolation).'));
+            assert.ok(!promptOnDefault.includes('subagent'));
+
+            // OFF + useSubagents
+            const promptOffUse = buildFeatureSubagentClause('useSubagents', undefined, false);
+            assert.ok(promptOffUse.includes('Do NOT create git worktrees for this dispatch.'));
+            assert.ok(promptOffUse.includes('Use your native subagent or orchestration capabilities'));
+            assert.ok(!promptOffUse.includes('implement the subtasks directly'));
+
+            // ON + noSubagents
+            const promptOnNo = buildFeatureSubagentClause('noSubagents', undefined, true);
+            assert.ok(promptOnNo.includes('Use a dedicated git worktree for each subtask to prevent file conflicts (worktree-per-plan isolation).'));
+            assert.ok(promptOnNo.includes('You are strictly forbidden from spawning or invoking any subagents. Handle all subtasks yourself.'));
+
+            // ON + customSubagent (named)
+            const promptOnCustom = buildFeatureSubagentClause('customSubagent', 'worker-agent', true);
+            assert.ok(promptOnCustom.includes('Use a dedicated git worktree for each subtask to prevent file conflicts (worktree-per-plan isolation).'));
+            assert.ok(promptOnCustom.includes('You are authorized to use the "worker-agent" subagent for this task.'));
+
+            // OFF + customSubagent (blank name)
+            const promptOffCustomBlank = buildFeatureSubagentClause('customSubagent', '', false);
+            assert.ok(promptOffCustomBlank.includes('Do NOT create git worktrees for this dispatch.'));
+            assert.ok(promptOffCustomBlank.includes('Use your native subagent or orchestration capabilities to handle each subtask.'));
+        });
+
+        test('custom agent feature prompt emits neutral ordering line and respects policy matrix', () => {
+            const plans = makeFeaturePlans();
+            const customPrompt = buildCustomAgentPrompt(plans, 'custom-agent', {
+                isFeature: true,
+                featureSubagentPolicy: 'default',
+                useWorktreesPerPlan: false
+            });
+            assert.ok(customPrompt.includes('Do NOT create git worktrees for this dispatch.'));
+            assert.ok(customPrompt.includes('Work through the subtasks in a sensible order.'));
+            assert.ok(!customPrompt.includes('subagent'));
         });
     });
 });

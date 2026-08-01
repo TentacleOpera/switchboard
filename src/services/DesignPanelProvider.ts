@@ -17,6 +17,8 @@ import { PanelStateStore } from './PanelStateStore';
 import { buildWorkspaceItems } from './workspaceUtils';
 import { buildDesignSystemBlock } from './agentPromptBuilder';
 import { getProjectDesignSystemPath, setProjectDesignSystemPath, removeProjectDesignSystemPath } from './designSystemUtils';
+import { reviveWithRetention } from '../utils/reviveWithRetention';
+
 import { STARTER_DESIGN_SYSTEM_HTML } from './designSystemStarterTemplate';
 
 // @google/stitch-sdk is ESM-only (its exports map has no "require" condition), so a
@@ -572,12 +574,28 @@ window.addEventListener('wheel', function(e) {
     } catch (err) {}
 }, { passive: false, capture: true });
 
+// ── Natural content-size reporter helper (pure classification function) ──
+export function computeReportedWidth(rawW: number, clientWidth: number, innerWidth: number): number | null {
+    if (clientWidth === 0) return null;
+    var maxView = Math.max(clientWidth, innerWidth);
+    if (rawW > maxView + 1) {
+        return rawW;
+    }
+    return null;
+}
+
 // ── Natural content-size reporter (drives real Fit/Reset + panning) ──
 function reportDims() {
     var d = document.documentElement;
-    var w = Math.max(d.scrollWidth, document.body ? document.body.scrollWidth : 0);
+    var clientW = d.clientWidth || 0;
+    if (!clientW) return; // zero-layout frame guard
+
+    var rawW = Math.max(d.scrollWidth, document.body ? document.body.scrollWidth : 0);
     var h = Math.max(d.scrollHeight, document.body ? document.body.scrollHeight : 0);
-    if (w && h) window.parent.postMessage({ type: 'sbContentDims', w: w, h: h }, '*');
+    var maxView = Math.max(clientW, window.innerWidth || 0);
+    var w = (rawW > maxView + 1) ? rawW : null;
+
+    if (h) window.parent.postMessage({ type: 'sbContentDims', w: w, h: h }, '*');
 }
 window.addEventListener('load', reportDims);
 window.addEventListener('resize', reportDims);
@@ -624,16 +642,17 @@ setTimeout(reportDims, 0);
         return !!this._panel;
     }
 
-    public async open(): Promise<void> {
+    public async open(column?: vscode.ViewColumn): Promise<void> {
+        const targetColumn = column ?? vscode.ViewColumn.One;
         if (this._panel) {
-            this._panel.reveal(vscode.ViewColumn.One);
+            this._panel.reveal(targetColumn, true);
             return;
         }
 
         this._panel = vscode.window.createWebviewPanel(
             'switchboard-design',
             'DESIGN',
-            vscode.ViewColumn.One,
+            { viewColumn: targetColumn, preserveFocus: true },
             {
                 enableScripts: true,
                 retainContextWhenHidden: true,
@@ -743,49 +762,10 @@ setTimeout(reportDims, 0);
         panel: vscode.WebviewPanel,
         state: any
     ): Promise<void> {
-        this._panel = panel;
-        // Reset webview options to the CURRENT extensionUri before loading html. VS Code
-        // persists the localResourceRoots from the original panel, but after an extension
-        // update those URIs point at the previous version's install dir (404 → blocked
-        // scripts on the restored panel). Re-applying them keeps restored panels working
-        // across updates. Mirrors the localResourceRoots set in open().
-        //
-        // This MUST be `webview.options` (a mutable `WebviewOptions`), never
-        // `panel.options`: `WebviewPanel.options` is a getter-only `WebviewPanelOptions`
-        // in the extension host, so assigning to it (even behind `as any`) throws
-        // TypeError under the strict-mode emit `strict: true` implies — killing the
-        // restore before `webview.html` is set. `retainContextWhenHidden` is a
-        // creation-time panel option, not a webview option; it is persisted from the
-        // original `createWebviewPanel` call and cannot be re-applied here.
-        this._panel.webview.options = {
-            enableScripts: true,
-            localResourceRoots: [
-                vscode.Uri.joinPath(this._extensionUri, 'dist'),
-                vscode.Uri.joinPath(this._extensionUri, 'webview'),
-                vscode.Uri.joinPath(this._extensionUri, 'designs'),
-                vscode.Uri.joinPath(this._extensionUri, 'node_modules'),
-                ...(vscode.workspace.workspaceFolders || []).map(folder => folder.uri)
-            ]
-        };
-        this._panel.iconPath = vscode.Uri.joinPath(this._extensionUri, 'icon.svg');
-        this._panel.webview.html = this._getHtml(this._panel.webview);
-
-        this._panel.webview.onDidReceiveMessage(
-            async (message) => this._handleMessage(message),
-            undefined,
-            this._disposables
-        );
-
-        this._initDesignService();
-
-        this._panel.onDidDispose(() => {
-            this._panel = undefined;
-            this._broadcaster?.setWebview(null);
-            this.disposeWatchers();
-            // Seat pinned to panel lifetime — drop before reconciling (see open()).
-            this._evictExtensionWebviewSeats();
-            this._reconcilePoll();
-        }, null, this._disposables);
+        await reviveWithRetention(panel, async (col) => {
+            await this.open(col);
+        });
+    }
 
         this._panel.onDidChangeViewState(e => this._onVisibilityChanged(e.webviewPanel.visible), null, this._disposables);
 

@@ -38,6 +38,8 @@ import { buildWorkspaceItems } from './workspaceUtils';
 import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import { InsightManager } from './InsightManager';
 import { GovernanceFileKey } from './constitutionUtils';
+import { reviveWithRetention } from '../utils/reviveWithRetention';
+
 import { getProjectPrdPath, sanitizeProjectSlug, buildPrdBuilderPrompt } from './prdUtils';
 import { classifyHttpError } from './errorMessages';
 import { bundleDocsContext, DocsBundleSource } from './ContextBundler';
@@ -554,17 +556,18 @@ export class PlanningPanelProvider {
         });
     }
 
-    private async _doOpenProject(): Promise<void> {
+    private async _doOpenProject(column?: vscode.ViewColumn): Promise<void> {
+        const targetColumn = column ?? vscode.ViewColumn.One;
         this._lastWebviewRootsSignature = '';
         if (this._projectPanel) {
-            this._projectPanel.reveal(undefined, true);
+            this._projectPanel.reveal(targetColumn, true);
             return;
         }
 
         this._projectPanel = vscode.window.createWebviewPanel(
             'switchboard-project',
             'PROJECT',
-            vscode.ViewColumn.One,
+            { viewColumn: targetColumn, preserveFocus: true },
             {
                 enableScripts: true,
                 retainContextWhenHidden: true
@@ -733,7 +736,8 @@ export class PlanningPanelProvider {
         return htmlContent;
     }
 
-    public async open(): Promise<void> {
+    public async open(column?: vscode.ViewColumn): Promise<void> {
+        const targetColumn = column ?? vscode.ViewColumn.One;
         // Force the next local-docs send to render (the dedup cache must not starve a
         // freshly revealed/created panel).
         this._lastLocalDocsSignature = '';
@@ -745,14 +749,14 @@ export class PlanningPanelProvider {
         // scripts, and freezing the panel on an infinite "Loading…" (stuck on Local Docs).
         this._lastWebviewRootsSignature = '';
         if (this._panel) {
-            this._panel.reveal(vscode.ViewColumn.One);
+            this._panel.reveal(targetColumn, true);
             return;
         }
 
         this._panel = vscode.window.createWebviewPanel(
             'switchboard-planning',
             'ARTIFACTS',
-            vscode.ViewColumn.One,
+            { viewColumn: targetColumn, preserveFocus: true },
             {
                 // enableScripts MUST be set at creation time, not left to depend solely on
                 // _updateWebviewRoots() — otherwise a stale dedup guard can leave a new panel
@@ -855,8 +859,9 @@ export class PlanningPanelProvider {
         panel: vscode.WebviewPanel,
         state: any
     ): Promise<void> {
-        this._panel = panel;
-        await this._hydratePanel(this._panel, false);
+        await reviveWithRetention(panel, async col => {
+            await this.open(col);
+        });
     }
 
     public async deserializeProjectPanel(
@@ -870,8 +875,9 @@ export class PlanningPanelProvider {
             panel.dispose();
             return;
         }
-        this._projectPanel = panel;
-        await this._hydratePanel(this._projectPanel, true);
+        await reviveWithRetention(panel, async col => {
+            await this._doOpenProject(col);
+        });
     }
 
     private async _hydratePanel(

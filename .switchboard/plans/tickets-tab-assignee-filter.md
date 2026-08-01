@@ -171,3 +171,8 @@ Add a regression test following the pattern in `src/test/kanban-linear-project-t
 ## Recommendation
 
 **Send to Coder** (complexity 4). The change is disciplined pattern-replication against well-cited precedents, but it coordinates 8+ sites across two files with a silent-failure mode — it needs the reset-site checklist executed carefully and verified by grep, not an intern's first pass.
+
+## Completion Report
+
+Implemented `tickets-assignee-filter` select element in `src/webview/planning.html` and wired client-side assignee filtering for both Linear and ClickUp in `src/webview/planning.js`. Changes include state variables, element accessors, dynamic option builders with HTML cache guards, predicates in filter funnels, change event handling, list-switch reset sites, state persistence, and a structural regression test in `src/test/tickets-assignee-filter-regression.test.js`. Files changed: `src/webview/planning.html`, `src/webview/planning.js`, and `src/test/tickets-assignee-filter-regression.test.js`. No issues encountered during implementation.
+

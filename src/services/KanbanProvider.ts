@@ -27,7 +27,8 @@ import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { buildFetchPlansPrompt } from './schedulerPresets';
 import { KanbanMigration } from './KanbanMigration';
-import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent } from './complexityScale';
+import { reviveWithRetention } from '../utils/reviveWithRetention';
+
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
 import { KANBAN_VERBS } from '../generated/verbAllowlist';
@@ -1120,9 +1121,27 @@ export class KanbanProvider implements vscode.Disposable {
             const cliEnabled = this._cliTriggersForScope(scope);
             const routingConfig = this._routingMapForScope(scope);
 
+            const cpStatus = this.getControlPlaneSelectionStatus(root);
+            const projectContextEnabled = await this._resolveProjectContextEnabled(root);
+
             return [
                 { type: 'updateColumns', columns: filteredColumns },
-                { type: 'updateWorkspaceSelection', workspaceRoot: root, workspaces: workspaceItems, activeFilter: null, projectFilter: this._projectFilter ?? null, projects, allWorkspaceProjects, controlPlaneMode: 'none', controlPlaneRoot: null, effectiveControlPlaneRoot: root, explicitControlPlaneRoot: root, pendingCandidate: null, repoScopeFilter: null, projectContextEnabled: false },
+                {
+                    type: 'updateWorkspaceSelection',
+                    workspaceRoot: root,
+                    workspaces: workspaceItems,
+                    activeFilter: this._repoScopeFilter || null,
+                    projectFilter: this._projectFilter ?? null,
+                    projects,
+                    allWorkspaceProjects,
+                    controlPlaneMode: cpStatus.mode,
+                    controlPlaneRoot: cpStatus.controlPlaneRoot,
+                    effectiveControlPlaneRoot: cpStatus.effectiveWorkspaceRoot,
+                    explicitControlPlaneRoot: cpStatus.explicitControlPlaneRoot,
+                    pendingCandidate: cpStatus.pendingCandidate,
+                    repoScopeFilter: cpStatus.repoScopeFilter,
+                    projectContextEnabled,
+                },
                 { type: 'cliTriggersState', enabled: cliEnabled },
                 { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig, featureWorktrees },
                 // Automation tab state rides the connect-time resync too, so the tab is
@@ -1420,12 +1439,16 @@ export class KanbanProvider implements vscode.Disposable {
     /**
      * Open or reveal the Kanban panel in the editor area.
      */
-    public async open(tab?: string) {
+    /**
+     * Open or reveal the Kanban panel in the editor area.
+     */
+    public async open(tab?: string, column?: vscode.ViewColumn) {
+        const targetColumn = column ?? vscode.ViewColumn.One;
         if (tab) {
             this._pendingTab = tab;
         }
         if (this._panel) {
-            this._panel.reveal(vscode.ViewColumn.One);
+            this._panel.reveal(targetColumn, true);
             // Switch the visible tab immediately — do NOT gate on fullSync.
             // The DB is kept in sync proactively by TaskViewerProvider's file watchers
             // (plan watcher, brain watcher, etc.), which call refreshUI on every file
@@ -1448,7 +1471,7 @@ export class KanbanProvider implements vscode.Disposable {
         this._panel = vscode.window.createWebviewPanel(
             'switchboard-kanban',
             'KANBAN',
-            vscode.ViewColumn.One,
+            { viewColumn: targetColumn, preserveFocus: true },
             {
                 enableScripts: true,
                 retainContextWhenHidden: true,
@@ -1495,6 +1518,8 @@ export class KanbanProvider implements vscode.Disposable {
         if (workspaceRoot) {
             void this._getKanbanDb(workspaceRoot).ensureReady();
             await this.applyLiveSyncConfig(workspaceRoot);
+        } else {
+            this._startRootRecovery();
         }
 
         // Mirror deserializeWebviewPanel(): re-init the kanban service so the
@@ -1526,68 +1551,10 @@ export class KanbanProvider implements vscode.Disposable {
         panel: vscode.WebviewPanel,
         state: any
     ): Promise<void> {
-        this._webviewReady = false;
-        this._pendingWebviewMessages = [];
-        this._panel = panel;
-
-        // Resolve the workspace root FIRST, mirroring open(), so _currentWorkspaceRoot
-        // is set before the broadcaster/service are initialized. In the startup-race
-        // case where workspace folders / identity mappings are not yet populated, arm
-        // a bounded retry + one-shot workspace-folder-change listener.
-        const workspaceRoot = this._resolveWorkspaceRoot();
-        if (workspaceRoot) {
-            void this._getKanbanDb(workspaceRoot).ensureReady();
-            await this.applyLiveSyncConfig(workspaceRoot);
-            this._initKanbanService();
-        } else {
-            this._startRootRecovery();
-        }
-
-        // Rebuild webview options to the CURRENT extensionUri before loading html. VS Code
-        // persists the localResourceRoots from the original panel, but after an extension
-        // update those URIs point at the previous version's install dir (404 → blocked
-        // scripts on the restored panel). Re-applying them with this._extensionUri keeps
-        // restored panels working across updates.
-        //
-        // NOTE: retainContextWhenHidden is a creation-time WebviewPanelOptions property
-        // and cannot be set on an already-created restored panel via webview.options.
-        // Context retention for restored panels is achieved by re-initializing the
-        // service/broadcaster, resolving the workspace root, and explicitly pushing board
-        // state when the webview sends 'ready'.
-        this._panel.webview.options = {
-            enableScripts: true,
-            localResourceRoots: [this._extensionUri]
-        };
-        this._panel.iconPath = vscode.Uri.joinPath(this._extensionUri, 'icon.svg');
-        this._panel.webview.html = await this._getHtml(this._panel.webview);
-        this._panel.webview.onDidReceiveMessage(
-            async (msg) => this._handleMessage(msg),
-            undefined,
-            this._disposables
-        );
-        this._panel.onDidDispose(() => {
-            this._panel = undefined;
-            this._lastColumnsSignature = null;
-            // Reset the board-snapshot dedup cache too: it's a singleton field that
-            // outlives the panel, so a freshly reopened webview would otherwise have
-            // its `updateBoard` push skipped as "unchanged" and render an empty board
-            // until a dropdown interaction mutated the snapshot key. (Columns survive
-            // because _lastColumnsSignature IS reset here.)
-            this._lastBoardSnapshotKey = '';
-            this._lastBoardSnapshotHash = null;
-            // Reset the O(1) early-out key too — otherwise reopening the panel
-            // matches the stale key and skips the first refresh (empty board).
-            this._lastPushKey = '';
-            this._webviewReady = false;
-            this._pendingWebviewMessages = [];
-            // Stop any pending root-recovery timers/listeners for the disposed panel.
-            this._stopRootRecovery();
-            // Defense-in-depth: clear the broadcaster's webview reference so any
-            // messages sent between dispose and reopen queue in the broadcaster's
-            // own _pendingWebviewMessages (flushed on the next setWebview) instead
-            // of being silently dropped to the now-dead webview.
-            this._broadcaster?.setWebview(null);
-        }, null, this._disposables);
+        await reviveWithRetention(panel, async (col) => {
+            await this.open(undefined, col);
+        });
+    }
 
         this._panel.onDidChangeViewState(
             (e) => {
@@ -7338,6 +7305,22 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 // when _panel is undefined (extension activation), so we
                 // re-request it here once the webview is live.
                 this._taskViewerProvider?.postMcpMonitorConfig();
+
+                // Make ready a full-state resync point. Pull the authoritative state
+                // and post directly to this._panel.webview so mounting webview gets board
+                // cards even if host-side dedup caches consider the state already pushed.
+                if (this._panel && workspaceRoot) {
+                    try {
+                        const scope = this._webviewScopeOrUndefined;
+                        const snapshotMessages = await this.getFullStateMessages(workspaceRoot, scope);
+                        for (const msg of snapshotMessages) {
+                            this._panel.webview.postMessage(msg);
+                        }
+                    } catch (err) {
+                        console.error('[KanbanProvider] ready full-state snapshot pull failed:', err);
+                    }
+                }
+
                 return { success: true };
             }
             case 'selectPlan': {

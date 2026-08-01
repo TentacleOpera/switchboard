@@ -384,3 +384,5 @@ will not change what is live; sync and reload before checking.
 **Send to Coder** (complexity 4).
 
 ## Completion Report
+
+Implemented fluid page width support for HTML previews across Planning HTML, Design HTML, and Stitch HTML preview tabs. Updated `reportDims` in `DesignPanelProvider.ts` to distinguish genuine horizontal content overflow from container-derived fluid layout, posting `w: null` for fluid pages and suppressing zero-layout measurements. Updated webview consumer handlers in `planning.js` and `design.js` to preserve container fluid width when `w: null` is reported while maintaining height updates and pan clamping, and added unit/regression tests in `src/test/html-preview-fluid-width-regression.test.js`.

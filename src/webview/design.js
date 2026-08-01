@@ -3518,41 +3518,38 @@
                 const MAX_PREVIEW_DIM = 30000;
                 const htmlFrame = document.getElementById('html-preview-frame');
                 const stitchFrame = document.getElementById('stitch-html-preview-frame');
+
+                function applyHtmlContentDims(tabKey, wrapperId, msg, setContentDims) {
+                    const wrapper = document.getElementById(wrapperId);
+                    if (!wrapper || wrapper.offsetParent === null) return;
+                    const vp = wrapper.querySelector('.zoomable-viewport');
+                    if (vp && msg.h) {
+                        const h = Math.min(msg.h, MAX_PREVIEW_DIM);
+                        vp.style.height = h + 'px';
+                        let w;
+                        if (typeof msg.w === 'number') {
+                            w = Math.min(msg.w, MAX_PREVIEW_DIM);
+                            vp.style.width = w + 'px';
+                        } else {
+                            w = vp.style.width && vp.style.width.endsWith('px')
+                                ? parseFloat(vp.style.width)
+                                : wrapper.clientWidth;
+                        }
+                        setContentDims({ w, h });
+                        if (_fitPending[tabKey]) {
+                            fitToContainer(tabKey, wrapper, vp, 5, 'width');
+                            _fitPending[tabKey] = false;
+                        } else {
+                            clampPan(tabKey, wrapper.getBoundingClientRect(), w, h);
+                            applyZoom(tabKey, vp);
+                        }
+                    }
+                }
+
                 if (htmlFrame && event.source === htmlFrame.contentWindow) {
-                    const wrapper = document.getElementById('html-preview-wrapper');
-                    const vp = wrapper ? wrapper.querySelector('.zoomable-viewport') : null;
-                    if (vp && event.data.w && event.data.h) {
-                        const w = Math.min(event.data.w, MAX_PREVIEW_DIM);
-                        const h = Math.min(event.data.h, MAX_PREVIEW_DIM);
-                        vp.style.width = w + 'px';
-                        vp.style.height = h + 'px';
-                        _htmlContentDims = { w, h };
-                        if (_fitPending.html) {
-                            fitToContainer('html', wrapper, vp, 5, 'width');
-                            _fitPending.html = false;
-                        } else {
-                            // preserve the user's zoom; just keep it in-bounds for the new dims
-                            clampPan('html', wrapper.getBoundingClientRect(), w, h);
-                            applyZoom('html', vp);
-                        }
-                    }
+                    applyHtmlContentDims('html', 'html-preview-wrapper', event.data, dims => { _htmlContentDims = dims; });
                 } else if (stitchFrame && event.source === stitchFrame.contentWindow) {
-                    const wrapper = document.getElementById('stitch-html-preview-wrapper');
-                    const vp = wrapper ? wrapper.querySelector('.zoomable-viewport') : null;
-                    if (vp && event.data.w && event.data.h) {
-                        const w = Math.min(event.data.w, MAX_PREVIEW_DIM);
-                        const h = Math.min(event.data.h, MAX_PREVIEW_DIM);
-                        vp.style.width = w + 'px';
-                        vp.style.height = h + 'px';
-                        _stitchHtmlContentDims = { w, h };
-                        if (_fitPending.stitchHtml) {
-                            fitToContainer('stitchHtml', wrapper, vp, 5, 'width');
-                            _fitPending.stitchHtml = false;
-                        } else {
-                            clampPan('stitchHtml', wrapper.getBoundingClientRect(), w, h);
-                            applyZoom('stitchHtml', vp);
-                        }
-                    }
+                    applyHtmlContentDims('stitchHtml', 'stitch-html-preview-wrapper', event.data, dims => { _stitchHtmlContentDims = dims; });
                 }
                 break;
             }

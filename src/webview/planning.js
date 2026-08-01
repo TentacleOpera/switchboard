@@ -502,11 +502,13 @@
 
     // Linear state
     let linearProjectIssues = [];
+    const TICKETS_ASSIGNEE_UNASSIGNED = '__unassigned__';
     let selectedLinearIssue = null;
     let linearProjectStatus = 'idle';
     let linearProjectMessage = '';
     let linearProjectSearchValue = '';
     let linearProjectStateFilterValue = '';
+    let linearProjectAssigneeFilterValue = '';
     let linearProjectPickerValue = '';
     let _restoredLinearProjectPickerValue = '';
     let linearAvailableProjects = [];
@@ -553,6 +555,7 @@
     let clickUpSelectedListId = '';
     let clickUpProjectSearchValue = '';
     let clickUpProjectStatusFilterValue = '';
+    let clickUpProjectAssigneeFilterValue = '';
     let clickUpCurrentPage = 0;
     let clickUpProjectHasMore = false;
     let clickUpSpacesLoadedOnce = false;
@@ -584,6 +587,8 @@
 
     // Cached HTML strings for DOM guard comparisons
     let _lastTicketsStateFilterHtml = '';
+    let _lastTicketsLinearAssigneeFilterHtml = '';
+    let _lastTicketsClickUpAssigneeFilterHtml = '';
     let _lastTicketsProjectPickerHtml = '';
     let _lastTicketsIssuesContainerHtml = '';
     let _lastTicketsDetailContentHtml = '';
@@ -1307,6 +1312,7 @@
                 clickUpProjectIssues: clickUpProjectIssues.slice(),
                 selectedClickUpIssue,
                 clickUpProjectStatusFilterValue,
+                clickUpProjectAssigneeFilterValue,
                 availableClickUpStatuses: availableClickUpStatuses.slice(),
                 clickUpHierarchyLoading,
                 clickUpProjectLoading,
@@ -1327,6 +1333,7 @@
             clickUpProjectIssues = [];
             selectedClickUpIssue = null;
             clickUpProjectStatusFilterValue = '';
+            clickUpProjectAssigneeFilterValue = '';
             availableClickUpStatuses = [];
             clickUpHierarchyLoading = false;
             _lastTicketsClickUpStateFilterHtml = '';
@@ -1476,6 +1483,7 @@
             clickUpProjectIssues = s.clickUpProjectIssues;
             selectedClickUpIssue = s.selectedClickUpIssue;
             clickUpProjectStatusFilterValue = s.clickUpProjectStatusFilterValue;
+            clickUpProjectAssigneeFilterValue = s.clickUpProjectAssigneeFilterValue;
             availableClickUpStatuses = s.availableClickUpStatuses;
             clickUpHierarchyLoading = s.clickUpHierarchyLoading;
             clickUpProjectLoading = s.clickUpProjectLoading;
@@ -2431,6 +2439,7 @@
             projectPicker: document.getElementById('tickets-project-picker'),
             stateFilter: document.getElementById('tickets-state-filter'),
             clickUpStatusFilter: document.getElementById('tickets-status-filter'),
+            assigneeFilter: document.getElementById('tickets-assignee-filter'),
             refreshButton: document.getElementById('tickets-refresh'),
             refetchButton: document.getElementById('tickets-refetch'),
             ticketsMoreTrigger: document.querySelector('#controls-strip-tickets [data-overflow-trigger]'),
@@ -5644,7 +5653,7 @@
                 // Cap reported dims: sizing the viewport resizes the iframe, which re-fires
                 // the iframe's resize/ResizeObserver reporter. Pages built from 100vh
                 // sections then feed back and grow the canvas without bound. Capping halts
-                // the loop. Mirrors design.js sbContentDims (design.js:3657-3689).
+                // the loop. Mirrors design.js sbContentDims.
                 const MAX_PREVIEW_DIM = 30000;
                 const planningHtmlFrame = document.getElementById('planning-html-frame');
                 if (state.activeSource !== 'planning-html-folder' ||
@@ -5652,12 +5661,20 @@
                     break;
                 }
                 const wrapper = document.getElementById('planning-html-preview-wrapper');
-                const vp = wrapper ? wrapper.querySelector('.zoomable-viewport') : null;
-                if (vp && msg.w && msg.h) {
-                    const w = Math.min(msg.w, MAX_PREVIEW_DIM);
+                if (!wrapper || wrapper.offsetParent === null) break;
+                const vp = wrapper.querySelector('.zoomable-viewport');
+                if (vp && msg.h) {
                     const h = Math.min(msg.h, MAX_PREVIEW_DIM);
-                    vp.style.width  = w + 'px';
                     vp.style.height = h + 'px';
+                    let w;
+                    if (typeof msg.w === 'number') {
+                        w = Math.min(msg.w, MAX_PREVIEW_DIM);
+                        vp.style.width = w + 'px';
+                    } else {
+                        w = vp.style.width && vp.style.width.endsWith('px')
+                            ? parseFloat(vp.style.width)
+                            : wrapper.clientWidth;
+                    }
                     _planningContentDims = { w, h };
                     if (_fitPending.planningHtml) {
                         fitToContainer('planningHtml', wrapper, vp, 5, 'width'); // initial view = fit to width, top-anchored
@@ -10069,6 +10086,20 @@ Instructions:
             saveTicketsState();
         });
 
+        // Assignee filter (shared control)
+        const assigneeFilterEl = document.getElementById('tickets-assignee-filter');
+        assigneeFilterEl?.addEventListener('change', (e) => {
+            _resetSidebarDrillDown();
+            if (lastIntegrationProvider === 'linear') {
+                linearProjectAssigneeFilterValue = e.target.value;
+                renderTicketsLinearList();
+            } else if (lastIntegrationProvider === 'clickup') {
+                clickUpProjectAssigneeFilterValue = e.target.value;
+                renderTicketsClickUpList();
+            }
+            saveTicketsState();
+        });
+
         // Status filter (ClickUp)
         clickUpStatusFilter?.addEventListener('change', (e) => {
             _onClickUpStatusFilterChanged(e.target.value);
@@ -10832,17 +10863,19 @@ Instructions:
     function renderTicketsLinearPanel() {
         if (lastIntegrationProvider !== 'linear' || !isTicketsTabActive()) return;
 
-        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyPreview, hierarchyNav } = getTicketsTabElements();
+        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, assigneeFilter, refreshButton, emptyPreview, hierarchyNav } = getTicketsTabElements();
 
         // Show Linear toolbar elements
         if (searchInput) searchInput.style.display = '';
         if (projectPicker) projectPicker.style.display = '';
         if (stateFilter) stateFilter.style.display = '';
         if (clickUpStatusFilter) clickUpStatusFilter.style.display = 'none';
+        if (assigneeFilter) assigneeFilter.style.display = '';
         if (refreshButton) refreshButton.style.display = '';
         if (hierarchyNav) hierarchyNav.style.display = 'none';
 
         renderTicketsLinearStateFilterOptions();
+        renderTicketsLinearAssigneeFilterOptions();
         renderTicketsLinearProjectPickerOptions();
 
         const loadingState = document.getElementById('tickets-loading-state');
@@ -10883,6 +10916,37 @@ Instructions:
 
         stateFilter.value = states.includes(linearProjectStateFilterValue) ? linearProjectStateFilterValue : '';
         linearProjectStateFilterValue = stateFilter.value;
+    }
+
+    function renderTicketsLinearAssigneeFilterOptions() {
+        const { assigneeFilter } = getTicketsTabElements();
+        if (!assigneeFilter) return;
+
+        const assigneeMap = new Map();
+        for (const issue of linearProjectIssues) {
+            if (issue?.assignee?.id) {
+                const id = String(issue.assignee.id);
+                const name = String(issue.assignee.name || issue.assignee.email || id).trim();
+                if (name && !assigneeMap.has(id)) {
+                    assigneeMap.set(id, name);
+                }
+            }
+        }
+
+        const sortedAssignees = Array.from(assigneeMap.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+
+        const newHtml = `<option value="">All assignees</option><option value="${TICKETS_ASSIGNEE_UNASSIGNED}">Unassigned</option>${sortedAssignees.map(([id, name]) =>
+            `<option value="${escapeAttr(id)}">${escapeHtml(name)}</option>`
+        ).join('')}`;
+
+        if (_lastTicketsLinearAssigneeFilterHtml !== newHtml) {
+            assigneeFilter.innerHTML = newHtml;
+            _lastTicketsLinearAssigneeFilterHtml = newHtml;
+        }
+
+        const validValues = ['', TICKETS_ASSIGNEE_UNASSIGNED, ...assigneeMap.keys()];
+        assigneeFilter.value = validValues.includes(linearProjectAssigneeFilterValue) ? linearProjectAssigneeFilterValue : '';
+        linearProjectAssigneeFilterValue = assigneeFilter.value;
     }
 
     function renderAttachmentsList(attachments) {
@@ -11033,10 +11097,16 @@ Instructions:
         const search = String(linearProjectSearchValue || '').trim().toLowerCase();
         const stateFilter = String(linearProjectStateFilterValue || '').trim();
         const projectFilter = String(linearProjectPickerValue || '').trim();
+        const assigneeFilter = String(linearProjectAssigneeFilterValue || '').trim();
         const filtered = linearProjectIssues.filter((issue) => {
             if (issue?.parentId) return false;
             if (stateFilter && String(issue?.state?.name || '') !== stateFilter) return false;
             if (projectFilter && String(issue?.project?.name || '') !== projectFilter) return false;
+            if (assigneeFilter === TICKETS_ASSIGNEE_UNASSIGNED) {
+                if (issue?.assignee) return false;
+            } else if (assigneeFilter) {
+                if (String(issue?.assignee?.id || '') !== assigneeFilter) return false;
+            }
             if (!search) return true;
             const haystack = [
                 issue.identifier,
@@ -11567,14 +11637,18 @@ Instructions:
     function renderTicketsClickUpPanel() {
         if (lastIntegrationProvider !== 'clickup' || !isTicketsTabActive()) return;
 
-        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyState, issuesContainer, hierarchyNav, emptyPreview } = getTicketsTabElements();
+        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, assigneeFilter, refreshButton, emptyState, issuesContainer, hierarchyNav, emptyPreview } = getTicketsTabElements();
 
         // Hide Linear toolbar elements, show ClickUp hierarchy
         if (searchInput) searchInput.style.display = '';
         if (projectPicker) projectPicker.style.display = 'none';
         if (stateFilter) stateFilter.style.display = 'none';
+        const showClickUpFilters = (clickUpSelectedListId || clickUpProjectIssues.length > 0) ? '' : 'none';
         if (clickUpStatusFilter) {
-            clickUpStatusFilter.style.display = (clickUpSelectedListId || clickUpProjectIssues.length > 0) ? '' : 'none';
+            clickUpStatusFilter.style.display = showClickUpFilters;
+        }
+        if (assigneeFilter) {
+            assigneeFilter.style.display = showClickUpFilters;
         }
         if (refreshButton) refreshButton.style.display = '';
         // In move mode the hierarchy nav display is managed by showMoveTicketModal
@@ -11604,6 +11678,7 @@ Instructions:
 
         if (clickUpSelectedListId || clickUpProjectIssues.length > 0) {
             renderTicketsClickUpStatusFilterOptions();
+            renderTicketsClickUpAssigneeFilterOptions();
             renderTicketsClickUpList();
         } else {
             if (issuesContainer) {
@@ -11694,8 +11769,10 @@ Instructions:
             selectedClickUpIssue = null;
             _resetSidebarDrillDown();
             clickUpProjectStatusFilterValue = '';
+            clickUpProjectAssigneeFilterValue = '';
             availableClickUpStatuses = [];
             _lastTicketsClickUpStateFilterHtml = '';
+            _lastTicketsClickUpAssigneeFilterHtml = '';
             // Move mode: browse the hierarchy for move-target selection without
             // persisting the browsing state. skip saveTicketsState() and
             // clickupSaveSpaceSelection so the user's active source is not
@@ -11759,8 +11836,10 @@ Instructions:
             selectedClickUpIssue = null;
             _resetSidebarDrillDown();
             clickUpProjectStatusFilterValue = '';
+            clickUpProjectAssigneeFilterValue = '';
             availableClickUpStatuses = [];
             _lastTicketsClickUpStateFilterHtml = '';
+            _lastTicketsClickUpAssigneeFilterHtml = '';
             // Move mode: browse folders for move-target selection without persisting.
             // Skip saveTicketsState() and clickupSaveFolderSelection; still load lists
             // so the user can navigate to a target list.
@@ -11854,8 +11933,10 @@ Instructions:
             selectedClickUpIssue = null;
             _resetSidebarDrillDown();
             clickUpProjectStatusFilterValue = '';
+            clickUpProjectAssigneeFilterValue = '';
             availableClickUpStatuses = [];
             _lastTicketsClickUpStateFilterHtml = '';
+            _lastTicketsClickUpAssigneeFilterHtml = '';
             saveTicketsState();
             if (listId) {
                 const spaceName = clickUpAvailableSpaces.find(s => s.id === clickUpSelectedSpaceId)?.name || '';
@@ -11930,12 +12011,55 @@ Instructions:
         }
     }
 
+    function renderTicketsClickUpAssigneeFilterOptions() {
+        const { assigneeFilter } = getTicketsTabElements();
+        if (!assigneeFilter) return;
+
+        const assigneeMap = new Map();
+        for (const task of clickUpProjectIssues) {
+            if (Array.isArray(task?.assignees)) {
+                for (const a of task.assignees) {
+                    if (a?.id != null) {
+                        const id = String(a.id);
+                        const name = String(a.username || a.email || id).trim();
+                        if (name && !assigneeMap.has(id)) {
+                            assigneeMap.set(id, name);
+                        }
+                    }
+                }
+            }
+        }
+
+        const sortedAssignees = Array.from(assigneeMap.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+
+        const html = `
+            <option value="">All assignees</option>
+            <option value="${TICKETS_ASSIGNEE_UNASSIGNED}">Unassigned</option>
+            ${sortedAssignees.map(([id, name]) => `<option value="${escapeAttr(id)}">${escapeHtml(name)}</option>`).join('')}
+        `;
+
+        if (_lastTicketsClickUpAssigneeFilterHtml !== html) {
+            assigneeFilter.innerHTML = html;
+            _lastTicketsClickUpAssigneeFilterHtml = html;
+        }
+
+        const validValues = ['', TICKETS_ASSIGNEE_UNASSIGNED, ...assigneeMap.keys()];
+        assigneeFilter.value = validValues.includes(clickUpProjectAssigneeFilterValue) ? clickUpProjectAssigneeFilterValue : '';
+        clickUpProjectAssigneeFilterValue = assigneeFilter.value;
+    }
+
     function getFilteredClickUpTasks() {
         const search = String(clickUpProjectSearchValue || '').trim().toLowerCase();
         const statusFilter = String(clickUpProjectStatusFilterValue || '').trim();
+        const assigneeFilter = String(clickUpProjectAssigneeFilterValue || '').trim();
         const filtered = clickUpProjectIssues.filter(task => {
             if (task?.parentId) return false;
             if (statusFilter && task.status !== statusFilter) return false;
+            if (assigneeFilter === TICKETS_ASSIGNEE_UNASSIGNED) {
+                if (Array.isArray(task?.assignees) && task.assignees.length > 0) return false;
+            } else if (assigneeFilter) {
+                if (!Array.isArray(task?.assignees) || !task.assignees.some(a => String(a?.id) === assigneeFilter)) return false;
+            }
             if (!search) return true;
             const haystack = [
                 task.id,
@@ -12418,6 +12542,7 @@ Instructions:
         linearProjectMessage = '';
         linearProjectSearchValue = '';
         linearProjectStateFilterValue = '';
+        linearProjectAssigneeFilterValue = '';
         linearProjectPickerValue = '';
         _restoredLinearProjectPickerValue = '';
         linearAvailableProjects = [];
@@ -12442,6 +12567,7 @@ Instructions:
         clickUpSelectedListId = '';
         clickUpProjectSearchValue = '';
         clickUpProjectStatusFilterValue = '';
+        clickUpProjectAssigneeFilterValue = '';
         clickUpCurrentPage = 0;
         clickUpProjectHasMore = false;
         clickUpSpacesLoadedOnce = false;
@@ -12454,6 +12580,7 @@ Instructions:
         pendingClickUpDetailIssueId = '';
 
         _lastTicketsStateFilterHtml = '';
+        _lastTicketsLinearAssigneeFilterHtml = '';
         _lastTicketsProjectPickerHtml = '';
         _lastTicketsIssuesContainerHtml = '';
         _lastTicketsDetailContentHtml = '';
@@ -12461,6 +12588,7 @@ Instructions:
         _lastTicketsClickUpIssuesContainerHtml = '';
         _lastTicketsClickUpDetailContentHtml = '';
         _lastTicketsClickUpStateFilterHtml = '';
+        _lastTicketsClickUpAssigneeFilterHtml = '';
         _lastTicketsClickUpSubtasksNavHtml = '';
         _lastTicketsLinearSubtasksNavHtml = '';
         _lastTicketsTagsKey = '';
@@ -12482,12 +12610,14 @@ Instructions:
             lastIntegrationProvider,
             linearProjectSearchValue,
             linearProjectStateFilterValue,
+            linearProjectAssigneeFilterValue,
             linearProjectPickerValue,
             clickUpSelectedSpaceId,
             clickUpSelectedFolderId,
             clickUpSelectedListId,
             clickUpProjectSearchValue,
-            clickUpProjectStatusFilterValue
+            clickUpProjectStatusFilterValue,
+            clickUpProjectAssigneeFilterValue
         };
         persistTab('tickets', state, ticketsWorkspaceRoot);
         persistTab('tickets.root', ticketsWorkspaceRoot);
@@ -12498,12 +12628,14 @@ Instructions:
         lastIntegrationProvider = state.lastIntegrationProvider || null;
         linearProjectSearchValue = state.linearProjectSearchValue || '';
         linearProjectStateFilterValue = state.linearProjectStateFilterValue || '';
+        linearProjectAssigneeFilterValue = state.linearProjectAssigneeFilterValue || '';
         linearProjectPickerValue = state.linearProjectPickerValue || '';
         clickUpSelectedSpaceId = state.clickUpSelectedSpaceId || '';
         clickUpSelectedFolderId = state.clickUpSelectedFolderId || '';
         clickUpSelectedListId = state.clickUpSelectedListId || '';
         clickUpProjectSearchValue = state.clickUpProjectSearchValue || '';
         clickUpProjectStatusFilterValue = state.clickUpProjectStatusFilterValue || '';
+        clickUpProjectAssigneeFilterValue = state.clickUpProjectAssigneeFilterValue || '';
 
         if (clickUpSelectedSpaceId) {
             _restoringClickUpHierarchy = true;

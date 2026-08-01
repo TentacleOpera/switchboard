@@ -240,4 +240,6 @@ Land `kanban-editor-webview-resync-on-ready` first, then this. Both review gates
 **Routing: Complexity 6 → Send to Coder.**
 
 ## Completion Report
-_To be filled by the implementing agent._
+
+Implemented panel revival with retention by replacing adoption of restored webview panels across all four Switchboard panel providers (`KanbanProvider`, `PlanningPanelProvider`, `DesignPanelProvider`) with a re-creation path using the new `reviveWithRetention` helper. Disposed incoming restored panels before attaching listeners and routed through each provider's `open()` path parameterized with the restored panel's target `viewColumn` and `preserveFocus: true`. Added static contract test `panel-revival-retention-contract.test.js` to prevent regressions. No issues encountered.
+

@@ -168,4 +168,9 @@ Take scope items 1 + 2 with **3b**. The pull-on-mount is the smallest change tha
 Complexity 5 → **Send to Coder**.
 
 ## Completion Report
-_To be filled by the implementing agent._
+
+### Implementation Summary
+- **What was implemented**: Made `ready` webview message handler a full-state resync point by pulling snapshot via `getFullStateMessages()` and posting directly to `this._panel.webview`. Updated `getFullStateMessages` (Scope item 3b) to compute real `controlPlaneMode`, `controlPlaneRoot`, `repoScopeFilter`, and `projectContextEnabled` status instead of returning hardcoded stubs.
+- **Files changed**: [KanbanProvider.ts](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/services/KanbanProvider.ts#L1120-L1145) (updated `getFullStateMessages` and `ready` message handler), [kanban-editor-webview-resync-on-ready.md](file:///Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/plans/kanban-editor-webview-resync-on-ready.md#L170-L172) (appended completion report).
+- **Issues encountered**: None. Deduplication skip caches remain intact and untouched while client mount delivery is now unconditional.
+
