@@ -13,6 +13,10 @@
     const collapsedWorktrees = new Set();
     let osNotifyEnabled = false;
 
+    const PTY_HOST_ORIGIN = (document.body && document.body.dataset && document.body.dataset.ptyHostOrigin)
+        || window.__SB_PTY_HOST_ORIGIN__
+        || `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`;
+
     const terminalBadges = new Map(); // terminalName -> string label / count
     // name -> { container, term, fitAddon, rendererAddon, isWebgl, ws, lastSeq, batchQueue,
     //           pendingAckChars, ackSuppressChars, reconnectTimer, reconnectDelay,
@@ -68,6 +72,49 @@
             if (resolved) { return resolved; }
         } catch { /* fall through */ }
         return 'Menlo, Monaco, "Courier New", monospace';
+    }
+
+    /**
+     * True when `el` occupies a real box in a rendered document.
+     *
+     * This panel routinely runs with no layout at all: the browser shell mounts every
+     * panel iframe up front and toggles them with display:none (see shell.js), so the
+     * Terminals document exists — and its terminals connect — while measuring 0x0.
+     * In that state xterm cannot measure a character cell, FitAddon's
+     * proposeDimensions divides by a zero cell size, and fit() bails on NaN. The
+     * terminal is then left at its 80x24 construction default.
+     *
+     * That default is not harmless. The pty is SHARED between every attached client
+     * and the gateway applies each resize frame as it arrives, so a hidden tab
+     * reporting 80x24 squashed the operator's visible terminal to 24 rows, and every
+     * shell load or tab switch made it flap. Every fit-and-report path is gated on
+     * this, and construction itself is deferred until it returns true.
+     */
+    function isRendered(el) {
+        if (!el) { return false; }
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+    }
+
+    /**
+     * Fit to the container and tell the pty the new size — but only ever from a
+     * rendered box. `rendered: true` lets the gateway discount any client that gets
+     * this wrong; see the resize arm of terminalWsGateway.
+     */
+    function fitAndReportSize(entry) {
+        if (!entry || entry.disposed || !entry.term || !entry.fitAddon) { return; }
+        if (!isRendered(entry.container)) { return; }
+        try {
+            entry.fitAddon.fit();
+            if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
+                entry.ws.send(JSON.stringify({
+                    t: 'resize',
+                    cols: entry.term.cols,
+                    rows: entry.term.rows,
+                    rendered: true
+                }));
+            }
+        } catch { /* ignore */ }
     }
 
     const DETACH_GRACE_MS = 15000;
@@ -927,19 +974,7 @@
             for (let i = 0; i < slotCount; i++) {
                 const name = paneAssignments[i];
                 if (name) {
-                    const entry = terminalsMap.get(name);
-                    if (entry && entry.fitAddon) {
-                        try {
-                            entry.fitAddon.fit();
-                            if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
-                                entry.ws.send(JSON.stringify({
-                                    t: 'resize',
-                                    cols: entry.term.cols,
-                                    rows: entry.term.rows
-                                }));
-                            }
-                        } catch { /* ignore */ }
-                    }
+                    fitAndReportSize(terminalsMap.get(name));
                 }
             }
         });
@@ -1158,6 +1193,12 @@
         if (entry.resizeObserver) {
             try { entry.resizeObserver.disconnect(); } catch { /* ignore */ }
         }
+        // A view unassigned before it was ever rendered still has its deferred-build
+        // observer attached; without this it keeps the entry (and its container) alive.
+        if (entry.pendingObserver) {
+            try { entry.pendingObserver.disconnect(); } catch { /* ignore */ }
+            entry.pendingObserver = null;
+        }
         // Before term.dispose(): the GPU renderers hold a WebGL context / canvas
         // that browsers cap per page (~16 contexts), so leaking one per closed
         // terminal eventually forces every terminal back to the DOM renderer.
@@ -1189,6 +1230,68 @@
             return;
         }
 
+        // Claim the name now so renderPaneGrid does not build a second view for it,
+        // but build nothing else until the pane has a real box. A terminal
+        // constructed into a zero-size document is stuck at 80x24 (see isRendered)
+        // and its socket would report that size to the shared pty. Deferring also
+        // keeps hidden panels from parsing pty output nobody is looking at — the
+        // gateway's replay ring is what covers the gap, which is the same mechanism
+        // an unassign/re-assign cycle already relies on.
+        const entry = {
+            name,
+            container,
+            term: null,
+            fitAddon: null,
+            rendererAddon: null,
+            isWebgl: false,
+            ws: null,
+            lastSeq: 0,
+            batchQueue: [],
+            pendingAckChars: 0,
+            ackSuppressChars: 0,
+            bytesWritten: 0,
+            writeThrowCount: 0,
+            largestInputDataLen: 0,
+            totalInputChars: 0,
+            reconnectTimer: null,
+            reconnectDelay: 500,
+            resizeObserver: null,
+            pendingObserver: null,
+            exited: false,
+            disposed: false
+        };
+        terminalsMap.set(name, entry);
+        whenRendered(entry, () => materializeTerminalView(entry));
+    }
+
+    /**
+     * Invoke `cb` once the entry's container has a non-zero box.
+     *
+     * Two separate reasons it may not have one yet, and a ResizeObserver covers both:
+     * renderPaneGrid builds each pane bottom-up and only appends it to the grid
+     * afterwards, so the container is still detached at createTerminalView time; and
+     * the whole panel may sit in a display:none iframe for the entire session until
+     * the operator clicks the Terminals icon.
+     */
+    function whenRendered(entry, cb) {
+        if (entry.disposed) { return; }
+        if (isRendered(entry.container)) { cb(); return; }
+        const observer = new ResizeObserver(() => {
+            if (entry.disposed || !isRendered(entry.container)) { return; }
+            observer.disconnect();
+            entry.pendingObserver = null;
+            cb();
+        });
+        observer.observe(entry.container);
+        entry.pendingObserver = observer;
+    }
+
+    /** Build the xterm instance, renderer and socket. Only ever called on a rendered
+     *  container — see createTerminalView. */
+    function materializeTerminalView(entry) {
+        if (entry.disposed || entry.term) { return; }
+        const container = entry.container;
+
         const term = new window.Terminal({
             cursorBlink: true,
             fontSize: 13,
@@ -1208,52 +1311,24 @@
             term.loadAddon(fitAddon);
         }
 
-        const entry = {
-            name,
-            container,
-            term,
-            fitAddon,
-            rendererAddon: null,
-            isWebgl: false,
-            ws: null,
-            lastSeq: 0,
-            batchQueue: [],
-            pendingAckChars: 0,
-            ackSuppressChars: 0,
-            bytesWritten: 0,
-            writeThrowCount: 0,
-            largestInputDataLen: 0,
-            totalInputChars: 0,
-            reconnectTimer: null,
-            reconnectDelay: 500,
-            resizeObserver: null,
-            exited: false,
-            disposed: false
-        };
+        entry.term = term;
+        entry.fitAddon = fitAddon;
 
         term.open(container);
-        const rendererAddon = attachRenderer(term, entry);
-        entry.rendererAddon = rendererAddon;
+        entry.rendererAddon = attachRenderer(term, entry);
         if (fitAddon) {
             try { fitAddon.fit(); } catch { /* ignore */ }
         }
-        terminalsMap.set(name, entry);
 
         let resizeTimer = null;
         const resizeObserver = new ResizeObserver(() => {
             if (resizeTimer) clearTimeout(resizeTimer);
             resizeTimer = setTimeout(() => {
-                if (fitAddon && entry.container.classList.contains('active')) {
-                    try {
-                        fitAddon.fit();
-                        if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
-                            entry.ws.send(JSON.stringify({
-                                t: 'resize',
-                                cols: term.cols,
-                                rows: term.rows
-                            }));
-                        }
-                    } catch { /* ignore */ }
+                // `active` is pane ASSIGNMENT, not visibility — a hidden panel's panes
+                // are still "active". fitAndReportSize is what gates on actually
+                // having a box.
+                if (entry.container.classList.contains('active')) {
+                    fitAndReportSize(entry);
                 }
             }, 100);
         });
@@ -1283,8 +1358,7 @@
         entry.pendingAckChars = 0;
         entry.ackSuppressChars = 0;
 
-        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        let wsUrl = `${protocol}//${location.host}/ws/terminal?name=${encodeURIComponent(entry.name)}`;
+        let wsUrl = `${PTY_HOST_ORIGIN}/ws/terminal?name=${encodeURIComponent(entry.name)}`;
         const terminalToken = (document.body && document.body.dataset && document.body.dataset.terminalToken)
             || window.__SB_TERMINAL_TOKEN__;
         if (terminalToken) {
@@ -1303,16 +1377,11 @@
 
         ws.onopen = () => {
             entry.reconnectDelay = 500;
-            if (entry.fitAddon) {
-                try {
-                    entry.fitAddon.fit();
-                    ws.send(JSON.stringify({
-                        t: 'resize',
-                        cols: entry.term.cols,
-                        rows: entry.term.rows
-                    }));
-                } catch { /* ignore */ }
-            }
+            // Unconditionally reporting term.cols/rows here is what pinned the shared
+            // pty to 80x24: on a connection opened before the terminal had a box, that
+            // is the xterm construction default rather than anything the operator can
+            // see. fitAndReportSize sends nothing unless there is a real box to measure.
+            fitAndReportSize(entry);
         };
 
         ws.onmessage = (event) => {

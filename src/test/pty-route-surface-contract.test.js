@@ -193,7 +193,7 @@ function post(port, pathname, body) {
     await test('the extension host wires terminalVerb and gates capabilities on the constructed fleet', () => {
         const src = fs.readFileSync(path.join(REPO_ROOT, 'src', 'services', 'TaskViewerProvider.ts'), 'utf8');
         assert.ok(/terminalVerb:/.test(src), 'TaskViewerProvider must wire terminalVerb');
-        assert.ok(/terminalWsGateway:/.test(src), 'TaskViewerProvider must inject terminalWsGateway');
+        assert.ok(!/terminalWsGateway:\s*this\._terminalWsGateway/.test(src), 'TaskViewerProvider must not inject in-process terminalWsGateway into LocalApiServer');
         // Capability-gating honesty (PRD contract #6): the probe passing is not enough.
         // With no kanban db the fleet is never constructed, and advertising the panel
         // on the probe alone ships a Terminals icon whose every verb fails.

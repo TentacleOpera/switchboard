@@ -24,6 +24,15 @@
             --text-secondary: #8C8C8C;
             --accent-primary: #00e5ff;
             --accent-teal: var(--accent-primary);
+            --sweep-grid: 32px;   /* afterburner grid pitch — sweep aligns to the cyan grid */
+            --accent-teal-dim: color-mix(in srgb, var(--accent-teal) 40%, transparent);
+            --accent-green: #4ec9b0;
+            --accent-red: #f85149;
+            --accent-orange: #d18616;
+            --glow-green: 0 0 10px rgba(78, 201, 176, 0.6), 0 0 20px rgba(78, 201, 176, 0.25);
+            --glow-red: 0 0 10px rgba(248, 81, 73, 0.6), 0 0 20px rgba(248, 81, 73, 0.25);
+            --font-family: 'Hanken Grotesk', Menlo, Consolas, sans-serif;
+            --font-code:   Menlo, Consolas, monospace;
         }
         .sb-icon {
             display: inline-block;
@@ -40,16 +49,6 @@
         .sb-icon-xs { width: 6px; height: 6px; }
         .sb-icon-close { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tY2xvc2Uuc3ZnIC0tPgo8IS0tIGZpbGwgaXMgaWdub3JlZCB1bmRlciBDU1MgbWFzazsgZmlsbD0iIzQ1ZTBlNiIgaXMgZnJvemVuIGZvciBwYXJpdHkgY2hlY2sgLS0+CjxzdmcgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB2aWV3Qm94PSIwIDAgMTYgMTYiIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+CiAgPHBhdGggZmlsbD0iIzQ1ZTBlNiIgZmlsbC1ydWxlPSJldmVub2RkIiBkPSJNMy43MiAzLjcyYS43NS43NSAwIDAgMSAxLjA2IDBMOCA2Ljk0bDMuMjItMy4yMmEuNzUuNzUgMCAxIDEgMS4wNiAxLjA2TDkuMDYgOGwzLjIyIDMuMjJhLjc1Ljc1IDAgMSAxLTEuMDYgMS4wNkw4IDkuMDZsLTMuMjIgMy4yMmEuNzUuNzUgMCAwIDEtMS4wNi0xLjA2TDYuOTQgOCAzLjcyIDQuNzhhLjc1Ljc1IDAgMCAxIDAtMS4wNnoiLz4KPC9zdmc+Cg=='); }
         .sb-icon-check { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tY2hlY2suc3ZnIC0tPgo8IS0tIGZpbGwgaXMgaWdub3JlZCB1bmRlciBDU1MgbWFzazsgZmlsbD0iIzQ1ZTBlNiIgaXMgZnJvemVuIGZvciBwYXJpdHkgY2hlY2sgLS0+CjxzdmcgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB2aWV3Qm94PSIwIDAgMTYgMTYiIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+CiAgPHBhdGggZmlsbD0iIzQ1ZTBlNiIgZmlsbC1ydWxlPSJldmVub2RkIiBkPSJNMTMuNzggNC4yMmEuNzUuNzUgMCAwIDEgMCAxLjA2bC03LjI1IDcuMjVhLjc1Ljc1IDAgMCAxLTEuMDYgMEwyLjIyIDkuMjhhLjc1Ljc1IDAgMCAxIDEuMDYtMS4wNkw2IDEwLjk0bDYuNzItNi43MmEuNzUuNzUgMCAwIDEgMS4wNiAweiIvPgo8L3N2Zz4K'); }
-            --sweep-grid: 32px;   /* afterburner grid pitch — sweep aligns to the cyan grid */
-            --accent-teal-dim: color-mix(in srgb, var(--accent-teal) 40%, transparent);
-            --accent-green: #4ec9b0;
-            --accent-red: #f85149;
-            --accent-orange: #d18616;
-            --glow-green: 0 0 10px rgba(78, 201, 176, 0.6), 0 0 20px rgba(78, 201, 176, 0.25);
-            --glow-red: 0 0 10px rgba(248, 81, 73, 0.6), 0 0 20px rgba(248, 81, 73, 0.25);
-            --font-family: 'Hanken Grotesk', Menlo, Consolas, sans-serif;
-            --font-code:   Menlo, Consolas, monospace;
-        }
 
         body.theme-claudify {
             --accent-primary: #D97757;

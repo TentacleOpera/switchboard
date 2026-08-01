@@ -128,10 +128,13 @@ const extensionConfig = {
 const standaloneConfig = {
     target: 'node',
     mode: extensionConfig.mode,
-    entry: './src/standalone/cli.ts',
+    entry: {
+        cli: './src/standalone/cli.ts',
+        ptyHost: './src/standalone/ptyHost.ts'
+    },
     output: {
         path: path.resolve(__dirname, 'dist', 'standalone'),
-        filename: 'cli.js',
+        filename: '[name].js',
         libraryTarget: 'commonjs2'
     },
     // Headless Ingestion piece 3: the standalone bundle imports the real

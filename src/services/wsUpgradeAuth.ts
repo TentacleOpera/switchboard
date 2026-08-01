@@ -15,6 +15,7 @@ export function parseCookies(req: any): Record<string, string> {
 export function isLocalhostOrigin(origin: string): boolean {
     try {
         const u = new URL(origin);
+        if (u.protocol === 'vscode-webview:') { return true; }
         const h = u.hostname;
         return h === '127.0.0.1' || h === 'localhost' || h === '::1' || h === '[::1]';
     } catch {

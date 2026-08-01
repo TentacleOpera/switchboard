@@ -91,13 +91,28 @@ function get(port, pathname, headers) {
     });
 
     await test('the HTTP-token cookie does NOT satisfy a gateway expecting the terminal token', () => {
-        // The invariant worth recording: the sb_session cookie carries the HTTP token
-        // (usually ''), the gateway expects its own. Pointing the cookie at the terminal
-        // token was rejected because it 401s the panel's own HTTP verb calls on installs
-        // that DO set switchboard.apiToken.
         const req = { url: '/ws/terminal?name=x', headers: { host: '127.0.0.1:1234', cookie: 'sb_session=http-token-value' }, socket: { remoteAddress: '127.0.0.1' } };
         return authorizeWsUpgrade(req, async () => 'terminal-token-value', { rejectWhenTokenEmpty: true })
             .then(auth => assert.strictEqual(auth.authorized, false, 'the HTTP token must not authorize the terminal channel'));
+    });
+
+    await test('vscode-webview origin with valid token authorizes upgrade', async () => {
+        const req = { url: '/ws/terminal?name=x&token=valid-token', headers: { host: '127.0.0.1:1234', origin: 'vscode-webview://12345' }, socket: { remoteAddress: '127.0.0.1' } };
+        const auth = await authorizeWsUpgrade(req, async () => 'valid-token', { rejectWhenTokenEmpty: true });
+        assert.strictEqual(auth.authorized, true, 'vscode-webview origin with valid token must authorize upgrade');
+    });
+
+    await test('vscode-webview origin with invalid token fails upgrade', async () => {
+        const req = { url: '/ws/terminal?name=x&token=wrong-token', headers: { host: '127.0.0.1:1234', origin: 'vscode-webview://12345' }, socket: { remoteAddress: '127.0.0.1' } };
+        const auth = await authorizeWsUpgrade(req, async () => 'valid-token', { rejectWhenTokenEmpty: true });
+        assert.strictEqual(auth.authorized, false, 'vscode-webview origin with invalid token must fail upgrade');
+    });
+
+    await test('untrusted web origin with valid token is rejected by origin check', async () => {
+        const req = { url: '/ws/terminal?name=x&token=valid-token', headers: { host: '127.0.0.1:1234', origin: 'https://evil.example.com' }, socket: { remoteAddress: '127.0.0.1' } };
+        const auth = await authorizeWsUpgrade(req, async () => 'valid-token', { rejectWhenTokenEmpty: true });
+        assert.strictEqual(auth.authorized, false, 'untrusted web origin must be rejected');
+        assert.strictEqual(auth.statusCode, 403, 'untrusted origin must get 403');
     });
 
     await test('the gateway keeps rejectWhenTokenEmpty: true', () => {

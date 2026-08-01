@@ -107,6 +107,9 @@ interface ClientState {
     isAlive: boolean;
     highWaterStart?: number;
     unackedChars: number;
+    /** Last size this client reported FROM A RENDERED VIEWPORT. Undefined until it
+     *  has one — a client with nothing on screen does not get a vote. See applyResize. */
+    reportedSize?: { cols: number; rows: number };
 }
 
 export class TerminalWsGateway {
@@ -635,9 +638,17 @@ export class TerminalWsGateway {
             client.isAlive = true;
         });
 
-        ws.on('message', (msg) => {
+        // `isBinary` — NOT a Buffer check. ws@8 hands every frame to this callback as a
+        // Buffer, text and binary alike, and reports the distinction only in this second
+        // argument. The old `Buffer.isBuffer(msg)` guard was therefore true for JSON
+        // control frames too: they fell into the binary arm, failed the 0x01 opcode test
+        // and hit `return`. Every `resize`, `ack` and legacy `input` frame was silently
+        // dropped for the life of that code — which is why ptys stayed pinned at their
+        // 80x24 spawn size no matter how the operator sized the window, and why unacked
+        // credit only ever grew until backpressure paused the terminal.
+        ws.on('message', (msg, isBinary) => {
             try {
-                if (Buffer.isBuffer(msg) || msg instanceof ArrayBuffer || ArrayBuffer.isView(msg)) {
+                if (isBinary) {
                     const buf = Buffer.from(msg as any);
                     if (buf.length < 1) return;
                     const opcode = buf[0];
@@ -660,7 +671,7 @@ export class TerminalWsGateway {
                     }
                     this.enqueueInput(terminal.name, decoded);
                 } else if (parsed.t === 'resize' && typeof parsed.cols === 'number' && typeof parsed.rows === 'number') {
-                    terminal.resize(parsed.cols, parsed.rows);
+                    this.applyResize(client, parsed);
                 } else if (parsed.t === 'ack' && typeof parsed.chars === 'number') {
                     const acked = Math.max(0, Math.min(parsed.chars, client.unackedChars));
                     client.unackedChars -= acked;
@@ -681,11 +692,66 @@ export class TerminalWsGateway {
 
         ws.on('close', () => {
             this.clients.delete(client);
+            // A departing client's size must stop constraining the survivors, or
+            // closing a small tab leaves everyone else clamped to its dimensions.
+            this.reconcileTerminalSize(client.terminalName);
         });
 
         ws.on('error', () => {
             this.clients.delete(client);
+            this.reconcileTerminalSize(client.terminalName);
         });
+    }
+
+    /**
+     * Size the pty from the clients that can actually see it.
+     *
+     * The pty is shared by every attached client and this used to be a bare
+     * `terminal.resize(cols, rows)` — last frame wins. That is how a hidden tab came
+     * to dictate the size: the browser shell mounts every panel iframe up front with
+     * display:none, so the Terminals panel connects while measuring 0x0, and an xterm
+     * with no layout reports its 80x24 construction default. The operator's visible
+     * terminal was squashed to 24 rows on every shell load and tab switch.
+     *
+     * Two rules, in order:
+     *  - A client that says it is not rendering gets no vote at all. terminals.js now
+     *    stamps `rendered: true` on frames sent from a real box; a frame WITHOUT the
+     *    field is treated as rendered so an older client behaves exactly as before.
+     *  - Among the clients that do have a viewport, take the MIN. That is the
+     *    conventional multi-client rule (tmux does the same): the smallest attached
+     *    viewport is the only size where nobody is looking at wrapped or clipped
+     *    output. With one client attached — overwhelmingly the common case — the min
+     *    of one is just that client's size, so nothing changes.
+     */
+    private applyResize(client: ClientState, parsed: { cols: number; rows: number; rendered?: boolean }): void {
+        if (parsed.rendered === false) {
+            return;
+        }
+        if (parsed.cols < 1 || parsed.rows < 1) {
+            console.warn(`[TerminalWsGateway] Ignoring degenerate resize ${parsed.cols}x${parsed.rows} for ${client.terminalName}`);
+            return;
+        }
+        client.reportedSize = { cols: parsed.cols, rows: parsed.rows };
+        this.reconcileTerminalSize(client.terminalName);
+    }
+
+    private reconcileTerminalSize(terminalName: string): void {
+        const terminal = this.fleetService.get(terminalName);
+        if (!terminal) { return; }
+
+        let cols = Infinity;
+        let rows = Infinity;
+        for (const c of this.clients) {
+            if (c.terminalName !== terminalName || !c.reportedSize) { continue; }
+            cols = Math.min(cols, c.reportedSize.cols);
+            rows = Math.min(rows, c.reportedSize.rows);
+        }
+        // Every attached client is still headless (or the last one with a viewport
+        // just left). Leave the pty at whatever it already is rather than inventing
+        // a size no client asked for.
+        if (!Number.isFinite(cols) || !Number.isFinite(rows)) { return; }
+
+        terminal.resize(cols, rows);
     }
 
     /**

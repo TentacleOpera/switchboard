@@ -455,6 +455,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _ptyFleetService?: PtyFleetService;
     private _terminalWsGateway?: TerminalWsGateway;
     private _terminalSessionToken: string = '';
+    private _ptyHostChild?: import('child_process').ChildProcess;
+    private _ptyHostPort?: number;
 
     // --- Single-flight coalescing guards (refresh-storm circuit-breaker) ---
     // Coalesce overlapping _refreshRunSheets / _syncFilesAndRefreshRunSheets calls
@@ -756,15 +758,18 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     worktreePath = matchWorktreePath(await db.getWorktrees(), record);
                 }
             } catch { /* best-effort — the toast still names plan and role */ }
-            if (!terminalName && this._ptyFleetService) {
+            if (!terminalName && (this as any)._ptyHostPort) {
                 try {
-                    const active = this._ptyFleetService.listActive();
-                    const role = this._normalizeAgentKey(record.dispatchedAgent || '');
-                    const match = worktreePath
-                        ? active.find(t => t.worktreePath === worktreePath && this._normalizeAgentKey(t.role) === role)
-                            || active.find(t => t.worktreePath === worktreePath)
-                        : active.find(t => this._normalizeAgentKey(t.role) === role);
-                    terminalName = match?.friendlyName || '';
+                    const res = await this.handleServiceVerb('ptyListTerminals', {});
+                    if (res?.success && Array.isArray(res.terminals)) {
+                        const active = res.terminals.filter((t: any) => t.status === 'active');
+                        const role = this._normalizeAgentKey(record.dispatchedAgent || '');
+                        const match = worktreePath
+                            ? active.find((t: any) => t.worktreePath === worktreePath && this._normalizeAgentKey(t.role) === role)
+                                || active.find((t: any) => t.worktreePath === worktreePath)
+                            : active.find((t: any) => this._normalizeAgentKey(t.role) === role);
+                        terminalName = match?.friendlyName || '';
+                    }
                 } catch { /* fleet unavailable — omit terminalName */ }
             }
             server.broadcastWs('agentCompleted', {
@@ -1699,68 +1704,129 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // browser terminal. The fleet outlives individual server restarts; only the
         // gateway reference is handed to the new LocalApiServer.
         const ptyReady = isPtyAvailable();
-        if (ptyReady && !this._ptyFleetService) {
+        if (ptyReady && !this._ptyHostChild) {
             const db = await this._getKanbanDb(effectiveRoot);
             if (db) {
-                this._ptyFleetService = new PtyFleetService(effectiveRoot, db);
-                // Awaited, not fire-and-forget: the write side (setConfigJson) is async,
-                // so a `void` purge leaves a window in which /kanban/dispatch's pre-flight
-                // and worktree routing still see ghost rows from the previous host.
                 await PtyFleetService.purgePtyTerminals(db);
-                this._terminalSessionToken = crypto.randomBytes(32).toString('hex');
-                const token = this._terminalSessionToken;
-                this._terminalWsGateway = new TerminalWsGateway(this._ptyFleetService, async () => token);
+                const ptyHostScript = path.join(this._context.extensionPath, 'dist', 'standalone', 'ptyHost.js');
+                const cp = require('child_process');
+                const child = cp.spawn(process.execPath, [ptyHostScript, '--workspace', effectiveRoot], {
+                    stdio: ['pipe', 'pipe', 'pipe']
+                });
+                this._ptyHostChild = child;
+                child.stderr.on('data', (chunk: Buffer) => {
+                    this._apiServerDiagnosticsChannel.appendLine(`[ptyHost stderr] ${chunk.toString().trim()}`);
+                });
+                child.on('exit', (code: number) => {
+                    this._apiServerDiagnosticsChannel.appendLine(`[ptyHost] Exited with code ${code}`);
+                    this._ptyHostChild = undefined;
+                    this._ptyHostPort = undefined;
+                });
+                await new Promise<void>((resolve) => {
+                    let handshakeDone = false;
+                    child.stdout.on('data', (data: Buffer) => {
+                        if (handshakeDone) return;
+                        const lines = data.toString().split('\n');
+                        for (const line of lines) {
+                            if (!line.trim()) continue;
+                            try {
+                                const msg = JSON.parse(line.trim());
+                                if (msg.t === 'ready' && typeof msg.port === 'number') {
+                                    this._ptyHostPort = msg.port;
+                                    this._terminalSessionToken = msg.token || '';
+                                    handshakeDone = true;
+                                    resolve();
+                                    break;
+                                }
+                            } catch (e) {
+                                // non-json output
+                            }
+                        }
+                    });
+                    setTimeout(() => {
+                        if (!handshakeDone) resolve();
+                    }, 5000);
+                });
             }
         }
-        // Capability-gating honesty (PRD contract #6): the probe passing is NOT enough —
-        // with no kanban db the fleet and gateway are never constructed, so advertising
-        // the panel on `ptyReady` alone ships a Terminals icon whose every verb fails and
-        // whose /ws/terminal upgrade is destroyed. Gate on the fleet actually existing.
-        const ptyHostReady = () => ptyReady && !!this._ptyFleetService;
+        const ptyHostReady = () => ptyReady && !!this._ptyHostChild && !!this._ptyHostPort;
 
-        const handlePtyVerb = async (verb: string, payload: any, root?: string): Promise<any> => {
-            if (!ptyReady || !this._ptyFleetService) {
-                return { success: false, error: 'PTY host unavailable on this platform/installation' };
-            }
-            switch (verb) {
-                case 'ptyCreateTerminal': {
-                    const terminal = await this._ptyFleetService.create(payload.role || 'coder', payload.name, payload.cwd, payload.worktreePath);
-                    return { success: true, terminal: { friendlyName: terminal.friendlyName, role: terminal.role, status: terminal.status } };
-                }
-                case 'ptyCloseTerminal': {
-                    const ok = this._ptyFleetService.kill(payload.name);
-                    return { success: ok };
-                }
-                case 'ptyListTerminals': {
-                    return {
-                        success: true,
-                        terminals: this._ptyFleetService.list().map(t => ({
+        const updateMirrorRegistry = async (db: any) => {
+            if (!db || !this._ptyHostPort) return;
+            try {
+                const http = require('http');
+                const resData = await new Promise<string>((resolve, reject) => {
+                    const req = http.request({
+                        hostname: '127.0.0.1',
+                        port: this._ptyHostPort,
+                        path: '/api/pty/ptyListTerminals',
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' }
+                    }, (res: any) => {
+                        let body = '';
+                        res.on('data', (c: any) => { body += c; });
+                        res.on('end', () => resolve(body));
+                    });
+                    req.on('error', reject);
+                    req.end(JSON.stringify({}));
+                });
+                const parsed = JSON.parse(resData);
+                if (parsed.success && Array.isArray(parsed.terminals)) {
+                    const existing = db.getConfigJsonSync('runtime.terminals', {}) || {};
+                    const terminalMap: Record<string, any> = {};
+                    for (const [name, entry] of Object.entries(existing)) {
+                        if (entry && (entry as any).purpose === 'pty') continue;
+                        if (entry && (entry as any).ideName === PTY_IDE_NAME) continue;
+                        terminalMap[name] = entry;
+                    }
+                    for (const t of parsed.terminals) {
+                        terminalMap[t.friendlyName] = {
                             friendlyName: t.friendlyName,
                             role: t.role,
                             status: t.status,
-                            pid: t.pty.pid,
+                            pid: t.pid,
                             startTime: t.startTime,
-                            worktreePath: t.worktreePath
-                        }))
-                    };
+                            worktreePath: t.worktreePath,
+                            ideName: PTY_IDE_NAME,
+                            purpose: 'pty',
+                        };
+                    }
+                    await db.setConfigJson('runtime.terminals', terminalMap);
                 }
-                case 'ptyRenameTerminal': {
-                    const ok = this._ptyFleetService.rename(payload.name, payload.alias);
-                    return { success: ok };
+            } catch (err) {
+                console.warn('[TaskViewerProvider] Failed to update pty registry mirror:', err);
+            }
+        };
+
+        const handlePtyVerb = async (verb: string, payload: any, root?: string): Promise<any> => {
+            if (!ptyHostReady() || !this._ptyHostPort) {
+                return { success: false, error: 'PTY host unavailable on this platform/installation' };
+            }
+            const http = require('http');
+            try {
+                const resData = await new Promise<string>((resolve, reject) => {
+                    const req = http.request({
+                        hostname: '127.0.0.1',
+                        port: this._ptyHostPort,
+                        path: `/api/pty/${verb}`,
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' }
+                    }, (res: any) => {
+                        let body = '';
+                        res.on('data', (c: any) => { body += c; });
+                        res.on('end', () => resolve(body));
+                    });
+                    req.on('error', reject);
+                    req.end(JSON.stringify(payload || {}));
+                });
+                const result = JSON.parse(resData);
+                if (['ptyCreateTerminal', 'ptyCloseTerminal', 'ptyRenameTerminal'].includes(verb)) {
+                    const db = await this._getKanbanDb(root || effectiveRoot);
+                    void updateMirrorRegistry(db);
                 }
-                case 'ptyClearTerminal': {
-                    const handle = this._ptyFleetService.get(payload.name);
-                    if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
-                    if (handle.status === 'active') { await clearPty(handle); }
-                    return { success: true };
-                }
-                case 'ptyClearAllTerminals': {
-                    const active = this._ptyFleetService.listActive();
-                    await Promise.all(active.map(t => clearPty(t)));
-                    return { success: true, cleared: active.length };
-                }
-                default:
-                    return { success: false, error: `Unknown terminal verb '${verb}'` };
+                return result;
+            } catch (err) {
+                return { success: false, error: err instanceof Error ? err.message : String(err) };
             }
         };
 
@@ -1776,7 +1842,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // Retrieve from VS Code SecretStorage - returns empty string if not set
                 return await this._context.secrets.get('switchboard.apiToken') || '';
             },
-            terminalWsGateway: this._terminalWsGateway,
             terminalVerb: (verb: string, payload: any, wsRoot?: string) => handlePtyVerb(verb, payload, wsRoot),
             allRoots: allRoots,
             getRegisteredTerminals: () => {
@@ -1786,13 +1851,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 this._registeredTerminals?.forEach((term, name) => {
                     if (term.exitStatus === undefined) { names.push(name); }
                 });
-                if (this._ptyFleetService) {
-                    for (const ptyTerm of this._ptyFleetService.listActive()) {
-                        if (!names.includes(ptyTerm.friendlyName)) {
-                            names.push(ptyTerm.friendlyName);
-                        }
-                    }
-                }
                 return names;
             },
             getSelectedWorkspaceRoot: () => this._kanbanProvider?.getCurrentWorkspaceRoot() ?? null,
@@ -2050,13 +2108,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             // The token is hex (crypto.randomBytes) so it needs no escaping,
                             // but it is escaped anyway to keep that a local property.
                             const attrSafeToken = this._terminalSessionToken.replace(/[^a-zA-Z0-9]/g, '');
-                            // injectBodyAttributes, not a bare `.replace('<body', ...)`:
-                            // that matched the first TEXTUAL `<body` and landed the token
-                            // inside a CSS comment in terminals.html that mentions the tag
-                            // in prose, leaving the real body bare and every upgrade 401ing.
+                            const ptyOriginAttr = this._ptyHostPort ? ` data-pty-host-origin="ws://127.0.0.1:${this._ptyHostPort}"` : '';
                             return {
                                 ...result,
-                                html: injectBodyAttributes(result.html, `data-terminal-token="${attrSafeToken}"`)
+                                html: injectBodyAttributes(result.html, `data-terminal-token="${attrSafeToken}"${ptyOriginAttr}`)
                             };
                         }
                         return result || null;
@@ -7934,11 +7989,14 @@ Each plan file must include:
         // cockpit) can actually display. `_getAliveAutobanTerminalRegistry` cannot
         // supply one — it keeps a row only on a VS Code pid/name match or a heartbeat,
         // and PTY rows have none of those — so the fleet is consulted directly here.
-        if (allowPtyFleet && this._ptyFleetService) {
+        if (allowPtyFleet && (this as any)._ptyHostPort) {
             const normalizedRole = this._normalizeAgentKey(role);
-            const match = this._ptyFleetService.listActive()
-                .find(t => this._normalizeAgentKey(t.role) === normalizedRole);
-            if (match) { return match.friendlyName; }
+            const res = await this.handleServiceVerb('ptyListTerminals', {});
+            if (res?.success && Array.isArray(res.terminals)) {
+                const match = res.terminals.filter((t: any) => t.status === 'active')
+                    .find((t: any) => this._normalizeAgentKey(t.role) === normalizedRole);
+                if (match) { return match.friendlyName; }
+            }
         }
         return this._getAgentNameForRole(role, workspaceRoot, allowPtyFleet);
     }
@@ -12527,14 +12585,16 @@ What would you like to find?`;
                         // a PTY at all in the extension host: PTYs live in _ptyFleetService,
                         // not in _registeredTerminals and not in the HostTerminal seam, so
                         // every browser "send to terminal" failed as "not found or not local".
-                        if (data?.apiOriginated && this._ptyFleetService) {
+                        if (data?.apiOriginated && (this as any)._ptyHostPort) {
                             const normalized = this._normalizeAgentKey(this._stripIdeSuffix(name));
-                            const ptyHandle = this._ptyFleetService.get(name)
-                                || this._ptyFleetService.listActive().find(t =>
-                                    this._normalizeAgentKey(this._stripIdeSuffix(t.friendlyName)) === normalized);
-                            if (ptyHandle && ptyHandle.status === 'active') {
-                                ptyHandle.sendText(input, true);
-                                return { success: true };
+                            const res = await this.handleServiceVerb('ptyListTerminals', {});
+                            if (res?.success && Array.isArray(res.terminals)) {
+                                const target = res.terminals.find((t: any) => t.friendlyName === name)
+                                    || res.terminals.find((t: any) => this._normalizeAgentKey(this._stripIdeSuffix(t.friendlyName)) === normalized);
+                                if (target && target.status === 'active') {
+                                    const writeRes = await this.handleServiceVerb('ptyWrite', { name: target.friendlyName, data: input + '\r' });
+                                    if (writeRes?.success) return { success: true };
+                                }
                             }
                         }
 
@@ -18427,11 +18487,17 @@ What would you like to find?`;
         }, allowPtyFleet);
         if (pushed) return true;
 
-        const ptyMatch = !allowPtyFleet && this._ptyFleetService
-            ? this._ptyFleetService.listActive().find(t =>
-                this._normalizeAgentKey(this._stripIdeSuffix(t.friendlyName))
-                === this._normalizeAgentKey(this._stripIdeSuffix(targetAgent)))
-            : undefined;
+        let ptyMatch = false;
+        if (!allowPtyFleet && (this as any)._ptyHostPort) {
+            try {
+                const res = await this.handleServiceVerb('ptyListTerminals', {});
+                if (res?.success && Array.isArray(res.terminals)) {
+                    ptyMatch = !!res.terminals.filter((t: any) => t.status === 'active').find((t: any) =>
+                        this._normalizeAgentKey(this._stripIdeSuffix(t.friendlyName))
+                        === this._normalizeAgentKey(this._stripIdeSuffix(targetAgent)));
+                }
+            } catch { /* fleet unavailable */ }
+        }
         this._seams().ui.showWarningMessage(ptyMatch
             ? `'${targetAgent}' is a browser terminal (Switchboard Terminals panel), so the VS Code sidebar cannot dispatch to it. Dispatch from the browser board, or open a VS Code agent terminal for this role.`
             : `Could not deliver prompt to '${targetAgent}'. No live agent terminal with that name was found.`);
@@ -18495,35 +18561,31 @@ What would you like to find?`;
         // to the same agent key, and for an api-originated dispatch the PTY is the one
         // the calling surface can display. Sidebar callers never opt in, so they can
         // never deliver into a terminal VS Code cannot show.
-        if (allowPtyFleet && this._ptyFleetService) {
+        if (allowPtyFleet && (this as any)._ptyHostPort) {
             const normalizedTarget = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
-            const ptyHandle = this._ptyFleetService.get(terminalName)
-                || this._ptyFleetService.listActive().find(t =>
-                    this._normalizeAgentKey(this._stripIdeSuffix(t.friendlyName)) === normalizedTarget);
-            if (ptyHandle && ptyHandle.status === 'active') {
-                await this._logEvent('dispatch', {
-                    timestamp: new Date().toISOString(),
-                    dispatchId: messageId,
-                    event: 'received',
-                    sender: meta.sender,
-                    recipient: meta.recipient,
-                    action: meta.action
-                });
-                // Delegate to the shared PTY delivery helper rather than a raw
-                // `pty.write(payload + '\r')`. That helper owns bracketed-paste framing,
-                // 256-byte chunked writes, the per-terminal send lock and the second
-                // confirm CR that interactive CLI agents need. A raw write submits a
-                // multi-line prompt one line at a time — the agent runs fragments.
-                const clearBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
-                const clearDelay = vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 2000);
-                try {
-                    await sendPromptToPty(ptyHandle, payload, { clearBeforePrompt, clearBeforePromptDelayMs: clearDelay });
-                    return true;
-                } catch (err) {
-                    console.error(`[TaskViewerProvider] PTY prompt delivery to '${terminalName}' failed:`, err);
-                    return false;
+            try {
+                const res = await this.handleServiceVerb('ptyListTerminals', {});
+                if (res?.success && Array.isArray(res.terminals)) {
+                    const target = res.terminals.find((t: any) => t.friendlyName === terminalName)
+                        || res.terminals.find((t: any) => this._normalizeAgentKey(this._stripIdeSuffix(t.friendlyName)) === normalizedTarget);
+                    if (target && target.status === 'active') {
+                        await this._logEvent('dispatch', {
+                            timestamp: new Date().toISOString(),
+                            dispatchId: messageId,
+                            event: 'received',
+                            sender: meta.sender,
+                            recipient: meta.recipient,
+                            action: meta.action
+                        });
+                        const writeRes = await this.handleServiceVerb('ptyWrite', { name: target.friendlyName, data: payload + '\r' });
+                        if (writeRes?.success) return true;
+                    }
                 }
+            } catch (err) {
+                console.error(`[TaskViewerProvider] PTY prompt delivery to '${terminalName}' failed:`, err);
+                return false;
             }
+        }
         }
 
         // Try registered terminals first, then fall back to open VS Code terminals
@@ -21130,17 +21192,12 @@ What would you like to find?`;
         this._recentMirrorProcessed.forEach(t => clearTimeout(t));
         this._julesDiagnosticsChannel.dispose();
         this._apiServerDiagnosticsChannel.dispose();
-        if (this._terminalWsGateway) {
-            try { this._terminalWsGateway.dispose(); } catch {}
-            this._terminalWsGateway = undefined;
-        }
-        if (this._ptyFleetService) {
+        if (this._ptyHostChild) {
             try {
-                for (const item of this._ptyFleetService.list()) {
-                    try { item.pty.kill('SIGKILL'); } catch {}
-                }
+                this._ptyHostChild.kill('SIGTERM');
             } catch {}
-            this._ptyFleetService = undefined;
+            this._ptyHostChild = undefined;
+            this._ptyHostPort = undefined;
         }
         void this._stopLocalApiServer();
     }
