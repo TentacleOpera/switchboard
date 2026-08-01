@@ -17,7 +17,7 @@ const assert = require('assert');
 const { installVscodeTrap } = require('./helpers/verbEngineTestSeams');
 installVscodeTrap();
 
-const { computeReportedWidth } = require('../../out/services/DesignPanelProvider');
+const { computeReportedWidth, DesignPanelProvider } = require('../../out/services/DesignPanelProvider');
 
 let passed = 0;
 let failed = 0;
@@ -86,6 +86,33 @@ async function runTests() {
         assert.strictEqual(vp.style.width, '1200px');
         assert.strictEqual(w, 1200);
         assert.strictEqual(vp.style.height, '700px');
+    });
+
+    // _INSPECTOR_SCRIPT is a template literal in a .ts file, so anything pasted into
+    // it — including TypeScript with an `export` keyword and type annotations — still
+    // compiles cleanly and only fails when a browser parses the injected <script>.
+    // A parse error there is total: the whole IIFE dies, taking dims reporting, wheel
+    // forwarding, Space-pan and Inspect Mode with it, silently. Nothing else can see it.
+    await test('_INSPECTOR_SCRIPT parses as a classic browser script', async () => {
+        const script = DesignPanelProvider._INSPECTOR_SCRIPT;
+        assert.ok(typeof script === 'string' && script.length > 0, '_INSPECTOR_SCRIPT missing');
+        const body = script.replace(/^<script>/, '').replace(/<\/script>$/, '');
+        assert.doesNotThrow(() => new Function(body), 'injected inspector script is not valid classic-script JS');
+        assert.ok(!/\bexport\s+(function|const|class|default)\b/.test(body), 'ESM export leaked into the injected script');
+    });
+
+    // The classifier must be embedded from the exported function via .toString(), not
+    // hand-copied — a copy lets the shipped logic and the tested logic drift apart.
+    await test('injected reporter embeds and calls the shared computeReportedWidth', async () => {
+        const body = DesignPanelProvider._INSPECTOR_SCRIPT;
+        assert.ok(
+            /var computeReportedWidth\s*=\s*function/.test(body),
+            'computeReportedWidth is not embedded into the injected script via .toString()'
+        );
+        assert.ok(
+            /var w = computeReportedWidth\(rawW, clientW, window\.innerWidth \|\| 0\);/.test(body),
+            'reportDims does not call the embedded computeReportedWidth'
+        );
     });
 
     console.log(`\nResults: ${passed} passed, ${failed} failed.`);

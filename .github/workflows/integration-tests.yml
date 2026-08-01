@@ -179,6 +179,16 @@ jobs:
       - name: Browser panel scrollbar contract (@supports gating, no ungated scrollbar-width)
         run: npm run test:contract:panel-scrollbars
 
+      # _INSPECTOR_SCRIPT is a template literal inside a .ts file, so TypeScript pasted
+      # into it compiles clean and only fails when a browser parses the injected
+      # <script> — and that failure is total and silent (dims reporting, wheel
+      # forwarding, Space-pan and Inspect Mode all die at once). A review pass caught
+      # exactly that: an `export function` with type annotations shipped inside the
+      # literal. This test parses the emitted script and pins the fluid-vs-intrinsic
+      # classifier that stops fluid pages collapsing to a narrow column. Keep it wired.
+      - name: HTML preview fluid width regression (injected script parses, fluid/intrinsic classifier)
+        run: npm run test:contract:html-preview-fluid-width
+
       # Wired during the scrollbar-styling review pass. The scrollbar block was
       # appended to project.html's <style> in a way that DELETED the preceding
       # `.review-mode-btn.active` rule and reused its closing brace, silently

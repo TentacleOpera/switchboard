@@ -386,3 +386,24 @@ will not change what is live; sync and reload before checking.
 ## Completion Report
 
 Implemented fluid page width support for HTML previews across Planning HTML, Design HTML, and Stitch HTML preview tabs. Updated `reportDims` in `DesignPanelProvider.ts` to distinguish genuine horizontal content overflow from container-derived fluid layout, posting `w: null` for fluid pages and suppressing zero-layout measurements. Updated webview consumer handlers in `planning.js` and `design.js` to preserve container fluid width when `w: null` is reported while maintaining height updates and pan clamping, and added unit/regression tests in `src/test/html-preview-fluid-width-regression.test.js`.
+
+## Review Findings
+
+CRITICAL (fixed): `computeReportedWidth` had been written *inside* the `_INSPECTOR_SCRIPT`
+template literal, so an ESM `export` plus TypeScript type annotations were injected verbatim into
+every previewed page — the whole inspector IIFE failed to parse, killing dims reporting, wheel
+forwarding, Space-pan and Inspect Mode, while the module exported nothing and the new regression
+test was red (5/6 failing). Fixed by hoisting the function to module scope in
+`src/services/DesignPanelProvider.ts` and embedding it into the injected script via
+`${computeReportedWidth.toString()}` bound to a `var` (mangling-safe, verified against terser), so
+the shipped classifier is the tested one; the test gained a parse guard and an embed-usage
+assertion, and was wired as `test:contract:html-preview-fluid-width` in `package.json` plus a step
+in `.github/workflows/integration-tests.yml` (MAJOR: it was defined by no script and invoked by no
+gate). The consumer restructure in `src/webview/planning.js:5652-5688` and
+`src/webview/design.js:3509-3554` was reviewed end-to-end and kept unchanged — `msg.h` guard,
+`typeof msg.w === 'number'` width gate, null-retains-pixel-width damping, real-number dims for
+`clampPan`/`getContentDims`, `offsetParent` guard (wrapper is `position: relative`, so no false
+positives) and `MAX_PREVIEW_DIM` all correct. Validation: `tsc -p tsconfig.test.json` clean,
+`npm run compile` clean (3 pre-existing warnings), `npm run lint` 0 errors, new test 8/8, and the
+five adjacent design/webview contract suites green (21/11/17/11/11); remaining risk is manual only
+— the fix must be synced into the installed VSIX before the repro steps can be checked.

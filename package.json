@@ -797,6 +797,7 @@
     "test:contract:shim-injection": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/webview-shim-injection-contract.test.js",
     "test:contract:db-backup-retention": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-db-backup-retention.test.js",
     "test:contract:panel-scrollbars": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/browser-panel-scrollbar-contract.test.js",
+    "test:contract:html-preview-fluid-width": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/html-preview-fluid-width-regression.test.js",
     "test:contract:rendermarkdown": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/sharedUtils-renderMarkdown.test.js",
     "test:contract:drag-guard": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-card-button-drag-guard.test.js",
     "test:contract:render-guard": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-render-guard-contract.test.js",

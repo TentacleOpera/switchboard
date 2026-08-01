@@ -63,6 +63,33 @@ interface TreeNode {
     metadata?: any;
 }
 
+/**
+ * Does the previewed page have a genuine intrinsic width, or is it fluid?
+ *
+ * Returns the raw content width ONLY when the page genuinely overflows the frame's
+ * usable viewport; `null` means "fluid — size me to the container". `scrollWidth`
+ * echoes `clientWidth` for a page that does not overflow, so reporting it
+ * unconditionally is self-referential: one narrow measurement (a pre-settle layout)
+ * gets written back onto the viewport and the report→resize→report loop locks the
+ * page at that width forever.
+ *
+ * The `innerWidth` term neutralises classic (Windows/Linux) scrollbars, where
+ * inserting a vertical scrollbar contracts `clientWidth` by ~15px while non-shrinkable
+ * content holds `scrollWidth` — a false "intrinsic" positive. The `+ 1` absorbs
+ * sub-pixel rounding. `clientWidth === 0` (detached layout tree) is not a measurement
+ * at all.
+ *
+ * This function is stringified into `_INSPECTOR_SCRIPT` below via `.toString()` so the
+ * shipped classifier and the one the regression test exercises can never diverge. It
+ * must therefore stay self-contained: no imports, no closure references, no TypeScript
+ * that survives the emit.
+ */
+export function computeReportedWidth(rawW: number, clientWidth: number, innerWidth: number): number | null {
+    if (!clientWidth) { return null; }
+    const maxView = Math.max(clientWidth, innerWidth);
+    return rawW > maxView + 1 ? rawW : null;
+}
+
 
 
 export class DesignPanelProvider implements vscode.Disposable {
@@ -574,26 +601,23 @@ window.addEventListener('wheel', function(e) {
     } catch (err) {}
 }, { passive: false, capture: true });
 
-// ── Natural content-size reporter helper (pure classification function) ──
-export function computeReportedWidth(rawW: number, clientWidth: number, innerWidth: number): number | null {
-    if (clientWidth === 0) return null;
-    var maxView = Math.max(clientWidth, innerWidth);
-    if (rawW > maxView + 1) {
-        return rawW;
-    }
-    return null;
-}
+// ── Natural content-size reporter helper. Stringified from computeReportedWidth in
+//    DesignPanelProvider.ts so the shipped classifier IS the tested one. Bound to a
+//    var, not relied on as a function declaration: a minified build mangles the
+//    emitted function's name, and the call site below is a plain string that no
+//    minifier can rename to match. ──
+var computeReportedWidth = ${computeReportedWidth.toString()};
 
 // ── Natural content-size reporter (drives real Fit/Reset + panning) ──
 function reportDims() {
     var d = document.documentElement;
     var clientW = d.clientWidth || 0;
-    if (!clientW) return; // zero-layout frame guard
+    if (!clientW) return; // zero-layout frame guard: no layout, no honest measurement
 
     var rawW = Math.max(d.scrollWidth, document.body ? document.body.scrollWidth : 0);
     var h = Math.max(d.scrollHeight, document.body ? document.body.scrollHeight : 0);
-    var maxView = Math.max(clientW, window.innerWidth || 0);
-    var w = (rawW > maxView + 1) ? rawW : null;
+    // null = "fluid, size me to the container"; a number = a real intrinsic overflow.
+    var w = computeReportedWidth(rawW, clientW, window.innerWidth || 0);
 
     if (h) window.parent.postMessage({ type: 'sbContentDims', w: w, h: h }, '*');
 }
