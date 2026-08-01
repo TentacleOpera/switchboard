@@ -7297,11 +7297,18 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 // cards even if host-side dedup caches consider the state already pushed.
                 if (this._panel && workspaceRoot) {
                     try {
-                        // Editor panel has no per-connection scope (that's a browser-WS
-                        // concept the broadcaster supplies via postMessage's callback
-                        // form). Pass undefined so the scope accessors resolve to the
-                        // editor's OWN in-memory config rather than a scoped lookup.
-                        const snapshotMessages = await this.getFullStateMessages(workspaceRoot, undefined);
+                        // Render the snapshot for THIS panel's declared scope. The editor
+                        // webview is a scoped pseudo-connection too: `setPushScope` stores
+                        // its scope on the hub, and every factory-form refresh push
+                        // (cliTriggersState, updateBoard.routingConfig) is rendered against
+                        // it. These snapshot messages are static objects, so pushWebviewOnly
+                        // cannot render them — the scope must be threaded in here instead.
+                        // Passing undefined would hand a project-scoped panel the SINGLETON
+                        // routing map / CLI-trigger state and, being last-write-wins, would
+                        // overwrite the correctly-scoped values an earlier refresh delivered.
+                        // Undefined survives only as the genuine "never declared" fallback.
+                        const panelScope = this._broadcaster?.getWebviewScope();
+                        const snapshotMessages = await this.getFullStateMessages(workspaceRoot, panelScope);
                         for (const msg of snapshotMessages) {
                             // pushWebviewOnly, NOT push(): this resync is for the ONE
                             // webview that just mounted. push() would also mirror the

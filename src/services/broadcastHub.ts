@@ -42,6 +42,17 @@ export class BroadcastHub {
         this._webviewScope = scope;
     }
 
+    /**
+     * The scope the BOUND webview declared (via its `setPushScope` verb). The webview
+     * is a scoped pseudo-connection exactly like a WS client, so any push built OUTSIDE
+     * the factory form — e.g. a mount-time full-state snapshot — must render against
+     * this value or it silently delivers singleton-tier state to a project-scoped panel.
+     * `undefined` = never declared → the singleton fallback the accessors already own.
+     */
+    getWebviewScope(): string | null | undefined {
+        return this._webviewScope;
+    }
+
     /** Update the webview target (called when the panel is created/ready). */
     setWebview(webview: { postMessage(msg: any): Thenable<boolean> } | null | undefined): void {
         this._target.webview = webview ?? undefined;
