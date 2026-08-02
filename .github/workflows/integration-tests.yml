@@ -73,6 +73,18 @@ jobs:
       - name: Terminal token transport contract (gateway auth + CSP-legal injection)
         run: npm run test:contract:terminal-token-transport
 
+      # The Host-header guard is the DNS-rebinding defence on a board that serves
+      # an RCE-grade terminal, so every failure here is silent and security-shaped:
+      # widening the pattern past the RFC 6761 `.localhost` reservation (to
+      # `127.0.0.0/8`, or to any name merely CONTAINING "localhost") readmits
+      # attacker-controlled names; a second predicate drifting from the module
+      # gives a CLI that prints a URL the server then 403s; and a CSP that allows
+      # `ws://localhost` without `ws://*.localhost` yields a board that renders
+      # but never streams. Also pins that --hostname stays presentation — the
+      # socket still binds loopback only.
+      - name: Loopback hostname contract (rebinding guard, one predicate, CSP parity)
+        run: npm run test:contract:loopback-hostname
+
       # .vscodeignore negations override ignores UNCONDITIONALLY, so a blanket
       # un-ignore of node-pty silently re-includes 28 MB of .pdb debug symbols past
       # the Marketplace upload cap. This runs vsce's real filter over the real tree.
