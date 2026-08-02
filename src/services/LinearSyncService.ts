@@ -122,7 +122,6 @@ const LINEAR_API_PATH = '/graphql';
 
 export class LinearSyncService {
   private _workspaceRoot: string;
-  private _configPath: string;
   private _syncMapPath: string;
   private _config: LinearConfig | null = null;
   private _secretStorage: vscode.SecretStorage;
@@ -176,9 +175,14 @@ export class LinearSyncService {
     this._lastRequestTime = Date.now();
   }
 
+  // NOTE: no `configPath` getter — Linear config lives in the machine-global
+  // store (see loadConfig/saveConfig, which go through
+  // GlobalIntegrationConfigService). The old getter returned
+  // <workspace>/.switchboard/linear-config.json, a path nothing has written since
+  // that migration, so every reader got a stale/absent file while the real
+  // config sat in the global store. It had no production callers.
   constructor(workspaceRoot: string, secretStorage: vscode.SecretStorage) {
     this._workspaceRoot = workspaceRoot;
-    this._configPath = path.join(workspaceRoot, '.switchboard', 'linear-config.json');
     this._syncMapPath = path.join(workspaceRoot, '.switchboard', 'linear-sync.json');
     this._secretStorage = secretStorage;
   }
@@ -2451,7 +2455,6 @@ export class LinearSyncService {
   get consecutiveFailures(): number { return this._consecutiveFailures; }
   set consecutiveFailures(v: number) { this._consecutiveFailures = v; }
   get debounceTimers() { return this._debounceTimers; }
-  get configPath() { return this._configPath; }
   get workspaceRoot() { return this._workspaceRoot; }
 
   delay(ms: number): Promise<void> {

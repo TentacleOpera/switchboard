@@ -10,6 +10,8 @@ const { installVsCodeMock } = require('../shared/vscode-mock');
 const { SecretStorageMock } = require('../shared/secret-storage-mock');
 const { installHttpsMock } = require('../shared/http-mock-helpers');
 
+const { GlobalIntegrationConfigService } = loadOutModule('services/GlobalIntegrationConfigService.js');
+
 function createContext(workspaceRoot, secretSeed = {}) {
     const installed = installVsCodeMock();
     const { ClickUpSyncService } = loadOutModule('services/ClickUpSyncService.js');
@@ -67,7 +69,15 @@ async function testApplyConfigFailureTriggersCleanup() {
             assert.strictEqual(result.success, false);
             assert.match(result.error, /Failed to create list/);
             assert.ok(http.requests.some((req) => req.method === 'DELETE' && req.path === '/api/v2/folder/folder-1'));
-            assert.strictEqual(fs.existsSync(service.configPath), false);
+            // The point of this assertion is that a failed setup persists nothing.
+            // It used to check the absence of a workspace file that the global-store
+            // migration stopped writing altogether — so it passed unconditionally
+            // and would not have caught a real rollback leak. Check the store.
+            const leaked = await GlobalIntegrationConfigService.loadConfig('clickup');
+            assert.strictEqual(
+                GlobalIntegrationConfigService.providerConfigMeaningfulCount('clickup', leaked), 0,
+                'a failed setup must not persist ClickUp config'
+            );
             assert.strictEqual(vscodeState.inputBoxCalls[0].password, true);
             assert.strictEqual(vscodeState.inputBoxCalls[0].placeHolder, 'pk_...');
         } finally {

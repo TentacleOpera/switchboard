@@ -14,6 +14,10 @@ const { installVsCodeMock } = require('../shared/vscode-mock');
 const { SecretStorageMock } = require('../shared/secret-storage-mock');
 const { installHttpsMock } = require('../shared/http-mock-helpers');
 
+// Loaded through the same out/ loader the service uses so both see one instance
+// of the global store (and therefore the same sandboxed state home).
+const { GlobalIntegrationConfigService } = loadOutModule('services/GlobalIntegrationConfigService.js');
+
 function createContext(workspaceRoot, secretSeed = {}) {
     const installed = installVsCodeMock();
     const { NotionFetchService } = loadOutModule('services/NotionFetchService.js');
@@ -121,7 +125,12 @@ async function testFetchAndCacheHappyPath() {
             assert.strictEqual(result.pageTitle, 'Integration Spec');
             assert.strictEqual(await secretStorage.get('switchboard.notion.apiToken'), 'secret_live_token');
 
-            const savedConfig = readJson(service.configPath);
+            // Notion config lives in the machine-global store, not in the
+            // workspace. This used to read `service.configPath`, a getter that
+            // still pointed at <workspace>/.switchboard/notion-config.json long
+            // after the write moved — so it failed with ENOENT while the real
+            // config was saved correctly. The getter is gone; read the store.
+            const savedConfig = await GlobalIntegrationConfigService.loadConfig('notion');
             const cachedContent = readText(service.cachePath);
             assert.strictEqual(savedConfig.pageTitle, 'Integration Spec');
 

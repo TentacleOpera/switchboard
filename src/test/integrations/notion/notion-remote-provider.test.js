@@ -52,7 +52,14 @@ async function run() {
         assert.ok(filter.last_edited_time && filter.last_edited_time.on_or_after, 'uses on_or_after');
         assert.ok(!('property' in filter), 'filter MUST NOT include a property field (else 400)');
 
-        assert.deepStrictEqual(state.deltas, [{ remoteId: 'PAGE1', stateKey: 'CODER CODED' }], 'only rows with a column are deltas');
+        // Assert WHICH rows become deltas and their identifying fields — not the
+        // exact object shape. A deepStrictEqual here pinned `{remoteId, stateKey}`
+        // and broke the moment the delta gained the feature-structure fields
+        // (parentRemoteId / isFeatureCandidate) and selfEdited / updatedAt, none
+        // of which this case is about. PAGE2 has a null select and must be dropped.
+        assert.strictEqual(state.deltas.length, 1, 'only rows with a column are deltas');
+        assert.strictEqual(state.deltas[0].remoteId, 'PAGE1');
+        assert.strictEqual(state.deltas[0].stateKey, 'CODER CODED');
         assert.strictEqual(state.nextCursor, '2026-01-02T00:05:00Z', 'cursor = max last_edited_time');
         assert.strictEqual(provider.stateKeyToColumn('CODER CODED'), 'CODER CODED', 'select name is the column name');
     }

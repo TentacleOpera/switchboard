@@ -37,7 +37,14 @@ function makePlan(overrides) {
     }, overrides);
 }
 
-const BASE_CONFIG = { provider: 'linear', boards: ['proj'], silentSync: false, pingFrequencySeconds: 60 };
+// `mode: 'full'` is REQUIRED, not decorative. The Headless Ingestion change added
+// a remote mode and made 'ingest' (pull only — no column mirror, no dispatch) the
+// default for anything that is not literally 'full'. This config predates that
+// field, so it silently resolved to 'ingest' and `_applyStateMirror` was skipped
+// outright: sections B and F assert moves that could never happen. Anything here
+// that exercises the state mirror must opt in explicitly.
+const BASE_CONFIG = { provider: 'linear', boards: ['proj'], silentSync: false, pingFrequencySeconds: 60, mode: 'full' };
+const INGEST_CONFIG = { ...BASE_CONFIG, mode: 'ingest' };
 
 function makeService(db, provider, sinks) {
     return new RemoteControlService({
@@ -158,6 +165,37 @@ async function run() {
         const sinks = { moves: [], comments: [], failComment: true };
         await poll(makeService(db, provider, sinks));
         assert.strictEqual(db._store.get('remote.commentCursor.linear'), '2026-01-01T00:00:00.000Z', 'D: cursor not advanced on dispatch failure');
+    }
+
+    // ── B2. Ingest mode suppresses the state mirror entirely.
+    // This is the counterpart that would have caught the silent rot above: with
+    // the mode field absent (or anything other than 'full') the service resolves
+    // to ingest, and an identical delta that section B turns into a move must
+    // produce NO move and NO refresh here. Without this, an accidental default
+    // flip looks exactly like a passing suite.
+    {
+        const db = makeDb(INGEST_CONFIG);
+        db.setPlans([makePlan({ kanbanColumn: 'CREATED' })]);
+        db._store.set('remote.stateCursor.linear', '2026-01-01T00:00:00.000Z');
+        db._store.set('remote.commentCursor.linear', '2026-01-01T00:00:00.000Z');
+        const order = [];
+        const provider = {
+            kind: 'linear',
+            fetchStateDeltas: async () => ({ deltas: [{ remoteId: 'ISSUE1', stateKey: 'S_CODED' }], nextCursor: '2026-01-03T00:00:00.000Z' }),
+            fetchCommentDeltas: async () => ({ deltas: [], nextCursor: '2026-01-01T00:00:00.000Z' }),
+            stateKeyToColumn: (k) => (k === 'S_CODED' ? 'CODER CODED' : undefined),
+            refreshLocalPlanFromRemote: async (id) => { order.push('refresh:' + id); },
+            postComment: async () => {},
+        };
+        const sinks = { moves: [], comments: [], order };
+        await poll(makeService(db, provider, sinks));
+        assert.deepStrictEqual(sinks.moves, [], 'B2: ingest mode must not move any card');
+        assert.deepStrictEqual(order, [], 'B2: ingest mode must not refresh or dispatch');
+        // The cursor still advances — ingest is "pull only", not "do nothing".
+        assert.strictEqual(
+            db._store.get('remote.stateCursor.linear'), '2026-01-03T00:00:00.000Z',
+            'B2: ingest still advances the state cursor'
+        );
     }
 
     // ── E. Notion provider selection keys plans by notionPageId (not sourceType).

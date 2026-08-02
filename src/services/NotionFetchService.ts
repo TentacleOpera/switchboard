@@ -16,13 +16,18 @@ export interface NotionConfig {
 
 export class NotionFetchService {
   private _workspaceRoot: string;
-  private _configPath: string;
   private _cachePath: string;
   private _secretStorage: vscode.SecretStorage;
 
+  // NOTE: there is deliberately no `_configPath` / `configPath` any more. Notion
+  // config moved to the machine-global store (see `_loadConfig`/`_saveConfig`
+  // below, which go through GlobalIntegrationConfigService). The old getter still
+  // returned `<workspace>/.switchboard/notion-config.json` — a path nothing has
+  // written since that migration — so every caller reading it got ENOENT while
+  // the real config sat in the global store. It had no production callers; read
+  // the config through GlobalIntegrationConfigService.loadConfig('notion').
   constructor(workspaceRoot: string, secretStorage: vscode.SecretStorage) {
     this._workspaceRoot = workspaceRoot;
-    this._configPath = path.join(workspaceRoot, '.switchboard', 'notion-config.json');
     this._cachePath = GlobalIntegrationConfigService.getGlobalCachePath('notion-cache.md');
     this._secretStorage = secretStorage;
   }
@@ -798,7 +803,6 @@ export class NotionFetchService {
     }
   }
 
-  get configPath(): string { return this._configPath; }
   get cachePath(): string { return this._cachePath; }
   get workspaceRoot(): string { return this._workspaceRoot; }
 }

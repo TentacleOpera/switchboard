@@ -7,6 +7,28 @@ const path = require('path');
 const FIXTURES_ROOT = path.join(process.cwd(), 'src', 'test', 'integrations', 'fixtures');
 const GENERATED_ROOT = path.join(FIXTURES_ROOT, 'generated');
 
+/**
+ * Integration config used to live at `<workspace>/.switchboard/<provider>-config.json`,
+ * so deleting the temp workspace was all the isolation a test needed. It now lives
+ * in the MACHINE-GLOBAL store (GlobalIntegrationConfigService), which the sandboxed
+ * state home keeps out of the real profile but which is shared by every case in a
+ * process — so one case's setup leaks into the next unless it is reset here.
+ *
+ * Loaded lazily and defensively: not every consumer of this harness has compiled
+ * out/ available, and none of them should fail merely because the reset could not
+ * run.
+ */
+async function resetGlobalIntegrationConfig() {
+    try {
+        const { GlobalIntegrationConfigService } = require(
+            path.join(process.cwd(), 'out', 'services', 'GlobalIntegrationConfigService.js')
+        );
+        for (const provider of ['clickup', 'linear', 'notion']) {
+            await GlobalIntegrationConfigService.clearConfig(provider);
+        }
+    } catch { /* out/ not built, or store unavailable — nothing to reset */ }
+}
+
 async function withWorkspace(name, run) {
     const workspaceRoot = path.join(
         GENERATED_ROOT,
@@ -14,11 +36,13 @@ async function withWorkspace(name, run) {
     );
     const switchboardDir = path.join(workspaceRoot, '.switchboard');
     await fs.promises.mkdir(switchboardDir, { recursive: true });
+    await resetGlobalIntegrationConfig();
 
     try {
         return await run({ workspaceRoot, switchboardDir });
     } finally {
         await fs.promises.rm(workspaceRoot, { recursive: true, force: true });
+        await resetGlobalIntegrationConfig();
     }
 }
 

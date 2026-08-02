@@ -14,6 +14,15 @@ const { installVsCodeMock } = require('../shared/vscode-mock');
 const { SecretStorageMock } = require('../shared/secret-storage-mock');
 const { installHttpsMock } = require('../shared/http-mock-helpers');
 
+// Linear config lives in the machine-global store, not in the workspace. These
+// used to go through `service.configPath` — a getter still pointing at
+// <workspace>/.switchboard/linear-config.json, which nothing has written since
+// the global-store migration, so seeds silently went nowhere and reads came back
+// null. The getter is gone; talk to the store.
+const { GlobalIntegrationConfigService } = loadOutModule('services/GlobalIntegrationConfigService.js');
+const writeConfig = (cfg) => GlobalIntegrationConfigService.saveConfig('linear', cfg, { replace: true });
+const readConfig = () => GlobalIntegrationConfigService.loadConfig('linear');
+
 function createContext(workspaceRoot, secretSeed = {}) {
     const installed = installVsCodeMock();
     const { LinearSyncService, CANONICAL_COLUMNS } = loadOutModule('services/LinearSyncService.js', ['services/ClickUpSyncService.js']);
@@ -125,7 +134,7 @@ async function testConfigAndSyncMapPersistence() {
             'switchboard.linear.apiToken': 'lin_api_token'
         });
 
-        await writeJson(service.configPath, {
+        await writeConfig({
             teamId: 'legacy-team',
             teamName: 'Legacy',
             setupComplete: true,
@@ -193,7 +202,7 @@ async function testSetupAndSyncFallback() {
             });
             assert.deepStrictEqual(result, { success: true });
 
-            const saved = readJson(service.configPath);
+            const saved = await readConfig();
             assert.strictEqual(saved.teamId, 'team-1');
             assert.deepStrictEqual(saved.includeProjectNames, ['Project One']);
             assert.strictEqual(saved.switchboardLabelId, 'label-switchboard');
@@ -429,7 +438,7 @@ async function testApplyConfigOptionsAndValidation() {
             });
             assert.deepStrictEqual(mappedOnly, { success: true });
 
-            const mappedConfig = readJson(service.configPath);
+            const mappedConfig = await readConfig();
             assert.strictEqual(mappedConfig.teamId, 'team-1');
             assert.strictEqual(mappedConfig.switchboardLabelId, '');
             assert.strictEqual(mappedConfig.projectId, undefined);
@@ -454,7 +463,7 @@ async function testApplyConfigOptionsAndValidation() {
                 enableAutoPull: false
             });
             assert.deepStrictEqual(labelOnly, { success: true });
-            assert.strictEqual(readJson(service.configPath).switchboardLabelId, 'label-switchboard');
+            assert.strictEqual((await readConfig()).switchboardLabelId, 'label-switchboard');
         } finally {
             http.restore();
         }
@@ -472,7 +481,7 @@ async function testApplyConfigOptionsAndValidation() {
                 enableAutoPull: false
             });
             assert.deepStrictEqual(realtimeEnabled, { success: true });
-            const realtimeConfig = readJson(service.configPath);
+            const realtimeConfig = await readConfig();
             assert.strictEqual(realtimeConfig.realTimeSyncEnabled, true);
             assert.strictEqual(realtimeConfig.columnToStateId.CREATED, 'state-created');
         } finally {
@@ -492,7 +501,7 @@ async function testApplyConfigOptionsAndValidation() {
                 enableAutoPull: true
             });
             assert.deepStrictEqual(autoPullEnabled, { success: true });
-            const autoPullConfig = readJson(service.configPath);
+            const autoPullConfig = await readConfig();
             assert.strictEqual(autoPullConfig.autoPullEnabled, true);
             assert.strictEqual(autoPullConfig.columnToStateId.CREATED, 'state-created');
         } finally {
@@ -512,7 +521,7 @@ async function testApplyConfigOptionsAndValidation() {
                 enableAutoPull: false
             });
             assert.deepStrictEqual(projectCleared, { success: true });
-            assert.strictEqual(readJson(service.configPath).projectId, undefined);
+            assert.strictEqual((await readConfig()).projectId, undefined);
         } finally {
             http.restore();
         }
@@ -1024,7 +1033,7 @@ async function testRateLimitingAndRetry() {
             'switchboard.linear.apiToken': 'valid_token'
         });
         
-        await writeJson(service._configPath, baseConfig());
+        await writeConfig(baseConfig());
         service._config = await service.loadConfig();
         
         // Test throttle enforcement

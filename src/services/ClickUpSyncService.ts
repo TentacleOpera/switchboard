@@ -154,7 +154,6 @@ export const CANONICAL_COLUMNS = [
 
 export class ClickUpSyncService {
   private _workspaceRoot: string;
-  private _configPath: string;
   private _config: ClickUpConfig | null = null;
   private _debounceTimers: Map<string, NodeJS.Timeout> = new Map();
   private _rateLimitDelay: number = 1000;
@@ -203,9 +202,14 @@ export class ClickUpSyncService {
     return this._taskListIndex.get(taskId);
   }
 
+  // NOTE: no `configPath` getter — ClickUp config lives in the machine-global
+  // store (see loadConfig/saveConfig, which go through
+  // GlobalIntegrationConfigService). The old getter returned
+  // <workspace>/.switchboard/clickup-config.json, a path nothing has written since
+  // that migration, so every reader got a stale/absent file while the real
+  // config sat in the global store. It had no production callers.
   constructor(workspaceRoot: string, secretStorage: vscode.SecretStorage) {
     this._workspaceRoot = workspaceRoot;
-    this._configPath = path.join(workspaceRoot, '.switchboard', 'clickup-config.json');
     this._secretStorage = secretStorage;
   }
 
@@ -2636,7 +2640,6 @@ export class ClickUpSyncService {
   get debounceTimers(): Map<string, NodeJS.Timeout> { return this._debounceTimers; }
   get batchSize(): number { return this._batchSize; }
   get rateLimitDelay(): number { return this._rateLimitDelay; }
-  get configPath(): string { return this._configPath; }
   get workspaceRoot(): string { return this._workspaceRoot; }
 
   delay(ms: number): Promise<void> {

@@ -15,6 +15,16 @@ const { installVsCodeMock } = require('../shared/vscode-mock');
 const { SecretStorageMock } = require('../shared/secret-storage-mock');
 const { installHttpsMock } = require('../shared/http-mock-helpers');
 
+// ClickUp config lives in the machine-global store, not in the workspace. These
+// used to go through `service.configPath` — a getter still pointing at
+// <workspace>/.switchboard/clickup-config.json, which nothing has written since
+// the global-store migration, so seeds silently went nowhere and reads came back
+// null. The getter is gone; talk to the store.
+const { GlobalIntegrationConfigService } = loadOutModule('services/GlobalIntegrationConfigService.js');
+const writeConfig = (cfg) => GlobalIntegrationConfigService.saveConfig('clickup', cfg, { replace: true });
+const readConfig = () => GlobalIntegrationConfigService.loadConfig('clickup');
+const clearConfig = () => GlobalIntegrationConfigService.clearConfig('clickup');
+
 function createContext(workspaceRoot, secretSeed = {}) {
     const installed = installVsCodeMock();
     const { ClickUpSyncService, CANONICAL_COLUMNS } = loadOutModule('services/ClickUpSyncService.js');
@@ -90,7 +100,7 @@ function createClickUpTask(overrides = {}) {
 async function testConfigNormalizationAndSetupFlow() {
     await withWorkspace('clickup-setup', async ({ workspaceRoot }) => {
         const { service, secretStorage, vscodeState, CANONICAL_COLUMNS } = createContext(workspaceRoot);
-        await writeJson(service.configPath, {
+        await writeConfig({
             workspaceId: 'legacy-team',
             folderId: 'legacy-folder',
             spaceId: 'legacy-space',
@@ -104,7 +114,7 @@ async function testConfigNormalizationAndSetupFlow() {
         assert.strictEqual(normalized.realTimeSyncEnabled, true);
         assert.strictEqual(normalized.autoPullEnabled, true);
         assert.deepStrictEqual(normalized.columnMappings, {});
-        await fs.promises.unlink(service.configPath);
+        await clearConfig();
 
         const http = installHttpsMock();
         try {
@@ -139,7 +149,7 @@ async function testConfigNormalizationAndSetupFlow() {
             assert.deepStrictEqual(result, { success: true });
             assert.strictEqual(await secretStorage.get('switchboard.clickup.apiToken'), 'pk_live_clickup_token');
 
-            const saved = readJson(service.configPath);
+            const saved = await readConfig();
             assert.strictEqual(saved.folderId, 'folder-1');
             assert.strictEqual(saved.columnMappings.CREATED, 'list-created');
             assert.strictEqual(saved.columnMappings['Custom Agent Column'], 'list-custom-agent-column');
@@ -174,7 +184,7 @@ async function testConfigNormalizationAndSetupFlow() {
             assert.strictEqual(mappingState.excludedCount, 1);
             assert.strictEqual(mappingState.unmappedCount, 0);
 
-            const updatedConfig = readJson(service.configPath);
+            const updatedConfig = await readConfig();
             assert.strictEqual(updatedConfig.columnMappings.BACKLOG, 'list-backlog');
             assert.strictEqual(updatedConfig.columnMappings['Custom Agent Column'], '');
         } finally {
@@ -208,7 +218,7 @@ async function testApplyConfigOptionsAndValidation() {
             });
             assert.deepStrictEqual(folderOnly, { success: true });
 
-            const folderOnlyConfig = readJson(service.configPath);
+            const folderOnlyConfig = await readConfig();
             assert.strictEqual(folderOnlyConfig.folderId, 'folder-1');
             assert.deepStrictEqual(folderOnlyConfig.columnMappings, {});
             assert.strictEqual(folderOnlyConfig.realTimeSyncEnabled, false);
@@ -237,7 +247,7 @@ async function testApplyConfigOptionsAndValidation() {
         });
         assert.deepStrictEqual(enabled, { success: true });
 
-        const enabledConfig = readJson(service.configPath);
+        const enabledConfig = await readConfig();
         assert.strictEqual(enabledConfig.folderId, 'folder-1');
         assert.strictEqual(enabledConfig.columnMappings.CREATED, 'list-created');
         assert.strictEqual(enabledConfig.realTimeSyncEnabled, true);
@@ -259,7 +269,7 @@ async function testApplyConfigOptionsAndValidation() {
         assert.strictEqual(missingMappedList.success, false);
         assert.match(missingMappedList.error, /mapped ClickUp list/i);
 
-        await fs.promises.unlink(service.configPath);
+        await clearConfig();
 
         const realtimeHttp = installHttpsMock();
         try {
