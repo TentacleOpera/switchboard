@@ -499,8 +499,22 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _julesStatusPollTimer?: NodeJS.Timeout;
     private _isRefreshingJules: boolean = false;
     private _julesCliUnavailable: boolean = false; // set on `spawn jules ENOENT`; stops the 30s poll until a new Jules dispatch resets it
-    private readonly _julesDiagnosticsChannel = vscode.window.createOutputChannel('Switchboard Jules Diagnostics');
-    private readonly _apiServerDiagnosticsChannel = vscode.window.createOutputChannel('Switchboard API Server');
+    // Created on first append, not at construction. A class-field initializer runs
+    // before the constructor body, so an eager `vscode.window.createOutputChannel`
+    // here makes merely CONSTRUCTING this provider a host-dependent act — which is
+    // what the headless verb-engine trap catches. Standalone survives it today only
+    // because `vscodeShim.window.createOutputChannel` happens to stub it out; that
+    // is a safety net, not a licence. Both channels are write-only diagnostics that
+    // most sessions never touch, so deferring costs nothing and buys a provider that
+    // can be built under any host.
+    private _julesDiagnosticsChannelInstance?: vscode.OutputChannel;
+    private _apiServerDiagnosticsChannelInstance?: vscode.OutputChannel;
+    private get _julesDiagnosticsChannel(): vscode.OutputChannel {
+        return (this._julesDiagnosticsChannelInstance ??= vscode.window.createOutputChannel('Switchboard Jules Diagnostics'));
+    }
+    private get _apiServerDiagnosticsChannel(): vscode.OutputChannel {
+        return (this._apiServerDiagnosticsChannelInstance ??= vscode.window.createOutputChannel('Switchboard API Server'));
+    }
     private _needsSetup: boolean = false;
     private _terminalSessionToken: string = '';
     private _ptyHostChild?: import('child_process').ChildProcess;
@@ -21281,7 +21295,9 @@ What would you like to find?`;
         this._recentBrainWrites.forEach(t => clearTimeout(t));
         this._recentSourceWrites.forEach(t => clearTimeout(t));
         this._recentMirrorProcessed.forEach(t => clearTimeout(t));
-        this._julesDiagnosticsChannel.dispose();
+        // Backing field, not the getter — disposing a provider that never logged
+        // must not create a channel purely to destroy it.
+        this._julesDiagnosticsChannelInstance?.dispose();
         // Reap the pty host BEFORE disposing the diagnostics channel its stderr
         // handler writes to. dispose() is synchronous so the exit cannot be awaited;
         // SIGTERM lets the child run its own disposeAll (graceful shell shutdown),
@@ -21299,7 +21315,7 @@ What would you like to find?`;
             this._ptyHostPort = undefined;
             this._ptyTerminalNames = [];
         }
-        this._apiServerDiagnosticsChannel.dispose();
+        this._apiServerDiagnosticsChannelInstance?.dispose();
         void this._stopLocalApiServer();
     }
 

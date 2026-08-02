@@ -103,6 +103,20 @@ jobs:
       - name: Cross-client project scope contract (initiator threading, scoped push rendering)
         run: npm run test:contract:cross-client-scope
 
+      # The sandbox guard is what keeps a test run from writing the developer's REAL
+      # machine-global integration config — tokens included. It must fail CLOSED: a
+      # guard that silently no-ops when it cannot detect the sandbox is worse than
+      # none, because the suite still passes while clobbering live credentials. Pins
+      # the fail-closed throw and the production-shape check that must NOT trip.
+      - name: Global config sandbox contract (fail-closed guard, no real-file writes)
+        run: npm run test:contract:global-config-sandbox
+
+      # renderMarkdown feeds webview HTML, so its output is an XSS surface as much as
+      # a formatting one, and block-transition bugs (list-then-table, table-then-list)
+      # are the classic way a hand-rolled renderer starts emitting unbalanced tags.
+      - name: Shared renderMarkdown contract (block transitions, escaping)
+        run: npm run test:contract:rendermarkdown
+
       - name: Headless feature management contract (capability derivation, verb schemas, standalone wiring)
         run: npm run test:contract:headless-feature-mgmt
 
