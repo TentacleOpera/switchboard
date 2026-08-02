@@ -119,6 +119,8 @@
         return btn;
     }
 
+    const popoutWindows = new Set();
+
     function applyThemeToAll(themeName) {
         const isClaudify = themeName === 'claudify';
         if (isClaudify) {
@@ -131,6 +133,15 @@
                 frame.contentWindow?.postMessage({ type: 'switchboardThemeChanged', theme: themeName }, '*');
             } catch { /* ignore */ }
         }
+        for (const win of Array.from(popoutWindows)) {
+            if (win.closed) {
+                popoutWindows.delete(win);
+            } else {
+                try {
+                    win.postMessage({ type: 'switchboardThemeChanged', theme: themeName }, location.origin);
+                } catch { /* ignore */ }
+            }
+        }
     }
 
     function buildFrame(panel) {
@@ -141,6 +152,115 @@
         frame.setAttribute('aria-label', panel.label || panel.id);
         frame.setAttribute('allow', 'clipboard-read; clipboard-write');
         return frame;
+    }
+
+    function renderTerminalSection(terminals) {
+        let container = document.getElementById('strip-terminals');
+        const themeBtn = document.querySelector('.theme-toggle-btn');
+
+        if (!frames.has('terminals')) {
+            if (container) {
+                container.remove();
+            }
+            if (themeBtn) {
+                themeBtn.style.marginTop = 'auto';
+            }
+            return;
+        }
+
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'strip-terminals';
+            container.role = 'group';
+            container.setAttribute('aria-label', 'Fleet terminals');
+
+            if (themeBtn) {
+                strip.insertBefore(container, themeBtn);
+                themeBtn.style.marginTop = '';
+            } else {
+                strip.appendChild(container);
+            }
+        }
+
+        container.innerHTML = '';
+        if (!Array.isArray(terminals) || terminals.length === 0) {
+            return;
+        }
+
+        for (const t of terminals) {
+            const btn = document.createElement('button');
+            btn.className = 'strip-icon strip-term-btn';
+            btn.type = 'button';
+
+            const roleChar = (t.role || 'T').charAt(0).toUpperCase();
+            let wtBase = 'Workspace Root';
+            if (t.worktreePath) {
+                const parts = t.worktreePath.replace(/\\/g, '/').split('/').filter(Boolean);
+                wtBase = parts.length > 0 ? parts[parts.length - 1] : t.worktreePath;
+            }
+
+            const labelText = `${t.name} · ${t.role || 'Terminal'} · ${wtBase} [${t.light}]`;
+            btn.setAttribute('aria-label', labelText);
+            btn.title = t.worktreePath || t.name;
+
+            const glyph = document.createElement('span');
+            glyph.textContent = roleChar;
+            btn.appendChild(glyph);
+
+            const dot = document.createElement('span');
+            dot.className = `strip-term-dot dot-${t.light}`;
+            btn.appendChild(dot);
+
+            const label = document.createElement('span');
+            label.className = 'strip-label';
+            label.textContent = `${t.name} · ${t.role || 'Terminal'} · ${wtBase}`;
+            btn.appendChild(label);
+
+            btn.addEventListener('click', () => {
+                const slug = t.name.replace(/[^A-Za-z0-9_-]/g, '_');
+                const popoutName = `sb-term-${slug}`;
+                const popoutUrl = `/terminals?solo=${encodeURIComponent(t.name)}`;
+                const features = 'width=900,height=700';
+
+                let popout = null;
+                try {
+                    popout = window.open(popoutUrl, popoutName, features);
+                } catch { /* ignore */ }
+
+                const fallbackToInCockpit = () => {
+                    selectPanel('terminals');
+                    const termFrame = frames.get('terminals');
+                    if (termFrame && termFrame.contentWindow) {
+                        try {
+                            termFrame.contentWindow.postMessage({
+                                type: 'focusTerminal',
+                                name: t.name
+                            }, location.origin);
+                        } catch { /* ignore */ }
+                    }
+                };
+
+                if (!popout || popout.closed) {
+                    fallbackToInCockpit();
+                    return;
+                }
+
+                popoutWindows.add(popout);
+                try { popout.focus(); } catch { /* ignore */ }
+
+                setTimeout(() => {
+                    try {
+                        if (!popout.closed && !popout.document.hasFocus()) {
+                            fallbackToInCockpit();
+                        }
+                    } catch {
+                        // Throw treated as focused (do nothing)
+                    }
+                }, 100);
+            });
+
+            container.appendChild(btn);
+        }
     }
 
     function renderManifest(manifest) {
@@ -168,6 +288,8 @@
 
         const themeBtn = buildThemeToggle();
         strip.appendChild(themeBtn);
+
+        renderTerminalSection([]);
 
         const hash = window.location.hash.replace(/^#/, '');
         const initial = (hash && frames.has(hash)) ? hash : defaultPanelId(manifest);
@@ -201,6 +323,9 @@
             }
         } else if (data.type === 'switchboardThemeChanged') {
             applyThemeToAll(data.theme);
+        } else if (data.type === 'terminalFleetState' && Array.isArray(data.terminals)) {
+            if (event.origin !== location.origin) { return; }
+            renderTerminalSection(data.terminals);
         }
     });
 

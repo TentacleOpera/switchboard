@@ -102,7 +102,10 @@ test('credit is reset with the ClientState on every attach', () => {
     const setup = block(gatewayCode, 'private setupClient(', 'this.clients.add(client)');
     assert.ok(setup.includes('unackedChars: 0'),
         'a reconnecting client\'s credit belongs to a socket that no longer exists; carrying it forward leaves the terminal paused with nobody able to ack it down');
-    const connect = block(terminalsJs, 'function connectTerminalSocket(entry)', 'const protocol =');
+    // End marker is the socket-URL build. It used to be `const protocol =`, which the
+    // out-of-process pty host removed: the scheme is now baked into the module-scope
+    // PTY_HOST_ORIGIN, because the gateway no longer lives on the page's own origin.
+    const connect = block(terminalsJs, 'function connectTerminalSocket(entry)', 'let wsUrl =');
     assert.ok(connect.includes('entry.pendingAckChars = 0') && connect.includes('entry.ackSuppressChars = 0'),
         'both client-side accumulators must be zeroed on reconnect');
 });

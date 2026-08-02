@@ -207,6 +207,78 @@ function post(port, pathname, body) {
         );
     });
 
+    await test('the extension host forwards pty verbs to the child process, never to an in-process fleet', () => {
+        // The whole point of the out-of-process host: terminal work leaves the
+        // extension's event loop (35.21 ms p50 in-process vs 0.24 ms out). A
+        // "convenience" re-introduction of an in-process PtyFleetService or a
+        // TerminalWsGateway here puts every frame straight back on the contended loop.
+        const src = fs.readFileSync(path.join(REPO_ROOT, 'src', 'services', 'TaskViewerProvider.ts'), 'utf8');
+        assert.ok(
+            /_ptyHostVerb\s*\(\s*verb\s*,\s*payload\s*\)/.test(src),
+            'the extension-host terminalVerb arm must forward through _ptyHostVerb (HTTP to the child), not serve verbs locally.'
+        );
+        assert.ok(
+            /\/api\/pty\/\$\{encodeURIComponent\(verb\)\}/.test(src),
+            '_ptyHostVerb must POST to the child on /api/pty/<verb>.'
+        );
+        assert.ok(
+            !/new\s+PtyFleetService\s*\(/.test(src),
+            'TaskViewerProvider must not construct a PtyFleetService — the fleet lives in the pty host child.'
+        );
+        assert.ok(
+            !/new\s+TerminalWsGateway\s*\(/.test(src),
+            'TaskViewerProvider must not construct a TerminalWsGateway — the gateway lives in the pty host child.'
+        );
+        // Dispatch delivery must keep its bracketed-paste/chunking/lock machinery. A
+        // raw ptyWrite submits a multi-line prompt line by line and the agent runs
+        // fragments; the lock can only serialise concurrent dispatches on the child.
+        assert.ok(
+            /_ptyHostVerb\('ptySendPrompt'/.test(src),
+            'dispatch delivery to a PTY must use the ptySendPrompt verb, not a raw ptyWrite.'
+        );
+        const child = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'ptyHost.ts'), 'utf8');
+        assert.ok(
+            /case 'ptySendPrompt'/.test(child) && /sendPromptToPty\(/.test(child),
+            'the pty host must serve ptySendPrompt via sendPromptToPty.'
+        );
+        // process.execPath in the extension host is the ELECTRON binary. Without this
+        // the spawn opens a second IDE window instead of running the script.
+        assert.ok(
+            /ELECTRON_RUN_AS_NODE:\s*'1'/.test(src),
+            'the pty host spawn must set ELECTRON_RUN_AS_NODE=1 — process.execPath is Electron under the extension host.'
+        );
+    });
+
+    await test('terminals.js dials the pty host origin, not the page origin', () => {
+        // Plan 3's regression: the panel and the gateway are no longer the same server
+        // under the extension host. Rebuilding the socket URL from location.host
+        // silently re-couples the panel to the extension port, which serves nothing.
+        const js = fs.readFileSync(path.join(REPO_ROOT, 'src', 'webview', 'terminals.js'), 'utf8');
+        assert.ok(
+            /PTY_HOST_ORIGIN\}\/ws\/terminal/.test(js),
+            'terminals.js must build the /ws/terminal URL from PTY_HOST_ORIGIN.'
+        );
+        assert.ok(
+            !/\$\{location\.host\}\/ws\/terminal/.test(js),
+            'terminals.js must not construct the terminal socket URL from location.host directly — that is the re-coupling regression.'
+        );
+        assert.ok(
+            /dataset\.ptyHostOrigin/.test(js),
+            'PTY_HOST_ORIGIN must read the serve-time data-pty-host-origin body attribute.'
+        );
+        // The standalone host injects nothing and must stay byte-identical, so the
+        // location fallback has to survive.
+        assert.ok(
+            /__SB_PTY_HOST_ORIGIN__[\s\S]{0,160}location\.host/.test(js),
+            'the location.host fallback must remain so the standalone host is unchanged.'
+        );
+        const src = fs.readFileSync(path.join(REPO_ROOT, 'src', 'services', 'TaskViewerProvider.ts'), 'utf8');
+        assert.ok(
+            /data-pty-host-origin="ws:\/\/127\.0\.0\.1:\$\{this\._ptyHostPort\}"/.test(src),
+            'the extension host must inject data-pty-host-origin alongside data-terminal-token at serve time.'
+        );
+    });
+
     await test('the webview posts pty verbs to /terminals/verb/ and keeps getSetting on /kanban/verb/', () => {
         const js = fs.readFileSync(path.join(REPO_ROOT, 'src', 'webview', 'terminals.js'), 'utf8');
         for (const verb of PTY_VERBS) {

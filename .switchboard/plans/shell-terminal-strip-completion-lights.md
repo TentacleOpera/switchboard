@@ -184,3 +184,10 @@ A secondary finding shaped the design: the shell has **no WebSocket of its own**
 ## Recommendation
 
 **Send to Coder.** Complexity 5 — three files, no server change, no new socket. The three corrections above (unknown-name reconcile, bottom anchor, early-return badge clear) are each small but each is a visible defect if skipped, so their contract tests carry the plan.
+
+## Completion Summary
+
+Implemented persistent shell terminal strip with completion lights (`active`, `done`, `exited`) relaying state from Terminals panel iframe to shell via `postMessage`. Clicking a strip entry switches to Terminals panel and sends `focusTerminal` to assign the terminal to the focused pane while clearing completion badge. Added bounded scrolling (`max-height: 40vh`), gating when Terminals panel is absent, and accessible roles/labels.
+Files changed: `src/webview/terminals.js`, `src/webview/shell.js`, `src/webview/shell.html`, `src/test/shell-terminal-strip.test.js`.
+No issues encountered during implementation.
+

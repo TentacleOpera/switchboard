@@ -21,9 +21,11 @@ import type { FSWatcher, Dirent, Stats } from 'fs';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { isPtyAvailable } from '../standalone/ptyBackend';
+// PtyFleetService is imported for purgePtyTerminals ONLY — the fleet itself, the
+// WebSocket gateway and the prompt-delivery helpers now live in the pty host child.
+// The extension is control plane: it never constructs a fleet and never sees
+// terminal bytes.
 import { PtyFleetService, PTY_IDE_NAME } from '../standalone/ptyFleetService';
-import { TerminalWsGateway } from '../standalone/terminalWsGateway';
-import { sendPromptToPty, clearPty } from '../standalone/ptyPromptDelivery';
 
 import * as cp from 'child_process';
 import { promisify } from 'util';
@@ -343,6 +345,54 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return this._handleMessage({ ...(payload ?? {}), type: verb });
     }
 
+    /**
+     * Forward one control verb to the out-of-process pty host.
+     *
+     * This is the ONLY way the extension reaches the fleet. It is deliberately a
+     * class method rather than the closure inside `_startLocalApiServer`: the
+     * routing lookups and dispatch writes scattered through this file need it too,
+     * and routing them through `handleServiceVerb` does not work — that entry point
+     * is allowlist-gated on TASKVIEWER_VERBS and dispatches into the webview message
+     * listener, neither of which knows any `pty*` verb.
+     *
+     * Control plane only. Terminal BYTES never come through here — the panel dials
+     * the child directly, which is the entire point of the child existing (35.21 ms
+     * p50 in-process vs 0.24 ms out).
+     */
+    private async _ptyHostVerb(verb: string, payload: any): Promise<any> {
+        if (!this._ptyHostChild || !this._ptyHostPort) {
+            return { success: false, error: 'PTY host unavailable on this platform/installation' };
+        }
+        const http = require('http');
+        const port = this._ptyHostPort;
+        try {
+            const resData = await new Promise<string>((resolve, reject) => {
+                const req = http.request({
+                    hostname: '127.0.0.1',
+                    port,
+                    path: `/api/pty/${encodeURIComponent(verb)}`,
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                }, (res: any) => {
+                    let body = '';
+                    res.on('data', (c: any) => { body += c; });
+                    res.on('end', () => resolve(body));
+                });
+                req.on('error', reject);
+                req.end(JSON.stringify(payload || {}));
+            });
+            const result = JSON.parse(resData);
+            if (verb === 'ptyListTerminals' && result?.success && Array.isArray(result.terminals)) {
+                this._ptyTerminalNames = result.terminals
+                    .filter((t: any) => t.status === 'active')
+                    .map((t: any) => t.friendlyName);
+            }
+            return result;
+        } catch (err) {
+            return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+    }
+
 
     private _apiServerForBroadcast: any | null = null;
 
@@ -452,11 +502,28 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private readonly _julesDiagnosticsChannel = vscode.window.createOutputChannel('Switchboard Jules Diagnostics');
     private readonly _apiServerDiagnosticsChannel = vscode.window.createOutputChannel('Switchboard API Server');
     private _needsSetup: boolean = false;
-    private _ptyFleetService?: PtyFleetService;
-    private _terminalWsGateway?: TerminalWsGateway;
     private _terminalSessionToken: string = '';
     private _ptyHostChild?: import('child_process').ChildProcess;
     private _ptyHostPort?: number;
+    /**
+     * Set once a spawned child dies WITHOUT ever completing its handshake — a
+     * node-pty load failure, a missing dist/standalone/ptyHost.js, a broken install.
+     * `_startLocalApiServer` is re-entrant (the liveness watchdog calls it on every
+     * failed health check), so without this latch a child that cannot boot is
+     * respawned forever, each attempt stalling server startup on the handshake
+     * timeout. One failure disables the Terminals panel for this host lifetime.
+     */
+    private _ptyHostBootFailed = false;
+    /**
+     * Last known fleet membership, refreshed on every `ptyListTerminals` forward.
+     *
+     * `getRegisteredTerminals` is a SYNCHRONOUS LocalApiServer callback and the fleet
+     * now lives across a process boundary, so it cannot ask. It must still see PTY
+     * names: /kanban/dispatch 409s on an empty list (LocalApiServer ~1205), which
+     * would make a browser-only fleet undispatchable. The panel polls
+     * ptyListTerminals, so this stays fresh exactly when browser terminals matter.
+     */
+    private _ptyTerminalNames: string[] = [];
 
     // --- Single-flight coalescing guards (refresh-storm circuit-breaker) ---
     // Coalesce overlapping _refreshRunSheets / _syncFilesAndRefreshRunSheets calls
@@ -758,9 +825,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     worktreePath = matchWorktreePath(await db.getWorktrees(), record);
                 }
             } catch { /* best-effort — the toast still names plan and role */ }
-            if (!terminalName && (this as any)._ptyHostPort) {
+            if (!terminalName && this._ptyHostPort) {
                 try {
-                    const res = await this.handleServiceVerb('ptyListTerminals', {});
+                    const res = await this._ptyHostVerb('ptyListTerminals', {});
                     if (res?.success && Array.isArray(res.terminals)) {
                         const active = res.terminals.filter((t: any) => t.status === 'active');
                         const role = this._normalizeAgentKey(record.dispatchedAgent || '');
@@ -1704,26 +1771,51 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // browser terminal. The fleet outlives individual server restarts; only the
         // gateway reference is handed to the new LocalApiServer.
         const ptyReady = isPtyAvailable();
-        if (ptyReady && !this._ptyHostChild) {
+        if (ptyReady && !this._ptyHostChild && !this._ptyHostBootFailed) {
             const db = await this._getKanbanDb(effectiveRoot);
             if (db) {
                 await PtyFleetService.purgePtyTerminals(db);
                 const ptyHostScript = path.join(this._context.extensionPath, 'dist', 'standalone', 'ptyHost.js');
-                const cp = require('child_process');
+                // ELECTRON_RUN_AS_NODE is NOT optional. Under the extension host
+                // `process.execPath` is the Electron binary, and the utility-process
+                // ext host does not carry this variable in its own env — so a bare
+                // spawn opens a second IDE window instead of running the script.
+                // The child deletes it from its own env before spawning any shell,
+                // so operator terminals do not inherit it.
                 const child = cp.spawn(process.execPath, [ptyHostScript, '--workspace', effectiveRoot], {
-                    stdio: ['pipe', 'pipe', 'pipe']
+                    stdio: ['pipe', 'pipe', 'pipe'],
+                    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
                 });
                 this._ptyHostChild = child;
+                let handshakeDone = false;
                 child.stderr.on('data', (chunk: Buffer) => {
-                    this._apiServerDiagnosticsChannel.appendLine(`[ptyHost stderr] ${chunk.toString().trim()}`);
+                    // Guarded: dispose() disposes this channel, and a SIGTERM'd child
+                    // can still emit on the way out. appendLine on a disposed channel throws.
+                    try { this._apiServerDiagnosticsChannel.appendLine(`[ptyHost stderr] ${chunk.toString().trim()}`); } catch { /* channel disposed */ }
                 });
-                child.on('exit', (code: number) => {
-                    this._apiServerDiagnosticsChannel.appendLine(`[ptyHost] Exited with code ${code}`);
+                child.on('error', (err: Error) => {
+                    try { this._apiServerDiagnosticsChannel.appendLine(`[ptyHost] Spawn failed: ${err.message}`); } catch { /* channel disposed */ }
+                    if (!handshakeDone) { this._ptyHostBootFailed = true; }
                     this._ptyHostChild = undefined;
                     this._ptyHostPort = undefined;
                 });
+                child.on('exit', (code: number) => {
+                    try {
+                        this._apiServerDiagnosticsChannel.appendLine(
+                            handshakeDone
+                                ? `[ptyHost] Exited with code ${code}`
+                                : `[ptyHost] Exited with code ${code} before handshake — Terminals disabled for this host lifetime.`
+                        );
+                    } catch { /* channel disposed */ }
+                    // Died before ever reporting a port: a broken install, not a crash
+                    // of a working host. Latch it off rather than letting the liveness
+                    // watchdog respawn it on every failed health check.
+                    if (!handshakeDone) { this._ptyHostBootFailed = true; }
+                    this._ptyHostChild = undefined;
+                    this._ptyHostPort = undefined;
+                    this._ptyTerminalNames = [];
+                });
                 await new Promise<void>((resolve) => {
-                    let handshakeDone = false;
                     child.stdout.on('data', (data: Buffer) => {
                         if (handshakeDone) return;
                         const lines = data.toString().split('\n');
@@ -1743,9 +1835,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             }
                         }
                     });
-                    setTimeout(() => {
-                        if (!handshakeDone) resolve();
+                    const timer = setTimeout(() => {
+                        if (handshakeDone) { return; }
+                        // No handshake in 5 s: treat it as a boot failure and reap the
+                        // child rather than leaving a headless orphan holding a port.
+                        this._ptyHostBootFailed = true;
+                        try { child.kill('SIGTERM'); } catch { /* already gone */ }
+                        resolve();
                     }, 5000);
+                    if (typeof timer.unref === 'function') { timer.unref(); }
                 });
             }
         }
@@ -1754,23 +1852,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const updateMirrorRegistry = async (db: any) => {
             if (!db || !this._ptyHostPort) return;
             try {
-                const http = require('http');
-                const resData = await new Promise<string>((resolve, reject) => {
-                    const req = http.request({
-                        hostname: '127.0.0.1',
-                        port: this._ptyHostPort,
-                        path: '/api/pty/ptyListTerminals',
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' }
-                    }, (res: any) => {
-                        let body = '';
-                        res.on('data', (c: any) => { body += c; });
-                        res.on('end', () => resolve(body));
-                    });
-                    req.on('error', reject);
-                    req.end(JSON.stringify({}));
-                });
-                const parsed = JSON.parse(resData);
+                const parsed = await this._ptyHostVerb('ptyListTerminals', {});
                 if (parsed.success && Array.isArray(parsed.terminals)) {
                     const existing = db.getConfigJsonSync('runtime.terminals', {}) || {};
                     const terminalMap: Record<string, any> = {};
@@ -1798,36 +1880,18 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
         };
 
+        // Verb forwards to the child. Same guard shape and same `PTY host unavailable`
+        // error the in-process arms returned, so callers see no contract change.
         const handlePtyVerb = async (verb: string, payload: any, root?: string): Promise<any> => {
-            if (!ptyHostReady() || !this._ptyHostPort) {
+            if (!ptyHostReady()) {
                 return { success: false, error: 'PTY host unavailable on this platform/installation' };
             }
-            const http = require('http');
-            try {
-                const resData = await new Promise<string>((resolve, reject) => {
-                    const req = http.request({
-                        hostname: '127.0.0.1',
-                        port: this._ptyHostPort,
-                        path: `/api/pty/${verb}`,
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' }
-                    }, (res: any) => {
-                        let body = '';
-                        res.on('data', (c: any) => { body += c; });
-                        res.on('end', () => resolve(body));
-                    });
-                    req.on('error', reject);
-                    req.end(JSON.stringify(payload || {}));
-                });
-                const result = JSON.parse(resData);
-                if (['ptyCreateTerminal', 'ptyCloseTerminal', 'ptyRenameTerminal'].includes(verb)) {
-                    const db = await this._getKanbanDb(root || effectiveRoot);
-                    void updateMirrorRegistry(db);
-                }
-                return result;
-            } catch (err) {
-                return { success: false, error: err instanceof Error ? err.message : String(err) };
+            const result = await this._ptyHostVerb(verb, payload);
+            if (['ptyCreateTerminal', 'ptyCloseTerminal', 'ptyRenameTerminal'].includes(verb)) {
+                const db = await this._getKanbanDb(root || effectiveRoot);
+                void updateMirrorRegistry(db);
             }
+            return result;
         };
 
         this._localApiServer = new LocalApiServer({
@@ -1851,6 +1915,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 this._registeredTerminals?.forEach((term, name) => {
                     if (term.exitStatus === undefined) { names.push(name); }
                 });
+                // PTY names come from the last fleet snapshot, not a live query — this
+                // callback is synchronous and the fleet is now in another process.
+                // Omitting them would 409 /kanban/dispatch's no-live-terminal pre-flight
+                // for anyone whose only agents are browser terminals.
+                for (const ptyName of this._ptyTerminalNames) {
+                    if (!names.includes(ptyName)) { names.push(ptyName); }
+                }
                 return names;
             },
             getSelectedWorkspaceRoot: () => this._kanbanProvider?.getCurrentWorkspaceRoot() ?? null,
@@ -7989,9 +8060,9 @@ Each plan file must include:
         // cockpit) can actually display. `_getAliveAutobanTerminalRegistry` cannot
         // supply one — it keeps a row only on a VS Code pid/name match or a heartbeat,
         // and PTY rows have none of those — so the fleet is consulted directly here.
-        if (allowPtyFleet && (this as any)._ptyHostPort) {
+        if (allowPtyFleet && this._ptyHostPort) {
             const normalizedRole = this._normalizeAgentKey(role);
-            const res = await this.handleServiceVerb('ptyListTerminals', {});
+            const res = await this._ptyHostVerb('ptyListTerminals', {});
             if (res?.success && Array.isArray(res.terminals)) {
                 const match = res.terminals.filter((t: any) => t.status === 'active')
                     .find((t: any) => this._normalizeAgentKey(t.role) === normalizedRole);
@@ -12582,17 +12653,21 @@ What would you like to find?`;
 
                         // PTY fleet first for HTTP-originated calls, mirroring
                         // _attemptDirectTerminalPush. Without this arm the verb cannot reach
-                        // a PTY at all in the extension host: PTYs live in _ptyFleetService,
-                        // not in _registeredTerminals and not in the HostTerminal seam, so
-                        // every browser "send to terminal" failed as "not found or not local".
-                        if (data?.apiOriginated && (this as any)._ptyHostPort) {
+                        // a PTY at all in the extension host: PTYs live in the pty host
+                        // child, not in _registeredTerminals and not in the HostTerminal
+                        // seam, so every browser "send to terminal" failed as "not found
+                        // or not local". ptyWrite (not ptySendPrompt) is the right verb
+                        // here — this arm mirrors the old `sendText(input, true)`, a bare
+                        // line submit with no bracketed-paste framing and, per the note
+                        // below, deliberately no clearBeforePrompt side effect.
+                        if (data?.apiOriginated && this._ptyHostPort) {
                             const normalized = this._normalizeAgentKey(this._stripIdeSuffix(name));
-                            const res = await this.handleServiceVerb('ptyListTerminals', {});
+                            const res = await this._ptyHostVerb('ptyListTerminals', {});
                             if (res?.success && Array.isArray(res.terminals)) {
                                 const target = res.terminals.find((t: any) => t.friendlyName === name)
                                     || res.terminals.find((t: any) => this._normalizeAgentKey(this._stripIdeSuffix(t.friendlyName)) === normalized);
                                 if (target && target.status === 'active') {
-                                    const writeRes = await this.handleServiceVerb('ptyWrite', { name: target.friendlyName, data: input + '\r' });
+                                    const writeRes = await this._ptyHostVerb('ptyWrite', { name: target.friendlyName, data: input + '\r' });
                                     if (writeRes?.success) return { success: true };
                                 }
                             }
@@ -18488,9 +18563,9 @@ What would you like to find?`;
         if (pushed) return true;
 
         let ptyMatch = false;
-        if (!allowPtyFleet && (this as any)._ptyHostPort) {
+        if (!allowPtyFleet && this._ptyHostPort) {
             try {
-                const res = await this.handleServiceVerb('ptyListTerminals', {});
+                const res = await this._ptyHostVerb('ptyListTerminals', {});
                 if (res?.success && Array.isArray(res.terminals)) {
                     ptyMatch = !!res.terminals.filter((t: any) => t.status === 'active').find((t: any) =>
                         this._normalizeAgentKey(this._stripIdeSuffix(t.friendlyName))
@@ -18561,10 +18636,10 @@ What would you like to find?`;
         // to the same agent key, and for an api-originated dispatch the PTY is the one
         // the calling surface can display. Sidebar callers never opt in, so they can
         // never deliver into a terminal VS Code cannot show.
-        if (allowPtyFleet && (this as any)._ptyHostPort) {
+        if (allowPtyFleet && this._ptyHostPort) {
             const normalizedTarget = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
             try {
-                const res = await this.handleServiceVerb('ptyListTerminals', {});
+                const res = await this._ptyHostVerb('ptyListTerminals', {});
                 if (res?.success && Array.isArray(res.terminals)) {
                     const target = res.terminals.find((t: any) => t.friendlyName === terminalName)
                         || res.terminals.find((t: any) => this._normalizeAgentKey(this._stripIdeSuffix(t.friendlyName)) === normalizedTarget);
@@ -18577,15 +18652,31 @@ What would you like to find?`;
                             recipient: meta.recipient,
                             action: meta.action
                         });
-                        const writeRes = await this.handleServiceVerb('ptyWrite', { name: target.friendlyName, data: payload + '\r' });
-                        if (writeRes?.success) return true;
+                        // ptySendPrompt, NOT ptyWrite. The child runs sendPromptToPty on
+                        // our behalf, which owns bracketed-paste framing, 256-byte chunked
+                        // writes, the per-terminal send lock and the confirm CR that
+                        // interactive CLI agents need. A raw write submits a multi-line
+                        // prompt one line at a time — the agent runs fragments. The lock
+                        // has to live on the child's side of the boundary anyway: it is
+                        // per-process state, and two dispatches racing from here would
+                        // otherwise splice into each other's chunked pastes.
+                        const clearBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
+                        const clearDelay = vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 2000);
+                        const writeRes = await this._ptyHostVerb('ptySendPrompt', {
+                            name: target.friendlyName,
+                            data: payload,
+                            clearBeforePrompt,
+                            clearBeforePromptDelayMs: clearDelay
+                        });
+                        if (writeRes?.success) { return true; }
+                        console.error(`[TaskViewerProvider] PTY prompt delivery to '${terminalName}' failed:`, writeRes?.error);
+                        return false;
                     }
                 }
             } catch (err) {
                 console.error(`[TaskViewerProvider] PTY prompt delivery to '${terminalName}' failed:`, err);
                 return false;
             }
-        }
         }
 
         // Try registered terminals first, then fall back to open VS Code terminals
@@ -21191,14 +21282,24 @@ What would you like to find?`;
         this._recentSourceWrites.forEach(t => clearTimeout(t));
         this._recentMirrorProcessed.forEach(t => clearTimeout(t));
         this._julesDiagnosticsChannel.dispose();
-        this._apiServerDiagnosticsChannel.dispose();
+        // Reap the pty host BEFORE disposing the diagnostics channel its stderr
+        // handler writes to. dispose() is synchronous so the exit cannot be awaited;
+        // SIGTERM lets the child run its own disposeAll (graceful shell shutdown),
+        // and the unref'd escalation covers a child that ignores it. Plan 1's
+        // parent-death watch is the backstop for the crash path, which never
+        // reaches here at all.
         if (this._ptyHostChild) {
-            try {
-                this._ptyHostChild.kill('SIGTERM');
-            } catch {}
+            const child = this._ptyHostChild;
+            try { child.kill('SIGTERM'); } catch {}
+            const escalate = setTimeout(() => {
+                try { if (child.exitCode === null && child.signalCode === null) { child.kill('SIGKILL'); } } catch {}
+            }, 3000);
+            if (typeof escalate.unref === 'function') { escalate.unref(); }
             this._ptyHostChild = undefined;
             this._ptyHostPort = undefined;
+            this._ptyTerminalNames = [];
         }
+        this._apiServerDiagnosticsChannel.dispose();
         void this._stopLocalApiServer();
     }
 

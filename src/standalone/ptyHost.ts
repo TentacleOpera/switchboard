@@ -5,7 +5,7 @@ import { parse as parseUrl } from 'url';
 import { isPtyAvailable } from './ptyBackend';
 import { PtyFleetService } from './ptyFleetService';
 import { TerminalWsGateway } from './terminalWsGateway';
-import { clearPty } from './ptyPromptDelivery';
+import { clearPty, sendPromptToPty } from './ptyPromptDelivery';
 
 interface PtyHostOptions {
     workspaceRoot: string;
@@ -24,6 +24,14 @@ export function parseArgs(args: string[]): PtyHostOptions {
 
 export async function runPtyHost(args: string[] = process.argv.slice(2)): Promise<void> {
     const { workspaceRoot } = parseArgs(args);
+
+    // The extension host must set ELECTRON_RUN_AS_NODE=1 to run this script at all
+    // (its process.execPath is the Electron binary). Electron has already consumed
+    // the variable by the time this line runs, so dropping it here is free — and it
+    // must be dropped, because node-pty hands process.env to every shell it spawns
+    // and an operator terminal carrying ELECTRON_RUN_AS_NODE=1 silently breaks any
+    // Electron app launched from it, `code` included.
+    delete process.env.ELECTRON_RUN_AS_NODE;
 
     if (!isPtyAvailable()) {
         console.error('[ptyHost] Error: node-pty is unavailable on this system.');
@@ -93,6 +101,29 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                 }
                 return { success: false, error: `Terminal ${payload.name} is not active` };
             }
+            case 'ptySendPrompt': {
+                // Dispatch delivery, not a raw write. sendPromptToPty owns bracketed-paste
+                // framing, chunked writes and the confirm CR — a raw write submits a
+                // multi-line prompt line by line and the agent runs fragments.
+                //
+                // This verb exists so that machinery runs HERE rather than in the
+                // extension: withTerminalLock is per-process state, so serialising two
+                // concurrent dispatches is only possible on the side that owns the pty.
+                const handle = fleet.get(payload.name);
+                if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
+                if (handle.status !== 'active') { return { success: false, error: `Terminal ${payload.name} is not active` }; }
+                try {
+                    await sendPromptToPty(handle, payload.data || '', {
+                        clearBeforePrompt: payload.clearBeforePrompt === true,
+                        clearBeforePromptDelayMs: typeof payload.clearBeforePromptDelayMs === 'number'
+                            ? payload.clearBeforePromptDelayMs
+                            : undefined
+                    });
+                    return { success: true };
+                } catch (err) {
+                    return { success: false, error: err instanceof Error ? err.message : String(err) };
+                }
+            }
             default:
                 return { success: false, error: `Unknown terminal verb '${verb}'` };
         }
@@ -135,29 +166,45 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
         gateway.handleUpgrade(req, socket, head);
     });
 
-    // Parent death monitor
+    // Parent death monitor.
+    //
+    // A pty host that outlives a crashed extension host orphans every child shell and
+    // nothing reaps them until reboot — strictly worse than the in-process status quo,
+    // where the ptys died with the extension. The parent's disposal path does not run
+    // on a crash by definition, so this has to live here.
+    let exiting = false;
     const cleanupAndExit = () => {
-        try {
-            fleet.disposeAll();
-        } catch (e) {
-            // silent
-        }
-        process.exit(0);
+        if (exiting) { return; }
+        exiting = true;
+        // Awaited, not fire-and-forget: disposeAll owns the SIGTERM → grace → SIGKILL
+        // budget, and exiting underneath it sends SIGTERM and never lives to escalate.
+        // The 1s cap keeps a wedged shell from holding the host open indefinitely; the
+        // fleet's own `process.once('exit')` reaper is the hard backstop either way.
+        void Promise.race([
+            fleet.disposeAll(),
+            new Promise(r => setTimeout(r, 1000))
+        ]).catch(() => { /* reaped on exit regardless */ })
+            .then(() => process.exit(0));
     };
 
     process.on('SIGTERM', cleanupAndExit);
     process.on('SIGINT', cleanupAndExit);
+    // stdin is a pipe from the parent; EOF fires the moment the parent goes away.
     process.stdin.on('end', cleanupAndExit);
     process.stdin.resume();
 
-    // Check parent process liveness if ppid is supported
+    // Belt-and-braces for hosts where the stdin pipe outlives the parent.
     if (process.ppid) {
         const parentPid = process.ppid;
         const ppidInterval = setInterval(() => {
             try {
-                // process.kill(pid, 0) throws if process doesn't exist (on POSIX)
+                // Signal 0 probes liveness without delivering anything.
                 process.kill(parentPid, 0);
-            } catch (e) {
+            } catch (e: any) {
+                // EPERM means the pid EXISTS but is not ours (pid reuse by another
+                // user) — treating that as death would reap a live session's shells.
+                // Only ESRCH is proof the parent is gone.
+                if (e && e.code !== 'ESRCH') { return; }
                 clearInterval(ppidInterval);
                 cleanupAndExit();
             }

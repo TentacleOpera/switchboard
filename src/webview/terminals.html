@@ -646,6 +646,19 @@
                 scrollbar-color: var(--border-bright) transparent;
             }
         }
+        body.is-solo .terminals-sidebar,
+        body.is-solo .layout-toolbar,
+        body.is-solo .layout-fallback-banner {
+            display: none !important;
+        }
+        body.is-solo .solo-status-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
     </style>
 </head>
 <body>
@@ -690,6 +703,7 @@
         <div id="empty-state" class="empty-state">
             No terminal selected. Click "+ New" to spawn a terminal.
         </div>
+        <div id="solo-status" class="solo-status-container" style="display: none;"></div>
         <div id="toast-container" class="toast-container"></div>
     </div>
 

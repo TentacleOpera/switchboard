@@ -283,3 +283,8 @@ not reliable" verdict, plus the implications for a same-origin popped-out termin
 window that must (a) reuse rather than duplicate on repeat clicks, and (b) not
 degrade the opener's WebGL-rendered terminals.
 ```
+
+## Completion Report
+
+Implemented single terminal pop-out window support allowing any fleet terminal to open in a dedicated browser window with layout chrome and sidebars hidden (`body.is-solo`).
+Modified `src/webview/terminals.js` (solo mode setup, slot pinning against fleet removal, write suppression for persisted layout settings, transport eviction reconnect handling, and opener theme inheritance), `src/webview/terminals.html` (solo CSS rules and status container), `src/webview/shell.js` (synchronous window opening on terminal strip click, focus refusal fallback to cockpit focus, and popout theme fan-out tracking), `package.json` and added `src/test/terminal-solo-popout-contract.test.js`. No major issues encountered; all contract tests pass cleanly.

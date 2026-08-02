@@ -832,7 +832,8 @@
     "publish:marketplace": "bash scripts/publish-marketplace.sh",
     "test:contract:vsix-packaging": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/vsix-packaging-contract.test.js",
     "test:contract:pty-route-surface": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-route-surface-contract.test.js",
-    "test:contract:terminal-token-transport": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-token-transport-contract.test.js"
+    "test:contract:terminal-token-transport": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-token-transport-contract.test.js",
+    "test:contract:terminal-solo-popout": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-solo-popout-contract.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",

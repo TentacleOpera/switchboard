@@ -13,6 +13,15 @@
     const collapsedWorktrees = new Set();
     let osNotifyEnabled = false;
 
+    let soloTerminalName = null;
+    let hasFetchedList = false;
+    try {
+        const urlParams = new URLSearchParams(location.search);
+        if (urlParams.has('solo')) {
+            soloTerminalName = urlParams.get('solo');
+        }
+    } catch { /* ignore */ }
+
     const PTY_HOST_ORIGIN = (document.body && document.body.dataset && document.body.dataset.ptyHostOrigin)
         || window.__SB_PTY_HOST_ORIGIN__
         || `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`;
@@ -205,9 +214,9 @@
             return;
         }
         try {
-            const parentBody = window.parent && window.parent !== window
+            const parentBody = (window.parent && window.parent !== window)
                 ? window.parent.document.body
-                : null;
+                : (window.opener ? window.opener.document.body : null);
             if (parentBody) {
                 const inherited = ALL_THEME_CLASSES.find(cls => parentBody.classList.contains(cls));
                 if (inherited) {
@@ -215,7 +224,7 @@
                     return;
                 }
             }
-        } catch { /* cross-origin parent — fall through to the default */ }
+        } catch { /* cross-origin parent/opener — fall through to the default */ }
         document.body.classList.add('cyber-theme-enabled');
     }
 
@@ -280,6 +289,15 @@
     }
 
     function init() {
+        if (soloTerminalName) {
+            document.body.classList.add('is-solo');
+            document.title = soloTerminalName;
+            currentLayout = '1';
+            effectiveLayout = '1';
+            paneAssignments = [soloTerminalName];
+            initialAssignmentDone = true;
+        }
+
         // Before any terminal is constructed — buildTerminalTheme() reads the CSS
         // variables this class selects.
         resolveInitialTheme();
@@ -342,6 +360,15 @@
                 applyThemeToAllTerminals(message.theme);
             } else if (message.type === 'agentCompleted') {
                 handleAgentCompleted(message);
+            } else if (message.type === 'focusTerminal' && typeof message.name === 'string') {
+                if (event.origin !== location.origin) { return; }
+                if (terminalBadges.has(message.name)) {
+                    terminalBadges.delete(message.name);
+                }
+                assignToFocusedPane(message.name);
+                renderSidebarList();
+                renderPaneGrid();
+                postFleetStateToShell();
             }
         });
 
@@ -354,9 +381,35 @@
             applyLayoutFloor({ fit: false });
         }, 150));
 
-        loadLayoutSettings().then(() => {
+        if (soloTerminalName) {
             fetchTerminalList();
+        } else {
+            loadLayoutSettings().then(() => {
+                fetchTerminalList();
+            });
+        }
+    }
+
+    function postFleetStateToShell() {
+        if (window.parent === window) { return; }
+        const terminals = fleetList.map(t => {
+            let light = 'active';
+            if (t.status === 'exited') {
+                light = 'exited';
+            } else if (terminalBadges.has(t.friendlyName)) {
+                light = 'done';
+            }
+            return {
+                name: t.friendlyName,
+                role: t.role,
+                worktreePath: t.worktreePath,
+                light
+            };
         });
+        window.parent.postMessage({
+            type: 'terminalFleetState',
+            terminals
+        }, location.origin);
     }
 
     const LAYOUTS = {
@@ -397,6 +450,7 @@
     }
 
     async function saveSetting(key, value) {
+        if (soloTerminalName) { return; }
         try {
             await fetch('/kanban/verb/saveSetting', {
                 method: 'POST',
@@ -444,6 +498,7 @@
             if (res.ok) {
                 const data = await res.json();
                 if (data && Array.isArray(data.terminals)) {
+                    hasFetchedList = true;
                     fleetList = data.terminals;
                     sanitizePaneAssignments();
                     renderSidebarList();
@@ -451,11 +506,39 @@
                     // First paint is also the first chance to measure the grid, so the
                     // floor is evaluated here rather than only on a later resize.
                     applyLayoutFloor();
+                    postFleetStateToShell();
+                    checkSoloNotFound();
                 }
             }
         } catch (err) {
             console.warn('[Terminals] Failed to fetch terminal list:', err);
         }
+    }
+
+    function checkSoloNotFound() {
+        if (!soloTerminalName) return;
+        const soloStatusEl = document.getElementById('solo-status');
+        if (!soloStatusEl || !paneGridEl) return;
+
+        if (!hasFetchedList) {
+            soloStatusEl.style.display = 'flex';
+            soloStatusEl.textContent = 'Connecting…';
+            paneGridEl.style.display = 'none';
+            return;
+        }
+
+        const isLive = fleetList.some(t => t.friendlyName === soloTerminalName);
+        if (!isLive) {
+            const entry = terminalsMap.get(soloTerminalName);
+            if (!entry) {
+                soloStatusEl.style.display = 'flex';
+                soloStatusEl.textContent = `Terminal "${soloTerminalName}" not found`;
+                paneGridEl.style.display = 'none';
+                return;
+            }
+        }
+        soloStatusEl.style.display = 'none';
+        paneGridEl.style.display = 'grid';
     }
 
     /** Single-level undo of the last assignment mutation. Cleared when the terminal it
@@ -512,6 +595,9 @@
         // was closed. Drop those slots individually — never discard the whole layout.
         for (let i = 0; i < paneAssignments.length; i++) {
             if (paneAssignments[i] && !liveNames.has(paneAssignments[i])) {
+                if (soloTerminalName && paneAssignments[i] === soloTerminalName) {
+                    continue;
+                }
                 paneAssignments[i] = null;
             }
         }
@@ -765,6 +851,7 @@
                 terminalBadges.delete(terminalName);
                 renderSidebarList();
                 renderPaneGrid();
+                postFleetStateToShell();
                 return;
             }
         }
@@ -782,6 +869,7 @@
         if (terminalBadges.has(terminalName)) {
             terminalBadges.delete(terminalName);
         }
+        postFleetStateToShell();
 
         if (displaced) {
             showPaneToast(`Pane ${target + 1}: ${displaced} → ${terminalName}`, undoLastAssignment);
@@ -845,7 +933,16 @@
                 idxEl.className = 'pane-index-chip';
                 idxEl.textContent = `P${i + 1}`;
                 titleEl.appendChild(idxEl);
-                titleEl.appendChild(document.createTextNode(assignedName));
+
+                let displayTitle = assignedName;
+                const fleetItem = fleetList.find(t => t.friendlyName === assignedName);
+                if (fleetItem && fleetItem.status === 'exited') {
+                    displayTitle += ' (exited)';
+                } else if (!fleetItem && hasFetchedList) {
+                    displayTitle += ' (no longer listed)';
+                }
+                titleEl.appendChild(document.createTextNode(displayTitle));
+
                 if (terminalBadges.has(assignedName)) {
                     const badgeSpan = document.createElement('span');
                     badgeSpan.className = 'pane-badge';
@@ -1435,10 +1532,14 @@
                     entry.term.write(`\r\n\x1b[31m[${frame.message || 'Terminal unavailable'}]\x1b[0m\r\n`);
                     entry.term.options.disableStdin = true;
                 } else if (frame.t === 'exit') {
-                    const exitCode = typeof frame.code === 'number' ? frame.code : 0;
-                    entry.exited = true;
-                    entry.term.write(`\r\n\x1b[31m[Process Exited with code ${exitCode}]\x1b[0m\r\n`);
-                    entry.term.options.disableStdin = true;
+                    if (frame.reason === 'Lagging client evicted') {
+                        entry.term.write(`\r\n\x1b[33m[Disconnected — reconnecting…]\x1b[0m\r\n`);
+                    } else {
+                        const exitCode = typeof frame.code === 'number' ? frame.code : 0;
+                        entry.exited = true;
+                        entry.term.write(`\r\n\x1b[31m[Process Exited with code ${exitCode}]\x1b[0m\r\n`);
+                        entry.term.options.disableStdin = true;
+                    }
                 }
             } catch (err) {
                 console.warn('[Terminals] Bad message:', err);
@@ -1577,6 +1678,12 @@
             terminalBadges.set(targetTerm, 'DONE');
             renderSidebarList();
             renderPaneGrid();
+            postFleetStateToShell();
+
+            const isKnown = fleetList.some(t => t.friendlyName === targetTerm);
+            if (!isKnown) {
+                fetchTerminalList();
+            }
         }
 
         showCompletionToast(planTitle || 'Agent Task', role || 'Agent', targetTerm);
