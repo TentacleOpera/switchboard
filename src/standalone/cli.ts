@@ -3,6 +3,7 @@ import * as http from 'http';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import { startHeadlessSwitchboard } from './bootstrap';
+import { isLoopbackHostname } from '../utils/loopbackHostname';
 
 function usage(): string {
     return `Usage: npx switchboard [options]
@@ -20,6 +21,9 @@ Aliases for secrets commands:
 Options:
   --workspace <path>   Workspace root to serve (default: cwd)
   --port <number>      Preferred port; 0 for ephemeral (default: 0)
+  --hostname <name>    Hostname for the board URL (default: 127.0.0.1). Must be a
+                       loopback name: localhost, 127.0.0.1, or anything under the
+                       reserved .localhost TLD, e.g. switchboard.localhost
   --no-open            Do not open a browser
   --help               Show this help
 `;
@@ -53,16 +57,37 @@ function resolveSecretKey(inputKey: string): string {
     process.exit(1);
 }
 
-function parseArgs(argv: string[]): { workspace?: string; port?: number; noOpen: boolean; help: boolean } {
+function parseArgs(argv: string[]): { workspace?: string; port?: number; hostname?: string; noOpen: boolean; help: boolean } {
     const args = { noOpen: false, help: false } as any;
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         if (a === '--workspace') { args.workspace = argv[++i]; }
         else if (a === '--port') { args.port = parseInt(argv[++i], 10); }
+        else if (a === '--hostname') { args.hostname = argv[++i]; }
         else if (a === '--no-open') { args.noOpen = true; }
         else if (a === '--help' || a === '-h') { args.help = true; }
     }
     return args;
+}
+
+/**
+ * Reject a `--hostname` the server would 403 on, at parse time.
+ *
+ * The failure this prevents is silent and expensive: a non-loopback name would
+ * print an inviting URL, open a browser, and then hit the DNS-rebinding guard —
+ * burning the one-time token on a request that can never succeed.
+ */
+function resolveHostname(input: string | undefined): string {
+    if (input === undefined) { return '127.0.0.1'; }
+    const candidate = input.trim().toLowerCase();
+    if (!isLoopbackHostname(candidate)) {
+        console.error(`[switchboard] --hostname '${input}' is not a loopback name.`);
+        console.error('Switchboard binds 127.0.0.1 only, so the hostname must resolve there:');
+        console.error('  127.0.0.1, localhost, or any name under the reserved .localhost TLD');
+        console.error('  e.g. --hostname switchboard.localhost');
+        process.exit(1);
+    }
+    return candidate;
 }
 
 async function probeHealth(port: number, timeoutMs = 2000): Promise<boolean> {
@@ -185,9 +210,12 @@ async function main() {
         process.exit(1);
     }
 
+    const hostname = resolveHostname(args.hostname);
+
     const instance = await startHeadlessSwitchboard({
         workspaceRoot,
         port: args.port,
+        hostname,
         verbose: true,
     });
 
@@ -197,6 +225,13 @@ async function main() {
 
     console.log(`\nSwitchboard is running at ${instance.url}`);
     console.log(`Board URL (one-time token): ${boardUrl}`);
+    if (hostname !== '127.0.0.1') {
+        // The token is consumed server-side, so a name the browser fails to
+        // resolve never reaches the server and never spends it — this fallback
+        // stays valid. Printed up front because the failure mode (a browser that
+        // does not map *.localhost to loopback) looks like Switchboard is down.
+        console.log(`If your browser cannot resolve ${hostname}, use http://127.0.0.1:${instance.port}/?token=${instance.oneTimeToken} instead.`);
+    }
     console.log('Press Ctrl+C to stop.\n');
 
     if (!args.noOpen) {
