@@ -230,6 +230,26 @@ jobs:
       - name: Terminal input path contract (binary frames, UTF-8/CSI-safe chunking, FIFO pacing)
         run: npm run test:contract:terminal-input-path
 
+      # Solo pop-out. Every guard here is a silent failure: an unsuppressed saveSetting
+      # lets a pop-out rewrite the docked panel's layout; an unpinned pane assignment
+      # lets the detach timer destroy the window's own scrollback 15s after an operator
+      # close; a missing pre-set of initialAssignmentDone opens a DIFFERENT agent's
+      # terminal under the requested name. Also pins the eviction sentinel across the
+      # terminals.js / terminalWsGateway.ts file boundary — reword it on the server and
+      # the client goes back to rendering a live terminal as "[Process Exited with code
+      # -1]", stdin disabled, no reconnect.
+      - name: Terminal solo pop-out contract (write suppression, slot pin, eviction vs exit)
+        run: npm run test:contract:terminal-solo-popout
+
+      # Shell terminal strip. The two defects a screenshot review waves through: the
+      # bottom anchor is an INLINE style on the theme toggle, so a second
+      # `margin-top: auto` child parks the terminal list mid-strip instead of stacking;
+      # and `assignToFocusedPane` early-returns when the terminal is already in the
+      # focused pane — the most likely case for a click on a lit entry — so a delegated
+      # badge clear leaves the completion light burning after the click.
+      - name: Shell terminal strip contract (light precedence, bottom anchor, badge clear)
+        run: npm run test:contract:shell-terminal-strip
+
       # Every failure mode of surface scoping is a panel that silently stops updating.
       # Pins the three traps: untagged-means-everyone, parse-before-resync, and
       # every-panel-gets-`common`. Also pins the client/server panel-map mirror (a

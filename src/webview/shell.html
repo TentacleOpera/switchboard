@@ -163,30 +163,42 @@
             padding-top: 6px;
             margin-top: auto;
         }
+        /* No fleet yet: the separator would be a hairline pinned above the theme
+           toggle with nothing under it. */
+        #strip-terminals:empty {
+            border-top: none;
+            padding-top: 0;
+        }
         .strip-term-btn {
             font-weight: 600;
             font-size: 13px;
         }
+        /* The three states differ by SHAPE, not only hue: a ring, a filled disc and
+           a filled square. Colour alone would not survive a monochrome screenshot or
+           a deuteranopic viewer — and green-vs-accent is the exact pair that fails.
+           The state is also spelled out in each button's aria-label (shell.js). */
         .strip-term-dot {
             position: absolute;
             bottom: 3px;
             right: 3px;
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
+            width: 7px;
+            height: 7px;
             pointer-events: none;
             box-sizing: border-box;
         }
         .strip-term-dot.dot-active {
-            background-color: var(--accent);
+            border-radius: 50%;
+            background: transparent;
+            border: 1.5px solid var(--accent);
         }
         .strip-term-dot.dot-done {
+            border-radius: 50%;
             background-color: #22c55e;
             box-shadow: 0 0 4px #22c55e;
         }
         .strip-term-dot.dot-exited {
-            background: transparent;
-            border: 1.5px solid var(--text-dim);
+            border-radius: 1px;
+            background-color: var(--text-dim);
         }
 
         /* Browser-only shell: dark native palette + a 6px strip scrollbar to

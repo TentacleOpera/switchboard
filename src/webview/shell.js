@@ -246,6 +246,20 @@
                 }
 
                 popoutWindows.add(popout);
+                // Clicking a lit entry IS the acknowledgement — the user has now been
+                // shown the terminal. The in-cockpit fallback clears the badge as a
+                // side effect of `focusTerminal`; the pop-out path reaches no such
+                // code, so without this the DONE light burns forever. Acknowledge-only:
+                // popping out must not rearrange the cockpit's panes.
+                const termFrame = frames.get('terminals');
+                if (termFrame && termFrame.contentWindow) {
+                    try {
+                        termFrame.contentWindow.postMessage({
+                            type: 'clearTerminalBadge',
+                            name: t.name
+                        }, location.origin);
+                    } catch { /* ignore */ }
+                }
                 try { popout.focus(); } catch { /* ignore */ }
 
                 setTimeout(() => {

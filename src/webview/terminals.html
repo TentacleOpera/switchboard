@@ -651,6 +651,16 @@
         body.is-solo .layout-fallback-banner {
             display: none !important;
         }
+        /* #empty-state is a full-height flex SIBLING of #pane-grid, and
+           renderSidebarList() shows it inline whenever the fleet list is empty. In
+           solo mode the pane is pinned, so an empty fleet (operator close, rename)
+           is normal and the pane keeps rendering — leaving the empty state visible
+           would stack "No terminal selected. Click + New" above the live terminal
+           and halve the window. It also collides with #solo-status on the
+           not-found path. Suppress it outright; solo mode never offers + New. */
+        body.is-solo #empty-state {
+            display: none !important;
+        }
         body.is-solo .solo-status-container {
             display: flex;
             align-items: center;

@@ -369,6 +369,20 @@
                 renderSidebarList();
                 renderPaneGrid();
                 postFleetStateToShell();
+            } else if (message.type === 'clearTerminalBadge' && typeof message.name === 'string') {
+                // Acknowledge-only sibling of `focusTerminal`. The strip's click now
+                // pops the terminal out into its own window, so the user HAS seen the
+                // completion — but the cockpit's pane layout must not be rearranged
+                // behind their back, which is exactly what `focusTerminal` would do.
+                // Without this arm the DONE light burns forever on the happy path,
+                // because assignToFocusedPane is never reached.
+                if (event.origin !== location.origin) { return; }
+                if (terminalBadges.has(message.name)) {
+                    terminalBadges.delete(message.name);
+                    renderSidebarList();
+                    renderPaneGrid();
+                    postFleetStateToShell();
+                }
             }
         });
 
@@ -382,6 +396,10 @@
         }, 150));
 
         if (soloTerminalName) {
+            // Paint the transient state BEFORE the first fetch. checkSoloNotFound is
+            // otherwise only reached from a fetch that SUCCEEDED, so a slow or failed
+            // first fetch would leave the window blank instead of "Connecting…".
+            checkSoloNotFound();
             fetchTerminalList();
         } else {
             loadLayoutSettings().then(() => {
@@ -508,11 +526,17 @@
                     applyLayoutFloor();
                     postFleetStateToShell();
                     checkSoloNotFound();
+                    return;
                 }
             }
         } catch (err) {
             console.warn('[Terminals] Failed to fetch terminal list:', err);
         }
+        // Reached on a network error, a non-OK response, or an unusable payload. This
+        // function deliberately swallows all three and leaves fleetList untouched, so
+        // for solo mode the state is "not loaded yet" — NOT "terminal missing". Repaint
+        // the transient state and let the next terminalsChanged refetch resolve it.
+        checkSoloNotFound();
     }
 
     function checkSoloNotFound() {
@@ -635,8 +659,17 @@
     function renderSidebarList() {
         listEl.innerHTML = '';
         if (fleetList.length === 0) {
-            emptyStateEl.style.display = 'flex';
-            paneGridEl.style.display = 'none';
+            // Solo mode pins its one terminal (see sanitizePaneAssignments), so an
+            // empty fleet does NOT mean an empty window — an operator close empties
+            // the registry while the pinned pane and its scrollback stay live.
+            // checkSoloNotFound owns grid visibility there; hiding it here would
+            // blank the window on any repaint that does not route back through it
+            // (a pane click, for one). #empty-state is CSS-suppressed under
+            // body.is-solo, so its inline display is inert.
+            if (!soloTerminalName) {
+                emptyStateEl.style.display = 'flex';
+                paneGridEl.style.display = 'none';
+            }
             return;
         }
 
