@@ -319,6 +319,12 @@ export function createHeadlessHostSeams(workspaceRoot: string): HostSeams {
     const secrets = createStandaloneHostSecrets(workspaceRoot);
 
     return {
+        // Empty on purpose — see the HostSeams.appName docstring. A blank ideName
+        // is the fail-open value `isCompatibleIdeName` already relies on; naming
+        // standalone here would hide its terminal rows from an editor session
+        // reading the same DB. It also matches today's behaviour, where
+        // `vscode.env.appName` is simply absent from vscodeShim.
+        appName: '',
         pathConfig,
         terminal: {
             // No-op terminal handle. The real standalone terminals live in the PTY

@@ -515,6 +515,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private get _apiServerDiagnosticsChannel(): vscode.OutputChannel {
         return (this._apiServerDiagnosticsChannelInstance ??= vscode.window.createOutputChannel('Switchboard API Server'));
     }
+    private _hostIntegrationsActivated = false;
     private _needsSetup: boolean = false;
     private _terminalSessionToken: string = '';
     private _ptyHostChild?: import('child_process').ChildProcess;
@@ -757,20 +758,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         // Ensure pair programming defaults to OFF on load regardless of previous session state
         this._autobanState.pairProgrammingMode = 'off';
-        const switchboardConfig = vscode.workspace.getConfiguration('switchboard');
-        const newInspect = switchboardConfig.inspect<boolean>('pairProgramming.aggressive');
-        const hasNew = newInspect?.globalValue !== undefined || newInspect?.workspaceValue !== undefined;
-        this._autobanState.aggressivePairProgramming = hasNew ? switchboardConfig.get<boolean>('pairProgramming.aggressive', false) : switchboardConfig.get<boolean>('aggressivePairProgramming.enabled', false);
-
-        this._setupStateWatcher();
-        this._setupPlanWatcher();
-        this._setupMemoWatcher();
-        this._setupSessionWatcher();
-        // Heavy init (ownership registry, brain watcher, file sync) deferred to _runDeferredConstructorInit(),
-        // called from resolveWebviewView() or other entry points. See _runDeferredConstructorInit().
-        this._julesStatusPollTimer = setInterval(() => {
-            this._refreshJulesStatus();
-        }, 30000);
 
         // Oversight-pass engine — created before the API server so the /oversight/*
         // callbacks and the watcher attach (extension.ts) can land in either order.
@@ -793,10 +780,55 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             isAutomationArmed: () => this._autobanState.enabled === true
         });
 
+    }
+
+    /**
+     * Host-facing wiring that must NOT run as a side effect of `new`.
+     *
+     * Both hosts call this immediately after constructing the provider
+     * (`extension.ts` for the editor, `bootstrap.ts` for standalone), so runtime
+     * behaviour and ordering are exactly what they were when this lived at the
+     * end of the constructor. What changes is that CONSTRUCTION is now pure:
+     * building a TaskViewerProvider reaches no `vscode` property, which is the
+     * precondition the headless verb-engine trap enforces and the reason
+     * `verb-engine-headless-seams` previously had to reach for the permissive
+     * stub instead of the trap.
+     *
+     * Keep this method to wiring only — no state a caller could observe before
+     * activation. `pairProgrammingMode` is still reset to 'off' in the
+     * constructor precisely because that invariant must hold with or without
+     * this call.
+     */
+    public activateHostIntegrations(): void {
+        if (this._hostIntegrationsActivated) { return; }
+        this._hostIntegrationsActivated = true;
+
+        // Config read, not an editor subscription: standalone needs this too.
+        // `aggressivePairProgramming` feeds agentPromptBuilder, so skipping it
+        // off-editor would silently drop the directive from dispatched prompts.
+        const switchboardConfig = vscode.workspace.getConfiguration('switchboard');
+        const newInspect = switchboardConfig.inspect<boolean>('pairProgramming.aggressive');
+        const hasNew = newInspect?.globalValue !== undefined || newInspect?.workspaceValue !== undefined;
+        this._autobanState.aggressivePairProgramming = hasNew ? switchboardConfig.get<boolean>('pairProgramming.aggressive', false) : switchboardConfig.get<boolean>('aggressivePairProgramming.enabled', false);
+
+        // Order below is the constructor's original order, preserved verbatim —
+        // the watchers resolve a workspace root, and _startLocalApiServer reads
+        // the _oversightPass built in the constructor.
+        this._setupStateWatcher();
+        this._setupPlanWatcher();
+        this._setupMemoWatcher();
+        this._setupSessionWatcher();
+        // Heavy init (ownership registry, brain watcher, file sync) deferred to _runDeferredConstructorInit(),
+        // called from resolveWebviewView() or other entry points. See _runDeferredConstructorInit().
+        this._julesStatusPollTimer = setInterval(() => {
+            this._refreshJulesStatus();
+        }, 30000);
+
         // Start local API server for agent access
         void this._startLocalApiServer();
         void this._validateNoSwitchboardPollution();
         void this._startAllSchedulerLoops();
+
         this._initEventHandlers();
     }
 
@@ -2843,13 +2875,26 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             .trim();
     }
 
+    /**
+     * Both helpers sit on the terminal-resolution path, which the standalone host
+     * serves over HTTP — so they read the host name from the seam rather than
+     * `vscode.env`. A blank name means "no host suffix to apply": return the name
+     * untouched instead of composing a bare `-`, which would otherwise strip a
+     * legitimate trailing hyphen and turn every suffixed lookup into a miss.
+     * Before this, standalone read `vscode.env.appName` off vscodeShim, which does
+     * not define it — so the suffix tier searched for `<name>-undefined`.
+     */
     private _suffixedName(baseName: string): string {
-        const suffix = `-${vscode.env.appName}`;
+        const appName = this._seams().appName;
+        if (!appName) { return baseName; }
+        const suffix = `-${appName}`;
         return baseName.endsWith(suffix) ? baseName : `${baseName}${suffix}`;
     }
 
     private _stripIdeSuffix(name: string): string {
-        const suffix = `-${vscode.env.appName}`;
+        const appName = this._seams().appName;
+        if (!appName) { return name; }
+        const suffix = `-${appName}`;
         return name.endsWith(suffix) ? name.slice(0, -suffix.length) : name;
     }
 

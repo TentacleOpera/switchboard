@@ -117,8 +117,19 @@ function buildHeadlessTaskViewerProvider(tmpRoot, seamOpts = {}) {
         mockContext,
         false
     );
-    provider._hostSeams = seams;
-    provider._broadcaster = new BroadcastHub({ webview: fakeWebview, apiServer: null });
+    // `initHeadlessVerbServing` — not a raw `_hostSeams` assignment — is the
+    // provider's documented headless entry point, and it is what the standalone
+    // host calls. It also registers `_messageListener`, without which every
+    // `handleServiceVerb` call throws "message listener not yet registered"
+    // (the extension host would have registered it in resolveWebviewView).
+    //
+    // `activateHostIntegrations()` is deliberately NOT called: it is the editor
+    // wiring (watchers, API server, event subscriptions) that must stay out of
+    // construction. The trap above is what proves construction no longer needs it.
+    provider.initHeadlessVerbServing(
+        seams,
+        new BroadcastHub({ webview: fakeWebview, apiServer: null })
+    );
     return { provider, seams, recorders, pushes };
 }
 
@@ -366,13 +377,23 @@ async function main() {
     });
 
     await test('TaskViewer: sendToTerminal schema validates payload and returns result', async () => {
-        const { provider } = buildHeadlessTaskViewerProvider(tmpRoot);
+        const { provider, recorders } = buildHeadlessTaskViewerProvider(tmpRoot, { terminals: ['term1'] });
         await assert.rejects(
             () => provider.handleServiceVerb('sendToTerminal', { name: 'term1' }),
             /Invalid payload for TaskViewer verb 'sendToTerminal'.*input/
         );
         const result = await provider.handleServiceVerb('sendToTerminal', { name: 'term1', input: 'echo hi' });
         assert.strictEqual(result.success, true);
+        // success:true alone would also hold if the arm resolved nothing and
+        // short-circuited; assert the text actually reached the seam.
+        assert.deepStrictEqual(recorders.terminalSends, [{ name: 'term1', text: 'echo hi' }]);
+
+        // The not-found path must stay reachable — an unseeded name resolves to
+        // nothing and fails in-body rather than throwing.
+        const { provider: bare } = buildHeadlessTaskViewerProvider(tmpRoot);
+        const missing = await bare.handleServiceVerb('sendToTerminal', { name: 'term1', input: 'echo hi' });
+        assert.strictEqual(missing.success, false);
+        assert.match(missing.error, /not found or not local/);
     });
 
     await test('TaskViewer: showInfo executes and returns success', async () => {

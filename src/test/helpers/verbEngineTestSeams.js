@@ -153,6 +153,10 @@ function createHeadlessTestSeams(opts = {}) {
     };
 
     const seams = {
+        // Non-empty by default so the `-${appName}` suffix tier of terminal-name
+        // resolution is actually exercised; pass `appName: ''` to assert the
+        // standalone shape, where a blank name means "apply no suffix at all".
+        appName: opts.appName !== undefined ? opts.appName : 'TestHost',
         // Single pathConfig seam. Precedence: `opts.config[key]` (untyped bag)
         // → the typed bag (`configStrings`/`configBooleans`/`configNumbers`/
         // `configJson`) → the caller's default. This object literal previously
@@ -190,26 +194,44 @@ function createHeadlessTestSeams(opts = {}) {
                 recorders.configWrites.push({ scope: 'workspace', key, value });
             },
         },
-        terminal: {
-            create: (name) => {
-                const handle = {
-                    name,
-                    sendText: (text) => recorders.terminalSends.push({ name, text }),
-                    dispose: () => {},
-                    show: () => {},
-                };
-                return handle;
-            },
-            findByName: () => null,
-            findByNameContains: () => null,
-            sendInput: (name, text) => {
-                recorders.terminalSends.push({ name, text });
-                return true;
-            },
-            kill: () => false,
-            resize: () => false,
-            onClose: () => {},
-        },
+        // `findByName` used to be a hard `() => null`, which made every arm that
+        // must RESOLVE a terminal before writing (sendToTerminal) unreachable —
+        // the arm correctly returned "not found or not local" and the test read
+        // that as an arm defect. Seed resolvable terminals with `opts.terminals`;
+        // the default stays empty, so callers that want the not-found path keep it.
+        terminal: (() => {
+            const makeHandle = (name) => ({
+                name,
+                sendText: (text) => recorders.terminalSends.push({ name, text }),
+                dispose: () => {},
+                show: () => {},
+            });
+            // `create` adds to the same map so a create-then-send flow resolves.
+            // No `processId` on these handles — that is what routes the arm down
+            // the host-agnostic `sendText` path instead of VS Code's sendRobustText.
+            const existing = new Map((opts.terminals || []).map(n => [n, makeHandle(n)]));
+            return {
+                create: (name) => {
+                    const handle = makeHandle(name);
+                    existing.set(name, handle);
+                    return handle;
+                },
+                findByName: (name) => existing.get(name) || null,
+                findByNameContains: (fragment) => {
+                    for (const [n, h] of existing) {
+                        if (fragment && n.includes(fragment)) return h;
+                    }
+                    return null;
+                },
+                sendInput: (name, text) => {
+                    recorders.terminalSends.push({ name, text });
+                    return true;
+                },
+                kill: () => false,
+                resize: () => false,
+                onClose: () => {},
+            };
+        })(),
         commands: {
             executeCommand: async (command, ...args) => {
                 recorders.executedCommands.push({ command, args });

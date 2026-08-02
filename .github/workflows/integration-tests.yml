@@ -126,16 +126,22 @@ jobs:
       - name: Verb engine kanban contract (seams, db path, return contract)
         run: npm run test:contract:verb-engine-kanban
 
-      # NOT WIRED YET — these two suites are red for causes that predate the
-      # seam-harness fix, and a permanently-red gate is worse than no gate:
-      #   test:contract:verb-engine          (4 red) TaskViewerProvider's ctor
-      #       still reaches `vscode.window`, so the vscode-trap fires before any
-      #       arm runs — an unmigrated-provider problem, not a harness one.
-      #   test:contract:verb-engine-planning (3 red) linearLoadProject /
-      #       clickupLoadSpaces / importAllTickets do not return success:false
-      #       in-body when the workspace root is unresolved.
-      # Both are green-able only by migrating those arms; each needs its own
-      # plan. Wire them in the same change that greens them.
+      # Runs under the vscode BOOBY TRAP (any `vscode.*` property access throws),
+      # so this gate is what keeps TaskViewerProvider constructible off-editor:
+      # put host work back into the constructor — a class-field
+      # `createOutputChannel`, a watcher, an event subscription — and this goes red
+      # even though the extension still boots fine. It also pins the arms
+      # themselves, including the terminal-name resolution that reads the host name
+      # from the `appName` seam rather than `vscode.env` (vscodeShim never defined
+      # appName, so standalone was searching for `<name>-undefined`).
+      - name: Verb engine headless seams contract (pure ctor under vscode trap, arm host-agnosticism)
+        run: npm run test:contract:verb-engine
+
+      # Planning's counterpart. The load-bearing assertion is that a verb fails
+      # IN-BODY rather than throwing across the HTTP boundary — a throw here
+      # becomes a 500 with no structured error for the webview to render.
+      - name: Verb engine planning contract (in-body failure, schema validation, seam routing)
+        run: npm run test:contract:verb-engine-planning
 
       - name: Design per-client view state contract (seats, poll lifecycle, wsHub keepalive)
         run: npm run test:contract:design-view-state

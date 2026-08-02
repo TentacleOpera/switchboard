@@ -376,20 +376,62 @@ async function main() {
         assert.strictEqual(result.type, 'browseTicketsFolderResult');
     });
 
-    await test('linearLoadProject RETURNS success:false in-body when no workspace root', async () => {
-        const { provider } = buildHeadlessPlanningProvider(tmpRoot);
-        const result = await provider.handleServiceVerb('linearLoadProject', { workspaceRoot: '/not/a/real/root' });
-        assert.strictEqual(result.success, false);
-        assert.strictEqual(result.status, 'error');
-        assert.ok(Array.isArray(result.issues));
-    });
+    // WHERE THE NO-WORKSPACE FAILURE ACTUALLY COMES FROM.
+    //
+    // These three used to pass a bogus `workspaceRoot` against a seeded root and
+    // assert each arm's own guard shape (`status:'error'`, `scope:'hierarchy'`,
+    // `type:'importAllTicketsComplete'`). Both halves of that were wrong:
+    //
+    //  1. A bogus explicit root does not produce "no workspace".
+    //     `_resolveWorkspaceRoot` ignores an explicit root outside the allowed set
+    //     and then deliberately falls back to the first allowed root, so the arm
+    //     ran with the seeded root and died on the empty adapter stub.
+    //
+    //  2. Those per-arm guard shapes are UNREACHABLE through the verb path.
+    //     `_handleMessage` opens with a global `allRoots.length === 0` guard
+    //     (PlanningPanelProvider.ts) that returns a flat
+    //     `{ success:false, error:'No workspace open' }` before the switch. Given
+    //     non-empty roots the global guard passes, and given non-empty roots
+    //     `_resolveWorkspaceRoot` always has a `firstAllowed` to return — so
+    //     `if (!workspaceRoot)` inside an arm can never be true from here. The
+    //     arm-level guards are dead defensive code behind the global one; keep
+    //     them, but do not assert a shape the verb rail cannot emit.
+    //
+    // What IS the contract worth pinning, and what this suite is for: the verb
+    // fails IN-BODY rather than throwing across the HTTP boundary.
+    const NO_WORKSPACE_VERBS = [
+        ['linearLoadProject', {}],
+        ['clickupLoadSpaces', {}],
+        ['importAllTickets', { provider: 'clickup', importMode: 'document' }],
+    ];
+    for (const [verb, extra] of NO_WORKSPACE_VERBS) {
+        await test(`${verb} RETURNS success:false in-body when no workspace is open`, async () => {
+            const { provider } = buildHeadlessPlanningProvider(tmpRoot, { roots: [] });
+            const result = await provider.handleServiceVerb(verb, { workspaceRoot: '/not/a/real/root', ...extra });
+            assert.strictEqual(result.success, false, `${verb} must fail in-body, not throw`);
+            assert.match(result.error, /No workspace open/);
+        });
+    }
 
-    await test('clickupLoadSpaces RETURNS success:false in-body when no workspace root', async () => {
+    // The other half of the same behaviour: an unknown explicit root must NOT be
+    // treated as "no workspace" while a real root is open — it falls back. If this
+    // ever starts returning 'No workspace open', the fallback in
+    // `_resolveWorkspaceRoot` has been tightened and the tests above become
+    // indistinguishable from it.
+    await test('an unknown explicit workspaceRoot falls back to an allowed root, not to the no-workspace guard', async () => {
         const { provider } = buildHeadlessPlanningProvider(tmpRoot);
-        const result = await provider.handleServiceVerb('clickupLoadSpaces', { workspaceRoot: '/not/a/real/root' });
-        assert.strictEqual(result.success, false);
-        assert.strictEqual(result.scope, 'hierarchy');
-        assert.ok(/No workspace folder found/.test(result.error));
+        let result;
+        try {
+            result = await provider.handleServiceVerb('clickupLoadSpaces', { workspaceRoot: '/not/a/real/root' });
+        } catch {
+            // Reaching the adapter stub and throwing means it got past the guard,
+            // which is exactly what this asserts.
+            return;
+        }
+        assert.notStrictEqual(
+            result?.error, 'No workspace open',
+            'unknown explicit root must fall back to the seeded root, not trip the global guard'
+        );
     });
 
     await test('getTicketSyncStatuses RETURNS success:false in-body when ids missing', async () => {
@@ -423,13 +465,6 @@ async function main() {
         assert.ok(Array.isArray(result.targets));
     });
 
-    await test('importAllTickets RETURNS success:false in-body when workspace not resolved', async () => {
-        const { provider } = buildHeadlessPlanningProvider(tmpRoot);
-        const result = await provider.handleServiceVerb('importAllTickets', { workspaceRoot: '/not/a/real/root', provider: 'clickup', importMode: 'document' });
-        assert.strictEqual(result.success, false);
-        assert.strictEqual(result.type, 'importAllTicketsComplete');
-        assert.ok(/No workspace root/.test(result.error));
-    });
 
     await test('loadTicketComments RETURNS in-body ticketCommentsLoaded via command seam and keeps push additive', async () => {
         const { provider, pushes } = buildHeadlessPlanningProvider(tmpRoot, {

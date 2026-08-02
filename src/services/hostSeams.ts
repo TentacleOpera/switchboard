@@ -584,6 +584,22 @@ export class VscodeHostFileWatcher implements HostFileWatcher {
 // A2b's service extraction injects this bundle into extracted service methods.
 
 export interface HostSeams {
+    /**
+     * The host application's display name — `vscode.env.appName` in the editor.
+     *
+     * Terminal-name resolution suffixes and strips `-${appName}` to partition
+     * agent terminals per IDE, and that resolution is served headlessly (the
+     * standalone host answers `sendToTerminal` over HTTP), so it cannot read
+     * `vscode.env` directly.
+     *
+     * EMPTY STRING MEANS "no host name", and callers must then skip the suffix
+     * logic entirely rather than composing `-`. Standalone deliberately reports
+     * empty: `isCompatibleIdeName` treats a blank `ideName` as compatible with
+     * every host, and the ~4k shipped installs rely on that fail-open — giving
+     * standalone a concrete name would partition terminal rows that are visible
+     * today.
+     */
+    appName: string;
     pathConfig: HostPathConfigProvider;
     terminal: TerminalBackend;
     commands: HostCommands;
@@ -597,6 +613,7 @@ export interface HostSeams {
 
 export function createVscodeHostSeams(workspaceRoot: string, secrets?: vscode.SecretStorage): HostSeams {
     return {
+        appName: vscode.env.appName || '',
         pathConfig: new VscodeHostPathConfigProvider(workspaceRoot),
         terminal: new VscodeTerminalBackend(),
         commands: new VscodeHostCommands(),

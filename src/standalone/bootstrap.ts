@@ -598,6 +598,11 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         headlessContext,
         false
     );
+    // Same call the editor host makes right after `new`. The event registrations
+    // land on vscodeShim's no-op Event stubs here, exactly as they did when this
+    // ran inside the constructor — but the config read is real and standalone
+    // depends on it (aggressivePairProgramming feeds dispatched prompts).
+    taskViewerProvider.activateHostIntegrations();
     taskViewerProvider.initHeadlessVerbServing(headlessSeams, headlessBroadcaster);
     // Setup arms delegate startup-command / integration-state reads to the
     // TaskViewer provider; wire the real (headless) instance.

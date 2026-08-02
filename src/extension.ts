@@ -990,6 +990,10 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // 1. REGISTER SIDEBAR (Task Viewer)
     const taskViewerProvider = new TaskViewerProvider(context.extensionUri, context);
+    // Editor-event subscriptions + the pairProgramming config read. Used to run at
+    // the end of the constructor; called here so `new` stays host-agnostic. Must
+    // stay adjacent to the construction — nothing may observe the provider first.
+    taskViewerProvider.activateHostIntegrations();
     activeTaskViewerProvider = taskViewerProvider;
     taskViewerProvider.setRegisteredTerminals(registeredTerminals);
     // Oversight-pass engine: completion signal = the watcher's plan-file mtime
