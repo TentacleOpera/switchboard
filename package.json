@@ -790,6 +790,7 @@
     "test:contract:design-reply-addressing": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/design-reply-addressing-regression.test.js",
     "test:contract:design-system": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/design-system-contract.test.js",
     "test:contract:cross-client-scope": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/cross-client-scope-contract.test.js",
+    "test:contract:loopback-hostname": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/loopback-hostname-contract.test.js",
     "test:contract:headless-feature-mgmt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/headless-feature-management-contract.test.js",
     "test:contract:headless-feature-mgmt-destructive": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/headless-feature-management-destructive.test.js",
     "test:contract:design-view-state": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/design-view-state-seats-contract.test.js",

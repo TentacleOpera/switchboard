@@ -151,7 +151,7 @@ export function getShellHtml(repoRoot: string, themeClass?: string): PanelHtmlRe
     }
     let content = fs.readFileSync(htmlPath, 'utf8');
     const nonce = makeNonce();
-    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; frame-src 'self';`;
+    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self';`;
     content = content.replace(/\{\{NONCE\}\}/g, nonce);
     content = applyThemeClass(content, themeClass);
     return { html: content, csp };
@@ -168,7 +168,7 @@ export function getBoardHtml(repoRoot: string, workspaceRoot: string, capabiliti
     }
     let content = fs.readFileSync(htmlPath, 'utf8');
     const nonce = makeNonce();
-    const csp = `default-src 'self'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; frame-src 'self';`;
+    const csp = `default-src 'self'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self';`;
     content = content.replace(/<script>/g, `<script nonce="${nonce}">`);
     // kanban.html carries the marker — pass expectMarker so its deletion warns.
     content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', `<script nonce="${nonce}">`, true);
@@ -228,14 +228,14 @@ export function getProjectHtml(repoRoot: string, workspaceRoot: string, capabili
     }
     let content = fs.readFileSync(htmlPath, 'utf8');
     const nonce = makeNonce();
-    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; frame-src 'self' http: https: about:srcdoc blob: data:;`;
+    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self' http: https: about:srcdoc blob: data:;`;
     content = content.replace(/\{\{NONCE\}\}/g, nonce);
     content = content.replace(/{{WEBVIEW_CSP_SOURCE}}/g, "'self'");
     // Browser cockpit: the shared template's meta CSP hardcodes `connect-src https:`
     // (written for the VS Code webview). In a plain browser that blocks the local
     // server's verb fetches (http://127.0.0.1) AND the WebSocket (ws://127.0.0.1),
     // so every panel comes up empty. Widen it to the loopback API/WS origins.
-    content = content.replace('connect-src https:', "connect-src 'self' https: http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*");
+    content = content.replace('connect-src https:', "connect-src 'self' https: http://127.0.0.1:* http://localhost:* http://*.localhost:* ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*");
     content = content.replace(/{{PROJECT_JS_URI}}/g, '/static/webview/project.js');
     content = content.replace(/{{HANKEN_FONT_URI}}/g, '/static/designs/HankenGrotesk-Variable.woff2');
     content = content.replace(/{{GEIST_PIXEL_FONT_URI}}/g, '/static/designs/GeistPixel-Square.woff2');
@@ -266,14 +266,14 @@ export function getPlanningHtml(repoRoot: string, workspaceRoot: string, capabil
     // has to satisfy both the editor webview and this browser — see
     // PlanningPanelProvider._buildLocalAssetUrl). 'self' alone drops them whenever the
     // cockpit is opened on `localhost` rather than `127.0.0.1`.
-    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' http://127.0.0.1:* http://localhost:* data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; frame-src 'self' http: https: about:srcdoc blob: data:;`;
+    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' http://127.0.0.1:* http://localhost:* http://*.localhost:* data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self' http: https: about:srcdoc blob: data:;`;
     content = content.replace(/\{\{NONCE\}\}/g, nonce);
     content = content.replace(/{{WEBVIEW_CSP_SOURCE}}/g, "'self'");
     // Browser cockpit: the shared template's meta CSP hardcodes `connect-src https:`
     // (written for the VS Code webview). In a plain browser that blocks the local
     // server's verb fetches (http://127.0.0.1) AND the WebSocket (ws://127.0.0.1),
     // so every panel comes up empty. Widen it to the loopback API/WS origins.
-    content = content.replace('connect-src https:', "connect-src 'self' https: http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*");
+    content = content.replace('connect-src https:', "connect-src 'self' https: http://127.0.0.1:* http://localhost:* http://*.localhost:* ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*");
     content = content.replace(/{{PLANNING_JS_URI}}/g, '/static/webview/planning.js');
     content = content.replace(/{{SHARED_UTILS_URI}}/g, '/static/webview/sharedUtils.js');
     content = content.replace(/{{MARKDOWN_EDITOR_URI}}/g, '/static/webview/markdownEditor.js');
@@ -303,14 +303,14 @@ export function getDesignHtml(repoRoot: string, workspaceRoot: string, capabilit
     // absolute `http://127.0.0.1:<port>/…` URLs so one string works in both hosts (see
     // DesignPanelProvider._absoluteApiUrl). 'self' alone drops them whenever the cockpit
     // is opened on `localhost` rather than `127.0.0.1`.
-    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' http://127.0.0.1:* http://localhost:* data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; frame-src 'self' http: https: about:srcdoc blob: data:;`;
+    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' http://127.0.0.1:* http://localhost:* http://*.localhost:* data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self' http: https: about:srcdoc blob: data:;`;
     content = content.replace(/\{\{NONCE\}\}/g, nonce);
     content = content.replace(/{{WEBVIEW_CSP_SOURCE}}/g, "'self'");
     // Browser cockpit: the shared template's meta CSP hardcodes `connect-src https:`
     // (written for the VS Code webview). In a plain browser that blocks the local
     // server's verb fetches (http://127.0.0.1) AND the WebSocket (ws://127.0.0.1),
     // so every panel comes up empty. Widen it to the loopback API/WS origins.
-    content = content.replace('connect-src https:', "connect-src 'self' https: http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*");
+    content = content.replace('connect-src https:', "connect-src 'self' https: http://127.0.0.1:* http://localhost:* http://*.localhost:* ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*");
     content = content.replace(/{{DESIGN_JS_URI}}/g, '/static/webview/design.js');
     content = content.replace(/{{SHARED_UTILS_URI}}/g, '/static/webview/sharedUtils.js');
     content = content.replace(/{{MARKDOWN_EDITOR_URI}}/g, '/static/webview/markdownEditor.js');
@@ -337,7 +337,7 @@ export function getSetupHtml(repoRoot: string, workspaceRoot: string, capabiliti
     }
     let content = fs.readFileSync(htmlPath, 'utf8');
     const nonce = makeNonce();
-    const csp = `default-src 'self'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval' 'unsafe-inline'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; frame-src 'self';`;
+    const csp = `default-src 'self'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval' 'unsafe-inline'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self';`;
     content = content.replace(/<script>/g, `<script nonce="${nonce}">`);
     // setup.html carries the marker — pass expectMarker so its deletion warns.
     // (It was deleted once, by 3224366, and shipped a dead Setup panel in 1.7.13.)
@@ -362,7 +362,7 @@ export function getMemoHtml(repoRoot: string, workspaceRoot: string, capabilitie
     }
     let content = fs.readFileSync(htmlPath, 'utf8');
     const nonce = makeNonce();
-    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; frame-src 'none';`;
+    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'none';`;
     content = content.replace(/\{\{NONCE\}\}/g, nonce);
     content = content.replace(/\{\{MEMO_JS_URI\}\}/g, '/static/webview/memo.js');
     content = content.replace(/\{\{HANKEN_FONT_URI\}\}/g, '/static/designs/HankenGrotesk-Variable.woff2');
@@ -386,7 +386,7 @@ export function getTerminalsHtml(repoRoot: string, workspaceRoot: string, capabi
     }
     let content = fs.readFileSync(htmlPath, 'utf8');
     const nonce = makeNonce();
-    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; frame-src 'none';`;
+    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'none';`;
     content = content.replace(/\{\{NONCE\}\}/g, nonce);
     content = content.replace(/\{\{TERMINALS_JS_URI\}\}/g, '/static/webview/terminals.js');
     content = content.replace(/\{\{XTERM_JS_URI\}\}/g, '/static/webview/vendor/xterm/xterm.js');

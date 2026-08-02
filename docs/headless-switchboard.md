@@ -31,3 +31,37 @@ The Setup panel and Design panel in the browser cockpit maintain functional pari
      - **Layer (a)**: Webview message listeners ignore broadcasts carrying their own `originatorId`.
      - **Layer (b)**: Programmatic input value updates set `window.__applyingBroadcast = true`.
      - **Layer (c)**: Input change event listeners no-op while `window.__applyingBroadcast` is active.
+
+## Board URL & Hostname
+
+The standalone host serves the board over plain HTTP on loopback. The URL has three moving parts, and only two of them are user-controllable.
+
+### Shape
+
+```
+http://<hostname>:<port>/[panel][?token=<one-time-token>]
+```
+
+- **Port** — ephemeral by default; `--port <number>` pins it.
+- **Hostname** — `127.0.0.1` by default; `--hostname <name>` changes it (see below).
+- **Panel path** — `/` (the shell) plus the directly addressable panels: `/board`, `/panels`, `/project`, `/memo`, `/planning`, `/design`, `/setup`, `/terminals` (each also accepts a `.html` suffix). Every one of them honours `?token=`, so any panel can be the landing page.
+- **Token** — consumed once, exchanged for an 8-hour `sb_session` cookie, then `303`-redirected away. The address bar settles on the bare URL; later visits need no token.
+
+### `--hostname`
+
+```
+npx switchboard --port 4321 --hostname switchboard.localhost
+```
+
+Accepted names are restricted to the loopback set: `127.0.0.1`, `localhost`, `::1`, and anything under the reserved `.localhost` TLD. RFC 6761 §6.3 requires resolvers to map `.localhost` and every name beneath it to loopback, so no `/etc/hosts` entry is needed and the name cannot be aimed elsewhere. `LocalApiServer` and the CLI share one predicate (`src/utils/loopbackHostname.ts`) so a name the CLI prints can never be one the server's `Host` guard rejects.
+
+**This is presentation only.** The server still binds `127.0.0.1`, still rejects any non-loopback peer at the socket level, and still refuses a `Host` header outside the loopback set. `--hostname` does not expose the board to the LAN, and there is no flag that does.
+
+Two consequences worth knowing:
+
+- **Cookie jars are per-origin.** A session established at `switchboard.localhost:4321` does not carry over to `127.0.0.1:4321` — the second origin needs its own token exchange. Pick one hostname and stay on it.
+- **Resolution is the browser's job.** Chromium, Safari and Firefox ≥ 84 map `*.localhost` to loopback; some older browsers and non-browser HTTP clients defer to the system resolver, which may not. Because an unresolvable name never reaches the server, the one-time token is not spent — the CLI prints the `127.0.0.1` fallback URL alongside, and it stays valid.
+
+### Dropping the port
+
+Nothing in Switchboard can remove `:<port>` from the URL — that requires listening on port 80, which needs root. A same-machine reverse proxy is the supported route, and it must rewrite the `Host` header to a loopback name and forward the WebSocket upgrade (`/ws`, `/ws/terminal`), or the board will 403 or render without live updates.

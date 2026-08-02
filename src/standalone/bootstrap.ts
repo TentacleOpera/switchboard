@@ -57,12 +57,19 @@ import { createVscodeHostSeams, type HostSeams } from '../services/hostSeams';
 // workspace root before any service that touches `vscode.workspace.getConfiguration`
 // is constructed.
 import { __setStandaloneWorkspaceRoot, createStandaloneSecretStorage } from './vscodeShim';
+import { isLoopbackHostname } from '../utils/loopbackHostname';
 
 export interface HeadlessSwitchboardOptions {
     workspaceRoot: string;
     port?: number;
     open?: boolean;
     verbose?: boolean;
+    /**
+     * Hostname to build the returned `url` from. Presentation only — the server
+     * always binds 127.0.0.1, and this name is expected to resolve there (that is
+     * why it is restricted to the loopback-name set). Defaults to `127.0.0.1`.
+     */
+    hostname?: string;
 }
 
 export interface HeadlessSwitchboardInstance {
@@ -1391,8 +1398,16 @@ Each plan file must include:
     const portFile = path.join(switchboardDir, 'api-server-port.txt');
     fs.writeFileSync(portFile, String(port), 'utf8');
 
-    const url = `http://127.0.0.1:${port}`;
-    log(opts, `Local API server listening on ${url}`);
+    // The bind address is 127.0.0.1 unconditionally; `hostname` only changes the
+    // name the user is handed. Validated here as well as in the CLI so a library
+    // caller cannot mint a URL the server's Host guard would then reject.
+    const displayHost = opts.hostname ?? '127.0.0.1';
+    if (!isLoopbackHostname(displayHost)) {
+        throw new Error(`hostname must resolve to loopback (localhost, *.localhost or 127.0.0.1); got '${displayHost}'`);
+    }
+    const bindUrl = `http://127.0.0.1:${port}`;
+    const url = `http://${displayHost}:${port}`;
+    log(opts, `Local API server listening on ${bindUrl}${url === bindUrl ? '' : ` (serving as ${url})`}`);
 
     return {
         server,

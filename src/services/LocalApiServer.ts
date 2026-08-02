@@ -9,6 +9,7 @@ import type { NotionFetchService } from './NotionFetchService';
 import { importPlanFiles } from './PlanFileImporter';
 import { DEFAULT_KANBAN_COLUMNS } from './agentConfig';
 import { WsHub } from './wsHub';
+import { isLoopbackHostHeader, isLoopbackOrigin } from '../utils/loopbackHostname';
 
 interface LocalApiServerOptions {
     workspaceRoot: string;
@@ -3267,25 +3268,25 @@ export class LocalApiServer {
     }
 
     /**
-     * Handle incoming HTTP requests.
+     * DNS-rebinding guard. Delegates to the shared loopback-name policy so the
+     * set of names accepted here can never drift from the set the standalone CLI
+     * is willing to print — a `--hostname` the CLI accepts but the server 403s
+     * would be an unopenable board.
+     *
+     * `*.localhost` is included: RFC 6761 reserves that TLD for loopback, so it
+     * cannot be aimed at an attacker's IP. See `utils/loopbackHostname.ts`.
      */
     private _isAllowedHost(host: string | undefined): boolean {
-        if (!host) return false;
-        const lower = host.toLowerCase();
-        if (lower.startsWith('127.0.0.1:')) return true;
-        if (lower.startsWith('localhost:')) return true;
-        if (lower === '127.0.0.1' || lower === 'localhost' || lower === '[::1]') return true;
-        return false;
+        return isLoopbackHostHeader(host);
     }
 
     private _isLocalhostOrigin(origin: string): boolean {
-        try {
-            const u = new URL(origin);
-            const h = u.hostname;
-            return h === '127.0.0.1' || h === 'localhost' || h === '[::1]';
-        } catch { return false; }
+        return isLoopbackOrigin(origin);
     }
 
+    /**
+     * Handle incoming HTTP requests.
+     */
     private async _handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         // Restrict to localhost only
         const remoteAddress = req.socket.remoteAddress;
