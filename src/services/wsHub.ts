@@ -47,6 +47,7 @@ export const SURFACES = {
     design: 'design',
     setup: 'setup',
     memo: 'memo',
+    notes: 'notes',
 } as const;
 
 export type SurfaceType = typeof SURFACES[keyof typeof SURFACES];
@@ -72,6 +73,7 @@ export const PANEL_SURFACES: Record<string, string[]> = {
     design: [SURFACES.design, SURFACES.common],
     setup: [SURFACES.setup, SURFACES.common],
     memo: [SURFACES.memo, SURFACES.common],
+    notes: [SURFACES.notes, SURFACES.common],
 };
 
 const VALID_SURFACES = new Set<string>(Object.values(SURFACES));

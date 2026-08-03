@@ -181,6 +181,7 @@ interface LocalApiServerOptions {
         reason: string;
     }>;
     planningVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
+    notesVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     designVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     /**
      * Allow-list source for `GET /design/asset` — the headless replacement for
@@ -1745,6 +1746,35 @@ export class LocalApiServer {
             console.error(`[LocalApiServer] planningVerb '${verb}' error:`, err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : `planning verb '${verb}' failed` }));
+        }
+    }
+
+    private async _handleNotesVerb(verb: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        const notesVerb = this._options.notesVerb;
+        if (!notesVerb) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Notes verb dispatch not available' }));
+            return;
+        }
+        try {
+            const rawBody = await this._parseJsonBody(req);
+            const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
+            delete body.type;
+            delete body.bypassTriggerGate;
+            this._stampHttpSurface(body);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
+            const result = await notesVerb(verb, body, workspaceRoot);
+            const ok = !result || result.success !== false;
+            res.writeHead(ok ? 200 : 502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result ?? { success: true }));
+        } catch (err) {
+            console.error(`[LocalApiServer] notesVerb '${verb}' error:`, err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : `notes verb '${verb}' failed` }));
         }
     }
 
@@ -3402,6 +3432,9 @@ export class LocalApiServer {
             } else if (pathname.startsWith('/memo/verb/') && req.method === 'POST') {
                 const verb = decodeURIComponent(pathname.slice('/memo/verb/'.length));
                 await this._handlePlanningVerb(verb, req, res);
+            } else if (pathname.startsWith('/notes/verb/') && req.method === 'POST') {
+                const verb = decodeURIComponent(pathname.slice('/notes/verb/'.length));
+                await this._handleNotesVerb(verb, req, res);
             } else if (pathname.startsWith('/design/verb/') && req.method === 'POST') {
                 const verb = decodeURIComponent(pathname.slice('/design/verb/'.length));
                 await this._handleDesignVerb(verb, req, res);
@@ -3493,6 +3526,8 @@ export class LocalApiServer {
                 await this._handleServeProject(req, res);
             } else if ((pathname === '/memo' || pathname === '/memo.html') && req.method === 'GET') {
                 await this._handleServePanelById('memo', req, res);
+            } else if ((pathname === '/notes' || pathname === '/notes.html') && req.method === 'GET') {
+                await this._handleServePanelById('notes', req, res);
             } else if ((pathname === '/planning' || pathname === '/planning.html') && req.method === 'GET') {
                 await this._handleServePanelById('planning', req, res);
             } else if ((pathname === '/design' || pathname === '/design.html') && req.method === 'GET') {

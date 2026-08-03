@@ -163,6 +163,10 @@
       {
         "command": "switchboard.openMemo",
         "title": "Switchboard: Open Memo"
+      },
+      {
+        "command": "switchboard.openNotes",
+        "title": "Switchboard: Open Notes"
       }
     ],
     "keybindings": [
@@ -813,6 +817,7 @@
     "test:contract:memo-panel-style": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/memo-panel-style-contract.test.js",
     "test:contract:memo-browser-clear": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/memo-browser-clear-and-copy-contract.test.js",
     "test:contract:memo-workspace-binding": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/memo-panel-workspace-binding-contract.test.js",
+    "test:contract:notes": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/notes-service-contract.test.js",
     "test:contract:global-config-sandbox": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/global-config-sandbox.test.js",
     "test:contract:secrets-bridge": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standalone-secrets-bridge-contract.test.js",
     "test:integration:all": "npm run test:regression:plan-sync && npm run test:regression:native-project-api && node --require ./src/test/bootstrap/sandboxStateHome.js src/test/integrations/run-integration-tests.js all",

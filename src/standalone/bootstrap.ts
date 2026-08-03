@@ -24,6 +24,7 @@ import {
     type HostCapabilities,
 } from '../services/headlessPanelHtml';
 import { PlanIngestionEngine } from '../services/PlanIngestionEngine';
+import { NotesService } from '../services/NotesService';
 import { matchWorktreePath } from '../services/worktreeResolver';
 import { createStandalonePlanIngestionHost, readPlanScannerCustomSourceDirs } from './planIngestionHost';
 import { PtyFleetService, PTY_IDE_NAME } from './ptyFleetService';
@@ -664,6 +665,11 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     (planningProvider as any)._hostSeams = headlessSeams;
     (planningProvider as any)._broadcaster = headlessBroadcaster;
     planningProvider.setTaskViewerProvider(taskViewerProvider);
+
+    // The file-based Notes store — vscode-free, so the standalone host gets the
+    // same `/notes/verb/*` rail the extension host wires. Rooted at the bootstrap
+    // workspace; per-call `workspaceRoot` in the payload still wins.
+    const notesService = new NotesService(workspaceRoot);
 
     const moveSessionsToColumn = async (sessionIds: string[], sourceColumn: string, targetColumn: string) => {
         for (const sid of sessionIds) {
@@ -1322,6 +1328,8 @@ Each plan file must include:
             return handlePtyVerb(verb, payload, workspaceRootArg || payload?.workspaceRoot || workspaceRoot);
         },
         planningVerb,
+        notesVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
+            notesService.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),
         designVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
             designProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),
         getDesignAssetRoots: (wsRoot: string) => designProvider.getDesignAssetRoots(wsRoot),

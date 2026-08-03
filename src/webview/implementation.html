@@ -1565,6 +1565,7 @@
                 <button class="sub-tab-btn" data-tab="agents">Agents</button>
                 <button class="sub-tab-btn is-active" data-tab="terminals">Terminals</button>
                 <button class="sub-tab-btn" data-tab="memo">Memo</button>
+                <button class="sub-tab-btn" data-tab="notes">Notes</button>
             </div>
             <div id="agent-list-standard" class="agent-list hidden">
                 <div style="text-align: center; padding: 20px; color: var(--text-secondary);">
@@ -1598,6 +1599,28 @@
                     <button id="memo-clear-btn" class="secondary-btn w-full">Clear</button>
                     <button id="memo-copy-btn" class="secondary-btn is-teal w-full">Copy Prompt</button>
                     <button id="memo-send-btn" class="secondary-btn is-teal w-full">Send to Planner</button>
+                </div>
+            </div>
+            <div id="agent-list-notes" class="agent-list hidden">
+                <div class="notes-tab-content" style="padding: 10px; display: flex; flex-direction: column; gap: 8px;">
+                    <p style="font-size: 11px; color: var(--text-secondary); margin: 0 0 4px;">
+                        Plan jottings, meeting minutes, and briefings — a file-based store the
+                        orchestrator tick also reads. Meetings with a time feed the digest.
+                    </p>
+                    <div id="notes-list" style="display: flex; flex-direction: column; gap: 6px;"></div>
+                    <input type="hidden" id="note-id">
+                    <input type="text" id="note-title" class="modal-textarea" style="min-height: auto; width: 100%; font-size: 13px;" placeholder="Title">
+                    <select id="note-kind" class="modal-textarea" style="min-height: auto; width: 100%; font-size: 13px;">
+                        <option value="plan">Plan</option>
+                        <option value="meeting">Meeting</option>
+                        <option value="briefing">Briefing</option>
+                    </select>
+                    <input type="datetime-local" id="note-when" class="modal-textarea" style="min-height: auto; width: 100%; font-size: 13px; display: none;">
+                    <input type="text" id="note-tags" class="modal-textarea" style="min-height: auto; width: 100%; font-size: 13px;" placeholder="tags, comma-separated (optional)">
+                    <textarea id="note-body" class="modal-textarea" style="width: 100%; min-height: 120px; resize: vertical; font-size: 13px;" placeholder="- Agenda item 1&#10;- Action: follow up with …"></textarea>
+                    <span id="notes-status" style="font-size: 11px; color: var(--text-secondary); min-height: 14px;"></span>
+                    <button id="note-new-btn" class="secondary-btn w-full">New / Clear</button>
+                    <button id="note-save-btn" class="secondary-btn is-teal w-full">Save note</button>
                 </div>
             </div>
         </div>
@@ -2175,7 +2198,7 @@
                         // switchAgentTab('memo') fires memoLoad with workspaceRoot:
                         // currentWorkspaceRoot, and an empty value would force the host
                         // to fall back to a possibly-wrong workspace root.
-                        const validSubTabs = ['agents', 'terminals', 'memo'];
+                        const validSubTabs = ['agents', 'terminals', 'memo', 'notes'];
                         const restoredSubTab = (message.activeSubTab && validSubTabs.includes(message.activeSubTab)) ? message.activeSubTab : 'terminals';
                         switchAgentTab(restoredSubTab, false);
                     }
@@ -2208,6 +2231,35 @@
                     // re-render. The redundant same-value write on the cold safety-net
                     // path is harmless — see plan edge-case audit.
                     switchAgentTab('memo');
+                    break;
+                }
+                case 'openNotesTab': {
+                    // Mirror openMemoTab — user-initiated entry to the Notes sub-tab.
+                    switchAgentTab('notes');
+                    break;
+                }
+                case 'notesListResult': {
+                    renderNotesList(message.notes || []);
+                    break;
+                }
+                case 'noteContent': {
+                    loadNoteIntoForm(message.note);
+                    break;
+                }
+                case 'noteSaved': {
+                    setNotesStatus('Saved "' + ((message.note && message.note.title) || 'note') + '"');
+                    clearNotesForm();
+                    vscode.postMessage({ type: 'notesList', workspaceRoot: currentWorkspaceRoot });
+                    break;
+                }
+                case 'noteDeleted': {
+                    setNotesStatus('Note deleted');
+                    if (document.getElementById('note-id') && document.getElementById('note-id').value === String(message.id)) { clearNotesForm(); }
+                    vscode.postMessage({ type: 'notesList', workspaceRoot: currentWorkspaceRoot });
+                    break;
+                }
+                case 'notesError': {
+                    setNotesStatus(message.message || 'Notes error', true);
                     break;
                 }
                 case 'setupStatus':
@@ -2628,13 +2680,17 @@
             const tabs = {
                 agents: agentListStandard,
                 terminals: agentListTerminals,
-                memo: document.getElementById('agent-list-memo')
+                memo: document.getElementById('agent-list-memo'),
+                notes: document.getElementById('agent-list-notes')
             };
             document.querySelectorAll('.sub-tab-btn').forEach(btn => {
                 btn.classList.toggle('is-active', btn.dataset.tab === tab);
             });
             if (tab === 'memo') {
                 vscode.postMessage({ type: 'memoLoad', workspaceRoot: currentWorkspaceRoot });
+            }
+            if (tab === 'notes') {
+                vscode.postMessage({ type: 'notesList', workspaceRoot: currentWorkspaceRoot });
             }
             if (tab === 'terminals') {
                 vscode.postMessage({ type: 'getStartupCommands' });
@@ -2711,6 +2767,109 @@
             memoDirty = false;
             const content = document.getElementById('memo-textarea')?.value || '';
             vscode.postMessage({ type: 'memoGeneratePrompt', content, action: 'send', workspaceRoot: currentWorkspaceRoot });
+        });
+
+        // === Notes (sidebar tab) ===
+        function setNotesStatus(text, isError) {
+            const el = document.getElementById('notes-status');
+            if (el) { el.textContent = text || ''; el.style.color = isError ? 'var(--accent-red)' : 'var(--text-secondary)'; }
+        }
+        function notesRelTime(iso) {
+            const t = Date.parse(iso);
+            if (Number.isNaN(t)) return '';
+            const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
+            if (mins < 60) return mins + 'm ago';
+            const hours = Math.round(mins / 60);
+            if (hours < 24) return hours + 'h ago';
+            return Math.round(hours / 24) + 'd ago';
+        }
+        function notesIsoToLocalInput(iso) {
+            const t = Date.parse(iso);
+            if (Number.isNaN(t)) return '';
+            const d = new Date(t);
+            const pad = n => String(n).padStart(2, '0');
+            return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+        }
+        function notesBodyFromContent(content) {
+            const s = typeof content === 'string' ? content : '';
+            const m = s.match(/^##\s+Body\s*$/im);
+            if (m && m.index !== undefined) { return s.slice(m.index + m[0].length).replace(/^\n+/, '').replace(/\s+$/, ''); }
+            return '';
+        }
+        function syncNotesWhenVisibility() {
+            const kind = document.getElementById('note-kind')?.value;
+            const when = document.getElementById('note-when');
+            if (when) { when.style.display = kind === 'meeting' ? '' : 'none'; }
+        }
+        function clearNotesForm() {
+            ['note-id', 'note-title', 'note-when', 'note-tags', 'note-body'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+            const kind = document.getElementById('note-kind'); if (kind) kind.value = 'plan';
+            syncNotesWhenVisibility();
+            setNotesStatus('');
+        }
+        function renderNotesList(notes) {
+            const list = document.getElementById('notes-list');
+            if (!list) return;
+            list.innerHTML = '';
+            if (!Array.isArray(notes) || notes.length === 0) {
+                const empty = document.createElement('div');
+                empty.style.cssText = 'font-size: 12px; color: var(--text-secondary); padding: 6px 0;';
+                empty.textContent = 'No notes yet. Create one below.';
+                list.appendChild(empty);
+                return;
+            }
+            for (const note of notes) {
+                const row = document.createElement('div');
+                row.style.cssText = 'display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; background: var(--panel-bg2, #050505); border: 1px solid var(--border-color); border-radius: 2px; cursor: pointer;';
+                const main = document.createElement('div');
+                main.style.cssText = 'min-width: 0; flex: 1;';
+                const title = document.createElement('div');
+                title.style.cssText = 'font-size: 12px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+                title.textContent = note.title || '(untitled)';
+                const meta = document.createElement('div');
+                meta.style.cssText = 'font-size: 10px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 1px; margin-top: 2px;';
+                const when = note.when ? ' · ' + notesIsoToLocalInput(note.when).replace('T', ' ') : '';
+                meta.textContent = (note.kind || 'note') + ' · ' + notesRelTime(note.updated) + when;
+                main.appendChild(title); main.appendChild(meta);
+                main.addEventListener('click', () => vscode.postMessage({ type: 'notesRead', id: note.id, workspaceRoot: currentWorkspaceRoot }));
+                const del = document.createElement('button');
+                del.className = 'secondary-btn';
+                del.style.cssText = 'flex: 0 0 auto; padding: 4px 8px; border-color: transparent;';
+                del.title = 'Delete note';
+                del.textContent = '✕';
+                // Delete immediately — no confirmation (hard project rule).
+                del.addEventListener('click', (e) => { e.stopPropagation(); vscode.postMessage({ type: 'notesDelete', id: note.id, workspaceRoot: currentWorkspaceRoot }); });
+                row.appendChild(main); row.appendChild(del);
+                list.appendChild(row);
+            }
+        }
+        function loadNoteIntoForm(note) {
+            if (!note) return;
+            const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+            set('note-id', note.id || '');
+            set('note-title', note.title || '');
+            set('note-kind', note.kind || 'plan');
+            set('note-tags', Array.isArray(note.tags) ? note.tags.join(', ') : '');
+            set('note-when', note.when ? notesIsoToLocalInput(note.when) : '');
+            set('note-body', notesBodyFromContent(note.content));
+            syncNotesWhenVisibility();
+            setNotesStatus('Editing "' + (note.title || '(untitled)') + '"');
+        }
+        document.getElementById('note-kind')?.addEventListener('change', syncNotesWhenVisibility);
+        document.getElementById('note-new-btn')?.addEventListener('click', clearNotesForm);
+        document.getElementById('note-save-btn')?.addEventListener('click', () => {
+            const title = (document.getElementById('note-title')?.value || '').trim();
+            if (!title) { setNotesStatus('A title is required', true); return; }
+            const kind = document.getElementById('note-kind')?.value || 'plan';
+            const body = document.getElementById('note-body')?.value || '';
+            const tags = document.getElementById('note-tags')?.value || '';
+            const whenRaw = document.getElementById('note-when')?.value || '';
+            const id = document.getElementById('note-id')?.value || '';
+            const payload = { type: 'notesCreate', workspaceRoot: currentWorkspaceRoot, kind, title, body, tags };
+            if (id) payload.id = id;
+            if (kind === 'meeting' && whenRaw) payload.when = whenRaw;
+            setNotesStatus('Saving…');
+            vscode.postMessage(payload);
         });
 
 

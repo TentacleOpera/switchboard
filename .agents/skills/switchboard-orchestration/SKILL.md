@@ -197,6 +197,43 @@ curl -s -X POST "$BASE/oversight/stop" -H "Content-Type: application/json" -d '{
 
 ---
 
+## 4b. Notes endpoints (POST) — the `.switchboard/notes/` store
+
+A file-based notes store (day-to-day plan jottings, meeting minutes, agent
+briefings), a sibling of `.switchboard/plans/`. Every verb is
+`POST /notes/verb/<name>` with a JSON body; the response is the usual
+`{ success, ... }` envelope. `workspaceRoot` is optional in the body (defaults to
+the server's). Notes live under `.switchboard/notes/{plans,meetings,briefings}/<slug>-<uuid>.md`;
+`kind` is the subdir (singular `plan`/`meeting`/`briefing` accepted).
+
+| Endpoint | Body | Response `data` | Purpose |
+|---|---|---|---|
+| `POST /notes/verb/list` | `{ kind?, limit?, workspaceRoot? }` | `{ notes: NoteMeta[] }` | List note metadata (no body), newest-`updated` first. `kind` filters to one subdir. |
+| `POST /notes/verb/read` | `{ id, workspaceRoot? }` | `{ note: NoteFull }` | One note including full markdown `content`. |
+| `POST /notes/verb/search` | `{ query, kind?, limit?, workspaceRoot? }` | `{ notes: NoteMeta[] }` | Case-insensitive substring match over title + tags + body. |
+| `POST /notes/verb/write` | `{ id?, kind, title, body?, tags?, when?, workspaceRoot? }` | `{ note: NoteMeta }` | Create (no `id`) or full-replace (with `id`). Sets `created` on create, always refreshes `updated`. `when` (ISO) is meetings-only. |
+| `POST /notes/verb/append` | `{ id, text, workspaceRoot? }` | `{ note: NoteMeta }` | Append a paragraph to the body and bump `updated`. |
+| `POST /notes/verb/delete` | `{ id, workspaceRoot? }` | `{ deleted: true, id }` | Delete the note file immediately. **No confirmation.** |
+| `POST /notes/verb/upcoming` | `{ withinMinutes?, workspaceRoot? }` | `{ meetings: NoteMeta[] }` | Meetings whose `when` falls within `now .. now+withinMinutes` (default 1440), soonest first. |
+| `POST /notes/verb/digest` | `{ lookaheadMinutes?, recentLimit?, workspaceRoot? }` | `{ digest, upcomingCount, recentCount }` | The compact NOTES DIGEST block — the same text injected into the orchestrator wake prompt. Empty store → `digest: ""`. |
+
+```bash
+# Create a meeting note — returns { success:true, note:{ id, file, ... } }
+curl -s -X POST "$BASE/notes/verb/write" -H "Content-Type: application/json" -d '{
+  "kind": "meeting",
+  "title": "Weekly sync with Platform team",
+  "tags": "platform, sync",
+  "when": "2026-08-05T15:00:00.000Z",
+  "body": "- Agenda item 1"
+}'
+
+curl -s -X POST "$BASE/notes/verb/upcoming" -H "Content-Type: application/json" -d '{"withinMinutes":1440}'
+curl -s -X POST "$BASE/notes/verb/append"   -H "Content-Type: application/json" -d '{"id":"<noteId>","text":"prepped ✔"}'
+curl -s -X POST "$BASE/notes/verb/delete"   -H "Content-Type: application/json" -d '{"id":"<noteId>"}'   # immediate, no confirm
+```
+
+---
+
 ## 5. Comms (POST)
 
 ### `POST /orchestrator/request` — fleet agent → orchestrator

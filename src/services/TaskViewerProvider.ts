@@ -34,6 +34,7 @@ let JSDOMClass: any;
 import { SessionActionLog, ArchiveSpec, ArchiveResult } from './SessionActionLog';
 import { KanbanProvider } from './KanbanProvider';
 import { OversightPassService } from './OversightPassService';
+import { NotesService } from './NotesService';
 import type { SetupPanelProvider } from './SetupPanelProvider';
 import { sendRobustText, getAntigravityHash, pasteTextViaClipboard, withTerminalSendLock } from './terminalUtils';
 import { buildFetchPlansPrompt } from './schedulerPresets';
@@ -638,6 +639,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _setupPanelProvider?: SetupPanelProvider;
     private _designPanelProvider?: { postMessage(message: any): void; handleServiceVerb(verb: string, payload: any): Promise<any>; getDesignAssetRoots?(workspaceRoot: string): string[] };
     private _planningPanelProvider?: { postMessage(message: any): void; handleServiceVerb(verb: string, payload: any): Promise<any> };
+    /**
+     * The file-based Notes store + verb engine. Vscode-free and owned outright
+     * (unlike the injected panel providers), so it's constructed inline and
+     * always available — the `/notes/verb/*` rail never 503s on a missing panel.
+     */
+    private _notesService = new NotesService();
     private _kanbanDbs = new Map<string, KanbanDatabase>();
     private _lastKanbanDbWarnings = new Map<string, string | null>();
     private _lastPlanIngestionValidationWarning: string | null = null;
@@ -2116,6 +2123,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     ? { ...payload, workspaceRoot: wsRoot }
                     : payload;
                 return await this._planningPanelProvider.handleServiceVerb(verb, p);
+            },
+            notesVerb: async (verb, payload, wsRoot) => {
+                const p = (wsRoot && payload && payload.workspaceRoot == null)
+                    ? { ...payload, workspaceRoot: wsRoot }
+                    : payload;
+                return await this._notesService.handleServiceVerb(verb, p);
             },
             designVerb: async (verb, payload, wsRoot) => {
                 if (!this._designPanelProvider) {
@@ -4554,6 +4567,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // 4. Cold-open safety net: re-assert Memo once the webview has had a moment to mount.
         setTimeout(() => {
             this.postMessage({ type: 'openMemoTab' });
+        }, 300);
+    }
+
+    /** Reveal the sidebar and switch to the Notes sub-tab (target of switchboard.openNotes). */
+    public async openNotesTab(): Promise<void> {
+        // Mirrors openMemoTab: persist for cold open, reveal, switch, cold-open safety net.
+        await this._context.workspaceState.update(TaskViewerProvider.ACTIVE_SUB_TAB_STATE_KEY, 'notes');
+        await this._seams().commands.executeCommand('switchboard-view.focus');
+        this.postMessage({ type: 'openNotesTab' });
+        setTimeout(() => {
+            this.postMessage({ type: 'openNotesTab' });
         }, 300);
     }
 
@@ -10765,7 +10789,19 @@ Each plan file must include:
             const recoveryPreamble = forceRecover
                 ? `Previous wake did not report completion — recover: check for an interrupted triage or merge before proceeding.\n`
                 : '';
-            const wakePrompt = `${recoveryPreamble}You are the Switchboard orchestrator. The system woke you. Read and follow .agents/skills/switchboard-orchestrator/SKILL.md — begin with the Wake Protocol. When done, report "wake complete, sleeping" and STOP.`;
+            // Best-effort NOTES DIGEST injection: on an empty/absent store or any
+            // error, buildDigest returns '' and the prompt is byte-identical to
+            // today's — purely additive, cannot regress the existing wake path.
+            let notesDigest = '';
+            try {
+                notesDigest = await this._notesService.buildDigest({ workspaceRoot: root });
+            } catch (err) {
+                console.error('[Autoban] notes digest failed:', err);
+            }
+            const digestBlock = notesDigest
+                ? `NOTES DIGEST (act on these via the /notes/verb/* rail):\n${notesDigest}\n\n`
+                : '';
+            const wakePrompt = `${recoveryPreamble}${digestBlock}You are the Switchboard orchestrator. The system woke you. Read and follow .agents/skills/switchboard-orchestrator/SKILL.md — begin with the Wake Protocol. When done, report "wake complete, sleeping" and STOP.`;
             let ok = false;
             try {
                 ok = await this._dispatchExecuteMessage(root, ORCHESTRATOR_TERMINAL_NAME, wakePrompt, { orchestrationWake: true });
@@ -12379,7 +12415,7 @@ Each plan file must include:
                         return { success: true };
                     }
                     case 'setActiveSubTab': {
-                        const validSubTabs = ['agents', 'terminals', 'memo'];
+                        const validSubTabs = ['agents', 'terminals', 'memo', 'notes'];
                         const activeSubTab = validSubTabs.includes(data.tab) ? data.tab : 'terminals';
                         await this._context.workspaceState.update(TaskViewerProvider.ACTIVE_SUB_TAB_STATE_KEY, activeSubTab);
                         return { success: true };
@@ -12501,6 +12537,90 @@ Each plan file must include:
                             action,
                             ...(sendSucceeded ? {} : { error: msg }),
                         };
+                    }
+                    // ── Notes sub-tab: thin wrappers over the owned _notesService,
+                    //    replying via postMessage. Mirrors the memo handlers' shape.
+                    case 'notesList': {
+                        const workspaceRoot = this._resolveStateWorkspaceRoot(data.workspaceRoot);
+                        if (!workspaceRoot) {
+                            this.postMessage({ type: 'notesError', message: 'No workspace folder found for notes.' });
+                            return { success: false, message: 'No workspace folder found for notes.' };
+                        }
+                        try {
+                            const notes = await this._notesService.list({ workspaceRoot, kind: data.kind });
+                            this.postMessage({ type: 'notesListResult', notes });
+                            return { success: true, notes };
+                        } catch (err) {
+                            const message = err instanceof Error ? err.message : 'Failed to list notes.';
+                            this.postMessage({ type: 'notesError', message });
+                            return { success: false, message };
+                        }
+                    }
+                    case 'notesRead':
+                    case 'notesOpen': {
+                        const workspaceRoot = this._resolveStateWorkspaceRoot(data.workspaceRoot);
+                        if (!workspaceRoot) {
+                            this.postMessage({ type: 'notesError', message: 'No workspace folder found for notes.' });
+                            return { success: false, message: 'No workspace folder found for notes.' };
+                        }
+                        try {
+                            const note = await this._notesService.read({ workspaceRoot, id: data.id });
+                            if (!note) {
+                                this.postMessage({ type: 'notesError', message: 'Note not found.' });
+                                return { success: false, message: 'Note not found.' };
+                            }
+                            this.postMessage({ type: 'noteContent', note });
+                            return { success: true, note };
+                        } catch (err) {
+                            const message = err instanceof Error ? err.message : 'Failed to read note.';
+                            this.postMessage({ type: 'notesError', message });
+                            return { success: false, message };
+                        }
+                    }
+                    case 'notesCreate': {
+                        const workspaceRoot = this._resolveStateWorkspaceRoot(data.workspaceRoot);
+                        if (!workspaceRoot) {
+                            this.postMessage({ type: 'notesError', message: 'No workspace folder found for notes.' });
+                            return { success: false, message: 'No workspace folder found for notes.' };
+                        }
+                        try {
+                            const note = await this._notesService.write({
+                                workspaceRoot,
+                                id: data.id,
+                                kind: data.kind,
+                                title: data.title,
+                                body: data.body,
+                                tags: data.tags,
+                                when: data.when
+                            });
+                            this.postMessage({ type: 'noteSaved', note });
+                            return { success: true, note };
+                        } catch (err) {
+                            const message = err instanceof Error ? err.message : 'Failed to save note.';
+                            this.postMessage({ type: 'notesError', message });
+                            return { success: false, message };
+                        }
+                    }
+                    case 'notesDelete': {
+                        const workspaceRoot = this._resolveStateWorkspaceRoot(data.workspaceRoot);
+                        if (!workspaceRoot) {
+                            this.postMessage({ type: 'notesError', message: 'No workspace folder found for notes.' });
+                            return { success: false, message: 'No workspace folder found for notes.' };
+                        }
+                        try {
+                            // Delete immediately — no confirmation (hard project rule).
+                            const deleted = await this._notesService.delete({ workspaceRoot, id: data.id });
+                            if (!deleted) {
+                                this.postMessage({ type: 'notesError', message: 'Note not found.' });
+                                return { success: false, message: 'Note not found.' };
+                            }
+                            this.postMessage({ type: 'noteDeleted', id: String(data.id) });
+                            return { success: true, id: String(data.id) };
+                        } catch (err) {
+                            const message = err instanceof Error ? err.message : 'Failed to delete note.';
+                            this.postMessage({ type: 'notesError', message });
+                            return { success: false, message };
+                        }
                     }
                     case 'getRecentActivity': {
                         const limit = Number(data.limit) || 50;

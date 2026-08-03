@@ -99,6 +99,7 @@
         design: ['design', 'common'],
         setup: ['setup', 'common'],
         memo: ['memo', 'common'],
+        notes: ['notes', 'common'],
     };
 
     function wsUrl() {

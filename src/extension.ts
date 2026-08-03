@@ -1173,6 +1173,11 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(openMemoDisposable);
 
+    const openNotesDisposable = vscode.commands.registerCommand('switchboard.openNotes', async () => {
+        await taskViewerProvider!.openNotesTab();
+    });
+    context.subscriptions.push(openNotesDisposable);
+
     const openInBrowserDisposable = registerSwitchboardCommand('switchboard.openInBrowser', async () => {
         if (!activeTaskViewerProvider) {
             vscode.window.showErrorMessage('Switchboard API server not available.');

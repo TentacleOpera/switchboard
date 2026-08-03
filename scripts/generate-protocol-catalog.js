@@ -36,6 +36,10 @@ const PROVIDERS = [
     { name: 'Design', file: 'src/services/DesignPanelProvider.ts', switchPattern: /switch\s*\(message\.type\)/ },
     { name: 'TaskViewer', file: 'src/services/TaskViewerProvider.ts', switchPattern: /switch\s*\(data\.type\)/ },
     { name: 'Setup', file: 'src/services/SetupPanelProvider.ts', switchPattern: /switch\s*\(message\?\.type\)/ },
+    // NotesService dispatches the /notes/verb/<name> rail via `switch (verb)` in
+    // handleServiceVerb (pure fs/path service, no webview push sites — the scan
+    // just finds no producers, which is correct).
+    { name: 'Notes', file: 'src/services/NotesService.ts', switchPattern: /switch\s*\(verb\)/ },
 ];
 
 const WEBVIEW_DIRS = [

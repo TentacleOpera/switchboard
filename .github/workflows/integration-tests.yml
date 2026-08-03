@@ -291,6 +291,13 @@ jobs:
       - name: WS surface scoping contract (fail-open, resync filtering, producer tagging)
         run: npm run test:contract:ws-surface-scoping
 
+      # The Notes store + verb rail: HTTP envelope (200/502/503), write→read
+      # round-trip on a real .switchboard/notes/ file, list ordering + kind
+      # filter, search, the meetings `upcoming` window, digest composition,
+      # immediate (no-confirmation) delete, and absent-store tolerance.
+      - name: Notes service contract (verb rail, round-trip, digest, immediate delete)
+        run: npm run test:contract:notes
+
       # Wired during the scrollbar-styling review pass. The scrollbar block was
       # appended to project.html's <style> in a way that DELETED the preceding
       # `.review-mode-btn.active` rule and reused its closing brace, silently

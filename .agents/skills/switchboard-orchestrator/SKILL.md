@@ -57,6 +57,17 @@
    dispatch a research agent for a well-formed research request; escalate planner-stage
    or unresolvable items; run Merge-Back for any feature whose subtasks are all coded
    AND reviewed.
+4b. **Notes-driven actions.** If the wake prompt carries a `NOTES DIGEST`, act on it via
+   the `POST /notes/verb/<name>` rail (see the Notes endpoints in the
+   `switchboard-orchestration` skill):
+   - **Imminent meeting** (upcoming within the window): if no prep note exists for it,
+     `write` a `kind: meeting` prep note (agenda skeleton + linked context) and `append`
+     a one-line "prepped" marker to the source note.
+   - **Stale/scattered plan-notes:** `read` them, then `write` a consolidated summary
+     note and/or reorganize (re-`write` with a cleaned body). git is the undo.
+   - **Daily briefing:** once per day, `write` a `kind: briefing` note summarizing recent
+     notes + today's meetings.
+   These are best-effort and never block merge-back. Never add confirmation gates.
 5. **Report completion, then STOP.** As the final act of every wake, append the summary
    line to the session log AND touch `.switchboard/orchestrator/last-wake-complete`
    (write an ISO timestamp as the file's content for mtime-robustness) — the engine's
