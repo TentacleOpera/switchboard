@@ -34,7 +34,7 @@ const webviewDir = path.join(repoRoot, 'src', 'webview');
 // gains its first `.sb-icon-*` rule.
 const PANELS = [
     'design.html', 'kanban.html', 'planning.html',
-    'setup.html', 'implementation.html', 'project.html',
+    'setup.html', 'implementation.html', 'project.html', 'tickets.html',
 ];
 
 // Size modifiers are not icons — they carry no mask and need no asset.

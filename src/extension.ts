@@ -63,6 +63,7 @@ let terminalClearStatusBarItem: vscode.StatusBarItem;
 let terminalResetStatusBarItem: vscode.StatusBarItem;
 let kanbanStatusBarItem: vscode.StatusBarItem;
 let artifactsStatusBarItem: vscode.StatusBarItem;
+let ticketsStatusBarItem: vscode.StatusBarItem;
 let projectStatusBarItem: vscode.StatusBarItem;
 let designStatusBarItem: vscode.StatusBarItem;
 let switchboardHubStatusBarItem: vscode.StatusBarItem;
@@ -2237,6 +2238,12 @@ export async function activate(context: vscode.ExtensionContext) {
     artifactsStatusBarItem.command = 'switchboard.openPlanningPanel';
     context.subscriptions.push(artifactsStatusBarItem);
 
+    ticketsStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99.5);
+    ticketsStatusBarItem.text = '$(tag) Tickets';
+    ticketsStatusBarItem.tooltip = 'Open Tickets Panel';
+    ticketsStatusBarItem.command = 'switchboard.openTicketsPanel';
+    context.subscriptions.push(ticketsStatusBarItem);
+
     projectStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
     projectStatusBarItem.text = '$(project) Project';
     projectStatusBarItem.tooltip = 'Open Project Management Panel';
@@ -2267,6 +2274,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const showTerminalControls = config.get<boolean>('statusBar.showTerminalControls', true);
         const showKanbanButton = config.get<boolean>('statusBar.showKanbanButton', true);
         const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', true);
+        const showTicketsButton = config.get<boolean>('statusBar.showTicketsButton', true);
         const showDesignButton = config.get<boolean>('statusBar.showDesignButton', true);
         const showProjectButton = config.get<boolean>('statusBar.showProjectButton', true);
         const showMemoButton = config.get<boolean>('statusBar.showMemoButton', true);
@@ -2279,6 +2287,7 @@ export async function activate(context: vscode.ExtensionContext) {
             kanbanStatusBarItem.hide();
             projectStatusBarItem.hide();
             artifactsStatusBarItem.hide();
+            ticketsStatusBarItem.hide();
             designStatusBarItem.hide();
             memoStatusBarItem.hide();
 
@@ -2290,6 +2299,9 @@ export async function activate(context: vscode.ExtensionContext) {
                 enabledCount++;
             }
             if (showArtifactsButton) {
+                enabledCount++;
+            }
+            if (showTicketsButton) {
                 enabledCount++;
             }
             if (showProjectButton) {
@@ -2338,6 +2350,12 @@ export async function activate(context: vscode.ExtensionContext) {
                 artifactsStatusBarItem.hide();
             }
 
+            if (showTicketsButton) {
+                ticketsStatusBarItem.show();
+            } else {
+                ticketsStatusBarItem.hide();
+            }
+
             if (showDesignButton) {
                 designStatusBarItem.show();
             } else {
@@ -2364,6 +2382,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const showTerminalControls = config.get<boolean>('statusBar.showTerminalControls', true);
         const showKanbanButton = config.get<boolean>('statusBar.showKanbanButton', true);
         const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', true);
+        const showTicketsButton = config.get<boolean>('statusBar.showTicketsButton', true);
         const showDesignButton = config.get<boolean>('statusBar.showDesignButton', true);
         const showProjectButton = config.get<boolean>('statusBar.showProjectButton', true);
         const showMemoButton = config.get<boolean>('statusBar.showMemoButton', true);
@@ -2377,11 +2396,12 @@ export async function activate(context: vscode.ExtensionContext) {
             lines.push(`[$(stop-circle) Reset](command:switchboard.deregisterAllTerminals)`);
         }
 
-        const hasPanels = showKanbanButton || showArtifactsButton || showProjectButton || showDesignButton;
+        const hasPanels = showKanbanButton || showArtifactsButton || showTicketsButton || showProjectButton || showDesignButton;
         if (hasPanels) {
             if (lines.length > 2) lines.push('---');
             if (showKanbanButton) lines.push(`[$(table) Kanban](command:switchboard.openKanban)`);
             if (showArtifactsButton) lines.push(`[$(notebook) Artifacts](command:switchboard.openPlanningPanel)`);
+            if (showTicketsButton) lines.push(`[$(tag) Tickets](command:switchboard.openTicketsPanel)`);
             if (showProjectButton) lines.push(`[$(project) Project](command:switchboard.openProjectPanel)`);
             if (showDesignButton) lines.push(`[$(symbol-color) Design](command:switchboard.openDesignPanel)`);
         }
@@ -2407,6 +2427,7 @@ export async function activate(context: vscode.ExtensionContext) {
             e.affectsConfiguration('switchboard.statusBar.showTerminalControls') ||
             e.affectsConfiguration('switchboard.statusBar.showKanbanButton') ||
             e.affectsConfiguration('switchboard.statusBar.showArtifactsButton') ||
+            e.affectsConfiguration('switchboard.statusBar.showTicketsButton') ||
             e.affectsConfiguration('switchboard.statusBar.showDesignButton') ||
             e.affectsConfiguration('switchboard.statusBar.showProjectButton') ||
             e.affectsConfiguration('switchboard.statusBar.showMemoButton') ||
@@ -2435,6 +2456,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const showTerminalControls = config.get<boolean>('statusBar.showTerminalControls', true);
         const showKanbanButton = config.get<boolean>('statusBar.showKanbanButton', true);
         const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', true);
+        const showTicketsButton = config.get<boolean>('statusBar.showTicketsButton', true);
         const showDesignButton = config.get<boolean>('statusBar.showDesignButton', true);
         const showProjectButton = config.get<boolean>('statusBar.showProjectButton', true);
         const showMemoButton = config.get<boolean>('statusBar.showMemoButton', true);
@@ -2466,7 +2488,7 @@ export async function activate(context: vscode.ExtensionContext) {
             });
         }
 
-        const hasPanelItems = showKanbanButton || showArtifactsButton || showProjectButton || showDesignButton || showMemoButton;
+        const hasPanelItems = showKanbanButton || showArtifactsButton || showTicketsButton || showProjectButton || showDesignButton || showMemoButton;
         if (hasPanelItems) {
             if (items.length > 0) {
                 items.push({ label: 'Panels', kind: vscode.QuickPickItemKind.Separator });
@@ -2483,6 +2505,13 @@ export async function activate(context: vscode.ExtensionContext) {
                     label: '$(notebook) Artifacts',
                     description: 'Open Artifacts Panel',
                     command: 'switchboard.openPlanningPanel'
+                });
+            }
+            if (showTicketsButton) {
+                items.push({
+                    label: '$(tag) Tickets',
+                    description: 'Open Tickets Panel',
+                    command: 'switchboard.openTicketsPanel'
                 });
             }
             if (showProjectButton) {

@@ -1298,6 +1298,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     }
                     return { success: true };
                 }
+                case 'browseIntegrationTicketSaveLocation':
                 case 'browseTicketsFolder': {
                     const provider = message.provider;
                     const folderUri = await this._seams().ui.showOpenDialog({
@@ -1308,13 +1309,14 @@ export class SetupPanelProvider implements vscode.Disposable {
                     });
                     if (folderUri?.[0]) {
                         this.postMessage({
-                            type: 'browseTicketsFolderResult',
+                            type: 'integrationTicketSaveLocationBrowsed',
                             provider,
                             path: folderUri[0]
                         });
                     }
                     return { success: true };
                 }
+                case 'saveIntegrationTicketSaveLocation':
                 case 'saveTicketsFolder': {
                     const provider = message.provider;
                     const folderPath = String(message.folderPath || '').trim();
@@ -1323,7 +1325,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         config.ticketSaveLocation = folderPath;
                         await GlobalIntegrationConfigService.saveConfig(provider, config);
                         this.postMessage({
-                            type: 'ticketsFoldersListed',
+                            type: 'integrationTicketSaveLocations',
                             provider,
                             path: folderPath,
                             ticketsAutoSync: await GlobalIntegrationConfigService.getTicketsAutoSync()
@@ -1335,18 +1337,19 @@ export class SetupPanelProvider implements vscode.Disposable {
                     await GlobalIntegrationConfigService.setTicketsAutoSync(message.enabled === true);
                     return { success: true };
                 }
+                case 'getIntegrationTicketSaveLocations':
                 case 'listTicketsFolders': {
                     const clickupConfig = await GlobalIntegrationConfigService.loadConfig('clickup');
                     const linearConfig = await GlobalIntegrationConfigService.loadConfig('linear');
                     const ticketsAutoSync = await GlobalIntegrationConfigService.getTicketsAutoSync();
                     this.postMessage({
-                        type: 'ticketsFoldersListed',
+                        type: 'integrationTicketSaveLocations',
                         provider: 'clickup',
                         path: clickupConfig?.ticketSaveLocation || '',
                         ticketsAutoSync
                     });
                     this.postMessage({
-                        type: 'ticketsFoldersListed',
+                        type: 'integrationTicketSaveLocations',
                         provider: 'linear',
                         path: linearConfig?.ticketSaveLocation || '',
                         ticketsAutoSync

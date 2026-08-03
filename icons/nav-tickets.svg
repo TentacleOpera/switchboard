@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- Tickets — flat sci-fi tag plate: ticket shape with corner notches and keyhole notch -->
+  <path fill="#45e0e6" fill-rule="evenodd" d="
+    M3 2 H13 L14 3 V6.25 A1.25 1.25 0 0 0 14 8.75 V13 L13 14 H3 L2 13 V8.75 A1.25 1.25 0 0 0 2 6.25 V3 Z
+    M5 4.5 H11 V6 H5 Z
+    M5 8 H11 V9.25 H5 Z
+    M5 11 H9 V12.25 H5 Z
+  "/>
+</svg>

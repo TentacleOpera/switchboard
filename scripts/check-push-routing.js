@@ -27,6 +27,7 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 const BASELINES = {
     'src/services/KanbanProvider.ts': 1,
     'src/services/PlanningPanelProvider.ts': 3,
+    'src/services/TicketsPanelProvider.ts': 0,
     'src/services/DesignPanelProvider.ts': 1,
     'src/services/SetupPanelProvider.ts': 1,
     'src/services/TaskViewerProvider.ts': 1,

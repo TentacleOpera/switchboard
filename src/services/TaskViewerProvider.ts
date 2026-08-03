@@ -89,7 +89,7 @@ import { KanbanDatabase, KanbanPlanRecord, WorkspaceDatabaseMapping } from './Ka
 import { matchWorktreePath } from './worktreeResolver';
 import { KanbanMigration } from './KanbanMigration';
 import { WorkspaceExcludeService } from './WorkspaceExcludeService';
-import { ensureWorkspaceIdentity, resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentityService';
+import { ensureWorkspaceIdentity, resolveEffectiveWorkspaceRootFromMappings, getMappingsFromIndex, resolveParentsForTerminals } from './WorkspaceIdentityService';
 import { inferTopicFromPath, parsePlanMetadata } from './planMetadataUtils';
 import {
     type ClickUpAutomationRule,
@@ -1932,10 +1932,32 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             if (!ptyHostReady()) {
                 return { success: false, error: 'PTY host unavailable on this platform/installation' };
             }
+            if (verb === 'ptyCreateTerminal' && payload) {
+                if (payload.parentRoot && !payload.cwd && !payload.worktreePath) {
+                    payload = { ...payload, cwd: payload.parentRoot };
+                    delete payload.parentRoot;
+                }
+                if (!payload.cwd && !payload.worktreePath) {
+                    const selected = this._kanbanProvider?.getCurrentWorkspaceRoot();
+                    if (selected) {
+                        payload = { ...payload, cwd: resolveEffectiveWorkspaceRootFromMappings(selected) };
+                    }
+                }
+            }
             const result = await this._ptyHostVerb(verb, payload);
             if (['ptyCreateTerminal', 'ptyCloseTerminal', 'ptyRenameTerminal'].includes(verb)) {
                 const db = await this._getKanbanDb(root || effectiveRoot);
                 void updateMirrorRegistry(db);
+            }
+            if (verb === 'ptyListTerminals' && result && result.success !== false && Array.isArray(result.terminals)) {
+                const cfg = getMappingsFromIndex();
+                const fallback = root || effectiveRoot;
+                const { parents, parentMap } = resolveParentsForTerminals(cfg, fallback, result.terminals);
+                result.parents = parents;
+                result.terminals = result.terminals.map((t: any) => ({
+                    ...t,
+                    parentRoot: parentMap.get(t.cwd) ?? null,
+                }));
             }
             return result;
         };
@@ -2205,7 +2227,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         return sharedGetProjectHtml(repoRoot, currentWsRoot(), caps, getTheme());
                     },
                     getShellHtml: async () => sharedGetShellHtml(repoRoot, getTheme()),
-                    getPanelsManifest: () => sharedGetPanelsManifest({ design: true, setup: true, planning: true, terminals: ptyHostReady() }),
+                    getPanelsManifest: () => sharedGetPanelsManifest({ design: true, setup: true, planning: true, tickets: true, terminals: ptyHostReady() }),
                     getPanelHtml: async (id: string) => {
                         const caps = {
                             ...baseHostCapabilities,

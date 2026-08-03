@@ -13,6 +13,15 @@ function escapeAttr(s) {
     return String(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+function escapeHtml(value) {
+    return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 function sanitizeUrl(rawUrl) {
     const trimmed = String(rawUrl).trim();
     if (/^(#|\/|\.{1,2}\/)/.test(trimmed)) { return trimmed; }
@@ -457,6 +466,219 @@ function renderJsonTree(data, depth, maxDepth, seen) {
 
     details.appendChild(children);
     return details;
+}
+
+function htmlToMarkdown(html) {
+    if (!html) return '';
+    let text = html;
+    text = text.replace(/<br\s*\/?>/gi, '\n');
+    text = text.replace(/<\/p>/gi, '\n\n');
+    text = text.replace(/<p>/gi, '');
+    text = text.replace(/<strong>(.*?)<\/strong>/gi, '**$1**');
+    text = text.replace(/<b>(.*?)<\/b>/gi, '**$1**');
+    text = text.replace(/<em>(.*?)<\/em>/gi, '*$1*');
+    text = text.replace(/<i>(.*?)<\/i>/gi, '*$1*');
+    text = text.replace(/<code>(.*?)<\/code>/gi, '`$1`');
+    text = text.replace(/<a\s+href="([^"]+)"[^>]*>(.*?)<\/a>/gi, '[$2]($1)');
+    text = text.replace(/<li[^>]*>(.*?)<\/li>/gi, '- $1\n');
+    text = text.replace(/<\/?[^>]+(>|$)/g, '');
+    return text.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#039;/g, "'");
+}
+
+function flashIconBtn(btn) {
+    if (!btn) return;
+    btn.classList.remove('icon-flash-spin');
+    void btn.offsetWidth;
+    btn.classList.add('icon-flash-spin');
+    setTimeout(() => btn.classList.remove('icon-flash-spin'), 600);
+}
+
+function _closeOneOverflowPopover(p) {
+    if (!p) return;
+    p.removeAttribute('data-open');
+    if (p._ownerMenu && p.parentElement !== p._ownerMenu) {
+        p._ownerMenu.appendChild(p);
+    }
+}
+
+function _closeAllOverflowPopovers(except) {
+    document.querySelectorAll('[data-overflow-popover][data-open="true"]').forEach(p => {
+        if (p !== except) _closeOneOverflowPopover(p);
+    });
+}
+
+function _recomputeOverflowTriggerVisibility(menu) {
+    if (!menu) return;
+    const popover = menu.querySelector('[data-overflow-popover]');
+    if (!popover) return;
+    const items = Array.from(popover.querySelectorAll('.overflow-menu-item, .strip-btn'));
+    const anyVisible = items.some(el => {
+        if (el.disabled) return false;
+        const cs = window.getComputedStyle(el);
+        if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+        return true;
+    });
+    menu.setAttribute('data-empty', anyVisible ? 'false' : 'true');
+}
+
+function _recomputeAllOverflowTriggers() {
+    document.querySelectorAll('[data-overflow-menu]').forEach(_recomputeOverflowTriggerVisibility);
+}
+
+let _overflowMenusInitialized = false;
+function initOverflowMenus() {
+    if (_overflowMenusInitialized) return;
+    _overflowMenusInitialized = true;
+
+    document.addEventListener('click', (e) => {
+        const trigger = e.target.closest('[data-overflow-trigger]');
+        if (trigger) {
+            e.stopPropagation();
+            const menu = trigger.closest('[data-overflow-menu]');
+            const popover = menu && menu.querySelector('[data-overflow-popover]');
+            if (!popover) return;
+            const willOpen = popover.getAttribute('data-open') !== 'true';
+            _closeAllOverflowPopovers(willOpen ? popover : null);
+            if (willOpen) {
+                popover._ownerMenu = menu;
+                if (popover.parentElement !== document.body) {
+                    document.body.appendChild(popover);
+                }
+                _positionOverflowPopover(popover, trigger);
+                popover.setAttribute('data-open', 'true');
+            } else {
+                _closeOneOverflowPopover(popover);
+            }
+            return;
+        }
+        if (!e.target.closest('[data-overflow-menu]') && !e.target.closest('[data-overflow-popover]')) {
+            _closeAllOverflowPopovers(null);
+        }
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        const openPopovers = document.querySelectorAll('[data-overflow-popover][data-open="true"]');
+        if (openPopovers.length) {
+            openPopovers.forEach(_closeOneOverflowPopover);
+        }
+    });
+
+    const repositionOpen = () => {
+        document.querySelectorAll('[data-overflow-popover][data-open="true"]').forEach(p => {
+            const menu = p._ownerMenu || p.closest('[data-overflow-menu]');
+            const trigger = menu && menu.querySelector('[data-overflow-trigger]');
+            if (trigger) _positionOverflowPopover(p, trigger);
+        });
+    };
+    window.addEventListener('scroll', repositionOpen, true);
+    window.addEventListener('resize', repositionOpen);
+}
+
+const _debounceTimers = {};
+function persistTab(tabKey, tabState, workspaceRoot) {
+    const timerKey = tabKey + (workspaceRoot ? '::' + workspaceRoot : '');
+    if (_debounceTimers[timerKey]) {
+        clearTimeout(_debounceTimers[timerKey]);
+    }
+    _debounceTimers[timerKey] = setTimeout(() => {
+        if (typeof vscode !== 'undefined' && vscode.postMessage) {
+            vscode.postMessage({
+                type: 'persistTabState',
+                tabKey,
+                workspaceRoot,
+                state: tabState
+            });
+        }
+        delete _debounceTimers[timerKey];
+    }, 300);
+}
+
+function populateWorkspaceDropdown(selectElOrId, workspaceItems, selectedValue, includeAllOption = true) {
+    const select = typeof selectElOrId === 'string' ? document.getElementById(selectElOrId) : selectElOrId;
+    if (!select) return;
+    const current = selectedValue || '';
+    select.innerHTML = '';
+    for (const item of workspaceItems) {
+        const option = document.createElement('option');
+        option.value = item.workspaceRoot;
+        option.textContent = item.label;
+        if (item.workspaceRoot === current) {
+            option.selected = true;
+        }
+        select.appendChild(option);
+    }
+    if (includeAllOption) {
+        const allOpt = document.createElement('option');
+        allOpt.value = '';
+        allOpt.textContent = 'All Workspaces';
+        if (!current) allOpt.selected = true;
+        select.insertBefore(allOpt, select.firstChild);
+    }
+}
+
+function normalizeFsPath(p) {
+    return String(p || '').replace(/[\\/]+$/, '');
+}
+
+function getCurrentFolderPaths(map, filter) {
+    if (filter) {
+        const normFilter = normalizeFsPath(filter);
+        const matched = Object.entries(map || {})
+            .filter(([root]) => normalizeFsPath(root) === normFilter)
+            .flatMap(([, paths]) => paths || []);
+        return [...new Set(matched)];
+    }
+    return [...new Set(Object.values(map || {}).flat())];
+}
+
+function getFolderModalEntries(map, filter) {
+    const normFilter = normalizeFsPath(filter);
+    const byPath = new Map();
+    for (const [root, paths] of Object.entries(map || {})) {
+        if (normFilter && normalizeFsPath(root) !== normFilter) continue;
+        for (const p of (paths || [])) {
+            const key = normalizeFsPath(p);
+            if (!key) continue;
+            if (!byPath.has(key)) byPath.set(key, { path: p, roots: new Set() });
+            byPath.get(key).roots.add(root);
+        }
+    }
+    return [...byPath.values()].map(e => ({ path: e.path, roots: [...e.roots] }));
+}
+
+function labelForWorkspaceRoot(root) {
+    const item = (typeof _workspaceItems !== 'undefined' ? _workspaceItems : []).find(w => normalizeFsPath(w.workspaceRoot) === normalizeFsPath(root));
+    if (item) return item.label;
+    const base = normalizeFsPath(root).split(/[\\/]/).filter(Boolean).pop();
+    return base ? base + ' (not open)' : root;
+}
+
+function renderFolderListModal() {
+    const folderListModal = document.getElementById('folder-list-modal');
+    if (!folderListModal) return;
+    folderListModal.innerHTML = '';
+
+    const isTickets = typeof folderModalScope !== 'undefined' && folderModalScope === 'tickets';
+    const map = isTickets ? ((typeof state !== 'undefined' && state.ticketsFolderPathsByRoot) || {}) : ((typeof state !== 'undefined' && state.localFolderPathsByRoot) || {});
+    const filter = (typeof folderModalScope !== 'undefined' && folderModalScope === 'research') ? (typeof researchWorkspaceRoot !== 'undefined' ? researchWorkspaceRoot : '') : ((typeof state !== 'undefined' && state.docsWorkspaceRootFilter) || '');
+    const entries = getFolderModalEntries(map, filter);
+    const isAggregate = !filter;
+
+    const addBtn = document.getElementById('btn-add-folder-modal');
+    if (addBtn) {
+        addBtn.disabled = isAggregate;
+        addBtn.title = isAggregate ? 'Select a specific workspace to add a folder' : '';
+        addBtn.style.opacity = isAggregate ? '0.5' : '';
+    }
+
+    if (isAggregate) {
+        const hint = document.createElement('div');
+        hint.className = 'folder-list-hint';
+        hint.style.cssText = 'padding: 8px 4px; font-size: 11px; color: var(--text-secondary); opacity: 0.85;';
+        hint.textContent = 'Viewing all workspaces. Select a specific workspace to add or remove folders.';
+        folderListModal.appendChild(hint);
+    }
 }
 
 // Shared click-flash feedback: gives every button a brief press pulse on click so actions

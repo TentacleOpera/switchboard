@@ -126,17 +126,44 @@ test('an agentCompleted for a name absent from fleetList triggers a refetch', ()
 
 // ------------------------------------------------------------- click / badge clear
 
-test('focusTerminal clears the badge itself, not via assignToFocusedPane', () => {
+test('focusTerminal clears the badge itself, not via the seating call', () => {
     const arm = block(terminalsJs, "message.type === 'focusTerminal'", "message.type === 'clearTerminalBadge'");
     const clearAt = arm.indexOf('terminalBadges.delete(');
-    const assignAt = arm.indexOf('assignToFocusedPane(');
+    // The arm delegates to locateTerminal, which seats the terminal AND hands it
+    // the caret — an inbound focus request means "let me type in this one", so the
+    // pane assignment alone was never the whole job.
+    const seatAt = arm.indexOf('locateTerminal(');
     assert.ok(clearAt !== -1, 'the focusTerminal arm must clear the badge');
-    assert.ok(assignAt !== -1, 'the focusTerminal arm must assign the terminal to the focused pane');
+    assert.ok(seatAt !== -1, 'the focusTerminal arm must seat the terminal in the focused pane');
     // assignToFocusedPane early-returns when the terminal already occupies the
     // focused pane, which is the most likely case for a click on a lit entry.
-    assert.ok(clearAt < assignAt, 'the badge must be cleared BEFORE delegating, to survive the early-return path');
+    assert.ok(clearAt < seatAt, 'the badge must be cleared BEFORE delegating, to survive the early-return path');
     assert.ok(arm.includes('renderSidebarList()'), 'the arm must repaint the sidebar on the early-return path');
     assert.ok(arm.includes('postFleetStateToShell()'), 'the arm must re-relay so the strip light clears too');
+});
+
+test('locateTerminal seats the terminal AND gives it the caret', () => {
+    const fn = block(terminalsJs, 'function locateTerminal(name) {', 'function assignToFocusedPane(terminalName) {');
+    assert.ok(fn.includes('assignToFocusedPane('), 'locateTerminal must still seat via assignToFocusedPane');
+    assert.ok(fn.includes('focusPaneTerminal('), 'locateTerminal must focus the pane, or "focus terminal" cannot be typed into');
+});
+
+test('a pane focus change never rebuilds the grid', () => {
+    // renderPaneGrid() empties #pane-grid and reparents every live xterm. A
+    // re-parented node loses focus, so doing that for a highlight change costs the
+    // operator their first click — the two-click-to-type defect.
+    const fn = block(terminalsJs, 'function setFocusedPane(index) {', 'function renderPaneGrid() {');
+    assert.ok(!fn.includes('renderPaneGrid()'), 'setFocusedPane must not rebuild the grid');
+    assert.ok(fn.includes('classList.toggle('), 'setFocusedPane must move the .focused class directly');
+    assert.ok(fn.includes('focusPaneTerminal('), 'setFocusedPane must hand the caret to the newly focused pane');
+});
+
+test('renderPaneGrid hands the caret back after a forced rebuild', () => {
+    // It runs on every terminalsChanged broadcast and every agentCompleted badge,
+    // so without this an unrelated terminal spawning yanks the caret mid-keystroke.
+    const fn = block(terminalsJs, 'function renderPaneGrid() {', 'function resolveFlooredLayout() {');
+    assert.ok(fn.includes('paneGridEl.contains(document.activeElement)'), 'renderPaneGrid must record whether it owned the caret');
+    assert.ok(fn.includes('if (hadFocus) { focusPaneTerminal('), 'renderPaneGrid must restore the caret it displaced');
 });
 
 test('assignToFocusedPane re-relays on BOTH of its badge-clear paths', () => {

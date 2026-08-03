@@ -10,7 +10,7 @@
     let initialAssignmentDone = false;
     let focusedPaneIndex = 0;
     let paneAssignments = []; // [terminalName or null, ...] length based on currentLayout
-    const collapsedWorktrees = new Set();
+    const collapsedGroups = new Set();
     let osNotifyEnabled = false;
 
     let soloTerminalName = null;
@@ -26,6 +26,11 @@
         || window.__SB_PTY_HOST_ORIGIN__
         || `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`;
 
+    // role -> agent CLI label ('CLAUDE CLI'), exactly as the kanban column sublines
+    // show it. Supplied pre-derived by getStartupCommands; never computed here, so the
+    // two surfaces cannot disagree about what a role is running.
+    let agentNames = {};
+
     const terminalBadges = new Map(); // terminalName -> string label / count
     // name -> { container, term, fitAddon, rendererAddon, isWebgl, ws, lastSeq, batchQueue,
     //           pendingAckChars, ackSuppressChars, reconnectTimer, reconnectDelay,
@@ -34,6 +39,7 @@
     // timer or frame id of their own.
     const terminalsMap = new Map();
     let fleetList = [];
+    let parentsList = [];
 
     const listEl = document.getElementById('terminals-list');
     const mainEl = document.getElementById('terminals-main');
@@ -322,9 +328,10 @@
             });
         }
 
-        // Scoped to the picker: #btn-clear-all borrows .btn-layout for its looks but is
-        // not a layout choice. An unscoped query binds this handler to it too, leaving
-        // the whole thing standing on the data-layout null-check below.
+        // Stays scoped to the picker. #btn-clear-all used to sit in this toolbar
+        // wearing .btn-layout and an unscoped query bound this handler to it too;
+        // it now lives in the sidebar ops block, but the scope is still the right
+        // thing to assert.
         const layoutBtns = document.querySelectorAll('.layout-picker .btn-layout');
         layoutBtns.forEach(btn => {
             btn.addEventListener('click', () => {
@@ -351,6 +358,22 @@
             btnClearAll.addEventListener('click', () => withClearingFeedback(btnClearAll, clearAllTerminals));
         }
 
+        const btnOpenAll = document.getElementById('btn-open-all');
+        if (btnOpenAll) {
+            btnOpenAll.addEventListener('click', async () => {
+                if (btnOpenAll.disabled) { return; }
+                btnOpenAll.disabled = true;
+                const label = btnOpenAll.textContent;
+                btnOpenAll.textContent = 'OPENING…';
+                try {
+                    await openAllTerminals();
+                } finally {
+                    btnOpenAll.disabled = false;
+                    btnOpenAll.textContent = label;
+                }
+            });
+        }
+
         window.addEventListener('message', (event) => {
             const message = event.data;
             if (!message) return;
@@ -365,10 +388,14 @@
                 if (terminalBadges.has(message.name)) {
                     terminalBadges.delete(message.name);
                 }
-                assignToFocusedPane(message.name);
+                // locateTerminal, not assignToFocusedPane: an inbound focus request
+                // from the board means "let me type in this one", which needs the
+                // caret and not just the pane slot.
+                locateTerminal(message.name);
                 renderSidebarList();
                 renderPaneGrid();
                 postFleetStateToShell();
+                focusPaneTerminal(paneAssignments.indexOf(message.name));
             } else if (message.type === 'clearTerminalBadge' && typeof message.name === 'string') {
                 // Acknowledge-only sibling of `focusTerminal`. The strip's click now
                 // pops the terminal out into its own window, so the user HAS seen the
@@ -402,7 +429,9 @@
             checkSoloNotFound();
             fetchTerminalList();
         } else {
-            loadLayoutSettings().then(() => {
+            // Labels before the first paint, so rows do not visibly gain their CLI
+            // name a beat after appearing.
+            Promise.all([loadLayoutSettings(), fetchAgentNames()]).then(() => {
                 fetchTerminalList();
             });
         }
@@ -481,7 +510,7 @@
     async function loadLayoutSettings() {
         const savedMode = await loadSetting('terminals.layoutMode', '1');
         const savedPanes = await loadSetting('terminals.paneAssignments', []);
-        const savedCollapsed = await loadSetting('terminals.collapsedWorktrees', []);
+        const savedCollapsed = await loadSetting('terminals.collapsedGroups', []);
         const savedNotify = await loadSetting('terminals.osNotify', false);
 
         if (LAYOUT_MODES.includes(savedMode)) {
@@ -492,7 +521,7 @@
             paneAssignments = savedPanes;
         }
         if (Array.isArray(savedCollapsed)) {
-            savedCollapsed.forEach(c => collapsedWorktrees.add(c));
+            savedCollapsed.forEach(c => collapsedGroups.add(c));
         }
         osNotifyEnabled = Boolean(savedNotify);
         if (notifyToggleEl) {
@@ -503,7 +532,7 @@
     function saveLayoutSettings() {
         saveSetting('terminals.layoutMode', currentLayout);
         saveSetting('terminals.paneAssignments', paneAssignments);
-        saveSetting('terminals.collapsedWorktrees', Array.from(collapsedWorktrees));
+        saveSetting('terminals.collapsedGroups', Array.from(collapsedGroups));
     }
 
     async function fetchTerminalList() {
@@ -518,6 +547,13 @@
                 if (data && Array.isArray(data.terminals)) {
                     hasFetchedList = true;
                     fleetList = data.terminals;
+                    parentsList = data.parents || [];
+                    // Self-heal for a custom agent added mid-session: only re-reads when
+                    // a role turns up that the cached label map has never seen, so the
+                    // common terminalsChanged refresh costs nothing extra.
+                    if (fleetList.some(t => t.role && !(t.role in agentNames))) {
+                        await fetchAgentNames();
+                    }
                     sanitizePaneAssignments();
                     renderSidebarList();
                     renderPaneGrid();
@@ -656,16 +692,111 @@
         }
     }
 
+    function renderTerminalRow(item) {
+        const itemDiv = document.createElement('div');
+        const paneIndex = paneAssignments.indexOf(item.friendlyName);
+        const isFocused = activeTerminalName === item.friendlyName;
+        itemDiv.className = 'terminal-item'
+            + (isFocused ? ' active' : '')
+            + (paneIndex !== -1 ? ' assigned' : '');
+
+        const info = document.createElement('div');
+        info.className = 'item-info';
+
+        const termNameEl = document.createElement('div');
+        termNameEl.className = 'item-name';
+        termNameEl.textContent = item.friendlyName;
+
+        const roleEl = document.createElement('div');
+        roleEl.className = 'item-role';
+        const cliLabel = agentNames[item.role];
+        roleEl.textContent = (cliLabel && cliLabel !== 'No agent assigned')
+            ? `${item.role} · ${cliLabel}`
+            : item.role;
+
+        info.appendChild(termNameEl);
+        info.appendChild(roleEl);
+
+        if (paneIndex !== -1) {
+            const paneChip = document.createElement('span');
+            paneChip.className = 'pane-index-chip';
+            paneChip.textContent = `P${paneIndex + 1}`;
+            paneChip.title = `Showing in pane ${paneIndex + 1}`;
+            info.appendChild(paneChip);
+        }
+
+        if (terminalBadges.has(item.friendlyName)) {
+            const badge = document.createElement('span');
+            badge.className = 'pane-badge';
+            badge.textContent = terminalBadges.get(item.friendlyName);
+            info.appendChild(badge);
+        }
+
+        const dot = document.createElement('div');
+        dot.className = 'status-dot' + (item.status === 'exited' ? ' exited' : '');
+
+        const actions = document.createElement('div');
+        actions.className = 'item-actions';
+
+        const locateBtn = document.createElement('button');
+        locateBtn.className = 'locate-btn';
+        locateBtn.textContent = 'locate';
+        locateBtn.title = 'Show this terminal in the focused pane and put the cursor in it';
+        locateBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            locateTerminal(item.friendlyName);
+        });
+        actions.appendChild(locateBtn);
+
+        const clearBtn = document.createElement('button');
+        clearBtn.className = 'locate-btn';
+        clearBtn.textContent = 'clear';
+        clearBtn.title = 'Send /clear to this terminal';
+        clearBtn.disabled = item.status === 'exited';
+        clearBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            withClearingFeedback(clearBtn, () => clearTerminal(item.friendlyName), 'clear');
+        });
+        actions.appendChild(clearBtn);
+
+        const renameBtn = document.createElement('button');
+        renameBtn.className = 'locate-btn';
+        renameBtn.textContent = 'rename';
+        renameBtn.title = 'Rename terminal';
+        renameBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            beginInlineRename(termNameEl, item.friendlyName);
+        });
+        actions.appendChild(renameBtn);
+
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'locate-btn is-danger';
+        closeBtn.textContent = 'close';
+        closeBtn.title = 'Close terminal (ends the process)';
+        closeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            closeTerminal(item.friendlyName);
+        });
+        actions.appendChild(closeBtn);
+
+        const topRow = document.createElement('div');
+        topRow.className = 'terminal-item-top';
+        topRow.appendChild(info);
+        topRow.appendChild(dot);
+
+        itemDiv.appendChild(topRow);
+        itemDiv.appendChild(actions);
+
+        itemDiv.addEventListener('click', () => {
+            locateTerminal(item.friendlyName);
+        });
+
+        return itemDiv;
+    }
+
     function renderSidebarList() {
         listEl.innerHTML = '';
         if (fleetList.length === 0) {
-            // Solo mode pins its one terminal (see sanitizePaneAssignments), so an
-            // empty fleet does NOT mean an empty window — an operator close empties
-            // the registry while the pinned pane and its scrollback stay live.
-            // checkSoloNotFound owns grid visibility there; hiding it here would
-            // blank the window on any repaint that does not route back through it
-            // (a pane click, for one). #empty-state is CSS-suppressed under
-            // body.is-solo, so its inline display is inert.
             if (!soloTerminalName) {
                 emptyStateEl.style.display = 'flex';
                 paneGridEl.style.display = 'none';
@@ -676,34 +807,80 @@
         emptyStateEl.style.display = 'none';
         paneGridEl.style.display = 'grid';
 
-        const groupsMap = new Map(); // worktreePath -> { basename, fullPath, items: [] }
-
-        for (const item of fleetList) {
-            const wtPath = item.worktreePath || 'Workspace Root';
-            let group = groupsMap.get(wtPath);
-            if (!group) {
-                let basename = 'Workspace Root';
-                if (item.worktreePath) {
-                    const parts = item.worktreePath.replace(/\\/g, '/').split('/').filter(Boolean);
-                    basename = parts.length > 0 ? parts[parts.length - 1] : item.worktreePath;
-                }
-                group = { basename, fullPath: wtPath, items: [] };
-                groupsMap.set(wtPath, group);
-            }
-            group.items.push(item);
+        let parents = Array.isArray(parentsList) ? [...parentsList] : [];
+        if (parents.length === 0) {
+            parents.push({
+                id: 'workspace-root',
+                name: 'Workspace Root',
+                parentFolder: '',
+                workspaceFolders: []
+            });
         }
 
-        for (const [wtPath, group] of groupsMap.entries()) {
-            const groupDiv = document.createElement('div');
-            const isCollapsed = collapsedWorktrees.has(wtPath);
-            groupDiv.className = 'worktree-group' + (isCollapsed ? ' collapsed' : '');
+        const parentGroups = parents.map(p => ({
+            id: p.id,
+            name: p.name || 'Workspace Root',
+            fullPath: p.parentFolder || '',
+            direct: [],
+            worktreesMap: new Map()
+        }));
 
-            const activeCount = group.items.filter(i => i.status !== 'exited').length;
-            const exitedCount = group.items.length - activeCount;
+        const unmappedGroup = {
+            id: 'unmapped',
+            name: 'Unmapped',
+            fullPath: 'Unmapped',
+            direct: [],
+            worktreesMap: new Map()
+        };
+
+        const allParentFolders = new Set(parentGroups.map(p => p.fullPath).filter(Boolean));
+
+        for (const item of fleetList) {
+            let targetGroup = parentGroups.find(p => p.fullPath && p.fullPath === item.parentRoot);
+            if (!targetGroup) {
+                targetGroup = parentGroups.length === 1 ? parentGroups[0] : unmappedGroup;
+            }
+
+            const wtPath = item.worktreePath;
+            const isDirect = !wtPath || wtPath === targetGroup.fullPath || allParentFolders.has(wtPath);
+
+            if (isDirect) {
+                targetGroup.direct.push(item);
+            } else {
+                let wtGroup = targetGroup.worktreesMap.get(wtPath);
+                if (!wtGroup) {
+                    const parts = wtPath.replace(/\\/g, '/').split('/').filter(Boolean);
+                    const basename = parts.length > 0 ? parts[parts.length - 1] : wtPath;
+                    wtGroup = { basename, fullPath: wtPath, items: [] };
+                    targetGroup.worktreesMap.set(wtPath, wtGroup);
+                }
+                wtGroup.items.push(item);
+            }
+        }
+
+        const activeGroupsToRender = [
+            ...parentGroups,
+            ...(unmappedGroup.direct.length > 0 || unmappedGroup.worktreesMap.size > 0 ? [unmappedGroup] : [])
+        ];
+
+        for (const parentGroup of activeGroupsToRender) {
+            const parentKey = 'parent:' + parentGroup.id;
+            const isParentCollapsed = collapsedGroups.has(parentKey);
+            const parentDiv = document.createElement('div');
+            parentDiv.className = 'parent-group' + (isParentCollapsed ? ' collapsed' : '');
+
+            let totalItems = parentGroup.direct.length;
+            let activeCount = parentGroup.direct.filter(i => i.status !== 'exited').length;
+
+            for (const wtGroup of parentGroup.worktreesMap.values()) {
+                totalItems += wtGroup.items.length;
+                activeCount += wtGroup.items.filter(i => i.status !== 'exited').length;
+            }
+            const exitedCount = totalItems - activeCount;
 
             const headerEl = document.createElement('div');
-            headerEl.className = 'worktree-group-header';
-            headerEl.title = group.fullPath;
+            headerEl.className = 'parent-group-header';
+            if (parentGroup.fullPath) headerEl.title = parentGroup.fullPath;
 
             const titleArea = document.createElement('div');
             titleArea.className = 'worktree-title-area';
@@ -714,11 +891,11 @@
 
             const nameEl = document.createElement('span');
             nameEl.className = 'worktree-name';
-            nameEl.textContent = group.basename;
+            nameEl.textContent = parentGroup.name;
 
             const countEl = document.createElement('span');
             countEl.className = 'worktree-count';
-            countEl.textContent = `${group.items.length} (${activeCount}a/${exitedCount}x)`;
+            countEl.textContent = `${totalItems} (${activeCount}a/${exitedCount}x)`;
 
             titleArea.appendChild(icon);
             titleArea.appendChild(nameEl);
@@ -727,117 +904,110 @@
             const groupNewBtn = document.createElement('button');
             groupNewBtn.className = 'btn-group-new';
             groupNewBtn.textContent = '+';
-            groupNewBtn.title = `Spawn terminal in ${group.basename}`;
+            groupNewBtn.title = `Spawn terminal in ${parentGroup.name}`;
             groupNewBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                onNewTerminalClicked(wtPath === 'Workspace Root' ? undefined : wtPath);
+                onNewTerminalClicked(parentGroup.fullPath ? { parentRoot: parentGroup.fullPath } : undefined);
             });
 
             headerEl.appendChild(titleArea);
             headerEl.appendChild(groupNewBtn);
 
             headerEl.addEventListener('click', () => {
-                if (collapsedWorktrees.has(wtPath)) {
-                    collapsedWorktrees.delete(wtPath);
+                if (collapsedGroups.has(parentKey)) {
+                    collapsedGroups.delete(parentKey);
                 } else {
-                    collapsedWorktrees.add(wtPath);
+                    collapsedGroups.add(parentKey);
                 }
                 saveLayoutSettings();
                 renderSidebarList();
             });
 
-            groupDiv.appendChild(headerEl);
+            parentDiv.appendChild(headerEl);
 
             const itemsContainer = document.createElement('div');
-            itemsContainer.className = 'worktree-items';
+            itemsContainer.className = 'parent-group-items';
 
-            for (const item of group.items) {
-                const itemDiv = document.createElement('div');
-                const paneIndex = paneAssignments.indexOf(item.friendlyName);
-                const isFocused = activeTerminalName === item.friendlyName;
-                itemDiv.className = 'terminal-item'
-                    + (isFocused ? ' active' : '')
-                    + (paneIndex !== -1 ? ' assigned' : '');
-
-                const info = document.createElement('div');
-                info.className = 'item-info';
-
-                const termNameEl = document.createElement('div');
-                termNameEl.className = 'item-name';
-                termNameEl.textContent = item.friendlyName;
-
-                const roleEl = document.createElement('div');
-                roleEl.className = 'item-role';
-                roleEl.textContent = item.role;
-
-                info.appendChild(termNameEl);
-                info.appendChild(roleEl);
-
-                if (paneIndex !== -1) {
-                    const paneChip = document.createElement('span');
-                    paneChip.className = 'pane-index-chip';
-                    paneChip.textContent = `P${paneIndex + 1}`;
-                    paneChip.title = `Showing in pane ${paneIndex + 1}`;
-                    info.appendChild(paneChip);
+            if (totalItems === 0) {
+                const emptyNotice = document.createElement('div');
+                emptyNotice.className = 'empty-parent-notice';
+                emptyNotice.textContent = '(no terminals — + to open)';
+                itemsContainer.appendChild(emptyNotice);
+            } else {
+                for (const item of parentGroup.direct) {
+                    itemsContainer.appendChild(renderTerminalRow(item));
                 }
 
-                if (terminalBadges.has(item.friendlyName)) {
-                    const badge = document.createElement('span');
-                    badge.className = 'pane-badge';
-                    badge.textContent = terminalBadges.get(item.friendlyName);
-                    info.appendChild(badge);
+                for (const [wtPath, wtGroup] of parentGroup.worktreesMap.entries()) {
+                    const wtKey = 'worktree:' + wtPath;
+                    const isWtCollapsed = collapsedGroups.has(wtKey);
+                    const wtDiv = document.createElement('div');
+                    wtDiv.className = 'worktree-group indent-worktree' + (isWtCollapsed ? ' collapsed' : '');
+
+                    const wtActive = wtGroup.items.filter(i => i.status !== 'exited').length;
+                    const wtExited = wtGroup.items.length - wtActive;
+
+                    const wtHeaderEl = document.createElement('div');
+                    wtHeaderEl.className = 'worktree-group-header';
+                    wtHeaderEl.title = wtGroup.fullPath;
+
+                    const wtTitleArea = document.createElement('div');
+                    wtTitleArea.className = 'worktree-title-area';
+
+                    const wtIcon = document.createElement('span');
+                    wtIcon.className = 'worktree-collapse-icon';
+                    wtIcon.textContent = '▼';
+
+                    const wtNameEl = document.createElement('span');
+                    wtNameEl.className = 'worktree-name';
+                    wtNameEl.textContent = wtGroup.basename;
+
+                    const wtCountEl = document.createElement('span');
+                    wtCountEl.className = 'worktree-count';
+                    wtCountEl.textContent = `${wtGroup.items.length} (${wtActive}a/${wtExited}x)`;
+
+                    wtTitleArea.appendChild(wtIcon);
+                    wtTitleArea.appendChild(wtNameEl);
+                    wtTitleArea.appendChild(wtCountEl);
+
+                    const wtNewBtn = document.createElement('button');
+                    wtNewBtn.className = 'btn-group-new';
+                    wtNewBtn.textContent = '+';
+                    wtNewBtn.title = `Spawn terminal in ${wtGroup.basename}`;
+                    wtNewBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        onNewTerminalClicked({ worktreePath: wtPath });
+                    });
+
+                    wtHeaderEl.appendChild(wtTitleArea);
+                    wtHeaderEl.appendChild(wtNewBtn);
+
+                    wtHeaderEl.addEventListener('click', () => {
+                        if (collapsedGroups.has(wtKey)) {
+                            collapsedGroups.delete(wtKey);
+                        } else {
+                            collapsedGroups.add(wtKey);
+                        }
+                        saveLayoutSettings();
+                        renderSidebarList();
+                    });
+
+                    wtDiv.appendChild(wtHeaderEl);
+
+                    const wtItemsContainer = document.createElement('div');
+                    wtItemsContainer.className = 'worktree-items';
+                    for (const item of wtGroup.items) {
+                        wtItemsContainer.appendChild(renderTerminalRow(item));
+                    }
+                    wtDiv.appendChild(wtItemsContainer);
+                    itemsContainer.appendChild(wtDiv);
                 }
-
-                const dot = document.createElement('div');
-                dot.className = 'status-dot' + (item.status === 'exited' ? ' exited' : '');
-
-                const actions = document.createElement('div');
-                actions.className = 'item-actions';
-
-                const renameBtn = document.createElement('button');
-                renameBtn.className = 'btn-rename-term';
-                renameBtn.textContent = '✎';
-                renameBtn.title = 'Rename terminal';
-                renameBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    beginInlineRename(termNameEl, item.friendlyName);
-                });
-                actions.appendChild(renameBtn);
-
-                const clearBtn = document.createElement('button');
-                clearBtn.className = 'btn-clear-term';
-                clearBtn.textContent = '⌫';
-                clearBtn.title = 'Clear terminal (sends /clear)';
-                clearBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    withClearingFeedback(clearBtn, () => clearTerminal(item.friendlyName));
-                });
-                actions.appendChild(clearBtn);
-
-                const closeBtn = document.createElement('button');
-                closeBtn.className = 'btn-close-term';
-                closeBtn.textContent = '×';
-                closeBtn.title = 'Close terminal';
-                closeBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    closeTerminal(item.friendlyName);
-                });
-                actions.appendChild(closeBtn);
-
-                itemDiv.appendChild(info);
-                itemDiv.appendChild(dot);
-                itemDiv.appendChild(actions);
-
-                itemDiv.addEventListener('click', () => {
-                    assignToFocusedPane(item.friendlyName);
-                });
-
-                itemsContainer.appendChild(itemDiv);
             }
 
-            groupDiv.appendChild(itemsContainer);
-            listEl.appendChild(groupDiv);
+            parentDiv.appendChild(itemsContainer);
+            listEl.appendChild(parentDiv);
         }
+    }
     }
 
     function setLayoutMode(mode) {
@@ -855,6 +1025,25 @@
         sanitizePaneAssignments();
         renderPaneGrid();
         applyLayoutFloor();
+    }
+
+    /**
+     * "Focus terminal" — the browser equivalent of the sidebar's `locate`.
+     *
+     * The sidebar reveals the terminal in the IDE; here the terminal is already on
+     * this page, so revealing it means seating it in the focused pane and handing it
+     * the caret. assignToFocusedPane does the seating and always has; the caret was
+     * the missing half, which is why "focus terminal" never actually let you type.
+     *
+     * Deliberately declared ahead of assignToFocusedPane so it stays outside the
+     * span shell-terminal-strip.test.js scans for that function's badge-clear paths.
+     */
+    function locateTerminal(name) {
+        assignToFocusedPane(name);
+        const index = paneAssignments.indexOf(name);
+        if (index !== -1 && index < getSlotCount(effectiveLayout)) {
+            focusPaneTerminal(index);
+        }
     }
 
     function assignToFocusedPane(terminalName) {
@@ -931,8 +1120,54 @@
         batchFitVisiblePanes();
     }
 
+    /**
+     * Give the caret to the terminal in `index`.
+     *
+     * Nothing in this file used to call term.focus() at all. xterm focuses its own
+     * hidden textarea from its internal mousedown handler and nowhere else, so the
+     * caret only ever arrived by accident — and any renderPaneGrid() landing after
+     * that mousedown took it straight back out again (see the note in
+     * renderPaneGrid). Selecting a pane therefore cost two clicks: the first was
+     * spent on the rebuild.
+     */
+    function focusPaneTerminal(index) {
+        const name = paneAssignments[index];
+        if (!name) { return; }
+        const entry = terminalsMap.get(name);
+        if (!entry || !entry.term || entry.disposed) { return; }
+        try { entry.term.focus(); } catch { /* ignore */ }
+    }
+
+    /**
+     * Move pane focus WITHOUT rebuilding the grid.
+     *
+     * A focus change is a two-class swap. renderPaneGrid() is a full teardown that
+     * reparents every live xterm — running it for a highlight change is what ate
+     * the first click. The sidebar still re-renders (it carries the .active row and
+     * the P-chips), but that touches no terminal DOM, so the caret survives it.
+     */
+    function setFocusedPane(index) {
+        if (index !== focusedPaneIndex) {
+            focusedPaneIndex = index;
+            const nameInPane = paneAssignments[index];
+            if (nameInPane) { activeTerminalName = nameInPane; }
+            paneGridEl.querySelectorAll('.terminal-pane').forEach(el => {
+                el.classList.toggle('focused', Number(el.dataset.paneIndex) === index);
+            });
+            renderSidebarList();
+        }
+        focusPaneTerminal(index);
+    }
+
     function renderPaneGrid() {
         const slotCount = getSlotCount(effectiveLayout);
+        // A rebuild reparents every live xterm, and a re-parented node does not keep
+        // focus — removing the focused element from the document drops focus to
+        // <body>. renderPaneGrid runs on every terminalsChanged broadcast, every
+        // agentCompleted badge and every per-terminal clear, so without this the
+        // caret was yanked out mid-keystroke whenever anything happened elsewhere in
+        // the fleet. Remember whether the caret was ours and hand it back at the end.
+        const hadFocus = paneGridEl.contains(document.activeElement);
         paneGridEl.className = `pane-grid layout-${effectiveLayout}`;
         paneGridEl.innerHTML = '';
 
@@ -944,15 +1179,11 @@
             paneEl.className = 'terminal-pane' + (i === focusedPaneIndex ? ' focused' : '');
             paneEl.dataset.paneIndex = i;
 
-            paneEl.addEventListener('click', () => {
-                if (focusedPaneIndex !== i) {
-                    focusedPaneIndex = i;
-                    const nameInPane = paneAssignments[i];
-                    if (nameInPane) { activeTerminalName = nameInPane; }
-                    renderPaneGrid();
-                    renderSidebarList();
-                }
-            });
+            // mousedown, not click: it lands before xterm's own selection handling
+            // and before mouseup, so one press both selects the pane and leaves the
+            // caret in it. On `click` the focus arrived after xterm had already
+            // decided where the caret went.
+            paneEl.addEventListener('mousedown', () => setFocusedPane(i));
 
             const headerEl = document.createElement('div');
             headerEl.className = 'pane-header';
@@ -987,21 +1218,26 @@
             }
 
             const actionsEl = document.createElement('div');
+            actionsEl.className = 'pane-actions';
             if (assignedName) {
+                // Same two words the extension sidebar uses. The 6- and 9-pane
+                // headers cannot fit them, so those fall back to initials.
+                const terse = effectiveLayout === '2x3' || effectiveLayout === '3x3';
+
                 const paneClearBtn = document.createElement('button');
                 paneClearBtn.className = 'btn-unassign-pane';
-                paneClearBtn.textContent = '⌫';
-                paneClearBtn.title = 'Clear terminal (sends /clear)';
+                paneClearBtn.textContent = terse ? 'c' : 'clear';
+                paneClearBtn.title = 'Send /clear to this terminal';
                 paneClearBtn.addEventListener('click', (e) => {
                     e.stopPropagation();
-                    withClearingFeedback(paneClearBtn, () => clearTerminal(assignedName));
+                    withClearingFeedback(paneClearBtn, () => clearTerminal(assignedName), terse ? 'c' : 'clear');
                 });
                 actionsEl.appendChild(paneClearBtn);
 
                 const unassignBtn = document.createElement('button');
                 unassignBtn.className = 'btn-unassign-pane';
-                unassignBtn.textContent = '⊟';
-                unassignBtn.title = 'Remove from pane (terminal keeps running)';
+                unassignBtn.textContent = terse ? 'h' : 'hide';
+                unassignBtn.title = 'Remove from this pane (terminal keeps running)';
                 unassignBtn.addEventListener('click', (e) => {
                     e.stopPropagation();
                     const targetName = paneAssignments[i];
@@ -1051,6 +1287,8 @@
                 cancelDetachTimer(name);
             }
         }
+
+        if (hadFocus) { focusPaneTerminal(focusedPaneIndex); }
     }
 
     /**
@@ -1112,6 +1350,45 @@
 
     const DEFAULT_ROLES = ['coder', 'planner', 'reviewer', 'lead', 'analyst', 'intern'];
 
+    /**
+     * Role sent by the "No role" picker button — a plain shell, no agent CLI.
+     *
+     * The fleet needs SOME role string: it names the terminal (`shell-1`, `shell-2`)
+     * and labels the sidebar row. `shell` is deliberately absent from the Agents tab,
+     * so `injectStartupCommand` looks it up in the configured startup commands, finds
+     * nothing, and returns before writing anything to the pty (ptyFleetService.ts:118)
+     * — which also skips the 750ms shell-readiness wait that only exists to let a CLI
+     * boot. Sending no role at all would NOT work: the handler defaults to `coder`,
+     * which does have a command.
+     *
+     * Do not add a `shell` entry to the Agents tab startup commands; that would give
+     * this button a CLI and defeat it.
+     */
+    const NO_ROLE = 'shell';
+
+    /**
+     * Pull the agent-CLI labels the kanban board already uses.
+     *
+     * getStartupCommands is an existing allowlisted verb; it now returns the
+     * `agentNames` map alongside the raw commands, so this panel renders the same
+     * string the column subline does without duplicating the derivation.
+     */
+    async function fetchAgentNames() {
+        try {
+            const res = await fetch('/kanban/verb/getStartupCommands', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            if (res.ok) {
+                const data = await res.json();
+                if (data && data.agentNames && typeof data.agentNames === 'object') {
+                    agentNames = data.agentNames;
+                }
+            }
+        } catch { /* labels are decoration — a failure must not blank the sidebar */ }
+    }
+
     async function fetchVisibleRoles() {
         try {
             const res = await fetch('/kanban/verb/getSetting', {
@@ -1132,7 +1409,7 @@
         return DEFAULT_ROLES;
     }
 
-    async function onNewTerminalClicked(targetWorktreePath) {
+    async function onNewTerminalClicked(targetSpec) {
         const picker = document.getElementById('role-picker');
         const optionsEl = document.getElementById('role-picker-options');
         if (!picker || !optionsEl) { return; }
@@ -1148,19 +1425,41 @@
             btn.textContent = role;
             btn.addEventListener('click', () => {
                 picker.hidden = true;
-                createTerminal(role, targetWorktreePath);
+                createTerminal(role, targetSpec);
             });
             optionsEl.appendChild(btn);
         }
+
+        // Last, and visually separated: this is the absence of a role, not another
+        // one, so it must not read as a peer of the agent buttons above it.
+        const noRoleBtn = document.createElement('button');
+        noRoleBtn.type = 'button';
+        noRoleBtn.className = 'role-option is-no-role';
+        noRoleBtn.textContent = 'No role';
+        noRoleBtn.title = 'Plain shell in the workspace directory — no agent CLI started';
+        noRoleBtn.addEventListener('click', () => {
+            picker.hidden = true;
+            createTerminal(NO_ROLE, targetSpec);
+        });
+        optionsEl.appendChild(noRoleBtn);
+
         picker.hidden = false;
     }
 
-    async function createTerminal(role, worktreePath) {
+    async function createTerminal(role, targetSpec) {
         try {
             const payload = { role };
-            if (worktreePath) {
-                payload.cwd = worktreePath;
-                payload.worktreePath = worktreePath;
+            if (typeof targetSpec === 'string') {
+                payload.cwd = targetSpec;
+                payload.worktreePath = targetSpec;
+            } else if (targetSpec && typeof targetSpec === 'object') {
+                if (targetSpec.parentRoot) {
+                    payload.parentRoot = targetSpec.parentRoot;
+                }
+                if (targetSpec.worktreePath) {
+                    payload.cwd = targetSpec.worktreePath;
+                    payload.worktreePath = targetSpec.worktreePath;
+                }
             }
             const res = await fetch('/terminals/verb/ptyCreateTerminal', {
                 method: 'POST',
@@ -1179,6 +1478,149 @@
         } catch (err) {
             console.error('[Terminals] Failed to create terminal:', err);
         }
+    }
+
+    /**
+     * Role list and order copied from `allBuiltInAgents` in createAgentGrid
+     * (src/extension.ts). `project_manager` has a visibility checkbox in the Agents
+     * tab but is deliberately absent from that array, so it is absent here too —
+     * this list mirrors what OPEN AGENT TERMINALS actually opens, not what the
+     * Agents tab can toggle.
+     */
+    const GRID_BUILTIN_ROLES = [
+        'planner', 'lead', 'coder', 'intern', 'reviewer', 'tester',
+        'analyst', 'ticket_updater', 'researcher', 'claude_artifacts', 'phone_a_friend'
+    ];
+
+    /**
+     * Mirror of TaskViewerProvider._defaultVisibleAgents(). createAgentGrid tests
+     * `visibleAgents[role] !== false` against a map that has ALREADY been merged
+     * over these defaults, so reading the saved value raw is not equivalent: an
+     * absent key would read as visible and open the opt-in roles (tester,
+     * researcher, phone_a_friend and friends) that the extension leaves shut.
+     * Keep in step with that method.
+     */
+    const DEFAULT_VISIBLE_AGENTS = {
+        lead: true, coder: true, intern: true, reviewer: true,
+        tester: false, planner: true, analyst: true, jules: false,
+        ticket_updater: false, researcher: false,
+        claude_artifacts: false, phone_a_friend: false, project_manager: true
+    };
+
+    async function resolveGridAgents() {
+        const [savedVisible, savedCustom, savedPlannerCount] = await Promise.all([
+            loadSetting('agents.visibleAgents', undefined),
+            loadSetting('agents.customAgents', []),
+            loadSetting('agents.plannerTerminalCount', 1)
+        ]);
+
+        const custom = Array.isArray(savedCustom)
+            ? savedCustom.filter(a => a && typeof a.role === 'string')
+            : [];
+
+        const visible = { ...DEFAULT_VISIBLE_AGENTS };
+        // A custom agent defaults to visible, matching getVisibleAgents.
+        for (const agent of custom) { visible[agent.role] = true; }
+        if (Array.isArray(savedVisible)) {
+            // Older array form: the listed roles are the visible ones.
+            for (const role of Object.keys(visible)) { visible[role] = savedVisible.includes(role); }
+            for (const role of savedVisible) { visible[role] = true; }
+        } else if (savedVisible && typeof savedVisible === 'object') {
+            Object.assign(visible, savedVisible);
+        }
+
+        const plannerCount = Number(savedPlannerCount) > 1 ? Math.floor(Number(savedPlannerCount)) : 1;
+
+        // role -> how many terminals that role should end up with.
+        const wanted = new Map();
+        for (const role of GRID_BUILTIN_ROLES) {
+            if (visible[role] === false) { continue; }
+            wanted.set(role, role === 'planner' ? plannerCount : 1);
+        }
+        for (const agent of custom) {
+            if (visible[agent.role] === false) { continue; }
+            wanted.set(agent.role, 1);
+        }
+        if (visible.jules !== false) { wanted.set('jules_monitor', 1); }
+        return wanted;
+    }
+
+    /**
+     * "Open all" — the browser counterpart of switchboard.createAgentGrid.
+     *
+     * Only ever tops up: a role that already has enough live terminals is left
+     * alone, so pressing this twice does not double the fleet. Startup commands are
+     * NOT sent from here — ptyFleetService.create() injects the role's configured
+     * command itself, and duplicating that would launch each agent CLI twice.
+     */
+    async function openAllTerminals() {
+        const wanted = await resolveGridAgents();
+        if (wanted.size === 0) {
+            console.warn('[Terminals] Open all: no visible agent roles configured');
+            return;
+        }
+
+        const liveByRole = new Map();
+        for (const t of fleetList) {
+            if (t.status === 'exited') { continue; }
+            liveByRole.set(t.role, (liveByRole.get(t.role) || 0) + 1);
+        }
+
+        let created = 0;
+        for (const [role, count] of wanted.entries()) {
+            const missing = count - (liveByRole.get(role) || 0);
+            // Sequential, not Promise.all: ptyFleetService.create() picks the next
+            // free `${role}-${n}` name off its own map, so concurrent creates for
+            // the same role can settle on the same name.
+            for (let i = 0; i < missing; i++) {
+                try {
+                    const res = await fetch('/terminals/verb/ptyCreateTerminal', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ role })
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (data && data.success) { created++; }
+                        else if (data && data.error) { console.warn(`[Terminals] Open all: ${role} rejected:`, data.error); }
+                    }
+                } catch (err) {
+                    console.warn(`[Terminals] Open all: failed to create ${role}:`, err);
+                }
+            }
+        }
+
+        await fetchTerminalList();
+        if (created > 0) { fillEmptyPanes(); }
+    }
+
+    /**
+     * Seat unassigned terminals into whatever rendered panes are still empty.
+     *
+     * Open-all can spawn more terminals than there are panes; the remainder stay in
+     * the sidebar and the operator seats them by clicking. Deliberately does not
+     * displace anything already on screen.
+     */
+    function fillEmptyPanes() {
+        const slotCount = getSlotCount(effectiveLayout);
+        const unseated = fleetList
+            .filter(t => t.status !== 'exited' && !paneAssignments.includes(t.friendlyName))
+            .map(t => t.friendlyName);
+        if (unseated.length === 0) { return; }
+
+        let changed = false;
+        for (let i = 0; i < slotCount && unseated.length > 0; i++) {
+            if (!paneAssignments[i]) {
+                paneAssignments[i] = unseated.shift();
+                changed = true;
+            }
+        }
+        if (!changed) { return; }
+        if (!activeTerminalName) { activeTerminalName = paneAssignments[focusedPaneIndex] || null; }
+        saveLayoutSettings();
+        renderSidebarList();
+        renderPaneGrid();
+        batchFitVisiblePanes();
     }
 
     async function renameTerminal(name, alias) {
@@ -1296,11 +1738,20 @@
         }
     }
 
-    function withClearingFeedback(btn, run) {
+    /**
+     * Disable-and-relabel for the 600 ms a /clear takes to land, matching the
+     * sidebar's `clear` → `clearing` treatment. `restoreLabel` is optional so the
+     * toolbar buttons (which have no transient label) keep working unchanged.
+     */
+    function withClearingFeedback(btn, run, restoreLabel) {
         if (btn.disabled) { return; }
         btn.disabled = true;
+        if (restoreLabel) { btn.textContent = restoreLabel.length <= 1 ? '…' : 'clearing'; }
         run();
-        setTimeout(() => { btn.disabled = false; }, 600);
+        setTimeout(() => {
+            btn.disabled = false;
+            if (restoreLabel) { btn.textContent = restoreLabel; }
+        }, 600);
     }
 
     const ACK_CHUNK_CHARS = 5000;
@@ -1475,6 +1926,13 @@
         });
 
         connectTerminalSocket(entry);
+
+        // A view is built lazily (whenRendered), so a locate/assign that triggered
+        // this construction has already run its focus attempt against a null term.
+        // Pick the caret up here if this terminal landed in the focused pane.
+        if (paneAssignments[focusedPaneIndex] === entry.name) {
+            focusPaneTerminal(focusedPaneIndex);
+        }
     }
 
     function connectTerminalSocket(entry) {

@@ -3707,7 +3707,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
     <div id="research-tab-bar" class="shared-tab-bar">
         <button class="shared-tab-btn active" data-tab="docs">DOCS</button>
         <button class="shared-tab-btn" data-tab="html">HTML</button>
-        <button class="shared-tab-btn" data-tab="tickets" id="tickets-tab-btn">TICKETS</button>
         <button class="shared-tab-btn" data-tab="research">RESEARCH</button>
         <button class="shared-tab-btn" data-tab="create-plans">WEB AGENTS</button>
     </div>
@@ -3965,107 +3964,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             </div>
         </div>
 
-        <div id="tickets-content" class="shared-tab-content">
-            <div class="controls-strip" id="controls-strip-tickets">
-                <div class="controls-strip-row">
-                    <div class="tickets-workspace-picker">
-                        <select id="tickets-workspace-filter" class="workspace-filter-select" style="display:none;"></select>
-                        <span id="tickets-workspace-label" class="workspace-static-label" style="display:none;"></span>
-                    </div>
-                    <button id="tickets-source-btn" class="strip-btn" title="Choose provider and navigate the source hierarchy">Source</button>
-                    <span id="tickets-source-summary" class="workspace-static-label"></span>
-                    <!-- Inline filters moved out of Source modal -->
-                    <select id="tickets-project-picker" class="planning-select" style="display:none" title="Filter by Linear project"></select>
-                    <select id="tickets-state-filter" class="planning-select" style="display:none" title="Filter by Linear state"></select>
-                    <select id="tickets-status-filter" class="planning-select" style="display:none" title="Filter by ClickUp status"></select>
-                    <select id="tickets-assignee-filter" class="planning-select" style="display:none" title="Filter by assignee"></select>
-                    <button id="tickets-refresh" class="strip-btn" title="Refresh recent changes">Refresh</button>
-                    <div class="overflow-menu" data-overflow-menu>
-                        <button type="button" class="strip-btn overflow-menu-trigger" data-overflow-trigger title="More actions">⋯ More</button>
-                        <div class="overflow-menu-popover" data-overflow-popover>
-                            <button id="tickets-refetch" class="strip-btn overflow-menu-item" title="Re-fetch from source and save local copies">Full re-fetch (recover from sync drift)</button>
-                            <button id="tickets-sync-all" class="strip-btn overflow-menu-item" title="Push all local ticket changes back to the integration">Sync changes</button>
-                            <button id="tickets-agent-api" class="strip-btn overflow-menu-item" title="What agents can do with this ticket source without the MCP">Agent API</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="content-row">
-                <div id="tree-pane-tickets">
-                    <div class="sidebar-toggle-row">
-                        <button id="tickets-create" class="strip-btn" title="Create New Ticket">+ New Ticket</button>
-                        <button id="tickets-link-all" class="strip-btn" title="Copy all ticket file paths to clipboard">Link all</button>
-                        <button id="tickets-import-all-kanban" class="strip-btn" title="Add all tickets to the Kanban board" style="display:none">Kanban all</button>
-                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
-                    </div>
-                    <div class="sidebar-search-row">
-                        <input id="tickets-search" type="text" class="sidebar-search-input" placeholder="Search tickets..." />
-                    </div>
-                    <div id="tickets-empty-state" class="empty-state">No tickets loaded.</div>
-                    <div id="tickets-issues-container"></div>
-                    <button id="tickets-load-more" class="planning-button" style="display:none">Load More</button>
-
-                </div>
-                <div class="preview-panel-wrapper">
-                    <div id="preview-pane-tickets" style="flex: 1; width: 100%; box-sizing: border-box; display: flex; flex-direction: column;">
-                        <div id="tickets-preview-meta-bar" style="display:none;">
-                            <button id="btn-edit-ticket" class="strip-btn">Edit</button>
-                            <button id="btn-save-ticket-edit" class="strip-btn" style="display:none; background: var(--accent-teal); color: black;">Save</button>
-                            <button id="btn-cancel-ticket-edit" class="strip-btn" style="display:none;">Cancel</button>
-                            <button id="btn-push-ticket" class="strip-btn">Push</button>
-                            <button id="btn-comment-ticket" class="strip-btn">Comment</button>
-                            <div class="overflow-menu" data-overflow-menu>
-                                <button type="button" class="strip-btn overflow-menu-trigger" data-overflow-trigger title="More actions">⋯ More</button>
-                                <div class="overflow-menu-popover" data-overflow-popover>
-                                    <button id="btn-assign-ticket" class="strip-btn overflow-menu-item" title="Assign members">Assign</button>
-                                    <button id="tickets-tags" class="strip-btn overflow-menu-item" title="Edit tags">Tags</button>
-                                    <button id="btn-view-attachments" class="strip-btn overflow-menu-item" style="display:none;">Attachments</button>
-                                    <button id="btn-diagram-prompt" class="strip-btn overflow-menu-item" style="display:none;" title="Copy a diagram prompt for this ticket">Diagram</button>
-                                    <button id="btn-add-subtask" class="strip-btn overflow-menu-item" title="Create a subtask under this ticket">+ Subtask</button>
-                                    <button id="btn-convert-subtask" class="strip-btn overflow-menu-item" title="Convert this ticket to a subtask of another ticket">To subtask</button>
-                                    <button id="btn-to-parent-task" class="strip-btn overflow-menu-item" title="Navigate to the parent task" style="display:none;">To parent task</button>
-                                </div>
-                            </div>
-                            <button id="btn-delete-ticket" class="strip-btn" title="Delete this ticket">Delete</button>
-                        </div>
-
-                        <div id="tickets-comment-manager" style="display:none; flex: 1; flex-direction: column; overflow: hidden; border-top: 1px solid var(--border-color); background: var(--panel-bg2); margin: 0;">
-                            <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--border-color);">
-                                <span style="font-size: 12px; font-weight: 600; color: var(--text-primary);">Comments</span>
-                                <div style="display: flex; gap: 6px;">
-                                    <button id="btn-comments-refresh" class="strip-btn" title="Refresh comments from provider" style="font-size: 11px;">Refresh</button>
-                                    <button id="btn-comments-close" class="strip-btn" title="Close comment manager" style="font-size: 11px;">Close</button>
-                                </div>
-                            </div>
-                            <div id="tickets-comment-threads" style="flex: 1; overflow-y: auto; padding: 8px 12px;"></div>
-                            <div id="tickets-comment-compose-area" style="padding: 8px 12px; border-top: 1px solid var(--border-color); position: relative;">
-                                <textarea id="tickets-comment-textarea" placeholder="Type a comment... Use @ to mention someone." style="width: 100%; height: 60px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-primary); font-family: inherit; font-size: 12px; padding: 4px; box-sizing: border-box; resize: vertical;"></textarea>
-                                <div id="tickets-mention-dropdown" style="display:none; position: absolute; bottom: 48px; left: 12px; right: 12px; max-height: 180px; overflow-y: auto; background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 4px; z-index: 100; box-shadow: 0 -2px 8px rgba(0,0,0,0.3);"></div>
-                                <div style="margin-top: 6px; display: flex; justify-content: flex-end; gap: 8px;">
-                                    <button id="btn-post-comment-cancel" class="strip-btn">Cancel</button>
-                                    <button id="btn-post-comment-submit" class="strip-btn" style="background: var(--accent-teal); color: black;">Post Comment</button>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="preview-content-wrapper" style="flex: 1; overflow-y: auto;">
-                            <div id="tickets-loading-state" style="flex: 1; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 32px; color: var(--text-secondary);">
-                                <div style="width: 32px; height: 32px; border: 3px solid var(--border-color); border-top-color: var(--accent-teal); border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
-                                <div style="font-size: 12px;">Loading tickets...</div>
-                            </div>
-                            <div id="tickets-tags-display" style="display: none; padding: 12px 16px 8px 16px; gap: 6px; flex-wrap: wrap;"></div>
-                            <!-- Markdown preview container matching local docs -->
-                            <div id="markdown-preview-tickets">
-                                <div id="tickets-empty-preview" class="empty-state">Select a ticket to preview</div>
-                                <!-- Subtasks navigation (injected at TOP by JS) -->
-                                <div id="tickets-subtasks-nav" style="display:none"></div>
-                                <!-- Ticket detail content (description + comments + attachments) -->
-                                <div id="tickets-detail-content"></div>
-                            </div>
-                        <div id="tickets-status-footer" style="display:none; padding: 8px 16px; font-size: 10px; color: var(--text-secondary); border-top: 1px solid var(--border-color); background: var(--panel-bg2, #1a1a2e);"></div>
-                    </div>
-                    <div class="cyber-scanlines"></div>
-                </div>
-            </div>
         </div>
         </div>
     </div>

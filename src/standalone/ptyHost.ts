@@ -73,7 +73,8 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                         status: t.status,
                         pid: t.pty.pid,
                         startTime: t.startTime,
-                        worktreePath: t.worktreePath
+                        worktreePath: t.worktreePath,
+                        cwd: t.cwd,
                     }))
                 };
             }

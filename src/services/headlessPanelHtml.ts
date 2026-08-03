@@ -404,6 +404,35 @@ export function getTerminalsHtml(repoRoot: string, workspaceRoot: string, capabi
     return { html: content, csp };
 }
 
+export function getTicketsHtml(repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult {
+    const candidates = [
+        path.join(repoRoot, 'dist', 'webview', 'tickets.html'),
+        path.join(repoRoot, 'src', 'webview', 'tickets.html'),
+    ];
+    const htmlPath = findFile(candidates);
+    if (!htmlPath) {
+        return { html: '<html><body>Tickets panel HTML not found.</body></html>', csp: '' };
+    }
+    let content = fs.readFileSync(htmlPath, 'utf8');
+    const nonce = makeNonce();
+    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' http://127.0.0.1:* http://localhost:* http://*.localhost:* data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self' http: https: about:srcdoc blob: data:;`;
+    content = content.replace(/\{\{NONCE\}\}/g, nonce);
+    content = content.replace(/{{WEBVIEW_CSP_SOURCE}}/g, "'self'");
+    content = content.replace('connect-src https:', "connect-src 'self' https: http://127.0.0.1:* http://localhost:* http://*.localhost:* ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*");
+    content = content.replace(/{{TICKETS_JS_URI}}/g, '/static/webview/tickets.js');
+    content = content.replace(/{{SHARED_UTILS_URI}}/g, '/static/webview/sharedUtils.js');
+    content = content.replace(/{{MARKDOWN_EDITOR_URI}}/g, '/static/webview/markdownEditor.js');
+    content = content.replace(/{{GEIST_PIXEL_FONT_URI}}/g, '/static/designs/GeistPixel-Square.woff2');
+    content = content.replace(/{{HANKEN_FONT_URI}}/g, '/static/designs/HankenGrotesk-Variable.woff2');
+    const firstScript = `<script nonce="${nonce}" src="/static/webview/sharedUtils.js"></script>`;
+    content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', firstScript);
+    const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
+    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="tickets" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
+    content = injectBodyAttributes(content, bodyAttr);
+    content = applyThemeClass(content, themeClass);
+    return { html: content, csp };
+}
+
 export interface PanelManifestEntry {
     id: string;
     label: string;
@@ -417,21 +446,21 @@ export interface PanelAvailability {
     setup?: boolean;
     planning?: boolean;
     terminals?: boolean;
+    tickets?: boolean;
 }
 
 export function getPanelsManifest(availability?: PanelAvailability): PanelManifestEntry[] {
     const setupEnabled = availability?.setup !== false;
     const planningEnabled = availability?.planning !== false;
     const designEnabled = availability?.design !== false;
+    const ticketsEnabled = availability?.tickets !== false;
     const terminalsEnabled = availability?.terminals === true; // Fail-closed!
     const iconDir = '/static/icons';
-    // nav-*.svg are single-color silhouettes (sci-fi flat redraws of the status
-    // bar codicons); shell.js renders .svg icons via CSS mask + currentColor so
-    // they follow the strip's idle/hover/active state colors.
     return [
         { id: 'board', label: 'Board', icon: `${iconDir}/nav-board.svg`, route: '/board', enabled: true },
         { id: 'project', label: 'Project', icon: `${iconDir}/nav-project.svg`, route: '/project', enabled: true },
         { id: 'memo', label: 'Memo', icon: `${iconDir}/nav-memo.svg`, route: '/memo', enabled: true },
+        { id: 'tickets', label: 'Tickets', icon: `${iconDir}/nav-tickets.svg`, route: '/tickets', enabled: ticketsEnabled },
         { id: 'planning', label: 'Artifacts', icon: `${iconDir}/nav-artifacts.svg`, route: '/planning', enabled: planningEnabled },
         { id: 'design', label: 'Design', icon: `${iconDir}/nav-design.svg`, route: '/design', enabled: designEnabled },
         { id: 'setup', label: 'Setup', icon: `${iconDir}/nav-setup.svg`, route: '/setup', enabled: setupEnabled },
@@ -444,6 +473,7 @@ export function getPanelHtmlById(id: string, repoRoot: string, workspaceRoot: st
         case 'board': return getBoardHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'project': return getProjectHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'memo': return getMemoHtml(repoRoot, workspaceRoot, capabilities, themeClass);
+        case 'tickets': return getTicketsHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'planning': return getPlanningHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'design': return getDesignHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'setup': return getSetupHtml(repoRoot, workspaceRoot, capabilities, themeClass);

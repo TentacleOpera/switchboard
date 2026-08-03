@@ -99,6 +99,7 @@
         design: ['design', 'common'],
         setup: ['setup', 'common'],
         memo: ['memo', 'common'],
+        tickets: ['tickets', 'common'],
     };
 
     function wsUrl() {
@@ -221,6 +222,7 @@
         openProjectPanel: 'project',
         openSetupPanel: 'setup',
         openDesignPanel: 'design',
+        openTicketsPanel: 'tickets',
     };
 
     const STATUS_MESSAGE_PANELS = { kanban: true };

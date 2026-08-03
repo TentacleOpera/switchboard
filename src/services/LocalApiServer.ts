@@ -181,6 +181,7 @@ interface LocalApiServerOptions {
         reason: string;
     }>;
     planningVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
+    ticketsVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     designVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     /**
      * Allow-list source for `GET /design/asset` — the headless replacement for
@@ -1745,6 +1746,35 @@ export class LocalApiServer {
             console.error(`[LocalApiServer] planningVerb '${verb}' error:`, err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : `planning verb '${verb}' failed` }));
+        }
+    }
+
+    private async _handleTicketsVerb(verb: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        const ticketsVerb = this._options.ticketsVerb;
+        if (!ticketsVerb) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Tickets verb dispatch not available' }));
+            return;
+        }
+        try {
+            const rawBody = await this._parseJsonBody(req);
+            const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
+            delete body.type;
+            delete body.bypassTriggerGate;
+            this._stampHttpSurface(body);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
+            const result = await ticketsVerb(verb, body, workspaceRoot);
+            const ok = !result || result.success !== false;
+            res.writeHead(ok ? 200 : 502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result ?? { success: true }));
+        } catch (err) {
+            console.error(`[LocalApiServer] ticketsVerb '${verb}' error:`, err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : `tickets verb '${verb}' failed` }));
         }
     }
 
@@ -3396,6 +3426,9 @@ export class LocalApiServer {
             } else if (pathname.startsWith('/planning/verb/') && req.method === 'POST') {
                 const verb = decodeURIComponent(pathname.slice('/planning/verb/'.length));
                 await this._handlePlanningVerb(verb, req, res);
+            } else if (pathname.startsWith('/tickets/verb/') && req.method === 'POST') {
+                const verb = decodeURIComponent(pathname.slice('/tickets/verb/'.length));
+                await this._handleTicketsVerb(verb, req, res);
             } else if (pathname.startsWith('/project/verb/') && req.method === 'POST') {
                 const verb = decodeURIComponent(pathname.slice('/project/verb/'.length));
                 await this._handlePlanningVerb(verb, req, res);
@@ -3495,6 +3528,8 @@ export class LocalApiServer {
                 await this._handleServePanelById('memo', req, res);
             } else if ((pathname === '/planning' || pathname === '/planning.html') && req.method === 'GET') {
                 await this._handleServePanelById('planning', req, res);
+            } else if ((pathname === '/tickets' || pathname === '/tickets.html') && req.method === 'GET') {
+                await this._handleServePanelById('tickets', req, res);
             } else if ((pathname === '/design' || pathname === '/design.html') && req.method === 'GET') {
                 await this._handleServePanelById('design', req, res);
             } else if ((pathname === '/setup' || pathname === '/setup.html') && req.method === 'GET') {

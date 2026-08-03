@@ -624,14 +624,6 @@
     let clickUpTaskDetailCache = new Map(); // taskId -> { task, subtasks, comments, attachments, renderedDescriptionHtml }
 
     // Helper functions for tickets tab
-    function escapeHtml(value) {
-        return String(value || '')
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-    }
 
     function getContrastColor(bgColor) {
         if (!bgColor) return null;
@@ -1715,10 +1707,6 @@
         return provider === 'linear' ? checked[0] : checked; // Linear: single id string; ClickUp: string[]
     }
 
-    function escapeAttr(value) {
-        return String(value || '').replace(/"/g, '&quot;');
-    }
-
     function showTicketsStatus(text, isError) {
         const { ticketsStatusFooter } = getTicketsTabElements();
         if (!ticketsStatusFooter) return;
@@ -2343,109 +2331,6 @@
             if (pRect.bottom > window.innerHeight - 4) {
                 // Flip above the trigger if it would overflow the viewport bottom.
                 popover.style.top = Math.max(4, rect.top - pRect.height - 2) + 'px';
-            }
-        });
-    }
-
-    // Close a single popover and return it to its home menu. While open the popover
-    // is portaled to <body> (see the open branch below) so that a backdrop-filter /
-    // transform ancestor — which turns position:fixed into "relative to that ancestor"
-    // and clips it inside a short overflow:auto strip — cannot contain or clip it.
-    function _closeOneOverflowPopover(p) {
-        p.removeAttribute('data-open');
-        if (p._ownerMenu && p.parentElement !== p._ownerMenu) {
-            p._ownerMenu.appendChild(p);
-        }
-    }
-
-    function _closeAllOverflowPopovers(except) {
-        document.querySelectorAll('[data-overflow-popover][data-open="true"]').forEach(p => {
-            if (p !== except) _closeOneOverflowPopover(p);
-        });
-    }
-
-    function _recomputeOverflowTriggerVisibility(menu) {
-        if (!menu) return;
-        const popover = menu.querySelector('[data-overflow-popover]');
-        if (!popover) return;
-        const items = Array.from(popover.querySelectorAll('.overflow-menu-item, .strip-btn'));
-        const anyVisible = items.some(el => {
-            if (el.disabled) return false;
-            const cs = window.getComputedStyle(el);
-            if (cs.display === 'none' || cs.visibility === 'hidden') return false;
-            return true;
-        });
-        menu.setAttribute('data-empty', anyVisible ? 'false' : 'true');
-    }
-
-    // Recompute every overflow-menu trigger's visibility on the page. Called after
-    // any gating update that toggles item display/disabled (e.g. _toggleSubtaskMetaButtons,
-    // Attachments/Diagram show/hide).
-    function _recomputeAllOverflowTriggers() {
-        document.querySelectorAll('[data-overflow-menu]').forEach(_recomputeOverflowTriggerVisibility);
-    }
-
-    let _overflowMenusInitialized = false;
-    function initOverflowMenus() {
-        if (_overflowMenusInitialized) return;
-        _overflowMenusInitialized = true;
-
-        document.addEventListener('click', (e) => {
-            const trigger = e.target.closest('[data-overflow-trigger]');
-            if (trigger) {
-                e.stopPropagation();
-                const menu = trigger.closest('[data-overflow-menu]');
-                const popover = menu && menu.querySelector('[data-overflow-popover]');
-                if (!popover) return;
-                const willOpen = popover.getAttribute('data-open') !== 'true';
-                _closeAllOverflowPopovers(willOpen ? popover : null);
-                if (willOpen) {
-                    // Portal the popover to <body> so no backdrop-filter/transform
-                    // ancestor (e.g. .cyber-theme-enabled .controls-strip) becomes its
-                    // containing block and clips it inside the short overflow:auto strip.
-                    // Remember its home menu so it can be reparented back on close (the
-                    // gating recompute queries items via the menu).
-                    popover._ownerMenu = menu;
-                    if (popover.parentElement !== document.body) {
-                        document.body.appendChild(popover);
-                    }
-                    _positionOverflowPopover(popover, trigger);
-                    popover.setAttribute('data-open', 'true');
-                } else {
-                    _closeOneOverflowPopover(popover);
-                }
-                return;
-            }
-            // Outside click — close all open popovers. A click inside an open popover
-            // (portaled to <body>, so it is NOT inside [data-overflow-menu]) must count
-            // as inside, else selecting an item would be treated as an outside click.
-            if (!e.target.closest('[data-overflow-menu]') && !e.target.closest('[data-overflow-popover]')) {
-                _closeAllOverflowPopovers(null);
-            }
-        });
-
-        document.addEventListener('keydown', (e) => {
-            if (e.key !== 'Escape') return;
-            const openPopovers = document.querySelectorAll('[data-overflow-popover][data-open="true"]');
-            if (openPopovers.length) {
-                openPopovers.forEach(_closeOneOverflowPopover);
-            }
-        });
-
-        // Reposition open popovers on scroll/resize (capture so we catch scroll inside
-        // any scrollable ancestor, e.g. the top strip's overflow-x:auto). The popover is
-        // portaled to <body> while open, so resolve its trigger via the remembered home
-        // menu rather than a DOM-ancestor lookup.
-        const repositionOpen = () => {
-            document.querySelectorAll('[data-overflow-popover][data-open="true"]').forEach(p => {
-                const menu = p._ownerMenu || p.closest('[data-overflow-menu]');
-                const trigger = menu && menu.querySelector('[data-overflow-trigger]');
-                if (trigger) _positionOverflowPopover(p, trigger);
-            });
-        };
-        window.addEventListener('scroll', repositionOpen, true);
-        window.addEventListener('resize', repositionOpen);
-    }
 
     function getTicketsTabElements() {
         return {
@@ -8381,15 +8266,6 @@ Return ONLY the drafted prompt with no additional commentary.`;
     }
 
     // Helper functions
-    function escapeHtml(str) {
-        if (!str) return '';
-        return str
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#039;');
-    }
 
     function formatRelativeTime(mtime) {
         const diff = Date.now() - mtime;

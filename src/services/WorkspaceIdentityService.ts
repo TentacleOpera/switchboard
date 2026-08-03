@@ -101,6 +101,71 @@ export function getMappingsFromIndex(): { enabled: boolean; mappings: WorkspaceD
     return { enabled: false, mappings: [] };
 }
 
+export function resolveParentsForTerminals(
+    cfg: { enabled: boolean; mappings: WorkspaceDatabaseMapping[] },
+    fallbackRoot: string,
+    terminals: Array<{ cwd?: string; [key: string]: any }>
+): {
+    parents: Array<{ id: string; name: string; parentFolder: string; workspaceFolders: string[] }>;
+    parentMap: Map<string, string | null>;
+} {
+    const resolvedFallback = path.resolve(fallbackRoot.startsWith('~') ? path.join(os.homedir(), fallbackRoot.slice(1)) : fallbackRoot);
+    const parents: Array<{ id: string; name: string; parentFolder: string; workspaceFolders: string[] }> = [];
+
+    if (cfg.enabled && Array.isArray(cfg.mappings) && cfg.mappings.length > 0) {
+        for (const m of cfg.mappings) {
+            const parentEntry = m.parentFolder || (Array.isArray(m.workspaceFolders) && m.workspaceFolders.length > 0 ? m.workspaceFolders[0] : undefined);
+            if (!parentEntry) continue;
+            const resolvedParent = path.resolve(parentEntry.startsWith('~') ? path.join(os.homedir(), parentEntry.slice(1)) : parentEntry);
+            const resolvedChildren = (m.workspaceFolders || []).map(f =>
+                path.resolve(f.startsWith('~') ? path.join(os.homedir(), f.slice(1)) : f)
+            );
+            parents.push({
+                id: m.id,
+                name: m.name || path.basename(resolvedParent),
+                parentFolder: resolvedParent,
+                workspaceFolders: resolvedChildren,
+            });
+        }
+    }
+
+    if (parents.length === 0) {
+        parents.push({
+            id: 'workspace-root',
+            name: path.basename(resolvedFallback),
+            parentFolder: resolvedFallback,
+            workspaceFolders: [],
+        });
+    }
+
+    const parentMap = new Map<string, string | null>();
+
+    for (const t of terminals) {
+        if (!t.cwd) {
+            parentMap.set(t.cwd || '', null);
+            continue;
+        }
+        const resolvedCwd = path.resolve(t.cwd.startsWith('~') ? path.join(os.homedir(), t.cwd.slice(1)) : t.cwd);
+        let bestMatch: { parentFolder: string; matchLength: number } | null = null;
+
+        for (const p of parents) {
+            const foldersToTest = [p.parentFolder, ...p.workspaceFolders];
+            for (const f of foldersToTest) {
+                if (resolvedCwd === f || resolvedCwd.startsWith(f + path.sep)) {
+                    if (!bestMatch || f.length > bestMatch.matchLength) {
+                        bestMatch = { parentFolder: p.parentFolder, matchLength: f.length };
+                    }
+                }
+            }
+        }
+
+        parentMap.set(t.cwd, bestMatch ? bestMatch.parentFolder : null);
+    }
+
+    return { parents, parentMap };
+}
+
+
 
 
 /**

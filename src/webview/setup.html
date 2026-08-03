@@ -671,8 +671,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <button class="shared-tab-btn" data-tab="database" role="tab" aria-selected="false">Database</button>
             <button class="shared-tab-btn" data-tab="control-plane" role="tab" aria-selected="false">Control Plane</button>
             <button class="shared-tab-btn" data-tab="mappings" role="tab" aria-selected="false">Multi-Repo</button>
-            <button class="shared-tab-btn" data-tab="clickup" role="tab" aria-selected="false">ClickUp</button>
-            <button class="shared-tab-btn" data-tab="linear" role="tab" aria-selected="false">Linear</button>
             <button class="shared-tab-btn" data-tab="notion" role="tab" aria-selected="false">Notion</button>
             <button class="shared-tab-btn" data-tab="plan-scanner" role="tab" aria-selected="false">Plan Scanner</button>
             <button class="shared-tab-btn" data-tab="theme" role="tab" aria-selected="false">Theme</button>
@@ -2792,7 +2790,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         function requestIntegrationSetupStates() {
             vscode.postMessage({ type: 'getIntegrationSetupStates' });
-            vscode.postMessage({ type: 'listTicketsFolders' });
+            vscode.postMessage({ type: 'getIntegrationTicketSaveLocations' });
         }
 
         function setIntegrationStatus(kind, state, errorText = '') {
@@ -3918,20 +3916,20 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         document.getElementById('linear-ticket-import-folder')?.addEventListener('input', updateApplyButtonsState);
 
         document.getElementById('btn-browse-clickup-ticket-folder')?.addEventListener('click', () => {
-            vscode.postMessage({ type: 'browseTicketsFolder', provider: 'clickup' });
+            vscode.postMessage({ type: 'browseIntegrationTicketSaveLocation', provider: 'clickup' });
         });
         document.getElementById('btn-browse-linear-ticket-folder')?.addEventListener('click', () => {
-            vscode.postMessage({ type: 'browseTicketsFolder', provider: 'linear' });
+            vscode.postMessage({ type: 'browseIntegrationTicketSaveLocation', provider: 'linear' });
         });
 
         document.getElementById('clickup-ticket-import-folder')?.addEventListener('blur', (e) => {
             const val = e.target.value.trim();
-            vscode.postMessage({ type: 'saveTicketsFolder', provider: 'clickup', folderPath: val });
+            vscode.postMessage({ type: 'saveIntegrationTicketSaveLocation', provider: 'clickup', folderPath: val });
             updateApplyButtonsState();
         });
         document.getElementById('linear-ticket-import-folder')?.addEventListener('blur', (e) => {
             const val = e.target.value.trim();
-            vscode.postMessage({ type: 'saveTicketsFolder', provider: 'linear', folderPath: val });
+            vscode.postMessage({ type: 'saveIntegrationTicketSaveLocation', provider: 'linear', folderPath: val });
             updateApplyButtonsState();
         });
 
@@ -4595,6 +4593,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     break;
                 }
+                case 'integrationTicketSaveLocations':
                 case 'ticketsFoldersListed': {
                     if (message.provider === 'clickup') {
                         const input = document.getElementById('clickup-ticket-import-folder');
@@ -4629,20 +4628,20 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     updateApplyButtonsState();
                     break;
                 }
+                case 'integrationTicketSaveLocationBrowsed':
                 case 'browseTicketsFolderResult': {
                     if (message.provider === 'clickup') {
                         const input = document.getElementById('clickup-ticket-import-folder');
                         if (input) input.value = message.path || '';
-                        vscode.postMessage({ type: 'saveTicketsFolder', provider: 'clickup', folderPath: message.path || '' });
+                        vscode.postMessage({ type: 'saveIntegrationTicketSaveLocation', provider: 'clickup', folderPath: message.path || '' });
                     } else if (message.provider === 'linear') {
                         const input = document.getElementById('linear-ticket-import-folder');
                         if (input) input.value = message.path || '';
-                        vscode.postMessage({ type: 'saveTicketsFolder', provider: 'linear', folderPath: message.path || '' });
+                        vscode.postMessage({ type: 'saveIntegrationTicketSaveLocation', provider: 'linear', folderPath: message.path || '' });
                     } else {
                         document.querySelectorAll('.ticket-import-folder-input').forEach(input => {
                             input.value = message.path || '';
                         });
-                        vscode.postMessage({ type: 'saveTicketsFolder', folderPath: message.path || '' });
                     }
                     updateApplyButtonsState();
                     break;

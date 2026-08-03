@@ -4296,6 +4296,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             return {
                 commands,
                 visibleAgents,
+                // The same map the kanban column sublines render (role -> 'CLAUDE CLI').
+                // Returned here rather than re-derived by each consumer: the derivation
+                // already exists once, in _getAgentNames, and the Terminals panel has no
+                // other way to reach it — updateAgentNames is postMessage'd to the kanban
+                // webview only, and the PTY host is a separate process with no db.
+                agentNames: await this._getAgentNames(workspaceRoot),
                 julesAutoSyncEnabled,
                 autoCommitOnCodeReview,
                 plannerTerminalCount,

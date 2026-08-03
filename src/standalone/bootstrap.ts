@@ -5,6 +5,7 @@ import * as path from 'path';
 import { URL } from 'url';
 import { KanbanDatabase } from '../services/KanbanDatabase';
 import { LocalApiServer } from '../services/LocalApiServer';
+import { resolveParentsForTerminals } from '../services/WorkspaceIdentityService';
 import { DEFAULT_KANBAN_COLUMNS } from '../services/agentConfig';
 import {
     columnToPromptRole,
@@ -1005,16 +1006,25 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 }
 
                 case 'ptyListTerminals': {
+                    const rawTerminals = ptyFleetService.list().map(t => ({
+                        friendlyName: t.friendlyName,
+                        role: t.role,
+                        status: t.status,
+                        pid: t.pty.pid,
+                        startTime: t.startTime,
+                        worktreePath: t.worktreePath,
+                        cwd: t.cwd,
+                    }));
+                    const dbMappings = await db.getWorkspaceMappings();
+                    const { parents, parentMap } = resolveParentsForTerminals(dbMappings, root, rawTerminals);
+                    const terminals = rawTerminals.map(t => ({
+                        ...t,
+                        parentRoot: parentMap.get(t.cwd) ?? null,
+                    }));
                     return {
                         success: true,
-                        terminals: ptyFleetService.list().map(t => ({
-                            friendlyName: t.friendlyName,
-                            role: t.role,
-                            status: t.status,
-                            pid: t.pty.pid,
-                            startTime: t.startTime,
-                            worktreePath: t.worktreePath
-                        }))
+                        terminals,
+                        parents,
                     };
                 }
 

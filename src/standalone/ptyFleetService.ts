@@ -20,6 +20,7 @@ export interface FleetTerminalInfo {
     pid: number;
     startTime: string;
     worktreePath?: string;
+    cwd?: string;
     ideName: string;
     purpose: string;
 }
@@ -31,6 +32,7 @@ export interface ExtendedTerminalHandle extends TerminalHandle {
     startTime: string;
     status: 'active' | 'exited';
     worktreePath?: string;
+    cwd: string;
     exitCode?: number;
 }
 
@@ -92,7 +94,8 @@ export class PtyFleetService {
             friendlyName: name,
             startTime,
             status: 'active',
-            worktreePath: worktreePath || (cwd !== this.workspaceRoot ? cwd : undefined),
+            worktreePath: worktreePath || undefined,
+            cwd: effectiveCwd,
         };
 
         this.terminals.set(name, handle);
@@ -199,6 +202,7 @@ export class PtyFleetService {
                     pid: t.pty.pid,
                     startTime: t.startTime,
                     worktreePath: t.worktreePath,
+                    cwd: t.cwd,
                     ideName: PTY_IDE_NAME,
                     purpose: 'pty',
                 } satisfies FleetTerminalInfo;

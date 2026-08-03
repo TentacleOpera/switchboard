@@ -29,6 +29,7 @@ const OUTPUT_PATH = path.join(REPO_ROOT, 'src', 'generated', 'verbAllowlist.ts')
 const PROVIDER_SETS = [
     { name: 'Kanban', set: 'KANBAN_VERBS' },
     { name: 'Planning', set: 'PLANNING_VERBS' },
+    { name: 'Tickets', set: 'TICKETS_VERBS' },
     { name: 'Design', set: 'DESIGN_VERBS' },
     { name: 'TaskViewer', set: 'TASKVIEWER_VERBS' },
     { name: 'Setup', set: 'SETUP_VERBS' },

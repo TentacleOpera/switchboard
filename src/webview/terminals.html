@@ -126,6 +126,49 @@
         .btn-new-terminal:hover {
             opacity: 0.9;
         }
+        /* Terminal-ops block. Ports .secondary-btn / .w-full from the extension
+           sidebar's Terminals sub-tab (implementation.html) so the browser page
+           presents the same full-width stacked controls rather than a row of
+           glyphs. Keep the padding, casing and letter-spacing in step with that
+           file — this is a mirror, not a variant. */
+        .sidebar-ops {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 10px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .secondary-btn {
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 8px;
+            font-size: 10px;
+            font-family: inherit;
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            border-radius: 2px;
+        }
+        .secondary-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--border-bright) 10%, transparent);
+            border-color: var(--border-bright);
+            color: var(--text-primary);
+        }
+        .secondary-btn:disabled {
+            opacity: 0.45;
+            cursor: default;
+        }
+        .secondary-btn.is-teal {
+            border-color: var(--accent-teal);
+            color: var(--accent-teal);
+        }
+        .secondary-btn.is-teal:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 12%, transparent);
+            color: var(--accent-teal);
+        }
+        .secondary-btn.w-full { width: 100%; }
         .terminals-list {
             flex: 1;
             overflow-y: auto;
@@ -165,6 +208,22 @@
             border-color: var(--accent-teal);
             color: var(--accent-teal);
         }
+        /* Not a role — the absence of one. Takes its own row below the role chips
+           and wears a dashed, muted border so it does not read as a peer of them.
+           text-transform is reset because the roles are capitalized generically
+           and this is a literal label, not a role name. */
+        .role-option.is-no-role {
+            flex-basis: 100%;
+            border-style: dashed;
+            border-color: var(--border-color);
+            color: var(--text-secondary);
+            text-transform: none;
+            margin-top: 2px;
+        }
+        .role-option.is-no-role:hover {
+            border-color: var(--accent-teal);
+            color: var(--accent-teal);
+        }
         .role-picker-cancel {
             background: none;
             border: none;
@@ -187,32 +246,61 @@
             width: 100%;
             box-sizing: border-box;
         }
-        .btn-rename-term,
-        .btn-clear-term {
+        /* Per-terminal row actions. Ports .locate-btn from the extension sidebar:
+           text labels, not glyphs, and always visible rather than revealed on
+           hover — `locate`/`clear` are the same two words the sidebar uses. The
+           only deviation is padding: the sidebar sets 0, which gives a ~10px
+           target. Kept the type identical and grew the box instead. */
+        .locate-btn {
             background: none;
             border: none;
             color: var(--text-secondary);
             cursor: pointer;
-            font-size: 11px;
-            padding: 0 4px;
+            font-size: 10px;
+            font-family: inherit;
+            letter-spacing: 0.5px;
+            padding: 4px 6px;
+            border-radius: 2px;
+            opacity: 0.7;
+            transition: all 0.2s;
         }
-        .btn-rename-term:hover,
-        .btn-clear-term:hover { color: var(--accent-teal); }
+        .locate-btn:hover:not(:disabled) {
+            opacity: 1;
+            color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+        .locate-btn:disabled {
+            opacity: 0.3;
+            cursor: default;
+        }
+        .locate-btn.is-danger:hover:not(:disabled) {
+            color: #f85149;
+            background: color-mix(in srgb, #f85149 12%, transparent);
+        }
         .toolbar-actions {
             display: flex;
             align-items: center;
             gap: 10px;
         }
+        /* Stacked, not a single row. The sidebar is 220px and the actions are now
+           four words rather than four glyphs, so they get their own line instead of
+           competing with the terminal name for horizontal space. */
         .terminal-item {
             padding: 8px 10px;
             border-radius: 4px;
             cursor: pointer;
             margin-bottom: 4px;
             display: flex;
-            align-items: center;
-            justify-content: space-between;
+            flex-direction: column;
+            gap: 6px;
             background: transparent;
             border: 1px solid transparent;
+        }
+        .terminal-item-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 6px;
         }
         .terminal-item:hover {
             background: rgba(255, 255, 255, 0.04);
@@ -251,23 +339,15 @@
         .status-dot.exited {
             background: #f85149;
         }
+        /* Always visible. Hover-reveal put the three destructive-ish actions
+           underneath a cursor that was already moving, and hid them from anyone
+           who never hovered. The sidebar shows locate/clear unconditionally and
+           disables what is unavailable; do the same. */
         .item-actions {
-            display: none;
-        }
-        .terminal-item:hover .item-actions {
             display: flex;
-            gap: 4px;
-        }
-        .btn-close-term {
-            background: none;
-            border: none;
-            color: var(--text-secondary);
-            cursor: pointer;
-            font-size: 12px;
-            padding: 0 4px;
-        }
-        .btn-close-term:hover {
-            color: #f85149;
+            gap: 2px;
+            flex-wrap: wrap;
+            margin-left: -6px;
         }
         .terminals-main {
             flex: 1;
@@ -404,6 +484,48 @@
             display: none;
         }
 
+        /* Parent Workspace Groups */
+        .parent-group {
+            margin-bottom: 10px;
+        }
+        .parent-group-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 5px 6px;
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--text-primary);
+            cursor: pointer;
+            border-left: 2px solid var(--accent-teal, #4ec9b0);
+        }
+        .parent-group-header:hover {
+            background: rgba(255, 255, 255, 0.08);
+        }
+        .parent-group.collapsed .worktree-collapse-icon {
+            transform: rotate(-90deg);
+        }
+        .parent-group-items {
+            padding-left: 6px;
+            margin-top: 4px;
+        }
+        .parent-group.collapsed .parent-group-items {
+            display: none;
+        }
+        .empty-parent-notice {
+            font-size: 10px;
+            color: var(--text-muted, #777);
+            font-style: italic;
+            padding: 4px 8px;
+        }
+        .worktree-group.indent-worktree {
+            margin-left: 6px;
+            border-left: 1px solid rgba(255, 255, 255, 0.08);
+            padding-left: 4px;
+        }
+
         /* Grid container & Panes */
         .pane-grid {
             flex: 1;
@@ -450,19 +572,41 @@
             box-shadow: inset 0 0 0 1px var(--accent-teal);
         }
 
+        /* Pane-header actions use the same text-label treatment as the sidebar
+           rows. They were two identically-styled single glyphs (⌫ and ⊟) sitting
+           side by side, one of which sends /clear to the agent and the other of
+           which only unassigns the pane — indistinguishable at a glance. */
+        .pane-actions {
+            display: flex;
+            gap: 2px;
+            flex-shrink: 0;
+        }
         .btn-unassign-pane {
             background: transparent;
             border: 1px solid var(--border-color);
             color: var(--text-secondary);
-            font-size: 11px;
+            font-size: 10px;
+            font-family: inherit;
+            letter-spacing: 0.5px;
             line-height: 1;
-            padding: 1px 4px;
+            padding: 3px 6px;
             border-radius: 3px;
             cursor: pointer;
+            transition: all 0.2s;
         }
-        .btn-unassign-pane:hover {
-            color: var(--text-primary);
+        .btn-unassign-pane:hover:not(:disabled) {
+            color: var(--accent-teal);
             border-color: var(--accent-teal);
+        }
+        .btn-unassign-pane:disabled {
+            opacity: 0.4;
+            cursor: default;
+        }
+        /* The 6- and 9-pane headers are too narrow for two words, so the label
+           collapses to the first letter there rather than overflowing the title. */
+        .pane-grid.layout-2x3 .btn-unassign-pane,
+        .pane-grid.layout-3x3 .btn-unassign-pane {
+            padding: 2px 4px;
         }
         .pane-index-chip {
             font-size: 9px;
@@ -686,6 +830,16 @@
             <div id="role-picker-options" class="role-picker-options"></div>
             <button type="button" id="role-picker-cancel" class="role-picker-cancel">Cancel</button>
         </div>
+        <!-- Terminal ops. Mirrors the extension sidebar's Terminals sub-tab
+             (implementation.html): full-width stacked secondary-btns, same labels.
+             Clear All lived in the layout toolbar wearing .btn-layout, where it
+             read as a seventh grid option. -->
+        <div class="sidebar-ops">
+            <button type="button" id="btn-open-all" class="secondary-btn is-teal w-full"
+                    title="Open a terminal for every visible agent role">OPEN AGENT TERMINALS</button>
+            <button type="button" id="btn-clear-all" class="secondary-btn w-full"
+                    title="Send /clear to every active terminal">CLEAR ALL TERMINALS</button>
+        </div>
         <div id="terminals-list" class="terminals-list"></div>
     </div>
     <div id="terminals-main" class="terminals-main">
@@ -699,7 +853,6 @@
                 <button type="button" class="btn-layout" data-layout="3x3">3x3</button>
             </div>
             <div class="toolbar-actions">
-                <button type="button" id="btn-clear-all" class="btn-layout" title="Send /clear to every terminal">Clear All</button>
                 <label class="notify-toggle-label">
                     <input type="checkbox" id="notify-toggle"> OS Notifications
                 </label>
