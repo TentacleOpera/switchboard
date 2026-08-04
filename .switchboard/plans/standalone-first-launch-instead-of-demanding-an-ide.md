@@ -8,11 +8,13 @@ something is — instead of probing `.switchboard/api-server-port.txt` and, on a
 go open the workspace in VS Code. An agent in Antigravity (or any host without the extension live)
 should get a working board, not an instruction to change editors.
 
-Delivering that needs three things the codebase does not have today: a **resolvable launcher** (there
+Delivering that needs four things the codebase does not have today: a **resolvable launcher** (there
 is currently no runnable standalone binary reachable from a generic workspace), **attach semantics** in
-the CLI (it presently hard-exits when a server is already up), and the **skill protocol inversion**
-itself. The first two are prerequisites, not polish — the skill change alone would emit a command that
-fails.
+the CLI (it presently hard-exits when a server is already up), a **way to stop a launched server** (the
+teardown exists but only reachable via a signal to a process you have a terminal for — and this plan
+detaches it), and the **skill protocol inversion** itself. The first three are prerequisites, not polish
+— the skill change alone would emit a command that fails, and detaching without a stop path leaves a
+server nothing can shut down.
 
 ### The observed failure
 
@@ -88,7 +90,7 @@ extension, therefore no `LocalApiServer`, therefore no port file unless some *ot
 This is the whole reason the plan exists, and it makes launch the **normal** path in Antigravity rather
 than an edge case: a `/switchboard` there can only ever attach to a server another process started, or
 start standalone itself. It also means the `/switchboard` **skill** is the only integration surface
-Antigravity offers — which is precisely why the protocol inversion in change 4, not an extension-side
+Antigravity offers — which is precisely why the protocol inversion in change 5, not an extension-side
 fix, is the deliverable.
 
 Bundles measured across this machine's IDE install roots (all of these are *sources to copy a launcher
@@ -151,17 +153,32 @@ propagation path has to be part of the deliverable or explicitly deferred with a
 
 ## Metadata
 - **Tags:** standalone, cli, agent-protocol, dx, feature-standalone-cli
-- **Complexity:** 6
+- **Complexity:** 7
+
+> **Superseded:** **Complexity:** 6
+> **Reason:** re-scored on adding change 3 (lifecycle). Shutdown is not a bolt-on: it introduces a pid
+> file whose consistency with the port file must hold across every exit path, a SIGHUP gap that currently
+> leaks PTY children, and a PID-recycling refusal case that a naive implementation gets dangerously wrong.
+> **Replaced with:** **Complexity:** 7
 - **Repo:** `switchboard`
 - **Feature:** Standalone CLI Scaffolding
 
 ## User Review Required (decisions, with defaults)
 
-1. **What does attach do — open a browser, or just report the port?** Default: **report the port and
-   URL on stdout, and open a browser only when `--open` is passed.** The agent case is the primary one
-   now and an agent does not want a browser tab; `TaskViewerProvider.ts:2187`'s intent (open a browser)
-   was written for a human running the command by hand. Note this inverts today's `--no-open` default
-   for the attach path only; launch keeps its current behaviour unless you want both changed.
+1. **What does attach do — open a browser, or just report the port?** Default (**decided by the user,
+   2026-08-04**): **open the browser, exactly as launch does.** The human contract is "type the command,
+   leave the terminal running, get a board" — and it must not silently change depending on whether a
+   server happened to already be up. So `--no-open` stays the single opt-out for **both** paths, and the
+   agent's helper script (change 2) passes `--no-open` explicitly rather than the CLI defaulting to
+   closed. Attach also opens no browser when it cannot mint a session (see change 1's token
+   requirement) — it says why instead of opening a tab that 401s.
+
+   > **Superseded:** Default was "report the port and URL on stdout, and open a browser only when
+   > `--open` is passed", on the reasoning that the agent case is primary and an agent does not want a
+   > tab.
+   > **Reason:** that optimises the agent path at the cost of the human one, and makes `npx <name>`
+   > behave differently for the same typed command depending on invisible state. The agent path can ask
+   > for `--no-open`; the human should not have to ask for the board.
 
 2. **Which launcher wins when several exist?** Default: **highest semver across all IDE install roots**,
    preferring an exact match to the workspace's own `dist/standalone/cli.js` when the workspace *is* the
@@ -174,7 +191,7 @@ propagation path has to be part of the deliverable or explicitly deferred with a
    committed helper script** (`.agents/scripts/switchboard-up.sh` or `.js`) that the skill calls, so the
    resolution logic is testable, versioned, and fixable without editing prose in N frozen skill copies.
    Rejected: embedding a multi-step resolution heuristic in SKILL.md, which cannot be tested and
-   inherits the freeze problem in change 4.
+   inherits the freeze problem in change 6.
 
 4. **How much version skew is tolerable?** A 1.5.9 CLI opening a DB that a 1.7.13 extension has migrated
    is a real hazard — `KanbanDatabase` migrations are live and actively failing in one case (see the
@@ -227,6 +244,32 @@ Replace the `exit 1` at `:206-211` with an attach path:
   delete the file first — `bootstrap.ts:1462` overwrites it on successful bind, so cleanup is implicit
   and unlinking it early would lose the diagnostic if the launch itself fails.
 
+**Attach must be able to mint a browser session, and today it cannot. This is the hard part of change 1,
+not the `exit 1` removal.** The two hosts differ:
+
+- **Standalone** mints exactly **one** token, at boot: `bootstrap.ts:304` generates `oneTimeToken` and
+  `:1437` rejects everything else forever — `if (oneTimeConsumed || t !== oneTimeToken) return false`.
+  There is no minting endpoint. So once the original launch's browser consumed it, a *newly attaching*
+  process has no way to authorise a browser at all. A tab opened against that server gets the 401 at
+  `LocalApiServer.ts:569` — "Open the board URL from a fresh `npx switchboard` launch".
+- **Extension** keeps a TTL'd map (`TaskViewerProvider.ts:2505-2518`) and *can* issue fresh tokens — that
+  is what its open-in-browser button does — but exposes no way for a separate CLI process to ask for one.
+
+So attach-and-open only works by accident today: it works if the *same* browser still holds a valid
+`sb_session` cookie from the original launch, and fails in a different browser, a private window, or after
+a cookie clear. Resolve it explicitly:
+
+- Add a **token-mint path on the running server** that a local attaching process can call —
+  `POST /session/token` returning a fresh single-use token, **gated on the API token, not the session
+  cookie** (a session cookie is what we are trying to obtain, so gating on it is circular). Standalone's
+  `oneTimeConsumed` boolean must become a TTL'd set to support more than one, matching the extension's
+  existing model rather than inventing a second one.
+- The attaching CLI mints a token, builds the board URL with it, and opens that. If minting is
+  unavailable (older server, no API token configured), **print the URL and say the browser may need a
+  session** rather than opening a tab that 401s — a confusing failure is worse than an honest message.
+- If this is judged too large, the honest fallback is: attach reports the port and does **not** claim it
+  opened a board. What must not ship is an attach path that opens a tab which silently 401s.
+
 Fix the stale comment at `TaskViewerProvider.ts:2183-2190` in the same change so it describes what the
 code now does.
 
@@ -261,10 +304,40 @@ lets the skill report honestly which happened.
 
 Detach the child (`spawn(..., { detached: true, stdio: 'ignore' }).unref()`, as `openBrowser` at
 `cli.ts:119-131` already does) so the server outlives the agent's shell invocation — otherwise the
-board dies with the tool call that started it. Log the child's stdout/stderr to
-`.switchboard/standalone-launch.log` so a failed boot is diagnosable after detaching.
+board dies with the tool call that started it, because an agent's tool-call shell exits the moment the
+command returns. Log the child's stdout/stderr to `.switchboard/standalone-launch.log` so a failed boot
+is diagnosable after detaching. **Detaching makes change 3 mandatory, not optional** — a server with no
+controlling terminal and no shutdown affordance is unstoppable without `lsof`.
 
-### 3. Version-skew guard — `.agents/scripts/switchboard-up.js` + `src/standalone/bootstrap.ts`
+### 3. Lifecycle — a way to stop what was started, and a clean death — `src/standalone/cli.ts`
+
+The teardown already exists and is thorough: `bootstrap.ts:1481-1491`'s `stop()` disposes the terminal
+WS gateway, `ptyFleetService.disposeAll()`, the ingestion engine and every provider, stops the server,
+and unlinks the port file. `cli.ts:240-248` wires it to SIGINT and SIGTERM. Nothing exposes it to a
+*different* process, which is what detaching requires. Three gaps, all small:
+
+- **No PID is recorded anywhere** (verified: no pid file is written in `src/`). Write
+  `.switchboard/api-server-pid.txt` alongside the port file, from the same place
+  (`bootstrap.ts:1461-1463`), and unlink it in `stop()` next to the port-file unlink so the pair is
+  always consistent. Without this, "stop the server" degrades to `lsof -i :<port>`.
+- **No way in.** Add a `switchboard stop [--workspace <path>]` subcommand next to the existing `secrets`
+  subcommands (`cli.ts:170-201`): read the pid + port files, health-probe to confirm it is really ours,
+  send SIGTERM, wait for the port to stop answering, then report. Prefer this over a `POST /shutdown`
+  endpoint (none exists today) — an HTTP kill switch on a loopback server is reachable by any local
+  process and by any page the browser loads, and the session-cookie gate is not a defence worth relying
+  on for "terminate the process". If a `/shutdown` endpoint is wanted anyway, gate it behind the API
+  token, not the session cookie.
+- **SIGHUP is not trapped** (verified: no `SIGHUP` handler anywhere in `src/`). So closing the launching
+  terminal today kills the process via Node's default SIGHUP behaviour **without** running `stop()` —
+  leaving a stale port file and potentially orphaned PTY children. Add `SIGHUP` to the existing
+  `process.on` list at `cli.ts:247-248`. This is worth fixing regardless of this plan: it makes closing a
+  window as clean as Ctrl-C.
+
+Also expose it to the agent: the skill (change 5) should mention `switchboard stop` as the counterpart to
+launching, so an agent that started a server can be asked to stop it. `SIGKILL` remains untrappable by
+definition — the stale-port-file path in change 1 is what makes that survivable.
+
+### 4. Version-skew guard — `.agents/scripts/switchboard-up.js` + `src/standalone/bootstrap.ts`
 
 Per decision 4: after resolving a candidate, compare its version against the highest
 `turnzero.switchboard-*` present on the machine and warn on stdout when launching an older CLI. Have
@@ -272,7 +345,7 @@ Per decision 4: after resolving a candidate, compare its version against the hig
 the running build knows, with an explicit message, rather than attempting a downgrade path that does not
 exist.
 
-### 4. Invert the skill's entry protocol — `.claude/skills/switchboard/SKILL.md`
+### 5. Invert the skill's entry protocol — `.claude/skills/switchboard/SKILL.md`
 
 Rewrite §1 step 1 so **Command A becomes "bring it up"**:
 
@@ -294,7 +367,7 @@ the launcher creating `.switchboard/` (as `cli.ts:158-161` does) must **not** be
 arbitrary directory — guard on an existing `.switchboard/` or `kanban.db` before launching, or
 `/switchboard` in a random folder silently scaffolds one.
 
-### 5. Propagation — make the skill edit actually reach users
+### 6. Propagation — make the skill edit actually reach users
 
 Per root cause 4, `{ overwrite: false }` at `extension.ts:363`, `:408`, `:4106` freezes workspace skill
 copies. Choose one and state it in the plan's outcome:
@@ -308,16 +381,22 @@ copies. Choose one and state it in the plan's outcome:
 
 Do **not** silently rely on `overwrite: false` — that is what makes "we fixed the skill" untrue.
 
-### 6. Tests
+### 7. Tests
 
 - `findRunningInstance` returns the port on a healthy server, `null` on a stale port file, `null` on a
   malformed one (`:113-115` already guards `NaN` — assert it).
 - Attach path: with a stub server answering `/health`, `main()` exits 0, prints the port, and starts no
   listener. Assert *no second bind*, which is the invariant.
 - Launcher resolution: given a fixture tree of install roots, picks the highest semver **that has a
-  `cli.js`**; skips a bundle-less 1.5.9 in favour of a 1.7.13 (the exact reported case); prefers the repo
-  build when `$ROOT` is the switchboard repo; exits non-zero with the roots listed when nothing matches.
-  Assert semver ordering, not string ordering.
+  `cli.js`**; skips a bundle-less older version in favour of a newer one; prefers the repo build when
+  `$ROOT` is the switchboard repo; exits non-zero with the roots listed when nothing matches. Assert
+  semver ordering, not string ordering.
+- Signal parity: SIGINT, SIGTERM **and SIGHUP** each run `stop()` exactly once and leave neither the port
+  file nor the pid file behind. Assert idempotence — a second signal arriving mid-teardown must not
+  double-dispose the PTY fleet.
+- `switchboard stop`: stops a live server for the named workspace; is a no-op with a clear message when
+  nothing is running; **refuses** when the pid file's PID exists but does not answer `/health` as this
+  workspace's server (PID recycling), rather than signalling a stranger.
 - Skill guard: assert `SKILL.md` no longer contains "open the workspace in VS Code" and does contain the
   launcher invocation — the same style of guard the tooltip and column plans use, so the instruction
   cannot silently regress.
@@ -330,6 +409,11 @@ Do **not** silently rely on `overwrite: false` — that is what makes "we fixed 
 2. **Launch from cold.** Nothing running: `node .agents/scripts/switchboard-up.js --workspace "$ROOT"`
    → resolves a launcher, boots, prints `SWITCHBOARD_MODE=launched` and a port, `/health` answers with
    `$ROOT` in `roots`. Confirm the server **survives** the invoking shell exiting.
+2a. **The human contract, both ways.** Nothing running: type the launch command in a terminal, leave it
+   open → a browser tab lands on the board, authenticated. Then, with that server still up, run the same
+   command again in a second terminal → it attaches and **also** lands a working board tab (decision 1).
+   Repeat the attach case in a **private window / different browser** to prove the minted session works
+   rather than relying on the first tab's cookie — this is the case that fails today.
 3. **Attach to a live extension.** With VS Code/Devin running the extension, run the same command →
    `SWITCHBOARD_MODE=attached`, the port equals the extension's, and **no second process** appears
    (`lsof -i` shows one listener; the DB has one writer). This is the single-writer regression test.
@@ -354,8 +438,20 @@ Do **not** silently rely on `overwrite: false` — that is what makes "we fixed 
    *started*) and starts no second writer.
 9. **Not a scaffolder.** Run `/switchboard` in a directory with no `.switchboard/` → refuses rather than
    creating one.
+9a. **Survives the terminal, and can still be stopped.** Launch via the script, then **close the
+    launching terminal window** (not Ctrl-C) → the server keeps answering `/health`. Then
+    `switchboard stop --workspace "$ROOT"` → the port stops answering, and **both** `api-server-port.txt`
+    and `api-server-pid.txt` are gone. Confirm no orphaned PTY children survive (`pgrep` the agent shells
+    the fleet spawned) — that is what proves `stop()` ran rather than the process merely dying.
+9b. **SIGHUP is clean now.** Launch in the *foreground*, close the terminal, and confirm the teardown ran:
+    port file removed, PTY children reaped. Before the change this leaves both behind, so assert the
+    before/after difference rather than just the after state.
+9c. **Stop is honest about what it kills.** With a *different* workspace's server running, `switchboard
+    stop --workspace <this root>` must not touch it. With a stale pid file pointing at a recycled PID,
+    stop must health-probe first and refuse rather than SIGTERM an unrelated process — the failure mode
+    that makes a naive pid-file implementation dangerous.
 10. **Propagation.** In a workspace scaffolded before this change, confirm the new skill text is present
-    after whichever mechanism change 5 selects (or that the documented manual step produces it).
+    after whichever mechanism change 6 selects (or that the documented manual step produces it).
 11. `npm run lint` plus the standalone suites green, including
     `test:contract:secrets-bridge` — change 1 touches `main()`, through which the `secrets` subcommands
     return early (`cli.ts:170-201`); confirm that early return still precedes all attach logic.
@@ -390,6 +486,17 @@ Do **not** silently rely on `overwrite: false` — that is what makes "we fixed 
 - Making the extension defer to a running standalone (the reverse direction).
 - Auto-installing or auto-updating an extension bundle when none is found.
 - Any change to how the board, panels or dispatch behave once a server is up — this plan only changes
-  how one comes to exist.
-- Shutting a launched server down. It outlives the session by design; lifecycle management is follow-up
-  work.
+  how one comes to exist and how it is stopped.
+- Auto-stopping the server on idle, on workspace close, or after N minutes. A launched server outlives
+  the session **deliberately** — that is what makes a second `/switchboard` an attach — so shutdown stays
+  explicit (`switchboard stop`, a signal, or closing a foreground terminal). Automatic lifecycle
+  management is follow-up work.
+- A `POST /shutdown` HTTP endpoint. Change 3 argues against it (any local process, and any page the
+  browser loads, can reach a loopback endpoint); if one is added later it must be API-token gated, not
+  session-cookie gated.
+
+> **Superseded:** this section previously read "Shutting a launched server down. It outlives the session
+> by design; lifecycle management is follow-up work."
+> **Reason:** the plan detaches the launched process, so excluding shutdown would ship a server with no
+> controlling terminal, no recorded PID, and no stop path — strictly worse than today's foreground
+> process. Shutdown is now change 3; only *automatic* lifecycle management remains out of scope.

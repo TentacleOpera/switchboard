@@ -83,6 +83,16 @@ jobs:
       - name: Terminal token transport contract (gateway auth + CSP-legal injection)
         run: npm run test:contract:terminal-token-transport
 
+      # PtyFleetService.rename mutates handle.name IN PLACE, so the gateway's onData
+      # closure switches to the new name while every name-keyed map is still filed
+      # under the old one — a renamed terminal with no scrollback ring at all (blank
+      # on re-attach, every frame stamped seq 0, leaked onData subscription on close).
+      # The load-bearing assertion here is the drift one: it derives the collection
+      # list from untrackTerminalData rather than hardcoding it, so a name-keyed map
+      # added later cannot be torn down on close while being skipped on rename.
+      - name: Terminal rename re-key contract (every name-keyed collection moves)
+        run: npm run test:contract:terminal-rename-rekey
+
       # The Host-header guard is the DNS-rebinding defence on a board that serves
       # an RCE-grade terminal, so every failure here is silent and security-shaped:
       # widening the pattern past the RFC 6761 `.localhost` reservation (to

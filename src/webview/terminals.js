@@ -2119,6 +2119,16 @@
                     terminalsMap.delete(name);
                     entry.name = next;
                     terminalsMap.set(next, entry);
+                    // The other name-keyed client collection. An in-flight ladder for
+                    // the old name self-terminates (its terminalsMap lookup misses),
+                    // but its generation counter is only ever cleaned by
+                    // destroyTerminalView under the key it was filed at — which the
+                    // re-key just made unreachable. Move it rather than orphan one
+                    // entry per rename for the life of the tab.
+                    if (fitLadderGen.has(name)) {
+                        fitLadderGen.set(next, fitLadderGen.get(name));
+                        fitLadderGen.delete(name);
+                    }
                     // Not `entry.term` alone: reconnecting an exited terminal makes
                     // setupClient re-send {t:'exit'} (terminalWsGateway.ts:633-635),
                     // printing a SECOND "[Process Exited]" line under the one the
@@ -2632,6 +2642,15 @@
     }
 
     function connectTerminalSocket(entry) {
+        // A pending backoff timer is obsolete the moment we connect for real. This
+        // used to be covered by destroyTerminalView (which clears it) standing
+        // between every rename and the reconnect; renameTerminal now re-keys instead,
+        // so a rename landing inside a backoff window leaves the old timer armed —
+        // it fires ~500ms later, sees terminalsMap holding the NEW name, and tears
+        // down the socket this call just opened. Same defect class as the stale
+        // onclose below, same reasoning: the caller that WANTS this timer is the
+        // timer itself, and clearing an id that has already fired is a no-op.
+        if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
         if (entry.ws) {
             // Detach first. The browser dispatches `close` in a later task, and by
             // then entry.name / fleetList may have moved on (rename) — a stale

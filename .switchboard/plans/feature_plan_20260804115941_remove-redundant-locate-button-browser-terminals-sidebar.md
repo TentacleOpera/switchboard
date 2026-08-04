@@ -8,7 +8,7 @@ The browser terminals page (`src/webview/terminals.html`, driven by `src/webview
 
 The `locate` button was ported from the **extension sidebar** (`src/webview/implementation.html`), where it has a genuine purpose: the sidebar is a *separate surface* from the IDE's terminal panel, so clicking `locate` posts `vscode.postMessage({ type: 'focusTerminal', ... })` to reveal the terminal in the IDE. That is a real cross-surface action.
 
-On the **browser page**, the terminal is already rendered on the same page in the pane grid. The `locate` button's click handler calls `locateTerminal(item.friendlyName)` (`terminals.js:747`), which seats the terminal in the focused pane and hands it the caret. But the **entire row** already has the identical handler bound at `terminals.js:790-792`:
+On the **browser page**, the terminal is already rendered on the same page in the pane grid. The `locate` button's click handler calls `locateTerminal(item.friendlyName)` (`terminals.js:785`), which seats the terminal in the focused pane and hands it the caret. But the **entire row** already has the identical handler bound at `terminals.js:828-830`:
 
 ```js
 itemDiv.addEventListener('click', () => {
@@ -22,7 +22,7 @@ The redundancy is the root cause of the user's confusion: a button that visibly 
 
 ### Intended outcome
 
-Remove the `locate` button from the browser sidebar's per-terminal action row. The row click already seats + focuses the terminal, so no replacement control is needed. `clear`, `rename`, and `close` remain. The `locateTerminal()` *function* stays — it is still called by the row click handler and by the inbound `focusTerminal` message arm (`terminals.js:394`), and is asserted by `shell-terminal-strip.test.js`.
+Remove the `locate` button from the browser sidebar's per-terminal action row. The row click already seats + focuses the terminal, so no replacement control is needed. `clear`, `rename`, and `close` remain. The `locateTerminal()` *function* stays — it is still called by the row click handler and by the inbound `focusTerminal` message arm (`terminals.js:407`), and is asserted by `shell-terminal-strip.test.js`.
 
 ## Metadata
 
@@ -30,26 +30,39 @@ Remove the `locate` button from the browser sidebar's per-terminal action row. T
 **Tags:** ui, ux, refactor
 **Project:** Browser Switchboard
 
+## User Review Required
+
+- None. Mechanical deletion of a 100% redundant control; no design decisions, no options with meaningful trade-offs. The row click is already the canonical seat-and-focus gesture.
+
 ## Complexity Audit
 
 **Routine.** This is a single-file deletion of one DOM-element construction block (~9 lines) in `terminals.js`. No new logic, no state changes, no API surface change. The `locateTerminal` function and its callers (row click, `focusTerminal` message arm) are untouched. The only risk surface is the existing static test `shell-terminal-strip.test.js`, which references `locateTerminal` (the function) but not the `locate` button — confirmed by reading the test; it asserts on the function body and the message arm, neither of which this plan touches.
 
 ## Edge-Case & Dependency Audit
 
-- **`locateTerminal` function must remain.** It is called by the row click handler (`terminals.js:791`) and the `focusTerminal` inbound message arm (`terminals.js:394`). Do NOT remove the function — only the button DOM element + its click listener.
+- **`locateTerminal` function must remain.** It is called by the row click handler (`terminals.js:829`) and the `focusTerminal` inbound message arm (`terminals.js:407`). Do NOT remove the function — only the button DOM element + its click listener.
 - **`clear`/`rename`/`close` buttons must remain.** They each perform a distinct action (`clearTerminal`, `beginInlineRename`, `closeTerminal`) and already call `e.stopPropagation()` so the row click does not double-fire. Only `locate` is the duplicate.
 - **CSS `.locate-btn` class stays.** `clear`, `rename`, and `close` all reuse the `.locate-btn` class for styling (they were ported together from the extension sidebar). Removing the class would break their styling. Only the `locate` *button element* is removed, not the class.
-- **`focusTerminal` inbound message path unaffected.** The message arm at `terminals.js:386-398` calls `locateTerminal()` directly — it does not go through the button. Inbound focus requests from the board still work after this change.
+- **`focusTerminal` inbound message path unaffected.** The message arm at `terminals.js:399-411` calls `locateTerminal()` directly — it does not go through the button. Inbound focus requests from the board still work after this change.
 - **No migration concern.** This is unreleased browser-page UI; no shipped state references the button. No user data, settings, or persisted state involved.
 - **`itemDiv` row click is the canonical "locate" gesture on the browser page.** After removal, clicking the row is the single, obvious way to seat + focus a terminal — which is already the documented behavior in the row handler.
+- **Groups mode interaction (feature-level reconciliation).** When the Terminal Sidebar Groupings subtask lands, `renderGroupSidebar` replaces these per-terminal rows while groups exist. The button removal here applies to the flat/structural list, which remains reachable via the "show all terminals" toggle — so this cleanup stays meaningful, not dead code.
+
+## Dependencies
+
+- None. (No session IDs cited; IDs are assigned on import.) Sequencing within the feature: land before the branding subtask so the branding diff rebases onto the settled three-button action row in `renderTerminalRow`.
+
+## Adversarial Synthesis
+
+**Risk summary.** Very low risk: a pure deletion of one DOM block whose action is byte-identical to the row click handler. The only real trap is over-deletion — removing the `locateTerminal` function or the `.locate-btn` CSS class along with the button — both explicitly retained because the row click, the `focusTerminal` message arm, and the three sibling buttons still depend on them.
 
 ## Proposed Changes
 
-### `src/webview/terminals.js` — remove the `locate` button block in `renderSidebarItem`
+### `src/webview/terminals.js` — remove the `locate` button block in `renderTerminalRow`
 
-In `renderSidebarItem` (around `terminals.js:738-749`), delete the `locateBtn` construction block. The `actions` container is then populated starting with `clearBtn`.
+In `renderTerminalRow` (`terminals.js:730-833`), delete the `locateBtn` construction block (`:779-787`). The `actions` container is then populated starting with `clearBtn`.
 
-**Before** (`terminals.js:738-749`):
+**Before** (`terminals.js:776-789`):
 ```js
 const actions = document.createElement('div');
 actions.className = 'item-actions';
@@ -87,6 +100,8 @@ const clearBtn = document.createElement('button');
 - `shell-terminal-strip.test.js`: Untouched. Its assertions target the `locateTerminal` *function* and the `focusTerminal` message *arm*, both of which remain.
 
 ## Verification Plan
+
+> Session note (improve-feature review, 2026-08-04): compilation and automated tests were NOT run as part of this planning pass per session directive. The checks below are the coder's verification gates, to be executed at implementation time. Line numbers were re-verified against the working tree on 2026-08-04 (`terminals.js` is now 3046 lines).
 
 1. **Static test suite:** `npm test` (or the project's test command) — confirm `shell-terminal-strip.test.js` still passes. It asserts `locateTerminal` seats + focuses; the function is unchanged, so it must pass.
 2. **Build check:** `npm run compile` — confirm webpack builds cleanly with no new errors (the deletion is inside a function body; no import/export surface changes).

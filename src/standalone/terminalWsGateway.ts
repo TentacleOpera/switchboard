@@ -601,6 +601,26 @@ export class TerminalWsGateway {
                 client.terminalName = newName;
             }
         }
+
+        // Re-arm a drain that was in flight across the move. Unlike every other
+        // collection here, inputQueues has a SELF-RESCHEDULING consumer:
+        // drainInputQueue re-arms itself with setImmediate and captures the name it
+        // was called with (:218). A drain still walking a multi-chunk paste when the
+        // rename lands therefore wakes under oldName, finds no queue — we just moved
+        // it — and returns down the `!queue` branch, which cannot clear `draining`
+        // because it has no queue to clear it on. The moved object keeps
+        // `draining: true` with chunks still in it, so every later enqueueInput takes
+        // the `if (!queue.draining)` false branch and never restarts the pump: the
+        // renamed terminal's stdin is dead for good, silently.
+        //
+        // draining && chunks.length can only mean an orphaned setImmediate is pending
+        // (the synchronous body is unreachable from here — this runs off the fleet's
+        // rename event, never from inside a drain), so this re-arms exactly one chain
+        // and the orphan is a no-op when it fires.
+        const movedQueue = this.inputQueues.get(newName);
+        if (movedQueue && movedQueue.draining && movedQueue.chunks.length > 0) {
+            setImmediate(() => this.drainInputQueue(newName));
+        }
     }
 
     /** Flush everything queued for a terminal synchronously, then disarm its timer. */

@@ -83,6 +83,18 @@ test('rekeyTerminal is synchronous', () => {
         'emit-before-HTTP-response ordering the client reconnect depends on');
 });
 
+test('an in-flight input drain is re-armed under the new name', () => {
+    const rekey = methodBody(GATEWAY_SRC, 'rekeyTerminal');
+    assert.match(rekey, /inputQueues\.get\(newName\)[\s\S]{0,200}drainInputQueue\(newName\)/,
+        'inputQueues is the one moved collection with a self-rescheduling consumer: ' +
+        'drainInputQueue re-arms via setImmediate with the name it was CALLED with, so a ' +
+        'drain in flight across the rename wakes under oldName, finds no queue, and returns ' +
+        'without clearing draining — which is still true on the moved object, so no later ' +
+        'enqueueInput ever restarts the pump and the terminal stdin is dead for good');
+    assert.match(rekey, /movedQueue\.draining[\s\S]{0,60}chunks\.length > 0/,
+        'guard on draining AND pending chunks, or a healthy queue gets a second drain chain');
+});
+
 test('the client re-keys its view instead of destroying it on rename', () => {
     const m = TERMINALS_JS.match(/async function renameTerminal\([\s\S]*?\n    \}/);
     assert.ok(m, 'renameTerminal not found');
@@ -100,6 +112,13 @@ test('a replaced socket cannot arm a reconnect against the new one', () => {
         'without destroyTerminalView setting entry.exited first, the outgoing socket\'s ' +
         'onclose fires against a live entry and schedules a reconnect that tears down the ' +
         'socket this call just opened');
+    // The other half of the same defect: destroyTerminalView also cleared the pending
+    // BACKOFF timer, and renameTerminal no longer calls it. Nulling onclose stops the
+    // outgoing socket from arming a NEW timer; it does nothing about one already armed.
+    assert.match(m[0], /clearTimeout\(entry\.reconnectTimer\)/,
+        'a rename inside a reconnect backoff window leaves the old timer armed; it fires ' +
+        '~500ms later against the re-keyed entry and tears down the socket just opened — ' +
+        'the double-connect manual step 8 forbids');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

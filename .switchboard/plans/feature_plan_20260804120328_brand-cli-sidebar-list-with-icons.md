@@ -8,15 +8,15 @@ The browser terminals page (`src/webview/terminals.html`, driven by `src/webview
 
 There are two intertwined root causes:
 
-1. **Display-name derivation is a dumb `basename(binary).toUpperCase() + ' CLI'`.** The agent CLI label that reaches the sidebar is computed in five places — `src/services/TaskViewerProvider.ts:8960`, `:9248`, `:18301`, `:18370` and `src/extension.ts:3402` — all using the identical expression:
+1. **Display-name derivation is a dumb `basename(binary).toUpperCase() + ' CLI'`.** The agent CLI label that reaches the sidebar is computed in five places — `src/services/TaskViewerProvider.ts:8970`, `:9258`, `:18311`, `:18380` and `src/extension.ts:3411` — all using the identical expression:
    ```ts
    const displayName = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase() + ' CLI';
    ```
-   For the `agy` binary this yields `AGY CLI`, which is the raw executable name, not the product brand. The user explicitly wants `Antigravity CLI`. The same map is the single source of truth for the **kanban column subline** too (`src/webview/kanban.html:5896-5906` reads `lastAgentNames[role]`), and `terminals.js:29-31` documents that the two surfaces are deliberately kept in lock-step ("exactly as the kanban column sublines show it … so the two surfaces cannot disagree"). So fixing the derivation fixes both surfaces at once.
+   For the `agy` binary this yields `AGY CLI`, which is the raw executable name, not the product brand. The user explicitly wants `Antigravity CLI`. The same map is the single source of truth for the **kanban column subline** too (`src/webview/kanban.html:5890-5899` reads `lastAgentNames[role]`), and `terminals.js:29-31` documents that the two surfaces are deliberately kept in lock-step ("exactly as the kanban column sublines show it … so the two surfaces cannot disagree"). So fixing the derivation fixes both surfaces at once.
 
-2. **The sidebar row renders no brand icon at all.** `renderTerminalRow` in `terminals.js:695-795` builds an `.item-info` block with `.item-name` (the terminal's friendly name) and `.item-role` (the `role · cliLabel` string, `terminals.js:710-715`). There is no `<img>`/`<svg>` for the CLI brand. The project ships no brand icon assets today (confirmed: no claude/antigravity/devin SVGs under `src/` or a `media/`/`resources/` dir), so they must be added.
+2. **The sidebar row renders no brand icon at all.** `renderTerminalRow` in `terminals.js:730-833` builds an `.item-info` block with `.item-name` (the terminal's friendly name) and `.item-role` (the `role · cliLabel` string, `terminals.js:745-750`). There is no `<img>`/`<svg>` for the CLI brand. The project ships no brand icon assets today (confirmed 2026-08-04: no claude/antigravity/devin SVGs anywhere in the repo; the only served image dir is `icons/` at the repo root, 202 sci-fi PNGs), so they must be added.
 
-The CSP in `terminals.html` (`img-src 'self' data:`) permits both served image assets and inline `data:` URIs, so either path is open. The established project pattern for icons is `{{ICON_*}}` placeholders resolved server-side in `headlessPanelHtml.ts` against `/static/icons/...` (see the kanban icon map at `headlessPanelHtml.ts:190-218`). The terminals panel already resolves font/JS placeholders in `getTerminalsHtml` (`headlessPanelHtml.ts:386-413`), so adding brand-icon placeholders there follows the existing convention.
+The CSP in `terminals.html` (`img-src 'self' data:`, line 5) permits both served image assets and inline `data:` URIs, so either path is open. The established project pattern for icons is `{{ICON_*}}` placeholders resolved server-side in `headlessPanelHtml.ts` against `/static/icons/...` (see the kanban icon map at `headlessPanelHtml.ts:188-218`). The terminals panel already resolves font/JS placeholders in `getTerminalsHtml` (`headlessPanelHtml.ts:386`), so adding brand-icon placeholders there follows the existing convention.
 
 ### Intended outcome
 
@@ -30,13 +30,22 @@ The CSP in `terminals.html` (`img-src 'self' data:`) permits both served image a
 **Tags:** frontend, ui, ux, refactor
 **Project:** Browser Switchboard
 
+## User Review Required (decisions, with defaults)
+
+1. **Icon style: monochrome `currentColor` SVGs vs official full-colour brand marks?**
+   **Default: monochrome `currentColor`.** The sidebar has three theme backgrounds (dark default, `theme-claudify` terracotta, `cyber-theme-enabled` cyan); a `currentColor` glyph inherits the role-text colour and stays legible on all three with zero per-theme CSS. Full-colour official marks risk clashing and raise the asset-licensing question (see `## Uncertain Assumptions`). If research shows official monochrome marks are published and redistributable, prefer those over hand-drawn approximations.
+2. **Brand icons on the kanban column subline too?**
+   **Default: no — out of scope.** The user asked for the *terminals.html sidebar list*. The kanban subline receives the `AGY CLI` → `Antigravity CLI` rename for free via the shared helper (the lock-step invariant at `terminals.js:29-31` demands the *text* stay identical), but no icon is added there in this plan.
+3. **`claude` label stays `CLAUDE CLI`?**
+   **Default: yes.** The user asked for a Claude Code *icon* and only explicitly renamed `agy`. Changing the `claude` text would break `kanban-auto-export.test.ts:364` and the existing kanban/terminal label contract for no requested benefit. A later rename is a one-line table edit.
+
 ## Complexity Audit
 
 **Low–Medium. Routine, but multi-file.** The change is a brand-mapping table plus one icon `<img>` per row — no state, no API, no persistence, no layout reflow risk (the icon sits in the existing `.item-info` flex column). The five displayName derivation sites are a mechanical extract-to-helper refactor. Risk surfaces:
 
 - **Five identical derivation sites.** They must all call the same helper so the kanban subline and the terminals sidebar never diverge (the existing comment at `terminals.js:29-31` treats this invariant as load-bearing). A shared `deriveAgentDisplayName(binary)` function eliminates the drift risk permanently.
 - **Static asset plumbing.** Adding `{{ICON_BRAND_CLAUDE}}` etc. placeholders requires edits in `getTerminalsHtml` (and the kanban path if icons are also wanted on the board subline — out of scope here; the user asked for the *sidebar list*, so only terminals.html needs the icon wiring). The kanban subline gets the *rename* for free via the shared helper, but not the icon.
-- **Test contract.** `src/test/kanban-auto-export.test.ts:364` asserts exported content includes `**Agent:** CLAUDE CLI`. The rename must NOT change `claude` → something else (the user only asked to rename `agy`), so that test stays green. If a test asserts `AGY CLI` literally, it must be updated — verify before/after.
+- **Test contract — CONFIRMED breakage, must be fixed in the same change.** `src/test/kanban-auto-export.test.ts` asserts `**Agent:** AGY CLI` literally at lines **278, 280, 355, and 365** (verified 2026-08-04). The `agy` → `Antigravity CLI` rename turns all four red; they must be updated to `Antigravity CLI` as part of this plan, not discovered later. Line **364** asserts `**Agent:** CLAUDE CLI` — that one stays green because the `claude` mapping is intentionally unchanged.
 
 No complex/risky logic, no concurrency, no data migration.
 
@@ -44,11 +53,21 @@ No complex/risky logic, no concurrency, no data migration.
 
 - **`claude` must stay `CLAUDE CLI`, not become `Claude Code`.** The user asked for a *Claude Code icon* for the claude CLI, and only explicitly renamed `agy` → `Antigravity CLI`. Keep `claude` → `CLAUDE CLI` to avoid breaking `kanban-auto-export.test.ts:364` and the existing kanban/terminal label contract. (If the user later wants `Claude Code` as the label, that is a one-line table change — but do not assume it now.)
 - **Custom agents.** `getStartupCommands` merges custom agents from `~/.switchboard/integration-config.json` (`TaskViewerProvider.ts:5514-5524`). A custom agent's binary is unknown to the brand table → must fall back to the current `basename().toUpperCase() + ' CLI'` behaviour so custom CLIs are not misbranded. The fallback also covers `jules`, `codex`, etc. that have no brand icon yet.
-- **`No agent assigned` sentinel.** `terminals.js:713` and `kanban.html:5898` both special-case the literal string `'No agent assigned'`. The brand helper must return this sentinel unchanged (it is not a binary-derived label) and the icon must be omitted for it.
+- **`No agent assigned` sentinel.** `terminals.js:748` and `kanban.html:5898` both special-case the literal string `'No agent assigned'`. The brand helper must return this sentinel unchanged (it is not a binary-derived label) and the icon must be omitted for it.
 - **Icon size/alignment.** The `.item-role` row is 10px text in a 220px sidebar. The glyph must be ~12-14px and vertically centered so it does not push the role text onto a second line or break the existing `.item-info` flex layout. Use a fixed-size `<img>` with `flex-shrink:0` and `align-self:center`.
 - **Theme variants.** The page has `theme-claudify` (terracotta accent) and `cyber-theme-enabled` (cyan). Brand icons should be monochrome SVGs that inherit `currentColor` or use a neutral fill so they read on both the dark default and the themed sidebar backgrounds (`terminals.html:78-83` gives the sidebar a translucent blurred background under themes). Prefer `currentColor`-driven SVGs.
 - **`dist/webview/terminals.html` mirror.** `headlessPanelHtml.ts:388-389` reads `dist/webview/terminals.html` first, then `src/webview/terminals.html`. The build copies `src/webview/*` to `dist/webview/*`; only `src/` is edited, and the build step regenerates `dist/`. Do not hand-edit `dist/`.
 - **Kanban icon scope.** The user asked for the *terminals.html sidebar list*. Do NOT add brand icons to the kanban column subline in this plan — that is a separate surface and a separate decision. The kanban subline receives the `AGY CLI` → `Antigravity CLI` rename for free via the shared helper, but no icon.
+- **Groups mode interaction (feature-level reconciliation).** When the Terminal Sidebar Groupings subtask lands, `renderGroupSidebar` replaces these per-terminal rows while groups exist. The brand icon then shows only in flat mode (reachable via the "show all terminals" toggle). That is accepted feature-wide: group rows are aggregates (name + count) and deliberately carry no per-terminal branding.
+- **Sibling-edit collision.** The `locate`-button removal subtask edits the SAME `renderTerminalRow` function (actions block, `:776-818`) — disjoint region from the `.item-role` info block edited here (`:745-750`), but the two diffs must land sequentially (locate first) so neither rebases over a stale copy of the function.
+
+## Dependencies
+
+- None. (No session IDs cited; IDs are assigned on import.) Sequencing within the feature: land AFTER the `locate`-button removal (shared `renderTerminalRow` surface) and BEFORE or independent of groupings (disjoint regions; groupings only adds a mode branch at `renderSidebarList:835`).
+
+## Adversarial Synthesis
+
+**Risk summary.** Low-medium risk: a mechanical extract-to-helper across five identical sites plus additive icon plumbing, with two sharp edges — the `kanban-auto-export.test.ts` `AGY CLI` assertions (confirmed breakage at lines 278/280/355/365; must be updated in the same change or CI goes red) and the icon asset path (was mis-specified as `media/icons/`; corrected to the served `icons/` root, verified in both hosts' `staticRoutes`). The `claude`-stays-`CLAUDE CLI` decision protects the second test assertion at line 364 and the kanban lock-step invariant.
 
 ## Proposed Changes
 
@@ -77,26 +96,30 @@ function deriveAgentDisplayName(startupCommand: string): string {
 
 Then replace each of the five sites:
 
-- `TaskViewerProvider.ts:8960` — `const displayName = ... + ' CLI';` → `const displayName = deriveAgentDisplayName(startupCommand);`
-- `TaskViewerProvider.ts:9248` — same replacement.
-- `TaskViewerProvider.ts:18301` — same replacement.
-- `TaskViewerProvider.ts:18370` — same replacement.
-- `extension.ts:3402` — `const displayName = ... + ' CLI';` → `const displayName = deriveAgentDisplayName(cmd);` (export the helper from `TaskViewerProvider` or move it to a tiny shared module both files import; prefer exporting from `TaskViewerProvider` since `extension.ts` already imports from it).
+- `TaskViewerProvider.ts:8970` — `const displayName = ... + ' CLI';` → `const displayName = deriveAgentDisplayName(startupCommand);`
+- `TaskViewerProvider.ts:9258` — same replacement.
+- `TaskViewerProvider.ts:18311` — same replacement.
+- `TaskViewerProvider.ts:18380` — same replacement.
+- `extension.ts:3411` — `const displayName = ... + ' CLI';` → `const displayName = deriveAgentDisplayName(cmd);` (export the helper from `TaskViewerProvider` or move it to a tiny shared module both files import; prefer exporting from `TaskViewerProvider` since `extension.ts` already imports from it).
 
 ### 2. Add brand icon SVG assets
 
-Add monochrome, `currentColor`-driven SVGs (so they adapt to theme) under a new static-served icons path. Following the kanban `/static/icons/` convention:
+> **Superseded:** Add the SVGs under `media/icons/brand-*.svg`, with a hedge to "verify the actual static root before writing files".
+> **Reason:** The static root is now verified (2026-08-04), and `media/` is wrong. `/static/icons/` is served from `<repoRoot>/icons/` in **both** hosts — `staticRoutes.icons` at `TaskViewerProvider.ts:2279` (extension) and `bootstrap.ts:510` (standalone) both map to `path.join(repoRoot, 'icons')`, dispatched by `LocalApiServer._handleServeStatic:824-846`. There is no `media/` dir in the repo, and files placed there would 404.
+> **Replaced with:** Add the SVGs to the existing `icons/` directory at the repo root (already served at `/static/icons/`, 202 PNGs + `worktree-*.svg` today).
 
-- `media/icons/brand-claude.svg` (Claude Code mark)
-- `media/icons/brand-antigravity.svg` (Antigravity mark)
-- `media/icons/brand-devin.svg` (Devin mark)
-- `media/icons/brand-cli-default.svg` (neutral fallback terminal glyph)
+Add monochrome, `currentColor`-driven SVGs (so they adapt to theme) to the `icons/` dir at the repo root:
 
-These must be served at `/static/icons/...`. Confirm the static route in `LocalApiServer.ts` already maps the icons dir (kanban uses `/static/icons/25-1-100 Sci-Fi Flat icons-*.png`, so the route exists); if the route serves from a different on-disk dir, place the SVGs there instead of `media/icons/`. Verify the actual static root before writing files.
+- `icons/brand-claude.svg` (Claude Code mark)
+- `icons/brand-antigravity.svg` (Antigravity mark)
+- `icons/brand-devin.svg` (Devin mark)
+- `icons/brand-cli-default.svg` (neutral fallback terminal glyph)
+
+These are then served at `/static/icons/brand-*.svg` with no route change — the `icons` prefix already exists in both hosts' `staticRoutes`. No `LocalApiServer` edit needed.
 
 ### 3. `src/services/headlessPanelHtml.ts` — wire brand-icon placeholders for the terminals panel
 
-In `getTerminalsHtml` (`headlessPanelHtml.ts:386-413`), after the existing placeholder replacements, add:
+In `getTerminalsHtml` (`headlessPanelHtml.ts:386`), after the existing placeholder replacements, add:
 
 ```ts
 const brandIconDir = '/static/icons';
@@ -140,7 +163,7 @@ Restructure `.item-role` to sit inside an `.item-role-row` flex container so the
 
 ### 5. `src/webview/terminals.js` — render the brand icon in `renderTerminalRow`
 
-Add a binary → icon-key map and resolve the icon URI from the body dataset. In `renderTerminalRow` (`terminals.js:695-795`), change the `.item-role` construction (`terminals.js:710-715`):
+Add a binary → icon-key map and resolve the icon URI from the body dataset. In `renderTerminalRow` (`terminals.js:730-833`), change the `.item-role` construction (`terminals.js:745-750`):
 
 ```js
 const CLI_BRAND_ICON_KEYS = {
@@ -205,9 +228,11 @@ This keeps the existing `agentNames[item.role]` lookup (the lock-step-with-kanba
 
 ## Verification Plan
 
+> Session note (improve-feature review, 2026-08-04): compilation and automated tests were NOT run as part of this planning pass per session directive. The checks below are the coder's verification gates, to be executed at implementation time. Line numbers and the static-root claim were re-verified against the working tree on 2026-08-04.
+
 1. **Build:** run the project's webview build so `dist/webview/terminals.html` + `dist/webview/terminals.js` regenerate from `src/`. Confirm no build error.
 2. **Type-check / compile:** `npm run compile` (or the project's TS build) — confirms the new `deriveAgentDisplayName` helper and its five call sites type-check, and the `extension.ts` import resolves.
-3. **Unit test — `kanban-auto-export.test.ts`:** run it. `**Agent:** CLAUDE CLI` must still appear (the `claude` mapping is intentionally unchanged). If any test asserts `AGY CLI` literally, update it to `Antigravity CLI` and confirm it passes.
+3. **Unit test — `kanban-auto-export.test.ts`:** update the four confirmed `**Agent:** AGY CLI` assertions (lines 278, 280, 355, 365) to `Antigravity CLI` IN THE SAME CHANGE, then run the test. `**Agent:** CLAUDE CLI` (line 364) must still appear unchanged (the `claude` mapping is intentionally untouched).
 4. **Manual — terminals sidebar:** open the browser terminals page with a fleet that includes a `claude` terminal, an `agy` terminal, and a `devin` terminal. Confirm:
    - the `agy` row shows `Antigravity CLI` (not `AGY CLI`) and the Antigravity icon;
    - the `claude` row shows `CLAUDE CLI` and the Claude Code icon;
@@ -216,3 +241,7 @@ This keeps the existing `agentNames[item.role]` lookup (the lock-step-with-kanba
 5. **Manual — kanban subline:** open the kanban board. Confirm the column agent subline for an `agy`-backed role now reads `Antigravity CLI` (the shared helper feeds both surfaces). Confirm `claude`-backed roles still read `CLAUDE CLI`.
 6. **Theme check:** toggle `theme-claudify` and `cyber-theme-enabled`. Confirm the brand icons remain legible on both sidebar backgrounds (monochrome `currentColor` SVGs should adapt; if a fixed-fill SVG was used, verify it does not clash with the terracotta/cyan accents).
 7. **Static contract:** `src/test/terminal-solo-popout-contract.test.js` and the `headlessPanelHtml` contract tests must still pass — the new `data-brand-icon-*` attributes are additive and the CSP `img-src 'self' data:` already permits served SVGs.
+
+## Uncertain Assumptions
+
+- **Official brand-mark availability and redistribution terms.** Whether Anthropic (Claude Code), Google (Antigravity), and Cognition (Devin) publish official monochrome/small-size SVG brand marks, and whether their brand/trademark guidelines permit redistributing those marks (or close approximations) inside a third-party MIT-licensed VS Code extension's `icons/` directory. This cannot be answered from the repo. The user was advised to run web research to confirm before implementation; if research shows redistribution is restricted, the fallback is neutral hand-drawn glyphs that *evoke* each brand without copying the mark (the plan's monochrome `currentColor` default already points this way).
