@@ -9,5 +9,7 @@ Make standalone a real front door rather than a fallback. B4 publishes the stand
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
 - [ ] [Feature B · B4 — npx Distribution (publish the standalone CLI to npm)](../plans/b4-npx-distribution-publish.md) — **PLAN REVIEWED**
-- [ ] [Make standalone the first-class entry point: `/switchboard` launches or attaches instead of demanding an IDE](../plans/standalone-first-launch-instead-of-demanding-an-ide.md) — **CREATED**
+- [ ] [Make standalone the first-class entry point: `/switchboard` launches or attaches instead of demanding an IDE](../plans/standalone-first-launch-instead-of-demanding-an-ide.md) — **PLAN REVIEWED**
+- [ ] [Standalone CLI: attach to a running server, and give a detached server a way to die](../plans/standalone-cli-attach-and-lifecycle.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
+

@@ -300,6 +300,16 @@ jobs:
       - name: Terminal solo pop-out contract (write suppression, slot pin, eviction vs exit)
         run: npm run test:contract:terminal-solo-popout
 
+      # Answerback suppression during scrollback replay. Fails silently by nature: the
+      # replay re-parses queries the CLI emitted while the view did not exist, xterm
+      # answers them, and the reply lands at the prompt as typed text. Nothing throws —
+      # the operator just sees `10;rgb:e0e0/e0e0/e0e011;rgb:1717/1717/1717`. Pins the
+      # reply grammar (positive AND negative cases, so a widened final class that eats
+      # keystrokes fails here) and the three structural properties that would silently
+      # un-fix it: onData's dual condition, the replay's own write, hello-armed window.
+      - name: Terminal answerback replay contract (reply grammar, suppression window)
+        run: npm run test:contract:terminal-answerback
+
       # Shell terminal strip. The two defects a screenshot review waves through: the
       # bottom anchor is an INLINE style on the theme toggle, so a second
       # `margin-top: auto` child parks the terminal list mid-strip instead of stacking;

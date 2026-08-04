@@ -2309,6 +2309,18 @@
      *
      * Eating one keystroke would be a worse bug than the one this exists to fix,
      * which is why finals are enumerated instead of using a class like [a-zA-Z].
+     *
+     * KNOWN COLLISION, accepted deliberately: modified F1–F4. xterm emits
+     * `ESC [ 1 ; <mod+1> P|Q|R|S` for those (Keyboard.ts `case 112`–`115`), so
+     * Shift/Ctrl/Alt-F3 IS the byte-for-byte string `ESC [ 1 ; 2 R` — which is
+     * also a perfectly legal CPR reply (cursor at row 1, column 2). Content
+     * cannot separate them; the protocol overloads the shape. Excluding
+     * `ESC [ 1 ; <n> R` would let a genuine row-1 CPR reply through and put
+     * `1;2R` back at the operator's prompt, i.e. reintroduce the reported bug for
+     * a real reply shape. Dropping the keystroke instead is the smaller harm: it
+     * costs one press of one rare key, only inside the sub-frame replay parse.
+     * The zero-keystroke-risk alternative is the parser-handler fallback
+     * documented in this plan — reach for it if this ever bites in practice.
      */
     const ANSWERBACK_RE = /^(?:\x1b\][\s\S]*|\x1bP[\s\S]*|\x1b\[[?>]?[0-9;]*(?:[cnR]|\$y))$/;
 

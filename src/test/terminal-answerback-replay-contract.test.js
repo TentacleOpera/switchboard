@@ -89,6 +89,21 @@ test('focus in/out reports are NOT classified as answerback', () => {
     assert.ok(!ANSWERBACK_RE.test('\x1b[O'), 'focus out');
 });
 
+// Pinned as a KNOWN, ACCEPTED collision rather than left to be rediscovered as a
+// bug report. xterm maps modified F1-F4 to `ESC [ 1 ; <mod+1> P|Q|R|S` (Keyboard.ts
+// case 112-115), so Shift-F3 is byte-identical to a CPR reply for row 1 column 2.
+// No content filter can separate them. Narrowing the grammar to exclude this shape
+// would let a real row-1 CPR reply reach the prompt — the reported bug, for a real
+// reply. This assertion documents which way the trade was taken; flip it only
+// together with the comment in terminals.js and a note on what replaced it.
+test('modified F1-F4 collide with CPR by protocol design — accepted, not overlooked', () => {
+    assert.ok(ANSWERBACK_RE.test('\x1b[1;2R'), 'Shift-F3 is indistinguishable from CPR row 1 col 2');
+    assert.ok(!ANSWERBACK_RE.test('\x1b[1;2P'), 'Shift-F1 does NOT collide — P is not a reply final');
+    assert.ok(!ANSWERBACK_RE.test('\x1b[1;2Q'), 'Shift-F2 does NOT collide');
+    assert.ok(!ANSWERBACK_RE.test('\x1b[1;2S'), 'Shift-F4 does NOT collide');
+    assert.ok(!ANSWERBACK_RE.test('\x1b[15;2~'), 'modified F5 does NOT collide — ~ is not a reply final');
+});
+
 test('onData drops answerback ONLY while the replay window is open', () => {
     const handler = block(terminalsJs, 'term.onData(', 'connectTerminalSocket(entry);');
     assert.ok(/entry\.suppressAnswerback\s*&&\s*isAnswerback\(data\)/.test(handler),
