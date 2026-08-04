@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import type { HostSeams, HostPathConfigProvider, HostSecrets } from '../services/hostSeams';
+import { switchboardCommandRegistry } from '../services/commandRegistry';
 
 /**
  * Standalone implementations of the host seams A2a defined.
@@ -123,6 +124,8 @@ export class StandaloneHostPathConfigProvider implements HostPathConfigProvider 
 export { StandaloneHostSecrets, HostSecrets } from '../services/encryptedSecretsStore';
 import { StandaloneHostSecrets as SharedStandaloneHostSecrets } from '../services/encryptedSecretsStore';
 import { stateFile } from '../utils/stateHome';
+
+const _warnedMissingCommands = new Set<string>();
 
 export function createStandaloneHostSecrets(workspaceRoot?: string): SharedStandaloneHostSecrets {
     const storePath = stateFile('secrets.enc');
@@ -352,7 +355,16 @@ export function createHeadlessHostSeams(workspaceRoot: string): HostSeams {
             onClose: () => {},
         },
         commands: {
-            executeCommand: async () => undefined,
+            executeCommand: async (command: string, ...args: any[]) => {
+                if (switchboardCommandRegistry.has(command)) {
+                    return await switchboardCommandRegistry.execute(command, ...args);
+                }
+                if (!_warnedMissingCommands.has(command)) {
+                    _warnedMissingCommands.add(command);
+                    console.warn(`[headless] command '${command}' is not bridged — the calling arm's side effect did not happen`);
+                }
+                return undefined;
+            },
         },
         ui: {
             showWarningMessage: async () => undefined,

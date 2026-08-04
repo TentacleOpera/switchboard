@@ -249,3 +249,9 @@ Reminder: the running extension loads from the installed extension folder, not t
 ---
 
 **Recommendation: Send to Coder** (Complexity 4).
+
+---
+
+## Completion Summary
+
+Implemented the fleet-aware pre-dispatch focus fix. `switchboard.focusTerminalByName` (`src/extension.ts`) now accepts an optional `{ silent?: boolean }` second argument, returns `true`/`false` from every branch, and gates its `showWarningMessage` on `!options?.silent`; the standalone handler (`src/standalone/bootstrap.ts`) accepts the same arg for signature parity. Added advisory `_isLikelyPtyDispatchTarget` (`src/services/TaskViewerProvider.ts`) — a snapshot read of `_ptyTerminalNames` (no `_ptyHostVerb` round-trip, no in-process fleet) that short-circuits to `false` when `!allowPtyFleet || !this._ptyHostPort` — and guarded the two `allowPtyFleet`-bearing dispatch-path focus calls (`_handleTriggerAgentActionInternal`, `dispatchToGroup` inside `handleKanbanBatchTrigger`) with it; the third (`dispatchCustomPromptToRole`, allowPtyFleet=false always) passes `{ silent: true }` only. `_attemptDirectTerminalPush` and the two `_focusTerminalByName` fallback sites left byte-identical. Added `src/test/pty-dispatch-focus-contract.test.js` (11 source-text assertions, all passing), wired as `test:contract:pty-dispatch-focus` in `package.json` and as a CI step in `.github/workflows/integration-tests.yml`. Verified: new contract test passes, `test:contract:verb-engine-kanban` and `test:contract:pty-route-surface` still pass, `tsc --noEmit` shows only pre-existing unrelated import-extension errors. No issues encountered.

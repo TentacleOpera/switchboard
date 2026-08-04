@@ -358,14 +358,8 @@ async function main() {
         assert.strictEqual(push.clickUp, true);
     });
 
-    await test('Setup: applyClickUpConfig schema validates and RETURNS body data', async () => {
-        const { provider, pushes } = buildHeadlessSetupProvider(tmpRoot);
-        const result = await provider.handleServiceVerb('applyClickUpConfig', { token: 'secret-token-123' });
-        assert.strictEqual(result.success, true);
-        assert.strictEqual(result.tokenReceived, true);
-        const push = pushes.find(p => p.type === 'clickupApplyResult');
-        assert.ok(push, 'webview push emitted');
-    });
+    // Plan 4: applyClickUpConfig moved to TicketsPanelProvider; its assertion was
+    //         migrated verbatim into verb-engine-tickets-headless.test.js.
 
     // ── TaskViewerProvider slice ───────────────────────────────────────────
     await test('TaskViewer: unknown verb is rejected', async () => {

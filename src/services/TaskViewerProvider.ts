@@ -636,6 +636,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _sessionLogs = new Map<string, SessionActionLog>();
     private _kanbanProvider?: KanbanProvider;
     private _setupPanelProvider?: SetupPanelProvider;
+    private _ticketsPanelProvider?: { handleServiceVerb(verb: string, payload: any): Promise<any> };
     private _designPanelProvider?: { postMessage(message: any): void; handleServiceVerb(verb: string, payload: any): Promise<any>; getDesignAssetRoots?(workspaceRoot: string): string[] };
     private _planningPanelProvider?: { postMessage(message: any): void; handleServiceVerb(verb: string, payload: any): Promise<any> };
     private _kanbanDbs = new Map<string, KanbanDatabase>();
@@ -1798,6 +1799,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * Start the local API server for agent access.
      */
     private async _startLocalApiServer(): Promise<void> {
+        if (this.suppressLocalApiServer || (globalThis as any).__SWITCHBOARD_STANDALONE_WORKSPACE_ROOT) {
+            console.log('[TaskViewerProvider] Suppressed local API server in standalone mode');
+            return;
+        }
         const workspaceRoot = this._getWorkspaceRoot();
         if (!workspaceRoot) {
             console.warn('[TaskViewerProvider] Cannot start local API server: no workspace root');
@@ -2161,6 +2166,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     : payload;
                 return await this._setupPanelProvider.handleServiceVerb(verb, p);
             },
+            ticketsVerb: async (verb, payload, wsRoot) => {
+                if (!this._ticketsPanelProvider) {
+                    return { success: false, error: 'Tickets provider not available' };
+                }
+                const p = (wsRoot && payload && payload.workspaceRoot == null)
+                    ? { ...payload, workspaceRoot: wsRoot }
+                    : payload;
+                return await this._ticketsPanelProvider.handleServiceVerb(verb, p);
+            },
             taskViewerVerb: async (verb, payload, wsRoot) => {
                 const p = (wsRoot && payload && payload.workspaceRoot == null)
                     ? { ...payload, workspaceRoot: wsRoot }
@@ -2190,6 +2204,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     terminalFleet: ptyHostReady(),
                     mcpTerminals: false,
                     secretsEntry: false,
+                    featureManagement: true,
+                    worktrees: true,
+                    uat: true,
+                    boardStructure: true,
+                    featureAdvanced: true,
                 };
                 const computeIntegrationsConfigured = async () => {
                     try {
@@ -2500,7 +2519,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return Date.now() <= expire;
     }
 
+    public suppressLocalApiServer = false;
+
     private _getWorkspaceRoots(): string[] {
+        const seamRoots = this._hostSeams?.workspace?.getWorkspaceRoots();
+        if (seamRoots && seamRoots.length > 0) { return seamRoots; }
         return (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
     }
 
@@ -3520,6 +3543,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (this._localApiServer) {
             this._setupPanelProvider.setApiServer(this._localApiServer);
         }
+    }
+
+    public setTicketsPanelProvider(provider: { handleServiceVerb(verb: string, payload: any): Promise<any> }) {
+        this._ticketsPanelProvider = provider;
     }
 
     public setDesignPanelProvider(provider: { postMessage(message: any): void; handleServiceVerb(verb: string, payload: any): Promise<any> }) {
@@ -4554,7 +4581,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             return false;
         }
         if (!this._isValidAgentName(targetAgent)) { return false; }
-        this._seams().commands.executeCommand('switchboard.focusTerminalByName', targetAgent);
+        // silent: this path reports its own delivery failure via _dispatchExecuteMessage.
+        // No PTY predicate — dispatchCustomPromptToRole resolves and delivers with
+        // allowPtyFleet=false, so its target is always a vscode.Terminal.
+        this._seams().commands.executeCommand('switchboard.focusTerminalByName', targetAgent, { silent: true });
         const success = await this._dispatchExecuteMessage(resolvedWorkspaceRoot, targetAgent, prompt, {});
 
         // Advance the rotation cursor ONLY after successful dispatch
@@ -5283,7 +5313,14 @@ Each plan file must include:
 
             // Send the prompt to the resolved terminal
             try {
-                this._seams().commands.executeCommand('switchboard.focusTerminalByName', group.targetAgent);
+                // A PTY has no VS Code terminal to reveal; `silent` suppresses the
+                // duplicate "Terminal not found" toast next to a dispatch that in fact
+                // succeeded. The predicate is advisory: skip the lookup entirely when we
+                // already believe the target is a browser terminal. Kept inside the
+                // per-group body so a mixed batch is covered group by group.
+                if (!this._isLikelyPtyDispatchTarget(group.targetAgent, allowPtyFleet)) {
+                    this._seams().commands.executeCommand('switchboard.focusTerminalByName', group.targetAgent, { silent: true });
+                }
                 const sent = await this._dispatchExecuteMessage(resolvedWorkspaceRoot, group.targetAgent, finalPrompt, {
                     batch: true,
                     sessionIds: group.plans.map(p => p.sessionId || p.planId || '').filter(Boolean)
@@ -18618,6 +18655,29 @@ What would you like to find?`;
         return `${basePayload}${accuracyInstruction}`;
     }
 
+    /**
+     * Advisory: is a dispatch to `agentName` LIKELY to land in a browser (PTY) terminal
+     * rather than a vscode.Terminal? Used only to skip a pointless pre-dispatch reveal —
+     * never to route delivery. _attemptDirectTerminalPush remains the sole authority on
+     * where a prompt actually goes, and it asks the pty host directly.
+     *
+     * Reads the `_ptyTerminalNames` snapshot (refreshed on every ptyListTerminals
+     * forward) instead of issuing its own round-trip: this sits on the dispatch hot path,
+     * the call it guards is fire-and-forget, and a stale answer costs nothing in either
+     * direction — a false negative is one silent no-op lookup, a false positive is one
+     * un-revealed terminal. The toast itself is suppressed by `silent`, not by this.
+     *
+     * `allowPtyFleet` mirrors the delivery gate: a caller that cannot deliver to a PTY
+     * cannot be targeting one, so it must never skip its reveal.
+     */
+    private _isLikelyPtyDispatchTarget(agentName: string, allowPtyFleet: boolean): boolean {
+        if (!allowPtyFleet || !this._ptyHostPort) { return false; }
+        const normalized = this._normalizeAgentKey(this._stripIdeSuffix(agentName));
+        if (!normalized) { return false; }
+        return this._ptyTerminalNames.some(name =>
+            this._normalizeAgentKey(this._stripIdeSuffix(name)) === normalized);
+    }
+
     private async _dispatchExecuteMessage(
         workspaceRoot: string,
         targetAgent: string,
@@ -19027,7 +19087,16 @@ What would you like to find?`;
 
 
         // Focus the terminal for immediate feedback
-        this._seams().commands.executeCommand('switchboard.focusTerminalByName', targetAgent);
+        // A PTY has no VS Code terminal to reveal; the browser Terminals panel owns its own
+        // tab focus. `silent` is what fixes the reported bug: a focus miss on the dispatch
+        // path is never the user's only signal — _dispatchExecuteMessage reports delivery
+        // failure itself — so the "Terminal not found" toast is pure duplicate noise here,
+        // and next to a dispatch that in fact succeeded it reads as a second, failed send.
+        // The predicate is advisory: skip the lookup entirely when we already believe the
+        // target is a browser terminal.
+        if (!this._isLikelyPtyDispatchTarget(targetAgent, allowPtyFleet)) {
+            this._seams().commands.executeCommand('switchboard.focusTerminalByName', targetAgent, { silent: true });
+        }
 
         let messagePayload = '';
         const messageMetadata: any = {};

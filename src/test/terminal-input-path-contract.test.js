@@ -112,5 +112,73 @@ test('input is independent of output backpressure', () => {
         'conflating the two directions would make a terminal that is merely lagging on OUTPUT unusable for input');
 });
 
+test('the gateway records bracketed-paste mode outside the evicting ring', () => {
+    assert.ok(gatewayCode.includes('private bracketedPasteModes = new Map<string, boolean>()'),
+        'the mode must be recorded per terminal — a TUI emits \\x1b[?2004h once at startup and the 256 KB ring evicts it, so an attaching client can never learn it from replay');
+    // End marker also pins PLACEMENT: the scanner must sit between these two.
+    const flush = block(gatewayCode, 'private flushOutput(', 'private scanBracketedPasteMode(');
+    const scanIdx = flush.indexOf('this.scanBracketedPasteMode(');
+    const ringIdx = flush.indexOf('buffer.chunks.push(');
+    assert.ok(scanIdx !== -1 && ringIdx !== -1 && scanIdx < ringIdx,
+        'the scan must run before the ring append — the ring evicts, and outliving eviction is the entire point');
+});
+
+test('the mode scanner ranks resets and DECSET by position, in one pass', () => {
+    const scan = block(gatewayCode, 'private scanBracketedPasteMode(', 'private untrackTerminalData(');
+    assert.ok(scan.includes('([hl])'),
+        'only final bytes h/l may change state — \\x1b[?2004$p is a status REQUEST and \\x1b[?2004;1$y its reply');
+    assert.ok(scan.includes("split(';').includes('2004')"),
+        'params must be compared whole, or 12004/20040 false-positive and \\x1b[?1049;2004h is missed');
+    assert.ok(scan.includes('\\x1bc|') && scan.includes('\\x1b\\[!p'),
+        'RIS and DECSTR must be alternatives in the SAME pass — scanned separately, an unrelated DECSET after a reset makes the reset lose a position compare and the mode goes stale-true');
+    assert.ok(/\[0-9;\]\{0,\d+\}/.test(scan),
+        'the param class must be length-bounded: an unterminated \\x1b[? followed by a long digit run backtracks quadratically on the output hot path, on the event loop owning every terminal');
+    assert.ok(scan.includes('modeScanCarry'),
+        'pty reads split anywhere, so \\x1b[?20 + 04h across two chunks must still be detected');
+
+    // The matcher itself, exercised directly — last state-changing event wins.
+    const re = /\x1bc|\x1b\[!p|\x1b\[\?([0-9;]{0,64})([hl])/g;
+    const last = (s) => {
+        re.lastIndex = 0;
+        let m, v;
+        while ((m = re.exec(s)) !== null) {
+            if (m[2]) { if (m[1].split(';').includes('2004')) { v = m[2]; } }
+            else { v = 'reset'; }
+        }
+        return v;
+    };
+    assert.strictEqual(last('\x1b[?2004h'), 'h');
+    assert.strictEqual(last('\x1b[?1049;2004h'), 'h', 'multi-param DECSET must be honoured');
+    assert.strictEqual(last('\x1b[?2004l'), 'l');
+    assert.strictEqual(last('\x1b[?2004$p'), undefined, 'DECRQM must not register');
+    assert.strictEqual(last('\x1b[?2004;1$y'), undefined, 'DECRPM must not register');
+    assert.strictEqual(last('\x1b[?12004h'), undefined, 'substring match must not register');
+    assert.strictEqual(last('\x1b[?2004h out \x1bc'), 'reset', 'RIS after a set must win');
+    assert.strictEqual(last('\x1b[?2004h out \x1b[!p'), 'reset', 'DECSTR after a set must win');
+    assert.strictEqual(last('\x1bc \x1b[?2004h'), 'h', 'a set after RIS must win');
+    assert.strictEqual(last('\x1bc \x1b[?1000h'), 'reset',
+        'an UNRELATED DECSET after RIS must not resurrect the pre-reset value — this is the two-pass bug');
+});
+
+test('hello omits the mode when unobserved and the client re-arms from it', () => {
+    const hello = block(gatewayCode, "t: 'hello'", 'Replay scrollback BEFORE');
+    assert.ok(hello.includes("typeof bracketedPaste === 'boolean'"),
+        'omitted, NOT false, when unobserved — telling a client to DISABLE a mode nobody ruled on is a regression');
+    const arm = block(terminalsJs, "frame.t === 'hello'", "frame.t === 'inputThrottled'");
+    assert.ok(arm.includes('\\x1b[?2004h'),
+        'a rebuilt view starts with bracketedPasteMode false and would paste unbracketed — one Enter per line to a raw-mode agent CLI');
+    assert.ok(!arm.includes('batchQueue'),
+        'the mode escape must bypass batchQueue: that path is billed to pendingAckChars and synthetic chars corrupt the backpressure ledger');
+});
+
+test('the recorded mode is torn down with the terminal', () => {
+    const untrack = block(gatewayCode, 'private untrackTerminalData(', 'private drainPending(');
+    assert.ok(untrack.includes('this.bracketedPasteModes.delete(name)'),
+        'a terminal re-created under the same name must not inherit the dead process mode');
+    assert.ok(untrack.includes('this.modeScanCarry.delete(name)'), 'carry must not leak across processes');
+    assert.ok(block(gatewayCode, 'public dispose()', 'for (const client of this.clients)').includes('this.bracketedPasteModes.clear()'),
+        'dispose must clear the recorded modes too');
+});
+
 console.log(`\nResults: ${passed} passed, ${failed} failed.`);
 if (failed > 0) { process.exit(1); }

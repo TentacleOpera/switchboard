@@ -1474,7 +1474,7 @@ export class KanbanProvider implements vscode.Disposable {
             // Fire-and-forget: push current DB state to the webview without blocking the
             // tab switch above. refreshUI is a lightweight DB read (no file-system scan);
             // it has its own internal try/catch so errors here are bounded.
-            void vscode.commands.executeCommand('switchboard.refreshUI');
+            void this._seams().commands.executeCommand('switchboard.refreshUI');
             return;
         }
 
@@ -1720,7 +1720,7 @@ export class KanbanProvider implements vscode.Disposable {
 
     public async refresh() {
         if (this._panel) {
-            await vscode.commands.executeCommand('switchboard.refreshUI');
+            await this._seams().commands.executeCommand('switchboard.refreshUI');
         }
     }
 
@@ -2657,7 +2657,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         const canDispatch = await this._canAssignRole(workspaceRoot, role);
         if (!canDispatch) { return false; }
         const instruction = role === 'planner' ? 'improve-plan' : undefined;
-        await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot);
+        await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot);
         return true;
     }
 
@@ -3272,7 +3272,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             // TaskViewerProvider reads DB ONCE → feeds BOTH sidebar and kanban.
             // This eliminates the dual-path bug where _refreshBoardImpl could
             // show different data than what the sidebar shows.
-            await vscode.commands.executeCommand('switchboard.refreshUI', _workspaceRoot);
+            await this._seams().commands.executeCommand('switchboard.refreshUI', _workspaceRoot);
             console.log(`[KanbanProvider] _refreshBoard done: workspaceRoot=${_workspaceRoot || 'undefined'}`);
         } catch (err) {
             console.error(`[KanbanProvider] _refreshBoard failed: workspaceRoot=${_workspaceRoot || 'undefined'}`, err);
@@ -5494,7 +5494,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             const commonWorktree = plans[0]?.worktreePath;
             const allSameWorktree = plans.every(p => p.worktreePath === commonWorktree);
             const worktreePath = allSameWorktree ? commonWorktree : undefined;
-            await vscode.commands.executeCommand('switchboard.dispatchToCoderTerminal', coderPrompt, worktreePath);
+            await this._seams().commands.executeCommand('switchboard.dispatchToCoderTerminal', coderPrompt, worktreePath);
         }
     }
 
@@ -5534,7 +5534,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             if (failures.length > 0) {
                 this.postMessage({ type: 'moveCardsFailed', failures });
             }
-            await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', 'planner', dispatchIds, 'improve-plan', workspaceRoot);
+            await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', 'planner', dispatchIds, 'improve-plan', workspaceRoot);
             return;
         }
 
@@ -5605,7 +5605,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
         const bucketEntries = [...buckets.entries()];
         const bucketResults = await Promise.allSettled(
             bucketEntries.map(([terminalName, ids]) =>
-                vscode.commands.executeCommand(
+                this._seams().commands.executeCommand(
                     'switchboard.triggerBatchAgentFromKanban',
                     'planner', ids, 'improve-plan', workspaceRoot, terminalName
                 )
@@ -8658,11 +8658,13 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             case 'showInfo':
                 if (typeof msg.message === 'string') {
                     void this._seams().ui.showInformationMessage(msg.message);
+                    this.postMessage({ type: 'showStatusMessage', message: msg.message, isError: false });
                 }
                 return { success: true };
             case 'showWarning': {
                 if (typeof msg.message === 'string' && msg.message.length > 0) {
                     void this._seams().ui.showWarningMessage(msg.message);
+                    this.postMessage({ type: 'showStatusMessage', message: msg.message, isError: true });
                 }
                 return { success: true };
             }
@@ -10200,8 +10202,13 @@ ${FOCUS_DIRECTIVE}`;
                 }
                 const column = typeof msg.column === 'string' && msg.column.trim() ? msg.column.trim() : 'CREATED';
                 const batchSize = typeof msg.batchSize === 'number' && msg.batchSize > 0 ? msg.batchSize : undefined;
-                await this._generateAntigravityPrompt(msg.agent, workspaceRoot, column, batchSize);
-                return { success: true };
+                const result = await this._buildBoardBatchPromptCore(msg.agent, workspaceRoot, column, batchSize);
+                this.postMessage({
+                    type: 'antigravityPrompt',
+                    prompt: result.prompt,
+                    error: result.error
+                });
+                return { success: true, prompt: result.prompt, error: result.error };
             }
             case 'schedulerPrompt': {
                 // Scheduler prompt handoff. Dispatches on job.source and appends

@@ -36,7 +36,7 @@ export interface VerbSchema {
     fields?: Record<string, VerbFieldSchema>;
 }
 
-export type ProviderKey = 'kanban' | 'planning' | 'design' | 'setup' | 'taskViewer';
+export type ProviderKey = 'kanban' | 'planning' | 'design' | 'setup' | 'taskViewer' | 'tickets';
 
 function typeOf(value: any): VerbFieldType | 'null' | 'other' {
     if (value === null) return 'null';
@@ -557,13 +557,7 @@ export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
             workspaceRoot: { type: 'string' },
         },
     },
-    convertToSubtask: {
-        fields: {
-            subtaskSessionId: { type: 'string', required: true },
-            featureSessionId: { type: 'string', required: true },
-            workspaceRoot: { type: 'string' },
-        },
-    },
+    // ── 2d: convertToSubtask schema moved to TICKETS_VERB_SCHEMAS. ──
     improveFeature: {
         fields: {
             planId: { type: 'string' },
@@ -781,38 +775,44 @@ export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
         },
     },
     // ─── Tickets family (P3) — ClickUp / Linear writes + provider config ───
-    clickupCreateTask: {
+    // ── 2f: clickupCreateTask, linearCreateIssue, syncAllTickets schemas moved
+    //    to TICKETS_VERB_SCHEMAS (verbs moved to TicketsPanelProvider). ──
+    // ── 2d: clickupUpdateTaskAssignees, clickupUpdateTaskPriority,
+    //    clickupUpdateTaskTags schemas moved to TICKETS_VERB_SCHEMAS. ──
+    // ── 2d: linearUpdateIssueAssignee, linearUpdateIssuePriority,
+    //    linearUpdateIssueLabels, editTicket, moveTicket, changeTicketStatus,
+    //    deleteTicketConfirmed schemas moved to TICKETS_VERB_SCHEMAS. ──
+    // ── 2e: postTicketComment, postTicketReply, ticketAttachImage schemas
+    //    moved to TICKETS_VERB_SCHEMAS. submitComment stays here — it serves
+    //    the live kanban + project review-comment sidebars. ──
+    submitComment: {
         fields: {
-            workspaceRoot: { type: 'string' },
-            listId: { type: ['string', 'number'] },
-            parentId: { type: ['string', 'number'] },
-            title: { type: 'string' },
-            description: { type: 'string' },
-            status: { type: 'string' },
-            priority: { type: 'number' },
-            assignees: { type: 'array' },
+            sessionId: { type: 'string' },
+            topic: { type: 'string' },
+            planFileAbsolute: { type: 'string' },
+            selectedText: { type: 'string' },
+            comment: { type: 'string' },
         },
     },
-    clickupUpdateTaskAssignees: {
+    // ── 2d: pushTicket schema moved to TICKETS_VERB_SCHEMAS. ──
+    // ── 2f: syncAllTickets schema moved to TICKETS_VERB_SCHEMAS. ──
+    syncToSource: {
         fields: {
-            workspaceRoot: { type: 'string' },
-            taskId: { type: ['string', 'number'], required: true },
-            currentAssigneeIds: { type: 'array' },
-            desiredAssigneeIds: { type: 'array' },
+            slugPrefix: { type: 'string', required: true },
         },
     },
-    clickupUpdateTaskPriority: {
+    // 2c: setupTicketsWatcher + saveLocalTicketFile moved to TICKETS_VERB_SCHEMAS.
+};
+
+// Ticket-source verbs moved to the Tickets panel (slice 2b). These schemas moved
+// with their handlers: leaving them in PLANNING_VERB_SCHEMAS while the verbs are
+// gated by TICKETS_VERBS silently disables payload validation on the /tickets rail,
+// because validateVerbPayload('tickets', …) finds no declared shape and passes.
+const TICKETS_VERB_SCHEMAS: Record<string, VerbSchema> = {
+    switchTicketsProvider: {
         fields: {
             workspaceRoot: { type: 'string' },
-            taskId: { type: ['string', 'number'], required: true },
-            priority: { type: 'number' },
-        },
-    },
-    clickupUpdateTaskTags: {
-        fields: {
-            workspaceRoot: { type: 'string' },
-            taskId: { type: ['string', 'number'], required: true },
-            tags: { type: 'array' },
+            provider: { type: 'string', required: true },
         },
     },
     clickupSaveSpaceSelection: {
@@ -840,16 +840,117 @@ export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
             folderName: { type: 'string' },
         },
     },
-    linearCreateIssue: {
+    linearSaveProjectSelection: {
         fields: {
             workspaceRoot: { type: 'string' },
             projectName: { type: 'string' },
-            title: { type: 'string' },
-            description: { type: 'string' },
-            parentId: { type: 'string' },
-            status: { type: 'string' },
+        },
+    },
+    addTicketsFolder: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    removeTicketsFolder: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            folderPath: { type: 'string', required: true },
+        },
+    },
+    saveTicketsFolderPaths: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            paths: { type: 'array' },
+        },
+    },
+    saveTicketsFolder: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            folderPath: { type: 'string' },
+        },
+    },
+    // ── 2c: ticket file load, sync-status, file watcher, delta pull ──
+    setupTicketsWatcher: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    saveLocalTicketFile: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            provider: { type: 'string', required: true },
+            id: { type: 'string', required: true },
+            content: { type: 'string' },
+        },
+    },
+    listLocalTicketFiles: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            provider: { type: 'string', required: true },
+            listId: { type: ['string', 'number'] },
+            projectId: { type: 'string' },
+        },
+    },
+    readLocalTicketFile: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            provider: { type: 'string', required: true },
+            id: { type: 'string', required: true },
+        },
+    },
+    refreshTicketsDelta: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            provider: { type: 'string', required: true },
+            listId: { type: ['string', 'number'] },
+            projectId: { type: 'string' },
+            includeClosed: { type: 'boolean' },
+            forceFull: { type: 'boolean' },
+        },
+    },
+    getTicketSyncStatuses: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            provider: { type: 'string', required: true },
+            ids: { type: 'array' },
+        },
+    },
+    ticketsRootChanged: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    ticketsDefaultRoot: {
+        fields: {},
+    },
+    // ── 2d: ticket detail + mutation schemas moved from PLANNING_VERB_SCHEMAS ──
+    convertToSubtask: {
+        fields: {
+            subtaskSessionId: { type: 'string', required: true },
+            featureSessionId: { type: 'string', required: true },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    clickupUpdateTaskAssignees: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            taskId: { type: ['string', 'number'], required: true },
+            currentAssigneeIds: { type: 'array' },
+            desiredAssigneeIds: { type: 'array' },
+        },
+    },
+    clickupUpdateTaskPriority: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            taskId: { type: ['string', 'number'], required: true },
             priority: { type: 'number' },
-            assigneeId: { type: 'string' },
+        },
+    },
+    clickupUpdateTaskTags: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            taskId: { type: ['string', 'number'], required: true },
+            tags: { type: 'array' },
         },
     },
     linearUpdateIssueAssignee: {
@@ -871,12 +972,6 @@ export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
             workspaceRoot: { type: 'string' },
             issueId: { type: 'string', required: true },
             labelIds: { type: 'array' },
-        },
-    },
-    linearSaveProjectSelection: {
-        fields: {
-            workspaceRoot: { type: 'string' },
-            projectName: { type: 'string' },
         },
     },
     editTicket: {
@@ -909,6 +1004,15 @@ export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
             id: { type: 'string', required: true },
         },
     },
+    pushTicket: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            provider: { type: 'string', required: true },
+            id: { type: 'string', required: true },
+        },
+    },
+    // ── 2e: comment manager, mention autocomplete and attachment schemas
+    //    moved from PLANNING_VERB_SCHEMAS. ──
     postTicketComment: {
         fields: {
             workspaceRoot: { type: 'string' },
@@ -928,56 +1032,8 @@ export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
             mentions: { type: 'array' },
         },
     },
-    submitComment: {
-        fields: {
-            sessionId: { type: 'string' },
-            topic: { type: 'string' },
-            planFileAbsolute: { type: 'string' },
-            selectedText: { type: 'string' },
-            comment: { type: 'string' },
-        },
-    },
-    pushTicket: {
-        fields: {
-            workspaceRoot: { type: 'string' },
-            provider: { type: 'string', required: true },
-            id: { type: 'string', required: true },
-        },
-    },
-    syncAllTickets: {
-        fields: {
-            workspaceRoot: { type: 'string' },
-            provider: { type: 'string' },
-        },
-    },
-    syncToSource: {
-        fields: {
-            slugPrefix: { type: 'string', required: true },
-        },
-    },
-    saveTicketsFolder: {
-        fields: {
-            workspaceRoot: { type: 'string' },
-            folderPath: { type: 'string' },
-        },
-    },
-    saveTicketsFolderPaths: {
-        fields: {
-            workspaceRoot: { type: 'string' },
-            paths: { type: 'array' },
-        },
-    },
-    setupTicketsWatcher: {
-        fields: {
-            workspaceRoot: { type: 'string' },
-        },
-    },
-    switchTicketsProvider: {
-        fields: {
-            workspaceRoot: { type: 'string' },
-            provider: { type: 'string', required: true },
-        },
-    },
+    // ── 2e: submitComment schema stays in PLANNING_VERB_SCHEMAS (live kanban +
+    //    project review-comment sidebars route to PlanningPanelProvider). ──
     ticketAttachImage: {
         fields: {
             workspaceRoot: { type: 'string' },
@@ -986,28 +1042,60 @@ export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
             requestId: { type: ['string', 'number'] },
         },
     },
-    saveLocalTicketFile: {
+    // ── 2f: schemas moved from PLANNING_VERB_SCHEMAS (verbs moved to
+    //    TicketsPanelProvider). linearImportTask / clickupImportTask were only
+    //    in TASK_VIEWER_VERB_SCHEMAS before; they are added here too so the
+    //    /tickets rail validates payload (validateVerbPayload('tickets', …)
+    //    otherwise treats "no declared shape" as a pass). ──
+    clickupCreateTask: {
         fields: {
             workspaceRoot: { type: 'string' },
-            provider: { type: 'string', required: true },
-            id: { type: 'string', required: true },
-            content: { type: 'string' },
+            listId: { type: ['string', 'number'] },
+            parentId: { type: ['string', 'number'] },
+            title: { type: 'string' },
+            description: { type: 'string' },
+            status: { type: 'string' },
+            priority: { type: 'number' },
+            assignees: { type: 'array' },
         },
     },
-    addTicketsFolder: {
+    linearCreateIssue: {
         fields: {
             workspaceRoot: { type: 'string' },
+            projectName: { type: 'string' },
+            title: { type: 'string' },
+            description: { type: 'string' },
+            parentId: { type: 'string' },
+            status: { type: 'string' },
+            priority: { type: 'number' },
+            assigneeId: { type: 'string' },
         },
     },
-    removeTicketsFolder: {
+    syncAllTickets: {
         fields: {
             workspaceRoot: { type: 'string' },
-            folderPath: { type: 'string', required: true },
+            provider: { type: 'string' },
         },
     },
-};
-
-export const SETUP_VERB_SCHEMAS: Record<string, VerbSchema> = {
+    linearImportTask: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            issueId: { type: 'string', required: true },
+            includeSubtasks: { type: 'boolean' },
+        },
+    },
+    clickupImportTask: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            taskId: { type: 'string', required: true },
+            includeSubtasks: { type: 'boolean' },
+        },
+    },
+    // ── Plan 4: ClickUp/Linear config verb schemas moved out of
+    //    SETUP_VERB_SCHEMAS. Leaving them in SETUP while the verbs are gated by
+    //    TICKETS_VERBS silently disables payload validation on the /tickets rail,
+    //    because validateVerbPayload('tickets', …) finds no declared shape and
+    //    passes. ──
     applyClickUpConfig: {
         fields: {
             token: { type: 'string' },
@@ -1020,6 +1108,10 @@ export const SETUP_VERB_SCHEMAS: Record<string, VerbSchema> = {
             options: { type: 'object' },
         },
     },
+};
+
+
+export const SETUP_VERB_SCHEMAS: Record<string, VerbSchema> = {
     applyNotionConfig: {
         fields: {
             token: { type: 'string' },
@@ -1505,5 +1597,6 @@ export const VERB_SCHEMAS: Record<ProviderKey, Record<string, VerbSchema>> = {
     design: DESIGN_VERB_SCHEMAS,
     setup: SETUP_VERB_SCHEMAS,
     taskViewer: TASK_VIEWER_VERB_SCHEMAS,
+    tickets: TICKETS_VERB_SCHEMAS,
 };
 

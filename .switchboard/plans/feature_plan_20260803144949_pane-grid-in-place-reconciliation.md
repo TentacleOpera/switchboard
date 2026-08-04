@@ -91,6 +91,12 @@ fit() {
 
 Making the fit path verify itself and retry (the sibling subtask) is the smaller, safer fix to ship first, and — per fact 4 — is the only fix for one of the two stranding paths. **This** plan removes the dominant cause: if a terminal's slot did not change, its DOM never moves, `_isPaused` never flips, and there is no race to lose. It is independently shippable and independently verifiable — it stands on its own even if the fit-verification work never lands, and vice versa. It is also the change that touches focus behaviour, which is exactly why it should not be bundled with a one-function bug fix.
 
+### Alternative considered and deferred: CSS-Grid placement instead of re-parenting
+
+The one case in-place reconciliation cannot make churn-free is a terminal *moving between panes* (`assignToFocusedPane`, the `hide`/undo path): the container is genuinely appended to a different `.pane-content`, which detaches it. External research surfaced the maintainer-endorsed way to avoid even that — make the terminal hosts direct children of the grid and reposition them by mutating `style.gridArea` / `style.gridColumn` / `style.gridRow`, so a terminal changes *slot* without ever changing *parent*. A repositioned-but-attached node never leaves the document, so its `IntersectionObserver` never fires.
+
+**Deferred, deliberately.** Adopting it means dissolving `.terminal-pane` as a container: the pane header (title chip, badge, `clear`/`hide`) would have to become either a sibling grid item positioned into the same cell or an absolutely-positioned overlay, and the `mousedown`-to-focus and `focused` outline behaviours would need re-deriving on whatever element is left. That is a larger restructure than this plan, on a file already carrying 754 uncommitted lines from another feature. The cost of deferring is bounded and known: a pane-to-pane *move* is a deliberate, infrequent operator action affecting at most two terminals, and the sibling subtask's fit ladder covers exactly that case. Recorded here as the natural follow-up if the ladder's `stale-canvas` warnings turn out to cluster on assignment changes rather than layout changes — which is precisely what the ladder's verdict logging will tell us.
+
 ## Metadata
 
 - **Complexity:** 7
@@ -570,13 +576,21 @@ An unwired contract is a contract that rots. The repo has been actively closing 
 20. **The parked-terminal check.** From `3x3` with all nine seated, switch to `1`, wait 20 seconds (past `DETACH_GRACE_MS`, `terminals.js:135`), then switch back to `3x3`. **Expect:** all nine panes repopulate immediately with their scrollback intact — the parked terminals must **not** have been destroyed. This is the behaviour the `paneAssignments.includes` sweep protects.
 21. Leave the panel at `3x3` for a few minutes with active output. **Expect:** no growth in listener count (DevTools → Performance monitor → "Event listeners" stays flat). A reused element with per-render `addEventListener` would climb — this is the check for the one failure mode the restructure introduces.
 
-## Uncertain Assumptions
+## Resolved Assumptions
 
-The following are external to this repository and cannot be settled by reading more code. The user was advised to run web research to confirm them before implementation.
+External research was run and closed both open questions. **This section is authoritative — do not re-open these during implementation.**
 
-- Whether upstream xterm.js has changed or removed the `IntersectionObserver`-driven `RenderService` pause between the pinned `@xterm/xterm@5.5.0` and current releases. If a later version no longer pauses (or exposes a public way to force a renderer resync), a dependency bump may be a cheaper and more durable fix than either subtask in this feature, and this plan's premise would need revisiting. `package.json` pins `^5.5.0`, so a routine `npm install` can move this surface without any code change here.
-- Whether the ordering this plan relies on — `requestAnimationFrame` callbacks running before the same frame's IntersectionObserver observations are computed and delivered — is guaranteed by the HTML rendering-steps specification or merely the prevailing browser behaviour. The sibling subtask's timer-based retry ladder makes the design correct either way, so this affects confidence in the *explanation*, not the *remedy*.
+- **A dependency upgrade does not make this plan unnecessary.** Every xterm release through 6.0.0 keeps the `IntersectionObserver`-driven `RenderService` pause, its deferred resize task and its last-record-only batch read; no changelog entry, commit or PR in 5.6.0 or 6.0.0 touched the architecture, because the pause is a deliberate performance feature rather than a bug awaiting a fix. Upstream also still offers no public force-resize API. So the premise here holds at 5.5.0 and at 6.0.0 alike: the only way to stop losing the race is to stop entering it. Upstream corroboration for the defect class: xterm.js issues #3118, #3029, #2643, #4338, #4841 and #5298 all describe fits against detached, hidden or re-parented terminals producing invalid dimensions or a stale canvas, and the maintainer-endorsed remedy is exactly this plan's thesis — keep the DOM node attached and stable rather than re-parenting it.
+- **rAF-before-IntersectionObserver is normative, but delivery can still slip a frame.** The HTML Living Standard's "update the rendering" steps order `requestAnimationFrame` callbacks before the intersection-observation step in every compliant engine, so the race described in fact 1 is real as stated. Under main-thread pressure, Gecko and WebKit may additionally defer IntersectionObserver *task delivery* to the next event-loop turn where Chromium dispatches it in microtasks — which widens the window rather than closing it. The explanation stands; if anything the race is worse on Firefox and Safari than the original write-up implied.
+
+No further research is needed for this plan.
 
 ## Recommendation
 
 **Complexity 7 → Send to Lead Coder.** Multi-function restructure of the panel's central render path, with a deliberate behavioural change to focus handling and three stale-closure / lifetime hazards that only appear once elements are reused.
+
+## Completion Report
+
+- **What was implemented:** Reconciled terminals pane grid in-place (`renderPaneGrid`) instead of tearing down the DOM and re-parenting every live xterm on every render. Extracted `createPaneElement`, `isTerseLayout`, and `updatePaneElement` helpers. Preserved caret focus state conditionally when displaced by grid reconciliation, attached element listeners once at creation time, re-derived button labels and pane headers dynamically, and added contract unit tests.
+- **Files changed:** `src/webview/terminals.js`, `src/test/terminal-pane-grid-reconcile-contract.test.js`, `package.json`, `.github/workflows/integration-tests.yml`, `src/test/shell-terminal-strip.test.js`.
+- **Issues encountered:** Adjusted caret-restore assertion in `shell-terminal-strip.test.js` to match the new conditional focus restore predicate (`hadFocus && !paneGridEl.contains(document.activeElement)`).

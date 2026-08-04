@@ -294,33 +294,7 @@ async function main() {
         assert.strictEqual(result.type, 'markdownLiveRendered');
     });
 
-    await test('downloadAttachment RETURNS in-body attachmentDownloaded and keeps push additive', async () => {
-        const { provider, pushes } = buildHeadlessPlanningProvider(tmpRoot, {
-            commandResults: {
-                'switchboard.downloadAttachment': () => ({ success: true, filePath: '/tmp/dl.bin' }),
-            },
-        });
-        const result = await provider.handleServiceVerb('downloadAttachment', { url: 'https://x/y', provider: 'clickup', ticketId: 't1' });
-        assert.strictEqual(result.success, true);
-        assert.strictEqual(result.filePath, '/tmp/dl.bin');
-        assert.strictEqual(result.type, 'attachmentDownloaded');
-        const push = pushes.find(p => p.type === 'attachmentDownloaded');
-        assert.ok(push, 'webview push emitted');
-    });
 
-    await test('viewAttachments RETURNS in-body attachments (headless: no webviewUri rewrite, no vscode reached)', async () => {
-        const { provider } = buildHeadlessPlanningProvider(tmpRoot, {
-            commandResults: {
-                'switchboard.getAttachmentList': () => ([{ isDownloaded: true, localPath: '/tmp/a.png' }]),
-            },
-        });
-        const result = await provider.handleServiceVerb('viewAttachments', { provider: 'clickup', ticketId: 't1', attachments: [] });
-        assert.strictEqual(result.success, true);
-        assert.ok(Array.isArray(result.attachments));
-        // Headless has no webview → webviewUri must NOT be set (host-agnostic guard).
-        assert.strictEqual(result.attachments[0].webviewUri, undefined);
-        assert.strictEqual(result.type, 'attachmentsListResult');
-    });
 
     await test('fetchRoots RETURNS in-body aggregate payload and emits pushes', async () => {
         const { provider, pushes } = buildHeadlessPlanningProvider(tmpRoot);
@@ -357,24 +331,8 @@ async function main() {
         );
     });
 
-    // ── Read arms: Tickets family (P3) ────────────────────────────────────
-    await test('listTicketsFolders RETURNS in-body paths and keeps push additive', async () => {
-        const { provider, pushes } = buildHeadlessPlanningProvider(tmpRoot);
-        const result = await provider.handleServiceVerb('listTicketsFolders', { workspaceRoot: tmpRoot });
-        assert.strictEqual(result.success, true);
-        assert.ok(Array.isArray(result.paths));
-        assert.strictEqual(result.type, 'ticketsFoldersListed');
-        const push = pushes.find(p => p.type === 'ticketsFoldersListed');
-        assert.ok(push, 'webview push emitted');
-    });
-
-    await test('browseTicketsFolder RETURNS in-body success with null path headless (no dialog)', async () => {
-        const { provider } = buildHeadlessPlanningProvider(tmpRoot);
-        const result = await provider.handleServiceVerb('browseTicketsFolder', { workspaceRoot: tmpRoot });
-        assert.strictEqual(result.success, true);
-        assert.strictEqual(result.path, null);
-        assert.strictEqual(result.type, 'browseTicketsFolderResult');
-    });
+    // ── 2b: listTicketsFolders + browseTicketsFolder moved to TicketsPanelProvider.
+    //    Their assertions now live in verb-engine-tickets-headless.test.js. ──
 
     // WHERE THE NO-WORKSPACE FAILURE ACTUALLY COMES FROM.
     //
@@ -399,128 +357,35 @@ async function main() {
     //
     // What IS the contract worth pinning, and what this suite is for: the verb
     // fails IN-BODY rather than throwing across the HTTP boundary.
-    const NO_WORKSPACE_VERBS = [
-        ['linearLoadProject', {}],
-        ['clickupLoadSpaces', {}],
-        ['importAllTickets', { provider: 'clickup', importMode: 'document' }],
-    ];
-    for (const [verb, extra] of NO_WORKSPACE_VERBS) {
-        await test(`${verb} RETURNS success:false in-body when no workspace is open`, async () => {
-            const { provider } = buildHeadlessPlanningProvider(tmpRoot, { roots: [] });
-            const result = await provider.handleServiceVerb(verb, { workspaceRoot: '/not/a/real/root', ...extra });
-            assert.strictEqual(result.success, false, `${verb} must fail in-body, not throw`);
-            assert.match(result.error, /No workspace open/);
-        });
-    }
+    // 2b: linearLoadProject + clickupLoadSpaces moved to TicketsPanelProvider;
+    //     their no-workspace assertions now live in verb-engine-tickets-headless.test.js.
+    // 2f: importAllTickets moved to TicketsPanelProvider; its no-workspace
+    //     assertion now lives in verb-engine-tickets-headless.test.js. ──
 
-    // The other half of the same behaviour: an unknown explicit root must NOT be
-    // treated as "no workspace" while a real root is open — it falls back. If this
-    // ever starts returning 'No workspace open', the fallback in
-    // `_resolveWorkspaceRoot` has been tightened and the tests above become
-    // indistinguishable from it.
-    await test('an unknown explicit workspaceRoot falls back to an allowed root, not to the no-workspace guard', async () => {
-        const { provider } = buildHeadlessPlanningProvider(tmpRoot);
-        let result;
-        try {
-            result = await provider.handleServiceVerb('clickupLoadSpaces', { workspaceRoot: '/not/a/real/root' });
-        } catch {
-            // Reaching the adapter stub and throwing means it got past the guard,
-            // which is exactly what this asserts.
-            return;
-        }
-        assert.notStrictEqual(
-            result?.error, 'No workspace open',
-            'unknown explicit root must fall back to the seeded root, not trip the global guard'
-        );
-    });
+    // 2b: the clickupLoadSpaces fallback test moved to verb-engine-tickets-headless.test.js
+    // (the verb now lives on TicketsPanelProvider).
 
-    await test('getTicketSyncStatuses RETURNS success:false in-body when ids missing', async () => {
-        const { provider } = buildHeadlessPlanningProvider(tmpRoot);
-        const result = await provider.handleServiceVerb('getTicketSyncStatuses', { workspaceRoot: tmpRoot, provider: 'clickup' });
-        assert.strictEqual(result.success, false);
-        assert.strictEqual(result.type, 'ticketSyncStatusesLoaded');
-        assert.ok(/Missing workspaceRoot or ids/.test(result.error));
-    });
-
-    await test('readLocalTicketFile RETURNS success:false in-body when params missing', async () => {
-        const { provider } = buildHeadlessPlanningProvider(tmpRoot);
-        const result = await provider.handleServiceVerb('readLocalTicketFile', { workspaceRoot: tmpRoot });
-        assert.strictEqual(result.success, false);
-        assert.strictEqual(result.type, 'localTicketFileRead');
-    });
-
-    await test('importTicketSubtasks RETURNS in-body enriched:false when params missing (no vscode reached)', async () => {
-        const { provider } = buildHeadlessPlanningProvider(tmpRoot);
-        const result = await provider.handleServiceVerb('importTicketSubtasks', { workspaceRoot: tmpRoot });
-        assert.strictEqual(result.success, true);
-        assert.strictEqual(result.enriched, false);
-        assert.strictEqual(result.reason, 'missing-params');
-    });
-
-    await test('fetchMoveTargets RETURNS success:false in-body when workspace not resolved', async () => {
-        const { provider } = buildHeadlessPlanningProvider(tmpRoot);
-        const result = await provider.handleServiceVerb('fetchMoveTargets', { workspaceRoot: '/not/a/real/root', provider: 'clickup', ticketId: 't1' });
-        assert.strictEqual(result.success, false);
-        assert.strictEqual(result.type, 'moveTargetsResult');
-        assert.ok(Array.isArray(result.targets));
-    });
+    // ── 2c: getTicketSyncStatuses + readLocalTicketFile moved to TicketsPanelProvider.
+    //    Their assertions now live in verb-engine-tickets-headless.test.js. ──
 
 
-    await test('loadTicketComments RETURNS in-body ticketCommentsLoaded via command seam and keeps push additive', async () => {
-        const { provider, pushes } = buildHeadlessPlanningProvider(tmpRoot, {
-            commandResults: {
-                'switchboard.loadTicketComments': () => ({ success: true, threads: [{ id: 'c1' }], members: [], threadingSupported: false }),
-            },
-        });
-        const result = await provider.handleServiceVerb('loadTicketComments', { workspaceRoot: tmpRoot, provider: 'clickup', id: 't1' });
-        assert.strictEqual(result.success, true);
-        assert.strictEqual(result.type, 'ticketCommentsLoaded');
-        assert.ok(Array.isArray(result.threads));
-        assert.strictEqual(result.threads.length, 1);
-        const push = pushes.find(p => p.type === 'ticketCommentsLoaded');
-        assert.ok(push, 'webview push emitted');
-    });
+
+
 
     // ── Schema validation: P3 tickets family writes ───────────────────────
-    await test('Planning: schema validation rejects malformed payload (moveTicket missing ticketId)', async () => {
-        const { provider } = buildHeadlessPlanningProvider(tmpRoot);
-        await assert.rejects(
-            () => provider.handleServiceVerb('moveTicket', { provider: 'clickup', targetId: 'lst1' }),
-            /Invalid payload for Planning verb 'moveTicket'.*ticketId/
-        );
-    });
 
-    await test('Planning: schema validation rejects malformed payload (changeTicketStatus missing statusId)', async () => {
-        const { provider } = buildHeadlessPlanningProvider(tmpRoot);
-        await assert.rejects(
-            () => provider.handleServiceVerb('changeTicketStatus', { provider: 'clickup', id: 't1' }),
-            /Invalid payload for Planning verb 'changeTicketStatus'.*statusId/
-        );
-    });
 
-    await test('Planning: schema validation rejects malformed payload (postTicketComment missing provider)', async () => {
-        const { provider } = buildHeadlessPlanningProvider(tmpRoot);
-        await assert.rejects(
-            () => provider.handleServiceVerb('postTicketComment', { id: 't1', comment: 'hi' }),
-            /Invalid payload for Planning verb 'postTicketComment'.*provider/
-        );
-    });
 
-    await test('Planning: schema validation rejects malformed payload (deleteTicketConfirmed missing id)', async () => {
-        const { provider } = buildHeadlessPlanningProvider(tmpRoot);
-        await assert.rejects(
-            () => provider.handleServiceVerb('deleteTicketConfirmed', { provider: 'clickup' }),
-            /Invalid payload for Planning verb 'deleteTicketConfirmed'.*id/
-        );
-    });
 
-    await test('Planning: schema validation rejects malformed payload (removeTicketsFolder missing folderPath)', async () => {
-        const { provider } = buildHeadlessPlanningProvider(tmpRoot);
-        await assert.rejects(
-            () => provider.handleServiceVerb('removeTicketsFolder', { workspaceRoot: tmpRoot }),
-            /Invalid payload for Planning verb 'removeTicketsFolder'.*folderPath/
-        );
-    });
+    // 2b: removeTicketsFolder schema validation moved to verb-engine-tickets-headless.test.js.
+
+    // 2c: importTicketSubtasks, fetchMoveTargets, moveTicket, changeTicketStatus and
+    //     deleteTicketConfirmed moved to TicketsPanelProvider; their assertions were
+    //     migrated verbatim into verb-engine-tickets-headless.test.js.
+
+    // 2e: downloadAttachment, viewAttachments, loadTicketComments and postTicketComment
+    //     moved to TicketsPanelProvider; their assertions were migrated verbatim into
+    //     verb-engine-tickets-headless.test.js.
 
     // ── Cleanup ───────────────────────────────────────────────────────────
     try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch {}

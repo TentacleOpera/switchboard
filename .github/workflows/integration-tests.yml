@@ -66,6 +66,16 @@ jobs:
       - name: PTY route surface contract (/terminals/verb only, nothing in the generated surface)
         run: npm run test:contract:pty-route-surface
 
+      # A browser-originated dispatch that correctly lands in a PTY terminal must not
+      # also raise a VS Code "Terminal not found" toast. The pre-dispatch focus call is
+      # a VS Code-only reveal; a PTY is invisible to it, so the miss warns — reading as
+      # a second, failed send next to a dispatch that in fact succeeded. Pins the
+      # `silent` opt-out on the three dispatch-path focus calls, the advisory
+      # `_isLikelyPtyDispatchTarget` predicate (snapshot-based, no round-trip, no
+      # in-process fleet), and that the explicit-focus surfaces keep their warning.
+      - name: PTY dispatch focus contract (no spurious VS Code toast on a PTY dispatch)
+        run: npm run test:contract:pty-dispatch-focus
+
       # /ws/terminal is an RCE-grade channel. This pins the gateway's empty-token
       # rejection, the untouched HTTP loopback-trust path the skill ecosystem rides
       # on, and the CSP-legal token transport (a nonce-less inline <script> is
@@ -142,6 +152,13 @@ jobs:
       # becomes a 500 with no structured error for the webview to render.
       - name: Verb engine planning contract (in-body failure, schema validation, seam routing)
         run: npm run test:contract:verb-engine-planning
+
+      # Receives the ticket-verb assertions as they migrate off Planning, slice by
+      # slice. It was added in 2b with a package.json script but no workflow step,
+      # which is the "green while incomplete" hole: the suite passed locally and
+      # guarded nothing in CI.
+      - name: Verb engine tickets contract (in-body failure, schema validation, allowlist gating)
+        run: npm run test:contract:verb-engine-tickets
 
       - name: Design per-client view state contract (seats, poll lifecycle, wsHub keepalive)
         run: npm run test:contract:design-view-state
@@ -279,8 +296,20 @@ jobs:
       # and `assignToFocusedPane` early-returns when the terminal is already in the
       # focused pane — the most likely case for a click on a lit entry — so a delegated
       # badge clear leaves the completion light burning after the click.
+      - name: Terminal pane fit verification contract
+        run: npm run test:contract:terminal-pane-fit
+
+      - name: Terminal pane grid reconcile contract
+        run: npm run test:contract:terminal-pane-grid-reconcile
+
+      - name: Terminal focus affordance contract (ring, chip, drop notice)
+        run: npm run test:contract:terminal-focus-affordance
+
       - name: Shell terminal strip contract (light precedence, bottom anchor, badge clear)
         run: npm run test:contract:shell-terminal-strip
+
+      - name: Terminal pane pinning contract
+        run: npm run test:contract:terminal-pane-pinning
 
       # Every failure mode of surface scoping is a panel that silently stops updating.
       # Pins the three traps: untagged-means-everyone, parse-before-resync, and

@@ -15,6 +15,13 @@ export const INPUT_CHUNK_BYTES = 4096;
 export const INPUT_HIGH_WATER_BYTES = 64 * 1024; // 64 KB
 export const INPUT_LOW_WATER_BYTES = 16 * 1024; // 16 KB
 
+/**
+ * Ceiling on the partial-escape carry in scanBracketedPasteMode. Long enough for
+ * any real DEC private-mode set (`\x1b[?1049;2004;1000;1002;1006h` is 28 bytes),
+ * short enough that a stream of bare ESCs cannot grow the carry without limit.
+ */
+export const MODE_SCAN_CARRY_MAX = 64;
+
 interface InputQueue {
     chunks: Buffer[];
     queuedBytes: number;
@@ -129,6 +136,23 @@ export class TerminalWsGateway {
     private pausedSince = new Map<string, number>();
     private clients = new Set<ClientState>();
     private inputQueues = new Map<string, InputQueue>();
+    /**
+     * Last observed value of DEC private mode 2004 (bracketed paste) per terminal.
+     * Absent = never observed; do NOT coerce that to false (see setupClient).
+     *
+     * This exists because the mode is CLIENT state: every `new Terminal()` starts
+     * with bracketedPasteMode off and only flips when its own parser consumes
+     * `\x1b[?2004h`. A TUI emits that once, at startup, so on any terminal that has
+     * produced more than MAX_SCROLLBACK_BYTES the escape is long evicted from the
+     * ring and an attaching client can never learn it — leaving that view pasting
+     * unbracketed forever, which a raw-mode agent CLI reads as one Enter per line.
+     * The gateway sees the stream from terminal creation, so it is the only place
+     * that can answer authoritatively.
+     */
+    private bracketedPasteModes = new Map<string, boolean>();
+
+    /** Trailing partial escape carried between scans — see scanBracketedPasteMode. */
+    private modeScanCarry = new Map<string, string>();
     private pingInterval?: NodeJS.Timeout;
     private drainInterval?: NodeJS.Timeout;
     private sharedFlushInterval?: NodeJS.Timeout;
@@ -309,6 +333,8 @@ export class TerminalWsGateway {
                 this.trackTerminalData(event.terminal);
             } else if (event.type === 'closed') {
                 this.untrackTerminalData(event.name, event.code);
+            } else if (event.type === 'renamed') {
+                this.rekeyTerminal(event.oldName, event.newName);
             }
             if (this.broadcastWs) {
                 this.broadcastWs('terminalsChanged', {}, 'terminals');
@@ -383,6 +409,9 @@ export class TerminalWsGateway {
         pending.bytes -= takenBytes;
 
         const combined = taken.join('');
+        // Before the ring append: the ring EVICTS, and the whole point of the
+        // recorded flag is to outlive eviction.
+        this.scanBracketedPasteMode(terminalName, combined);
         const buffer = this.scrollbackBuffers.get(terminalName);
         let seq = 0;
 
@@ -412,6 +441,72 @@ export class TerminalWsGateway {
         }
     }
 
+    /**
+     * Update the recorded bracketed-paste mode from a slice of pty OUTPUT.
+     *
+     * ONE regex pass, so the LAST state-changing event in DOCUMENT ORDER wins. All
+     * three events that change the mode are alternatives of the same pattern, and
+     * that is the point — ranking them in separate passes means an unrelated DECSET
+     * after a reset makes the reset lose a position compare and the mode goes
+     * stale-true:
+     *   \x1b[?<params>h|l   DECSET / DECRST
+     *   \x1bc               RIS    — full reset
+     *   \x1b[!p             DECSTR — soft reset
+     *
+     * RIS and DECSTR clear the mode because that is exactly what the client's own
+     * parser does on the same bytes: in the vendored bundle DECSTR calls
+     * `_coreService.reset()`, and RIS routes fullReset -> onRequestReset ->
+     * Terminal.reset -> CoreTerminal.reset -> `coreService.reset()`, whose body
+     * re-clones the DEC private-mode defaults — in which 2004 is false.
+     *
+     * Only final bytes `h` and `l` change state. `\x1b[?2004$p` is a DECRQM *request*
+     * and `\x1b[?2004;1$y` its reply; `[0-9;]` cannot match `$`, so neither can match
+     * at all. Params are compared WHOLE (`2004`, never a substring) so `12004` and
+     * `20040` cannot false-positive, and a multi-param set like `\x1b[?1049;2004h` is
+     * still honoured.
+     *
+     * The `{0,MODE_SCAN_CARRY_MAX}` bound is a security control, not tidiness: an
+     * unbounded `[0-9;]*` after `\x1b[?` backtracks one character at a time when no
+     * final byte follows, so a program printing tens of kilobytes of digits would
+     * hang the event loop of the process owning every terminal in the fleet.
+     *
+     * The carry is load-bearing: pty reads split wherever the kernel says, so
+     * `\x1b[?20` and `04h` routinely arrive in different chunks and a stateless scan
+     * would miss the only escape that matters.
+     */
+    private scanBracketedPasteMode(terminalName: string, data: string): void {
+        const carry = this.modeScanCarry.get(terminalName) || '';
+        const text = carry ? carry + data : data;
+
+        const modeEvent = /\x1bc|\x1b\[!p|\x1b\[\?([0-9;]{0,64})([hl])/g;
+        let match: RegExpExecArray | null;
+        let consumedEnd = 0;
+        while ((match = modeEvent.exec(text)) !== null) {
+            consumedEnd = match.index + match[0].length;
+            if (match[2]) {
+                // DECSET / DECRST — only 2004 is tracked; other modes are ignored but
+                // still advance consumedEnd so they cannot be re-scanned via the carry.
+                if (match[1].split(';').includes('2004')) {
+                    this.bracketedPasteModes.set(terminalName, match[2] === 'h');
+                }
+            } else {
+                // RIS or DECSTR.
+                this.bracketedPasteModes.set(terminalName, false);
+            }
+        }
+
+        // Carry only a trailing fragment that could still BECOME one of the tracked
+        // sequences: ESC, ESC[, ESC[!, ESC[?<digits;>. Anything else — a colour SGR,
+        // an OSC title — is dropped, so the carry is empty on essentially every flush
+        // and can never re-fire a sequence the pass above already consumed. An escape
+        // starting further back than MODE_SCAN_CARRY_MAX degrades to a missed
+        // detection, never to unbounded growth.
+        const tail = text.slice(Math.max(consumedEnd, text.length - MODE_SCAN_CARRY_MAX));
+        const escIdx = tail.lastIndexOf('\x1b');
+        const fragment = escIdx === -1 ? '' : tail.slice(escIdx);
+        this.modeScanCarry.set(terminalName, /^\x1b(\[(\?[0-9;]{0,64}|!)?)?$/.test(fragment) ? fragment : '');
+    }
+
     private untrackTerminalData(name: string, exitCode?: number): void {
         const sub = this.terminalSubscriptions.get(name);
         if (sub) {
@@ -430,6 +525,8 @@ export class TerminalWsGateway {
         this.pausedTerminals.delete(name);
         this.pausedSince.delete(name);
         this.inputQueues.delete(name);
+        this.bracketedPasteModes.delete(name);
+        this.modeScanCarry.delete(name);
 
         // Notify and close attached clients
         for (const client of Array.from(this.clients)) {
@@ -437,6 +534,71 @@ export class TerminalWsGateway {
                 this.safeSend(client.ws, { t: 'exit', code: exitCode ?? 0 });
                 try { client.ws.close(); } catch { /* ignore */ }
                 this.clients.delete(client);
+            }
+        }
+    }
+
+    /**
+     * Move every name-keyed collection from `oldName` to `newName` after a fleet
+     * rename.
+     *
+     * PtyFleetService.rename keeps the SAME handle and mutates `handle.name` in
+     * place, so the `onData` closure installed by trackTerminalData starts
+     * reporting the new name the instant the rename lands — while every map here
+     * is still filed under the old one. Left unhandled that produced a terminal
+     * with no scrollback ring at all: setupClient's buffer lookup missed and
+     * replayed nothing (blank pane), flushOutput's lookup missed so nothing was
+     * ever appended and every frame shipped seq 0 (client resume permanently
+     * dead), and untrackTerminalData later missed the subscription and leaked it.
+     *
+     * Keep this list in sync with untrackTerminalData — a name-keyed collection
+     * added to one and not the other reintroduces exactly this bug for a
+     * different piece of state. terminal-rename-rekey-contract.test.js
+     * cross-checks the two bodies for that reason.
+     *
+     * MUST stay synchronous. EventEmitter.emit runs handlers inline, so this
+     * completes before fleet.rename() returns to the ptyRenameTerminal verb arm
+     * (ptyHost.ts:81-83), and therefore before the HTTP response the client
+     * reconnects on is written (LocalApiServer.ts:1657 awaits the verb first).
+     * An await anywhere in here would open a window where a flush lands on a
+     * half-migrated set of maps AND break that ordering.
+     */
+    private rekeyTerminal(oldName: string, newName: string): void {
+        if (!oldName || !newName || oldName === newName) { return; }
+        if (this.scrollbackBuffers.has(newName) || this.terminalSubscriptions.has(newName)) {
+            console.warn(`[TerminalWsGateway] rekey ${oldName} -> ${newName} skipped: destination already tracked`);
+            return;
+        }
+
+        const moveMap = <T>(map: Map<string, T>) => {
+            if (!map.has(oldName)) { return; }
+            map.set(newName, map.get(oldName)!);
+            map.delete(oldName);
+        };
+        const moveSet = (set: Set<string>) => {
+            if (!set.delete(oldName)) { return; }
+            set.add(newName);
+        };
+
+        moveMap(this.scrollbackBuffers);
+        moveMap(this.terminalSubscriptions);
+        moveMap(this.pendingOutput);
+        moveMap(this.inputQueues);
+        moveMap(this.pausedSince);
+        moveMap(this.bracketedPasteModes);
+        moveMap(this.modeScanCarry);
+        moveSet(this.pendingFlushTerminals);
+        moveSet(this.pausedTerminals);
+
+        // Connected clients asked for the old name and are still attached to the
+        // same pty. Re-point them or the fan-out filter (c.terminalName === name,
+        // :400) stops matching and they go silent — including tabs that did not
+        // initiate the rename and have no reason to reconnect. The ack path
+        // (:680-684), the resize path (:697) and the drain poller (:764) read the
+        // same field.
+        for (const client of this.clients) {
+            if (client.terminalName === oldName) {
+                client.terminalName = newName;
             }
         }
     }
@@ -606,6 +768,7 @@ export class TerminalWsGateway {
 
         // Hello frame carries the terminal's current high-water seq so a client can
         // tell how far ahead the stream already is.
+        const bracketedPaste = this.bracketedPasteModes.get(terminal.name);
         this.safeSend(ws, {
             t: 'hello',
             name: terminal.name,
@@ -614,6 +777,9 @@ export class TerminalWsGateway {
             rows: terminal.pty.rows || 24,
             seq: buffer ? buffer.nextSeq - 1 : 0,
             replayChars,
+            // Omitted, NOT false, when nothing has been observed: telling a client to
+            // DISABLE a mode nobody has ruled on is a regression, not a default.
+            ...(typeof bracketedPaste === 'boolean' ? { bracketedPaste } : {}),
         });
 
         // Replay scrollback BEFORE any live frame. This block is synchronous, and
@@ -820,6 +986,8 @@ export class TerminalWsGateway {
         this.pendingFlushTerminals.clear();
         this.pendingOutput.clear();
         this.inputQueues.clear();
+        this.bracketedPasteModes.clear();
+        this.modeScanCarry.clear();
         for (const client of this.clients) {
             try { client.ws.close(); } catch { /* ignore */ }
         }

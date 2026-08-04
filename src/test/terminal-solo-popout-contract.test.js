@@ -152,7 +152,7 @@ test('the pinned pane survives an empty fleet without the empty state bleeding t
         /body\.is-solo #empty-state \{[^}]*display: none !important/.test(terminalsHtml),
         'body.is-solo must suppress #empty-state, which renderSidebarList shows inline on an empty fleet'
     );
-    const render = block(terminalsJs, 'function renderSidebarList() {', 'const groupsMap');
+    const render = block(terminalsJs, 'function renderSidebarList() {', 'function setLayoutMode(');
     assert.ok(
         /if \(!soloTerminalName\) \{\s*emptyStateEl\.style\.display/.test(render),
         'renderSidebarList must not hide the grid in solo mode — checkSoloNotFound owns its visibility'

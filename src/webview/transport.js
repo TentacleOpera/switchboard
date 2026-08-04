@@ -176,6 +176,18 @@
                 } else {
                     dispatchMessage(payload);
                 }
+                // The hub adds this connection to its broadcast set IMMEDIATELY after
+                // sending this frame — `_safeSend(__resync)` then `_connections.add(meta)`
+                // with no await between (wsHub.ts:257-267). So this is the first moment a
+                // host push is guaranteed to reach us. Panels whose mount-time state
+                // arrives ONLY as a push (Setup) must (re)request it here: a `ready`
+                // posted during the handshake is broadcast to zero subscribers and lost.
+                // If that ordering ever changes, this signal weakens back to a race.
+                try {
+                    window.dispatchEvent(new CustomEvent('sbTransportSubscribed'));
+                } catch (e) {
+                    console.error('[transport] dispatch sbTransportSubscribed failed:', e);
+                }
                 return;
             }
 
@@ -379,7 +391,81 @@
 .host-automation-false #btn-build-via-planner,
 .host-automation-false #btn-update-via-planner,
 .host-automation-false #btn-build-system,
-.host-automation-false #btn-build-prd-via-planner {
+.host-automation-false #btn-build-prd-via-planner,
+.host-automation-false [data-tab="automation"],
+.host-automation-false #automation-tab-content,
+.host-automation-false #automation-panel-root {
+    display: none !important;
+}
+`;
+                document.head.appendChild(style);
+            }
+
+            if (caps.orchestrator === false) {
+                document.body.classList.add('host-orchestrator-false');
+                const style = document.createElement('style');
+                style.textContent = `
+.host-orchestrator-false #btn-orchestrator,
+.host-orchestrator-false .orchestrator-only {
+    display: none !important;
+}
+`;
+                document.head.appendChild(style);
+            }
+
+            if (caps.mcpTerminals === false) {
+                document.body.classList.add('host-mcp-terminals-false');
+                const style = document.createElement('style');
+                style.textContent = `
+.host-mcp-terminals-false .mcp-monitor-only,
+.host-mcp-terminals-false #btn-launch-mcp-monitor {
+    display: none !important;
+}
+`;
+                document.head.appendChild(style);
+            }
+
+            if (caps.worktrees === false) {
+                document.body.classList.add('host-worktrees-false');
+                const style = document.createElement('style');
+                style.textContent = `
+.host-worktrees-false [data-tab="worktrees"],
+.host-worktrees-false #worktrees-tab-content {
+    display: none !important;
+}
+`;
+                document.head.appendChild(style);
+            }
+
+            if (caps.uat === false) {
+                document.body.classList.add('host-uat-false');
+                const style = document.createElement('style');
+                style.textContent = `
+.host-uat-false [data-tab="uat"],
+.host-uat-false #uat-tab-content {
+    display: none !important;
+}
+`;
+                document.head.appendChild(style);
+            }
+
+            if (caps.boardStructure === false) {
+                document.body.classList.add('host-board-structure-false');
+                const style = document.createElement('style');
+                style.textContent = `
+.host-board-structure-false #btn-add-column,
+.host-board-structure-false .col-header-actions {
+    display: none !important;
+}
+`;
+                document.head.appendChild(style);
+            }
+
+            if (caps.featureAdvanced === false) {
+                document.body.classList.add('host-feature-advanced-false');
+                const style = document.createElement('style');
+                style.textContent = `
+.host-feature-advanced-false #btn-suggest-features {
     display: none !important;
 }
 `;

@@ -17,7 +17,6 @@ import type { TaskViewerProvider } from './TaskViewerProvider';
 import { KanbanDatabase, type WorkspaceDatabaseMapping } from './KanbanDatabase';
 import type { KanbanProvider } from './KanbanProvider';
 import { getMappingsFromIndex, resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentityService';
-import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 
 // Switchboard writes only a marker-delimited MANAGED BLOCK into CLAUDE.md / AGENTS.md
 // (see extension.ts ensureProtocolFile) and only ledger-tracked skills into `.claude/`
@@ -80,6 +79,11 @@ export class SetupPanelProvider implements vscode.Disposable {
             // postMessage() silently drops. Mirrors KanbanProvider's
             // _initKanbanService(), which has no early-return and always re-points.
             this._broadcaster?.setWebview(this._panel?.webview);
+            // Same reasoning for the WS target: a server wired between the first
+            // seam derivation and this call would otherwise never reach the hub.
+            if (this._apiServer) {
+                this._broadcaster?.setApiServer(this._apiServer);
+            }
             return;
         }
         const workspaceRoot = this._getCurrentWorkspaceRoot() || '';
@@ -91,9 +95,12 @@ export class SetupPanelProvider implements vscode.Disposable {
         }
         this._hostSeams = createVscodeHostSeams(workspaceRoot);
         if (!this._broadcaster) {
-            this._broadcaster = new BroadcastHub({ webview: this._panel?.webview, apiServer: null });
+            this._broadcaster = new BroadcastHub({ webview: this._panel?.webview, apiServer: this._apiServer ?? null });
         } else {
             this._broadcaster.setWebview(this._panel?.webview);
+            if (this._apiServer) {
+                this._broadcaster.setApiServer(this._apiServer);
+            }
         }
         if (this._hostSeams?.pathConfig?.onConfigChanged) {
             this._hostSeams.pathConfig.onConfigChanged((key, value, originatorId) => {
@@ -133,6 +140,7 @@ export class SetupPanelProvider implements vscode.Disposable {
     }
 
     public setApiServer(server: any): void {
+        this._apiServer = server;
         this._broadcaster?.setApiServer(server);
     }
 
@@ -151,6 +159,15 @@ export class SetupPanelProvider implements vscode.Disposable {
     private _hostSeams?: HostSeams;
     private _broadcaster?: BroadcastHub;
     private _setupService?: SetupService;
+    /**
+     * Cached because the extension wires the server at activation — before any
+     * Setup panel or Setup verb has forced `_initSetupService()` to build the hub.
+     * A stateless `this._broadcaster?.setApiServer(server)` silently discarded it,
+     * so every push from postSetupPanelState() reached the VS Code webview only and
+     * the browser Setup panel rendered every setting unset. Mirrors
+     * DesignPanelProvider/PlanningPanelProvider, which cache for the same reason.
+     */
+    private _apiServer?: any;
 
     private _panel?: vscode.WebviewPanel;
     private _taskViewerProvider?: TaskViewerProvider;
@@ -516,113 +533,6 @@ export class SetupPanelProvider implements vscode.Disposable {
                     }
                     return { success: true };
                 }
-                case 'applyClickUpConfig': {
-                    const result = await this._taskViewerProvider.handleApplyClickUpConfig(
-                        message.token,
-                        message.options ?? {}
-                    );
-                    this.postMessage({ type: 'clickupApplyResult', ...result });
-                    await this._taskViewerProvider.postSetupPanelState();
-                    await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    return result;
-                }
-                case 'saveClickUpMappings': {
-                    const result = await this._taskViewerProvider.handleSaveClickUpMappings(
-                        Array.isArray(message.mappings) ? message.mappings : []
-                    );
-                    this.postMessage({ type: 'clickupMappingsSaved', ...result });
-                    await this._taskViewerProvider.postSetupPanelState();
-                    await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    return { success: true };
-                }
-                case 'saveClickUpAutomation': {
-                    const result = await this._taskViewerProvider.handleSaveClickUpAutomation(
-                        Array.isArray(message.automationRules) ? message.automationRules : []
-                    );
-                    this.postMessage({ type: 'clickupAutomationSaved', ...result });
-                    await this._taskViewerProvider.postSetupPanelState();
-                    await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    return { success: true };
-                }
-                case 'applyLinearConfig': {
-                    try {
-                        const result = await this._taskViewerProvider.handleApplyLinearConfig(
-                            message.token,
-                            message.options ?? {}
-                        );
-                        this.postMessage({ type: 'linearApplyResult', ...result });
-                        await this._taskViewerProvider.postSetupPanelState();
-                        await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    } catch (error) {
-                        const errorMessage = error instanceof Error ? error.message : String(error);
-                        this.postMessage({
-                            type: 'linearApplyResult',
-                            success: false,
-                            error: errorMessage
-                        });
-                    }
-                    return { success: true };
-                }
-                case 'saveLinearAutomation': {
-                    const result = await this._taskViewerProvider.handleSaveLinearAutomation(
-                        Array.isArray(message.automationRules) ? message.automationRules : []
-                    );
-                    this.postMessage({ type: 'linearAutomationSaved', ...result });
-                    await this._taskViewerProvider.postSetupPanelState();
-                    await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    return { success: true };
-                }
-                case 'linearBrowseProjects': {
-                    const result = await this._taskViewerProvider.handleLinearBrowseProjects();
-                    if (!result.success) {
-                        this.postMessage({
-                            type: 'linearBrowseProjectsResult',
-                            success: false,
-                            error: result.error
-                        });
-                        return { success: true };
-                    }
-                    try {
-                        const projectOptions = result.projects.map((p: { id: string; name: string }) => ({
-                            label: p.name,
-                            picked: false
-                        }));
-                        const selected = await this._seams().ui.showQuickPick(
-                            projectOptions,
-                            {
-                                placeHolder: 'Select projects',
-                                canPickMany: true
-                            }
-                        ) as Array<{ label: string }> | undefined;
-                        if (selected) {
-                            const selectedNames = selected.map((s) => s.label);
-                            this.postMessage({
-                                type: 'linearBrowseProjectsResult',
-                                success: true,
-                                target: message.target,
-                                projects: selectedNames
-                            });
-                        }
-                    } catch (error) {
-                        this.postMessage({
-                            type: 'linearBrowseProjectsResult',
-                            success: false,
-                            error: error instanceof Error ? error.message : String(error)
-                        });
-                    }
-                    return { success: true };
-                }
-                case 'enableTriagePipeline': {
-                    const provider = message.provider === 'linear' ? 'linear' : 'clickup';
-                    const result = await this._taskViewerProvider.handleEnableTriagePipeline(
-                        provider,
-                        typeof message.token === 'string' ? message.token : ''
-                    );
-                    this.postMessage({ type: 'triagePipelineResult', provider, ...result });
-                    await this._taskViewerProvider.postSetupPanelState();
-                    await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    return { success: true };
-                }
                 case 'applyNotionConfig': {
                     const result = await this._taskViewerProvider.handleApplyNotionConfig(
                         message.token
@@ -671,6 +581,10 @@ export class SetupPanelProvider implements vscode.Disposable {
                     return { success: true };
                 case 'openKanban':
                     await this._seams().commands.executeCommand('switchboard.openKanban');
+                    return { success: true };
+                // Plan 4: cross-panel link from Setup's Notion tab to the Tickets panel
+                case 'openTicketsPanel':
+                    await this._seams().commands.executeCommand('switchboard.openTicketsPanel');
                     return { success: true };
                 case 'saveStartupCommands':
                     if (this._setupService) {
@@ -1296,64 +1210,6 @@ export class SetupPanelProvider implements vscode.Disposable {
                             existingDbDetected
                         });
                     }
-                    return { success: true };
-                }
-                case 'browseIntegrationTicketSaveLocation':
-                case 'browseTicketsFolder': {
-                    const provider = message.provider;
-                    const folderUri = await this._seams().ui.showOpenDialog({
-                        canSelectFolders: true,
-                        canSelectFiles: false,
-                        canSelectMany: false,
-                        openLabel: 'Select Tickets Folder'
-                    });
-                    if (folderUri?.[0]) {
-                        this.postMessage({
-                            type: 'integrationTicketSaveLocationBrowsed',
-                            provider,
-                            path: folderUri[0]
-                        });
-                    }
-                    return { success: true };
-                }
-                case 'saveIntegrationTicketSaveLocation':
-                case 'saveTicketsFolder': {
-                    const provider = message.provider;
-                    const folderPath = String(message.folderPath || '').trim();
-                    if (provider === 'clickup' || provider === 'linear') {
-                        const config = await GlobalIntegrationConfigService.loadConfig(provider) || {};
-                        config.ticketSaveLocation = folderPath;
-                        await GlobalIntegrationConfigService.saveConfig(provider, config);
-                        this.postMessage({
-                            type: 'integrationTicketSaveLocations',
-                            provider,
-                            path: folderPath,
-                            ticketsAutoSync: await GlobalIntegrationConfigService.getTicketsAutoSync()
-                        });
-                    }
-                    return { success: true };
-                }
-                case 'saveTicketsAutoSync': {
-                    await GlobalIntegrationConfigService.setTicketsAutoSync(message.enabled === true);
-                    return { success: true };
-                }
-                case 'getIntegrationTicketSaveLocations':
-                case 'listTicketsFolders': {
-                    const clickupConfig = await GlobalIntegrationConfigService.loadConfig('clickup');
-                    const linearConfig = await GlobalIntegrationConfigService.loadConfig('linear');
-                    const ticketsAutoSync = await GlobalIntegrationConfigService.getTicketsAutoSync();
-                    this.postMessage({
-                        type: 'integrationTicketSaveLocations',
-                        provider: 'clickup',
-                        path: clickupConfig?.ticketSaveLocation || '',
-                        ticketsAutoSync
-                    });
-                    this.postMessage({
-                        type: 'integrationTicketSaveLocations',
-                        provider: 'linear',
-                        path: linearConfig?.ticketSaveLocation || '',
-                        ticketsAutoSync
-                    });
                     return { success: true };
                 }
                 // ── Remote Control (§10) — delegated to KanbanProvider ─────────

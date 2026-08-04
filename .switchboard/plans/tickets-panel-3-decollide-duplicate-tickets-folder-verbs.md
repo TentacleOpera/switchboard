@@ -213,3 +213,7 @@ Settled this pass by direct inspection — do not re-open, and do not send to re
 
 De-collided Setup ticket-folder verbs (`saveIntegrationTicketSaveLocation`, `browseIntegrationTicketSaveLocation`, `getIntegrationTicketSaveLocations`) and response types (`integrationTicketSaveLocations`, `integrationTicketSaveLocationBrowsed`) in `SetupPanelProvider.ts` and `setup.html`. Preserved backwards-compatible fall-through aliases for Setup verbs. Removed ambiguous provider-less save branch at `setup.html:4645`. Regenerated protocol catalog and verb allowlist. No issues encountered.
 
+## Review Findings
+
+**Clean — no defects found, no fixes applied.** All three Setup verbs are renamed, both shared response types are split (`integrationTicketSaveLocations` and `integrationTicketSaveLocationBrowsed`), the deprecated aliases are fall-through `case` labels on the Setup rail only and appear in no other verb set, and the provider-less `saveTicketsFolder` fallback at `setup.html:4645` is removed as specified. Planning's five `ticketsFoldersListed` emission sites and its `browseTicketsFolderResult` sites are untouched, so `planning.js:6026` still receives its messages — the rename did not over-reach. Validation: `catalog:check`, `parity:check`, `verb-returns:check`, `compile-tests`, and `test:contract:verb-engine` / `verb-engine-planning` / `verb-engine-kanban` (26/41/19 passed, 0 failed) all green. Remaining risk: none from this plan; note the aliases are still due for removal on the release schedule recorded here.
+

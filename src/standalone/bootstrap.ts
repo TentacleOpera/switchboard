@@ -37,8 +37,10 @@ import { ClickUpSyncService } from '../services/ClickUpSyncService';
 import { LinearSyncService } from '../services/LinearSyncService';
 import { NotionFetchService } from '../services/NotionFetchService';
 import { NotionBrowseService } from '../services/NotionBrowseService';
+import { switchboardCommandRegistry } from '../services/commandRegistry';
 import { DesignPanelProvider } from '../services/DesignPanelProvider';
 import { SetupPanelProvider } from '../services/SetupPanelProvider';
+import { TicketsPanelProvider } from '../services/TicketsPanelProvider';
 import { TaskViewerProvider } from '../services/TaskViewerProvider';
 import { KanbanProvider } from '../services/KanbanProvider';
 import { PlanningPanelProvider } from '../services/PlanningPanelProvider';
@@ -295,8 +297,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     });
     const ingestionEngine = new PlanIngestionEngine(getClickUpService, getLinearService, ingestionHost, getNotionService);
 
-    // In-memory UI settings (persisted to DB in saveSetting)
-    const uiSettings = new Map<string, any>();
+    // Active project filter
     let projectFilter: string | null = null;
 
     let server: LocalApiServer;
@@ -591,6 +592,16 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     (setupProvider as any)._hostSeams = headlessSeams;
     (setupProvider as any)._broadcaster = headlessBroadcaster;
 
+    // Tickets: extensionUri, context, stateStore. The ticket verb surface still lives in
+    // PlanningPanelProvider, so this currently serves the panel's own chrome verbs only.
+    const ticketsProvider = new TicketsPanelProvider(
+        { fsPath: repoRoot } as any,
+        headlessContext,
+        panelStateStore
+    );
+    (ticketsProvider as any)._hostSeams = headlessSeams;
+    (ticketsProvider as any)._broadcaster = headlessBroadcaster;
+
     // TaskViewer: extensionUri, context, needsSetup=false. The message listener
     // is registered headlessly via initHeadlessVerbServing (extracted from
     // resolveWebviewView) so verb dispatch has a target without the sidebar.
@@ -603,16 +614,23 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // land on vscodeShim's no-op Event stubs here, exactly as they did when this
     // ran inside the constructor — but the config read is real and standalone
     // depends on it (aggressivePairProgramming feeds dispatched prompts).
+    taskViewerProvider.suppressLocalApiServer = true;
     taskViewerProvider.activateHostIntegrations();
     taskViewerProvider.initHeadlessVerbServing(headlessSeams, headlessBroadcaster);
     // Setup arms delegate startup-command / integration-state reads to the
     // TaskViewer provider; wire the real (headless) instance.
     setupProvider.setTaskViewerProvider(taskViewerProvider);
+    // Same for Tickets: the ClickUp/Linear config arms relocated from Setup in
+    // plan 4 delegate to TaskViewer via a non-null-asserted `_taskViewerProvider`,
+    // so without this the standalone host throws on applyClickUpConfig,
+    // applyLinearConfig, saveClickUpAutomation, saveClickUpMappings,
+    // saveLinearAutomation, enableTriagePipeline, linearBrowseProjects and
+    // getIntegrationSetupStates. The editor host wires it at extension.ts:1275.
+    ticketsProvider.setTaskViewerProvider(taskViewerProvider);
 
     // Kanban: constructed the same way as Design/Setup/TaskViewer/Planning — shim context,
     // seams and broadcaster injected post-construction to pre-empt _initKanbanService's
-    // empty-root bail. Only the three feature verbs are routed to it (see kanbanVerb below);
-    // the existing hand-rolled arms are unchanged.
+    // empty-root bail.
     const kanbanProvider = new KanbanProvider(
         { fsPath: repoRoot } as any,
         headlessContext,
@@ -629,6 +647,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         (ws, fid) => kanbanProvider.regenerateFeatureFile(ws, fid)
     );
     taskViewerProvider.setKanbanProvider(kanbanProvider);
+    kanbanProvider.setTaskViewerProvider(taskViewerProvider);
 
     // Planning: extensionUri, researchImportService, plannerPromptWriter,
     // getWorkspaceRoot, adapterFactories, context, stateStore. Memo verbs
@@ -666,6 +685,34 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     (planningProvider as any)._broadcaster = headlessBroadcaster;
     planningProvider.setTaskViewerProvider(taskViewerProvider);
 
+    // Register standalone command handlers into switchboardCommandRegistry
+    switchboardCommandRegistry.register('switchboard.refreshUI', async () => {
+        await pushFullState();
+    });
+    switchboardCommandRegistry.register('switchboard.focusTerminalByName', async (terminalName: string, _options?: { silent?: boolean }) => {
+        // The standalone host has no VS Code toast to suppress; `options` is accepted
+        // for signature parity with the extension host handler and ignored here.
+        if (server) {
+            server.broadcastWs('focusTerminal', { friendlyName: terminalName }, SURFACES.terminals);
+        }
+        return true;
+    });
+    switchboardCommandRegistry.register('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, targetRoot?: string) => {
+        if (!ptyReady) {
+            return { success: false, error: 'PTY terminals are unavailable: node-pty module could not be loaded on this machine.' };
+        }
+        return await handlePtyVerb('triggerAction', { role, sessionId, instruction }, targetRoot || workspaceRoot);
+    });
+    switchboardCommandRegistry.register('switchboard.triggerBatchAgentFromKanban', async (role: string, sessionIds: string[], instruction?: string, targetRoot?: string, terminalName?: string) => {
+        if (!ptyReady) {
+            return { success: false, error: 'PTY terminals are unavailable: node-pty module could not be loaded on this machine.' };
+        }
+        return await handlePtyVerb('triggerAction', { role, sessionIds, instruction, terminalName }, targetRoot || workspaceRoot);
+    });
+    switchboardCommandRegistry.register('revealFileInOS', async () => undefined);
+    switchboardCommandRegistry.register('revealInExplorer', async () => undefined);
+    switchboardCommandRegistry.register('vscode.open', async () => undefined);
+
     const moveSessionsToColumn = async (sessionIds: string[], sourceColumn: string, targetColumn: string) => {
         for (const sid of sessionIds) {
             const plan = await db.getPlanBySessionId(sid);
@@ -699,23 +746,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                     return { success: true };
                 }
 
-                case 'getSetting': {
-                    const key = payload.key;
-                    let value: any = uiSettings.get(key);
-                    if (value === undefined) {
-                        if (key === 'selectedRole') { value = undefined; }
-                        else if (key.startsWith('roleConfig_')) { value = undefined; }
-                    }
-                    server.broadcastWs('settingResult', { key, value }, SURFACES.common);
-                    return { success: true, key, value };
-                }
 
-                case 'saveSetting': {
-                    const { key, value } = payload;
-                    uiSettings.set(key, value);
-                    if (key === 'selectedRole') { await hostState.update('selectedRole', value); }
-                    return { success: true };
-                }
 
                 case 'addProject': {
                     const workspaceId = await getWorkspaceId();
@@ -980,8 +1011,24 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     return await handlePtyVerb(verb, payload, root);
                 }
 
-                default:
-                    return { success: false, error: `Verb '${verb}' not implemented in standalone mode` };
+                default: {
+                    try {
+                        const result = await kanbanProvider.handleServiceVerb(verb, {
+                            initiatorProject: projectFilter,
+                            ...payload,
+                            workspaceRoot: root,
+                        });
+                        const isReadOnly = ['get', 'fetch', 'load', 'check', 'select', 'is', 'has', 'file'].some(p => verb.startsWith(p));
+                        if (!isReadOnly) { await pushFullState(); }
+                        return result;
+                    } catch (err) {
+                        const msg = err instanceof Error ? err.message : String(err);
+                        if (msg.startsWith('Unknown Kanban verb')) {
+                            return { success: false, error: `Verb '${verb}' not implemented in standalone mode` };
+                        }
+                        return { success: false, error: msg };
+                    }
+                }
             }
         } catch (err) {
             console.error(`[bootstrap] kanbanVerb '${verb}' failed:`, err);
@@ -1338,6 +1385,8 @@ Each plan file must include:
         getPlanningAssetRoots: (wsRoot: string) => planningProvider.getPlanningAssetRoots(wsRoot),
         setupVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
             setupProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),
+        ticketsVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
+            ticketsProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),
         allowSecretWritesOverHttp: true,
         taskViewerVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
             taskViewerProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),

@@ -2721,20 +2721,7 @@
             max-height: none;
         }
 
-        .agent-api-list li {
-            display: flex;
-            align-items: flex-start;
-            justify-content: space-between;
-            gap: 12px;
-            padding: 10px 12px;
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            background: var(--panel-bg2, var(--card-bg, #1a1a2e));
-        }
-        .agent-api-list .agent-api-text { flex: 1; min-width: 0; }
-        .agent-api-list .agent-api-name { font-size: 12px; font-weight: 600; color: var(--text-primary); }
-        .agent-api-list .agent-api-desc { font-size: 11px; color: var(--text-secondary); line-height: 1.4; margin-top: 2px; }
-        .agent-api-list .agent-api-copy { white-space: nowrap; flex: 0 0 auto; }
+        /* ── 2f: agent-api-list styles moved to tickets.html. ── */
 
 
         /* Tickets Tab Styles */
@@ -3313,37 +3300,7 @@
             box-shadow: 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
         }
 
-        /* Hierarchy nav styles */
-        .tickets-hierarchy-nav {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-
-        .tickets-hierarchy-nav select {
-            padding: 4px 8px;
-            background: var(--panel-bg2);
-            color: var(--text-primary);
-            border: 1px solid var(--border-color);
-            border-radius: 2px;
-            font-size: 10px;
-        }
-
-        .tickets-hierarchy-nav button {
-            padding: 4px 8px;
-            background: transparent;
-            color: var(--accent-teal);
-            border: 1px solid var(--accent-teal-dim);
-            border-radius: 2px;
-            cursor: pointer;
-            font-size: 9px;
-        }
-
-        .tickets-hierarchy-nav button:hover {
-            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
-            border-color: var(--accent-teal);
-        }
+        /* ── 2b: .tickets-hierarchy-nav CSS moved to tickets.html ── */
 
         /* Complexity dot — coloured circle indicator */
         .complexity-dot {
@@ -3964,8 +3921,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             </div>
         </div>
 
-        </div>
-        </div>
     </div>
     <div class="comment-popup" id="kanban-comment-popup">
         <div class="popup-label">Comment on selection</div>
@@ -4075,46 +4030,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             </div>
         </div>
     </div>
-    <div class="folder-modal" id="create-ticket-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="create-ticket-modal-title">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3 id="create-ticket-modal-title">Create New Ticket</h3>
-                <button class="modal-close-btn" id="btn-close-create-ticket-modal" aria-label="Close">&times;</button>
-            </div>
-            <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label for="create-ticket-title" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Title *</label>
-                    <input type="text" id="create-ticket-title" class="planning-input" placeholder="Enter ticket title" required style="width: 100%; box-sizing: border-box;" />
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label for="create-ticket-description" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Description</label>
-                    <textarea id="create-ticket-description" class="planning-input" placeholder="Enter ticket description (optional)" style="width: 100%; height: 100px; resize: vertical; box-sizing: border-box; font-family: inherit;"></textarea>
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label for="create-ticket-status" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Status</label>
-                    <select id="create-ticket-status" class="planning-input" style="width: 100%; box-sizing: border-box;">
-                        <option value="">Default</option>
-                    </select>
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label for="create-ticket-priority" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Priority</label>
-                    <select id="create-ticket-priority" class="planning-input" style="width: 100%; box-sizing: border-box;">
-                        <option value="">Default</option>
-                    </select>
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Assignees</label>
-                    <div id="create-ticket-assignees" style="border: 1px solid var(--vscode-input-border, transparent); border-radius: 2px; padding: 6px; max-height: 140px; overflow-y: auto;">
-                        <div style="font-size: 12px; color: var(--text-secondary);">Loading members…</div>
-                    </div>
-                </div>
-                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
-                    <button id="btn-cancel-create-ticket" class="strip-btn">Cancel</button>
-                    <button id="btn-submit-create-ticket" class="planning-button" style="margin: 0; padding: 4px 12px;">Create</button>
-                </div>
-            </div>
-        </div>
-    </div>
+    <!-- ── 2f: create-ticket modal, status modal and priority popover moved to
+         tickets.html. They are panel-level markup that sat outside #tickets-content,
+         so the original tab-body lift left them behind; tickets.js is their only
+         consumer (15 / 5 / 2 references respectively). ── -->
     <div class="folder-modal" id="new-doc-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="new-doc-modal-title">
         <div class="modal-content">
             <div class="modal-header">
@@ -4144,162 +4063,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             </div>
         </div>
     </div>
-    <div class="folder-modal" id="convert-subtask-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="convert-subtask-modal-title">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3 id="convert-subtask-modal-title">Convert to Subtask</h3>
-                <button class="modal-close-btn" id="btn-close-convert-subtask-modal" aria-label="Close">&times;</button>
-            </div>
-            <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
-                <div id="convert-subtask-info" style="font-size: 12px; color: var(--text-secondary);"></div>
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label for="convert-subtask-search" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Search Parent Ticket</label>
-                    <input type="text" id="convert-subtask-search" class="planning-input" placeholder="Type to search..." style="width: 100%; box-sizing: border-box;" />
-                </div>
-                <div id="convert-subtask-list" style="max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--border-color); padding: 8px; border-radius: 4px;"></div>
-                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
-                    <button id="btn-cancel-convert-subtask" class="strip-btn">Cancel</button>
-                    <button id="btn-confirm-convert-subtask" class="planning-button" style="margin: 0; padding: 4px 12px;" disabled>Convert</button>
-                </div>
-            </div>
-        </div>
-    </div>
-    <div class="folder-modal" id="attachments-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="attachments-modal-title">
-        <div class="modal-content" style="max-width: 600px;">
-            <div class="modal-header">
-                <h3 id="attachments-modal-title">Attachments</h3>
-                <button class="modal-close-btn" id="btn-close-attachments-modal" aria-label="Close">&times;</button>
-            </div>
-            <div class="modal-body" style="margin-top: 10px;">
-                <div id="attachments-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 400px; overflow-y: auto; text-align: left;"></div>
-            </div>
-        </div>
-    </div>
-    <div class="folder-modal" id="tags-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="tags-modal-title">
-        <div class="modal-content" style="max-width: 500px;">
-            <div class="modal-header">
-                <h3 id="tags-modal-title">Edit Tags</h3>
-                <button class="modal-close-btn" id="btn-close-tags-modal" aria-label="Close">&times;</button>
-            </div>
-            <div class="modal-body" style="margin-top: 10px;">
-                <div style="display: flex; flex-direction: column; gap: 12px;">
-                    <div>
-                        <label style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); display: block; margin-bottom: 8px;">Available Tags</label>
-                        <div id="tags-available-list" style="display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto;"></div>
-                    </div>
-                    <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px;">
-                        <button id="btn-cancel-tags" class="strip-btn">Cancel</button>
-                        <button id="btn-save-tags" class="planning-button" style="margin: 0; padding: 4px 12px;">Save</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <div class="folder-modal" id="assign-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="assign-modal-title">
-        <div class="modal-content" style="max-width: 500px;">
-            <div class="modal-header">
-                <h3 id="assign-modal-title">Assign Members</h3>
-                <button class="modal-close-btn" id="btn-close-assign-modal" aria-label="Close">&times;</button>
-            </div>
-            <div class="modal-body" style="margin-top: 10px;">
-                <div style="display: flex; flex-direction: column; gap: 12px;">
-                    <input id="assign-search" type="text" placeholder="Search members..." style="width: 100%; margin-bottom: 8px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-primary); font-size: 12px; padding: 4px 8px; box-sizing: border-box; border-radius: 3px;">
-                    <div>
-                        <div id="assign-available-list" style="display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto;"></div>
-                    </div>
-                    <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px;">
-                        <button id="btn-cancel-assign" class="strip-btn">Cancel</button>
-                        <button id="btn-save-assign" class="planning-button" style="margin: 0; padding: 4px 12px;">Save</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <div class="folder-modal" id="ticket-status-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="ticket-status-modal-title">
-        <div class="modal-content" style="max-width: 420px;">
-            <div class="modal-header">
-                <h3 id="ticket-status-modal-title">Change Status</h3>
-                <button class="modal-close-btn" id="btn-close-ticket-status-modal" aria-label="Close">&times;</button>
-            </div>
-            <div class="modal-body" style="margin-top: 10px;">
-                <div style="display: flex; flex-direction: column; gap: 12px;">
-                    <select id="ticket-status-select" class="kanban-meta-dropdown" style="width: 100%; background: var(--panel-bg2, #1a1a2e); border: 1px solid var(--border-color); color: var(--text-primary); font-size: 12px; padding: 4px 8px; box-sizing: border-box; border-radius: 3px;"></select>
-                    <div id="ticket-status-modal-loading" style="display:none; font-size:12px; color: var(--text-secondary);">Loading statuses…</div>
-                    <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px;">
-                        <button id="btn-cancel-ticket-status" class="strip-btn">Cancel</button>
-                        <button id="btn-save-ticket-status" class="planning-button" style="margin: 0; padding: 4px 12px;">Save</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <div id="ticket-priority-popover" style="display: none; position: absolute; z-index: 1000; background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); padding: 4px 0; min-width: 120px;"></div>
-    <div class="folder-modal" id="tickets-source-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="tickets-source-modal-title">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3 id="tickets-source-modal-title">Source</h3>
-                <button class="modal-close-btn" id="btn-close-tickets-source-modal" aria-label="Close">&times;</button>
-            </div>
-            <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
-                <!-- Provider selector — preserve class="workspace-filter-select" and style -->
-                <div>
-                    <label style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); display: block; margin-bottom: 4px;">Provider</label>
-                    <select id="tickets-provider-selector" class="workspace-filter-select" style="display:none; margin-left: 0;">
-                        <option value="clickup">ClickUp</option>
-                        <option value="linear">Linear</option>
-                    </select>
-                </div>
-                <!-- Hierarchy nav — preserve style="display:none; flex-wrap: wrap; gap: 8px; align-items: center;" -->
-                <div>
-                    <label style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); display: block; margin-bottom: 4px;">Hierarchy</label>
-                    <div id="tickets-hierarchy-nav" style="display:none; flex-wrap: wrap; gap: 8px; align-items: center;"></div>
-                </div>
-                <!-- Move-mode controls — shown only when the Source modal opens in move mode.
-                     The hierarchy nav is ClickUp-only and mutates the active source, so in
-                     move mode we hide it and present a themed target <select> populated via
-                     fetchMoveTargets (which works for both ClickUp and Linear). -->
-                <div id="tickets-source-move-controls" style="display:none; flex-direction: column; gap: 8px;">
-                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
-                        <input type="text" id="tickets-source-move-search" placeholder="Search target..." style="flex: 1; padding: 4px 8px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-primary); font-size: 12px; box-sizing: border-box; border-radius: 3px;">
-                        <button type="button" id="tickets-source-move-refresh" class="strip-btn" title="Refresh list" style="padding: 4px 8px;"><span class="sb-icon sb-icon-sm sb-icon-refresh" aria-hidden="true"></span></button>
-                    </div>
-                    <select id="tickets-source-move-target-select" size="10" style="width: 100%; padding: 4px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 3px; font-size: 12px; height: 180px; box-sizing: border-box;">
-                        <option value="" disabled selected>Loading targets...</option>
-                    </select>
-                    <div id="tickets-source-move-linear-unassign-wrap" style="display:none; font-size: 12px; color: var(--text-secondary);">
-                        <label style="display:flex; align-items:center; gap:4px;">
-                            <input type="checkbox" id="tickets-source-move-unassign"> Unassign from project
-                        </label>
-                    </div>
-                </div>
-                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
-                    <button id="btn-close-tickets-source-modal-action" class="strip-btn">Close</button>
-                    <button id="btn-apply-move-ticket" class="planning-button" style="display:none; margin: 0; padding: 4px 12px;" disabled>Move</button>
-                </div>
-            </div>
-        </div>
-    </div>
-    <div class="folder-modal" id="tickets-agent-api-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="tickets-agent-api-modal-title">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3 id="tickets-agent-api-modal-title">Agent API</h3>
-                <button class="modal-close-btn" id="btn-close-tickets-agent-api-modal" aria-label="Close">&times;</button>
-            </div>
-            <div class="modal-body">
-                <p style="margin: 0 0 14px 0; font-size: 12px; color: var(--text-secondary); line-height: 1.5;">
-                    Switchboard runs a local HTTP bridge so your coding agent can read and change tickets
-                    <strong>without the MCP server</strong>. Agents discover it via
-                    <code>.switchboard/api-server-port.txt</code> and call it with the matching skill.
-                    Pick a capability below and copy a ready-to-paste instruction for your agent.
-                </p>
-                <div id="tickets-agent-api-provider-label" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); margin-bottom: 10px;"></div>
-                <ul id="tickets-agent-api-list" class="agent-api-list" style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px;"></ul>
-                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;">
-                    <button id="btn-close-tickets-agent-api-modal-action" class="strip-btn">Close</button>
-                </div>
-            </div>
-        </div>
-    </div>
+    <!-- ── 2e: #attachments-modal moved to tickets.html. ── -->
+    <!-- ── 2f: Source modal + Agent API modal moved to tickets.html. ── -->
     <div class="folder-modal" id="prd-collision-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="prd-collision-modal-title">
         <div class="modal-content">
             <div class="modal-header">

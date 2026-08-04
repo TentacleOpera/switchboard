@@ -33,6 +33,7 @@ import { WorkspaceExcludeService } from './services/WorkspaceExcludeService';
 import { cleanWorkspace, pruneZombieTerminalEntries } from './lifecycle/cleanWorkspace';
 import { PlanningPanelProvider } from './services/PlanningPanelProvider';
 import { DesignPanelProvider, invalidateStitchSdkCache } from './services/DesignPanelProvider';
+import { TicketsPanelProvider } from './services/TicketsPanelProvider';
 import { PanelStateStore } from './services/PanelStateStore';
 import { PlannerPromptWriter } from './services/PlannerPromptWriter';
 import { PlanningPanelCacheService } from './services/PlanningPanelCacheService';
@@ -1256,8 +1257,26 @@ export async function activate(context: vscode.ExtensionContext) {
     );
     context.subscriptions.push(designPanelProvider);
 
+    const ticketsStateStore = new PanelStateStore(context.globalState, 'tickets');
+    const ticketsPanelProvider = new TicketsPanelProvider(
+        context.extensionUri,
+        context,
+        ticketsStateStore,
+        undefined,
+        {
+            getLinearSyncService: (root) => (kanbanProvider as any)._getLinearService(root),
+            getClickUpSyncService: (root) => (kanbanProvider as any)._getClickUpService(root),
+            getCacheService
+        }
+    );
+    context.subscriptions.push(ticketsPanelProvider);
+    // Plan 4: ClickUp/Linear config verbs moved into the Tickets panel delegate
+    // to the same TaskViewerProvider methods Setup used.
+    ticketsPanelProvider.setTaskViewerProvider(taskViewerProvider);
+
     taskViewerProvider.setDesignPanelProvider(designPanelProvider);
     taskViewerProvider.setPlanningPanelProvider(planningPanelProvider);
+    taskViewerProvider.setTicketsPanelProvider(ticketsPanelProvider);
 
     // Migration: Remove dead Stitch OAuth auth mode (shipped in prior releases).
     // Reset any stale 'oauth' authMode to 'apiKey' and delete the dead accessToken secret.
@@ -1287,6 +1306,12 @@ export async function activate(context: vscode.ExtensionContext) {
         async () => { await designPanelProvider.open(); }
     );
     context.subscriptions.push(openDesignPanelDisposable);
+
+    const openTicketsPanelDisposable = registerSwitchboardCommand(
+        'switchboard.openTicketsPanel',
+        async () => { ticketsPanelProvider.show(); }
+    );
+    context.subscriptions.push(openTicketsPanelDisposable);
 
     const openSetupPanelDisposable = registerSwitchboardCommand('switchboard.openSetupPanel', async (section?: string) => {
         await setupPanelProvider.open(typeof section === 'string' ? section : undefined);
@@ -2848,7 +2873,14 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(focusTerminalDisposable);
 
     // Register focus terminal by name command (reliable — uses in-memory terminal map)
-    const focusTerminalByNameDisposable = registerSwitchboardCommand('switchboard.focusTerminalByName', async (terminalName: string) => {
+    // The optional `options.silent` flag suppresses the miss toast. It exists for the
+    // pre-dispatch focus calls on the dispatch path: a focus miss there is never the
+    // user's only signal (the delivery path reports its own failure), and next to a
+    // dispatch that in fact succeeded it reads as a second, failed send. Explicit
+    // focus surfaces (the terminal grid, the `focusTerminal` verb, `focusAllTerminals`)
+    // pass no options and keep the warning — there "not found" IS the answer.
+    // Returns true on a successful reveal, false on a miss, so callers can react.
+    const focusTerminalByNameDisposable = registerSwitchboardCommand('switchboard.focusTerminalByName', async (terminalName: string, options?: { silent?: boolean }) => {
         const normalizeName = (value: string | undefined): string =>
             (value || '').toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
         const target = normalizeName(terminalName);
@@ -2857,7 +2889,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const registered = registeredTerminals.get(terminalName);
         if (registered && registered.exitStatus === undefined) {
             registered.show();
-            return;
+            return true;
         }
 
         // 1a. Try suffixed name (keys are stored suffixed)
@@ -2866,7 +2898,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const bySuffix = registeredTerminals.get(suffixed);
             if (bySuffix && bySuffix.exitStatus === undefined) {
                 bySuffix.show();
-                return;
+                return true;
             }
         }
 
@@ -2875,7 +2907,7 @@ export async function activate(context: vscode.ExtensionContext) {
             if (terminal.exitStatus !== undefined) continue;
             if (normalizeName(stripIdeSuffix(name)) !== target) continue;
             terminal.show();
-            return;
+            return true;
         }
 
         // 2. Fallback: scan VS Code terminals by name or original creation name
@@ -2886,12 +2918,14 @@ export async function activate(context: vscode.ExtensionContext) {
         );
         if (match) {
             match.show();
-            return;
+            return true;
         }
 
         // 3. creationOptions.name already checked above — warn if still not found
-
-        vscode.window.showWarningMessage(`Terminal '${terminalName}' not found. It may have been closed.`);
+        if (!options?.silent) {
+            vscode.window.showWarningMessage(`Terminal '${terminalName}' not found. It may have been closed.`);
+        }
+        return false;
     });
     context.subscriptions.push(focusTerminalByNameDisposable);
 
@@ -3450,6 +3484,11 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.window.registerWebviewPanelSerializer('switchboard-design', {
             deserializeWebviewPanel: async (panel, state) => {
                 await designPanelProvider.deserializeWebviewPanel(panel, state);
+            }
+        });
+        vscode.window.registerWebviewPanelSerializer(TicketsPanelProvider.viewType, {
+            deserializeWebviewPanel: async (panel, state) => {
+                await ticketsPanelProvider.revive(panel, state);
             }
         });
     }

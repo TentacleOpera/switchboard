@@ -795,6 +795,7 @@
     "test:contract:verb-engine": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/verb-engine-headless-seams.test.js",
     "test:contract:verb-engine-kanban": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/verb-engine-kanban-headless.test.js",
     "test:contract:verb-engine-planning": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/verb-engine-planning-headless.test.js",
+    "test:contract:verb-engine-tickets": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/verb-engine-tickets-headless.test.js",
     "test:contract:design-asset": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/design-asset-route-traversal.test.js",
     "test:contract:design-reply-addressing": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/design-reply-addressing-regression.test.js",
     "test:contract:design-system": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/design-system-contract.test.js",
@@ -842,9 +843,15 @@
     "publish:marketplace": "bash scripts/publish-marketplace.sh",
     "test:contract:vsix-packaging": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/vsix-packaging-contract.test.js",
     "test:contract:pty-route-surface": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-route-surface-contract.test.js",
+    "test:contract:pty-dispatch-focus": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-dispatch-focus-contract.test.js",
     "test:contract:terminal-token-transport": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-token-transport-contract.test.js",
     "test:contract:terminal-solo-popout": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-solo-popout-contract.test.js",
-    "test:contract:shell-terminal-strip": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/shell-terminal-strip.test.js"
+    "test:contract:terminal-answerback": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-answerback-replay-contract.test.js",
+    "test:contract:terminal-pane-fit": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-pane-fit-verification-contract.test.js",
+    "test:contract:terminal-pane-grid-reconcile": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-pane-grid-reconcile-contract.test.js",
+    "test:contract:terminal-focus-affordance": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-focus-affordance-contract.test.js",
+    "test:contract:shell-terminal-strip": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/shell-terminal-strip.test.js",
+    "test:contract:terminal-pane-pinning": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-pane-pinning-contract.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",

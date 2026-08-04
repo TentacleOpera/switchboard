@@ -21,6 +21,10 @@ export interface HostCapabilities {
     mcpTerminals?: boolean;
     secretsEntry?: boolean;
     featureManagement?: boolean;
+    worktrees?: boolean;
+    uat?: boolean;
+    boardStructure?: boolean;
+    featureAdvanced?: boolean;
     integrationsConfigured?: { clickup?: boolean; linear?: boolean; notion?: boolean; stitch?: boolean };
 }
 
@@ -32,6 +36,10 @@ const DEFAULT_HOST_CAPABILITIES: HostCapabilities = {
     mcpTerminals: false,
     secretsEntry: false,
     featureManagement: false,
+    worktrees: false,
+    uat: false,
+    boardStructure: false,
+    featureAdvanced: false,
 };
 
 export function findFile(candidates: string[]): string | undefined {

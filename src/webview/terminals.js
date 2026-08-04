@@ -10,6 +10,13 @@
     let initialAssignmentDone = false;
     let focusedPaneIndex = 0;
     let paneAssignments = []; // [terminalName or null, ...] length based on currentLayout
+    // Per-SLOT pin flags, index-aligned with paneAssignments. Index-keyed, not name-keyed:
+    // that is what lets renameTerminal leave pins alone, and it matches the operator's
+    // mental model ("the left pane stays put"), which is about the seat, not the occupant.
+    // Invariant: pinnedPanes[i] is never true while paneAssignments[i] is null. A pin on an
+    // empty seat reserves a slot nothing can fill, and it is persisted, so the soft-lock
+    // survives reload. sanitizePaneAssignments enforces this on every list refresh.
+    let pinnedPanes = [];
     const collapsedGroups = new Set();
     let osNotifyEnabled = false;
 
@@ -277,6 +284,12 @@
             background: pick('--term-surface', '#171717'),
             foreground: pick('--text-primary', '#e0e0e0'),
             cursor: pick('--accent-teal', '#00e5ff'),
+            // The character UNDER a block cursor. xterm defaults this to #000000,
+            // which is not this panel's surface — the inverted glyph read as a hole
+            // punched in the pane. Track the surface so the caret reads as a filled
+            // cell, not a gap. Verified present in all three renderers (DOM blink
+            // CSS, addon-canvas cursorAccent.css, addon-webgl cursorAccent.rgba).
+            cursorAccent: pick('--term-surface', '#171717'),
             selectionBackground: pick('--term-selection', 'rgba(0, 229, 255, 0.3)'),
         };
     }
@@ -512,6 +525,7 @@
         const savedPanes = await loadSetting('terminals.paneAssignments', []);
         const savedCollapsed = await loadSetting('terminals.collapsedGroups', []);
         const savedNotify = await loadSetting('terminals.osNotify', false);
+        const savedPins = await loadSetting('terminals.pinnedPanes', []);
 
         if (LAYOUT_MODES.includes(savedMode)) {
             currentLayout = savedMode;
@@ -519,6 +533,9 @@
         effectiveLayout = currentLayout;
         if (Array.isArray(savedPanes)) {
             paneAssignments = savedPanes;
+        }
+        if (Array.isArray(savedPins)) {
+            pinnedPanes = savedPins.map(Boolean);
         }
         if (Array.isArray(savedCollapsed)) {
             savedCollapsed.forEach(c => collapsedGroups.add(c));
@@ -532,6 +549,7 @@
     function saveLayoutSettings() {
         saveSetting('terminals.layoutMode', currentLayout);
         saveSetting('terminals.paneAssignments', paneAssignments);
+        saveSetting('terminals.pinnedPanes', pinnedPanes);
         saveSetting('terminals.collapsedGroups', Array.from(collapsedGroups));
     }
 
@@ -603,7 +621,7 @@
 
     /** Single-level undo of the last assignment mutation. Cleared when the terminal it
      *  would restore stops being live (see sanitizePaneAssignments). */
-    let undoSnapshot = null; // { slots: [...paneAssignments], name, displaced, paneIndex }
+    let undoSnapshot = null; // { slots: [...paneAssignments], pins: [...pinnedPanes], name, displaced, paneIndex }
     let toastTimer = null;
 
     function showPaneToast(text, onUndo) {
@@ -620,6 +638,10 @@
             toastEl.classList.remove('visible');
             if (onUndo) { onUndo(); }
         };
+        // Hide the Undo button when there is nothing to undo (e.g. the all-pinned
+        // toast). Setting display on the button, not on #pane-toast, so it does not
+        // fight `.pane-toast.visible { display: flex; }`.
+        toastUndoBtn.style.display = onUndo ? '' : 'none';
 
         toastEl.classList.add('visible');
         toastTimer = setTimeout(() => {
@@ -650,6 +672,8 @@
         if (paneAssignments.length > maxSlots) {
             paneAssignments.length = maxSlots;
         }
+        while (pinnedPanes.length < maxSlots) { pinnedPanes.push(false); }
+        if (pinnedPanes.length > maxSlots) { pinnedPanes.length = maxSlots; }
 
         // Stale-slot drop: a persisted layout may name terminals that died while the page
         // was closed. Drop those slots individually — never discard the whole layout.
@@ -660,6 +684,17 @@
                 }
                 paneAssignments[i] = null;
             }
+        }
+
+        // Pin expiry. Deliberately NOT folded into the drop loop above: closeTerminal()
+        // nulls its own slots BEFORE this refresh lands (the same reason the undo
+        // invalidation below cannot rely on the drop loop either), so a pin whose terminal
+        // was explicitly closed would never be reached by a dead-name check. Keying off the
+        // slot being empty instead of the occupant being dead covers every path — close,
+        // death-while-closed, hide, and a torn two-key persistence write where
+        // terminals.paneAssignments saved and terminals.pinnedPanes did not.
+        for (let i = 0; i < pinnedPanes.length; i++) {
+            if (pinnedPanes[i] && !paneAssignments[i]) { pinnedPanes[i] = false; }
         }
 
         // Undo invalidation. The snapshot restores a WHOLE arrangement, so it is only
@@ -718,10 +753,13 @@
         info.appendChild(roleEl);
 
         if (paneIndex !== -1) {
+            const isPinned = Boolean(pinnedPanes[paneIndex]);
             const paneChip = document.createElement('span');
-            paneChip.className = 'pane-index-chip';
-            paneChip.textContent = `P${paneIndex + 1}`;
-            paneChip.title = `Showing in pane ${paneIndex + 1}`;
+            paneChip.className = 'pane-index-chip' + (isPinned ? ' is-pinned' : '');
+            paneChip.textContent = isPinned ? `📌P${paneIndex + 1}` : `P${paneIndex + 1}`;
+            paneChip.title = isPinned
+                ? `Pinned to pane ${paneIndex + 1}`
+                : `Showing in pane ${paneIndex + 1}`;
             info.appendChild(paneChip);
         }
 
@@ -1008,7 +1046,6 @@
             listEl.appendChild(parentDiv);
         }
     }
-    }
 
     function setLayoutMode(mode) {
         if (!LAYOUT_MODES.includes(mode)) return;
@@ -1055,31 +1092,59 @@
         const existingIndex = paneAssignments.indexOf(terminalName);
         if (existingIndex === focusedPaneIndex) { return; }
 
-        let target = focusedPaneIndex;
-        if (paneAssignments[target]) {
-            let free = -1;
+        // Already on screen? Follow it. Relocating a seated terminal to satisfy a click
+        // empties one pane to fill another for zero gain — and if its seat is pinned,
+        // relocating would break the pin outright. This branch sits OUTSIDE the
+        // `paneAssignments[target]` conditional below: the old code only followed a
+        // seated terminal when every rendered pane was full, which relocated it into a
+        // free pane on the common case (one click clearing two panes for zero gain —
+        // the defect the comment there already named). Following unconditionally is a
+        // deliberate change to unpinned placement, called out in the plan's User Review.
+        if (existingIndex !== -1 && existingIndex < rendered) {
+            focusedPaneIndex = existingIndex;
+            activeTerminalName = terminalName;
+            terminalBadges.delete(terminalName);
+            renderSidebarList();
+            renderPaneGrid();
+            postFleetStateToShell();
+            return;
+        }
+
+        // Pins beat focus. This is the whole feature: the focused pane is where the caret
+        // happens to be (it moves every time the operator types into a pane), which is far
+        // too volatile to decide durable seating.
+        //
+        // ...except in a one-pane grid, where there is no other seat to protect the pinned
+        // one FROM. LAYOUTS['1'] has zero minimums and is the last rung of
+        // LAYOUT_FLOOR_ORDER, so a narrow window can drop a pinned 2h layout to a single
+        // pane involuntarily — and honouring the pin there turns every sidebar click into
+        // a dead click behind a toast. Inert, not enforced.
+        const pinsActive = rendered > 1;
+        const isOpen = (i) => i < rendered && (!pinsActive || !pinnedPanes[i]);
+
+        let target = -1;
+        if (isOpen(focusedPaneIndex)) {
+            target = focusedPaneIndex;
+        }
+        if (target === -1 || paneAssignments[target]) {
             for (let i = 0; i < rendered; i++) {
-                if (!paneAssignments[i]) { free = i; break; }
+                if (isOpen(i) && !paneAssignments[i]) { target = i; break; }
             }
-            if (free !== -1) {
-                target = free;
-            } else if (existingIndex !== -1 && existingIndex < rendered) {
-                // Every rendered pane is full AND this terminal already occupies one of
-                // them. Moving it would evict a bystander and leave the terminal's old
-                // pane empty — one click clearing two panes for zero gain, which is the
-                // defect this function exists to remove. Follow the terminal instead.
-                focusedPaneIndex = existingIndex;
-                activeTerminalName = terminalName;
-                terminalBadges.delete(terminalName);
-                renderSidebarList();
-                renderPaneGrid();
-                postFleetStateToShell();
-                return;
+        }
+        if (target === -1) {
+            for (let i = 0; i < rendered; i++) {
+                if (isOpen(i)) { target = i; break; }
             }
+        }
+        if (target === -1) {
+            // Every rendered pane is pinned. Displacing one would defeat the pin; doing
+            // nothing silently reads as a dead click. Say so.
+            showPaneToast('All panes are pinned — unpin one to switch.', null);
+            return;
         }
 
         const displaced = paneAssignments[target] || null;
-        undoSnapshot = { slots: paneAssignments.slice(), name: terminalName, displaced, paneIndex: target };
+        undoSnapshot = { slots: paneAssignments.slice(), pins: pinnedPanes.slice(), name: terminalName, displaced, paneIndex: target };
 
         if (existingIndex !== -1) {
             paneAssignments[existingIndex] = null;
@@ -1111,6 +1176,7 @@
         if (!undoSnapshot) { return; }
         hidePaneToast();
         paneAssignments = undoSnapshot.slots;
+        if (Array.isArray(undoSnapshot.pins)) { pinnedPanes = undoSnapshot.pins; }
         focusedPaneIndex = Math.min(undoSnapshot.paneIndex, getSlotCount(effectiveLayout) - 1);
         activeTerminalName = paneAssignments[focusedPaneIndex] || null;
         undoSnapshot = null;
@@ -1138,6 +1204,82 @@
         try { entry.term.focus(); } catch { /* ignore */ }
     }
 
+    /** Drop the caret ring from every pane. Paired with the onFocus handler in
+     *  materializeTerminalView — see the note there for why blur cannot target a
+     *  single pane. */
+    function clearCaretRing() {
+        paneGridEl.querySelectorAll('.terminal-pane.has-caret')
+            .forEach(el => el.classList.remove('has-caret'));
+    }
+
+    /**
+     * Resolve what an operator can actually DO with this terminal right now.
+     *
+     * Derived, never stored: a socket transition does not re-render the grid, so a
+     * cached value would go stale in exactly the situation the chip exists to
+     * report. Order matters — a dead terminal whose socket happens to be OPEN is
+     * read-only, not live.
+     *
+     * fleetList is consulted deliberately. It is what makes the header print
+     * "(exited)" a few pixels to the chip's left (see updatePaneElement), and
+     * entry.exited is only ever set by an error/exit FRAME. A terminal that died
+     * without a frame — host restart, socket cut before the exit arrived — would
+     * otherwise have a title saying "(exited)" and a chip saying "accepts input"
+     * in the same 22px header. Two sources of truth for "dead" in one header is
+     * the exact dishonesty this chip exists to remove.
+     */
+    function resolveInputState(name) {
+        const entry = terminalsMap.get(name);
+        const fleetItem = fleetList.find(t => t.friendlyName === name);
+        if (fleetItem && fleetItem.status === 'exited') {
+            return { key: 'readonly', label: 'read-only' };
+        }
+        if (!entry) { return { key: 'connecting', label: 'connecting' }; }
+        if (entry.exited || (entry.term && entry.term.options.disableStdin)) {
+            return { key: 'readonly', label: 'read-only' };
+        }
+        if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
+            return { key: 'live', label: 'accepts input' };
+        }
+        return { key: 'connecting', label: 'connecting' };
+    }
+
+    /** Repaint only the state class + chip for `name`. Cheaper than
+     *  renderPaneGrid() and, more importantly, does not re-append any xterm — a
+     *  grid rebuild during a socket transition would yank the caret out
+     *  mid-keystroke. */
+    function refreshInputState(name) {
+        const paneIndex = paneAssignments.indexOf(name);
+        if (paneIndex < 0) { return; }
+        const paneEl = paneGridEl.querySelector(`.terminal-pane[data-pane-index="${paneIndex}"]`);
+        if (!paneEl) { return; }
+        const state = resolveInputState(name);
+        paneEl.classList.remove('is-input-live', 'is-input-connecting', 'is-input-readonly');
+        paneEl.classList.add(`is-input-${state.key}`);
+        const chip = paneEl.querySelector('.pane-input-state');
+        if (!chip) { return; }
+        const terseHeader = effectiveLayout === '2x3' || effectiveLayout === '3x3';
+        chip.textContent = terseHeader ? '' : state.label;
+        chip.title = state.label;
+    }
+
+    /** Tell the operator their keystroke went nowhere.
+     *
+     *  ONE notice per disconnect episode, not one per interval: a 30-second
+     *  backoff window with a rolling timer still stacks ten identical lines into
+     *  a TUI's screen buffer, and the tenth says nothing the first did not. The
+     *  flag resets in ws.onopen, so the next outage reports again. The header chip
+     *  is the PERSISTENT signal — this line only catches the operator who is
+     *  looking at the terminal rather than the header. */
+    function notifyInputDropped(entry) {
+        refreshInputState(entry.name);
+        if (entry.inputDropNoticed) { return; }
+        entry.inputDropNoticed = true;
+        try {
+            entry.term.write('\r\n\x1b[33m[Not connected — keystroke discarded]\x1b[0m\r\n');
+        } catch { /* ignore */ }
+    }
+
     /**
      * Move pane focus WITHOUT rebuilding the grid.
      *
@@ -1159,126 +1301,58 @@
         focusPaneTerminal(index);
     }
 
+    /**
+     * Reconcile the pane grid IN PLACE.
+     *
+     * This used to open with `paneGridEl.innerHTML = ''` and rebuild every pane
+     * from scratch, which detached and re-appended every live xterm on every
+     * render — including renders that changed nothing but a badge. That churn is
+     * not cosmetic: xterm's RenderService pauses on non-intersection and PARKS the
+     * renderer resize plus the full repaint while paused (see xterm.js
+     * _handleIntersectionChange / handleResize), and it only unpauses from an
+     * IntersectionObserver batch whose last record says "intersecting". A fit that
+     * lands on the wrong side of that delivery leaves the buffer at the new size
+     * and the canvas at the old one — and FitAddon.fit() then short-circuits on
+     * matching cols/rows forever after, so the pane can never recover. Reusing the
+     * pane element means a terminal whose slot survives never moves, never
+     * unpauses, and never enters that state.
+     *
+     * Also removes the teardown that the caret save/restore below exists to paper
+     * over, and that setFocusedPane was written specifically to avoid.
+     */
     function renderPaneGrid() {
         const slotCount = getSlotCount(effectiveLayout);
-        // A rebuild reparents every live xterm, and a re-parented node does not keep
-        // focus — removing the focused element from the document drops focus to
-        // <body>. renderPaneGrid runs on every terminalsChanged broadcast, every
-        // agentCompleted badge and every per-terminal clear, so without this the
-        // caret was yanked out mid-keystroke whenever anything happened elsewhere in
-        // the fleet. Remember whether the caret was ours and hand it back at the end.
-        const hadFocus = paneGridEl.contains(document.activeElement);
         paneGridEl.className = `pane-grid layout-${effectiveLayout}`;
-        paneGridEl.innerHTML = '';
+
+        // Sampled BEFORE any mutation. Both the surplus-pane removal below and the
+        // per-pane update can drop the caret (removing or re-parenting the focused
+        // element sends focus to <body>), so a flag computed after either one would
+        // miss half the cases.
+        const hadFocus = paneGridEl.contains(document.activeElement);
 
         // A floored layout can leave the focus on a pane that is no longer rendered.
         if (focusedPaneIndex >= slotCount) { focusedPaneIndex = 0; }
 
-        for (let i = 0; i < slotCount; i++) {
-            const paneEl = document.createElement('div');
-            paneEl.className = 'terminal-pane' + (i === focusedPaneIndex ? ' focused' : '');
-            paneEl.dataset.paneIndex = i;
-
-            // mousedown, not click: it lands before xterm's own selection handling
-            // and before mouseup, so one press both selects the pane and leaves the
-            // caret in it. On `click` the focus arrived after xterm had already
-            // decided where the caret went.
-            paneEl.addEventListener('mousedown', () => setFocusedPane(i));
-
-            const headerEl = document.createElement('div');
-            headerEl.className = 'pane-header';
-
-            const titleEl = document.createElement('div');
-            titleEl.className = 'pane-title';
-
-            const assignedName = paneAssignments[i];
-            if (assignedName) {
-                const idxEl = document.createElement('span');
-                idxEl.className = 'pane-index-chip';
-                idxEl.textContent = `P${i + 1}`;
-                titleEl.appendChild(idxEl);
-
-                let displayTitle = assignedName;
-                const fleetItem = fleetList.find(t => t.friendlyName === assignedName);
-                if (fleetItem && fleetItem.status === 'exited') {
-                    displayTitle += ' (exited)';
-                } else if (!fleetItem && hasFetchedList) {
-                    displayTitle += ' (no longer listed)';
-                }
-                titleEl.appendChild(document.createTextNode(displayTitle));
-
-                if (terminalBadges.has(assignedName)) {
-                    const badgeSpan = document.createElement('span');
-                    badgeSpan.className = 'pane-badge';
-                    badgeSpan.textContent = terminalBadges.get(assignedName);
-                    titleEl.appendChild(badgeSpan);
-                }
-            } else {
-                titleEl.textContent = `Pane ${i + 1} (Empty)`;
-            }
-
-            const actionsEl = document.createElement('div');
-            actionsEl.className = 'pane-actions';
-            if (assignedName) {
-                // Same two words the extension sidebar uses. The 6- and 9-pane
-                // headers cannot fit them, so those fall back to initials.
-                const terse = effectiveLayout === '2x3' || effectiveLayout === '3x3';
-
-                const paneClearBtn = document.createElement('button');
-                paneClearBtn.className = 'btn-unassign-pane';
-                paneClearBtn.textContent = terse ? 'c' : 'clear';
-                paneClearBtn.title = 'Send /clear to this terminal';
-                paneClearBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    withClearingFeedback(paneClearBtn, () => clearTerminal(assignedName), terse ? 'c' : 'clear');
-                });
-                actionsEl.appendChild(paneClearBtn);
-
-                const unassignBtn = document.createElement('button');
-                unassignBtn.className = 'btn-unassign-pane';
-                unassignBtn.textContent = terse ? 'h' : 'hide';
-                unassignBtn.title = 'Remove from this pane (terminal keeps running)';
-                unassignBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    const targetName = paneAssignments[i];
-                    undoSnapshot = { slots: paneAssignments.slice(), name: null, displaced: targetName, paneIndex: i };
-                    showPaneToast(`Pane ${i + 1} cleared (${targetName} still running)`, undoLastAssignment);
-                    paneAssignments[i] = null;
-                    saveLayoutSettings();
-                    renderPaneGrid();
-                    renderSidebarList();
-                });
-                actionsEl.appendChild(unassignBtn);
-            }
-
-            headerEl.appendChild(titleEl);
-            headerEl.appendChild(actionsEl);
-            paneEl.appendChild(headerEl);
-
-            const contentEl = document.createElement('div');
-            contentEl.className = 'pane-content';
-
-            if (assignedName) {
-                let entry = terminalsMap.get(assignedName);
-                if (!entry) {
-                    createTerminalView(assignedName, contentEl);
-                } else {
-                    if (entry.container.parentNode !== contentEl) {
-                        contentEl.appendChild(entry.container);
-                    }
-                    entry.container.classList.add('active');
-                }
-            } else {
-                const emptySlot = document.createElement('div');
-                emptySlot.className = 'pane-empty-slot';
-                emptySlot.textContent = 'Click terminal in sidebar to assign';
-                contentEl.appendChild(emptySlot);
-            }
-
-            paneEl.appendChild(contentEl);
-            paneGridEl.appendChild(paneEl);
+        // Drop surplus panes first, so index-addressed reuse below is straightforward.
+        // A removed pane's terminal container goes with the subtree and is left
+        // detached — exactly what innerHTML='' did — and stays referenced by
+        // terminalsMap so a later reconcile can re-append it.
+        while (paneGridEl.children.length > slotCount) {
+            paneGridEl.removeChild(paneGridEl.lastElementChild);
+        }
+        while (paneGridEl.children.length < slotCount) {
+            paneGridEl.appendChild(createPaneElement(paneGridEl.children.length));
         }
 
+        for (let i = 0; i < slotCount; i++) {
+            updatePaneElement(paneGridEl.children[i], i);
+        }
+
+        // Unchanged from the original, deliberately. `paneAssignments` is padded to
+        // getMaxSlotCount() (nine) regardless of the active layout, so a terminal
+        // parked in slot 5 while the layout is `1` is still ASSIGNED: no detach timer,
+        // keeps its active class, survives a 3x3 -> 1 -> 3x3 round trip instantly.
+        // Narrowing this to the rendered slot count would start destroying those.
         for (const [name, entry] of terminalsMap.entries()) {
             if (!paneAssignments.includes(name)) {
                 entry.container.classList.remove('active');
@@ -1288,7 +1362,224 @@
             }
         }
 
-        if (hadFocus) { focusPaneTerminal(focusedPaneIndex); }
+        // Reclaim the caret only when WE had it and WE lost it. The old code restored
+        // whenever the grid held focus beforehand, which was right when the teardown
+        // destroyed every pane and is wrong now that most reconciles destroy nothing:
+        // it would snatch the caret back from wherever the operator just put it.
+        if (hadFocus && !paneGridEl.contains(document.activeElement)) {
+            focusPaneTerminal(focusedPaneIndex);
+        }
+    }
+
+    /**
+     * Build a pane shell once. Listeners are attached here and here only, and each
+     * one re-reads mutable state (paneAssignments, effectiveLayout) at call time —
+     * the old code could close over per-render values because the element was
+     * thrown away every render; a reused element cannot.
+     */
+    function createPaneElement(index) {
+        const paneEl = document.createElement('div');
+        paneEl.className = 'terminal-pane';
+        paneEl.dataset.paneIndex = index;
+
+        // mousedown, not click: it lands before xterm's own selection handling and
+        // before mouseup, so one press both selects the pane and leaves the caret
+        // in it.
+        paneEl.addEventListener('mousedown', () => setFocusedPane(index));
+
+        const headerEl = document.createElement('div');
+        headerEl.className = 'pane-header';
+
+        const titleEl = document.createElement('div');
+        titleEl.className = 'pane-title';
+
+        const actionsEl = document.createElement('div');
+        actionsEl.className = 'pane-actions';
+
+        // Pin toggle, prepended so it sits left of clear/hide. Suppressed in a
+        // single-slot grid (which covers solo mode, since init() forces
+        // effectiveLayout = '1' there): a pin in a one-pane grid can only
+        // deadlock the sidebar. The button is created once and reused; its label,
+        // state class and visibility are re-derived in updatePaneElement.
+        const pinBtn = document.createElement('button');
+        pinBtn.className = 'btn-unassign-pane btn-pin-pane';
+        pinBtn.title = 'Pin — keep this agent in this pane; other agents go elsewhere';
+        pinBtn.setAttribute('aria-pressed', 'false');
+        pinBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            pinnedPanes[index] = !pinnedPanes[index];
+            saveLayoutSettings();
+            renderPaneGrid();
+            renderSidebarList();
+        });
+
+        const paneClearBtn = document.createElement('button');
+        paneClearBtn.className = 'btn-unassign-pane';
+        paneClearBtn.title = 'Send /clear to this terminal';
+        // Re-reads the slot. The original closed over `assignedName` from the render
+        // that built the button, which was safe only because the button died with
+        // that render — on a reused element it would clear whichever terminal
+        // happened to be in this pane when it was first created.
+        paneClearBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const targetName = paneAssignments[index];
+            if (!targetName) { return; }
+            const label = isTerseLayout() ? 'c' : 'clear';
+            withClearingFeedback(paneClearBtn, () => clearTerminal(targetName), label);
+        });
+
+        const unassignBtn = document.createElement('button');
+        unassignBtn.className = 'btn-unassign-pane';
+        unassignBtn.title = 'Remove from this pane (terminal keeps running)';
+        unassignBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const targetName = paneAssignments[index];
+            if (!targetName) { return; }
+            undoSnapshot = { slots: paneAssignments.slice(), pins: pinnedPanes.slice(), name: null, displaced: targetName, paneIndex: index };
+            showPaneToast(`Pane ${index + 1} cleared (${targetName} still running)`, undoLastAssignment);
+            paneAssignments[index] = null;
+            pinnedPanes[index] = false; // an empty pinned seat reserves a slot nothing can fill
+            saveLayoutSettings();
+            renderPaneGrid();
+            renderSidebarList();
+        });
+
+        actionsEl.appendChild(pinBtn);
+        actionsEl.appendChild(paneClearBtn);
+        actionsEl.appendChild(unassignBtn);
+        headerEl.appendChild(titleEl);
+        headerEl.appendChild(actionsEl);
+        paneEl.appendChild(headerEl);
+
+        const contentEl = document.createElement('div');
+        contentEl.className = 'pane-content';
+        paneEl.appendChild(contentEl);
+        return paneEl;
+    }
+
+    /** The 6- and 9-pane headers cannot fit the two-word button labels. */
+    function isTerseLayout() {
+        return effectiveLayout === '2x3' || effectiveLayout === '3x3';
+    }
+
+    /**
+     * Patch a pane in place. The load-bearing rule: touch `entry.container`'s
+     * parent ONLY when the assignment for this slot actually changed. A badge
+     * update, an (exited) suffix or a layout-driven label change must move no
+     * terminal DOM at all.
+     */
+    function updatePaneElement(paneEl, index) {
+        paneEl.dataset.paneIndex = index;
+        paneEl.classList.toggle('focused', index === focusedPaneIndex);
+        paneEl.classList.toggle('pinned', Boolean(pinnedPanes[index]));
+
+        // The input-state class is the ONE source of truth the ring and the chip
+        // both style off, so they can never disagree. Cleared for empty panes —
+        // an empty pane is not a read-only terminal, and a red chip there would
+        // be a false alarm.
+        paneEl.classList.remove('is-input-live', 'is-input-connecting', 'is-input-readonly');
+
+        const titleEl = paneEl.querySelector('.pane-title');
+        const actionsEl = paneEl.querySelector('.pane-actions');
+        const contentEl = paneEl.querySelector('.pane-content');
+        const assignedName = paneAssignments[index];
+        const terse = isTerseLayout();
+        const slotCount = getSlotCount(effectiveLayout);
+
+        titleEl.textContent = '';
+        if (assignedName) {
+            const idxEl = document.createElement('span');
+            const isPinned = Boolean(pinnedPanes[index]);
+            idxEl.className = 'pane-index-chip' + (isPinned ? ' is-pinned' : '');
+            idxEl.textContent = isPinned ? `📌P${index + 1}` : `P${index + 1}`;
+            titleEl.appendChild(idxEl);
+
+            let displayTitle = assignedName;
+            const fleetItem = fleetList.find(t => t.friendlyName === assignedName);
+            if (fleetItem && fleetItem.status === 'exited') {
+                displayTitle += ' (exited)';
+            } else if (!fleetItem && hasFetchedList) {
+                displayTitle += ' (no longer listed)';
+            }
+            titleEl.appendChild(document.createTextNode(displayTitle));
+
+            if (terminalBadges.has(assignedName)) {
+                const badgeSpan = document.createElement('span');
+                badgeSpan.className = 'pane-badge';
+                badgeSpan.textContent = terminalBadges.get(assignedName);
+                titleEl.appendChild(badgeSpan);
+            }
+
+            // Input-state chip. The class goes on the PANE, not the chip: it is
+            // the one source of truth the ring and the chip both style off, so
+            // they cannot drift apart. Derived live at render time; socket
+            // transitions nudge it out-of-band via refreshInputState.
+            const state = resolveInputState(assignedName);
+            paneEl.classList.add(`is-input-${state.key}`);
+
+            const stateEl = document.createElement('span');
+            stateEl.className = 'pane-input-state';
+            // 2x3 and 3x3 headers are 10px tall with an ellipsised title —
+            // a word here eats the terminal name. Dot only, title attribute
+            // carries the meaning.
+            stateEl.textContent = terse ? '' : state.label;
+            stateEl.title = state.label;
+            titleEl.appendChild(stateEl);
+        } else {
+            titleEl.textContent = `Pane ${index + 1} (Empty)`;
+        }
+
+        // Labels are re-derived every reconcile: a 2x3 pane demoted to 2h must lose
+        // its `c`/`h` initials, which a create-time-only label would keep forever.
+        // Indexed, not destructured: the buttons share a class name, so there is
+        // no selector that tells them apart, and children[] is the honest read.
+        // children[0] = pin, [1] = clear, [2] = hide (order set in createPaneElement).
+        const pinBtn = actionsEl.children[0];
+        const clearBtn = actionsEl.children[1];
+        const hideBtn = actionsEl.children[2];
+        clearBtn.textContent = terse ? 'c' : 'clear';
+        hideBtn.textContent = terse ? 'h' : 'hide';
+
+        // Pin toggle: text labels (not emoji) to match clear/hide treatment; state
+        // carried by colour via .btn-pin-pane.is-pinned and by aria-pressed.
+        // Suppressed in a single-slot grid — a pin there can only deadlock, and
+        // solo mode forces effectiveLayout = '1' so this covers pop-outs too.
+        const pinActive = slotCount > 1;
+        const isPinned = Boolean(pinnedPanes[index]);
+        pinBtn.textContent = terse ? (isPinned ? 'u' : 'p') : (isPinned ? 'unpin' : 'pin');
+        pinBtn.title = isPinned
+            ? 'Unpin — this pane can be reassigned again'
+            : 'Pin — keep this agent in this pane; other agents go elsewhere';
+        pinBtn.setAttribute('aria-pressed', isPinned ? 'true' : 'false');
+        pinBtn.classList.toggle('is-pinned', isPinned);
+        pinBtn.style.display = (pinActive && assignedName) ? '' : 'none';
+
+        // The buttons now always EXIST (they are reused); an empty pane hides the
+        // block rather than omitting it.
+        actionsEl.style.display = assignedName ? '' : 'none';
+
+        if (assignedName) {
+            const placeholder = contentEl.querySelector('.pane-empty-slot');
+            if (placeholder) { contentEl.removeChild(placeholder); }
+            const entry = terminalsMap.get(assignedName);
+            if (!entry) {
+                createTerminalView(assignedName, contentEl);
+            } else {
+                // THE invariant of this change: no move when already in place.
+                if (entry.container.parentNode !== contentEl) {
+                    contentEl.appendChild(entry.container);
+                }
+                entry.container.classList.add('active');
+            }
+        } else if (!contentEl.querySelector('.pane-empty-slot')) {
+            // Clears a container still parented here from a previous assignment. The
+            // node survives in terminalsMap; only its parentage is dropped.
+            contentEl.textContent = '';
+            const emptySlot = document.createElement('div');
+            emptySlot.className = 'pane-empty-slot';
+            emptySlot.textContent = 'Click terminal in sidebar to assign';
+            contentEl.appendChild(emptySlot);
+        }
     }
 
     /**
@@ -1336,16 +1627,197 @@
         if (fit) { batchFitVisiblePanes(); }
     }
 
-    function batchFitVisiblePanes() {
-        requestAnimationFrame(() => {
-            const slotCount = getSlotCount(effectiveLayout);
-            for (let i = 0; i < slotCount; i++) {
-                const name = paneAssignments[i];
-                if (name) {
-                    fitAndReportSize(terminalsMap.get(name));
-                }
+    /** Attempt schedule for the settle ladder, in ms after the layout mutation.
+     *  Attempt 0 is a double rAF (style+layout flushed AND the frame's
+     *  IntersectionObserver records delivered); the rest are timers so a
+     *  backgrounded tab — where rAF never fires — still converges. */
+    const FIT_SETTLE_DELAYS_MS = [0, 60, 180, 420];
+
+    /** name -> generation counter. A newer ladder for the same terminal wins. */
+    const fitLadderGen = new Map();
+
+    /**
+     * The grid the RENDERER last painted, as distinct from the grid the buffer holds.
+     *
+     * There is no public API for this, and the distinction is the entire bug: once
+     * term.cols/rows are correct, FitAddon.fit() short-circuits forever (addon-fit.js)
+     * and a renderer left painting the old grid can never be repaired by fitting.
+     *
+     * RenderService.dimensions returns the live renderer's own dimensions object, and
+     * every renderer we ship — DOM, canvas and WebGL — computes
+     * `device.canvas.width = device.cell.width * bufferService.cols` inside
+     * _updateDimensions(), which runs from renderer.handleResize() — the exact call
+     * RenderService PARKS while paused. So css.canvas / css.cell is the applied grid.
+     *
+     * Returns:
+     *   { cols, rows }   the grid currently painted
+     *   'swapping'       no renderer installed (WebGL context loss -> canvas, see
+     *                    attachRenderer). RenderService.handleResize DROPS a resize
+     *                    outright in this window — it does not even park it — so this
+     *                    is a retry signal, never a pass.
+     *   null             cannot tell (private shape changed, cell size unmeasured).
+     *                    Also a retry signal. Never treat as converged.
+     */
+    function readRenderedGrid(term) {
+        let svc = null;
+        try { svc = term._core._renderService; } catch { /* ignore */ }
+        if (!svc) { return null; }
+        if (typeof svc.hasRenderer === 'function' && !svc.hasRenderer()) { return 'swapping'; }
+
+        let css = null;
+        try { css = svc.dimensions.css; } catch { /* ignore */ }
+        if (!css || !css.cell || !css.canvas) { return null; }
+        const cellW = css.cell.width;
+        const cellH = css.cell.height;
+        if (!(cellW > 0) || !(cellH > 0)) { return null; }
+        return {
+            cols: Math.round(css.canvas.width / cellW),
+            rows: Math.round(css.canvas.height / cellH)
+        };
+    }
+
+    /**
+     * Verdict on whether `entry` is drawn at the size its host box implies.
+     *
+     * Two independent checks, because a pane can fail either half:
+     *  - buffer:   term.cols/rows must equal what FitAddon would propose now.
+     *  - renderer: the painted grid must equal the buffer grid. This is the half
+     *              FitAddon cannot see and cannot repair.
+     *
+     * 'unsettled' means the geometry is not measurable yet — a retry signal, NOT a
+     * failure, and NOT a reason to fit (see the fitAndReportSize note below).
+     */
+    function inspectPaneFit(entry) {
+        if (!entry || entry.disposed || !entry.term || !entry.fitAddon) { return 'skip'; }
+        if (!isRendered(entry.container)) { return 'skip'; }
+
+        let proposed = null;
+        try { proposed = entry.fitAddon.proposeDimensions(); } catch { /* ignore */ }
+        if (!proposed || !Number.isFinite(proposed.cols) || !Number.isFinite(proposed.rows)) {
+            return 'unsettled';
+        }
+        if (entry.term.cols !== proposed.cols || entry.term.rows !== proposed.rows) {
+            return 'mismatch';
+        }
+
+        const painted = readRenderedGrid(entry.term);
+        if (painted === null || painted === 'swapping') { return 'unsettled'; }
+        if (painted.cols !== entry.term.cols || painted.rows !== entry.term.rows) {
+            return 'stale-canvas';
+        }
+        return 'ok';
+    }
+
+    /**
+     * Force the renderer back in sync WITHOUT touching the buffer and WITHOUT
+     * reporting anything to the pty.
+     *
+     * Ordered least-invasive first:
+     *  1. Read the host box. Cheap, but it forces a style/layout flush, which is
+     *     what lets the next IntersectionObserver computation see real geometry
+     *     and unpause RenderService (_isPaused is only ever written from that
+     *     callback — see xterm.js _handleIntersectionChange).
+     *  2. clearTextureAtlas() + refresh(). Non-destructive repaint request. Both
+     *     route through _renderService and are no-ops while paused, which is
+     *     exactly why step 3 exists.
+     *  3. Drive RenderService.handleResize directly with the CURRENT cols/rows.
+     *     This is the one call that re-runs renderer._updateDimensions() and so
+     *     re-sizes the canvas and .xterm-screen; FitAddon.fit() refuses to reach
+     *     it once cols/rows already match. It reads the buffer and never writes
+     *     it, so ybase cannot move. While paused it parks the task instead — which
+     *     is fine, because the ladder retries and an unpause flushes it.
+     *     No new private surface: readRenderedGrid already had to reach
+     *     _core._renderService to produce the 'stale-canvas' verdict that gates
+     *     this, so the two stand or fall together.
+     */
+    function resyncPaneRenderer(entry, verdict) {
+        try { void entry.container.getBoundingClientRect(); } catch { /* ignore */ }
+        try { entry.term.clearTextureAtlas(); } catch { /* ignore */ }
+        try { entry.term.refresh(0, Math.max(0, entry.term.rows - 1)); } catch { /* ignore */ }
+        if (verdict !== 'stale-canvas') { return; }
+        try {
+            entry.term._core._renderService.handleResize(entry.term.cols, entry.term.rows);
+        } catch { /* ignore */ }
+    }
+
+    function startFitLadder(name) {
+        const gen = (fitLadderGen.get(name) || 0) + 1;
+        fitLadderGen.set(name, gen);
+
+        const attempt = (step) => {
+            // Superseded by a newer layout change / assignment for this terminal.
+            if (fitLadderGen.get(name) !== gen) { return; }
+            const entry = terminalsMap.get(name);
+            if (!entry || entry.disposed) { return; }
+            // Re-read the assignment each attempt rather than closing over it: a floor
+            // demotion or a reassignment may have moved this terminal out. The SLICE is
+            // load-bearing — paneAssignments is padded to nine regardless of layout, so
+            // a bare .includes() would also match a terminal parked off-screen.
+            if (!paneAssignments.slice(0, getSlotCount(effectiveLayout)).includes(name)) { return; }
+
+            const before = inspectPaneFit(entry);
+            if (before === 'skip') { return; }
+            // ONLY on a verified buffer mismatch. fitAndReportSize sends a resize frame
+            // unconditionally — even when fit() short-circuits and changes nothing — and
+            // reconcileTerminalSize takes the MIN across clients, so firing it
+            // on an 'unsettled' verdict would push a stale size into the shared pty.
+            if (before === 'mismatch') {
+                fitAndReportSize(entry);
             }
-        });
+
+            const after = inspectPaneFit(entry);
+            if (after === 'ok' || after === 'skip') { return; }
+            if (after === 'stale-canvas' || after === 'mismatch') {
+                resyncPaneRenderer(entry, after);
+            }
+
+            const next = step + 1;
+            if (next >= FIT_SETTLE_DELAYS_MS.length) {
+                console.warn(
+                    `[Terminals] Pane fit did not converge for ${name} after ` +
+                    `${FIT_SETTLE_DELAYS_MS.length} attempts (verdict=${after}, ` +
+                    `client=${entry.term.cols}x${entry.term.rows}) — ` +
+                    `resize the window to force a re-fit.`
+                );
+                return;
+            }
+            schedule(next);
+        };
+
+        // Attempt 0 is a DOUBLE rAF: the first lands after the grid mutation, the
+        // second one frame later — i.e. after the first frame's style/layout and
+        // IntersectionObserver delivery. Later attempts are timers so a backgrounded
+        // tab (rAF suspended) still converges when it is brought forward.
+        const schedule = (step) => {
+            const delay = FIT_SETTLE_DELAYS_MS[step];
+            if (delay === 0) {
+                requestAnimationFrame(() => requestAnimationFrame(() => attempt(step)));
+            } else {
+                setTimeout(() => attempt(step), delay);
+            }
+        };
+        schedule(0);
+    }
+
+    /**
+     * Fit the panes the current layout renders, then VERIFY and retry.
+     *
+     * The old body was a single requestAnimationFrame around fitAndReportSize.
+     * One frame is not enough: renderPaneGrid detaches and re-appends every live
+     * xterm, xterm's RenderService parks renderer resizes while its
+     * IntersectionObserver says the screen element is not intersecting (and DROPS
+     * them outright while no renderer is installed at all), and rAF runs BEFORE
+     * that frame's intersection records are delivered. A pane that lost that race
+     * kept the right cols/rows and the wrong canvas — and FitAddon.fit()
+     * short-circuits on matching cols/rows, so no later fit from any call site
+     * could ever repair it. Hence: verify, resync, retry.
+     */
+    function batchFitVisiblePanes() {
+        const slotCount = getSlotCount(effectiveLayout);
+        for (let i = 0; i < slotCount; i++) {
+            const name = paneAssignments[i];
+            if (name) { startFitLadder(name); }
+        }
     }
 
     const DEFAULT_ROLES = ['coder', 'planner', 'reviewer', 'lead', 'analyst', 'intern'];
@@ -1636,7 +2108,27 @@
             });
             const data = res.ok ? await res.json() : null;
             if (data && data.success) {
-                destroyTerminalView(name);
+                // Re-key rather than destroy: the gateway keeps the same scrollback
+                // ring across a rename, so retaining this entry's lastSeq means the
+                // reconnect replays only the tail instead of re-rendering the whole
+                // 256 KB ring over a pane that already shows it — and an operator
+                // who was scrolled up stays where they were.
+                const entry = terminalsMap.get(name);
+                if (entry) {
+                    cancelDetachTimer(name);
+                    terminalsMap.delete(name);
+                    entry.name = next;
+                    terminalsMap.set(next, entry);
+                    // Not `entry.term` alone: reconnecting an exited terminal makes
+                    // setupClient re-send {t:'exit'} (terminalWsGateway.ts:633-635),
+                    // printing a SECOND "[Process Exited]" line under the one the
+                    // pane already shows. A dead pty has nothing to reconnect to.
+                    if (entry.term && !entry.exited) {
+                        connectTerminalSocket(entry);
+                    }
+                } else {
+                    destroyTerminalView(name);
+                }
                 for (let i = 0; i < paneAssignments.length; i++) {
                     if (paneAssignments[i] === name) { paneAssignments[i] = next; }
                 }
@@ -1755,12 +2247,61 @@
     }
 
     const ACK_CHUNK_CHARS = 5000;
+
+    /**
+     * Terminal REPLIES (answerback), as distinct from operator keystrokes.
+     *
+     * xterm hands both to onData through the same channel with no provenance, so
+     * during a scrollback replay — where the parser re-answers queries that were
+     * live minutes ago — content is the only thing left to discriminate on.
+     *
+     * Derived from the `triggerDataEvent` call sites in @xterm/xterm 5.5 that do
+     * NOT pass wasUserInput=true, not from guesswork:
+     *
+     *   \x1b]…         OSC replies: 10/11 colour, 4 palette, 52 clipboard
+     *   \x1bP…         DCS replies: XTGETTCAP (P1+r/P0+r), DECRQSS (P1$r/P0$r)
+     *                  and XTVERSION (P>|). Those three are the ONLY families
+     *                  reaching xterm 5.5's DCS reply emitter, and its payload
+     *                  always starts with `P`, so this bare anchor is complete.
+     *   \x1b[?…c       DA1
+     *   \x1b[>…c       DA2
+     *   \x1b[…R        CPR / DECXCPR (cursor position report)
+     *   \x1b[…n        DSR
+     *   \x1b[…$y       DECRQM — mode 2026 (synchronized update) and 2004
+     *                  (bracketed paste) are probed constantly by modern TUIs
+     *
+     * Deliberately NOT matched:
+     *   \x1b[A-D, \x1b[H/F, \x1bO…, \x1b<char>, \x1b[3~   things a human presses
+     *   \x1b[200~…\x1b[201~                               bracketed paste
+     *   \x1b[<code>u                                      CSI u keystrokes
+     *   \x1b[I / \x1b[O                                   focus reports — fired
+     *       from the focus/blur handler, never from a parse, so replay cannot
+     *       provoke them and suppressing them would break focus reporting
+     *   \x1b[…t                                           XTWINOPS size reports
+     *       are gated behind the `windowOptions` option, bundled default `{}`,
+     *       never set here. Revisit this grammar if that changes.
+     *   <n>c with no introducer                           only reachable on the
+     *       termName==='linux' branch; termName is never set, so it is 'xterm'
+     *   \x1b_… / \x1b^… / \x1bX…                          APC/PM/SOS: PM and SOS
+     *       produce no output at all, and APC only fires for an addon-registered
+     *       handler (addon-image); neither uses the DCS reply emitter
+     *
+     * Eating one keystroke would be a worse bug than the one this exists to fix,
+     * which is why finals are enumerated instead of using a class like [a-zA-Z].
+     */
+    const ANSWERBACK_RE = /^(?:\x1b\][\s\S]*|\x1bP[\s\S]*|\x1b\[[?>]?[0-9;]*(?:[cnR]|\$y))$/;
+
+    function isAnswerback(data) {
+        return ANSWERBACK_RE.test(data);
+    }
+
     const pendingBatchEntries = new Set();
     let sharedBatchRafId = null;
     let sharedBatchFallbackTimer = null;
 
     function destroyTerminalView(name) {
         cancelDetachTimer(name);
+        fitLadderGen.delete(name);
         const entry = terminalsMap.get(name);
         if (!entry) { return; }
         entry.disposed = true;
@@ -1795,6 +2336,18 @@
         if (entry.term) {
             try { entry.term.dispose(); } catch { /* ignore */ }
         }
+        // Not an xterm disposable — term.dispose() will not remove it, and the
+        // viewport element outlives this call only through these two fields.
+        if (entry.jumpViewport && entry.jumpScrollHandler) {
+            try { entry.jumpViewport.removeEventListener('scroll', entry.jumpScrollHandler); } catch { /* ignore */ }
+        }
+        entry.jumpViewport = null;
+        entry.jumpScrollHandler = null;
+        if (entry.scrollDisposable) {
+            try { entry.scrollDisposable.dispose(); } catch { /* ignore */ }
+            entry.scrollDisposable = null;
+        }
+        entry.jumpBtn = null;
         if (entry.container && entry.container.parentNode) {
             try { entry.container.parentNode.removeChild(entry.container); } catch { /* ignore */ }
         }
@@ -1834,12 +2387,19 @@
             writeThrowCount: 0,
             largestInputDataLen: 0,
             totalInputChars: 0,
+            inputDropNoticed: false,
             reconnectTimer: null,
             reconnectDelay: 500,
             resizeObserver: null,
             pendingObserver: null,
+            scrollDisposable: null,
+            jumpBtn: null,
+            jumpViewport: null,
+            jumpScrollHandler: null,
             exited: false,
-            disposed: false
+            disposed: false,
+            suppressAnswerback: false,
+            awaitingReplayFrame: false
         };
         terminalsMap.set(name, entry);
         whenRendered(entry, () => materializeTerminalView(entry));
@@ -1875,6 +2435,18 @@
 
         const term = new window.Terminal({
             cursorBlink: true,
+            // The caret is the only PER-CELL signal for "this pane has focus", and
+            // xterm's default here is 'outline' — a hairline weight change that is
+            // invisible at fontSize 13 in a 9-pane grid. 'none' turns it into a
+            // real state change: exactly one pane in the grid shows a caret at all,
+            // and that pane is the one taking keystrokes.
+            //
+            // Honoured by all three renderers: the DOM renderer's style switch has
+            // no 'none' case so it emits no cursor class; addon-canvas guards with
+            // `"none" !== t`; addon-webgl matches the style string against the four
+            // drawn styles and falls through. Do not "tidy" this back to the
+            // default value — it IS the fix, not documentation of the default.
+            cursorInactiveStyle: 'none',
             fontSize: 13,
             fontFamily: resolveMonoFont(),
             theme: buildTerminalTheme(),
@@ -1897,6 +2469,7 @@
 
         term.open(container);
         entry.rendererAddon = attachRenderer(term, entry);
+        attachJumpToLatest(entry, term, container);
         if (fitAddon) {
             try { fitAddon.fit(); } catch { /* ignore */ }
         }
@@ -1906,22 +2479,66 @@
             if (resizeTimer) clearTimeout(resizeTimer);
             resizeTimer = setTimeout(() => {
                 // `active` is pane ASSIGNMENT, not visibility — a hidden panel's panes
-                // are still "active". fitAndReportSize is what gates on actually
+                // are still "active". inspectPaneFit/fitAndReportSize gate on actually
                 // having a box.
                 if (entry.container.classList.contains('active')) {
-                    fitAndReportSize(entry);
+                    startFitLadder(entry.name);
                 }
             }, 100);
         });
         resizeObserver.observe(container);
         entry.resizeObserver = resizeObserver;
 
+        // The caret ring is driven from xterm's OWN focus state, not from
+        // `focusedPaneIndex`. `.focused` is pane SELECTION — it is set on pane 0
+        // at first paint and is never cleared when the document loses focus, so
+        // it cannot answer "will my keystrokes land here?".
+        //
+        // Resolve the pane element inside the handler, never at wire-up time:
+        // renderPaneGrid reuses pane elements but a future change could reparent
+        // this container, so a captured reference is fragile. closest() reads
+        // the live tree.
+        term.onFocus(() => {
+            clearCaretRing();
+            const paneEl = entry.container.closest('.terminal-pane');
+            if (paneEl) { paneEl.classList.add('has-caret'); }
+        });
+        // Clear ALL panes, not the one that blurred. Chromium does not fire blur
+        // when a focused node is detached, so a reparent leaves no blur to react
+        // to (the class dies with the discarded pane element instead, and the
+        // re-focus at renderPaneGrid's tail re-applies it). For the blurs that DO
+        // fire — sidebar click, sibling iframe, window blur — closest() may still
+        // resolve to an outgoing node, so a sweep is the only form that is correct
+        // in every case. Idempotent and O(panes); a grid is nine elements.
+        term.onBlur(() => clearCaretRing());
+
         term.onData((data) => {
+            // Scrollback replay re-parses queries the CLI emitted while this view
+            // did not exist, and xterm answers them as if they were live. Those
+            // replies land at the CLI's prompt as typed text — the
+            // `10;rgb:e0e0/e0e0/e0e011;rgb:1717/1717/1717` an operator sees on
+            // every pane swap. Muted for the replay parse only; live queries are
+            // still answered, because the CLI needs the colour reply to pick its
+            // palette. Content-filtered so a keystroke racing the socket open is
+            // never swallowed.
+            if (entry.suppressAnswerback && isAnswerback(data)) {
+                return;
+            }
             if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
                 if (!entry.largestInputDataLen) entry.largestInputDataLen = 0;
                 if (data.length > entry.largestInputDataLen) entry.largestInputDataLen = data.length;
                 entry.totalInputChars = (entry.totalInputChars || 0) + data.length;
                 entry.ws.send(encodeInputFrame(data));
+            } else {
+                // The socket is CONNECTING, in reconnect backoff, or CLOSED. This
+                // branch used to be an implicit no-op: the keystroke evaporated
+                // with no echo, no log and no chrome change, which is the whole
+                // "is input even possible?" complaint.
+                //
+                // Deliberately NOT queued. Replaying stale keystrokes into a shell
+                // after a reconnect can complete a half-typed command with a stray
+                // \r. Report, discard, move on.
+                notifyInputDropped(entry);
             }
         });
 
@@ -1935,8 +2552,93 @@
         }
     }
 
+    /**
+     * A pinned "jump to latest" pill for a pane that is scrolled off the bottom.
+     *
+     * xterm only auto-follows new output while the viewport is already at the
+     * bottom, so an operator who scrolled up inside a long agent conversation
+     * stays parked there with no signal that output is still arriving. The
+     * scrollbar is the only other way back, and even widened it is a 12px bar
+     * inset 8px from the pane edge — a poor primary control at 2x2 and denser.
+     *
+     * TWO event sources, and BOTH are required:
+     *  - The viewport's native `scroll` event covers the OPERATOR scrolling
+     *    (wheel, thumb drag, keyboard). term.onScroll does NOT fire for these:
+     *    Viewport._handleScroll emits onRequestScrollLines with
+     *    suppressScrollEvent:true, and Terminal.scrollLines handles source
+     *    VIEWPORT by calling refresh(0, rows-1) itself, so
+     *    BufferService.scrollLines skips _onScroll.fire entirely.
+     *  - term.onScroll covers NEW OUTPUT advancing baseY while the operator stays
+     *    parked. BufferService.scroll() fires it unconditionally, and that path
+     *    mutates no scrollTop, so it never produces a DOM scroll event.
+     * Drop either one and the pill is silently wrong in a case the operator hits
+     * on first use: onScroll-only never appears in an idle terminal, DOM-only
+     * never updates its count as output arrives.
+     */
+    function attachJumpToLatest(entry, term, container) {
+        const btn = document.createElement('button');
+        btn.className = 'jump-to-latest';
+        btn.type = 'button';
+        // The terminal owns the keyboard. A tabbable button inside the pane would
+        // put a stop between the operator and the pty for a control they reach by
+        // pointer anyway.
+        btn.tabIndex = -1;
+        btn.title = 'Scroll to the latest output';
+        btn.setAttribute('aria-label', 'Scroll to the latest output');
+        btn.textContent = '↓ latest';
+        container.appendChild(btn);
+        entry.jumpBtn = btn;
+
+        // Cached so a firehose does not rewrite textContent on every flush. Starts
+        // at -1 so the first call always paints.
+        let lastBehind = -1;
+        const update = () => {
+            if (entry.disposed || !entry.term) { return; }
+            let behind = 0;
+            try {
+                const buf = term.buffer.active;
+                behind = Math.max(0, buf.baseY - buf.viewportY);
+            } catch { return; }
+            if (behind === lastBehind) { return; }
+            lastBehind = behind;
+            btn.classList.toggle('visible', behind > 0);
+            btn.textContent = behind > 0 ? `↓ latest (${behind})` : '↓ latest';
+        };
+
+        // click, NOT mousedown: the pane's own mousedown handler must run first so
+        // the press also selects the pane (see renderPaneGrid). stopPropagation
+        // keeps the click from being read a second time as a click into the
+        // terminal body.
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            try {
+                term.scrollToBottom();
+                term.focus();
+            } catch { /* term disposed mid-click */ }
+            update();
+        });
+
+        // term.element exists: this runs after term.open(container).
+        const viewport = term.element && term.element.querySelector('.xterm-viewport');
+        if (viewport) {
+            viewport.addEventListener('scroll', update, { passive: true });
+            // Retained for teardown — a DOM listener is not an xterm disposable and
+            // term.dispose() will not remove it.
+            entry.jumpViewport = viewport;
+            entry.jumpScrollHandler = update;
+        }
+        entry.scrollDisposable = term.onScroll(update);
+        update();
+    }
+
     function connectTerminalSocket(entry) {
         if (entry.ws) {
+            // Detach first. The browser dispatches `close` in a later task, and by
+            // then entry.name / fleetList may have moved on (rename) — a stale
+            // handler would arm a reconnect timer that tears down the socket this
+            // call is about to open. Callers that WANT the reconnect are the ones
+            // whose socket closed on its own, and their handler has already run.
+            try { entry.ws.onclose = null; } catch { /* ignore */ }
             try { entry.ws.close(); } catch { /* ignore */ }
             entry.ws = null;
         }
@@ -1945,6 +2647,11 @@
         // forward would ack characters the new counter never issued.
         entry.pendingAckChars = 0;
         entry.ackSuppressChars = 0;
+        // Both windows belong to the socket that just went away. A flag left true
+        // by a socket that died mid-replay would mute this connection's live
+        // replies until something else cleared it.
+        entry.suppressAnswerback = false;
+        entry.awaitingReplayFrame = false;
 
         let wsUrl = `${PTY_HOST_ORIGIN}/ws/terminal?name=${encodeURIComponent(entry.name)}`;
         const terminalToken = (document.body && document.body.dataset && document.body.dataset.terminalToken)
@@ -1962,9 +2669,19 @@
         // force an async read on the hot path.
         ws.binaryType = 'arraybuffer';
         entry.ws = ws;
+        // The canonical nudge: a reconnect swaps in a CONNECTING socket here
+        // without re-rendering the grid, so without this the chip only self-
+        // corrects because the OLD socket's onclose happens to fire later —
+        // correct by accident. Every other nudge site below is a refinement of
+        // this one.
+        refreshInputState(entry.name);
 
         ws.onopen = () => {
             entry.reconnectDelay = 500;
+            // A fresh socket earns a fresh drop notice. Paired with
+            // notifyInputDropped — see the note there.
+            entry.inputDropNoticed = false;
+            refreshInputState(entry.name);
             // Unconditionally reporting term.cols/rows here is what pinned the shared
             // pty to 80x24: on a connection opened before the terminal had a box, that
             // is the xterm construction default rather than anything the operator can
@@ -1986,7 +2703,22 @@
                     if (seq) {
                         entry.lastSeq = seq;
                     }
-                    entry.batchQueue.push(outputDecoder.decode(new Uint8Array(event.data, 4)));
+                    const text = outputDecoder.decode(new Uint8Array(event.data, 4));
+                    if (entry.awaitingReplayFrame) {
+                        entry.awaitingReplayFrame = false;
+                        // Any tail still queued from the previous socket must reach
+                        // xterm BEFORE the replay, or the pane renders out of order.
+                        // In practice the queue is empty (BATCH_FALLBACK_MS = 200 vs a
+                        // >=500ms reconnect delay); draining removes the dependency on
+                        // that timer relationship holding forever.
+                        flushBatch(entry);
+                        // Its OWN write, not the batch queue: coalescing it with a live
+                        // frame would put live queries inside the suppression window and
+                        // cost the CLI a legitimate answer.
+                        writeReplay(entry, text);
+                        return;
+                    }
+                    entry.batchQueue.push(text);
                     scheduleBatchFlush(entry);
                     return;
                 }
@@ -2010,6 +2742,36 @@
                     entry.ackSuppressChars = typeof frame.replayChars === 'number' && frame.replayChars > 0
                         ? frame.replayChars
                         : 0;
+                    // The gateway sends hello, then the replay frame, synchronously and
+                    // in that order (setupClient in terminalWsGateway.ts) — and a
+                    // WebSocket preserves order across text and binary. So the NEXT
+                    // binary frame is the replay, and nothing else can be. Assigned
+                    // unconditionally, so a window armed by a socket that died before
+                    // its replay arrived cannot leak into this connection.
+                    entry.awaitingReplayFrame = entry.ackSuppressChars > 0;
+                    // Re-arm bracketed paste from the server's record.
+                    //
+                    // decPrivateModes.bracketedPasteMode is per-xterm-instance and starts
+                    // false, so a rebuilt view (new tab, shell reload, pane reassignment
+                    // past DETACH_GRACE_MS) pastes UNBRACKETED unless the enabling escape
+                    // happens to still be in the replayed ring tail. When it is not,
+                    // xterm's prepareTextForTerminal collapses every newline to a bare \r
+                    // and a raw-mode agent CLI submits once per line — the paste-splitting
+                    // bug this exists to fix.
+                    //
+                    // Written into the parser rather than poked into decPrivateModes: the
+                    // escape is public API, renders nothing, generates no reply, and cannot
+                    // drift from xterm's internals. It lands ahead of the replay frame,
+                    // which is correct — the replay is a suffix of history, so any 2004
+                    // escape inside it re-applies this same value.
+                    //
+                    // Written DIRECTLY to the parser, not via the rAF-batched write queue:
+                    // that path is billed to pendingAckChars via onWriteParsed, and
+                    // synthetic characters the server never credited would corrupt the
+                    // backpressure ledger.
+                    if (typeof frame.bracketedPaste === 'boolean' && entry.term && !entry.disposed) {
+                        entry.term.write(frame.bracketedPaste ? '\x1b[?2004h' : '\x1b[?2004l');
+                    }
                 } else if (frame.t === 'inputThrottled') {
                     // Informational only — stdin stays enabled. Input is queued, never
                     // dropped, so the operator can keep typing behind a large paste.
@@ -2022,6 +2784,7 @@
                     entry.exited = true;
                     entry.term.write(`\r\n\x1b[31m[${frame.message || 'Terminal unavailable'}]\x1b[0m\r\n`);
                     entry.term.options.disableStdin = true;
+                    refreshInputState(entry.name);
                 } else if (frame.t === 'exit') {
                     if (frame.reason === 'Lagging client evicted') {
                         entry.term.write(`\r\n\x1b[33m[Disconnected — reconnecting…]\x1b[0m\r\n`);
@@ -2030,6 +2793,7 @@
                         entry.exited = true;
                         entry.term.write(`\r\n\x1b[31m[Process Exited with code ${exitCode}]\x1b[0m\r\n`);
                         entry.term.options.disableStdin = true;
+                        refreshInputState(entry.name);
                     }
                 }
             } catch (err) {
@@ -2039,6 +2803,7 @@
 
         ws.onclose = () => {
             if (entry.exited) { return; }
+            refreshInputState(entry.name);
             const item = fleetList.find(i => i.friendlyName === entry.name);
             if (item && item.status === 'active') {
                 if (entry.reconnectTimer) clearTimeout(entry.reconnectTimer);
@@ -2101,6 +2866,34 @@
         } catch (err) {
             entry.writeThrowCount = (entry.writeThrowCount || 0) + 1;
             console.error(`[Terminals] term.write failed for terminal ${entry.name}:`, err);
+        }
+    }
+
+    /**
+     * Write the gateway's scrollback replay with answerback muted.
+     *
+     * The flag is cleared in the write callback rather than on the next line
+     * because WriteBuffer._innerWrite parses each queued item in a single action
+     * and fires that item's callback before parsing the next one. So the callback
+     * is exactly the boundary at which the replay has been fully consumed and no
+     * live chunk has been parsed yet — clear it earlier and the tail of the replay
+     * still answers; clear it later and a live query goes unanswered.
+     *
+     * Cleared on the throw path too — a stuck flag would mute the terminal's live
+     * replies for the rest of the session.
+     */
+    function writeReplay(entry, text) {
+        if (!entry || entry.disposed || !entry.term) { return; }
+        entry.suppressAnswerback = true;
+        try {
+            entry.term.write(text, () => {
+                entry.suppressAnswerback = false;
+                onWriteParsed(entry, text.length);
+            });
+        } catch (err) {
+            entry.suppressAnswerback = false;
+            entry.writeThrowCount = (entry.writeThrowCount || 0) + 1;
+            console.error(`[Terminals] replay write failed for terminal ${entry.name}:`, err);
         }
     }
 

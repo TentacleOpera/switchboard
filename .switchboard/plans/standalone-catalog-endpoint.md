@@ -1,0 +1,194 @@
+# Standalone: `GET /catalog` 404s for every workspace except the switchboard repo
+
+## Goal
+
+Make `GET /catalog` serve the protocol catalog in the headless host by supplying a `catalogProvider`
+that reads the catalog shipped with the CLI, instead of falling back to a lookup in the *served*
+workspace where the file will never exist.
+
+### Root problem / background (verified 2026-08-04 against a booted standalone server)
+
+```
+$ curl -s http://127.0.0.1:41778/catalog
+{"error":"catalog not generated; run `node scripts/generate-protocol-catalog.js --write` in the workspace root"}
+```
+
+`LocalApiServer._handleGetCatalog:2315-2340` has two paths:
+
+```ts
+if (this._options.catalogProvider) { ... return data; }
+// Fallback: load the checked-in protocol-catalog.json from the workspace root.
+const catalogPath = path.join(this._options.workspaceRoot, 'protocol-catalog.json');
+```
+
+The extension supplies the hook — `catalogProvider` appears at `TaskViewerProvider.ts:2331` — so it
+resolves the catalog relative to its own installation. **Standalone supplies nothing**: a grep for
+`catalogProvider` across `src/` finds it only in `LocalApiServer.ts` (the option at `:301`, the use at
+`:2317-2318`) and `TaskViewerProvider.ts:2331`. Nothing in `src/standalone/bootstrap.ts` sets it.
+
+So standalone takes the fallback, which joins `protocol-catalog.json` onto **`workspaceRoot`** — the
+user's project. `protocol-catalog.json` is a build artifact of the switchboard repo (it exists at that
+repo's root, which is why the endpoint appears to work when you happen to serve switchboard itself).
+For any real workspace the file is absent and the endpoint 404s with a message telling the user to
+generate a catalog in *their* project, which is not something they should ever do.
+
+Why this matters beyond a broken endpoint: `GET /catalog` is the documented discovery mechanism for
+agents. The `switchboard-orchestration` skill instructs agents to use `/catalog` to learn the HTTP
+surface, and `AGENTS.md`'s skill table points at it for invocation ("for invocation, use the
+`switchboard-orchestration` skill and `GET /catalog`"). In the headless host — the host most likely to
+be driven by an external agent, since it exists precisely for machines without the editor — that
+discovery path is dead.
+
+Adjacent finding, for scope clarity: the rest of the orchestration read surface **works** in standalone.
+Verified: `/kanban/plans` 200, `/kanban/features` 200, `/worktree/list` → `{"success":true,"data":[]}`,
+`/orchestrator/inbox` → `{"success":true,"data":[]}`, `/orchestrator/session-log` →
+`{"success":true,"data":""}`. The write hooks decline honestly rather than lying: `/orchestration/start`
+→ `{"error":"Orchestration start not available"}`, `/orchestrator/request` → `{"error":"Orchestrator
+request channel not available"}`, `/worktree/cleanup` → `{"error":"Worktree cleanup not available"}` —
+which is consistent with the declared `orchestrator: false` capability. So `/catalog` is the single
+odd one out: not declined, just misresolved.
+
+## Metadata
+- **Tags:** bugfix, api, cli, docs
+- **Complexity:** 3
+- **Repo:** `switchboard`
+
+## User Review Required (decisions, with defaults)
+
+1. **Where should standalone read the catalog from?**
+   **Default (recommended): the CLI's own install directory**, resolved from the bundle location
+   (`repoRoot`, which `bootstrap.ts` already computes and passes as the panel `repoRoot` at `:608`,
+   `:627`), not from `workspaceRoot`. The catalog describes the *server's* protocol, so it belongs to
+   the server's installation.
+
+2. **Should the workspace fallback be removed?**
+   **Default: keep it, but demote it.** Try the install location first, then the workspace, then 404.
+   Removing it outright would break anyone who has deliberately placed a catalog in a workspace, and
+   the ordering change alone fixes the reported symptom.
+
+3. **Should the catalog be a build artifact shipped in `dist/`?**
+   **Default: yes, if it is not already.** If `protocol-catalog.json` is only present in a git checkout
+   and not in the published package, then an npm-installed CLI has nothing to serve regardless of
+   resolution order. Confirm what the packaging step includes before choosing the resolution root; this
+   is the one thing that could turn a three-line fix into a packaging change.
+
+## Complexity Audit
+
+### Routine
+- Supplying an existing option hook in one more place, mirroring `TaskViewerProvider.ts:2331`.
+- The error path and status code already exist and are correct.
+
+### Complex / Risky
+- **Packaging.** If the catalog is not shipped with the CLI, the fix is inert in the exact scenario it
+  targets (a globally installed `switchboard` binary). This must be checked, not assumed — see User
+  Review 3.
+- **Path resolution under a bundle.** `bootstrap.ts` computes `repoRoot`; whether that points at the
+  repo root or at `dist/` when running from an installed package needs verifying, since the same class
+  of bundler-versus-filesystem confusion already bit `ptyBackend.ts` (see
+  `standalone-pty-spawn-helper-chmod`). Do not use `require.resolve` here for the same reason.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions.** None; a single file read per request. Consider a small in-process cache since the
+  catalog is immutable for the process lifetime, but correctness does not require it.
+- **Security.** The path must be computed from the install location and a fixed filename — never joined
+  with anything from the request. The endpoint is already behind `_handleReadEndpoint`'s auth. The
+  catalog describes the API surface only; it must not be extended to include secrets or workspace
+  contents.
+- **Side Effects.** None; read-only.
+- **Dependencies & Conflicts.** Independent of every other plan in this set.
+
+## Dependencies
+
+- None. (No session IDs cited; IDs are assigned on import.)
+
+## Adversarial Synthesis
+
+**Risk summary.** The code fix is trivial and the real risk is declaring victory without checking
+packaging: if `protocol-catalog.json` ships only in the git checkout, an installed CLI still 404s and
+the endpoint remains broken for the users who need it most. The second risk is resolving the install
+root incorrectly under the bundle, which would produce the same 404 from a different wrong path — so
+verification must run from an installed/packed CLI, not only from the repo.
+
+## Proposed Changes
+
+### `src/standalone/bootstrap.ts`
+
+- **Context.** `LocalApiServer` construction and its options object (the `terminalVerb` supplier is at
+  `:1339`, in the same options literal); `repoRoot` already in scope and passed to the panel providers
+  at `:608` and `:627`.
+- **Logic.** Add a `catalogProvider` that reads `protocol-catalog.json` from the CLI's install root and
+  returns the parsed object, or `null` when absent — `null` is the contract
+  `_handleGetCatalog:2319-2326` already expects and turns into a 404.
+- **Implementation.**
+  ```ts
+  // The catalog describes THIS SERVER's protocol, so it lives with the installation,
+  // not in the served workspace. Without this hook LocalApiServer falls back to
+  // path.join(workspaceRoot, 'protocol-catalog.json') (:2330), which only exists when
+  // you happen to be serving the switchboard repo itself.
+  catalogProvider: async () => {
+      try {
+          const raw = await fs.promises.readFile(path.join(repoRoot, 'protocol-catalog.json'), 'utf8');
+          return JSON.parse(raw);
+      } catch { return null; }
+  },
+  ```
+- **Edge Cases.** Return `null` (not a throw) on a missing or malformed file so the route produces its
+  documented 404 rather than a 500. If `repoRoot` proves to point at `dist/` in an installed package,
+  resolve one level up — determine this empirically from a packed install rather than by reading the
+  build config.
+
+### `src/services/LocalApiServer.ts`
+
+- **Context.** `_handleGetCatalog:2315-2340`; the workspace fallback at `:2329-2338` and its message at
+  `:2335`.
+- **Logic.** Leave the two-path structure intact (the new hook makes the fallback unreachable in
+  standalone), but correct the fallback's error text so it stops instructing users to generate a catalog
+  inside their own project.
+- **Implementation.** Reword to name the real cause and remedy: the catalog ships with Switchboard, and
+  its absence means an incomplete build or package — not a missing step in the user's workspace.
+- **Edge Cases.** Keep `statusCode = 404`; clients (and the orchestration skill) may already
+  distinguish 404 from 500.
+
+### `.agents/skills/switchboard-orchestration/SKILL.md` (and the `.claude` copy)
+
+- **Context.** The skill directs agents to `GET /catalog` for discovery; both copies exist
+  (`.agents/skills/...` and `.claude/skills/...`), and skill copies are known to drift because the
+  workspace copy is installed with `overwrite:false`.
+- **Logic.** Note that `/catalog` requires a Switchboard build that ships `protocol-catalog.json`, and
+  what to fall back to when it 404s (the enumerated endpoints in the same document).
+- **Implementation.** One short paragraph beside the existing `/catalog` reference.
+- **Edge Cases.** Update both copies in the same change, or the workspace copy keeps the stale
+  instruction.
+
+## Verification Plan
+
+### Automated Tests
+
+- **Contract — standalone serves the catalog for an arbitrary workspace.** Boot standalone with
+  `--workspace <scratch>` (a directory containing no `protocol-catalog.json`) and assert `GET /catalog`
+  returns 200 with a parsed object containing known entries — e.g. the `/phone-a-friend` path that
+  exists in the current catalog.
+- **Contract — honest 404 when the artifact is genuinely absent.** With the catalog file removed from
+  the install root, assert a 404 whose message no longer tells the user to generate one in their
+  workspace.
+- **Packaging test.** From `npm pack` output (or an equivalent staged install), assert
+  `protocol-catalog.json` is present in the package and reachable from the resolved install root. This
+  is the assertion that catches the inert-fix scenario.
+- **Regression — extension host unchanged.** Assert the extension still resolves through its own
+  `catalogProvider` (`TaskViewerProvider.ts:2331`) and returns 200.
+- **Manual smoke.** From an installed CLI in an unrelated project: `curl localhost:<port>/catalog` and
+  confirm a catalog, not an instruction to generate one.
+
+## Uncertain Assumptions
+
+- That `protocol-catalog.json` is shipped rather than checked-in-only. If it is generated at build time
+  and excluded from the package, this plan grows a packaging change — resolve before implementation.
+- That `repoRoot` in `bootstrap.ts` is the install root under a packed install. Verify against a real
+  packed install; the bundle-versus-filesystem distinction has already produced one bug in this
+  codebase.
+
+## Out of Scope
+
+- Regenerating or restructuring the catalog contents.
+- The orchestration write hooks, which correctly decline in standalone.

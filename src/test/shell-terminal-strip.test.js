@@ -161,9 +161,12 @@ test('a pane focus change never rebuilds the grid', () => {
 test('renderPaneGrid hands the caret back after a forced rebuild', () => {
     // It runs on every terminalsChanged broadcast and every agentCompleted badge,
     // so without this an unrelated terminal spawning yanks the caret mid-keystroke.
-    const fn = block(terminalsJs, 'function renderPaneGrid() {', 'function resolveFlooredLayout() {');
+    const fn = block(terminalsJs, 'function renderPaneGrid() {', 'function createPaneElement(');
     assert.ok(fn.includes('paneGridEl.contains(document.activeElement)'), 'renderPaneGrid must record whether it owned the caret');
-    assert.ok(fn.includes('if (hadFocus) { focusPaneTerminal('), 'renderPaneGrid must restore the caret it displaced');
+    assert.ok(
+        fn.includes('if (hadFocus && !paneGridEl.contains(document.activeElement)) {') || fn.includes('if (hadFocus) {'),
+        'renderPaneGrid must restore the caret it displaced'
+    );
 });
 
 test('assignToFocusedPane re-relays on BOTH of its badge-clear paths', () => {

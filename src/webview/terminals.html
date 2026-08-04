@@ -40,6 +40,13 @@
             --term-grid:      rgba(0, 229, 255, 0.03);    /* afterburner: cyan grid */
             --term-grid-size: 32px;
             --term-selection: rgba(0, 229, 255, 0.3);
+
+            /* Input-state chip. Semantic status, NOT brand accent — deliberately
+               absent from body.theme-claudify so a connecting terminal reads amber
+               in both themes. Tokens rather than literals so there is one place to
+               change, per the no-literals rule the accent family already follows. */
+            --state-connecting: #d7a03a;
+            --state-readonly:   #f85149;
         }
 
         /* ── Themes ────────────────────────────────────────────────────────────
@@ -368,6 +375,31 @@
         .terminal-view-host.active {
             display: block;
         }
+        /* Anchored to the view host, not the pane, so it is re-parented with the
+           terminal on every renderPaneGrid() rebuild. Hidden by state rather than
+           hover — an operator who does not know it exists never hovers for it.
+           right: 22px clears the 12px scrollbar with room to spare. */
+        .jump-to-latest {
+            position: absolute;
+            right: 22px;
+            bottom: 12px;
+            display: none;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 9px;
+            font-size: 11px;
+            font-family: inherit;
+            line-height: 1.4;
+            color: var(--term-surface);
+            background: var(--accent-teal);
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            z-index: 3;
+            box-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
+        }
+        .jump-to-latest.visible { display: inline-flex; }
+        .jump-to-latest:hover { filter: brightness(1.12); }
         .empty-state {
             display: flex;
             flex-direction: column;
@@ -568,8 +600,99 @@
             flex-direction: column;
         }
         .terminal-pane.focused {
+            /* `.focused` is pane SELECTION (see setFocusedPane) — it survives the
+               document losing focus, so it can never mean "type here". Demote it to a
+               quiet border and let .has-caret carry the real signal. Kept visible
+               rather than deleted: .focused is also where a sidebar assignment lands,
+               so the operator does still need to see it.
+               ORDER MATTERS — .has-caret below shares border-color at equal
+               specificity and must stay AFTER this rule. */
+            border-color: var(--border-bright);
+        }
+
+        /* Driven by xterm's own onFocus/onBlur. THIS is the typing target: the
+           real input element is xterm's helper textarea, which is opacity:0 and
+           parked at left:-9999em, and xterm.css:46 strips the browser focus ring
+           off the terminal element. Nothing else in this panel draws one.
+
+           outline, NOT box-shadow. Three reasons: (1) .terminal-pane.focused
+           already claims box-shadow (inset 1px) and the pinned-panes plan claims
+           it again (inset 3px 0 0) — one property, one winner, and a third
+           claimant would need a rule per class combination; (2) outline is
+           layout-neutral, so no ResizeObserver refit and no {t:'resize'} frame to
+           the shared pty; (3) outline-offset:-1px draws the ring inside the pane
+           box, so it cannot be clipped by the 4px .pane-grid gap or painted over
+           by an opaque grid neighbour. */
+        .terminal-pane.has-caret {
+            outline: 1px solid var(--accent-teal);
+            outline-offset: -1px;
             border-color: var(--accent-teal);
-            box-shadow: inset 0 0 0 1px var(--accent-teal);
+        }
+        .terminal-pane.has-caret .pane-header {
+            background: color-mix(in srgb, var(--accent-teal) 14%, var(--panel-bg2));
+            color: var(--text-primary);
+        }
+        /* A focused pane that cannot take input must not wear the "type here"
+           colour — that is the same lie .focused was demoted for. Recolour the
+           ring to the state instead of hiding it: the caret really is there, it
+           just has nowhere to go. */
+        .terminal-pane.has-caret.is-input-connecting {
+            outline-color: var(--state-connecting);
+            border-color: var(--state-connecting);
+        }
+        .terminal-pane.has-caret.is-input-connecting .pane-header {
+            background: color-mix(in srgb, var(--state-connecting) 14%, var(--panel-bg2));
+        }
+        .terminal-pane.has-caret.is-input-readonly {
+            outline-color: var(--state-readonly);
+            border-color: var(--state-readonly);
+        }
+        .terminal-pane.has-caret.is-input-readonly .pane-header {
+            background: color-mix(in srgb, var(--state-readonly) 14%, var(--panel-bg2));
+        }
+
+        /* Input-state chip. Styled off the PANE's is-input-* class, not its own —
+           see resolveInputState for why there is exactly one state writer. */
+        .pane-input-state {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 0.4px;
+            text-transform: lowercase;
+            padding: 0 4px;
+            border-radius: 2px;
+            /* Mandatory: .pane-title is a flex row whose terminal name is an
+               anonymous item, and the name is what must shrink, not the chip. */
+            flex-shrink: 0;
+        }
+        .pane-input-state::before {
+            content: '';
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: currentColor;
+            flex-shrink: 0;
+        }
+        .is-input-live .pane-input-state {
+            color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 12%, transparent);
+        }
+        .is-input-connecting .pane-input-state {
+            color: var(--state-connecting);
+            background: color-mix(in srgb, var(--state-connecting) 12%, transparent);
+        }
+        .is-input-readonly .pane-input-state {
+            color: var(--state-readonly);
+            background: color-mix(in srgb, var(--state-readonly) 12%, transparent);
+        }
+        /* Dot-only in the two dense layouts — the header is 10px with an
+           ellipsised title and a word here would consume the terminal name. */
+        .pane-grid.layout-2x3 .pane-input-state,
+        .pane-grid.layout-3x3 .pane-input-state {
+            padding: 0 2px;
+            gap: 0;
         }
 
         /* Pane-header actions use the same text-label treatment as the sidebar
@@ -616,6 +739,27 @@
             border-radius: 2px;
             color: var(--accent-teal);
             background: color-mix(in srgb, var(--accent-teal) 18%, transparent);
+        }
+        .pane-index-chip.is-pinned {
+            color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+        .btn-pin-pane.is-pinned {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 14%, transparent);
+        }
+        /* A pinned pane is visually distinct from the merely-focused one: focus is a
+           1px inset teal ring, pin is a 3px inset teal edge that survives focus
+           moving away. Both are inset shadows, never borders — a border would
+           shrink the content box by 2px and fire the per-terminal ResizeObserver
+           (a refit + a {t:'resize'} frame to the shared pty), which is exactly why
+           the adjacent .terminal-pane.focused rule uses box-shadow too. */
+        .terminal-pane.pinned {
+            box-shadow: inset 3px 0 0 var(--accent-teal);
+        }
+        .terminal-pane.pinned.focused {
+            box-shadow: inset 0 0 0 1px var(--accent-teal), inset 3px 0 0 var(--accent-teal);
         }
         .terminal-item.assigned .item-name { color: var(--text-primary); }
 
@@ -679,6 +823,12 @@
         .pane-content {
             flex: 1;
             position: relative;
+            /* The terminal rectangle is painted --term-surface by xterm, but the
+               8px .terminal-view-host gutter (terminals.html:359-367) fell through
+               to the pane's --panel-bg (#000000), framing every terminal in a hard
+               edge that read as chrome rather than as the typing surface. Carry the
+               surface colour into the gutter. */
+            background: var(--term-surface);
         }
         .pane-empty-slot {
             display: flex;
@@ -780,6 +930,30 @@
             background: var(--vscode-scrollbarSlider-hoverBackground, var(--text-secondary));
         }
 
+        /* Terminal viewports only. The block above is sized for sidebar and
+           dropdown lists; at 6px with a transparent track and a #444 thumb it is
+           effectively invisible against --term-surface, and .terminal-view-host's
+           8px padding sets it in from the pane edge where no pointer looks for it.
+           SCOPED on purpose: browser-panel-scrollbar-contract.test.js requires
+           exactly one BARE ::-webkit-scrollbar rule per panel file, and a second
+           unscoped block would fail it. */
+        .xterm-viewport::-webkit-scrollbar {
+            width: 12px;
+        }
+        .xterm-viewport::-webkit-scrollbar-track {
+            background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+        }
+        .xterm-viewport::-webkit-scrollbar-thumb {
+            background: color-mix(in srgb, var(--text-secondary) 55%, transparent);
+            border-radius: 6px;
+            border: 2px solid transparent;
+            background-clip: content-box;
+        }
+        .xterm-viewport::-webkit-scrollbar-thumb:hover {
+            background: var(--accent-teal);
+            background-clip: content-box;
+        }
+
         /* Firefox only. DO NOT hoist these two properties out of the @supports
            gate: Chromium 121+ and Safari 17.4+ ignore EVERY ::-webkit-scrollbar
            rule on a scroller that declares scrollbar-width or scrollbar-color,
@@ -788,6 +962,10 @@
             :root {
                 scrollbar-width: thin;
                 scrollbar-color: var(--border-bright) transparent;
+            }
+            .xterm-viewport {
+                scrollbar-width: auto;
+                scrollbar-color: var(--text-secondary) transparent;
             }
         }
         body.is-solo .terminals-sidebar,

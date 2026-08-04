@@ -3,16 +3,18 @@ const path = require('path');
 const assert = require('assert');
 
 function testTicketsAssigneeFilterRegression() {
-    const htmlPath = path.join(__dirname, '../webview/planning.html');
+    // ── 2f: repointed from planning.html/planning.js to tickets.html/tickets.js
+    //    (tickets tab markup + JS moved to the Tickets panel). ──
+    const htmlPath = path.join(__dirname, '../webview/tickets.html');
     const html = fs.readFileSync(htmlPath, 'utf8');
 
-    const jsPath = path.join(__dirname, '../webview/planning.js');
+    const jsPath = path.join(__dirname, '../webview/tickets.js');
     const js = fs.readFileSync(jsPath, 'utf8');
 
     // Assertion 1: markup element exists
     assert.ok(
         html.includes('id="tickets-assignee-filter"'),
-        'Expected tickets-assignee-filter select in planning.html'
+        'Expected tickets-assignee-filter select in tickets.html'
     );
 
     // Assertion 2: element accessor in getTicketsTabElements

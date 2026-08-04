@@ -19,10 +19,12 @@ Extract the TICKETS tab out of the Artifacts panel into a dedicated Tickets pane
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Lift the helpers Tickets shares with DOCS/HTML out of planning.js into sharedUtils.js](../plans/tickets-panel-1-lift-shared-webview-helpers-into-sharedutils.md) — **LEAD CODED**
-- [ ] [Extract the TICKETS tab into its own panel, registered in both the VS Code and standalone hosts](../plans/tickets-panel-2-extract-tickets-tab-into-standalone-panel.md) — **LEAD CODED**
-- [ ] [De-collide the three tickets-folder verbs that Planning and Setup both define with different meanings](../plans/tickets-panel-3-decollide-duplicate-tickets-folder-verbs.md) — **LEAD CODED**
-- [ ] [Move the ClickUp and Linear config tabs out of Setup and into the Tickets panel](../plans/tickets-panel-4-move-clickup-and-linear-config-out-of-setup.md) — **LEAD CODED**
+- [ ] [Lift the helpers Tickets shares with DOCS/HTML out of planning.js into sharedUtils.js](../plans/tickets-panel-1-lift-shared-webview-helpers-into-sharedutils.md) — **CODE REVIEWED**
+- [ ] [Extract the TICKETS tab into its own panel, registered in both the VS Code and standalone hosts](../plans/tickets-panel-2-extract-tickets-tab-into-standalone-panel.md) — **CODE REVIEWED**
+- [ ] [De-collide the three tickets-folder verbs that Planning and Setup both define with different meanings](../plans/tickets-panel-3-decollide-duplicate-tickets-folder-verbs.md) — **CODE REVIEWED**
+- [ ] [Move the ClickUp and Linear config tabs out of Setup and into the Tickets panel](../plans/tickets-panel-4-move-clickup-and-linear-config-out-of-setup.md) — **CODE REVIEWED**
+- [ ] [Sweep the dead ticket code left in the Artifacts panel after the Tickets extraction](../plans/tickets-panel-7-sweep-dead-ticket-code-from-planning.md) — **CREATED**
+- [ ] [Give `tickets.root` a single source of truth: wire the host push, then drop the local mirror](../plans/tickets-panel-8-single-source-for-tickets-root.md) — **CREATED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -59,3 +61,7 @@ No subtask was merged, deleted or split — the four are genuinely distinct unit
 | Secrets bridge | 4 only | Untouched by every subtask. Any diff reaching it is a defect. |
 
 **Do not touch the secrets bridge.** Tokens are addressed by secret name, never by panel, so relocating this UI requires no storage change and no re-auth for the install base. `standalone-secrets-bridge-contract.test.js` documents three past bugs where plausible-looking changes destroyed a standalone user's only copy of their tokens. Any diff in plan 4 that touches the secrets path is a mistake.
+
+## Review Findings
+
+**Plans 1 and 3 pass and may move to CODE REVIEWED; plans 2 and 4 are incomplete and must go back to the coder.** Plans 2 and 4 landed their destructive half and skipped their constructive half: the ticket markup moved correctly into `tickets.html` and all eight registration lists are right, but the ~4,600-line JS move, the ~80-verb move and all three migration items never happened, and plan 4 moved nothing at all while deleting Setup's ClickUp/Linear tab buttons. The review fixed every live regression and build break: a syntax error that killed the entire Artifacts panel, a stranded `_positionOverflowPopover` that would `ReferenceError` on any overflow menu, six rewritten-worse `sharedUtils.js` helper copies, seven type errors in a provider that had never been compiled, an unregistered `openTicketsPanel` command wired to three UI entry points, an uninstantiated provider, an unsupplied `ticketsVerb`, a wrong editor-host HTML path, and unreachable ClickUp/Linear configuration. Two registration surfaces beyond the plan's documented eight were also found and wired: `scripts/verb-return-contract-baseline.json` and the `panel-scrollbars` contract. All automated gates are now green (`compile-tests`, `catalog:check`, `parity:check`, `push-routing:check` with `TicketsPanelProvider.ts: 0 (baseline 0)`, `verb-returns:check`, `icons:parity` across 7 panels, `mirror:check`, and the ticket/panel/secrets contract suites); the one remaining repo lint error is `src/webview/terminals.js:1013`, which belongs to the Terminals feature in the same auto-commit and was deliberately left alone. Remaining risk: tickets is non-functional until plan 2's JS move lands, and no manual dual-host verification was possible in this pass.

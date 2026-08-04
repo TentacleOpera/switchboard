@@ -3,10 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' {{CSP_SOURCE}}; script-src 'nonce-{{NONCE}}' {{CSP_SOURCE}}; img-src {{CSP_SOURCE}} https: data:; font-src {{CSP_SOURCE}};">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' {{WEBVIEW_CSP_SOURCE}}; script-src 'nonce-{{NONCE}}' {{WEBVIEW_CSP_SOURCE}}; img-src {{WEBVIEW_CSP_SOURCE}} https: data:; font-src {{WEBVIEW_CSP_SOURCE}};">
     <title>Tickets</title>
     <style>
         :root {
+            color-scheme: dark;
             --panel-bg: #1e1e1e;
             --panel-bg2: #252526;
             --text-primary: #cccccc;
@@ -41,16 +42,465 @@
         .overflow-menu-popover[data-open="true"] { display: flex; flex-direction: column; }
         .overflow-menu-item { display: block; width: 100%; text-align: left; background: none; border: none; padding: 6px 12px; color: var(--text-primary); font-size: 11px; cursor: pointer; }
         .overflow-menu-item:hover { background: var(--border-color); }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-corner {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--vscode-scrollbarSlider-background, var(--border-color));
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--vscode-scrollbarSlider-hoverBackground, var(--text-secondary));
+        }
+
+        /* Firefox only. DO NOT hoist these two properties out of the @supports
+           gate: Chromium 121+ and Safari 17.4+ ignore EVERY ::-webkit-scrollbar
+           rule on a scroller that declares scrollbar-width or scrollbar-color,
+           so an ungated copy silently deletes the 6px styling above. Chromium
+           and Safari report this selector as supported and skip the block;
+           Gecko reports it unsupported and enters it. */
+        @supports not selector(::-webkit-scrollbar) {
+            :root {
+                scrollbar-width: thin;
+                scrollbar-color: var(--border-color) transparent;
+            }
+        }
+
+        /* ── Icon mask rules (byte-exact from planning.html) ─────────────── */
+        .sb-icon {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            vertical-align: -0.125em;
+            background-color: currentColor;
+            flex-shrink: 0;
+            mask-repeat: no-repeat;
+            mask-position: center;
+            mask-size: contain;
+        }
+        .sb-icon-sm { width: 10px; height: 10px; }
+        .sb-icon-xs { width: 6px; height: 6px; }
+        .sb-icon-refresh { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tcmVmcmVzaC5zdmcgLS0+CjwhLS0gZmlsbCBpcyBpZ25vcmVkIHVuZGVyIENTUyBtYXNrOyBmaWxsPSIjNDVlMGU2IiBpcyBmcm96ZW4gZm9yIHBhcml0eSBjaGVjayAtLT4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2Ij4KICA8cGF0aCBmaWxsPSIjNDVlMGU2IiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik04IDNhNSA1IDAgMSAwIDQuNTQ2IDIuOTE0Ljc1Ljc1IDAgMCAxIDEuMzYtLjYzQTYuNSA2LjUgMCAxIDEgOCAxLjVWLjc1YS43NS43NSAwIDAgMSAxLjI4LS41M2wyLjI1IDIuMjVhLjc1Ljc1IDAgMCAxIDAgMS4wNmwtMi4yNSAyLjI1QS43NS43NSAwIDAgMSA4IDUuMjVWM3oiLz4KPC9zdmc+Cg=='); }
+        .sb-icon-chevron-right { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tY2hldnJvbi1yaWdodC5zdmcgLS0+CjwhLS0gZmlsbCBpcyBpZ25vcmVkIHVuZGVyIENTUyBtYXNrOyBmaWxsPSIjNDVlMGU2IiBpcyBmcm96ZW4gZm9yIHBhcml0eSBjaGVjayAtLT4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2Ij4KICA8cGF0aCBmaWxsPSIjNDVlMGU2IiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik02LjIyIDMuMjJhLjc1Ljc1IDAgMCAxIDEuMDYgMGw0LjI1IDQuMjVhLjc1Ljc1IDAgMCAxIDAgMS4wNmwtNC4yNSA0LjI1YS43NS43NSAwIDAgMS0xLjA2LTEuMDZMOS45NCA4IDYuMjIgNC4yOGEuNzUuNzUgMCAwIDEgMC0xLjA2eiIvPgo8L3N2Zz4K'); }
+        .sb-icon-overflow { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tb3ZlcmZsb3cuc3ZnIC0tPgo8IS0tIGZpbGwgaXMgaWdub3JlZCB1bmRlciBDU1MgbWFzazsgZmlsbD0iIzQ1ZTBlNiIgaXMgZnJvemVuIGZvciBwYXJpdHkgY2hlY2sgLS0+CjxzdmcgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB2aWV3Qm94PSIwIDAgMTYgMTYiIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+CiAgPHBhdGggZmlsbD0iIzQ1ZTBlNiIgZmlsbC1ydWxlPSJldmVub2RkIiBkPSJNMyA4YTEuNSAxLjUgMCAxIDEtMyAwIDEuNSAxLjUgMCAwIDEgMyAwem02LjUgMGExLjUgMS41IDAgMSAxLTMgMCAxLjUgMS41IDAgMCAxIDMgMHpNMTYgOGExLjUgMS41IDAgMSAxLTMgMCAxLjUgMS41IDAgMCAxIDMgMHoiLz4KPC9zdmc+Cg=='); }
+
+        /* ── Form element styles (byte-exact from planning.html) ────────── */
+        .workspace-filter-select {
+            font-size: 11px;
+            letter-spacing: 0.5px;
+            padding: 3px 8px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            cursor: pointer;
+            max-width: 160px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .workspace-filter-select:hover {
+            border-color: var(--accent-teal-dim);
+        }
+        .workspace-filter-select:focus {
+            outline: 1px solid var(--accent-teal);
+        }
+
+        .planning-button {
+            padding: 8px 16px;
+            font-size: 11px;
+            font-family: var(--font-family);
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            border: 1px solid var(--accent-teal-dim);
+            background: var(--panel-bg2);
+            color: var(--accent-teal);
+            cursor: pointer;
+            border-radius: 3px;
+            transition: all 0.15s;
+        }
+        .planning-button:active {
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+        }
+        .planning-button:hover:not(:disabled) {
+            background: var(--accent-teal);
+            color: #111111;
+            box-shadow: var(--glow-teal);
+        }
+        .planning-button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            border-color: var(--border-color);
+            color: var(--text-secondary);
+        }
+        .planning-button.secondary {
+            border: 1px solid var(--border-color);
+            background: var(--card-bg);
+            color: var(--text-primary);
+        }
+        .planning-button.secondary:hover:not(:disabled) {
+            background: var(--card-bg-hover);
+            color: var(--text-primary);
+            box-shadow: none;
+        }
+
+        .planning-select {
+            flex: 1;
+            font-size: 12px;
+            padding: 4px 8px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+        }
+
+        /* ── Folder/Source modal styles (byte-exact from planning.html) ──── */
+        .folder-modal {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .folder-modal .modal-content {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+        }
+        .folder-modal .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .folder-modal .modal-header h3 {
+            margin: 0;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .folder-modal .modal-close-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 24px;
+            cursor: pointer;
+            padding: 0;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            transition: all 0.15s;
+        }
+        .folder-modal .modal-close-btn:hover {
+            background: var(--card-bg-hover);
+            color: var(--text-primary);
+        }
+        .folder-modal .modal-body {
+            padding: 20px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .folder-modal .modal-section {
+            margin-bottom: 20px;
+        }
+        .folder-modal .modal-section:last-child {
+            margin-bottom: 0;
+        }
+        .folder-modal .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+        .folder-modal .section-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+        }
+        .folder-modal .section-actions {
+            display: flex;
+            gap: 8px;
+        }
+        .folder-modal .folder-list {
+            max-height: none;
+        }
+
+        /* ── 2f: Agent API modal styles (moved from planning.html). ── */
+        .agent-api-list li {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 10px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--panel-bg2, var(--card-bg, #1a1a2e));
+        }
+        .agent-api-list .agent-api-text { flex: 1; min-width: 0; }
+        .agent-api-list .agent-api-name { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+        .agent-api-list .agent-api-desc { font-size: 11px; color: var(--text-secondary); line-height: 1.4; margin-top: 2px; }
+        .agent-api-list .agent-api-copy { white-space: nowrap; flex: 0 0 auto; }
+
+        /* ── Cyber-theme overrides (byte-exact from planning.html) ──────── */
+        .cyber-theme-enabled .folder-modal .modal-content {
+            background: rgba(10, 10, 10, 0.88);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
+            box-shadow: 0 0 24px color-mix(in srgb, var(--accent-primary) 12%, transparent), 0 8px 32px rgba(0, 0, 0, 0.5);
+        }
+        .cyber-theme-enabled .planning-button {
+            border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
+            box-shadow: 0 0 6px color-mix(in srgb, var(--accent-primary) 10%, transparent);
+        }
+        .cyber-theme-enabled .planning-button:hover:not(:disabled) {
+            box-shadow: 0 0 14px color-mix(in srgb, var(--accent-primary) 45%, transparent);
+        }
+        .cyber-theme-enabled .planning-button.secondary {
+            border-color: var(--border-color);
+            background: var(--card-bg);
+            color: var(--text-primary);
+        }
+        .cyber-theme-enabled .planning-button.secondary:hover:not(:disabled) {
+            background: var(--card-bg-hover);
+            color: var(--text-primary);
+            box-shadow: none;
+        }
+        .cyber-theme-enabled .planning-select,
+        .cyber-theme-enabled .planning-input {
+            background: rgba(10, 10, 10, 0.70);
+            border-color: var(--border-color);
+        }
+        .cyber-theme-enabled .planning-select:focus,
+        .cyber-theme-enabled .planning-input:focus {
+            border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-primary) 15%, transparent);
+        }
+
+        /* ── Agent API list (for the Agent API modal, not moved yet but ──── */
+        /* referenced by getTicketsTabElements — keep the CSS so later slices */
+        /* don't hit unstyled markup) */
+        .agent-api-list li {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 10px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--panel-bg2, var(--card-bg, #1a1a2e));
+        }
+        .agent-api-list .agent-api-text { flex: 1; min-width: 0; }
+        .agent-api-list .agent-api-name { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+        .agent-api-list .agent-api-desc { font-size: 11px; color: var(--text-secondary); line-height: 1.4; margin-top: 2px; }
+        .agent-api-list .agent-api-copy { white-space: nowrap; flex: 0 0 auto; }
+
+        /* ── Hierarchy nav styles (byte-exact from planning.html) ────────── */
+        .tickets-hierarchy-nav {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .tickets-hierarchy-nav select {
+            padding: 4px 8px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-size: 10px;
+        }
+
+        .tickets-hierarchy-nav button {
+            padding: 4px 8px;
+            background: transparent;
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 2px;
+            cursor: pointer;
+            font-size: 9px;
+        }
+
+        .tickets-hierarchy-nav button:hover {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border-color: var(--accent-teal);
+        }
+
+        /* ── Plan 4: ClickUp/Linear config tab styles (moved from setup.html) ── */
+        .hidden { display: none !important; }
+        .flex { display: flex; }
+        .gap-2 { gap: 8px; }
+        .w-full { width: 100%; }
+
+        .startup-row label {
+            display: block;
+            font-size: 9px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 2px;
+        }
+        .startup-row span { color: var(--text-secondary); }
+        .startup-row input,
+        .startup-row select {
+            width: 100%;
+            background: #0a0a0a;
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            padding: 6px 8px;
+            font-size: 11px;
+        }
+        .startup-row input { font-family: var(--font-code); }
+        .startup-row input:focus,
+        .startup-row input:hover,
+        .startup-row select:focus,
+        .startup-row select:hover {
+            border-color: var(--border-bright);
+            outline: none;
+        }
+
+        .hint-text {
+            font-size: 10px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }
+
+        .secondary-btn,
+        .action-btn {
+            border-radius: 2px;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            transition: all 0.2s ease;
+        }
+        .secondary-btn {
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 8px;
+            font-size: 10px;
+        }
+        .secondary-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--border-bright) 10%, transparent);
+            border-color: var(--border-bright);
+            color: var(--text-primary);
+        }
+        .action-btn {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent-teal) 30%, transparent);
+            color: color-mix(in srgb, var(--accent-teal) 80%, var(--text-secondary));
+            padding: 9px;
+            font-size: 11px;
+        }
+        .action-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
+            color: var(--accent-teal);
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+        }
+        @keyframes sb-spin { to { transform: rotate(360deg); } }
+        .action-btn.is-busy,
+        .secondary-btn.is-busy {
+            position: relative;
+            opacity: 0.65;
+            cursor: wait;
+        }
+        .action-btn.is-busy .sb-btn-spinner,
+        .secondary-btn.is-busy .sb-btn-spinner {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            margin-right: 6px;
+            border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+            border-top-color: currentColor;
+            border-radius: 50%;
+            animation: sb-spin 0.6s linear infinite;
+            vertical-align: -2px;
+        }
+        .sb-btn-spinner { display: none; }
+        .action-btn:active:not(:disabled),
+        .secondary-btn:active:not(:disabled) {
+            transform: scale(0.97);
+        }
+
+        .db-subsection {
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border-dim);
+        }
+        .db-subsection:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+        .subsection-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+
+        .modal-input {
+            width: 100%;
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 8px 10px;
+            font-size: 11px;
+            margin-bottom: 10px;
+        }
+        .modal-input:hover,
+        .modal-input:focus {
+            border-color: var(--border-bright);
+            outline: none;
+        }
+
+        /* Config tab content: scrollable, not the tickets flex layout */
+        #clickup-fields.shared-tab-content,
+        #linear-fields.shared-tab-content {
+            display: none;
+            flex: 1;
+            flex-direction: column;
+            overflow-y: auto;
+            padding: 14px;
+        }
+        #clickup-fields.shared-tab-content.active,
+        #linear-fields.shared-tab-content.active {
+            display: flex;
+        }
     </style>
 </head>
 <body class="cyber-theme-enabled" data-panel="tickets">
     <div id="tickets-tab-bar" class="shared-tab-bar">
         <button class="shared-tab-btn active" data-tab="tickets" id="tickets-tab-btn">TICKETS</button>
-        <button class="shared-tab-btn" data-tab="clickup" id="clickup-tab-btn">CLICKUP</button>
-        <button class="shared-tab-btn" data-tab="linear" id="linear-tab-btn">LINEAR</button>
+        <button class="shared-tab-btn" data-tab="clickup" role="tab" aria-selected="false">CLICKUP</button>
+        <button class="shared-tab-btn" data-tab="linear" role="tab" aria-selected="false">LINEAR</button>
     </div>
     <div class="container">
-        <div id="tickets-content" class="shared-tab-content active">
+        <div id="tickets-content" class="shared-tab-content active" data-tab-content="tickets">
             <div class="controls-strip" id="controls-strip-tickets">
                 <div class="controls-strip-row">
                     <div class="tickets-workspace-picker">
@@ -142,6 +592,649 @@
                             </div>
                         </div>
                         <div id="tickets-status-footer" style="display:none; padding: 8px 16px; font-size: 10px; color: var(--text-secondary); border-top: 1px solid var(--border-color); background: var(--panel-bg2, #1a1a2e);"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- ── Plan 4: ClickUp/Linear config tab bodies (moved from setup.html) ── -->
+        <div class="shared-tab-content" id="clickup-fields" data-tab-content="clickup">
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; letter-spacing: 1px;">
+                    Configure ClickUp integration for plan sync, issue import, and custom field mapping.
+                </div>
+
+                <div id="clickup-config-section">
+                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
+                        <div class="subsection-header">
+                            <span>Artifacts Panel Visibility</span>
+                        </div>
+                        <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                            <input id="planning-source-clickup" type="checkbox" checked style="width:auto; margin:0;">
+                            <span>Show docs in Artifacts Panel</span>
+                        </label>
+                    </div>
+                    <!-- Section 1: API Token -->
+                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
+                        <div class="subsection-header">
+                            <span>1. API Token</span>
+                            <span id="clickup-setup-status" style="margin-left:auto; font-size:9px; color:var(--text-secondary);">Not configured</span>
+                        </div>
+                        <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
+                            Sync plans to ClickUp tasks and import tasks from ClickUp.
+                        </div>
+                        <label class="startup-row" style="display:block; margin-top:6px;">
+                            <span style="display:block; margin-bottom:4px;">API Token</span>
+                            <input id="clickup-token-input" type="password" placeholder="Enter ClickUp API token" style="width:100%;">
+                        </label>
+                        <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3; margin-bottom:12px;">
+                            Your key is stored in VS Code's encrypted secret storage (your OS keychain) and is used only to call ClickUp directly — it's never sent to any Switchboard server or logged.
+                        </div>
+                        <label class="startup-row" style="display:block; margin-bottom:6px;">
+                            <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">
+                                Custom Ticket Import Location
+                            </span>
+                            <div style="display:flex; gap:8px; margin-top:4px;">
+                                <input id="clickup-ticket-import-folder" class="ticket-import-folder-input" type="text" placeholder="e.g. /Users/me/Tickets" style="flex:1; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-size:11px; border-radius:4px;">
+                                <button id="btn-browse-clickup-ticket-folder" class="secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
+                            </div>
+                        </label>
+                        <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
+                            Optional. When not set, imported tickets are saved under <code>.switchboard/tickets/clickup/</code> in your workspace. Set a path here only if you want them saved somewhere else. Tickets are kept separate from your Kanban plans — use 'Add to Kanban' to promote a ticket to the board.
+                        </div>
+                        <div style="margin-top:10px; margin-bottom:4px;">
+                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                <input class="tickets-auto-sync-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                <span style="font-size:11px;">Enable Tickets auto-sync</span>
+                            </label>
+                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                When on, tickets save locally whenever a list loads, and local edits auto-push to ClickUp/Linear on file save.
+                            </div>
+                        </div>
+                        <button id="btn-apply-clickup-config" class="action-btn w-full" style="margin-top: 8px;">APPLY CLICKUP SETTINGS</button>
+                        <button id="btn-enable-triage-clickup" class="action-btn w-full" style="margin-top: 8px; display:none;">⚡ ENABLE TRIAGE PIPELINE</button>
+                        <div class="hint-text" style="margin-top:6px; display:none;">
+                            Enables auto-pull (15-min interval), creates a <strong>"Bug Triage"</strong> project filter, and adds an automation rule that imports <code>triage</code>-tagged tickets, moves them to the <strong>Ticket Updater</strong> column, and dispatches the ticket_updater agent. When the card reaches <strong>Completed</strong>, the result is written back to the ticket. Requires a configured Ticket Updater agent (Prompts tab) and the integration to be set up first.
+                        </div>
+                        <div id="clickup-triage-result" style="min-height:16px; font-size:10px; margin-top:6px; display:none;"></div>
+                        <div id="clickup-option-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
+                        <div id="clickup-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
+                    </div>
+
+                    <!-- Section 2: Kanban Board Mapping -->
+                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim); display:none;">
+                        <div class="subsection-header" style="margin-bottom:6px;">
+                            <span>2. Kanban Board Mapping</span>
+                        </div>
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:8px; cursor:pointer;">
+                                <input id="clickup-disclosure-kanban" type="checkbox" style="width:auto; margin:0;">
+                                <span style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Enable Kanban sync</span>
+                            </label>
+                        </div>
+                        <div id="clickup-kanban-body" class="hidden" style="margin-top:10px; margin-left:8px; display:flex; flex-direction:column; gap:10px;">
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="clickup-option-create-folder" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Create or reuse the AI Agents folder</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Create a folder in ClickUp to organize your Switchboard lists
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="clickup-option-create-lists" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Create or reuse mapped lists for visible Kanban columns</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Create ClickUp lists for each Kanban column (e.g., "In Progress" list) to sync plans to tasks
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="clickup-option-create-custom-fields" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Create Switchboard custom fields on the first mapped list</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Add custom fields to track plan metadata like complexity, session ID, and file path
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="clickup-option-exclude-backlog" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Exclude backlog tasks from sync</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Keep sync lightweight by excluding tasks whose status is named "backlog". Only active tasks will be imported.
+                                </div>
+                            </div>
+
+                            <div id="clickup-mapping-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
+
+                            <div id="clickup-mappings-section" class="hidden" style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px;">
+                                <div class="subsection-header" style="margin-bottom:6px;">
+                                    <span>Column Mappings</span>
+                                </div>
+                                <div style="font-size:10px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
+                                    Map current Switchboard columns to ClickUp lists, create missing lists, or exclude columns from sync.
+                                </div>
+                                <div class="flex gap-2" style="margin-bottom:8px;">
+                                    <button id="btn-clickup-create-unmapped" class="secondary-btn w-full">CREATE LISTS FOR UNMAPPED</button>
+                                    <button id="btn-clickup-save-mappings" class="action-btn w-full">SAVE MAPPINGS</button>
+                                </div>
+                                <div id="clickup-mappings-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Section 3: Kanban Automation -->
+                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: none; display:none;">
+                        <div class="subsection-header" style="margin-bottom:6px;">
+                            <span>3. Kanban Automation</span>
+                        </div>
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:8px; cursor:pointer;">
+                                <input id="clickup-disclosure-automation" type="checkbox" style="width:auto; margin:0;">
+                                <span style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Enable automation</span>
+                            </label>
+                        </div>
+                        <div id="clickup-automation-body" class="hidden" style="margin-top:10px; margin-left:8px; display:flex; flex-direction:column; gap:10px;">
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="clickup-option-enable-realtime-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Enable realtime ClickUp push sync for mapped plans</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Automatically push plan changes to ClickUp as you move cards between columns
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="clickup-option-delete-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Delete ClickUp tasks when plans are deleted in Switchboard</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    When enabled, deleting a plan in Switchboard will delete the corresponding task in ClickUp
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="clickup-option-inbound-delete" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Reconcile inbound deletes from ClickUp</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    When enabled, deleting a task in ClickUp will tombstone the mapped local plan
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="clickup-option-complete-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Sync completed status to ClickUp</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    When enabled, moving a plan to COMPLETED in Switchboard will update the ClickUp task status
+                                </div>
+                            </div>
+
+                            <div id="clickup-automation-section" class="hidden" style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px;">
+                                <div class="subsection-header" style="margin-bottom:6px;">
+                                    <span>ClickUp Automation</span>
+                                </div>
+                                <div style="margin-bottom:12px;">
+                                    <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                        <input id="clickup-option-enable-auto-pull" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                        <span>Enable ClickUp auto-pull and automation polling</span>
+                                    </label>
+                                    <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                        Periodically pull ClickUp task updates and run automation rules to create plans from tasks
+                                </div>
+                                </div>
+                                <div style="font-size:10px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
+                                    Create a normal Switchboard plan when a ClickUp task matches a tag, then write the result back when that plan reaches the configured final column.
+                                </div>
+                                <div class="flex gap-2" style="margin-bottom:8px;">
+                                    <button id="btn-clickup-add-rule" class="secondary-btn w-full">ADD RULE</button>
+                                    <button id="btn-clickup-save-automation" class="action-btn w-full">SAVE AUTOMATION</button>
+                                </div>
+                                <div style="font-size:9px; letter-spacing:1px; color:var(--text-secondary); margin:8px 0 4px;">RULES</div>
+                                <div id="clickup-automation-rules-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+        </div>
+
+        <div class="shared-tab-content" id="linear-fields" data-tab-content="linear">
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; letter-spacing: 1px;">
+                    Configure Linear integration for plan sync, issue import, and workflow state mapping.
+                </div>
+
+                <div id="linear-config-section">
+                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
+                        <div class="subsection-header">
+                            <span>Artifacts Panel Visibility</span>
+                        </div>
+                        <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                            <input id="planning-source-linear" type="checkbox" checked style="width:auto; margin:0;">
+                            <span>Show docs in Artifacts Panel</span>
+                        </label>
+                    </div>
+                    <!-- Section 1: API Token -->
+                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
+                        <div class="subsection-header">
+                            <span>1. API Token</span>
+                            <span id="linear-setup-status" style="margin-left:auto; font-size:9px; color:var(--text-secondary);">Not configured</span>
+                        </div>
+                        <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
+                            Sync plans to Linear issues and import issues from Linear.
+                        </div>
+                        <label class="startup-row" style="display:block; margin-top:6px;">
+                            <span style="display:block; margin-bottom:4px;">API Token</span>
+                            <input id="linear-token-input" type="password" placeholder="Enter Linear API token" style="width:100%;">
+                        </label>
+                        <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3; margin-bottom:12px;">
+                            Your key is stored in VS Code's encrypted secret storage (your OS keychain) and is used only to call Linear directly — it's never sent to any Switchboard server or logged.
+                        </div>
+                        <label class="startup-row" style="display:block; margin-bottom:6px;">
+                            <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">
+                                Custom Ticket Import Location
+                            </span>
+                            <div style="display:flex; gap:8px; margin-top:4px;">
+                                <input id="linear-ticket-import-folder" class="ticket-import-folder-input" type="text" placeholder="e.g. /Users/me/Tickets" style="flex:1; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-size:11px; border-radius:4px;">
+                                <button id="btn-browse-linear-ticket-folder" class="secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
+                            </div>
+                        </label>
+                        <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
+                            Optional. When not set, imported tickets are saved under <code>.switchboard/tickets/linear/</code> in your workspace. Set a path here only if you want them saved somewhere else. Tickets are kept separate from your Kanban plans — use 'Add to Kanban' to promote a ticket to the board.
+                        </div>
+                        <div style="margin-top:10px; margin-bottom:4px;">
+                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                <input class="tickets-auto-sync-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                <span style="font-size:11px;">Enable Tickets auto-sync</span>
+                            </label>
+                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                When on, tickets save locally whenever a list loads, and local edits auto-push to ClickUp/Linear on file save.
+                            </div>
+                        </div>
+                        <button id="btn-apply-linear-config" class="action-btn w-full" style="margin-top: 8px;">APPLY LINEAR SETTINGS</button>
+                        <button id="btn-enable-triage-linear" class="action-btn w-full" style="margin-top: 8px; display:none;">⚡ ENABLE TRIAGE PIPELINE</button>
+                        <div class="hint-text" style="margin-top:6px; display:none;">
+                            Enables auto-pull (15-min interval), creates a <strong>"Bug Triage"</strong> project filter, and adds an automation rule that imports <code>triage</code>-tagged tickets, moves them to the <strong>Ticket Updater</strong> column, and dispatches the ticket_updater agent. When the card reaches <strong>Completed</strong>, the result is written back to the ticket. Requires a configured Ticket Updater agent (Prompts tab) and the integration to be set up first.
+                        </div>
+                        <div id="linear-triage-result" style="min-height:16px; font-size:10px; margin-top:6px; display:none;"></div>
+                        <div id="linear-option-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
+                        <div id="linear-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
+                    </div>
+
+                    <!-- Section 2: Kanban Board Mapping -->
+                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim); display:none;">
+                        <div class="subsection-header" style="margin-bottom:6px;">
+                            <span>2. Kanban Board Mapping</span>
+                        </div>
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:8px; cursor:pointer;">
+                                <input id="linear-disclosure-kanban" type="checkbox" style="width:auto; margin:0;">
+                                <span style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Enable Kanban sync</span>
+                            </label>
+                        </div>
+                        <div id="linear-kanban-body" class="hidden" style="margin-top:10px; margin-left:8px; display:flex; flex-direction:column; gap:10px;">
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="linear-option-map-columns" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Map visible Kanban columns to Linear workflow states</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Link your Kanban columns (e.g., "In Progress") to Linear states so plan movements sync to Linear issues
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="linear-option-create-label" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Create or reuse the Switchboard label</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Add a "switchboard" label to Linear issues created by Switchboard for easy filtering
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="linear-option-exclude-backlog" type="checkbox" checked style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Exclude backlog issues from sync</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Keep the plugin sync lightweight by excluding backlog issues. Only active and planned issues will be imported.
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <span>Include projects (comma-separated names)</span>
+                                </label>
+                                <div style="display:flex; gap:8px; margin-top:4px;">
+                                    <input id="linear-option-include-projects" type="text" placeholder="e.g., Frontend, Backend" style="flex:1; background: #0a0a0a;">
+                                    <button id="linear-browse-include-projects" class="secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
+                                </div>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Only sync issues from these projects. Leave empty to sync all projects in the team.
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <span>Exclude projects (comma-separated names)</span>
+                                </label>
+                                <div style="display:flex; gap:8px; margin-top:4px;">
+                                    <input id="linear-option-exclude-projects" type="text" placeholder="e.g., Archived, Internal" style="flex:1; background: #0a0a0a;">
+                                    <button id="linear-browse-exclude-projects" class="secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
+                                </div>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Exclude these projects from sync even if they match the include filter.
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Section 3: Kanban Automation -->
+                    <div class="db-subsection" style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: none; display:none;">
+                        <div class="subsection-header" style="margin-bottom:6px;">
+                            <span>3. Kanban Automation</span>
+                        </div>
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:8px; cursor:pointer;">
+                                <input id="linear-disclosure-automation" type="checkbox" style="width:auto; margin:0;">
+                                <span style="font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Enable automation</span>
+                            </label>
+                        </div>
+                        <div id="linear-automation-body" class="hidden" style="margin-top:10px; margin-left:8px; display:flex; flex-direction:column; gap:10px;">
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="linear-option-enable-realtime-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Enable realtime Linear push sync for mapped plans</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    Automatically push plan changes to Linear as you move cards between columns
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="linear-option-enable-complete-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Sync completed status to Linear</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    When enabled, marking a plan as complete in Switchboard will move the Linear issue to your mapped completed state
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="linear-option-delete-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Archive Linear issues when plans are deleted in Switchboard</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    When enabled, deleting a plan in Switchboard will archive the corresponding issue in Linear
+                                </div>
+                            </div>
+                            <div>
+                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                    <input id="linear-option-inbound-delete" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                    <span>Reconcile inbound deletes from Linear</span>
+                                </label>
+                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                    When enabled, deleting/archiving an issue in Linear will tombstone the mapped local plan
+                                </div>
+                            </div>
+
+                            <div id="linear-automation-section" class="hidden" style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px;">
+                                <div class="subsection-header" style="margin-bottom:6px;">
+                                    <span>Linear Automation</span>
+                                </div>
+                                <div style="margin-bottom:12px;">
+                                    <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                        <input id="linear-option-enable-auto-pull" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                        <span>Enable Linear auto-pull and automation polling</span>
+                                    </label>
+                                    <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                        Periodically pull Linear issue updates and run automation rules to create plans from issues
+                                    </div>
+                                </div>
+                                <div style="font-size:10px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
+                                    Create a normal Switchboard plan when a Linear issue matches a label and state, then write the result back when that plan reaches the configured final column.
+                                </div>
+                                <div class="flex gap-2" style="margin-bottom:8px;">
+                                    <button id="btn-linear-add-rule" class="secondary-btn w-full">ADD RULE</button>
+                                    <button id="btn-linear-save-automation" class="action-btn w-full">SAVE AUTOMATION</button>
+                                </div>
+                                <div style="font-size:9px; letter-spacing:1px; color:var(--text-secondary); margin:8px 0 4px;">RULES</div>
+                                <div id="linear-automation-rules-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+        </div>
+    </div>
+         the close button ids and the move-mode controls are referenced by
+         tickets.js (slice 2b/2c). The Agent API modal stays in planning.html
+         until its own slice. -->
+    <div class="folder-modal" id="tickets-source-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="tickets-source-modal-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="tickets-source-modal-title">Source</h3>
+                <button class="modal-close-btn" id="btn-close-tickets-source-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
+                <!-- Provider selector — preserve class="workspace-filter-select" and style -->
+                <div>
+                    <label style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); display: block; margin-bottom: 4px;">Provider</label>
+                    <select id="tickets-provider-selector" class="workspace-filter-select" style="display:none; margin-left: 0;">
+                        <option value="clickup">ClickUp</option>
+                        <option value="linear">Linear</option>
+                    </select>
+                </div>
+                <!-- Hierarchy nav — preserve style="display:none; flex-wrap: wrap; gap: 8px; align-items: center;" -->
+                <div>
+                    <label style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); display: block; margin-bottom: 4px;">Hierarchy</label>
+                    <div id="tickets-hierarchy-nav" style="display:none; flex-wrap: wrap; gap: 8px; align-items: center;"></div>
+                </div>
+                <!-- Move-mode controls — shown only when the Source modal opens in move mode.
+                     The hierarchy nav is ClickUp-only and mutates the active source, so in
+                     move mode we hide it and present a themed target <select> populated via
+                     fetchMoveTargets (which works for both ClickUp and Linear). -->
+                <div id="tickets-source-move-controls" style="display:none; flex-direction: column; gap: 8px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                        <input type="text" id="tickets-source-move-search" placeholder="Search target..." style="flex: 1; padding: 4px 8px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-primary); font-size: 12px; box-sizing: border-box; border-radius: 3px;">
+                        <button type="button" id="tickets-source-move-refresh" class="strip-btn" title="Refresh list" style="padding: 4px 8px;"><span class="sb-icon sb-icon-sm sb-icon-refresh" aria-hidden="true"></span></button>
+                    </div>
+                    <select id="tickets-source-move-target-select" size="10" style="width: 100%; padding: 4px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 3px; font-size: 12px; height: 180px; box-sizing: border-box;">
+                        <option value="" disabled selected>Loading targets...</option>
+                    </select>
+                    <div id="tickets-source-move-linear-unassign-wrap" style="display:none; font-size: 12px; color: var(--text-secondary);">
+                        <label style="display:flex; align-items:center; gap:4px;">
+                            <input type="checkbox" id="tickets-source-move-unassign"> Unassign from project
+                        </label>
+                    </div>
+                </div>
+                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
+                    <button id="btn-close-tickets-source-modal-action" class="strip-btn">Close</button>
+                    <button id="btn-apply-move-ticket" class="planning-button" style="display:none; margin: 0; padding: 4px 12px;" disabled>Move</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Folder modal — ticket-scoped copy of planning.html's #folder-modal.
+         The DOCS tab still uses the planning.html original; this is a separate
+         instance for the Tickets panel's own webview. -->
+    <div class="folder-modal" id="folder-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="folder-modal-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="folder-modal-title">Manage Tickets Folders</h3>
+                <button class="modal-close-btn" id="btn-close-folder-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-section">
+                    <div class="section-header">
+                        <span class="section-title">Configured Folders</span>
+                        <div class="section-actions">
+                            <button id="btn-refresh-folders-modal" class="strip-btn" title="Refresh folders">&#8635;</button>
+                            <button id="btn-add-folder-modal" class="strip-btn">Add Folder</button>
+                        </div>
+                    </div>
+                    <div id="folder-list-modal" class="folder-list">
+                        <!-- Folder items rendered by JS -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Attachments modal — moved from planning.html (slice 2e). Reuses the
+         .folder-modal / .modal-content / .modal-close-btn / .modal-body CSS
+         already defined in this file's <style> block. -->
+    <div class="folder-modal" id="attachments-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="attachments-modal-title">
+        <div class="modal-content" style="max-width: 600px;">
+            <div class="modal-header">
+                <h3 id="attachments-modal-title">Attachments</h3>
+                <button class="modal-close-btn" id="btn-close-attachments-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" style="margin-top: 10px;">
+                <div id="attachments-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 400px; overflow-y: auto; text-align: left;"></div>
+            </div>
+        </div>
+    </div>
+    <!-- ── 2f: Agent API modal (moved from planning.html). ── -->
+    <div class="folder-modal" id="tickets-agent-api-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="tickets-agent-api-modal-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="tickets-agent-api-modal-title">Agent API</h3>
+                <button class="modal-close-btn" id="btn-close-tickets-agent-api-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="margin: 0 0 14px 0; font-size: 12px; color: var(--text-secondary); line-height: 1.5;">
+                    Switchboard runs a local HTTP bridge so your coding agent can read and change tickets
+                    <strong>without the MCP server</strong>. Agents discover it via
+                    <code>.switchboard/api-server-port.txt</code> and call it with the matching skill.
+                    Pick a capability below and copy a ready-to-paste instruction for your agent.
+                </p>
+                <div id="tickets-agent-api-provider-label" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); margin-bottom: 10px;"></div>
+                <ul id="tickets-agent-api-list" class="agent-api-list" style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px;"></ul>
+                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;">
+                    <button id="btn-close-tickets-agent-api-modal-action" class="strip-btn">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Panel-level ticket modals (moved from planning.html in slice 2f) ── -->
+    <div class="folder-modal" id="create-ticket-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="create-ticket-modal-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="create-ticket-modal-title">Create New Ticket</h3>
+                <button class="modal-close-btn" id="btn-close-create-ticket-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label for="create-ticket-title" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Title *</label>
+                    <input type="text" id="create-ticket-title" class="planning-input" placeholder="Enter ticket title" required style="width: 100%; box-sizing: border-box;" />
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label for="create-ticket-description" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Description</label>
+                    <textarea id="create-ticket-description" class="planning-input" placeholder="Enter ticket description (optional)" style="width: 100%; height: 100px; resize: vertical; box-sizing: border-box; font-family: inherit;"></textarea>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label for="create-ticket-status" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Status</label>
+                    <select id="create-ticket-status" class="planning-input" style="width: 100%; box-sizing: border-box;">
+                        <option value="">Default</option>
+                    </select>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label for="create-ticket-priority" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Priority</label>
+                    <select id="create-ticket-priority" class="planning-input" style="width: 100%; box-sizing: border-box;">
+                        <option value="">Default</option>
+                    </select>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Assignees</label>
+                    <div id="create-ticket-assignees" style="border: 1px solid var(--vscode-input-border, transparent); border-radius: 2px; padding: 6px; max-height: 140px; overflow-y: auto;">
+                        <div style="font-size: 12px; color: var(--text-secondary);">Loading members…</div>
+                    </div>
+                </div>
+                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
+                    <button id="btn-cancel-create-ticket" class="strip-btn">Cancel</button>
+                    <button id="btn-submit-create-ticket" class="planning-button" style="margin: 0; padding: 4px 12px;">Create</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="folder-modal" id="ticket-status-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="ticket-status-modal-title">
+        <div class="modal-content" style="max-width: 420px;">
+            <div class="modal-header">
+                <h3 id="ticket-status-modal-title">Change Status</h3>
+                <button class="modal-close-btn" id="btn-close-ticket-status-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" style="margin-top: 10px;">
+                <div style="display: flex; flex-direction: column; gap: 12px;">
+                    <select id="ticket-status-select" class="kanban-meta-dropdown" style="width: 100%; background: var(--panel-bg2, #1a1a2e); border: 1px solid var(--border-color); color: var(--text-primary); font-size: 12px; padding: 4px 8px; box-sizing: border-box; border-radius: 3px;"></select>
+                    <div id="ticket-status-modal-loading" style="display:none; font-size:12px; color: var(--text-secondary);">Loading statuses…</div>
+                    <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px;">
+                        <button id="btn-cancel-ticket-status" class="strip-btn">Cancel</button>
+                        <button id="btn-save-ticket-status" class="planning-button" style="margin: 0; padding: 4px 12px;">Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="ticket-priority-popover" style="display: none; position: absolute; z-index: 1000; background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); padding: 4px 0; min-width: 120px;"></div>
+
+    <!-- ── Assign / tags / convert-subtask modals (moved from planning.html, slice 2f) ── -->
+    <div class="folder-modal" id="convert-subtask-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="convert-subtask-modal-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="convert-subtask-modal-title">Convert to Subtask</h3>
+                <button class="modal-close-btn" id="btn-close-convert-subtask-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
+                <div id="convert-subtask-info" style="font-size: 12px; color: var(--text-secondary);"></div>
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label for="convert-subtask-search" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Search Parent Ticket</label>
+                    <input type="text" id="convert-subtask-search" class="planning-input" placeholder="Type to search..." style="width: 100%; box-sizing: border-box;" />
+                </div>
+                <div id="convert-subtask-list" style="max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--border-color); padding: 8px; border-radius: 4px;"></div>
+                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
+                    <button id="btn-cancel-convert-subtask" class="strip-btn">Cancel</button>
+                    <button id="btn-confirm-convert-subtask" class="planning-button" style="margin: 0; padding: 4px 12px;" disabled>Convert</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="folder-modal" id="tags-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="tags-modal-title">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3 id="tags-modal-title">Edit Tags</h3>
+                <button class="modal-close-btn" id="btn-close-tags-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" style="margin-top: 10px;">
+                <div style="display: flex; flex-direction: column; gap: 12px;">
+                    <div>
+                        <label style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); display: block; margin-bottom: 8px;">Available Tags</label>
+                        <div id="tags-available-list" style="display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto;"></div>
+                    </div>
+                    <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px;">
+                        <button id="btn-cancel-tags" class="strip-btn">Cancel</button>
+                        <button id="btn-save-tags" class="planning-button" style="margin: 0; padding: 4px 12px;">Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="folder-modal" id="assign-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="assign-modal-title">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3 id="assign-modal-title">Assign Members</h3>
+                <button class="modal-close-btn" id="btn-close-assign-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" style="margin-top: 10px;">
+                <div style="display: flex; flex-direction: column; gap: 12px;">
+                    <input id="assign-search" type="text" placeholder="Search members..." style="width: 100%; margin-bottom: 8px; background: var(--input-bg); border: 1px solid var(--border-color); color: var(--text-primary); font-size: 12px; padding: 4px 8px; box-sizing: border-box; border-radius: 3px;">
+                    <div>
+                        <div id="assign-available-list" style="display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto;"></div>
+                    </div>
+                    <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px;">
+                        <button id="btn-cancel-assign" class="strip-btn">Cancel</button>
+                        <button id="btn-save-assign" class="planning-button" style="margin: 0; padding: 4px 12px;">Save</button>
                     </div>
                 </div>
             </div>
