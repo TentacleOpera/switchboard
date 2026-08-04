@@ -437,13 +437,17 @@ regeneration step in the same change.
 
 ## Uncertain Assumptions
 
-The following are external and cannot be settled by reading this repository. The user has been advised to
-run web research to confirm them before implementation:
+The following are external and cannot be settled by reading this repository. A research pass run
+2026-08-04 covered the sibling plans' npm-packaging and file-permission questions and **did not address
+either item below** — both remain genuinely open:
 
 - **That detaching survives the target agent harness.** Some harnesses reap the whole process group on
   tool-call exit, which would kill a detached child regardless of `detached: true` / `.unref()`. This is a
-  property of Antigravity's tool-execution model, not of this repo. If it does not hold, the entire
-  launch-and-detach design needs a different vehicle, so verify it **before** implementing change 1.
+  property of Antigravity's tool-execution model, not of this repo, and no amount of documentation
+  research substitutes for running the experiment in the host. If it does not hold, the entire
+  launch-and-detach design needs a different vehicle, so **verify it empirically before implementing
+  change 1** — spawn a detached `sleep 60` from an Antigravity tool call and check whether it is still
+  alive afterwards. That five-minute test gates the plan's central mechanism.
 - **That Antigravity 2 offers no extension mechanism at all** (previously confirmed against
   antigravity.google: it extends via *skills*, and its product material describes no extension
   marketplace). Worth a re-check because it is load-bearing for the "launch is the normal path there"

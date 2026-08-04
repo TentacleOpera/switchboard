@@ -188,7 +188,7 @@ test('every undoSnapshot literal in the file carries a pins key', () => {
             `undoSnapshot literal #${count} must carry a pins: key — site at offset ${start}`
         );
     }
-    assert.ok(count >= 2, `expected at least 2 undoSnapshot literals (assignToFocusedPane + hide handler), found ${count}`);
+    assert.ok(count >= 1, `expected at least 1 undoSnapshot literal (unassign handler; navigation undo removed), found ${count}`);
 });
 
 // --------------------------------------------------------------- hide handler clears pin

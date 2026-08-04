@@ -749,17 +749,22 @@
             border-color: var(--accent-teal);
             background: color-mix(in srgb, var(--accent-teal) 14%, transparent);
         }
-        /* A pinned pane is visually distinct from the merely-focused one: focus is a
-           1px inset teal ring, pin is a 3px inset teal edge that survives focus
-           moving away. Both are inset shadows, never borders — a border would
-           shrink the content box by 2px and fire the per-terminal ResizeObserver
-           (a refit + a {t:'resize'} frame to the shared pty), which is exactly why
-           the adjacent .terminal-pane.focused rule uses box-shadow too. */
+        /* A pinned pane is visually distinct from the merely-selected one: pin is a
+           3px inset teal edge that survives focus moving away. Inset shadow, never
+           a border — a border would shrink the content box by 2px and fire the
+           per-terminal ResizeObserver (a refit + a {t:'resize'} frame to the shared
+           pty).
+           The selection component is NEUTRAL, not teal. box-shadow does not merge
+           across two matching class rules, so the pinned+selected pane needs its
+           own declaration or it loses one of the two — but that declaration must
+           not resurrect the teal ring .terminal-pane.focused was demoted for.
+           `.focused` is SELECTION; only .has-caret (an outline, so no contention
+           here) may claim the accent. */
         .terminal-pane.pinned {
             box-shadow: inset 3px 0 0 var(--accent-teal);
         }
         .terminal-pane.pinned.focused {
-            box-shadow: inset 0 0 0 1px var(--accent-teal), inset 3px 0 0 var(--accent-teal);
+            box-shadow: inset 0 0 0 1px var(--border-bright), inset 3px 0 0 var(--accent-teal);
         }
         .terminal-item.assigned .item-name { color: var(--text-primary); }
 

@@ -153,3 +153,9 @@ No other test changes are required — the all-pinned toast test, the `undoLastA
 ---
 
 **Recommendation:** Complexity 2 → **Send to Intern**.
+
+---
+
+## Completion Report
+
+Removed the navigation undo toast from `assignToFocusedPane` in `src/webview/terminals.js`: deleted the `undoSnapshot = {...}` literal and the `showPaneToast(...)` displacement-toast call, replaced the `else`-branch comment, and kept the `hidePaneToast()` retraction gated on `!displaced`. Relaxed the contract-test count assertion in `src/test/terminal-pane-pinning-contract.test.js` from `>= 2` to `>= 1` with an updated message. The unassign-button undo, the all-pinned informational toast, and the `undoLastAssignment`/`sanitizePaneAssignments`/rename-follows-snapshot logic are all left intact — `undoSnapshot` now has exactly one producer (the unassign handler). No issues encountered; grep confirms no dangling navigation-undo callers remain.

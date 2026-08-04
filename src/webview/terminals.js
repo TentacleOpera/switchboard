@@ -1144,7 +1144,10 @@
         }
 
         const displaced = paneAssignments[target] || null;
-        undoSnapshot = { slots: paneAssignments.slice(), pins: pinnedPanes.slice(), name: terminalName, displaced, paneIndex: target };
+        // Navigation undo removed: rapid terminal switching is the primary interaction
+        // and an Undo toast on every displacing click reads as nagging. The unassign
+        // button still keeps its own undo (see the unassignBtn handler in
+        // createPaneElement). hidePaneToast() below retracts any lingering unassign toast.
 
         if (existingIndex !== -1) {
             // Reachable only for a terminal parked in a NON-rendered slot (the
@@ -1169,11 +1172,8 @@
         }
         postFleetStateToShell();
 
-        if (displaced) {
-            showPaneToast(`Pane ${target + 1}: ${displaced} → ${terminalName}`, undoLastAssignment);
-        } else {
-            // Nothing was destroyed, but undoSnapshot was just replaced — retract any
-            // toast still on screen from the previous mutation.
+        // No navigation toast. Still retract any stale toast from a prior unassign.
+        if (!displaced) {
             hidePaneToast();
         }
 
@@ -1269,8 +1269,10 @@
         paneEl.classList.add(`is-input-${state.key}`);
         const chip = paneEl.querySelector('.pane-input-state');
         if (!chip) { return; }
-        const terseHeader = effectiveLayout === '2x3' || effectiveLayout === '3x3';
-        chip.textContent = terseHeader ? '' : state.label;
+        // isTerseLayout(), not a second inline copy of the layout list — the render
+        // path in updatePaneElement uses the helper, and two definitions of "terse"
+        // would let the out-of-band refresh print a word the render path hides.
+        chip.textContent = isTerseLayout() ? '' : state.label;
         chip.title = state.label;
     }
 
@@ -1379,6 +1381,25 @@
         // it would snatch the caret back from wherever the operator just put it.
         if (hadFocus && !paneGridEl.contains(document.activeElement)) {
             focusPaneTerminal(focusedPaneIndex);
+        }
+
+        // Then sweep the caret ring if the caret is not actually in the grid.
+        //
+        // NOT redundant with term.onBlur. Chromium fires no blur when a focused
+        // node is detached, and this function detaches focused nodes two ways: the
+        // surplus-pane removal above, and updatePaneElement clearing a slot that
+        // just went empty (contentEl.textContent = ''). Panes are REUSED rather
+        // than rebuilt, so a class stranded that way outlives the render on a live
+        // element — and the reclaim above cannot save it, because it early-returns
+        // when the focused slot is the one that emptied. The result was an empty
+        // pane wearing the teal "type here" outline, which is the precise lie this
+        // ring exists to replace.
+        //
+        // Ordered after the reclaim on purpose: term.focus() dispatches focus
+        // synchronously, so a successful reclaim has already put activeElement back
+        // inside the grid and this is a no-op. Idempotent and O(panes).
+        if (!paneGridEl.contains(document.activeElement)) {
+            clearCaretRing();
         }
     }
 
@@ -2528,21 +2549,25 @@
         // it cannot answer "will my keystrokes land here?".
         //
         // Resolve the pane element inside the handler, never at wire-up time:
-        // renderPaneGrid reuses pane elements but a future change could reparent
-        // this container, so a captured reference is fragile. closest() reads
-        // the live tree.
+        // updatePaneElement reparents this container whenever the slot's
+        // assignment changes, so a captured reference goes stale on the first
+        // reassignment. closest() reads the live tree.
         term.onFocus(() => {
             clearCaretRing();
             const paneEl = entry.container.closest('.terminal-pane');
             if (paneEl) { paneEl.classList.add('has-caret'); }
         });
-        // Clear ALL panes, not the one that blurred. Chromium does not fire blur
-        // when a focused node is detached, so a reparent leaves no blur to react
-        // to (the class dies with the discarded pane element instead, and the
-        // re-focus at renderPaneGrid's tail re-applies it). For the blurs that DO
-        // fire — sidebar click, sibling iframe, window blur — closest() may still
-        // resolve to an outgoing node, so a sweep is the only form that is correct
-        // in every case. Idempotent and O(panes); a grid is nine elements.
+        // Clear ALL panes, not the one that blurred. For the blurs that DO fire —
+        // sidebar click, pane-header button, sibling iframe, window blur —
+        // closest() may resolve to an outgoing node, so a sweep is the only form
+        // correct in every case. Idempotent and O(panes); a grid is nine elements.
+        //
+        // These two handlers are NOT sufficient on their own. Chromium fires no
+        // blur when a focused node is detached, and renderPaneGrid reconciles the
+        // grid IN PLACE — pane elements are reused, so a class stranded by a
+        // detached container survives on a live element instead of dying with a
+        // discarded one. renderPaneGrid's tail carries the matching sweep; see the
+        // note there.
         term.onBlur(() => clearCaretRing());
 
         term.onData((data) => {

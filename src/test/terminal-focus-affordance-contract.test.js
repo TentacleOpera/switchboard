@@ -52,6 +52,32 @@ test('blur clears EVERY pane, not the one that blurred', () => {
         'onBlur must go through clearCaretRing, not a single-pane classList.remove');
 });
 
+test('renderPaneGrid sweeps a ring stranded by a detached container', () => {
+    // Panes are reconciled IN PLACE, so a class stranded by a removed/reparented
+    // container survives on a LIVE element. Chromium fires no blur on detach and
+    // the focus reclaim early-returns when the focused slot is the one that
+    // emptied, so onFocus/onBlur alone cannot cover it.
+    const fn = block(terminalsJs, 'function renderPaneGrid() {', 'function createPaneElement(');
+    assert.ok(/if \(!paneGridEl\.contains\(document\.activeElement\)\) \{\s*clearCaretRing\(\);/.test(fn),
+        'renderPaneGrid must sweep the caret ring when the caret is not inside the grid');
+    assert.ok(fn.indexOf('focusPaneTerminal(focusedPaneIndex)') < fn.lastIndexOf('clearCaretRing()'),
+        'the sweep must run AFTER the focus reclaim, or it wipes the ring the reclaim just set');
+});
+
+test('selection never claims the accent, not even on a pinned pane', () => {
+    // .focused was demoted to a neutral border precisely because selection is not
+    // keyboard focus. .pinned.focused needs its own box-shadow (the property does
+    // not merge across class rules) and is the one place the teal ring can sneak
+    // back in.
+    const pinnedFocused = terminalsHtml.match(/\.terminal-pane\.pinned\.focused\s*\{([^}]*)\}/);
+    assert.ok(pinnedFocused, '.terminal-pane.pinned.focused rule is missing');
+    assert.ok(!/inset 0 0 0 1px var\(--accent-teal\)/.test(pinnedFocused[1]),
+        'the selection component of .pinned.focused must not be the accent — that is the ring .focused was demoted for');
+    const focused = terminalsHtml.match(/\.terminal-pane\.focused\s*\{([^}]*)\}/);
+    assert.ok(focused && !/var\(--accent-teal\)/.test(focused[1]),
+        '.terminal-pane.focused must not use the accent — selection survives the document losing focus');
+});
+
 test('the ring uses outline, not box-shadow', () => {
     const ring = block(terminalsHtml, '.terminal-pane.has-caret {', '}');
     assert.ok(ring.includes('outline:'),
