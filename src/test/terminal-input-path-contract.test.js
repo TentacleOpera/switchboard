@@ -131,8 +131,20 @@ test('the mode scanner ranks resets and DECSET by position, in one pass', () => 
         'params must be compared whole, or 12004/20040 false-positive and \\x1b[?1049;2004h is missed');
     assert.ok(scan.includes('\\x1bc|') && scan.includes('\\x1b\\[!p'),
         'RIS and DECSTR must be alternatives in the SAME pass — scanned separately, an unrelated DECSET after a reset makes the reset lose a position compare and the mode goes stale-true');
-    assert.ok(/\[0-9;\]\{0,\d+\}/.test(scan),
-        'the param class must be length-bounded: an unterminated \\x1b[? followed by a long digit run backtracks quadratically on the output hot path, on the event loop owning every terminal');
+    // Pinned on the MATCHER DECLARATION, not the body. A body-wide grep for a
+    // bounded param class is satisfied by the carry-fragment test at the end of the
+    // method, which carries its own {0,64} — so the matcher can be unbounded while
+    // a body-wide assertion still passes. Measured on this pattern, unbounding it
+    // costs ~4x on 80 KB of digit junk and stays LINEAR (backtracking is one pass
+    // per start position, and starts cannot overlap a digit run), so this is a
+    // constant cap on per-start backtracking rather than the catastrophic-blowup
+    // guard the plan described. Keep the bound: it is free, it holds the matcher and
+    // the carry test to the same ceiling, and MODE_SCAN_CARRY_MAX is meaningless
+    // without it.
+    const modeEventDecl = /const modeEvent = \/[^\n]*\/g;/.exec(scan);
+    assert.ok(modeEventDecl, 'the single-pass matcher must be declared as `const modeEvent = /…/g`');
+    assert.ok(/\[0-9;\]\{0,\d+\}/.test(modeEventDecl[0]),
+        'the param class in the MATCHER ITSELF must be length-bounded — an unterminated \\x1b[? followed by a long digit run otherwise backtracks the whole run on the output hot path, on the event loop owning every terminal in the fleet');
     assert.ok(scan.includes('modeScanCarry'),
         'pty reads split anywhere, so \\x1b[?20 + 04h across two chunks must still be detected');
 
@@ -169,6 +181,117 @@ test('hello omits the mode when unobserved and the client re-arms from it', () =
         'a rebuilt view starts with bracketedPasteMode false and would paste unbracketed — one Enter per line to a raw-mode agent CLI');
     assert.ok(!arm.includes('batchQueue'),
         'the mode escape must bypass batchQueue: that path is billed to pendingAckChars and synthetic chars corrupt the backpressure ledger');
+});
+
+/**
+ * The SHIPPED scanner, executed — not a hand-copied regex and not a grep.
+ *
+ * Everything else about this change is source text, but the scanner is pure, so
+ * the one part that CAN be tested for behaviour is tested for behaviour. The carry
+ * specifically: it is load-bearing (pty reads split wherever the kernel says, so
+ * `\x1b[?20` + `04h` in two chunks is the common case, not the exotic one), it is
+ * where the pre-review scanner was actually broken — it re-fired a consumed reset
+ * on every subsequent chunk — and neither a substring assertion nor an inline copy
+ * of the regex can detect either failure. The body is extracted from source so a
+ * duplicate cannot drift from the original.
+ */
+function loadScanner() {
+    const SIG = 'private scanBracketedPasteMode(terminalName: string, data: string): void {';
+    const start = gatewayCode.indexOf(SIG);
+    assert.ok(start !== -1, `scanner signature changed — update SIG in loadScanner: ${SIG}`);
+    let depth = 0;
+    let end = -1;
+    for (let i = start + SIG.length - 1; i < gatewayCode.length; i++) {
+        if (gatewayCode[i] === '{') { depth++; }
+        else if (gatewayCode[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+    }
+    assert.ok(end !== -1, 'unbalanced braces in scanBracketedPasteMode');
+    // The only type annotation in the body. Kept as a targeted strip rather than a
+    // general one so a NEW annotation fails loudly here instead of silently.
+    const body = gatewayCode.slice(start + SIG.length, end)
+        .replace('let match: RegExpExecArray | null;', 'let match;');
+    const leftover = /:\s*(?:RegExpExecArray|string|number|boolean)\b/.exec(body);
+    assert.ok(!leftover, `unstripped type annotation in the extracted body (${leftover && leftover[0]}) — add it to the replace list above`);
+
+    const carryMax = /MODE_SCAN_CARRY_MAX = (\d+)/.exec(gatewayCode);
+    assert.ok(carryMax, 'MODE_SCAN_CARRY_MAX must be declared');
+    const scan = new Function('MODE_SCAN_CARRY_MAX', 'terminalName', 'data', `"use strict";${body}`);
+    return {
+        carryMax: Number(carryMax[1]),
+        gw() {
+            return {
+                bracketedPasteModes: new Map(),
+                modeScanCarry: new Map(),
+                feed(name, ...chunks) {
+                    for (const c of chunks) { scan.call(this, Number(carryMax[1]), name, c); }
+                    return this.bracketedPasteModes.get(name);
+                },
+            };
+        },
+    };
+}
+
+test('the scanner detects a DECSET split across pty reads', () => {
+    const { gw } = loadScanner();
+    assert.strictEqual(gw().feed('t', 'out\x1b[?20', '04h more'), true, 'split mid-params');
+    assert.strictEqual(gw().feed('t', 'out\x1b', '[?2004h'), true, 'split after the bare ESC');
+    assert.strictEqual(gw().feed('t', '\x1b[?2004', 'h'), true, 'split before the final byte');
+    assert.strictEqual(gw().feed('t', ...'hi\x1b[?2004h!'.split('')), true, 'one byte per read');
+    assert.strictEqual(gw().feed('t', 'tail\x1b', 'c'), false, 'RIS split across reads');
+    assert.strictEqual(gw().feed('t', 'tail\x1b[!', 'p'), false, 'DECSTR split across reads');
+    assert.strictEqual(gw().feed('t', 'plain output\n'), undefined,
+        'a terminal that never emitted 2004 must stay UNOBSERVED, not default to false');
+});
+
+test('the carry cannot re-fire a sequence the scan already consumed', () => {
+    const { gw } = loadScanner();
+    const a = gw();
+    a.feed('t', '\x1b[?2004h');
+    assert.strictEqual(a.feed('t', 'lots of plain output\n'), true, 'a consumed enable must survive later plain output');
+    // The pre-review defect: a consumed reset left in the carry re-fired on every
+    // later chunk. Here the enable must win because it is genuinely later.
+    assert.strictEqual(gw().feed('t', '\x1b[?2004h', '\x1bc', '\x1b[?2004h'), true);
+    // ...and the reset must win when IT is later, across chunk boundaries, even
+    // with an unrelated DECSET and a colour SGR in between.
+    assert.strictEqual(gw().feed('t', '\x1b[?2004h', 'text\x1b[0m', '\x1bc', '\x1b[?1000h'), false);
+    const b = gw();
+    b.feed('t', 'red \x1b[31m');
+    assert.strictEqual(b.modeScanCarry.get('t'), '', 'a colour SGR tail must be dropped, never carried');
+});
+
+test('the carry is bounded and per-terminal', () => {
+    const { gw, carryMax } = loadScanner();
+    const drip = gw();
+    for (let n = 0; n < 400; n++) {
+        drip.feed('t', n === 0 ? '\x1b[?' : '1');
+        assert.ok((drip.modeScanCarry.get('t') || '').length <= carryMax,
+            `carry grew past MODE_SCAN_CARRY_MAX — an unterminated escape must degrade to a missed detection, never unbounded growth`);
+    }
+    assert.strictEqual(drip.bracketedPasteModes.get('t'), undefined, 'a digit drip must not set the mode');
+
+    const cross = gw();
+    cross.feed('a', '\x1b[?20');
+    cross.feed('b', '04h');
+    assert.strictEqual(cross.bracketedPasteModes.get('b'), undefined,
+        "terminal b must not complete terminal a's partial escape — the carry is per terminal");
+    assert.strictEqual(cross.feed('a', '04h'), true, "a's own carry must still complete");
+});
+
+test('a hostile digit run does not stall the output hot path', () => {
+    const { gw } = loadScanner();
+    // M7, automated — a THROUGHPUT FLOOR, not a test of the {0,64} bound. Measured,
+    // the bound changes this from ~0.05ms to ~0.2ms on 80 KB: both are linear, so no
+    // timing assertion can discriminate the bound (the structural assertion above
+    // does that). What this DOES catch is a future edit to the matcher that
+    // introduces genuine catastrophic backtracking — nested quantifiers, an
+    // alternation that can match the empty string inside a loop — on the scanner
+    // that runs on every flush of every terminal in the fleet.
+    const junk = '\x1b[?' + '0123456789;'.repeat(4000);
+    const start = process.hrtime.bigint();
+    gw().feed('t', junk);
+    gw().feed('t', ('\x1b[?' + '9'.repeat(64)).repeat(2000));
+    const ms = Number(process.hrtime.bigint() - start) / 1e6;
+    assert.ok(ms < 1000, `scanning ${junk.length} chars of digit junk took ${ms.toFixed(0)}ms — the matcher has acquired catastrophic backtracking`);
 });
 
 test('the recorded mode is torn down with the terminal', () => {

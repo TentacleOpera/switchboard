@@ -47,7 +47,7 @@ stack traces (`:6940`-area handling for V23, V27, V29) — same category of avoi
 ## Metadata
 - **Tags:** database, bugfix, reliability, devops
 - **Complexity:** 4
-- **Repo:** `switchboard`
+- **Project:** browser-switchboard
 
 ## User Review Required (decisions, with defaults)
 
@@ -72,9 +72,11 @@ stack traces (`:6940`-area handling for V23, V27, V29) — same category of avoi
 ## Complexity Audit
 
 ### Routine
-- The detection signal is available at creation time: `_initialize` already distinguishes "No DB exists
-  … not creating" from "Loaded existing DB", and it logs which path it took.
-- `migration_meta` already exists as the stamping mechanism.
+- The detection signal is available at creation time — and it is a whole method, not a flag:
+  `createIfMissing()` (`:1809-1865`) is the ONLY path that creates a database
+  (`new SQL.Database()` at `:1836`). `_initialize` never creates — on a missing file it logs
+  `No DB exists at … - not creating` and returns false (`:6339-6347`).
+- `migration_meta` already exists as the stamping mechanism (`setMigrationVersion`, `:1880`).
 
 ### Complex / Risky
 - **Migration-runner changes are high-consequence.** A mistake that stamps migrations as applied on a
@@ -108,29 +110,49 @@ stack traces (`:6940`-area handling for V23, V27, V29) — same category of avoi
 
 **Risk summary.** The bug being fixed is cosmetic; the fix touches the most dangerous file in the
 project. Getting the freshness signal wrong converts harmless log noise into skipped migrations on real
-data — strictly worse than the problem. The discipline that keeps this safe: derive freshness only from
-the code path that created the file, add the stamping inside the creation transaction, and keep a
-V19-fixture test so the historical chain stays covered. If that discipline cannot be met cheaply, the
-minimal alternative (User Review 1's column-explicit INSERT, or simply suppressing V20's stack trace on
-an empty table) is an acceptable smaller win.
+data — strictly worse than the problem. The discipline that keeps this safe: stamp only inside
+`createIfMissing()` (the sole create path — no flag, no inference from table contents), and prove
+stamped-fresh and migrated-fresh databases converge via the schema-equivalence diff in the
+Verification Plan. If that discipline cannot be met cheaply, the minimal alternative (User Review 1's
+column-explicit INSERT, or simply suppressing V20's stack trace on an empty table) is an acceptable
+smaller win.
 
 ## Proposed Changes
 
-### `src/services/KanbanDatabase.ts` — freshness flag
+### `src/services/KanbanDatabase.ts` — stamp the baseline on the create path
 
-- **Context.** `_initialize` distinguishes create from load (its logs read `No DB exists at … - not
-  creating` versus `Loaded existing DB from …`); `SCHEMA_TABLES` defines the current 34-column `plans`;
-  `_runMigrations` executes the chain; `migration_meta` holds
-  `kanban_db_migration_version` (57 on current builds).
-- **Logic.** When the database is created from `SCHEMA_TABLES` in this call, mark it as born at the
-  current baseline and have `_runMigrations` stamp the version to the baseline without executing the
-  historical steps.
-- **Implementation.** Set an instance-level `_createdFresh = true` on the create path only; in
-  `_runMigrations`, if `_createdFresh` and the stored version is unset, write the baseline version and
-  return before the historical steps. Do the write in the same transaction that created the tables.
-- **Edge Cases.** Never infer freshness from `SELECT COUNT(*) FROM plans` — an existing database with
-  zero plans is not fresh and must still migrate. If the create path is ambiguous in some caller, fail
-  closed by running the migrations (today's behaviour).
+- **Context.** `createIfMissing():1809-1865` is the only creation path: `new SQL.Database()`
+  at `:1836`, then `SCHEMA_TABLES (create)` + `_ensureSchemaColumns()` + `_applySchemaIndexes()`
+  + `_runMigrations()` at `:1838-1842`. `_runMigrations` gates V20 and later on
+  `getMigrationVersion()` (e.g. V20 at `:6923-6924`; V40–V57 each stamp at
+  `:7516`-`:8028`); V2–V19 run ungated every boot but are idempotent try/catch no-ops.
+  `migration_meta` holds `kanban_db_migration_version` (57 on current builds).
+- **Logic.** A database created from current `SCHEMA_TABLES` in this call already satisfies
+  everything the version-gated historical migrations were written to achieve. Stamp the
+  baseline in the create path so the gated chain (V20–V57) is skipped; the ungated V2–V19
+  blocks still run and no-op as they do today.
+- **Implementation.**
+  > **Superseded:** Set an instance-level `_createdFresh = true` on the create path only; in
+  > `_runMigrations`, if `_createdFresh` and the stored version is unset, write the baseline
+  > version and return before the historical steps.
+  > **Reason:** The plan located the create/load distinction in `_initialize`, but
+  > `_initialize` never creates — it refuses (`:6339-6347`). The real create path is
+  > `createIfMissing()`, which is itself an unambiguous freshness signal, so no instance flag
+  > is needed at all. A flag also invites a future caller to set it wrongly.
+  > **Replaced with:** In `createIfMissing()`, immediately after `_applySchemaIndexes(
+  > 'SCHEMA_INDEXES (create)')` (`:1841`) and before `_runMigrations()` (`:1842`), write the
+  > current baseline version via `setMigrationVersion(CURRENT_SCHEMA_VERSION)` (introduce a
+  > named constant equal to the highest gated migration, currently 57, next to
+  > `MIGRATION_VERSION_KEY`). The version gates then skip V20–V57 naturally; no runner-branch
+  > or flag is introduced. The write happens while `this._db` is the freshly created
+  > in-memory database, before the first `_persist()` at `:1846`, so creation and stamping
+  > land in the same on-disk write.
+- **Edge Cases.** Never infer freshness from `SELECT COUNT(*) FROM plans` — an existing
+  database with zero plans is not fresh and must still migrate. If some future caller creates
+  a DB through a different route, it takes today's behaviour (migrations run) — fail closed.
+  Two processes racing `createIfMissing` on the same path: the stamp is part of the creation
+  write, so it cannot interleave with another process's migration run any worse than creation
+  itself already can.
 
 ### `src/services/KanbanDatabase.ts` — V20 hardening
 
@@ -157,32 +179,43 @@ an empty table) is an acceptable smaller win.
 
 ## Verification Plan
 
-### Automated Tests
+> Per dispatch directive, no automated tests and no compilation steps are part of this
+> verification plan — manual verification only.
 
-- **Contract — fresh DB boots clean.** Create a new workspace, initialise `KanbanDatabase`, and assert
-  the captured log contains no `migration FAILED`, no `ERR`/stack traces, and no `already exists`
-  stack traces. Assert `kanban_db_migration_version` equals the current baseline (57) and that the
-  `plans` table has the full current column set.
-- **Contract — historical chain still runs where it applies.** Build a V19-shaped fixture DB with rows,
-  run initialisation, and assert V20 through V57 actually execute and the data survives (including the
-  `plan_file`+`workspace_id` uniqueness V20 exists to establish). This is the test that prevents the
-  fix from becoming a skipped-migration bug.
-- **Regression — a zero-plan existing DB is not treated as fresh.** Take a migrated DB, delete all
-  plans, re-initialise, and assert migrations are not re-stamped or skipped incorrectly.
-- **Regression — rollback preserved.** Force a V20 failure against an incompatible fixture and assert
-  the DB is unchanged, matching today's `rolled back. DB unchanged` guarantee.
-- **Manual smoke.** `node dist/standalone/cli.js --workspace <brand-new-dir> --no-open` and read the
-  boot log top to bottom: it should contain no failures.
+- **Manual — fresh DB boots clean.** Create a brand-new scratch workspace, boot the
+  standalone CLI against it, and read the initialisation log top to bottom: no
+  `migration FAILED`, no V20 step output, no `already exists` stack traces. Then query
+  `migration_meta` and assert `kanban_db_migration_version = 57`.
+- **Manual — schema equivalence (the load-bearing check).** Produce two scratch databases:
+  one created with the fix (stamped, migrations skipped) and one created on the build
+  *without* the fix (full historical chain, V20 rolled back). Diff the output of
+  `SELECT sql FROM sqlite_master ORDER BY name` (plus a `PRAGMA table_info` dump per table)
+  between the two. They MUST be identical — this is what proves "stamped fresh" and
+  "migrated fresh" converge, and what prevents the fix from becoming a skipped-migration bug.
+  Pay specific attention to whatever V55's hot/cold partition init materialises on an empty
+  DB.
+- **Manual — historical chain still runs where it applies.** Take a real pre-V20 database
+  (an old install's `kanban.db`, or one hand-shaped to V19) with rows in `plans`, open it
+  with the fixed build, and confirm V20–V57 execute, the data survives, and the version
+  ends at 57.
+- **Manual — zero-plan existing DB is not treated as fresh.** Open a migrated DB, delete all
+  plans, re-open, and confirm no re-stamping and no skipped-migration log lines.
+- **Manual — board works on a stamped DB.** Seed a plan into the fresh workspace and confirm
+  it appears on the standalone board (`GET /kanban/board`).
 
 ## Uncertain Assumptions
 
-- That every caller of `KanbanDatabase` creates via the same path, so one freshness flag is sufficient.
-  The archive DB takes a different route (it logs `No DB exists … - not creating` repeatedly during
-  boot), which suggests more than one initialisation entry point — enumerate them before relying on a
-  single flag.
-- That the baseline to stamp is the current maximum (57) rather than a deliberate lower baseline. If the
-  team wants some post-V20 migrations to still run on fresh DBs (e.g. data repairs that also seed
-  defaults), the baseline is a judgement call, not a constant.
+- That stamping 57 skips nothing a fresh DB actually needs. Most version-gated migrations
+  are schema/data repairs that are no-ops on an empty current-schema DB, but V55's
+  "hot/cold partition initialized" may materialise state (config flags, archive structures)
+  rather than just tables. This is resolvable locally — the schema-equivalence diff above
+  is the arbiter — but if V55 (or any gated migration) proves to do something
+  `SCHEMA_TABLES` doesn't, the baseline constant must be lowered to just below that
+  migration instead of 57.
+- That V20 through V57 are ALL individually version-gated (spot-checked: V20 `:6924`, V40–V57
+  each stamp inside a gate). Confirm V21–V39 carry gates before relying on the stamp to skip
+  them; any ungated migration in that range still runs and must stay idempotent — same as
+  today.
 
 ## Out of Scope
 

@@ -51,7 +51,7 @@ odd one out: not declined, just misresolved.
 ## Metadata
 - **Tags:** bugfix, api, cli, docs
 - **Complexity:** 3
-- **Repo:** `switchboard`
+- **Project:** browser-switchboard
 
 ## User Review Required (decisions, with defaults)
 
@@ -67,25 +67,26 @@ odd one out: not declined, just misresolved.
    the ordering change alone fixes the reported symptom.
 
 3. **Should the catalog be a build artifact shipped in `dist/`?**
-   **Default: yes, if it is not already.** If `protocol-catalog.json` is only present in a git checkout
-   and not in the published package, then an npm-installed CLI has nothing to serve regardless of
-   resolution order. Confirm what the packaging step includes before choosing the resolution root; this
-   is the one thing that could turn a three-line fix into a packaging change.
+   **RESOLVED 2026-08-04: it already ships.** `npm pack --dry-run` lists `protocol-catalog.json`
+   (573 kB) in the package, and `package.json` has no `files` whitelist or `.npmignore` to
+   exclude it. `resolveRepoRoot()` (`bootstrap.ts:110-113`, `path.resolve(__dirname, '..',
+   '..')` from `dist/standalone/cli.js`) lands on the package root under an npx install, so
+   `path.join(repoRoot, 'protocol-catalog.json')` resolves in BOTH the repo checkout and an
+   installed CLI. No packaging change is needed; the three-line fix is the whole fix.
 
 ## Complexity Audit
 
 ### Routine
-- Supplying an existing option hook in one more place, mirroring `TaskViewerProvider.ts:2331`.
+- Supplying an existing option hook in one more place, mirroring `TaskViewerProvider.ts:2340-2354`.
 - The error path and status code already exist and are correct.
 
 ### Complex / Risky
-- **Packaging.** If the catalog is not shipped with the CLI, the fix is inert in the exact scenario it
-  targets (a globally installed `switchboard` binary). This must be checked, not assumed — see User
-  Review 3.
-- **Path resolution under a bundle.** `bootstrap.ts` computes `repoRoot`; whether that points at the
-  repo root or at `dist/` when running from an installed package needs verifying, since the same class
-  of bundler-versus-filesystem confusion already bit `ptyBackend.ts` (see
-  `standalone-pty-spawn-helper-chmod`). Do not use `require.resolve` here for the same reason.
+- ~~**Packaging.**~~ **Resolved:** the catalog ships in the npm package and `repoRoot` resolves
+  to the install root (see User Review 3). The inert-fix scenario is closed.
+- **Path resolution under a bundle.** Use plain `path.join(repoRoot, ...)`, never
+  `require.resolve` — webpack rewrites `require.resolve` to a numeric module id (the same
+  bundler-versus-filesystem confusion that broke `ptyBackend.ts`; see
+  `standalone-pty-spawn-helper-chmod`).
 
 ## Edge-Case & Dependency Audit
 
@@ -115,28 +116,37 @@ verification must run from an installed/packed CLI, not only from the repo.
 ### `src/standalone/bootstrap.ts`
 
 - **Context.** `LocalApiServer` construction and its options object (the `terminalVerb` supplier is at
-  `:1339`, in the same options literal); `repoRoot` already in scope and passed to the panel providers
-  at `:608` and `:627`.
-- **Logic.** Add a `catalogProvider` that reads `protocol-catalog.json` from the CLI's install root and
-  returns the parsed object, or `null` when absent — `null` is the contract
-  `_handleGetCatalog:2319-2326` already expects and turns into a 404.
+  `:1375-1380`, in the same options literal); `repoRoot` already in scope (`:450`) and passed to the
+  panel HTML getters at `:488-503`. The extension's own provider to mirror is
+  `TaskViewerProvider.ts:2340-2354` (candidate list: extension path, then workspace root).
+- **Logic.** Add a `catalogProvider` that tries `protocol-catalog.json` at the CLI's install root
+  first and the served workspace second (matching the keep-but-demote decision in User Review 2),
+  returns the parsed object, or `null` when absent from both — `null` is the contract
+  `_handleGetCatalog:2317-2326` already expects and turns into a 404.
 - **Implementation.**
   ```ts
   // The catalog describes THIS SERVER's protocol, so it lives with the installation,
   // not in the served workspace. Without this hook LocalApiServer falls back to
   // path.join(workspaceRoot, 'protocol-catalog.json') (:2330), which only exists when
-  // you happen to be serving the switchboard repo itself.
+  // you happen to be serving the switchboard repo itself. Plain path.join, never
+  // require.resolve — webpack rewrites require.resolve to a numeric module id.
   catalogProvider: async () => {
-      try {
-          const raw = await fs.promises.readFile(path.join(repoRoot, 'protocol-catalog.json'), 'utf8');
-          return JSON.parse(raw);
-      } catch { return null; }
+      const candidates = [
+          path.join(repoRoot, 'protocol-catalog.json'),
+          path.join(workspaceRoot, 'protocol-catalog.json'),
+      ];
+      for (const catalogPath of candidates) {
+          try {
+              const raw = await fs.promises.readFile(catalogPath, 'utf8');
+              return JSON.parse(raw);
+          } catch { /* try next candidate */ }
+      }
+      return null;
   },
   ```
 - **Edge Cases.** Return `null` (not a throw) on a missing or malformed file so the route produces its
-  documented 404 rather than a 500. If `repoRoot` proves to point at `dist/` in an installed package,
-  resolve one level up — determine this empirically from a packed install rather than by reading the
-  build config.
+  documented 404 rather than a 500. `repoRoot` is confirmed to be the install root in a packed package
+  (User Review 3), so no `dist/`-level adjustment is needed.
 
 ### `src/services/LocalApiServer.ts`
 
@@ -163,30 +173,31 @@ verification must run from an installed/packed CLI, not only from the repo.
 
 ## Verification Plan
 
-### Automated Tests
+> Per dispatch directive, no automated tests and no compilation steps are part of this
+> verification plan — manual verification only.
 
-- **Contract — standalone serves the catalog for an arbitrary workspace.** Boot standalone with
-  `--workspace <scratch>` (a directory containing no `protocol-catalog.json`) and assert `GET /catalog`
-  returns 200 with a parsed object containing known entries — e.g. the `/phone-a-friend` path that
-  exists in the current catalog.
-- **Contract — honest 404 when the artifact is genuinely absent.** With the catalog file removed from
-  the install root, assert a 404 whose message no longer tells the user to generate one in their
-  workspace.
-- **Packaging test.** From `npm pack` output (or an equivalent staged install), assert
-  `protocol-catalog.json` is present in the package and reachable from the resolved install root. This
-  is the assertion that catches the inert-fix scenario.
-- **Regression — extension host unchanged.** Assert the extension still resolves through its own
-  `catalogProvider` (`TaskViewerProvider.ts:2331`) and returns 200.
-- **Manual smoke.** From an installed CLI in an unrelated project: `curl localhost:<port>/catalog` and
-  confirm a catalog, not an instruction to generate one.
+- **Manual — standalone serves the catalog for an arbitrary workspace.** Boot standalone with
+  `--workspace <scratch>` (a directory containing no `protocol-catalog.json`) and confirm
+  `GET /catalog` returns 200 with a parsed object containing known entries — e.g. the
+  `/phone-a-friend` path that exists in the current catalog.
+- **Manual — honest 404 when the artifact is genuinely absent.** Temporarily rename the
+  install-root `protocol-catalog.json`, restart, and confirm a 404 whose message no longer
+  tells the user to generate one in their workspace. Restore the file.
+- **Manual — packed-install check.** Inspect `npm pack --dry-run` output (or a staged
+  install) and confirm `protocol-catalog.json` is present at the package root — already
+  verified once on 2026-08-04; re-verify if the packaging config changes.
+- **Manual — extension host unchanged.** In the extension host, confirm `GET /catalog` still
+  returns 200 through its own `catalogProvider` (`TaskViewerProvider.ts:2340`).
+- **Manual smoke.** From an installed CLI in an unrelated project: `curl
+  localhost:<port>/catalog` and confirm a catalog, not an instruction to generate one.
 
 ## Uncertain Assumptions
 
-- That `protocol-catalog.json` is shipped rather than checked-in-only. If it is generated at build time
-  and excluded from the package, this plan grows a packaging change — resolve before implementation.
-- That `repoRoot` in `bootstrap.ts` is the install root under a packed install. Verify against a real
-  packed install; the bundle-versus-filesystem distinction has already produced one bug in this
-  codebase.
+- ~~That `protocol-catalog.json` is shipped rather than checked-in-only.~~ **Resolved
+  2026-08-04:** `npm pack --dry-run` includes it (573 kB).
+- ~~That `repoRoot` in `bootstrap.ts` is the install root under a packed install.~~
+  **Resolved 2026-08-04:** `resolveRepoRoot()` is `path.resolve(__dirname, '..', '..')` from
+  `dist/standalone/cli.js`, which is the package root in a packed install.
 
 ## Out of Scope
 

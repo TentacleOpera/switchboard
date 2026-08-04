@@ -465,10 +465,16 @@ export class TerminalWsGateway {
      * `20040` cannot false-positive, and a multi-param set like `\x1b[?1049;2004h` is
      * still honoured.
      *
-     * The `{0,MODE_SCAN_CARRY_MAX}` bound is a security control, not tidiness: an
-     * unbounded `[0-9;]*` after `\x1b[?` backtracks one character at a time when no
-     * final byte follows, so a program printing tens of kilobytes of digits would
-     * hang the event loop of the process owning every terminal in the fleet.
+     * The `{0,MODE_SCAN_CARRY_MAX}` bound caps per-start backtracking: an unbounded
+     * `[0-9;]*` after `\x1b[?` walks back one character at a time when no final byte
+     * follows, so a program printing tens of kilobytes of digits pays for the whole
+     * run on the event loop of the process owning every terminal in the fleet.
+     * MEASURED, that is linear, not catastrophic — ~4x on 80 KB of digit junk, since
+     * one pass is spent per start position and start positions cannot overlap a
+     * digit run. So this is cheap insurance, NOT the ReDoS control the plan claimed.
+     * Keep it anyway: it is free, and it holds the matcher to the same ceiling as
+     * the carry-fragment test below, which is what makes MODE_SCAN_CARRY_MAX mean
+     * anything.
      *
      * The carry is load-bearing: pty reads split wherever the kernel says, so
      * `\x1b[?20` and `04h` routinely arrive in different chunks and a stateless scan

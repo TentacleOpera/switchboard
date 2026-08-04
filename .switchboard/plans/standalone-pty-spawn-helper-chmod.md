@@ -68,7 +68,7 @@ Code's own terminals.
 ## Metadata
 - **Tags:** bugfix, reliability, cli, infrastructure
 - **Complexity:** 3
-- **Repo:** `switchboard`
+- **Project:** browser-switchboard
 
 ## User Review Required (decisions, with defaults)
 
@@ -166,29 +166,39 @@ handled by reporting rather than failing.
 
 ## Verification Plan
 
-### Automated Tests
+> Per dispatch directive, no automated tests and no compilation steps are part of this
+> verification plan — manual verification only. The bug is bundle-only, so every check below
+> runs against a produced `dist/standalone/cli.js` (from whatever build produced the VSIX/
+> package under test), never through ts-node — an unbundled run resolves correctly and would
+> show nothing wrong.
 
-- **Unit — resolver returns a string.** Assert `resolveNodePtyDir()` returns a string containing
-  `node-pty` when run unbundled, and `undefined` (not a throw) when resolution fails.
-- **Build-artifact test — the bug cannot return.** Run `npm run compile`, then boot
-  `node dist/standalone/cli.js --workspace <scratch> --port 0 --no-open` and assert stderr/stdout
-  contains **no** `Failed to chmod darwin spawn-helper` and no `ERR_INVALID_ARG_TYPE`. This is the
-  assertion that matters — it is the only one that exercises the bundled path.
-- **Integration — the chmod actually happens.** On darwin, `chmod -x` the prebuilt `spawn-helper` in a
-  disposable install, boot standalone, and assert (a) the mode is restored to `0o755` and (b)
-  `POST /terminals/verb/ptyCreateTerminal {"role":"shell"}` succeeds. Skip on non-darwin. This is the
-  test that proves the latent failure is closed.
-- **Regression — memoised once.** Spy on `fs.chmodSync` and assert one call across repeated
-  `getPtyModule()` invocations.
+- **Manual — boot log is clean.** Boot the built CLI (`node dist/standalone/cli.js
+  --workspace <scratch> --no-open`) and confirm stdout/stderr contains **no** `Failed to
+  chmod darwin spawn-helper` and no `ERR_INVALID_ARG_TYPE`. This is the assertion that
+  matters — it is the only one that exercises the bundled path.
+- **Manual — the chmod actually happens (darwin).** In a disposable copy of the install,
+  `chmod -x node_modules/node-pty/prebuilds/darwin-<arch>/spawn-helper`, boot standalone, and
+  confirm (a) the mode is restored to `0o755` and (b) `POST /terminals/verb/ptyCreateTerminal
+  {"role":"shell"}` succeeds. Skip on non-darwin. This is the check that proves the latent
+  failure is closed. (Live evidence it matters: on this machine the `darwin-x64` helper
+  currently sits at `-rw-r--r--` while `darwin-arm64` has `+x` — verified 2026-08-04.)
+- **Manual — unbundled path unharmed.** Run the same module resolution unbundled (tests /
+  ts-node context) and confirm the `typeof __non_webpack_require__` guard falls through to
+  plain `require.resolve` with no new warning output.
+- **Manual — memoised once.** With verbose logging, confirm the chmod block runs once across
+  repeated PTY availability probes / terminal creations in one process.
 
 ## Uncertain Assumptions
 
-- That `__non_webpack_require__` is available in this webpack configuration and target. It is standard
-  for `target: node` builds, but the `typeof` guard means a wrong assumption degrades to the warning
-  path rather than breaking the build.
-- That `prebuilds/darwin-<arch>/spawn-helper` is still the correct layout for the pinned `node-pty`
-  version. Verify against the installed package rather than the code's assumption, since a version bump
-  could move it and `fs.existsSync` would then silently skip forever.
+- ~~That `__non_webpack_require__` is available in this webpack configuration and target.~~
+  **Resolved 2026-08-04:** both webpack configs use `target: 'node'` (`webpack.config.js:14`,
+  `:129`), where `__non_webpack_require__` is the documented escape hatch. The `typeof` guard
+  remains mandatory for the unbundled path, where the identifier is not defined.
+- ~~That `prebuilds/darwin-<arch>/spawn-helper` is still the correct layout for the pinned
+  `node-pty` version.~~ **Resolved 2026-08-04 against the installed package:**
+  `node_modules/node-pty/prebuilds/{darwin-arm64,darwin-x64,win32-arm64,win32-x64}/spawn-helper`
+  exist with exactly this layout. Keep the `fs.existsSync` guard regardless — a future
+  version bump could move it.
 
 ## Out of Scope
 
