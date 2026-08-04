@@ -146,6 +146,19 @@ test('the already-seated follow-branch returns before any pin logic mutates a sl
     );
 });
 
+test('vacating a parked slot vacates its pin — no pin left on an emptied slot', () => {
+    // The only reachable path to `paneAssignments[existingIndex] = null` is a
+    // terminal parked in a NON-rendered slot (the follow-branch returns for every
+    // rendered one). If that slot was pinned — pin in 3x3, shrink to 2h — the pin
+    // outlives its occupant on a slot that renders no marker, and saveLayoutSettings
+    // persists it. sanitize would heal it, but only on the next list refresh.
+    const fn = block(terminalsJs, 'function assignToFocusedPane(terminalName) {', 'function undoLastAssignment() {');
+    assert.ok(
+        /paneAssignments\[existingIndex\] = null;[\s\S]{0,120}?pinnedPanes\[existingIndex\] = false;/.test(fn),
+        'clearing the old slot must clear its pin too — an empty pinned slot reserves a seat nothing can fill'
+    );
+});
+
 // --------------------------------------------------------------- undo coherence
 
 test('undoLastAssignment restores pins', () => {

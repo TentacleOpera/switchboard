@@ -1147,7 +1147,18 @@
         undoSnapshot = { slots: paneAssignments.slice(), pins: pinnedPanes.slice(), name: terminalName, displaced, paneIndex: target };
 
         if (existingIndex !== -1) {
+            // Reachable only for a terminal parked in a NON-rendered slot (the
+            // follow-branch above already returned for every rendered one), e.g. a
+            // pin set in 3x3 and then shrunk to 2h. Vacating that slot must vacate
+            // its pin with it: a pin on an empty slot reserves a seat nothing can
+            // fill, it is persisted by the saveLayoutSettings below, and it renders
+            // no marker on an empty pane — so widening back to 3x3 would show a pane
+            // the sidebar silently refuses to seat into. Same invariant sanitize
+            // enforces; enforced here too because sanitize only runs on a list
+            // refresh, not on a sidebar click. existingIndex can never equal target
+            // (target is always < rendered), so this cannot clear the new seat's pin.
             paneAssignments[existingIndex] = null;
+            pinnedPanes[existingIndex] = false;
         }
 
         paneAssignments[target] = terminalName;
