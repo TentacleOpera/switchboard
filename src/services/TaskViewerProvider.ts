@@ -1945,7 +1945,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (!payload.cwd && !payload.worktreePath) {
                     const selected = this._kanbanProvider?.getCurrentWorkspaceRoot();
                     if (selected) {
-                        payload = { ...payload, cwd: resolveEffectiveWorkspaceRootFromMappings(selected) };
+                        // Must go through the KanbanProvider wrapper, not the bare mappings
+                        // resolver: the wrapper honours the legacy `kanban.controlPlaneRoot`
+                        // override FIRST. `createAgentGrid` (extension.ts) resolves via the
+                        // wrapper, and this path exists to match the grid button exactly —
+                        // calling the module function directly makes the two buttons open
+                        // different repos for anyone who has a control-plane root set.
+                        payload = {
+                            ...payload,
+                            cwd: this._kanbanProvider?.resolveEffectiveWorkspaceRoot(selected)
+                                ?? resolveEffectiveWorkspaceRootFromMappings(selected)
+                        };
                     }
                 }
             }

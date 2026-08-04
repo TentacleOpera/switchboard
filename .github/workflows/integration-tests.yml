@@ -344,6 +344,28 @@ jobs:
       - name: Terminal scroll affordance contract (scoped scrollbar, dual-source jump pill)
         run: npm run test:contract:terminal-scroll-affordance
 
+      # NOT wired, deliberately — `test:contract:terminal-operations-no-periodic-reopen`
+      # is now runnable (the script was missing entirely until the multi-parent review
+      # pass) but it FAILS on main, and it fails STALE rather than catching a
+      # regression: its fourth assertion pins `toFields`, `getCustomAgents` and
+      # `getJulesAutoSyncSetting` in implementation.html, and none of those three
+      # identifiers exist in that file any more. Assertions 1-3 pass. Repairing it
+      # means re-deriving the current Terminal Operations onboarding contract, which
+      # is its own ticket; wiring it as-is would just paint CI red. Named in the
+      # regression surface of every terminal plan since it was written.
+
+      # Multi-parent workspace terminals. Every failure mode of the path resolver is
+      # SILENT — a prefix test instead of a segment test files a sibling directory
+      # under the wrong parent, a shortest-match win picks the wrong overlapping
+      # mapping, and forgetting the disabled-mappings case returns an empty parents[]
+      # for the majority of operators. Nothing throws; the label is just wrong, which
+      # is the bug the feature exists to remove. Also pins the two host-parity traps:
+      # the proxy must resolve through KanbanProvider's wrapper (which honours
+      # kanban.controlPlaneRoot) so the browser + and OPEN AGENT TERMINALS agree, and
+      # the standalone host must translate parentRoot itself since it has no proxy.
+      - name: Multi-parent terminals contract (attribution, spawn targeting, hierarchy)
+        run: npm run test:contract:multi-parent-terminals
+
       # Every failure mode of surface scoping is a panel that silently stops updating.
       # Pins the three traps: untagged-means-everyone, parse-before-resync, and
       # every-panel-gets-`common`. Also pins the client/server panel-map mirror (a

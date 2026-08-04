@@ -876,7 +876,14 @@
         for (const item of fleetList) {
             let targetGroup = parentGroups.find(p => p.fullPath && p.fullPath === item.parentRoot);
             if (!targetGroup) {
-                targetGroup = parentGroups.length === 1 ? parentGroups[0] : unmappedGroup;
+                // Fold an unattributed terminal into the sole group ONLY when that group is
+                // the synthetic catch-all (mappings disabled, or the host sent no parents at
+                // all) — there, everything genuinely belongs to it. With one REAL configured
+                // mapping, folding would file a shell in an unmapped directory under that
+                // parent's name, which is the mislabelling this hierarchy exists to remove.
+                const soleSynthetic = parentGroups.length === 1
+                    && (parentGroups[0].id === 'workspace-root' || !parentGroups[0].fullPath);
+                targetGroup = soleSynthetic ? parentGroups[0] : unmappedGroup;
             }
 
             const wtPath = item.worktreePath;

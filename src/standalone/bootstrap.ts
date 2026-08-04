@@ -1043,7 +1043,13 @@ Read the current content above. Deepen the problem analysis, verify every file p
     const handlePtyVerb = async (verb: string, payload: any, root: string): Promise<any> => {
         switch (verb) {
                 case 'ptyCreateTerminal': {
-                    const terminal = await ptyFleetService.create(payload.role || 'coder', payload.name, payload.cwd, payload.worktreePath);
+                    // The sidebar's per-parent `+` posts `parentRoot`, never `cwd` — the
+                    // extension host translates it in its proxy. This host has no proxy in
+                    // front of it, so it translates here or the button silently spawns in
+                    // the boot root and reports success. Same UI, same behaviour required.
+                    const targetCwd = payload.cwd
+                        || (!payload.worktreePath && payload.parentRoot ? payload.parentRoot : undefined);
+                    const terminal = await ptyFleetService.create(payload.role || 'coder', payload.name, targetCwd, payload.worktreePath);
                     return { success: true, terminal: { friendlyName: terminal.friendlyName, role: terminal.role, status: terminal.status } };
                 }
 

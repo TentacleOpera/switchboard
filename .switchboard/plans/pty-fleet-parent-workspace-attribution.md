@@ -171,3 +171,7 @@ Implemented terminal directory recording and parent attribution resolution acros
 Files changed: `src/services/WorkspaceIdentityService.ts`, `src/standalone/ptyFleetService.ts`, `src/standalone/ptyHost.ts`, `src/standalone/bootstrap.ts`, `src/services/TaskViewerProvider.ts`.
 No issues encountered during implementation.
 
+## Review Findings
+
+Reviewed clean — every risk this plan named was handled: segment containment (not prefix), longest-match selection, `~` expansion, the synthetic single-parent fallback for the disabled-mappings majority case, and `cwd` added to **both** hand-duplicated `ptyListTerminals` copies. No code fix was needed here; the plan's own verification items 1-7 had no automated coverage at all, so a new suite `src/test/multi-parent-terminals-contract.test.js` (29 assertions, all green) now exercises the resolver behaviourally against the compiled service and is wired into CI as `test:contract:multi-parent-terminals`. Validation: `compile-tests` clean, `compile` clean, `lint` 0 errors, all five PRD gates pass (`catalog`/`parity`/`push-routing`/`verb-returns`/`mirror`), 16 terminal contract suites pass. Deferred NITs: the match is case-sensitive so a differently-cased `cwd` falls to Unmapped on a case-insensitive volume (pre-existing convention project-wide), and `parentMap.set(t.cwd || '', null)` writes an unread `''` key. Remaining risk: none material — mapping edits do refresh live, since `switchboard.mappingsChanged` clears the cache *and* rebuilds the index (`extension.ts:1546-1551`).
+

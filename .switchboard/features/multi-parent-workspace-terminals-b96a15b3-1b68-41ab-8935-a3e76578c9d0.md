@@ -28,9 +28,9 @@ That is why there is no `--parents` boot argument, no `ptySetParents` verb, no `
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [PTY Fleet: Report Each Terminal's Parent Workspace](../plans/pty-fleet-parent-workspace-attribution.md) — **INTERN CODED**
-- [ ] [PTY Fleet: Spawn Into the Active Parent Workspace](../plans/pty-fleet-multi-parent-spawn.md) — **INTERN CODED**
-- [ ] [Terminals Sidebar: Parent → Worktree Two-Level Hierarchy](../plans/terminals-sidebar-parent-worktree-hierarchy.md) — **INTERN CODED**
+- [ ] [PTY Fleet: Report Each Terminal's Parent Workspace](../plans/pty-fleet-parent-workspace-attribution.md) — **CODE REVIEWED**
+- [ ] [PTY Fleet: Spawn Into the Active Parent Workspace](../plans/pty-fleet-multi-parent-spawn.md) — **CODE REVIEWED**
+- [ ] [Terminals Sidebar: Parent → Worktree Two-Level Hierarchy](../plans/terminals-sidebar-parent-worktree-hierarchy.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -48,3 +48,7 @@ That is why there is no `--parents` boot argument, no `ptySetParents` verb, no `
 **Working-tree caveat.** `terminals.js`, `terminals.html`, `KanbanProvider.ts` and `shell-terminal-strip.test.js` all had uncommitted modifications when these plans were reviewed. Rebase before starting and re-read `renderSidebarList()` rather than trusting the cited line numbers.
 
 **Out of scope for this feature, deliberately:** validating caller-supplied paths against an allowlist (a real pre-existing hole in `ptyCreateTerminal`, but its own security ticket), the `terminals.*` settings scope question (the defect it addressed does not occur under the default configuration), running more than one pty host, re-pointing the fleet's `workspaceRoot` on workspace switch, making the pane grid parent-aware (pane headers stay name-only), and changing the flat `${role}-${n}` naming scheme.
+
+## Review Findings
+
+All three subtasks reviewed in one pass; the load-bearing decision held — the pty child stayed a dumb shell spawner, every mapping lookup happens host-side, and no verb was added, so the route surface and verb allowlist are untouched exactly as designed. Three MAJOR issues fixed: grid-button parity (the proxy bypassed `KanbanProvider.resolveEffectiveWorkspaceRoot`'s `kanban.controlPlaneRoot` override — `TaskViewerProvider.ts:1945-1959`), the standalone host silently ignoring `parentRoot` so the per-parent `+` lied under `npx switchboard` (`bootstrap.ts:1045-1052`), and an unattributed terminal being folded into a sole *real* parent instead of Unmapped (`terminals.js:877-887`). Gate-wiring audit found the feature's ~31 named automated checks did not exist as test files at all — closed with `src/test/multi-parent-terminals-contract.test.js` (29 assertions, behavioural on the resolver plus source-text on the host-parity traps), wired into CI; separately, `terminal-operations-no-periodic-reopen` had **no** `package.json` script and **no** CI step despite being named in this feature's shared regression surface, and it fails **stale** on main (its fourth assertion pins `toFields`, `getCustomAgents` and `getJulesAutoSyncSetting`, none of which exist in `implementation.html` any more) — the script now exists, CI wiring is deliberately withheld with that diagnosis in a comment, and repairing the assertion needs its own ticket. Validation: `compile-tests` clean, `compile` clean (3 pre-existing jsdom/canvas warnings), `lint` 0 errors, all five PRD gates green, 16 terminal contract suites plus the new suite green.
