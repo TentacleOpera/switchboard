@@ -107,6 +107,7 @@ This workflow is single-plan and non-destructive, so it cannot split retroactive
 - **Asserting a mode nobody ruled on.** Telling a client to enable mouse reporting on a guess creates this exact bug rather than fixing it. Per-mode "observed or omitted" semantics are load-bearing — the same rule the gateway already applies to `bracketedPaste` (`terminalWsGateway.ts:805-808`: *"Omitted, NOT false, when nothing has been observed: telling a client to DISABLE a mode nobody has ruled on is a regression, not a default"*).
 - **Alt screen must be reset-only AND buffer-gated.** Writing `?1049h` into a fresh xterm switches it to an empty alt buffer and hides the scrollback that was just replayed — a blank pane, worse than the bug. **`?1049l` is *not* safe unconditionally either** — see the superseded callout in item 3. The asymmetry and the gate are both deliberate and must be commented, not "tidied".
 - **Not corrupting the credit ledger.** Mode escapes are synthetic characters the server never billed, so they must go straight to the parser and never through `flushBatch` / `onWriteParsed` — the reason already documented at `terminals.js:2841-2845`.
+- **Three mode lists that must not drift.** The gateway's `TRACKED_DEC_MODES`, the client's `REARMABLE_DEC_MODES`, and the pill's release write each enumerate mouse modes independently. A mode present in the pill's *visibility* signal but absent from its *release* write is a dead button (PRD contract #6) — which is exactly what mode 9 was in the draft. Pinned by a parity assertion, not three greps (item 7, assertion 7).
 - **Renaming the gateway's mode map breaks a shipped, CI-wired contract.** `src/test/terminal-input-path-contract.test.js` is not merely adjacent — it *executes* the scanner body extracted by exact-string signature match, and reads its results out of a mock whose field is literally named `bracketedPasteModes`. Nine assertions plus the harness must be retargeted **in the same change** (item 9). The plan previously claimed this test "must stay green" without edits, which is false.
 
 ### Explicitly NOT in scope
@@ -149,6 +150,8 @@ This workflow is single-plan and non-destructive, so it cannot split retroactive
 - One extra `term.write` of at most ~40 bytes per attach. No measurable cost.
 - The mouse-mode pill adds one `MutationObserver` per materialised terminal, attribute-filtered to `class` on `term.element`. Fires only on a real mode transition. This is the first `MutationObserver` in `terminals.js` (the file otherwise uses `ResizeObserver`), so the teardown precedent has to be established rather than copied.
 - `macOptionClickForcesSelection: true` changes Option-drag inside a mouse-mode app from "reported to the app" to "selects text". That is the iTerm/VS Code convention and is the point, but it is a behaviour change for anyone who was Option-dragging deliberately in a TUI.
+- **`macOptionClickForcesSelection: true` also disables Option-click-to-move-cursor on macOS.** `altClickMovesCursor`'s bundled default is `!0` (**true**, verified in the bundle) and `terminals.js` does not override it, so Option-click currently emits arrow-key sequences to reposition the shell prompt at the clicked cell. Forced selection takes precedence, so that gesture is lost. Not mentioned in the original draft and not obvious from the one-line option change. It is the same trade iTerm2 and VS Code make by default, and the Option-click-to-move-cursor gesture is far less discoverable than "I cannot select text", so the trade is worth taking — but it is a second behaviour change riding on one option, and item 2 of *User Review Required* covers it.
+- `macOptionIsMeta` is **not** touched. Confirmed that `macOptionClickForcesSelection` governs mouse events only and does not alter how Option-modified *keystrokes* reach the app, so no meta-prefix behaviour changes. (Relevant because `macOptionIsMeta: true` is known to break `@`, `|`, `[`, `]` on German/Swiss/French layouts — a hazard this change comes nowhere near, and must not drift into.)
 - Shift-wheel stops reaching mouse-mode apps and scrolls the viewport instead. Also the conventional binding, and the only bypass that works while a legitimate mouse-mode app is running.
 - Two contract files change: one new (item 7), one retargeted (item 9). The retarget is mechanical but touches assertions written as the *documentation* of a shipped fix — preserve each assertion's intent and message, retarget only the identifier.
 
@@ -198,10 +201,17 @@ This workflow is single-plan and non-destructive, so it cannot split retroactive
  * ring cannot be relied on to carry the last transition: it evicts at
  * MAX_SCROLLBACK_BYTES, so an enable can outlive its own reset inside the replay.
  *
- *   1000/1002/1003  mouse reporting (VT200 / drag / any-motion). 1000 already
- *                   claims the WHEEL, so a stale enable makes the pane unscrollable
- *                   AND kills selection (xterm disables its SelectionService while
- *                   mouse events are active). This is the reported bug.
+ *   9               X10 mouse reporting. Does NOT claim the wheel (X10:{events:1}
+ *                   is DOWN only; the WHEEL bit is 16), so it cannot cause the
+ *                   no-scroll symptom — but areMouseEventsActive() is
+ *                   `0 !== protocols[active].events`, so events:1 still trips it and
+ *                   xterm still disables its SelectionService. Stale mode 9 therefore
+ *                   produces HALF the reported bug: clicks cannot clear a selection
+ *                   while the wheel works fine.
+ *   1000/1002/1003  mouse reporting (VT200 / drag / any-motion). All three claim the
+ *                   WHEEL (events 19 / 23 / 31 — bit 16 set in each), so a stale
+ *                   enable makes the pane unscrollable AND kills selection. This is
+ *                   the reported bug.
  *   1006            SGR mouse coordinates — meaningless alone, but it rides with
  *                   the above and a half-restored pair reports garbage coordinates.
  *   1004            focus reporting. Benign if wrong, cheap to carry, and losing it
@@ -218,13 +228,17 @@ This workflow is single-plan and non-destructive, so it cannot split retroactive
  * "DECSET 1005 not supported (see #2507)" on set/reset, i.e. it does not implement
  * them, so a record would describe a mode the client cannot enter.
  */
-export const TRACKED_DEC_MODES = [1000, 1002, 1003, 1004, 1006, 1049, 2004] as const;
+export const TRACKED_DEC_MODES = [9, 1000, 1002, 1003, 1004, 1006, 1049, 2004] as const;
 
 /** Terminal name -> (mode number -> last observed h/l). A mode ABSENT from the
  *  inner map has never been ruled on and must be omitted from hello, never sent
  *  as false. */
 private decModes = new Map<string, Map<number, boolean>>();
 ```
+
+> **Superseded:** `TRACKED_DEC_MODES = [1000, 1002, 1003, 1004, 1006, 1049, 2004]` — mode 9 absent, and the doc comment attributing the WHEEL claim to 1000 alone.
+> **Reason:** Web research established that `term.modes.mouseTrackingMode` enumerates `'x10'` as a first-class tracking state, which sent me back to the bundle: `X10:{events:1,…}` and `areMouseEventsActive(){return 0!==this._protocols[this._activeProtocol].events}`. Because the predicate tests only "events is non-zero", mode 9 **does** disable the SelectionService — so a stale mode 9 reproduces the "click cannot clear a selection" half of the reported bug, while leaving the wheel working. Untracked, it is invisible to the server, absent from hello, and never re-armed. Worse, it makes the item 4 pill a **dead button**: the pill's visibility reads the `enable-mouse-events` class (set for *any* active protocol, mode 9 included), so it would appear — but its release write of `1000l/1002l/1003l/1006l` does not clear mode 9, so clicking it would change nothing and the pill would stay visible. That is a dead-click, which PRD contract #6 forbids outright. The draft also credited only 1000 with the WHEEL bit; 1002 (`events:23`) and 1003 (`events:31`) both carry bit 16 too.
+> **Replaced with:** `9` added to `TRACKED_DEC_MODES`, to `REARMABLE_DEC_MODES` (item 3), and to the pill's release write (item 4). Doc comment corrected to describe X10's distinct half-symptom and to credit all three of 1000/1002/1003 with the wheel.
 
 ```ts
     private scanTerminalModes(terminalName: string, data: string): void {
@@ -338,14 +352,18 @@ private decModes = new Map<string, Map<number, boolean>>();
      * A fresh xterm has all of these at their defaults while the pty app's belief
      * persists, and the app never re-announces a settled mode — so without this the
      * pane can come back with mouse reporting on and nothing left to turn it off:
-     * the wheel goes to the app instead of the viewport (mode 1000's event mask
-     * includes WHEEL) and xterm disables its own SelectionService, so a click can
-     * neither start nor clear a selection. That is the "stuck, can't scroll, can't
-     * deselect" report.
+     * the wheel goes to the app instead of the viewport (1000/1002/1003 all set the
+     * WHEEL bit — event masks 19/23/31) and xterm disables its own SelectionService,
+     * so a click can neither start nor clear a selection. That is the "stuck, can't
+     * scroll, can't deselect" report.
+     *
+     * 9 (X10) is here even though it does NOT claim the wheel: areMouseEventsActive
+     * only tests that the active protocol's event mask is non-zero, and X10's is 1,
+     * so a stale mode 9 still kills selection.
      *
      * 1049 is NOT in this list — it is handled separately and conditionally below.
      */
-    const REARMABLE_DEC_MODES = [1000, 1002, 1003, 1004, 1006, 2004];
+    const REARMABLE_DEC_MODES = [9, 1000, 1002, 1003, 1004, 1006, 2004];
 
     /**
      * Force the terminal's DEC private modes to the gateway's recorded state.
@@ -370,19 +388,30 @@ private decModes = new Map<string, Map<number, boolean>>();
         }
         // Alt screen: NEITHER direction is written blind. `?1049h` into a freshly
         // built xterm switches it to an EMPTY alt buffer and hides the scrollback the
-        // replay just wrote — a blank pane, worse than the bug. And `?1049l` is NOT
-        // inert: xterm's reset arm is
-        //   case 1049: … activateNormalBuffer(), 1049===param && this.restoreCursor()
-        // and restoreCursor() sits OUTSIDE activateNormalBuffer's own
-        // `_activeBuffer!==this._normal` guard. On a fresh instance savedX/savedY are
-        // 0, so an unguarded `?1049l` teleports the cursor to viewport row 0 col 0 and
-        // resets SGR — the next live chunk then overwrites the top of the scrollback
-        // this very replay just wrote. So the reset is written ONLY when xterm is
-        // genuinely in the alt buffer, where restoreCursor() is the correct and
-        // expected DECRC behaviour. `term.buffer.active.type` is public API
-        // (BufferApiView is constructed with the literal "alternate").
+        // replay just wrote — a blank pane, worse than the bug.
         //
-        // Do not "complete" this to a symmetric write, and do not drop the gate.
+        // And `?1049l` is NOT inert. This is NOT an xterm.js quirk: XTerm's ctlseqs
+        // defines `?1049l` as the composite of 1047 (buffer switch) + 1048 (cursor
+        // restore), so DECRC is part of the sequence's DEFINITION — and real xterm,
+        // iTerm2, Windows Terminal, Alacritty and VS Code all perform it too. In the
+        // vendored bundle the arm is
+        //   case 1049: … activateNormalBuffer(), 1049===param && this.restoreCursor()
+        // where restoreCursor() sits OUTSIDE activateNormalBuffer's own
+        // `_activeBuffer!==this._normal` guard, and on a fresh instance savedX/savedY
+        // are 0 — so an unguarded write teleports the cursor to viewport row 0 col 0
+        // and resets SGR, after which the next live chunk overwrites the top of the
+        // scrollback this very replay just wrote.
+        //
+        // So the gate is a DELIBERATE DEVIATION from spec, justified because our write
+        // is synthetic: a real app sending `?1049l` knows it saved a cursor, whereas we
+        // are asserting a mode the app already believes is settled and have no saved
+        // cursor worth restoring. Written ONLY when xterm is genuinely in the alt
+        // buffer, where DECRC is both correct and expected. `term.buffer.active.type`
+        // is documented public API since 4.0 (BufferApiView is constructed with the
+        // literal "alternate").
+        //
+        // Do not "complete" this to a symmetric write, and do not drop the gate — the
+        // unconditional form was evaluated against gate-and-omit and lost on both.
         let inAlt = false;
         try { inAlt = entry.term.buffer.active.type === 'alternate'; } catch { /* pre-open */ }
         if (modes[1049] === false && inAlt) { seq += '\x1b[?1049l'; }
@@ -505,9 +534,13 @@ The pill both explains the state ("this app is taking your mouse") and releases 
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
             // To the PARSER, not the pty: the app keeps its own belief, xterm stops
-            // acting on it. Every mouse protocol is reset, not just the active one —
-            // the operator wants their pointer back, not a negotiation.
-            try { term.write('\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l'); } catch { /* disposed */ }
+            // acting on it. EVERY mouse protocol is reset, not just the active one —
+            // the operator wants their pointer back, not a negotiation. Mode 9 (X10)
+            // is included and is NOT optional: the pill's visibility reads
+            // `enable-mouse-events`, which xterm sets for any non-zero event mask
+            // including X10's, so omitting `?9l` would show the pill for a mode this
+            // click cannot clear — a dead button.
+            try { term.write('\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l'); } catch { /* disposed */ }
             update();
         });
 
@@ -634,6 +667,7 @@ Keep this block at 8-space indent inside `destroyTerminalView` — `terminal-scr
 4. `1049` is absent from `REARMABLE_DEC_MODES`, and the `?1049l` literal appears **only** in a statement that also tests `=== 'alternate'` — the blank-pane *and* cursor-teleport guards, together. Assert the literal `\x1b[?1049h` appears nowhere in `terminals.js`.
 5. The carry-fragment guard regex survives in the gateway scanner (the draft deleted it once already).
 6. `decModes` is torn down at all **three** sites: `untrackTerminalData`, `rekeyTerminal`, `dispose`.
+7. **Mode 9 parity across all three lists — the dead-button guard.** Assert `9` is present in the gateway's `TRACKED_DEC_MODES`, in the client's `REARMABLE_DEC_MODES`, **and** in the pill's release write. Write it as a *parity* assertion (every mouse mode the pill can display must be a mode the pill can clear), not three independent greps: the failure being pinned is the three lists drifting apart, which three separate greps would each pass. Derive the mouse-mode subset from a single source in the test rather than restating it.
 
 Plus: `pendingModes` is reset in `connectTerminalSocket` and cleared on `writeReplay`'s throw path, the `MutationObserver` is disconnected in `destroyTerminalView`, `macOptionClickForcesSelection: true` is in the constructor, the wheel handler returns `!ev.shiftKey`, and `--state-mouse-captured` is declared in `terminals.html`'s `:root` with no hex literal inside the `.mouse-mode-release` rule.
 
@@ -684,17 +718,28 @@ Plus: `pendingModes` is reset in `connectTerminalSocket` and cleared on `writeRe
 
 **Also add**, in the same file, one assertion the widened scanner earns: a multi-param DECSET (`\x1b[?1049;1000;1006h`) records **all three** modes. The existing suite only ever feeds single-param sequences, so nothing currently proves the `split(';')` loop records more than the first match.
 
-**Edge cases.** `:211`'s type-annotation strip list (`'let match: RegExpExecArray | null;'`) and its `leftover` guard must keep passing — item 1's `as typeof TRACKED_DEC_MODES[number]` cast is not in the scanned annotation list, but `TRACKED_DEC_MODES` is a module-level `const` that the extracted body references and `new Function` will not have in scope. **Pass it in**: extend the `new Function` parameter list and the `scan.call(...)` arguments with `TRACKED_DEC_MODES` (hard-coded in the test as `[1000,1002,1003,1004,1006,1049,2004]`, with a separate assertion that the gateway's literal matches). Without this the harness throws `TRACKED_DEC_MODES is not defined` on the first feed — a red test, not a silent pass, but a confusing one to debug cold.
+**Edge cases.** `:211`'s type-annotation strip list (`'let match: RegExpExecArray | null;'`) and its `leftover` guard must keep passing — item 1's `as typeof TRACKED_DEC_MODES[number]` cast is not in the scanned annotation list, but `TRACKED_DEC_MODES` is a module-level `const` that the extracted body references and `new Function` will not have in scope. **Pass it in**: extend the `new Function` parameter list and the `scan.call(...)` arguments with `TRACKED_DEC_MODES` (hard-coded in the test as `[9,1000,1002,1003,1004,1006,1049,2004]`, with a separate assertion that the gateway's literal matches — the assertion is what catches a future mode being added to the gateway and not to the harness). Without this the harness throws `TRACKED_DEC_MODES is not defined` on the first feed — a red test, not a silent pass, but a confusing one to debug cold.
 
-## Uncertain Assumptions
+## Resolved Assumptions
 
-Three items are external to this repo and cannot be settled by reading more of it. The user was **advised to run web research to confirm them before implementation**; a ready-to-run research prompt was supplied in the review chat. None blocks starting items 1–3; all three touch items 4–6.
+**Authoritative. Do not re-open or re-research any item in this section.** Web research was run on 2026-08-04 (52 sources: XTerm `ctlseqs`, DEC VT220/VT510 manuals, xterm.js typings + release notes, iTerm2 / Windows Terminal / Alacritty / VS Code sources, TUI-framework and AI-CLI sources) and every item below is settled. Two findings changed the plan; both are marked with superseded callouts at their implementation sites.
 
-1. **Upstream `@xterm/xterm` API stability.** `attachCustomWheelEventHandler`, `term.modes` / `mouseTrackingMode`, and `term.buffer.active.type` were all read out of the vendored 5.5 bundle and are correct there. Whether all three are *supported public API* (versus internal surface that happens to be reachable) and whether they survive 5.5 → 6.x is an upstream-project question. Item 6 already guards `attachCustomWheelEventHandler` behind a `typeof` check; the other two are unguarded reads.
-2. **XTerm ctlseqs semantics for `1049` / `1047` / `47` reset.** The buffer gate in item 3 is derived from the *vendored implementation*. Whether restore-cursor-on-`?1049l` is spec-mandated (so every terminal does it, and the gate is universally right) or an xterm.js implementation choice determines whether the gate is a workaround or the correct reading of the standard — and therefore how the comment should be worded and how much the vendor bump in (1) can move it.
-3. **`macOptionClickForcesSelection` interaction with sibling options.** `macOptionIsMeta` and `altClickMovesCursor` are both bundled and neither is set by `terminals.js`. Whether enabling forced selection changes how Option-modified *keystrokes* reach a mouse-mode app (as opposed to Option-*drag*) is upstream option-interaction behaviour, not determinable from the minified bundle.
+| # | Question | Verdict | Effect on the plan |
+| :--- | :--- | :--- | :--- |
+| 1 | Are `attachCustomWheelEventHandler`, `term.modes` / `mouseTrackingMode`, and `term.buffer.active.type` supported public API, and do they survive 5.5 → 6.x? | **All three are documented public contracts, stable through 6.0.** Introduced 5.4.0, 4.14.0 and 4.0.0 respectively. No deprecations, no 6.x roadmap items touching them. `xterm` → `@xterm/xterm` was a package rename only; the typings are identical. | None. All three reads are safe as written; item 6's `typeof` guard is belt-and-braces, keep it. |
+| 2 | Does returning `false` from the wheel handler leave native viewport scroll intact? | **Yes — documented contract.** It suppresses both the mouse report and xterm's internal viewport scroll, and xterm does **not** call `preventDefault()`. Four documented ways native scroll can still fail: `overflow: hidden`/`clip` on an ancestor, `touch-action: none` / `overscroll-behavior: contain`, an upstream listener calling `preventDefault`, and `scrollHeight === clientHeight`. | **Checked against this file:** `terminals.html` has no `touch-action` and no `overscroll-behavior` anywhere. `overflow: hidden` exists on `body` (`:99`) and `.terminal-pane` (`:598`), but neither is consulted — the wheel target's own `.xterm-viewport` is the nearest scrollable ancestor and scrolls first. Item 6 is clear. Manual step 12 remains the confirmation. |
+| 3 | Is restore-cursor-on-`?1049l` spec-mandated or an xterm.js choice? | **Spec-mandated.** XTerm `ctlseqs` defines `?1049l` as the composite of 1047 (buffer switch) + 1048 (cursor restore), i.e. `DECRC` is part of the sequence definition. `?47l` and `?1047l` do **not** restore. The *variance* between emulators is only in cursor-register scoping; xterm.js, real xterm, iTerm2, Windows Terminal, Alacritty and VS Code **all** execute the restore when `?1049l` arrives in the normal buffer. | **Confirms the buffer gate, changes its rationale.** The gate is a deliberate deviation from a spec-mandated behaviour, not a workaround for an xterm.js quirk — reworded at the implementation site. Research independently evaluated gate-vs-omit-vs-unconditional and recommends the gate (its "Approach A"), matching item 3. |
+| 4 | Does `macOptionClickForcesSelection` change how Option-modified *keystrokes* reach a mouse-mode app? | **No — it affects mouse events only.** Keystroke delivery is governed by `macOptionIsMeta` (bundled default `false`, not set here), which is untouched. | Resolves the concern favourably. **But it surfaced a real conflict:** `altClickMovesCursor`'s bundled default is `!0` (**true**, verified in the bundle), and forced selection takes precedence over it — see the new Side Effects entry. |
+| 5 | Which mouse modes do agent CLIs actually set, and what happens on unclean exit? | **1000 or 1002 for tracking, 1006 for encoding, 1004 for focus. 1005/1015 avoided** (coordinate truncation past column 223, multi-byte ambiguity) — confirming they are correctly out of scope. 1003 is used but rarely held. On `SIGKILL` / uncaught exception the CLI bypasses its cleanup handlers, so no `DECRST` is ever sent. | Confirms the tracked set, and confirms 1002 belongs in it even though Claude Code shows 0 hits — other CLIs use it. The unclean-exit finding is desync path 1, stated verbatim in the Goal, and is exactly what items 4–6 exist for. |
+| 6 | Is there prior art for an operator-facing "release the mouse" control? | **Yes, and it is the convention.** `Shift` is the xterm/Linux-standard selection bypass; `Option`/`Alt` is the macOS convention (iTerm2's default); tmux uses `Shift` to defer to the host terminal. VS Code ships **both** `terminal.integrated.macOptionClickForcesSelection` **and** an explicit "Toggle Mouse Reporting" command. | Validates all three affordances (pill, Shift-wheel, Option-drag) as convention rather than invention. The pill is the direct analogue of VS Code's Toggle Mouse Reporting, differing only in being state-visible rather than palette-hidden. |
 
-**Not uncertain, and deliberately not listed here** — these were closed by reading source during the improve pass and must not be re-researched: mode 1000's WHEEL bit, the SelectionService disable, the `?1049l` cursor restore, the 1005/1015 DECRQM `4` reply, the alt-buffer wheel-to-arrow conversion, the `enable-mouse-events` class contract, `--accent-warn`'s absence, and every assertion in `terminal-input-path-contract.test.js`.
+### Closed by source reading, also not to be re-researched
+
+Mode 1000's WHEEL bit (`VT200:{events:19}`), the SelectionService disable, the `?1049l` cursor restore in the vendored bundle, the 1005/1015 DECRQM `4` reply, the alt-buffer wheel-to-arrow conversion, the `enable-mouse-events` class contract, `--accent-warn`'s absence, `altClickMovesCursor`'s `true` default, the X10 event mask (`X10:{events:1}` — see item 1's mode-9 callout), `areMouseEventsActive(){return 0!==this._protocols[this._activeProtocol].events}`, and every assertion in `terminal-input-path-contract.test.js`.
+
+### Known residual — accepted, not fixed here
+
+**An app that dies inside the alternate screen leaves the pane in the alt buffer with no operator escape.** The gateway would have recorded `1049:true` (it observed the enable and never a reset), so item 3 correctly declines to write `?1049l` — from the server's view the app *is* legitimately in the alt screen. The pill deliberately does not touch 1049 (taking the alt screen from a live TUI mid-draw is a worse failure than an unscrollable pane). So this case still requires closing the pane. It is desync path 1 for a mode the pill cannot safely cover, it is the same failure that exists today, and widening the pill to reset 1049 would trade a rare stuck pane for a common corrupted one. Revisit only with a separate, explicitly-labelled "return to normal screen" control.
 
 ## Verification Plan
 
@@ -725,9 +770,10 @@ Reproduce on the current build, so the fix is measured against an observed failu
 ### Manual — confirm the fix
 
 11. Repeat step 10 with the fix live. The class must match the app's actual state, and the wheel and click must behave accordingly.
-12. Reattach while the app is *legitimately* in mouse mode: the class stays, the pill is visible, and Shift-wheel scrolls while a plain wheel still reaches the app. **This is the only check for the item 6 wheel bypass** — the "returning false leaves native scroll intact" behaviour is not readable from source.
+12. Reattach while the app is *legitimately* in mouse mode: the class stays, the pill is visible, and Shift-wheel scrolls while a plain wheel still reaches the app. **This is the only runtime check for the item 6 wheel bypass.** The contract is documented (returning `false` suppresses the report and skips `preventDefault`) and the four documented ways native scroll can still be blocked were each checked against `terminals.html` and are all clear — but "the browser actually scrolls the viewport" is still a runtime outcome, so confirm it rather than assuming it.
 13. Click the pill: the wheel and click come back immediately, the pill hides, and the app keeps running (no keystroke was sent to it).
-14. Option-drag inside a mouse-mode app selects text.
+14. Option-drag inside a mouse-mode app selects text. Then confirm the accepted loss from the same option: Option-**click** no longer repositions the shell prompt cursor (`altClickMovesCursor` is defaulted true and forced selection now wins). If that gesture turns out to matter more than expected, the exit is `altClickMovesCursor` — not reverting `macOptionClickForcesSelection`.
+14b. **Mode 9 (X10) — the dead-button check.** Drive a pane into X10 tracking (`printf '\e[?9h'` into the pty, or any X10-era TUI), confirm the pill appears, and confirm clicking it *actually releases* — selection works again and the pill hides. Before the mode-9 fix the pill would appear and do nothing. Note the wheel keeps working throughout: X10 does not claim it, so this is the selection-only half of the bug.
 15. Full panel reload (fresh view, full-ring replay) and a solo pop-out window: both end in the correct mode state.
 16. Bracketed paste still survives a reattach — paste a multi-line block into a fresh view and confirm it arrives as one submission, not one per line. This is the mode whose application point moved, so it is the regression risk of item 3.
 17. **Alt-screen cursor integrity — the item 3 corruption check, and the one a reviewer is most likely to skip.** Run a full-screen TUI (`htop`, or `git log` in its pager), **quit it** so the gateway records `1049:false`, keep working until the ring has evicted, then reattach. The pane must come back with the replayed scrollback intact and the prompt at the *bottom*: no cursor jump to the top of the viewport, no live output overwriting replayed history, no SGR colour reset. This is what the buffer gate exists for — without it this step shows a mangled pane on the *common* path, not a rare one.

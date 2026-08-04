@@ -226,7 +226,28 @@ export namespace workspace {
 // ─── commands ───────────────────────────────────────────────────────────────
 
 export namespace commands {
-    export async function executeCommand(_command: string, ..._args: any[]): Promise<any> { return undefined; }
+    // NOT the command bridge — do not build a registry here. Provider arms reach the
+    // host through the `commands` SEAM (hostSeams.ts HostCommands), and standalone
+    // injects `createVscodeHostSeams`, whose VscodeHostCommands is registry-first
+    // (hostSeams.ts:327-336): a command registered into `switchboardCommandRegistry`
+    // by bootstrap.ts executes there and never arrives here. The bridge point is
+    // bootstrap's registration block; see also hostServices.ts's
+    // `createHeadlessHostSeams`, which implements the same contract but is not the
+    // bundle standalone currently injects.
+    //
+    // This stub is therefore the terminal dead end for *unbridged* commands only —
+    // which is exactly why it warns. VscodeHostCommands swallows exceptions and
+    // returns undefined, so without this line an arm whose whole payoff is a command
+    // succeeds silently and the missing side effect is invisible. Warn-once per id,
+    // per process: enough to diagnose, not enough to spam a long-running server.
+    const _warnedUnbridged = new Set<string>();
+    export async function executeCommand(command: string, ..._args: any[]): Promise<any> {
+        if (!_warnedUnbridged.has(command)) {
+            _warnedUnbridged.add(command);
+            console.warn(`[headless] command '${command}' is not bridged — the calling arm's side effect did not happen`);
+        }
+        return undefined;
+    }
     export function registerCommand(_command: string, _callback: (...args: any[]) => any): { dispose(): void } { return { dispose() {} }; }
 }
 

@@ -8655,16 +8655,27 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 }
                 return { success: true, recovered };
             }
+            // showInfo / showWarning: the toast is the editor's channel; the
+            // `showStatusMessage` push is the HEADLESS degrade for it, because the shim's
+            // showInformationMessage/showWarningMessage return undefined and the message is
+            // otherwise lost (vscodeShim.ts:133-135). Gated on `__viaHttp` — set only by
+            // handleServiceVerb, i.e. only for callers with no editor toast to read — so an
+            // editor webview click still produces exactly ONE notification instead of a
+            // VS Code toast plus an in-board status line. Same degrade flag used at :9682.
             case 'showInfo':
                 if (typeof msg.message === 'string') {
                     void this._seams().ui.showInformationMessage(msg.message);
-                    this.postMessage({ type: 'showStatusMessage', message: msg.message, isError: false });
+                    if (msg.__viaHttp === true) {
+                        this.postMessage({ type: 'showStatusMessage', message: msg.message, isError: false });
+                    }
                 }
                 return { success: true };
             case 'showWarning': {
                 if (typeof msg.message === 'string' && msg.message.length > 0) {
                     void this._seams().ui.showWarningMessage(msg.message);
-                    this.postMessage({ type: 'showStatusMessage', message: msg.message, isError: true });
+                    if (msg.__viaHttp === true) {
+                        this.postMessage({ type: 'showStatusMessage', message: msg.message, isError: true });
+                    }
                 }
                 return { success: true };
             }

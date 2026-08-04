@@ -401,6 +401,18 @@
                 document.head.appendChild(style);
             }
 
+            // orchestrator / mcpTerminals: the body class is the contract; the selector
+            // lists below are FORWARD-COMPATIBILITY ONLY and currently match nothing in
+            // kanban.html (verified: 0 occurrences of #btn-orchestrator, .orchestrator-only,
+            // .mcp-monitor-only, #btn-launch-mcp-monitor). Both clusters are built
+            // dynamically inside the automation panel — the orchestrator as an automation
+            // MODE (kanban.html:9296, :10796) and the MCP monitor as `mcpConfigPanel`
+            // (:10991) — so what actually hides them today is the `automation === false`
+            // tab gate above. Do NOT "fix" these by adding matching selectors to real
+            // controls: the EXTENSION host also declares mcpTerminals:false (see
+            // TaskViewerProvider baseHostCapabilities) while its MCP monitor works, so a
+            // matching selector would hide a working editor surface. Gate those on a new,
+            // honestly-derived flag instead.
             if (caps.orchestrator === false) {
                 document.body.classList.add('host-orchestrator-false');
                 const style = document.createElement('style');
@@ -452,9 +464,18 @@
             if (caps.boardStructure === false) {
                 document.body.classList.add('host-board-structure-false');
                 const style = document.createElement('style');
+                // The Kanban Structure block lives in the SETUP tab (kanban.html:2888-2896).
+                // These are its real ids — an earlier revision gated `#btn-add-column` and
+                // `.col-header-actions`, neither of which exists in kanban.html, so the
+                // whole branch was decorative and the controls stayed clickable.
+                // They genuinely cannot work headlessly: standalone's pushFullState
+                // publishes `updateColumns` from the CONSTANT DEFAULT_KANBAN_COLUMNS
+                // (bootstrap.ts:334, :363), so a saved custom column is written to the DB
+                // and never rendered.
                 style.textContent = `
-.host-board-structure-false #btn-add-column,
-.host-board-structure-false .col-header-actions {
+.host-board-structure-false #btn-add-kanban-column,
+.host-board-structure-false #btn-restore-kanban-defaults,
+.host-board-structure-false #kanban-structure-list {
     display: none !important;
 }
 `;

@@ -2207,6 +2207,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // secrets.get() is async (returns Promise<string|undefined>), so
                 // integrationsConfigured must be computed inside the async getters,
                 // not captured synchronously at IIFE-evaluation time.
+                // One key is deliberately ABSENT from the literal below — the feature-management
+                // flag. This literal is evaluated ONCE at server construction, before
+                // `_localApiServer` exists, so a value baked in here would resolve against a
+                // missing server and disable the FEATURE button in VS Code. The three getters
+                // below late-bind it per request via `hasFeatureManagement()`. Guarded by
+                // headless-feature-management-contract ("base capability literal omits
+                // featureManagement", which greps this literal as a string) — do not add it.
+                // The four Board flags that ARE here must stay `true`: applyCapabilityGating is
+                // shared with the headless host and its defaults are fail-closed, so omitting
+                // them would gate the editor's own working surfaces.
                 const baseHostCapabilities = {
                     terminalDispatch: true,
                     automation: true,
@@ -2214,7 +2224,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     terminalFleet: ptyHostReady(),
                     mcpTerminals: false,
                     secretsEntry: false,
-                    featureManagement: true,
                     worktrees: true,
                     uat: true,
                     boardStructure: true,

@@ -14,7 +14,7 @@ import {
     SKIP_COMPILATION_DIRECTIVE,
     SKIP_TESTS_DIRECTIVE,
 } from '../services/agentPromptBuilder';
-import { StandaloneHostPathConfigProvider, createStandaloneHostSecrets, StandaloneHostState } from './hostServices';
+import { StandaloneHostPathConfigProvider, createStandaloneHostSecrets } from './hostServices';
 import {
     getShellHtml as sharedGetShellHtml,
     getBoardHtml as sharedGetBoardHtml,
@@ -270,7 +270,12 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
 
     await db.ensureReady();
 
-    const hostState = new StandaloneHostState(db);
+    // NOTE: the former `hostState = new StandaloneHostState(db)` is gone. Its sole
+    // consumer was the hand-rolled `saveSetting` arm's `hostState.update('selectedRole', …)`
+    // one-off, retired when both settings verbs began falling through to KanbanProvider's
+    // durable four-tier arms. `selectedRole` now lives in `workspaceState` under the
+    // prefixed key `switchboard.prompts.selectedRole` (same standalone-state.json file),
+    // so the old bare-key value is orphaned and the picker falls back to its default once.
 
     // ─── Headless Ingestion: construct the shared PlanIngestionEngine ──────────
     // The engine is the same host-agnostic engine the VS Code extension uses
@@ -366,6 +371,37 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
             { type: 'switchboardThemeNameSetting', theme: 'afterburner', surface: SURFACES.common },
             { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: false, routingConfig: {}, featureWorktrees, surface: SURFACES.kanban },
         ];
+    };
+
+    // ─── Coalesced board push ────────────────────────────────────────────────
+    // `pushFullState` re-reads the whole board (buildBoardCards + getProjects +
+    // getWorktrees) and broadcasts five messages, so it must not be called twice
+    // for one user action. Two publishers now exist per delegated mutation: the
+    // provider arm's `executeCommand('switchboard.refreshUI')` (43 call sites, 4 of
+    // them inside delegated Board arms — saveKanbanColumn, deleteKanbanColumn,
+    // restoreKanbanDefaults, toggleKanbanColumnVisibility) and the kanbanVerb
+    // `default:` arm's own post-mutation push. Un-coalesced, each of those verbs
+    // rebuilt the board twice.
+    //
+    // Trailing edge, first-call-arms: every call inside the window collapses into
+    // the single push that fires at the end of it. That also serialises the pushes
+    // (chained, never concurrent) so a slower DB read cannot deliver a stale
+    // snapshot after a fresher one, and it is the recursion guard the plan asked
+    // for — a bridged refreshUI reaching an arm that calls refreshUI again re-arms
+    // a timer instead of recursing. Deliberately NOT unref'd: a pending redraw must
+    // survive to fire rather than be swallowed by an idle event loop.
+    const PUSH_COALESCE_MS = 40;
+    let pushCoalesceTimer: NodeJS.Timeout | null = null;
+    let pushChain: Promise<void> = Promise.resolve();
+
+    const schedulePushFullState = (): void => {
+        if (pushCoalesceTimer) { return; }
+        pushCoalesceTimer = setTimeout(() => {
+            pushCoalesceTimer = null;
+            pushChain = pushChain
+                .then(() => pushFullState())
+                .catch((e) => console.error('[bootstrap] coalesced pushFullState failed:', e));
+        }, PUSH_COALESCE_MS);
     };
 
     // ─── Headless panel HTML (shared module) ─────────────────────────────────
@@ -685,9 +721,18 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     (planningProvider as any)._broadcaster = headlessBroadcaster;
     planningProvider.setTaskViewerProvider(taskViewerProvider);
 
-    // Register standalone command handlers into switchboardCommandRegistry
-    switchboardCommandRegistry.register('switchboard.refreshUI', async () => {
-        await pushFullState();
+    // Register standalone command handlers into switchboardCommandRegistry.
+    //
+    // NOTE ON REACH: these handlers are consumed via `createVscodeHostSeams`
+    // (headlessSeams above), whose VscodeHostCommands is registry-first
+    // (hostSeams.ts:327-336) — so a registered command executes here and an
+    // unregistered one falls through to vscodeShim's no-op. hostServices.ts's
+    // `createHeadlessHostSeams` bundle is NOT what standalone injects.
+    switchboardCommandRegistry.register('switchboard.refreshUI', () => {
+        // Coalesced, not awaited: refreshUI is a display refresh with 43 provider
+        // call sites, and the kanbanVerb `default:` arm pushes for the same
+        // mutation. See schedulePushFullState.
+        schedulePushFullState();
     });
     switchboardCommandRegistry.register('switchboard.focusTerminalByName', async (terminalName: string, _options?: { silent?: boolean }) => {
         // The standalone host has no VS Code toast to suppress; `options` is accepted
@@ -1018,8 +1063,16 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             ...payload,
                             workspaceRoot: root,
                         });
+                        // Read-only classification is prefix-based rather than a named
+                        // set. Verified against all 152 KANBAN_VERBS: 25 match and every
+                        // one is a genuine read or a client-side notification, so there is
+                        // no write silently skipping its push today. A future verb named
+                        // `getOrCreate*` / `selectAnd*` WOULD, so prefer adding it to an
+                        // explicit write list over trusting the prefix.
                         const isReadOnly = ['get', 'fetch', 'load', 'check', 'select', 'is', 'has', 'file'].some(p => verb.startsWith(p));
-                        if (!isReadOnly) { await pushFullState(); }
+                        // Coalesced: the arm may already have fired refreshUI for this same
+                        // mutation. Not awaited — the push is additive to the HTTP body.
+                        if (!isReadOnly) { schedulePushFullState(); }
                         return result;
                     } catch (err) {
                         const msg = err instanceof Error ? err.message : String(err);

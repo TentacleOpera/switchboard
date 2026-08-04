@@ -143,6 +143,23 @@ async function main() {
         assert.strictEqual(caps.featureManagement, true);
     });
 
+    // Standalone Board Parity: the four Board flags added for the gating subtask obey
+    // the same fail-closed rule as featureManagement — a host that omits one must gate,
+    // never dead-click (PRD contract #6).
+    for (const flag of ['worktrees', 'uat', 'boardStructure', 'featureAdvanced']) {
+        await test(`caps object with NO ${flag} key serialises as ${flag}:false`, () => {
+            const { html } = getBoardHtml(repoRoot, repoRoot, { terminalDispatch: false });
+            assert.strictEqual(capsFromHtml(html)[flag], false,
+                `${flag} must default false — an omitted flag gates honestly rather than showing a dead surface`);
+        });
+
+        await test(`explicit ${flag}:true survives the default spread`, () => {
+            const { html } = getBoardHtml(repoRoot, repoRoot, { [flag]: true });
+            assert.strictEqual(capsFromHtml(html)[flag], true);
+        });
+    }
+
+
     console.log('\n── kanban verb schemas: live and field-accurate ──');
 
     await test('createFeature: real webview payload validates', () => {
@@ -404,6 +421,53 @@ async function main() {
     });
 
     console.log('\n── source contracts: capability gating ──');
+
+    // Standalone Board Parity — every gated selector must resolve to a real control.
+    // A branch that adds a body class and injects CSS matching nothing reads exactly
+    // like working gating in review and leaves the control clickable (PRD contract #6).
+    await test('boardStructure gate targets the real Kanban Structure ids', () => {
+        // Regression lock: this branch shipped gating `#btn-add-column` and
+        // `.col-header-actions`, neither of which exists in kanban.html — decorative
+        // gate, live controls, while standalone pushes `updateColumns` from the constant
+        // DEFAULT_KANBAN_COLUMNS so a saved custom column can never render.
+        const gateIdx = transportSrc.indexOf('caps.boardStructure === false');
+        assert.ok(gateIdx > 0, 'boardStructure branch missing from applyCapabilityGating');
+        const branch = transportSrc.slice(gateIdx, gateIdx + 1200);
+        for (const id of ['btn-add-kanban-column', 'btn-restore-kanban-defaults', 'kanban-structure-list']) {
+            assert.ok(branch.includes(`#${id}`), `boardStructure gate must hide #${id}`);
+            assert.ok(kanbanHtml.includes(`id="${id}"`),
+                `#${id} is gated but absent from kanban.html — a gate that matches nothing is a dead control`);
+        }
+    });
+
+    await test('worktrees / uat / automation gates hide the tab BUTTON and its panel, not just inner controls', () => {
+        for (const [flag, tab, panelId] of [
+            ['worktrees', 'worktrees', 'worktrees-tab-content'],
+            ['uat', 'uat', 'uat-tab-content'],
+            ['automation', 'automation', 'automation-tab-content'],
+        ]) {
+            const gateIdx = transportSrc.indexOf(`caps.${flag} === false`);
+            assert.ok(gateIdx > 0, `${flag} branch missing from applyCapabilityGating`);
+            const branch = transportSrc.slice(gateIdx, gateIdx + 1600);
+            assert.ok(branch.includes(`[data-tab="${tab}"]`),
+                `${flag} must gate the tab itself — a hand-listed selector set drifts every time a control is added inside the tab`);
+            assert.ok(branch.includes(`#${panelId}`), `${flag} must hide #${panelId}`);
+            assert.ok(kanbanHtml.includes(`data-tab="${tab}"`) && kanbanHtml.includes(`id="${panelId}"`),
+                `${flag} gate targets markup that does not exist in kanban.html`);
+        }
+    });
+
+    await test('extension host declares all four new Board flags true (fail-closed defaults must not gate the editor)', () => {
+        // applyCapabilityGating is shared by both hosts and the new defaults are false,
+        // so the editor must declare these explicitly or it hides its own working surfaces.
+        const litIdx = taskViewerSrc.indexOf('const baseHostCapabilities = {');
+        assert.ok(litIdx > 0);
+        const literal = taskViewerSrc.slice(litIdx, taskViewerSrc.indexOf('};', litIdx));
+        for (const flag of ['worktrees', 'uat', 'boardStructure', 'featureAdvanced']) {
+            assert.ok(new RegExp(`${flag}:\\s*true`).test(literal),
+                `extension host must declare ${flag}: true`);
+        }
+    });
 
     await test('transport gating: featureManagement === false disables #btn-feature-action with tooltip', () => {
         assert.ok(transportSrc.includes('caps.featureManagement === false'));

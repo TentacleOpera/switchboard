@@ -313,6 +313,16 @@ export class StandaloneHostState implements HostMemento {
  * Build a headless HostSeams bundle for `npx switchboard` (no VS Code process).
  * Uses file-backed config/secrets and no-op UI/terminal/editor implementations.
  * A real file watcher can be swapped in later; this supplies a safe disposable.
+ *
+ * ⚠️ NOT CURRENTLY WIRED. `bootstrap.ts` injects `createVscodeHostSeams(...)` into every
+ * provider, not this bundle — its VscodeHostCommands is registry-first, so the commands
+ * bootstrap registers into `switchboardCommandRegistry` are reached that way. Consequences
+ * for anyone reading the `commands` impl below and assuming it runs: it does not. Its
+ * warn-once diagnostic is duplicated on the live path in `vscodeShim.commands.executeCommand`,
+ * and its deliberate divergence from VscodeHostCommands (handler exceptions PROPAGATE here
+ * rather than being swallowed by that class's `catch { return undefined }`) is likewise not
+ * in effect. Switching bootstrap over is a real change — this bundle takes no secret storage
+ * argument and its ui/terminal/editor seams differ — so do it deliberately, with tests.
  */
 export function createHeadlessHostSeams(workspaceRoot: string): HostSeams {
     const pathConfig = new StandaloneHostPathConfigProvider(workspaceRoot);
