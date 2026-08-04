@@ -321,6 +321,19 @@ jobs:
       - name: Terminal pane pinning contract
         run: npm run test:contract:terminal-pane-pinning
 
+      # Terminal scroll affordance. Both halves of this one fail SILENTLY, which is
+      # why it needs a gate rather than a manual pass. CSS: the terminal rules are
+      # scoped (.xterm-viewport::-webkit-scrollbar) and the Firefox override lives
+      # inside the @supports gate — un-scope either and Chromium 121+ / Safari 17.4+
+      # drop every ::-webkit-scrollbar rule on the affected scrollers, with no error.
+      # JS: the jump-to-latest pill needs BOTH event sources. term.onScroll does not
+      # fire for operator scrolling (Viewport passes suppressScrollEvent:true), and
+      # the DOM scroll event does not fire for new output advancing baseY. Collapsing
+      # them to one "simpler" subscription leaves a pill that never appears in an idle
+      # terminal — the exact reported scenario — while every other test stays green.
+      - name: Terminal scroll affordance contract (scoped scrollbar, dual-source jump pill)
+        run: npm run test:contract:terminal-scroll-affordance
+
       # Every failure mode of surface scoping is a panel that silently stops updating.
       # Pins the three traps: untagged-means-everyone, parse-before-resync, and
       # every-panel-gets-`common`. Also pins the client/server panel-map mirror (a

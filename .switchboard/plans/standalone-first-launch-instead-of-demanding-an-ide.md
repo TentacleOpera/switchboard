@@ -260,10 +260,28 @@ So attach-and-open only works by accident today: it works if the *same* browser 
 a cookie clear. Resolve it explicitly:
 
 - Add a **token-mint path on the running server** that a local attaching process can call —
-  `POST /session/token` returning a fresh single-use token, **gated on the API token, not the session
-  cookie** (a session cookie is what we are trying to obtain, so gating on it is circular). Standalone's
-  `oneTimeConsumed` boolean must become a TTL'd set to support more than one, matching the extension's
-  existing model rather than inventing a second one.
+  `POST /session/token` returning a fresh single-use token. Standalone's `oneTimeConsumed` boolean must
+  become a TTL'd set to support more than one, matching the extension's existing model
+  (`TaskViewerProvider.ts:2505-2518`) rather than inventing a second one.
+- **The mint endpoint cannot be gated on the existing credential, and this is the crux.** Standalone's
+  `getAuthToken()` returns `sessionToken` (`bootstrap.ts:305`, `:1365`) — 32 random bytes generated
+  per-process and held **only in memory**, never written to disk. So an attaching process has no
+  credential to present: gating the mint on the session cookie is circular (the cookie is what we want),
+  and gating it on the auth token is *equally* circular, because that token is the same unreachable
+  in-memory secret. Either gate leaves attach unable to authenticate at all.
+  **The trust boundary therefore has to move to the filesystem:** the running server writes its
+  mint credential to `.switchboard/api-server-token.txt` with `0600`, and the attaching process reads it.
+  This is the Jupyter-token / Docker-socket pattern — "a process running as this user, able to read this
+  workspace" becomes the authorisation, which is coherent because such a process can already read
+  `kanban.db`, every plan file, and the secrets store. Write it from the same place as the port and pid
+  files and unlink it in `stop()`, so all three stay consistent. Do **not** put it in the DB or a
+  world-readable location.
+- **Note the hosts differ and the plan must not assume otherwise.** Standalone always has a real token, so
+  `_checkAuth` genuinely enforces. The extension's `getAuthToken()` reads `switchboard.apiToken` from
+  SecretStorage (`TaskViewerProvider.ts:1978-1981`), which is empty unless a user set it and has no
+  setter UI — so `_checkAuth`'s `if (!expected) return true` (`LocalApiServer.ts:529`) makes the extension
+  pure localhost-trust today. Attaching to an extension therefore needs no credential, and minting against
+  one must not assume a token exists.
 - The attaching CLI mints a token, builds the board URL with it, and opens that. If minting is
   unavailable (older server, no API token configured), **print the URL and say the browser may need a
   session** rather than opening a tab that 401s — a confusing failure is worse than an honest message.
@@ -320,6 +338,9 @@ and unlinks the port file. `cli.ts:240-248` wires it to SIGINT and SIGTERM. Noth
   `.switchboard/api-server-pid.txt` alongside the port file, from the same place
   (`bootstrap.ts:1461-1463`), and unlink it in `stop()` next to the port-file unlink so the pair is
   always consistent. Without this, "stop the server" degrades to `lsof -i :<port>`.
+  Treat the three discovery files — `api-server-port.txt`, `api-server-pid.txt` and change 1's
+  `api-server-token.txt` — as **one atomic set**: written together at bind, unlinked together in `stop()`.
+  A surviving token file for a dead server is the worst of the three to leave behind.
 - **No way in.** Add a `switchboard stop [--workspace <path>]` subcommand next to the existing `secrets`
   subcommands (`cli.ts:170-201`): read the pid + port files, health-probe to confirm it is really ours,
   send SIGTERM, wait for the port to stop answering, then report. Prefer this over a `POST /shutdown`
@@ -441,7 +462,7 @@ Do **not** silently rely on `overwrite: false` — that is what makes "we fixed 
 9a. **Survives the terminal, and can still be stopped.** Launch via the script, then **close the
     launching terminal window** (not Ctrl-C) → the server keeps answering `/health`. Then
     `switchboard stop --workspace "$ROOT"` → the port stops answering, and **both** `api-server-port.txt`
-    and `api-server-pid.txt` are gone. Confirm no orphaned PTY children survive (`pgrep` the agent shells
+    `api-server-pid.txt` and `api-server-token.txt` are all gone. Confirm no orphaned PTY children survive (`pgrep` the agent shells
     the fleet spawned) — that is what proves `stop()` ran rather than the process merely dying.
 9b. **SIGHUP is clean now.** Launch in the *foreground*, close the terminal, and confirm the teardown ran:
     port file removed, PTY children reaped. Before the change this leaves both behind, so assert the

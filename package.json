@@ -852,7 +852,8 @@
     "test:contract:terminal-pane-grid-reconcile": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-pane-grid-reconcile-contract.test.js",
     "test:contract:terminal-focus-affordance": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-focus-affordance-contract.test.js",
     "test:contract:shell-terminal-strip": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/shell-terminal-strip.test.js",
-    "test:contract:terminal-pane-pinning": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-pane-pinning-contract.test.js"
+    "test:contract:terminal-pane-pinning": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-pane-pinning-contract.test.js",
+    "test:contract:terminal-scroll-affordance": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-scroll-affordance-contract.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",
