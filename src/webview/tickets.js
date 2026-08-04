@@ -7566,8 +7566,14 @@ Instructions:
                 setButtonBusy(document.getElementById('btn-linear-save-automation'), false);
                 setLinearSetupMessage(message.success === false ? (message.error || 'Failed to save Linear automation.') : 'Linear automation saved.', message.success === false);
                 break;
-            case 'integrationTicketSaveLocations':
-            case 'ticketsFoldersListed': {
+            // The `ticketsFoldersListed` alias this arm carried in setup.html was
+            // dropped when the integration-setup markup merged into this panel:
+            // tickets.js already owns a `ticketsFoldersListed` arm (the folder-list
+            // modal) earlier in this same switch, so the alias was unreachable —
+            // and had it ever won the match it would have reset every
+            // `.tickets-auto-sync-toggle` to false on a plain folder-list load.
+            // The integration-setup path is driven by `getIntegrationTicketSaveLocations`.
+            case 'integrationTicketSaveLocations': {
                 if (message.provider === 'clickup') {
                     const input = document.getElementById('clickup-ticket-import-folder');
                     if (input) input.value = message.path || '';
@@ -7592,8 +7598,12 @@ Instructions:
                 updateApplyButtonsState();
                 break;
             }
-            case 'integrationTicketSaveLocationBrowsed':
-            case 'browseTicketsFolderResult': {
+            // Same as above: the `browseTicketsFolderResult` alias is dropped. That
+            // message type is already claimed earlier in this switch by the
+            // tickets-folder arm (which posts `saveTicketsFolder`), so the alias was
+            // unreachable here. The integration-setup Browse button posts
+            // `browseIntegrationTicketSaveLocation` and is answered by the label below.
+            case 'integrationTicketSaveLocationBrowsed': {
                 if (message.provider === 'clickup') {
                     const input = document.getElementById('clickup-ticket-import-folder');
                     if (input) input.value = message.path || '';

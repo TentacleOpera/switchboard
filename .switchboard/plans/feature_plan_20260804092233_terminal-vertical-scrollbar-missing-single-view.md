@@ -10,166 +10,153 @@ because it depends on browser layout/paint timing.
 
 xterm.js renders its scrollbar as a **native** scrollbar on the
 `.xterm-viewport` element. xterm.css (v5.5.0) sets `overflow-y: scroll` on that
-element, so the scrollbar gutter is always reserved. The panel's global
-`::-webkit-scrollbar` rules (`terminals.html` lines 765-781) style it to 6px
-wide with a `#444` (`--border-bright`) thumb. So in principle the scrollbar
-should always be visible.
+element, so the scrollbar gutter is always reserved. The panel's scoped
+`.xterm-viewport::-webkit-scrollbar` rules (`terminals.html:940-955`) style it
+12px wide with a `color-mix` thumb. So in principle the scrollbar should
+always be visible.
 
-It goes missing anyway. Two root causes, both confirmed by reading the code:
+It goes missing anyway. This analysis was re-verified against HEAD (`30d82f8`)
+during feature reconciliation; two of the original three causes are now
+obsolete, one survives, and the surviving mechanism is narrowed:
 
-**Root cause 1 — DOM re-attachment without a scrollbar refresh.**
-`renderPaneGrid()` (`terminals.js` line 1162) does a full
-`paneGridEl.innerHTML = ''` teardown and rebuilds every pane on every call.
-Existing terminal containers are detached and re-attached to freshly-created
-`.pane-content` parents (line 1267: `contentEl.appendChild(entry.container)`).
-`renderPaneGrid()` is called on **every** `terminalsChanged` broadcast (line
-381 → `fetchTerminalList` → line 559), every `focusTerminal` message (line
-396), every `clearTerminalBadge` (line 410), every layout change, and every
-assign/unassign.
+> **Superseded:** "Root cause 1 — `renderPaneGrid()` does a full `paneGridEl.innerHTML = ''` teardown and re-attaches every terminal container to fresh `.pane-content` parents on EVERY `terminalsChanged` broadcast / focus / badge / layout call (old `:1162`, `:1267`). Same-size re-attachment means `fit()` no-ops, `onResize` never fires, and xterm's `syncScrollArea()` is never triggered."
+> **Reason:** `30d82f8` replaced the teardown with a patch-in-place reconcile. `renderPaneGrid()` (`terminals.js:1323`) now creates pane shells once (`createPaneElement`, `:1380`) and reconciles them (`updatePaneElement`, `:1471`); a terminal container is re-parented ONLY when its slot assignment actually changed (`:1569-1571` guards on `entry.container.parentNode !== contentEl`). The per-broadcast mass re-attachment this root cause depended on no longer exists. The stale-scroll-area mechanism it described is still real — but only at actual re-parent moments, not on every broadcast.
+> **Replaced with:** Live mechanism A below.
 
-After re-attachment, `batchFitVisiblePanes()` (line 1339) runs via
-`applyLayoutFloor()` (line 562). It calls `fitAndReportSize` →
-`fitAddon.fit()`. But when the pane layout hasn't changed (the common case —
-especially in solo mode where there is only one pane), the container's box is
-identical before and after the re-attach. `fit()` detects no dimension change,
-does **not** call `term.resize()`, so `onResize` does not fire, and xterm's
-`syncScrollArea()` is never triggered. The `.xterm-viewport` element was just
-removed from the document and put back; the browser may not repaint its native
-scrollbar without a layout change, and xterm's internal
-`_lastRecordedViewportHeight` / scroll-area height are stale. The scrollbar
-thumb renders at zero height or not at all until the next render or resize
-event — which may not come if there is no new terminal output.
+**Live mechanism A — same-size re-parent on assignment change.**
+When `updatePaneElement` does move a container (`:1570`,
+`contentEl.appendChild(entry.container)`), the new parent's box is usually
+identical to the old one. `FitAddon.fit()` short-circuits when cols/rows
+already match, no dimensions change fires, and xterm's
+`Viewport.syncScrollArea()` is never invoked — confirmed in the vendored
+bundle (`node_modules/@xterm/xterm/lib/xterm.js`): the viewport syncs its
+scroll area on `RenderService.onDimensionsChange` and on buffer/scroll
+events, NOT on DOM re-parenting. The scroll-area height stays stale; the
+thumb renders at zero height or not at all until the next buffer write or
+real resize — which may not come if the shell is idle.
 
-This is why it is "difficult to reproduce": it depends on whether the browser
-happens to repaint the native scrollbar after a same-size re-attachment, which
-varies by Chromium version, GPU state, and whether a paint is coalesced.
+**Live mechanism B — solo-mode `display: none → grid` transition (unchanged).**
+`checkSoloNotFound()` (`:596-620`) sets `paneGridEl.style.display = 'none'`
+while connecting / not-found (`:604`, `:614`) and flips to `'grid'` at `:619`.
+Materialization is deferred via `whenRendered` (`:2405`, `:2417`) until the
+container has a real box, and the initial `fitAddon.fit()` in
+`materializeTerminalView` (`:2474`) can measure a just-transitioned box.
 
-**Root cause 2 — Solo-mode `display: none → grid` transition.**
-In solo mode, `checkSoloNotFound()` (line 578) sets `paneGridEl.style.display
-= 'none'` while the terminal list is loading, then flips it back to `'grid'`
-once the terminal is confirmed live (line 601). The terminal is materialized
-via a `whenRendered` ResizeObserver that fires when the container transitions
-from 0×0 (hidden grid) to a real box. `materializeTerminalView()` (line 1872)
-calls `term.open(container)` then `fitAddon.fit()` inside that observer
-callback. If the browser has not completed layout by the time the observer
-fires, `fit()` measures a transient box and the viewport's initial scrollbar
-dimensions are wrong. The per-terminal ResizeObserver (100 ms debounce, line
-1904) may or may not fire again to correct it — if the box doesn't change
-after the initial fit, no correction happens.
+**The fit ladder does NOT cover the scrollbar.**
+`30d82f8` also added `startFitLadder` (`:1743-1800`): double-rAF attempt 0,
+verdict-driven retries at `FIT_SETTLE_DELAYS_MS = [0, 60, 180, 420]` (`:1634`),
+and renderer resync (`resyncPaneRenderer`, `:1733`). But its verdicts come from
+`inspectPaneFit` (`:1690-1709`), which checks cols/rows/canvas ONLY — it never
+examines `.xterm-viewport`'s scroll area. A pane converges to `'ok'` with a
+zero-height thumb. That is the gap this plan closes; it is also why the fix
+must drive the scroll area directly rather than add yet another `fit()`.
 
-**Contributing factor — low contrast.** The scrollbar thumb is `#444`
-(`--border-bright`) on a `#000` viewport background (`xterm.css`). A 6px
-`#444` bar on `#000` is low-contrast, so even when the scrollbar is
-technically present, it is easy to miss on a large full-window terminal in
-solo mode. This compounds the perception that it "went missing."
+> **Superseded:** "Contributing factor — low contrast. The scrollbar thumb is `#444` (`--border-bright`) on a `#000` viewport at 6px, easy to miss on a large full-window terminal."
+> **Reason:** Already fixed at HEAD. `terminals.html:940-955` ships scoped `.xterm-viewport::-webkit-scrollbar` rules (12px track, `color-mix(in srgb, var(--text-secondary) 55%, transparent)` thumb, `--accent-teal` hover) plus a Firefox `@supports not selector(::-webkit-scrollbar)` override at `:966-969` — stronger than what this plan originally proposed, and already compatible with `browser-panel-scrollbar-contract.test.js` (scoped, not bare).
+> **Replaced with:** No CSS work in this plan. The landed rules are kept untouched; the remaining defect is purely the stale scroll area.
 
 ## Metadata
 
-**Complexity:** 5
 **Tags:** frontend, ui, bugfix, reliability
+
+**Complexity:** 5
+
 **Project:** Browser Switchboard
+
+## User Review Required
+
+- **Private xterm surface.** The primary refresh calls `term._core.viewport.syncScrollArea()` behind a `try/catch` + feature check. Precedent exists (`term._core._renderService.handleResize` at `:1739`, `readRenderedGrid` at `:1661`), but it IS private API — confirm acceptable, or the `overflowY`-toggle fallback becomes the primary (less precise: it repaints the widget without re-syncing xterm's scroll-area bookkeeping).
+- **First verification step is a repro check.** The landed ladder + CSS may have reduced the symptom's frequency. If the defect cannot be reproduced at HEAD after a genuine attempt (solo popout, assign/unassign cycles, idle shell), close this subtask as fixed-by-`30d82f8` instead of implementing.
 
 ## Complexity Audit
 
-**Routine:**
-- Adding a scoped CSS block for `.xterm-viewport` scrollbar contrast.
-- Adding a `requestAnimationFrame` re-fit call after `checkSoloNotFound` makes
-  the grid visible.
+### Routine
+- One new self-contained function, `refreshTerminalScrollbar(entry)`, with guards mirroring `fitAndReportSize` (`!entry`, `disposed`, `!entry.term`, missing viewport).
+- Three one-line hook insertions at well-identified sites (re-parent branch, solo display flip, ladder convergence).
 
-**Complex / risky:**
-- Forcing a scrollbar repaint after DOM re-attachment without disturbing the
-  user's scroll position. The approach (toggle `overflow-y` on the viewport
-  element for one frame) is a well-known repaint-forcing technique, but it
-  must not reset scroll position or trigger spurious scroll events. xterm's
-  `syncScrollArea` must be re-invoked so `_lastRecordedViewportHeight` is
-  fresh.
-- `renderPaneGrid()` is on the hot path (every `terminalsChanged` broadcast).
-  Any per-terminal work added there must be cheap and must not cause focus
-  loss (the existing `hadFocus` guard at line 1170 handles focus, but new
-  layout reads must not invalidate it).
+### Complex / Risky
+- Preserving the user's scroll position across the refresh — `scrollTop` is saved and restored on a later frame as a belt-and-suspenders guard; the refresh must never yank the terminal to the bottom.
+- Hot-path discipline: the refresh must NOT be wired into every `batchFitVisiblePanes` pass unconditionally. Hooks are confined to genuine transitions (re-parent, display flip) and to ladder convergence, which is already generation-gated and throttled to four attempts.
+- Private API drift: xterm upgrades can rename `_core.viewport`; the feature check must degrade to the `overflowY` toggle silently rather than throw.
 
-No database, auth, or backend changes. No migrations. The change is confined
-to `src/webview/terminals.js`, `src/webview/terminals.html`, and a new
-contract test.
+No database, auth, or backend changes. No migrations. Confined to
+`src/webview/terminals.js`.
 
 ## Edge-Case & Dependency Audit
 
-1. **User scrolled up when a `terminalsChanged` broadcast arrives.** The
-   scrollbar refresh must NOT scroll the terminal to the bottom. The
-   `overflow-y` toggle technique preserves `scrollTop` because the browser
-   restores it when `overflow-y` returns to `scroll`. The fix must read
-   `scrollTop` before the toggle and restore it after, as a belt-and-suspenders
-   guard.
-
-2. **Terminal has no scrollback (content fits in visible rows).** With
-   `overflow-y: scroll`, the thumb fills the track. The refresh must still
-   produce a visible thumb in this state — the `overflow-y` toggle handles
-   this because the browser re-evaluates the scrollbar from scratch.
-
-3. **Multi-pane mode (2×2, 2×3, 3×3).** The same re-attachment issue affects
-   all pane counts, but it is less noticeable because the panes are smaller
-   and `terminalsChanged` broadcasts don't always change every pane's
-   assignment. The fix applies uniformly to all panes via
-   `batchFitVisiblePanes`.
-
-4. **Terminal not yet materialized (deferred via `whenRendered`).** The
-   scrollbar refresh must skip entries with no `term` (entry.term is null).
-   `fitAndReportSize` already guards on `!entry.term`; the new refresh
-   function must do the same.
-
-5. **Disposed / exited terminals.** The refresh must skip disposed entries
-   (`entry.disposed`). Already guarded by `fitAndReportSize`.
-
-6. **WebGL / Canvas renderer context loss.** The renderer can swap mid-session
-   (`attachRenderer` returns a holder, not the addon itself). The scrollbar
-   refresh is independent of the renderer — it operates on the viewport DOM
-   element, not the canvas. No interaction.
-
-7. **Firefox.** Firefox ignores `::-webkit-scrollbar` and uses the standard
-   `scrollbar-width` / `scrollbar-color` properties (gated in the `@supports`
-   block). The `overflow-y` toggle technique works in Firefox too. The
-   contrast CSS must be added inside the existing `@supports` gate for the
-   Firefox path, and as a `::-webkit-scrollbar-thumb` override for the
-   Chromium/WebKit path.
-
+1. **User scrolled up when a refresh fires.** `scrollTop` is read before and
+   restored after; `syncScrollArea()` itself clamps to the buffer and does
+   not scroll to bottom.
+2. **Terminal with no scrollback.** With `overflow-y: scroll` the gutter is
+   reserved and the (now higher-contrast) thumb fills the track;
+   `syncScrollArea()` recomputes a consistent full-track state.
+3. **Multi-pane layouts.** Mechanism A applies to any re-parent regardless of
+   pane count; the hook in `updatePaneElement` covers all layouts uniformly.
+4. **Unmaterialized terminal (`entry.term` null, deferred via `whenRendered`).**
+   Guard returns early — same contract as `fitAndReportSize`.
+5. **Disposed / exited terminals.** Guard returns early; the rAF restoration
+   re-checks `entry.disposed` before touching the DOM.
+6. **Renderer swap (WebGL/Canvas context loss).** The refresh operates on the
+   viewport DOM element and the viewport model, not the canvas — orthogonal
+   to `attachRenderer` holder swaps.
+7. **Firefox.** Native scrollbar via `scrollbar-width: auto` +
+   `scrollbar-color` (landed, `:966-969`). The `overflowY` toggle fallback is
+   browser-agnostic; `syncScrollArea()` is xterm-internal and
+   browser-agnostic.
 8. **Existing scrollbar contract test**
-   (`src/test/browser-panel-scrollbar-contract.test.js`). It asserts exactly
-   one bare `::-webkit-scrollbar` rule per panel HTML file. The new
-   `.xterm-viewport::-webkit-scrollbar` rules are **scoped** (prefixed with
-   `.xterm-viewport`), so they do not match the bare `::-webkit-scrollbar`
-   pattern the test counts. The test should still pass. Verify.
+   (`src/test/browser-panel-scrollbar-contract.test.js`). This plan adds NO
+   CSS, so the "exactly one bare `::-webkit-scrollbar` rule" assertion is
+   structurally unaffected. (Per session directive, tests are not run here —
+   this is a static-analysis statement, not an executed check.)
+9. **Code-investigation TODO for the implementer (repo-answerable):** confirm
+   in the vendored bundle whether `RenderService._updateDimensions` fires
+   `onDimensionsChange` when dimensions are unchanged — if it does,
+   `resyncPaneRenderer`'s step 3 (`:1738-1740`) already re-syncs the scroll
+   area in the `'stale-canvas'` case and the ladder-convergence hook (change
+   3 below) can be narrowed to verdicts that did NOT go through resync.
 
-9. **`batchFitVisiblePanes` is already called after most `renderPaneGrid`
-   paths** — but NOT after the `terminalsChanged` → `fetchTerminalList` path
-   directly (it comes indirectly via `applyLayoutFloor`). The fix adds an
-   explicit scrollbar refresh to `batchFitVisiblePanes` so every caller
-   benefits.
+## Dependencies
+
+- No cross-session dependencies (`sess_…`): none recorded.
+- **Sibling subtask (same feature):** *Terminal pane buttons condensed to
+  single letters by layout name* also edits `src/webview/terminals.js`. Per
+  the PRD's one-agent-stream-per-file discipline the two land SERIALLY:
+  buttons FIRST (mechanical), this plan SECOND. Surfaces are disjoint
+  (header labels/CSS block vs fit ladder/viewport) — a rebase between them
+  should be conflict-free.
+
+## Adversarial Synthesis
+
+Key risks: the plan's original architecture claims were stale (corrected
+against `30d82f8`), the refresh touches private xterm API (mitigated by
+feature-check + DOM fallback + codebase precedent), and a sloppy hook
+placement could either run on the hot path or yank scroll position (mitigated
+by transition-only hooks and `scrollTop` save/restore). The remaining
+uncertainty — whether the symptom still reproduces at HEAD — is gated
+explicitly as verification step 1 rather than assumed.
 
 ## Proposed Changes
 
-### 1. `src/webview/terminals.js` — force scrollbar repaint after re-attach
+### 1. `src/webview/terminals.js` — `refreshTerminalScrollbar(entry)`
 
-Add a `refreshTerminalScrollbar(entry)` function that forces xterm's viewport
-to repaint its native scrollbar after a DOM re-attachment, without changing
-scroll position. Wire it into `batchFitVisiblePanes` so every grid rebuild
-triggers it.
+Add near `resyncPaneRenderer` (`:1733`), the module's other
+force-xterm-to-repaint helper:
 
 ```js
 /**
- * Force xterm's native scrollbar to repaint after a DOM re-attachment.
+ * Re-sync xterm's scroll area after a same-size DOM re-parent or a
+ * display:none -> grid flip. fit() short-circuits when cols/rows match,
+ * so onDimensionsChange never fires and Viewport.syncScrollArea() is
+ * never called; the thumb renders at zero height until the next buffer
+ * write. The fit ladder (startFitLadder) verifies cols/rows/canvas but
+ * never the scroll area — this closes that gap.
  *
- * renderPaneGrid() does a full innerHTML='' teardown and re-attaches every
- * terminal container. When the pane layout is unchanged, fit() detects no
- * dimension change, term.resize() is not called, onResize does not fire, and
- * xterm's syncScrollArea() is never triggered. The .xterm-viewport element
- * was just removed from the document and put back; the browser may not
- * repaint its native scrollbar without a layout change, leaving the thumb at
- * zero height or absent until the next render.
- *
- * Toggling overflow-y on the viewport for one frame forces the browser to
- * destroy and recreate the scrollbar, and reading offsetHeight forces
- * syncScrollArea to re-record the viewport height. Scroll position is
- * preserved across the toggle.
+ * Primary: xterm's own Viewport.syncScrollArea (private surface, same
+ * precedent as term._core._renderService at resyncPaneRenderer).
+ * Fallback: a one-frame overflowY toggle forces the browser to drop and
+ * recreate the native scrollbar widget (rAF split so Chromium commits
+ * 'hidden' first — a synchronous toggle coalesces into a no-op).
+ * Scroll position is preserved across both paths.
  */
 function refreshTerminalScrollbar(entry) {
     if (!entry || entry.disposed || !entry.term) { return; }
@@ -177,19 +164,24 @@ function refreshTerminalScrollbar(entry) {
     if (!container) { return; }
     const viewport = container.querySelector('.xterm-viewport');
     if (!viewport) { return; }
-    // Preserve scroll position across the toggle.
     const savedScrollTop = viewport.scrollTop;
-    // Force the browser to drop and recreate the scrollbar widget.
-    viewport.style.overflowY = 'hidden';
-    // Restore on the next frame so the browser commits the 'hidden' state
-    // before re-enabling scroll — a synchronous toggle is coalesced into a
-    // no-op by some Chromium versions.
+    let synced = false;
+    try {
+        const vp = entry.term._core && entry.term._core.viewport;
+        if (vp && typeof vp.syncScrollArea === 'function') {
+            vp.syncScrollArea();
+            synced = true;
+        }
+    } catch { /* ignore — private shape changed, fall through */ }
+    if (!synced) {
+        viewport.style.overflowY = 'hidden';
+        requestAnimationFrame(() => {
+            if (entry.disposed) { return; }
+            viewport.style.overflowY = '';
+        });
+    }
     requestAnimationFrame(() => {
         if (entry.disposed) { return; }
-        viewport.style.overflowY = '';
-        // Re-fit in case the box changed during the hidden frame, then
-        // restore scroll position.
-        fitAndReportSize(entry);
         if (viewport.scrollTop !== savedScrollTop) {
             viewport.scrollTop = savedScrollTop;
         }
@@ -197,248 +189,90 @@ function refreshTerminalScrollbar(entry) {
 }
 ```
 
-Update `batchFitVisiblePanes` to call it for every live pane:
+### 2. `src/webview/terminals.js` — hook: actual re-parent in `updatePaneElement`
+
+In the `:1567-1573` branch, after the container is (re-)attached and
+activated:
 
 ```js
-function batchFitVisiblePanes() {
-    requestAnimationFrame(() => {
-        const slotCount = getSlotCount(effectiveLayout);
-        for (let i = 0; i < slotCount; i++) {
-            const name = paneAssignments[i];
-            if (name) {
-                const entry = terminalsMap.get(name);
-                fitAndReportSize(entry);
-                refreshTerminalScrollbar(entry);
-            }
-        }
-    });
+} else {
+    // THE invariant of this change: no move when already in place.
+    if (entry.container.parentNode !== contentEl) {
+        contentEl.appendChild(entry.container);
+        refreshTerminalScrollbar(entry);   // ADD — same-size re-parent
+                                           // leaves the scroll area stale
+    }
+    entry.container.classList.add('active');
 }
 ```
 
-### 2. `src/webview/terminals.js` — explicit re-fit after solo grid becomes visible
+### 3. `src/webview/terminals.js` — hook: solo grid becomes visible
 
-In `checkSoloNotFound()`, after setting `paneGridEl.style.display = 'grid'`
-(line 601), schedule a re-fit + scrollbar refresh for the solo terminal on the
-next frame. This handles the `display: none → grid` transition where the
-initial materialization fit may have measured a transient box.
+In `checkSoloNotFound()` after `paneGridEl.style.display = 'grid';` (`:619`):
 
 ```js
-// Inside checkSoloNotFound(), after:
-//   soloStatusEl.style.display = 'none';
-//   paneGridEl.style.display = 'grid';
-// Add:
+soloStatusEl.style.display = 'none';
+paneGridEl.style.display = 'grid';
+// ADD — the initial fit may have measured a just-transitioned box; the
+// ladder re-fits but never re-syncs the scroll area.
 requestAnimationFrame(() => {
     const entry = terminalsMap.get(soloTerminalName);
-    if (entry) {
-        fitAndReportSize(entry);
-        refreshTerminalScrollbar(entry);
-    }
+    if (entry) { refreshTerminalScrollbar(entry); }
 });
 ```
 
-### 3. `src/webview/terminals.js` — deferred second fit after initial materialization
+### 4. `src/webview/terminals.js` — hook: ladder convergence
 
-In `materializeTerminalView()`, after the initial `fitAddon.fit()` (line 1901),
-schedule a second fit + scrollbar refresh on the next frame. This handles the
-case where the first fit ran against a box that was technically non-zero but
-not yet at its final settled size (common in the solo `whenRendered` path).
+In `startFitLadder`'s `attempt` (`:1768-1769`), when the pane has converged:
 
 ```js
-// After: try { fitAddon.fit(); } catch { /* ignore */ }
-// Add:
-requestAnimationFrame(() => {
-    if (entry.disposed || !entry.term) { return; }
-    fitAndReportSize(entry);
-    refreshTerminalScrollbar(entry);
-});
-```
-
-### 4. `src/webview/terminals.html` — higher-contrast xterm scrollbar
-
-Add scoped CSS for `.xterm-viewport` scrollbars so the thumb is visible even
-on a large full-window terminal. The global `::-webkit-scrollbar-thumb` uses
-`--border-bright` (`#444`), which is too subtle on `#000`. Override it
-specifically for the terminal viewport with a higher-contrast token. These
-rules are scoped (`.xterm-viewport::-webkit-scrollbar`) so they do not affect
-the sidebar or other panel scrollers, and they do not count as a "bare"
-`::-webkit-scrollbar` rule for the existing contract test.
-
-```css
-/* xterm's viewport scrollbar — higher contrast than the panel default so
-   the thumb is visible on a full-window terminal (solo mode). The global
-   ::-webkit-scrollbar-thumb uses --border-bright (#444), which is nearly
-   invisible on xterm's #000 viewport background at 6px. */
-.xterm-viewport::-webkit-scrollbar {
-    width: 8px;
-}
-.xterm-viewport::-webkit-scrollbar-thumb {
-    background: var(--text-secondary, #8C8C8C);
-    border-radius: 4px;
-}
-.xterm-viewport::-webkit-scrollbar-thumb:hover {
-    background: var(--text-primary, #e0e0e0);
+const after = inspectPaneFit(entry);
+if (after === 'ok' || after === 'skip') {
+    if (after === 'ok') { refreshTerminalScrollbar(entry); }   // ADD
+    return;
 }
 ```
 
-And inside the existing `@supports not selector(::-webkit-scrollbar)` block,
-add a Firefox-specific override for the viewport:
+Cheap: runs at most once per ladder (generation-gated, four attempts max),
+and only on verified convergence. If the code-investigation TODO (Edge-Case
+Audit #9) shows `handleResize` re-syncs on no-change, narrow this to skip
+when a `resyncPaneRenderer` step already ran for this attempt.
 
-```css
-@supports not selector(::-webkit-scrollbar) {
-    :root {
-        scrollbar-width: thin;
-        scrollbar-color: var(--border-bright) transparent;
-    }
-    .xterm-viewport {
-        scrollbar-width: auto;
-        scrollbar-color: var(--text-secondary, #8C8C8C) transparent;
-    }
-}
-```
+> **Superseded:** "Proposed change 4 — add scoped `.xterm-viewport::-webkit-scrollbar` CSS (8px, `--text-secondary` thumb) and a Firefox `@supports` override."
+> **Reason:** Already landed at HEAD in stronger form (`terminals.html:940-955`, 12px + `color-mix` thumb + teal hover; Firefox override `:966-969`).
+> **Replaced with:** Nothing — no CSS changes in this plan.
 
-### 5. `src/test/terminal-scrollbar-refresh-contract.test.js` — new regression test
-
-A contract test (same pattern as `terminal-solo-popout-contract.test.js` and
-`browser-panel-scrollbar-contract.test.js`) that verifies:
-
-- `terminals.js` defines a `refreshTerminalScrollbar` function that toggles
-  `overflowY` on the viewport and restores scroll position.
-- `batchFitVisiblePanes` calls `refreshTerminalScrollbar` for each live pane.
-- `checkSoloNotFound` schedules a `requestAnimationFrame` re-fit after
-  setting `display: grid`.
-- `materializeTerminalView` schedules a deferred second fit.
-- `terminals.html` has a scoped `.xterm-viewport::-webkit-scrollbar` rule
-  with a higher-contrast thumb than `--border-bright`.
-- The scoped rule does not break the "exactly one bare `::-webkit-scrollbar`"
-  assertion in `browser-panel-scrollbar-contract.test.js` (the scoped rule is
-  prefixed and does not match the bare pattern).
-
-```js
-'use strict';
-const fs = require('fs');
-const path = require('path');
-const assert = require('assert');
-
-const terminalsJs = fs.readFileSync(
-    path.join(__dirname, '../webview/terminals.js'), 'utf8');
-const terminalsHtml = fs.readFileSync(
-    path.join(__dirname, '../webview/terminals.html'), 'utf8');
-
-let passed = 0, failed = 0;
-function test(name, fn) {
-    try { fn(); console.log(`  ✅ ${name}`); passed++; }
-    catch (e) { console.error(`  ❌ ${name}\n     ${e.message}`); failed++; }
-}
-
-test('refreshTerminalScrollbar toggles overflowY and preserves scrollTop', () => {
-    assert.ok(terminalsJs.includes('function refreshTerminalScrollbar'),
-        'refreshTerminalScrollbar must be defined');
-    const fn = terminalsJs.substring(
-        terminalsJs.indexOf('function refreshTerminalScrollbar'));
-    assert.ok(fn.includes("viewport.style.overflowY = 'hidden'"),
-        'must toggle overflowY to hidden to force repaint');
-    assert.ok(fn.includes('savedScrollTop'),
-        'must preserve scroll position across the toggle');
-    assert.ok(fn.includes('requestAnimationFrame'),
-        'must restore overflowY on the next frame');
-});
-
-test('batchFitVisiblePanes calls refreshTerminalScrollbar', () => {
-    const fn = terminalsJs.substring(
-        terminalsJs.indexOf('function batchFitVisiblePanes'),
-        terminalsJs.indexOf('function batchFitVisiblePanes') + 400);
-    assert.ok(fn.includes('refreshTerminalScrollbar'),
-        'batchFitVisiblePanes must refresh scrollbars after re-attach');
-});
-
-test('checkSoloNotFound schedules a re-fit after display:grid', () => {
-    const fn = terminalsJs.substring(
-        terminalsJs.indexOf('function checkSoloNotFound'),
-        terminalsJs.indexOf('function checkSoloNotFound') + 600);
-    assert.ok(fn.includes("paneGridEl.style.display = 'grid'"),
-        'must set display to grid');
-    assert.ok(fn.includes('requestAnimationFrame'),
-        'must schedule a rAF re-fit after showing the grid');
-    assert.ok(fn.includes('refreshTerminalScrollbar'),
-        'must refresh the scrollbar after showing the grid');
-});
-
-test('materializeTerminalView schedules a deferred second fit', () => {
-    const fn = terminalsJs.substring(
-        terminalsJs.indexOf('function materializeTerminalView'),
-        terminalsJs.indexOf('function materializeTerminalView') + 800);
-    assert.ok(fn.includes('requestAnimationFrame'),
-        'must schedule a deferred re-fit after initial fit()');
-});
-
-test('terminals.html has scoped xterm-viewport scrollbar with higher contrast', () => {
-    assert.ok(terminalsHtml.includes('.xterm-viewport::-webkit-scrollbar'),
-        'must scope a scrollbar rule to .xterm-viewport');
-    assert.ok(terminalsHtml.includes('.xterm-viewport::-webkit-scrollbar-thumb'),
-        'must override the thumb for xterm viewport');
-    // The thumb must NOT fall back to --border-bright (#444) — that is the
-    // low-contrast token this plan replaces.
-    const thumbBlock = terminalsHtml.match(
-        /\.xterm-viewport::-webkit-scrollbar-thumb\s*\{([^}]*)\}/);
-    assert.ok(thumbBlock, 'thumb block must exist');
-    assert.ok(!thumbBlock[1].includes('--border-bright'),
-        'xterm viewport thumb must not use --border-bright (#444) — too low contrast');
-});
-
-test('scoped xterm scrollbar does not add a bare ::-webkit-scrollbar rule', () => {
-    // The existing contract test counts bare (un-prefixed) ::-webkit-scrollbar
-    // rules. Scoped rules (.xterm-viewport::-webkit-scrollbar) must not match.
-    const bare = (terminalsHtml.match(/^\s*::-webkit-scrollbar\s*\{/gm) || []).length;
-    assert.strictEqual(bare, 1,
-        `expected exactly 1 bare ::-webkit-scrollbar rule, found ${bare}`);
-});
-
-console.log(`\n${passed} passed, ${failed} failed`);
-if (failed > 0) { process.exit(1); }
-```
+> **Superseded:** "Proposed change 5 — new contract test `src/test/terminal-scrollbar-refresh-contract.test.js`."
+> **Reason:** Session directive skips automated tests in the verification plan; no new test artifact is commissioned.
+> **Replaced with:** Manual verification matrix below. If a follow-up session restores test coverage, the original contract-test sketch in git history is a sound starting point.
 
 ## Verification Plan
 
-1. **Run the new contract test:**
-   ```
-   node src/test/terminal-scrollbar-refresh-contract.test.js
-   ```
-   All 6 tests must pass.
+*Session directive: no project compilation and no automated tests. Verification is manual plus a syntax check.*
 
-2. **Run the existing scrollbar contract test (must not regress):**
-   ```
-   node src/test/browser-panel-scrollbar-contract.test.js
-   ```
-   The "exactly one bare `::-webkit-scrollbar` rule" assertion must still
-   pass for `terminals.html`.
-
-3. **Run the existing solo popout contract test:**
-   ```
-   node src/test/terminal-solo-popout-contract.test.js
-   ```
-
-4. **Manual verification — solo mode:**
-   - Open a terminal in solo mode (`?solo=<name>` popout).
-   - Produce enough output to fill the viewport with scrollback.
+1. **Repro gate (do this FIRST):** At HEAD, open a solo popout (`?solo=<name>`)
+   with an idle shell and cycle assign/unassign in a multi-pane grid. If the
+   scrollbar never goes missing after a genuine attempt, close this subtask
+   as fixed-by-`30d82f8` and skip implementation.
+2. **Syntax check:** `node --check src/webview/terminals.js` passes.
+3. **Manual — solo mode:**
+   - Open a terminal in solo mode; produce enough output for scrollback.
    - Trigger repeated `terminalsChanged` broadcasts (spawn/close another
-     terminal in the fleet, or wait for periodic fleet updates).
+     terminal in the fleet).
    - Confirm the scrollbar remains visible after each broadcast.
-   - Scroll up mid-output, trigger a `terminalsChanged` broadcast, and confirm
-     the scroll position is preserved and the scrollbar thumb is still
-     visible.
-
-5. **Manual verification — multi-pane mode:**
-   - Open a 2×2 grid with 4 terminals.
-   - Produce output in each.
-   - Trigger `terminalsChanged` broadcasts.
-   - Confirm all 4 scrollbars remain visible.
-
-6. **Manual verification — no scrollback:**
-   - Open a terminal with no output (fresh shell).
-   - Confirm the scrollbar thumb is visible (full-track, higher-contrast
-     `#8C8C8C` instead of `#444`).
-
-7. **Firefox check (if available):**
-   - Open the terminals panel in Firefox.
-   - Confirm the xterm scrollbar is visible with the
-     `scrollbar-color: var(--text-secondary)` override.
+   - Scroll up mid-output, trigger a broadcast, confirm scroll position is
+     preserved and the thumb stays visible.
+4. **Manual — re-parent path:** In a 2x2 grid, swap two terminals' pane
+   assignments (or unassign/reassign one) with an idle shell. Confirm the
+   moved terminal's scrollbar is present immediately after the move.
+5. **Manual — multi-pane:** 2x2 grid, output in each pane, broadcasts firing;
+   all four scrollbars remain visible.
+6. **Manual — no scrollback:** Fresh shell; thumb is visible full-track
+   (landed 12px `color-mix` styling, not the old 6px `#444`).
+7. **Manual — scroll-position guard:** Scroll up ~10 pages, force a
+   re-parent (assign to another pane), confirm the viewport returns to the
+   same scroll offset.
+8. **Firefox spot check (if available):** panel in Firefox; xterm scrollbar
+   visible via the `scrollbar-color` override after the same transitions.
+9. **Repeat in the standalone browser host** (`npx switchboard`) for one pass
+   of steps 3-4 — both hosts serve the same panel HTML.

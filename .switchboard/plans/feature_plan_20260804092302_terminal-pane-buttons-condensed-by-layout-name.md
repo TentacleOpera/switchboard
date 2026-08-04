@@ -12,115 +12,151 @@ The pane header is a flex row (`justify-content: space-between`) with two childr
 
 This layout already has the correct overflow behavior: when the header is genuinely too narrow, the **title ellipsizes** while the buttons keep their full labels. The infrastructure for graceful degradation is already in place.
 
-The bug is a **premature, layout-name-based shortcut** that bypasses this mechanism:
+The bug is a **premature, layout-name-based shortcut** that bypasses this mechanism. It is still live at HEAD, but the code structure around it changed in `30d82f8`:
 
-1. **`src/webview/terminals.js:1225`** — `const terse = effectiveLayout === '2x3' || effectiveLayout === '3x3';` hardcodes the condensation by layout name. Whenever the layout is 2x3 or 3x3, the button labels are set to `'c'` / `'h'` regardless of the actual rendered pane width. On a wide monitor, a 2x3 layout (3 columns) gives each pane far more than the ~50px needed to render "clear" and "hide" at 10px font.
+> **Superseded:** "`src/webview/terminals.js:1225` — `const terse = effectiveLayout === '2x3' || effectiveLayout === '3x3';` hardcodes the condensation at button creation time (lines 1222-1235), with `withClearingFeedback` at 1746-1755."
+> **Reason:** `30d82f8` replaced per-render button creation with a reconcile model. Buttons are now created ONCE in `createPaneElement` (`terminals.js:1380-1457`) and re-labeled on every pass by `updatePaneElement` (`:1471`); the create-time ternaries at old lines 1222-1235 no longer exist, and the condensation was centralized into a helper.
+> **Replaced with:** The condensation now lives in **`isTerseLayout()` (`terminals.js:1461-1463`)** — `return effectiveLayout === '2x3' || effectiveLayout === '3x3';` — with FIVE call sites:
+> 1. `:1540-1541` — `updatePaneElement` sets `clearBtn.textContent = terse ? 'c' : 'clear'` and `hideBtn.textContent = terse ? 'h' : 'hide'` on every reconcile.
+> 2. `:1549` — the pin button (added after this plan was first written) gets `terse ? (isPinned ? 'u' : 'p') : (isPinned ? 'unpin' : 'pin')`.
+> 3. `:1427` — the clear button's click handler computes `const label = isTerseLayout() ? 'c' : 'clear';` at click time for `withClearingFeedback`.
+> 4. `:1525` — the input-state chip: `stateEl.textContent = terse ? '' : state.label;` (dot-only in dense layouts).
+> 5. `:1261-1262` — `refreshInputState` duplicates the check as `terseHeader` for the same chip.
 
-2. **`src/webview/terminals.html:548-610`** —配套 CSS shrinks `.pane-header` padding/font-size and `.btn-unassign-pane` padding specifically for `.layout-2x3` / `.layout-3x3`, with comments asserting "The 6- and 9-pane headers are too narrow for two words." This assertion is false on wide displays and is the rationalization for the JS-side condensation.
+The CSS side also moved, to `src/webview/terminals.html`:
+- **`:730-733`** — `.pane-grid.layout-2x3 .btn-unassign-pane, .pane-grid.layout-3x3 .btn-unassign-pane { padding: 2px 4px; }` — the button shrink, justified by the same false "headers are too narrow" assertion. **Remove.**
+- **`:580-583`** — header padding/font density shrink for 2x3/3x3. **Keep** — a reasonable density tweak that does not affect label text.
+- **`:585-588`** — title ellipsis rules for 2x3/3x3. **Keep** — the correct overflow mechanism, still needed on narrow viewports.
+- **`:692-694`** — input-state chip styling for 2x3/3x3. **Keep** — the chip is out of scope (see User Review Required).
 
-3. **`withClearingFeedback` (`terminals.js:1746-1755`)** — the restore label passed in is `terse ? 'c' : 'clear'`, so the terse flag also controls the transient "clearing" feedback text. Removing `terse` means the full `'clear'` label is always passed, which correctly triggers the `'clearing'` transient state (length > 1 branch at line 1749).
+**Root cause (unchanged):** The condensation is keyed on layout name (`'2x3'` / `'3x3'`) rather than on measured available width. The existing flex + ellipsis CSS already handles true overflow correctly — the `isTerseLayout()` flag is redundant for buttons and fires far too aggressively.
 
-**Root cause:** The condensation is keyed on layout name (`'2x3'` / `'3x3'`) rather than on measured available width. The existing flex + ellipsis CSS already handles true overflow correctly — the `terse` flag is redundant and fires far too aggressively.
+**`withClearingFeedback` (`terminals.js:2238-2247`)** — now reads `btn.textContent = restoreLabel.length <= 1 ? '…' : 'clearing';`. Once the button labels are always `'clear'`, the restore label is always length 5, so the transient state shows the full word `'clearing'` for 600ms — the intended treatment.
 
 ## Metadata
 
-**Complexity:** 2
 **Tags:** frontend, ui, ux, bugfix
+
+**Complexity:** 3
+
 **Project:** Browser Switchboard
 
-## Complexity Audit (Routine vs Complex/Risky)
+## User Review Required
 
-**Routine.** This is a small, localized change to two files:
-- Remove a boolean flag and its three ternary usages in `terminals.js`.
-- Remove two layout-specific CSS rule blocks in `terminals.html`.
+- **Scope decision — the input-state chip KEEPS its dense-layout dot-only mode.** Call sites 4 and 5 above are untouched: the chip sits *inside* the ellipsizing `.pane-title`, where its text competes directly with the terminal name (unlike the buttons, which are shielded by `flex-shrink: 0`). The colored dot plus `title` attribute carries the meaning. Veto this if you want the chip de-condensed too — that would widen the diff to `stateEl`/`refreshInputState` and the `:692-694` CSS.
+- **No width measurement is added.** The fix trusts the existing flex degradation order (title ellipsizes first, buttons keep full labels) rather than measuring header width. True measured condensation was considered and rejected as machinery for a problem the user reports does not exist.
 
-No new logic, no new dependencies, no state changes, no backend involvement. The flex layout that already handles overflow is untouched. Risk is limited to the visual appearance of pane headers in 2x3/3x3 layouts on genuinely narrow viewports — but even there, the title ellipsizes first (by design), so the buttons retain their full labels until the header is so narrow that the title is already reduced to near-zero. That is the correct degradation order.
+## Complexity Audit
+
+### Routine
+- Delete one helper usage pattern: collapse three button-label ternaries (`:1427`, `:1540-1541`, `:1549`) to constant full labels.
+- Remove one CSS rule block (`terminals.html:730-733`).
+- Keep `isTerseLayout()` (or rename it for clarity) solely for the chip call sites, and fix its misleading comment at `:1460`.
+
+### Complex / Risky
+- None beyond the visual: on genuinely narrow viewports the degradation order changes from "buttons shrink to initials" to "title ellipsizes to near-zero while buttons stay readable" — which is the designed behavior of the flex rules already in place.
+
+No new logic, no state changes, no backend involvement, no migrations.
 
 ## Edge-Case & Dependency Audit
 
-- **Narrow viewports / small webview panels:** With `terse` removed, on a very narrow viewport the full "clear"/"hide" labels plus a long terminal name could in theory crowd the header. But `.pane-title` has `min-width: 0` + ellipsis and `.pane-actions` has `flex-shrink: 0`, so the title truncates first. The buttons only become a problem if the title is already empty and the buttons still don't fit — an extreme case that does not occur with 3 columns on any realistic VS Code panel width. The existing 2x3/3x3 title-ellipsis CSS (lines 553-559) is retained, so narrow-viewport title truncation still works.
-- **`withClearingFeedback` transient label:** Currently `restoreLabel = terse ? 'c' : 'clear'`. After the fix, `restoreLabel` is always `'clear'` (length 5 > 1), so line 1749 shows `'clearing'` during the 600ms feedback window — the intended full-word treatment. The `hide` button does not pass a `restoreLabel`, so it is unaffected.
-- **No existing tests reference the terse labels:** A grep across `src/test/*terminal*` for `terse`, `'c'`, `'h'`, `btn-unassign`, `paneClear`, `unassignBtn` returned no matches. The condensation is untested, so removing it breaks no contracts.
-- **Sidebar list buttons (`terminals.js:751-760`):** The sidebar's per-terminal `clear` button already always uses the full `'clear'` label (no terse flag). This plan aligns the pane-grid buttons with the sidebar's behavior — consistency win.
-- **Layout buttons in the toolbar (`terminals.html:848-853`):** Unrelated; the `2x3`/`3x3` toolbar buttons keep their labels.
+- **Narrow viewports / small webview panels:** With terse labels removed, `.pane-title` (`min-width: 0` + ellipsis) truncates first while `.pane-actions` (`flex-shrink: 0`) keeps the full `clear`/`hide` labels — the title is reduced to near-zero before the buttons are ever crowded. The `:585-588` title-ellipsis CSS is retained, so narrow-viewport truncation still works.
+- **`withClearingFeedback` transient label:** Restore label becomes constant `'clear'` (length 5 > 1), so `:2241` shows `'clearing'` during the 600ms feedback window — the intended full-word path. The `hide` and pin buttons pass no restore label and are unaffected.
+- **Pin button (`:1549`):** New since this plan was first written. It condenses to `p`/`u` under the same flag and is equally ambiguous — it gets full `pin`/`unpin` labels under this fix. Its `aria-pressed` state and `is-pinned` class are unchanged.
+- **Layout demotion reconcile:** `updatePaneElement` re-derives labels every pass precisely so a 2x3 pane demoted to `2h` loses its initials. With constant labels this reconcile becomes a no-op assignment — harmless and keeps the code honest if labels ever become dynamic again.
+- **No existing tests reference the terse labels:** A grep across `src/test/*terminal*` for `terse`, `'c'`, `'h'`, `btn-unassign` returned no matches. The condensation is untested; removing it breaks no contracts.
+- **Sidebar list buttons:** The sidebar's per-terminal `clear` button already always uses the full `'clear'` label. This plan aligns the pane-grid buttons with the sidebar — consistency win.
+- **Toolbar layout buttons:** Unrelated; the `2x3`/`3x3` toolbar buttons keep their labels.
+
+## Dependencies
+
+- No cross-session dependencies (`sess_…`): none recorded.
+- **Sibling subtask (same feature):** *Terminal vertical scrollbar goes missing, especially in single/solo view mode* also edits `src/webview/terminals.js`. Per the PRD's one-agent-stream-per-file discipline, the two must land SERIALLY. This plan lands FIRST (mechanical, low blast radius), the scrollbar plan second. The surfaces are disjoint (header labels/CSS block vs fit ladder/viewport), so a rebase between them should be conflict-free.
+
+## Adversarial Synthesis
+
+Key risks: the plan's original line references were stale (fixed by the rewrite against HEAD), and widening scope to the input-state chip would conflate two different space economies. Mitigations: every call site and CSS line above was re-verified against `30d82f8`; chip scope is quarantined behind a User Review gate; narrow-viewport behavior rests on pre-existing flex rules, checked manually rather than assumed.
 
 ## Proposed Changes
 
-### `src/webview/terminals.js` — remove the `terse` flag and always use full labels
+### `src/webview/terminals.js` — buttons always full labels; chip keeps dense mode
 
-At lines 1222-1235 (pane clear button), remove the `terse` declaration and collapse the ternaries:
+**1. Clear/hide labels in `updatePaneElement` (`:1540-1541`):**
 
 ```js
 // BEFORE
-if (assignedName) {
-    // Same two words the extension sidebar uses. The 6- and 9-pane
-    // headers cannot fit them, so those fall back to initials.
-    const terse = effectiveLayout === '2x3' || effectiveLayout === '3x3';
+clearBtn.textContent = terse ? 'c' : 'clear';
+hideBtn.textContent = terse ? 'h' : 'hide';
 
-    const paneClearBtn = document.createElement('button');
-    paneClearBtn.className = 'btn-unassign-pane';
-    paneClearBtn.textContent = terse ? 'c' : 'clear';
-    paneClearBtn.title = 'Send /clear to this terminal';
-    paneClearBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        withClearingFeedback(paneClearBtn, () => clearTerminal(assignedName), terse ? 'c' : 'clear');
-    });
-    actionsEl.appendChild(paneClearBtn);
-
-    const unassignBtn = document.createElement('button');
-    unassignBtn.className = 'btn-unassign-pane';
-    unassignBtn.textContent = terse ? 'h' : 'hide';
-    ...
-
-// AFTER
-if (assignedName) {
-    // Same two words the extension sidebar uses. The pane-title flexes
-    // and ellipsizes when the header is genuinely narrow, so the buttons
-    // keep their full labels at every layout.
-    const paneClearBtn = document.createElement('button');
-    paneClearBtn.className = 'btn-unassign-pane';
-    paneClearBtn.textContent = 'clear';
-    paneClearBtn.title = 'Send /clear to this terminal';
-    paneClearBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        withClearingFeedback(paneClearBtn, () => clearTerminal(assignedName), 'clear');
-    });
-    actionsEl.appendChild(paneClearBtn);
-
-    const unassignBtn = document.createElement('button');
-    unassignBtn.className = 'btn-unassign-pane';
-    unassignBtn.textContent = 'hide';
-    ...
+// AFTER — the pane-title flexes and ellipsizes when the header is genuinely
+// narrow, so the buttons keep their full labels at every layout (same words
+// the sidebar uses).
+clearBtn.textContent = 'clear';
+hideBtn.textContent = 'hide';
 ```
 
-The `unassignBtn` click handler body (lines 1241-1250) is unchanged — it never referenced `terse`.
+**2. Pin label (`:1549`):**
 
-### `src/webview/terminals.html` — remove the layout-specific button-shrink CSS, keep title ellipsis
+```js
+// BEFORE
+pinBtn.textContent = terse ? (isPinned ? 'u' : 'p') : (isPinned ? 'unpin' : 'pin');
 
-Remove the button-padding override block at lines 605-610:
+// AFTER
+pinBtn.textContent = isPinned ? 'unpin' : 'pin';
+```
+
+**3. Click-time restore label (`:1427`):**
+
+```js
+// BEFORE
+const label = isTerseLayout() ? 'c' : 'clear';
+withClearingFeedback(paneClearBtn, () => clearTerminal(targetName), label);
+
+// AFTER
+withClearingFeedback(paneClearBtn, () => clearTerminal(targetName), 'clear');
+```
+
+**4. `isTerseLayout()` (`:1460-1463`)** — keep the helper for the two chip call sites (`:1525`, `:1261`) but fix the comment, which falsely generalizes:
+
+```js
+// BEFORE
+/** The 6- and 9-pane headers cannot fit the two-word button labels. */
+
+// AFTER
+/** Dense 6-/9-pane headers: the input-state chip (inside the ellipsizing
+ *  title) collapses to a dot there. Button labels are NOT condensed — the
+ *  title ellipsizes first by flex design. */
+```
+
+Optionally rename it `isDenseHeaderLayout()` at both call sites for honesty; not required.
+
+**5. `terse` local in `updatePaneElement` (`:1486`)** — still needed by the chip line (`:1525`); keep it. If the rename in (4) is taken, it reads `const denseHeader = isDenseHeaderLayout();`.
+
+### `src/webview/terminals.html` — remove the button-shrink block only
+
+Remove `:730-733`:
 
 ```css
 /* REMOVE — the pane-title ellipsizes when narrow; buttons keep full labels. */
-/* The 6- and 9-pane headers are too narrow for two words, so the label
-   collapses to the first letter there rather than overflowing the title. */
 .pane-grid.layout-2x3 .btn-unassign-pane,
 .pane-grid.layout-3x3 .btn-unassign-pane {
     padding: 2px 4px;
 }
 ```
 
-**Keep** the title-ellipsis rules at lines 553-559 (`.pane-grid.layout-2x3 .pane-title, .pane-grid.layout-3x3 .pane-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }`) — these are the correct overflow mechanism and remain needed for narrow viewports.
-
-**Keep** the header padding/font shrink at lines 548-552 (`.pane-grid.layout-2x3 .pane-header, .pane-grid.layout-3x3 .pane-header { padding: 2px 4px; font-size: 10px; }`) — this is a reasonable density tweak for multi-pane layouts and does not affect label text.
+**Keep** `:580-583` (header density), `:585-588` (title ellipsis), `:692-694` (chip styling) — all still load-bearing.
 
 ## Verification Plan
 
-1. **Build/typecheck:** Run the project's standard webview build/lint step (e.g. `npm run build` or the webview lint target) and confirm no new errors.
+*Session directive: no project compilation and no automated tests. Verification is manual plus a syntax check.*
+
+1. **Syntax check:** `node --check src/webview/terminals.js` passes.
 2. **Manual — 2x3 layout on a wide window:**
    - Open the Terminals view, assign terminals to panes, select the `2x3` layout.
-   - Confirm each pane header shows full `clear` and `hide` button labels (not `c` / `h`).
+   - Confirm each pane header shows full `pin`/`unpin`, `clear` and `hide` labels (not `p`/`u`/`c`/`h`).
    - Confirm a long terminal name in a pane title ellipsizes (trailing `…`) rather than the buttons shrinking.
 3. **Manual — 3x3 layout on a wide window:** Same checks as above for `3x3`.
-4. **Manual — narrow viewport regression check:** Narrow the VS Code panel / webview window sharply while in `2x3` or `3x3` layout. Confirm the title ellipsizes first and the buttons remain labeled `clear` / `hide` until the header is too narrow for even the title — at which point the title is already near-empty and the buttons are the only readable content (correct degradation order).
-5. **Manual — clearing feedback:** Click `clear` on a pane button in `2x3` layout. Confirm the button label changes to `clearing` for ~600ms then reverts to `clear` (the `withClearingFeedback` full-word path).
-6. **Existing tests:** Run `npm test` (or the project's test command) and confirm no regressions in the terminal contract tests under `src/test/`.
+4. **Manual — narrow viewport regression check:** Narrow the panel sharply in `2x3`/`3x3`. Confirm the title ellipsizes first and the buttons remain fully labeled until the header is too narrow for even the title — correct degradation order.
+5. **Manual — clearing feedback:** Click `clear` on a pane button in `2x3`. Confirm the label changes to `clearing` for ~600ms then reverts to `clear`.
+6. **Manual — chip retained:** In `2x3`/`3x3`, confirm the input-state chip still renders dot-only with its `title` tooltip, and still shows its word label in `1`/`2h`/`2x2` layouts.
+7. **Repeat in the standalone browser host** (`npx switchboard`) — both hosts serve the same panel HTML, so one pass each is enough.

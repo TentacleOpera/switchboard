@@ -106,9 +106,13 @@ is what the current `left: 44px` design intends. The port needs a right-side pla
 flip-to-left fallback, not a copy of the vertical logic.
 
 ## Metadata
-- **Tags:** bugfix, ui, standalone, browser-shell, accessibility
+- **Tags:** bugfix, ui, ux
 - **Complexity:** 3
-- **Repo:** `switchboard`
+- **Project:** browser-switchboard
+
+> **Superseded:** Tags were `bugfix, ui, standalone, browser-shell, accessibility`, and a `**Repo:** `switchboard`` line was present.
+> **Reason:** `standalone`, `browser-shell`, and `accessibility` are not in the allowed tag list (the a11y aspect is covered by `ux`); the improvement session is single-repo, so no **Repo:** line is emitted.
+> **Replaced with:** `bugfix, ui, ux`, no **Repo:** line, and a **Project:** pin for browser-switchboard.
 
 ## User Review Required (decisions, with defaults)
 
@@ -133,6 +137,40 @@ flip-to-left fallback, not a copy of the vertical logic.
    sites). A dead hover element that only works if someone later removes the overflow is worse than no
    element — it is what made this bug invisible.
 
+## Complexity Audit
+
+### Routine
+- Two small self-contained files touched (`shell.html`, `shell.js`); no TypeScript compiled surface.
+- The pattern being ported is proven in-repo (`kanban.html`'s overlay, ~76 existing `data-tooltip`
+  consumers) — this is a port, not an invention.
+- Deletions dominate: `.strip-label` CSS, three JS call sites, one `title` assignment.
+- No CSP, manifest, verb, schema, or provider changes; VS Code host unaffected (shell is
+  standalone-only).
+
+### Complex / Risky
+- The one genuinely new logic piece is tooltip lifecycle beside a **mutating** rail: hide on strip
+  scroll (absent in kanban's usage) and hide on the terminal section's full rebuild
+  (`container.innerHTML = ''`, `shell.js:185`), which can remove the hovered target mid-hover so
+  `mouseout` never fires.
+- Right-side placement with flip-to-left is new geometry relative to kanban's above/below logic.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** `renderTerminalSection` rebuilds every terminal button on each
+  `terminalFleetState` postMessage (`shell.js:185`). A fleet update landing mid-hover removes the
+  tooltip's target element without a `mouseout`, stranding the tooltip. Mitigation: hide the tooltip
+  at the top of `renderTerminalSection` (and on any strip DOM rebuild), in addition to scroll/click.
+- **Security:** Tooltip text assigned via `textContent` (as kanban does), never `innerHTML` — a
+  hostile `worktreePath` or panel label renders as text, not markup. No CSP change required
+  (`style-src 'unsafe-inline' 'self'` already permits `element.style` writes).
+- **Side Effects:** Removing `btn.title` (`shell.js:204`) ends the native-tooltip asymmetry; nothing
+  else consumes it (grepped — no test or doc relies on it). The overlay is `pointer-events: none`,
+  so it cannot swallow clicks aimed at the strip or the iframe content.
+- **Dependencies & Conflicts:** None. The *Browser Terminals — New Pane & Window Capabilities* and
+  *Terminals Sidebar* features touch `terminals.html`/`terminals.js`, not `shell.html`/`shell.js`;
+  the only shared surface is the terminal metadata shape (`name`, `role`, `worktreePath`, `light`),
+  which this plan does not change.
+
 ## Dependencies
 
 None.
@@ -141,6 +179,15 @@ Worth sequencing awareness, not a hard dependency: the *Browser Terminals — Ne
 Capabilities* and *Terminals Sidebar* features touch `terminals.html`/`terminals.js`, not
 `shell.html`/`shell.js`. The only overlap is the shell's fleet section reading terminal metadata
 (`name`, `role`, `worktreePath`, `light`), whose shape this plan does not change.
+
+## Adversarial Synthesis
+
+Key risks: the original change 4 targeted a code path that does not exist (disabled panels are
+**omitted**, not greyed — `shell.js:294`), the terminal strip's full rebuild on every fleet-state
+push can strand a tooltip on a removed target, and the flip-to-left fallback clamps over the icon
+itself in a 48px rail. Mitigations: change 4 superseded to a no-op, hide the tooltip on strip DOM
+rebuild as well as scroll/click, and accept the flip clamp as a degenerate-window cosmetic case.
+Overall risk stays low — the ported pattern is proven in-repo and the change is deletion-heavy.
 
 ## Proposed Changes
 
@@ -172,9 +219,13 @@ Add a small tooltip module mirroring `kanban.html:4111-4173`, with placement rew
 - Delegate on `document` with **`mouseover`/`mouseout`**, not `mouseenter`/`mouseleave` — kanban's
   comment at `:4158` records why (only the former bubble). Reuse its `relatedTarget` containment check
   so moving between a button and its own glyph child does not flicker.
-- Hide on `scroll` of `#strip` and `#strip-terminals`, and on `click` — a `position: fixed` tooltip
-  does not follow a scrolling target, so a strip scroll would leave it stranded beside the wrong icon.
-  This case does not arise in kanban's usage and is the one genuinely new piece of logic.
+- Hide on `scroll` of `#strip` and `#strip-terminals`, on `click`, and **on terminal-section
+  rebuild** — a `position: fixed` tooltip does not follow a scrolling target, so a strip scroll
+  would leave it stranded beside the wrong icon. Worse, `renderTerminalSection` clears with
+  `container.innerHTML = ''` (`shell.js:185`) on every fleet-state push: if the hovered button is
+  removed mid-hover, no `mouseout` ever fires and the tooltip strands beside empty space. Call the
+  hide function at the top of `renderTerminalSection`. The scroll case does not arise in kanban's
+  usage and the rebuild case is shell-specific — these are the genuinely new pieces of logic.
 
 ### 3. Switch all three builders to `data-tooltip` — `src/webview/shell.js`
 
@@ -189,22 +240,37 @@ Add a small tooltip module mirroring `kanban.html:4111-4173`, with placement rew
   line; remove `btn.title` (`:204`) and the `.strip-label` block (`:215-217`). Keep `aria-label`
   (`:203`) exactly as-is — it is the accessible name, and the tooltip is not a substitute for it.
 
-### 4. Disabled buttons must still explain themselves
+### 4. Disabled buttons — no work needed (superseded)
 
-`.strip-icon[disabled]` (`shell.html:105-109`) is used when the manifest reports `enabled: false`
-(`shell.js:61`) — e.g. panels gated off when `node-pty` is unavailable (`bootstrap.ts:460`). A disabled
-`<button>` in most browsers **suppresses `mouseover` on the element itself**, so a disabled icon would
-be the one place still showing nothing — and it is the place a tooltip matters most.
+> **Superseded:** The claim that `.strip-icon[disabled]` "is used when the manifest reports
+> `enabled: false`" and therefore disabled icons need a hit-testing workaround so they can still
+> show a tooltip (keep the button enabled, gate the action, add an "unavailable" tooltip).
+> **Reason:** The premise is false against the code. `renderManifest` **omits** disabled panels
+> entirely — `if (panel.enabled === false) { continue; }` (`shell.js:294`), with a deliberate
+> design comment at `:289-293`: a capability the host lacks is "a dead control the user can never
+> turn on — it just reads as 'broken'", matching PRD contract #6 (capability-gating honesty —
+> absent, not disabled). `buildIcon` is never called for a disabled panel, so `btn.disabled = true`
+> (`shell.js:61`) and the `[disabled]` CSS (`shell.html:105-109`) are dead code today, and no
+> disabled icon is ever rendered to hover over. The manifest does carry `enabled` flags
+> (`headlessPanelHtml.ts:468-475`, e.g. `terminalsEnabled` false when `node-pty` is missing), but
+> the shell's contract is omission.
+> **Replaced with:** Nothing. No disabled-icon tooltip work, no hit-testing change, no
+> "unavailable" copy. Leave the dead `btn.disabled` line and `[disabled]` CSS untouched — removing
+> them is a separate cleanup, out of scope for this plan.
 
-Resolve by keeping the button enabled for hit-testing and gating the *action* instead: keep
-`aria-disabled="true"` + the `.strip-icon[disabled]`-equivalent styling via a class, and return early
-in the click handler (`shell.js:84-87` already does exactly this — `if (panel.enabled === false)
-{ return; }`). Give disabled icons a tooltip that says why, e.g. `Terminals — unavailable (node-pty
-not loaded)` where the manifest supplies a reason, falling back to `<label> — unavailable`.
+### 5. Regression test — extend `src/test/shell-terminal-strip.test.js`
 
-### 5. Regression test
+> **Superseded:** "Follow whatever harness the browser-shell tests already use; if the shell has no
+> existing UI test, assert structurally over the served HTML/JS text rather than standing up a new
+> browser harness for this."
+> **Reason:** The harness already exists and was missed: `src/test/shell-terminal-strip.test.js`
+> runs source-text contract tests over `shell.html`/`shell.js` (`fs.readFileSync` + marker-block
+> assertions against the real files) — exactly the structural style the fallback described. There is
+> no browser harness, and none is needed.
+> **Replaced with:** Add the assertions below as new tests in
+> `src/test/shell-terminal-strip.test.js`, using its existing `block()`/regex idiom.
 
-Add a shell UI test asserting, over the rendered strip:
+Assert, over the real `shell.html`/`shell.js` source text (and the rendered strip where practical):
 
 - every `.strip-icon` (panel, theme toggle, terminal) carries a non-empty `data-tooltip`;
 - no `.strip-label` element and no `.strip-label` CSS rule survives anywhere in `shell.html`/`shell.js`
@@ -213,10 +279,15 @@ Add a shell UI test asserting, over the rendered strip:
   actually encodes the root cause, so re-nesting it re-breaks the build rather than the UI;
 - no `.strip-icon` sets a native `title`.
 
-Follow whatever harness the browser-shell tests already use; if the shell has no existing UI test,
-assert structurally over the served HTML/JS text rather than standing up a new browser harness for this.
-
 ## Verification Plan
+
+### Automated Tests
+
+None run in this pass — the session directive skips automated tests and compilation. The
+source-text contract tests in change 5 are authored, not executed, here; run them in the coding
+session.
+
+### Manual
 
 1. **Reproduce first, and prove the diagnosis rather than assuming it.** Boot the standalone CLI, open
    the shell, hover a panel icon → nothing. In devtools, select the `.strip-label` under that button
@@ -231,13 +302,16 @@ assert structurally over the served HTML/JS text rather than standing up a new b
    one appearing a second later.
 4. **Clipping is genuinely escaped.** With enough terminals to make both `#strip` and `#strip-terminals`
    scroll, hover a terminal near the bottom — the tooltip renders fully, outside both boxes.
-5. **Scroll behaviour.** Hover to show a tooltip, then scroll the strip with the wheel — the tooltip
-   hides rather than floating beside the wrong icon.
+5. **Scroll & rebuild behaviour.** Hover to show a tooltip, then scroll the strip with the wheel —
+   the tooltip hides rather than floating beside the wrong icon. Then hover a terminal button and
+   trigger a fleet-state change (start or stop a terminal in another client) — the tooltip hides on
+   the section rebuild instead of stranding beside a removed button.
 6. **Edge flipping.** Narrow the window until the tooltip would overflow the right edge → flips to the
    icon's left. Hover the topmost and bottommost icons → stays fully on-screen.
-7. **Disabled icons.** Boot with `node-pty` unavailable so the manifest reports `enabled: false`, and
-   confirm the greyed icon still shows a tooltip explaining why, and still does not switch panels when
-   clicked.
+7. **Disabled panels are absent, not greyed.** Boot with `node-pty` unavailable so the manifest
+   reports `enabled: false` for Terminals — confirm the Terminals icon simply does not appear in the
+   strip (the deliberate omission contract, `shell.js:294`), and every icon that does appear shows a
+   tooltip. (Supersedes the original "greyed icon still shows a tooltip" check — see change 4.)
 8. **Theme.** Toggle to Claudify and back; the tooltip's border/background follow the shell's tokens
    in both themes (the strip retints `--accent` per `shell.html:43-46`).
 9. **Accessibility unregressed.** Every strip button keeps its `aria-label`; the fleet terminal label
@@ -248,20 +322,16 @@ assert structurally over the served HTML/JS text rather than standing up a new b
     confirm no duplicate or cross-frame tooltip.
 11. `npm run lint` green.
 
-## Uncertain Assumptions
-
-- **That no ancestor establishes a containing block for `position: fixed`.** A `transform`, `filter`,
-  `perspective`, `will-change` or `contain` on `body` or `#strip` would make a fixed-position tooltip
-  clip anyway. Inspection of `shell.html` shows none — `body` is a plain flex row — but appending the
-  overlay to `body` (change 1) is what makes this robust regardless, so verify the served DOM rather
-  than trusting the source.
-- **That `enabled: false` is currently reachable.** `bootstrap.ts:460` logs that panels are unaffected
-  when `node-pty` is missing, so change 4's disabled path may be dormant today. It is still the
-  documented meaning of `panel.enabled` (`shell.js:61`) and must not be the one hover that stays dead.
-- **That the shell has no existing UI test harness.** Not confirmed; change 5 falls back to structural
-  assertions if so.
-- **That `title` on terminal buttons is not relied on by anything else** (a screenshot test, a doc).
-  Grep before deleting.
+> **Superseded:** The previous **## Uncertain Assumptions** section listed four open items: no
+> containing block for `position: fixed`; whether `enabled: false` is reachable; whether a shell UI
+> test harness exists; whether `btn.title` is relied on elsewhere.
+> **Reason:** All four were resolved by direct code inspection during the improve pass — (1)
+> `shell.html` has no `transform`/`filter`/`perspective`/`will-change`/`contain` on `body` or
+> `#strip` (verified); (2) the manifest does carry `enabled` flags (`headlessPanelHtml.ts:468-475`)
+> but `renderManifest` omits disabled panels (`shell.js:294`), so change 4 was superseded; (3)
+> `src/test/shell-terminal-strip.test.js` exists and is the harness for change 5; (4) a grep of
+> `src/test` shows nothing relies on the terminal buttons' `title`.
+> **Replaced with:** No remaining uncertainties — no web research required.
 
 ## Out of Scope
 
