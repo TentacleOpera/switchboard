@@ -33,7 +33,7 @@ The CSP in `terminals.html` (`img-src 'self' data:`, line 5) permits both served
 ## User Review Required (decisions, with defaults)
 
 1. **Icon style: monochrome `currentColor` SVGs vs official full-colour brand marks?**
-   **Default: monochrome `currentColor`.** The sidebar has three theme backgrounds (dark default, `theme-claudify` terracotta, `cyber-theme-enabled` cyan); a `currentColor` glyph inherits the role-text colour and stays legible on all three with zero per-theme CSS. Full-colour official marks risk clashing and raise the asset-licensing question (see `## Uncertain Assumptions`). If research shows official monochrome marks are published and redistributable, prefer those over hand-drawn approximations.
+   **Default: monochrome `currentColor` — CONFIRMED by brand-compliance research (2026-08-04).** Anthropic, Google, and Cognition all restrict third parties from bundling or altering their official marks without written consent; shipping official full-colour logos is a HIGH-compliance-risk path and is rejected. Monochrome minimalist glyphs rendered in the theme foreground colour (never the official brand palettes) are the accepted nominative-fair-use path, paired with trademark disclaimers (Proposed Changes §6). The sidebar's three theme backgrounds (dark default, `theme-claudify` terracotta, `cyber-theme-enabled` cyan) reinforce the same choice: a `currentColor` glyph inherits the role-text colour and stays legible on all three with zero per-theme CSS.
 2. **Brand icons on the kanban column subline too?**
    **Default: no — out of scope.** The user asked for the *terminals.html sidebar list*. The kanban subline receives the `AGY CLI` → `Antigravity CLI` rename for free via the shared helper (the lock-step invariant at `terminals.js:29-31` demands the *text* stay identical), but no icon is added there in this plan.
 3. **`claude` label stays `CLAUDE CLI`?**
@@ -116,6 +116,8 @@ Add monochrome, `currentColor`-driven SVGs (so they adapt to theme) to the `icon
 - `icons/brand-cli-default.svg` (neutral fallback terminal glyph)
 
 These are then served at `/static/icons/brand-*.svg` with no route change — the `icons` prefix already exists in both hosts' `staticRoutes`. No `LocalApiServer` edit needed.
+
+**Asset sourcing (research-resolved, 2026-08-04):** do NOT trace or derive from official press-kit logos. The `claude` spark glyph is available in Simple Icons (slug `claude`, CC0 1.0 — copyright-free vector code; trademark remains Anthropic's, which the monochrome nominative-use treatment plus the §6 disclaimers addresses). Antigravity and Devin marks are not reliably present in CC0 icon sets — hand-drawn minimalist geometric glyphs that *evoke* each brand without copying the official mark are the compliant path there. All four SVGs must be single-colour (`fill="currentColor"` or fill-free paths inheriting currentColor), ~12px legible, and must NOT use official brand colour palettes (no Anthropic terracotta `#D97757`, no Google four-colour scheme) — the theme foreground is the only fill.
 
 ### 3. `src/services/headlessPanelHtml.ts` — wire brand-icon placeholders for the terminals panel
 
@@ -226,6 +228,24 @@ info.appendChild(roleRow);
 
 This keeps the existing `agentNames[item.role]` lookup (the lock-step-with-kanban invariant) and only adds the icon visually.
 
+### 6. Legal notices — trademark disclaimers (research-mandated)
+
+The brand-compliance research (2026-08-04) makes disclaimers a **required** companion to shipping brand-evoking glyphs. Add a "Legal Notices & Trademarks" section to the project `README.md` (and, if one exists or is cheap to add, a `NOTICE`/`TRADEMARKS.md`):
+
+```markdown
+## Legal Notices & Trademarks
+- **Claude** and **Claude Code** are registered trademarks of Anthropic, PBC.
+- **Google** and **Google Antigravity** are registered trademarks of Google LLC.
+- **Devin** is a registered trademark of Cognition AI, Inc.
+
+Switchboard is an independent, open-source project. All third-party product names,
+logos, and brands mentioned herein are the property of their respective owners.
+Reference to these brands is strictly for nominative compatibility identification
+and does not imply affiliation, sponsorship, or endorsement.
+```
+
+If any of the four SVGs is adapted from Simple Icons, note the CC0 1.0 source alongside (no attribution legally required, but recording provenance keeps the audit trail clean).
+
 ## Verification Plan
 
 > Session note (improve-feature review, 2026-08-04): compilation and automated tests were NOT run as part of this planning pass per session directive. The checks below are the coder's verification gates, to be executed at implementation time. Line numbers and the static-root claim were re-verified against the working tree on 2026-08-04.
@@ -241,7 +261,15 @@ This keeps the existing `agentNames[item.role]` lookup (the lock-step-with-kanba
 5. **Manual — kanban subline:** open the kanban board. Confirm the column agent subline for an `agy`-backed role now reads `Antigravity CLI` (the shared helper feeds both surfaces). Confirm `claude`-backed roles still read `CLAUDE CLI`.
 6. **Theme check:** toggle `theme-claudify` and `cyber-theme-enabled`. Confirm the brand icons remain legible on both sidebar backgrounds (monochrome `currentColor` SVGs should adapt; if a fixed-fill SVG was used, verify it does not clash with the terracotta/cyan accents).
 7. **Static contract:** `src/test/terminal-solo-popout-contract.test.js` and the `headlessPanelHtml` contract tests must still pass — the new `data-brand-icon-*` attributes are additive and the CSP `img-src 'self' data:` already permits served SVGs.
+8. **Compliance check:** confirm the "Legal Notices & Trademarks" section (Proposed Changes §6) exists in `README.md`, and that all four SVGs are single-colour `currentColor` with no official brand-palette hex values (`#D97757`, `#4285F4`, `#EA4335`, `#FBBC05`, `#34A853`) present in the files.
 
-## Uncertain Assumptions
+## Resolved Assumptions
 
-- **Official brand-mark availability and redistribution terms.** Whether Anthropic (Claude Code), Google (Antigravity), and Cognition (Devin) publish official monochrome/small-size SVG brand marks, and whether their brand/trademark guidelines permit redistributing those marks (or close approximations) inside a third-party MIT-licensed VS Code extension's `icons/` directory. This cannot be answered from the repo. The user was advised to run web research to confirm before implementation; if research shows redistribution is restricted, the fallback is neutral hand-drawn glyphs that *evoke* each brand without copying the mark (the plan's monochrome `currentColor` default already points this way).
+> **Superseded:** This section was `## Uncertain Assumptions`, flagging official brand-mark availability and redistribution terms as unknowable from the repo, with the user advised to run web research before implementation.
+> **Reason:** The user ran the research (brand-asset compliance report, 2026-08-04) and fed the findings back. The question is answered; per the advise-research protocol, resolved findings are recorded here as authoritative and must not be re-opened.
+> **Replaced with:** The resolved findings below.
+
+- **Official marks are off-limits.** Anthropic, Google, and Cognition all restrict third parties from bundling, altering, or redistributing their official logos without written consent. Shipping official full-colour marks is rejected (User Review §1).
+- **Monochrome minimalist glyphs + disclaimers are the compliant path.** Nominative fair use covers identifying the CLIs; proportionality means monochrome theme-coloured glyphs, never official colour palettes. Implemented via the §2 sourcing rules and the §6 legal notices.
+- **CC0 icon sets cover `claude` only.** Simple Icons (CC0 1.0) has the Claude spark (slug `claude`); Antigravity and Devin marks are not reliably available there, so those two glyphs are hand-drawn minimalist evocations per §2.
+- **VS Code Codicons do not apply here.** The terminals panel is a headless browser page (no codicon font shipped), so the research's primary recommendation (generic Codicons) is not available on this surface; the research's secondary path (monochrome SVGs + disclaimers) is what this plan implements.
