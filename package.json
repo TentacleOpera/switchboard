@@ -815,6 +815,7 @@
     "test:contract:terminal-input-path": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-input-path-contract.test.js",
     "test:contract:terminal-rename-rekey": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-rename-rekey-contract.test.js",
     "test:contract:ws-surface-scoping": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/ws-surface-scoping-contract.test.js",
+    "test:contract:setup-panel-ws-hydration": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/setup-panel-ws-hydration-contract.test.js",
     "test:contract:rendermarkdown": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/sharedUtils-renderMarkdown.test.js",
     "test:contract:drag-guard": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-card-button-drag-guard.test.js",
     "test:contract:render-guard": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-render-guard-contract.test.js",

@@ -24,6 +24,8 @@ const TRANSPORT = fs.readFileSync(
     path.join(__dirname, '..', 'webview', 'transport.js'), 'utf8');
 const SETUP_HTML = fs.readFileSync(
     path.join(__dirname, '..', 'webview', 'setup.html'), 'utf8');
+const KANBAN_HTML = fs.readFileSync(
+    path.join(__dirname, '..', 'webview', 'kanban.html'), 'utf8');
 
 let passed = 0, failed = 0;
 function test(name, fn) {
@@ -71,6 +73,21 @@ test('setup.html re-requests its mount-time state on the subscribe signal', () =
         assert.ok(m[0].includes(`'${verb}'`),
             `the subscribe handler must re-post '${verb}' — its result arrives only as a push`);
     }
+});
+
+test('kanban.html ignores the Setup panel`s foreign kanbanStructure shape', () => {
+    // Turning the WS mirror on made Setup's untagged pushes reachable by every
+    // browser panel for the first time on the extension host. Setup emits
+    // {type:'kanbanStructure', items}; KanbanProvider emits {structure, customColumns}.
+    // An unguarded `msg.structure || []` blanked #kanban-structure-list and wiped
+    // lastCustomKanbanColumns on every Setup state fan-out.
+    const m = KANBAN_HTML.match(/case 'kanbanStructure': \{([\s\S]*?)\n                \}/);
+    assert.ok(m, "kanban.html has no 'kanbanStructure' handler");
+    assert.match(m[1], /if \(!Array\.isArray\(msg\.structure\)\) \{ break; \}/,
+        'the handler must reject the Setup panel shape rather than coerce it to [] — ' +
+        'Setup pushes are untagged and therefore reach this panel too');
+    assert.ok(!/lastKanbanStructure = msg\.structure \|\| \[\]/.test(KANBAN_HTML),
+        'the `|| []` fallback IS the blanking bug — a foreign payload must break, not empty the list');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

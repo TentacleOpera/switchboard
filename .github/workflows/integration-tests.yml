@@ -387,6 +387,23 @@ jobs:
       - name: WS surface scoping contract (fail-open, resync filtering, producer tagging)
         run: npm run test:contract:ws-surface-scoping
 
+      # Wired during the Setup-hydration review pass. Both halves of this fix fail
+      # SILENTLY and identically — a browser /setup panel that renders every control
+      # at its unset default. A stateless `setApiServer` (called at activation, before
+      # _initSetupService builds the hub) drops the LocalApiServer on the floor, so the
+      # WS mirror is off for the whole session; and even with the reference repaired,
+      # the inline `ready` post races wsHub's subscribe-after-snapshot ordering, so the
+      # mount-time fan-out can be broadcast to zero subscribers. Neither is reachable
+      # from a behavioural test (the verb still returns {success:true} and the VS Code
+      # webview path still works), so the mitigations are pinned as source contracts:
+      # the cached setter, the non-null hub construction, the early-return re-apply,
+      # the __resync-keyed subscribe signal, and the setup.html re-request. Also pins
+      # kanban.html's shape guard — Setup pushes `kanbanStructure` as `items` while
+      # KanbanProvider pushes `structure`, and an unguarded read blanked the kanban
+      # panel's Setup-tab column list the moment the WS mirror started working.
+      - name: Setup panel WS hydration contract (cached server, subscribe signal, re-request)
+        run: npm run test:contract:setup-panel-ws-hydration
+
       # Wired during the scrollbar-styling review pass. The scrollbar block was
       # appended to project.html's <style> in a way that DELETED the preceding
       # `.review-mode-btn.active` rule and reused its closing brace, silently

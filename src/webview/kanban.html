@@ -8397,7 +8397,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   break;
                 }
                 case 'kanbanStructure': {
-                    lastKanbanStructure = msg.structure || [];
+                    // TWO producers emit this type with DIFFERENT shapes: KanbanProvider
+                    // sends {structure, customColumns} (ours), while the Setup panel's
+                    // postSetupPanelState sends {items} (TaskViewerProvider.ts). Setup's
+                    // pushes are untagged, so they reach every WS client including this
+                    // one — and reading `msg.structure || []` off a Setup payload blanked
+                    // #kanban-structure-list and wiped lastCustomKanbanColumns until the
+                    // next KanbanProvider push. Ignore the foreign shape; setup.html
+                    // already guards the mirror case with Array.isArray(message.items).
+                    // Remove this only once Setup's pushes are surface-tagged per message.
+                    if (!Array.isArray(msg.structure)) { break; }
+                    lastKanbanStructure = msg.structure;
                     lastCustomKanbanColumns = msg.customColumns || [];
                     renderKanbanStructureList();
                     break;
