@@ -310,21 +310,33 @@ jobs:
       - name: Terminal answerback replay contract (reply grammar, suppression window)
         run: npm run test:contract:terminal-answerback
 
-      # Shell terminal strip. The two defects a screenshot review waves through: the
-      # bottom anchor is an INLINE style on the theme toggle, so a second
-      # `margin-top: auto` child parks the terminal list mid-strip instead of stacking;
-      # and `assignToFocusedPane` early-returns when the terminal is already in the
-      # focused pane — the most likely case for a click on a lit entry — so a delegated
-      # badge clear leaves the completion light burning after the click.
+      # Pane fit verification. Fails invisibly by nature: the buffer ends up the right
+      # size while the CANVAS keeps painting the old grid, and FitAddon.fit()
+      # short-circuits on matching cols/rows, so no later fit from any call site can
+      # repair it. Pins the two decisions that silently un-fix it — fitAndReportSize
+      # gated on a verified buffer mismatch alone (it reports unconditionally, and the
+      # gateway takes the MIN across clients), and the renderer repair gated on
+      # stale-canvas alone — plus the declaration order the spans depend on.
       - name: Terminal pane fit verification contract
         run: npm run test:contract:terminal-pane-fit
 
+      # Pane grid in-place reconcile. `innerHTML = ''` detached every live xterm on
+      # every render, which churned xterm's IntersectionObserver pause and made pane
+      # sizing a race. Pins the in-place invariant, listeners at creation only, terse
+      # labels re-derived from the live layout, the detach sweep still testing the FULL
+      # nine-slot assignment array, and the before/after caret predicate.
       - name: Terminal pane grid reconcile contract
         run: npm run test:contract:terminal-pane-grid-reconcile
 
       - name: Terminal focus affordance contract (ring, chip, drop notice)
         run: npm run test:contract:terminal-focus-affordance
 
+      # Shell terminal strip. The two defects a screenshot review waves through: the
+      # bottom anchor is an INLINE style on the theme toggle, so a second
+      # `margin-top: auto` child parks the terminal list mid-strip instead of stacking;
+      # and `assignToFocusedPane` early-returns when the terminal is already in the
+      # focused pane — the most likely case for a click on a lit entry — so a delegated
+      # badge clear leaves the completion light burning after the click.
       - name: Shell terminal strip contract (light precedence, bottom anchor, badge clear)
         run: npm run test:contract:shell-terminal-strip
 

@@ -52,9 +52,13 @@ Reversing the order is not fatal — both are independently shippable and indepe
 
 **Review gates.** Both subtasks are *User Review Required — Yes*, one decision each: subtask 1 reads private xterm internals (`term._core._renderService.dimensions`) because no public API reports the painted grid; subtask 2 changes caret-restore semantics from unconditional to before/after-comparison. Neither decision is reversible cheaply once coded, so take them before dispatch.
 
+## Review Findings
+
+Both subtasks reviewed in place as one delivery unit (fit ladder first, then the reconcile) — no CRITICAL findings and no cross-subtask conflict: the edit regions are disjoint exactly as the reconciliation pass predicted, declaration order matches the contract on both sides, and the two-different-correct-answers rule for `paneAssignments` is honoured (ladder slices to the rendered count, sweep tests all nine). Two MAJORs fixed: a widened caret assertion in `src/test/shell-terminal-strip.test.js` that would have green-lit a revert to the old unconditional restore, and a redundant second `inspectPaneFit` on the already-converged path in `src/webview/terminals.js`; the CI comment block the two new steps had been wedged inside was also reattached to its step. Files changed by review: `src/webview/terminals.js`, `src/test/shell-terminal-strip.test.js`, `.github/workflows/integration-tests.yml`. Verified: 14/14 contract suites scanning `terminals.js` pass (185 checks), `node --check` clean, `npm run compile` succeeds (3 pre-existing optional-dependency warnings), PRD gates `verb-returns:check` / `parity:check` / `push-routing:check` all green, and both new `test:contract:*` scripts are confirmed invoked by `.github/workflows/integration-tests.yml` — no unwired-gate hole. Remaining risk: every new assertion is source-text, so the manual repro (10× `3x3 → 1`, focus-theft, parked-terminal round trip, listener count) and the sync-to-installed-extension step are still outstanding — the running extension loads from `~/.<ide>/extensions/turnzero.switchboard-*/dist/`, so this repo-only build is not live.
+
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Verified Pane Fit After a Terminals-Panel Layout Change](../plans/feature_plan_20260803144948_verified-pane-fit-after-layout-change.md) — **LEAD CODED**
-- [ ] [Reconcile the Terminals Pane Grid In Place Instead of Rebuilding It](../plans/feature_plan_20260803144949_pane-grid-in-place-reconciliation.md) — **LEAD CODED**
+- [ ] [Verified Pane Fit After a Terminals-Panel Layout Change](../plans/feature_plan_20260803144948_verified-pane-fit-after-layout-change.md) — **CODE REVIEWED**
+- [ ] [Reconcile the Terminals Pane Grid In Place Instead of Rebuilding It](../plans/feature_plan_20260803144949_pane-grid-in-place-reconciliation.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 

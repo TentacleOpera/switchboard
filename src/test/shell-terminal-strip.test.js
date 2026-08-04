@@ -158,14 +158,18 @@ test('a pane focus change never rebuilds the grid', () => {
     assert.ok(fn.includes('focusPaneTerminal('), 'setFocusedPane must hand the caret to the newly focused pane');
 });
 
-test('renderPaneGrid hands the caret back after a forced rebuild', () => {
+test('renderPaneGrid hands the caret back only when it actually took it', () => {
     // It runs on every terminalsChanged broadcast and every agentCompleted badge,
     // so without this an unrelated terminal spawning yanks the caret mid-keystroke.
     const fn = block(terminalsJs, 'function renderPaneGrid() {', 'function createPaneElement(');
     assert.ok(fn.includes('paneGridEl.contains(document.activeElement)'), 'renderPaneGrid must record whether it owned the caret');
+    // The predicate is BEFORE-and-AFTER, not a bare `if (hadFocus)`. Since the grid
+    // reconciles in place, most renders destroy no caret at all, so an unconditional
+    // restore re-steals focus from wherever the operator just put it. The legacy form
+    // must NOT be accepted here — this suite is the canary for that regression.
     assert.ok(
-        fn.includes('if (hadFocus && !paneGridEl.contains(document.activeElement)) {') || fn.includes('if (hadFocus) {'),
-        'renderPaneGrid must restore the caret it displaced'
+        fn.includes('if (hadFocus && !paneGridEl.contains(document.activeElement)) {'),
+        'renderPaneGrid must restore the caret only when the reconcile displaced it'
     );
 });
 

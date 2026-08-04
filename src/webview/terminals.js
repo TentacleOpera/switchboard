@@ -1796,6 +1796,12 @@
 
             const before = inspectPaneFit(entry);
             if (before === 'skip') { return; }
+            // Already converged: nothing is mutated below, so re-inspecting would
+            // return the same verdict for the price of a second proposeDimensions()
+            // — i.e. a second getComputedStyle forced-layout flush per pane, nine of
+            // them on a 3x3. The common case must not cost more than the old
+            // single-rAF path did.
+            if (before === 'ok') { return; }
             // ONLY on a verified buffer mismatch. fitAndReportSize sends a resize frame
             // unconditionally — even when fit() short-circuits and changes nothing — and
             // reconcileTerminalSize takes the MIN across clients, so firing it
