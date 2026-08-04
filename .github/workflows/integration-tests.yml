@@ -356,6 +356,9 @@ jobs:
       - name: Terminal scroll affordance contract (scoped scrollbar, dual-source jump pill)
         run: npm run test:contract:terminal-scroll-affordance
 
+      - name: Terminal DEC mode restore contract
+        run: npm run test:contract:terminal-dec-mode-restore
+
       # NOT wired, deliberately — `test:contract:terminal-operations-no-periodic-reopen`
       # is now runnable (the script was missing entirely until the multi-parent review
       # pass) but it FAILS on main, and it fails STALE rather than catching a

@@ -1150,7 +1150,6 @@
             return;
         }
 
-        const displaced = paneAssignments[target] || null;
         // Navigation undo removed: rapid terminal switching is the primary interaction
         // and an Undo toast on every displacing click reads as nagging. The unassign
         // button still keeps its own undo (see the unassignBtn handler in
@@ -1179,10 +1178,13 @@
         }
         postFleetStateToShell();
 
-        // No navigation toast. Still retract any stale toast from a prior unassign.
-        if (!displaced) {
-            hidePaneToast();
-        }
+        // No navigation toast. Retract any toast still on screen from a prior unassign —
+        // on EVERY seating, displacing or not. Its Undo restores the whole pre-unassign
+        // arrangement (undoLastAssignment replaces paneAssignments wholesale), so a toast
+        // left live across a seating reverts this move too, which the operator never
+        // asked for. Same invariant as the note on hidePaneToast: a toast must not
+        // outlive the mutation it describes.
+        hidePaneToast();
 
         saveLayoutSettings();
         renderSidebarList();
@@ -2304,6 +2306,80 @@
     const ACK_CHUNK_CHARS = 5000;
 
     /**
+     * DEC private modes the gateway reports, in application order.
+     *
+     * A fresh xterm has all of these at their defaults while the pty app's belief
+     * persists, and the app never re-announces a settled mode — so without this the
+     * pane can come back with mouse reporting on and nothing left to turn it off:
+     * the wheel goes to the app instead of the viewport (1000/1002/1003 all set the
+     * WHEEL bit — event masks 19/23/31) and xterm disables its own SelectionService,
+     * so a click can neither start nor clear a selection. That is the "stuck, can't
+     * scroll, can't deselect" report.
+     *
+     * 9 (X10) is here even though it does NOT claim the wheel: areMouseEventsActive
+     * only tests that the active protocol's event mask is non-zero, and X10's is 1,
+     * so a stale mode 9 still kills selection.
+     *
+     * 1049 is NOT in this list — it is handled separately and conditionally below.
+     */
+    const REARMABLE_DEC_MODES = [9, 1000, 1002, 1003, 1004, 1006, 2004];
+
+    /**
+     * Force the terminal's DEC private modes to the gateway's recorded state.
+     * Returns true when something was actually written.
+     *
+     * Written DIRECTLY to the parser, not via the rAF-batched write queue: that path
+     * is billed to pendingAckChars via onWriteParsed, and synthetic characters the
+     * server never credited would corrupt the backpressure ledger. DECSET/DECRST
+     * generate no answerback, so this cannot provoke a reply and needs no
+     * suppression window.
+     *
+     * A mode the server never observed is absent from `modes` and is left at xterm's
+     * default — asserting a mode nobody ruled on is how you CREATE this bug.
+     */
+    function applyServerModes(entry, modes) {
+        if (!entry || entry.disposed || !entry.term || !modes) { return false; }
+        let seq = '';
+        for (const mode of REARMABLE_DEC_MODES) {
+            const on = modes[mode];
+            if (typeof on !== 'boolean') { continue; }
+            seq += `\x1b[?${mode}${on ? 'h' : 'l'}`;
+        }
+        // Alt screen: NEITHER direction is written blind. `?1049h` into a freshly
+        // built xterm switches it to an EMPTY alt buffer and hides the scrollback the
+        // replay just wrote — a blank pane, worse than the bug.
+        //
+        // And `?1049l` is NOT inert. This is NOT an xterm.js quirk: XTerm's ctlseqs
+        // defines `?1049l` as the composite of 1047 (buffer switch) + 1048 (cursor
+        // restore), so DECRC is part of the sequence's DEFINITION — and real xterm,
+        // iTerm2, Windows Terminal, Alacritty and VS Code all perform it too. In the
+        // vendored bundle the arm is
+        //   case 1049: … activateNormalBuffer(), 1049===param && this.restoreCursor()
+        // where restoreCursor() sits OUTSIDE activateNormalBuffer's own
+        // `_activeBuffer!==this._normal` guard, and on a fresh instance savedX/savedY
+        // are 0 — so an unguarded write teleports the cursor to viewport row 0 col 0
+        // and resets SGR, after which the next live chunk overwrites the top of the
+        // scrollback this very replay just wrote.
+        //
+        // So the gate is a DELIBERATE DEVIATION from spec, justified because our write
+        // is synthetic: a real app sending `?1049l` knows it saved a cursor, whereas we
+        // are asserting a mode the app already believes is settled and have no saved
+        // cursor worth restoring. Written ONLY when xterm is genuinely in the alt
+        // buffer, where DECRC is both correct and expected. `term.buffer.active.type`
+        // is documented public API since 4.0 (BufferApiView is constructed with the
+        // literal "alternate").
+        //
+        // Do not "complete" this to a symmetric write, and do not drop the gate — the
+        // unconditional form was evaluated against gate-and-omit and lost on both.
+        let inAlt = false;
+        try { inAlt = entry.term.buffer.active.type === 'alternate'; } catch { /* pre-open */ }
+        if (modes[1049] === false && inAlt) { seq += '\x1b[?1049l'; }
+        if (!seq) { return false; }
+        try { entry.term.write(seq); } catch { return false; /* disposed between guard and write */ }
+        return true;
+    }
+
+    /**
      * Terminal REPLIES (answerback), as distinct from operator keystrokes.
      *
      * xterm hands both to onData through the same channel with no provenance, so
@@ -2415,6 +2491,14 @@
             entry.scrollDisposable = null;
         }
         entry.jumpBtn = null;
+        // A MutationObserver is not an xterm disposable and term.dispose() will not
+        // disconnect it — the first MutationObserver in this file, so the teardown
+        // pattern is established here rather than copied.
+        if (entry.mouseModeObserver) {
+            try { entry.mouseModeObserver.disconnect(); } catch { /* ignore */ }
+            entry.mouseModeObserver = null;
+        }
+        entry.mouseModeBtn = null;
         if (entry.container && entry.container.parentNode) {
             try { entry.container.parentNode.removeChild(entry.container); } catch { /* ignore */ }
         }
@@ -2466,7 +2550,10 @@
             exited: false,
             disposed: false,
             suppressAnswerback: false,
-            awaitingReplayFrame: false
+            awaitingReplayFrame: false,
+            pendingModes: null,
+            mouseModeBtn: null,
+            mouseModeObserver: null
         };
         terminalsMap.set(name, entry);
         whenRendered(entry, () => materializeTerminalView(entry));
@@ -2523,6 +2610,12 @@
             // client below that means disposal can never lose scrollback the operator
             // could still have scrolled to. Change the two together.
             scrollback: 1000,
+            // Option-drag selects even while an app is capturing the mouse. xterm's
+            // shouldForceSelection() has a Mac branch gated entirely on this option,
+            // and the bundled default is FALSE — so without it there is no modifier
+            // that can select text in a mouse-reporting app on macOS, which is the
+            // platform this panel runs on. Matches iTerm and VS Code.
+            macOptionClickForcesSelection: true,
         });
 
         let fitAddon = null;
@@ -2537,8 +2630,19 @@
         term.open(container);
         entry.rendererAddon = attachRenderer(term, entry);
         attachJumpToLatest(entry, term, container);
+        attachMouseModeRelease(entry, term, container);
         if (fitAddon) {
             try { fitAddon.fit(); } catch { /* ignore */ }
+        }
+        // Shift-wheel always scrolls the viewport, even while an app is capturing the
+        // wheel (mode 1000's event mask includes WHEEL, so a plain wheel is reported
+        // to the app and cancelled). Returning false makes xterm skip its own wheel
+        // handling entirely — no mouse report AND no preventDefault — so the
+        // browser's native scroll on .xterm-viewport proceeds. Verified against both
+        // wheel paths in the vendored bundle, each of which checks
+        // _customWheelEventHandler first.
+        if (typeof term.attachCustomWheelEventHandler === 'function') {
+            term.attachCustomWheelEventHandler((ev) => !ev.shiftKey);
         }
 
         let resizeTimer = null;
@@ -2702,6 +2806,61 @@
         update();
     }
 
+    /**
+     * A pill for a pane whose app has claimed the mouse.
+     *
+     * While mouse reporting is active xterm hands the wheel to the app (mode 1000's
+     * event mask includes WHEEL) and disables its SelectionService, so the pane
+     * cannot be scrolled and a click can neither start nor clear a selection. That is
+     * correct behaviour for a TUI that wants clicks — and indistinguishable from an
+     * app that died still holding the mode, which no amount of server-side tracking
+     * can fix because there was never a reset to observe.
+     *
+     * `enable-mouse-events` is xterm's own class on term.element, added and removed on
+     * every protocol change, so this reads a public signal rather than
+     * _coreMouseService. It is also written on the same statement as the
+     * SelectionService toggle that causes the symptom, so it cannot drift from it.
+     */
+    function attachMouseModeRelease(entry, term, container) {
+        const btn = document.createElement('button');
+        btn.className = 'mouse-mode-release';
+        btn.type = 'button';
+        btn.tabIndex = -1;   // the terminal owns the keyboard; this is a pointer control
+        btn.title = 'This app is capturing the mouse — release it to scroll and select';
+        btn.setAttribute('aria-label', 'Release the mouse from the running application');
+        btn.textContent = 'release mouse';
+        container.appendChild(btn);
+        entry.mouseModeBtn = btn;
+
+        const update = () => {
+            if (entry.disposed || !term.element) { return; }
+            btn.classList.toggle('visible', term.element.classList.contains('enable-mouse-events'));
+        };
+
+        // click, NOT mousedown — same reason as the jump pill: the pane's own
+        // mousedown must run first so the press also selects the pane.
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            // To the PARSER, not the pty: the app keeps its own belief, xterm stops
+            // acting on it. EVERY mouse protocol is reset, not just the active one —
+            // the operator wants their pointer back, not a negotiation. Mode 9 (X10)
+            // is included and is NOT optional: the pill's visibility reads
+            // `enable-mouse-events`, which xterm sets for any non-zero event mask
+            // including X10's, so omitting `?9l` would show the pill for a mode this
+            // click cannot clear — a dead button.
+            try { term.write('\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l'); } catch { /* disposed */ }
+            update();
+        });
+
+        // Attribute-filtered: fires on a real protocol change, not on every render.
+        const observer = new MutationObserver(update);
+        if (term.element) {
+            observer.observe(term.element, { attributes: true, attributeFilter: ['class'] });
+        }
+        entry.mouseModeObserver = observer;
+        update();
+    }
+
     function connectTerminalSocket(entry) {
         // A pending backoff timer is obsolete the moment we connect for real. This
         // used to be covered by destroyTerminalView (which clears it) standing
@@ -2732,6 +2891,9 @@
         // replies until something else cleared it.
         entry.suppressAnswerback = false;
         entry.awaitingReplayFrame = false;
+        // Belongs to the socket that just went away. A set left armed by a socket that
+        // died mid-replay describes a stream this connection will not receive.
+        entry.pendingModes = null;
 
         let wsUrl = `${PTY_HOST_ORIGIN}/ws/terminal?name=${encodeURIComponent(entry.name)}`;
         const terminalToken = (document.body && document.body.dataset && document.body.dataset.terminalToken)
@@ -2829,28 +2991,23 @@
                     // unconditionally, so a window armed by a socket that died before
                     // its replay arrived cannot leak into this connection.
                     entry.awaitingReplayFrame = entry.ackSuppressChars > 0;
-                    // Re-arm bracketed paste from the server's record.
+                    // Applied AFTER the replay, not here: a stale enable inside the
+                    // replayed ring would otherwise overwrite the authoritative state
+                    // and the pane would come back stuck. Held on the entry and
+                    // flushed by writeReplay's callback; applied inline below when
+                    // there is no replay to wait for.
                     //
-                    // decPrivateModes.bracketedPasteMode is per-xterm-instance and starts
-                    // false, so a rebuilt view (new tab, shell reload, pane reassignment
-                    // past DETACH_GRACE_MS) pastes UNBRACKETED unless the enabling escape
-                    // happens to still be in the replayed ring tail. When it is not,
-                    // xterm's prepareTextForTerminal collapses every newline to a bare \r
-                    // and a raw-mode agent CLI submits once per line — the paste-splitting
-                    // bug this exists to fix.
-                    //
-                    // Written into the parser rather than poked into decPrivateModes: the
-                    // escape is public API, renders nothing, generates no reply, and cannot
-                    // drift from xterm's internals. It lands ahead of the replay frame,
-                    // which is correct — the replay is a suffix of history, so any 2004
-                    // escape inside it re-applies this same value.
-                    //
-                    // Written DIRECTLY to the parser, not via the rAF-batched write queue:
-                    // that path is billed to pendingAckChars via onWriteParsed, and
-                    // synthetic characters the server never credited would corrupt the
-                    // backpressure ledger.
-                    if (typeof frame.bracketedPaste === 'boolean' && entry.term && !entry.disposed) {
-                        entry.term.write(frame.bracketedPaste ? '\x1b[?2004h' : '\x1b[?2004l');
+                    // `bracketedPaste` is the legacy single-mode field from a server
+                    // that predates `modes`. Folded in rather than handled separately
+                    // so there is one application path.
+                    entry.pendingModes = frame.modes && typeof frame.modes === 'object'
+                        ? frame.modes
+                        : (typeof frame.bracketedPaste === 'boolean' ? { 2004: frame.bracketedPaste } : null);
+                    // Cleared only when the write actually landed. A hello that arrives
+                    // before the view materialised (no entry.term) keeps the set armed
+                    // rather than dropping it on the floor.
+                    if (!entry.awaitingReplayFrame && applyServerModes(entry, entry.pendingModes)) {
+                        entry.pendingModes = null;
                     }
                 } else if (frame.t === 'inputThrottled') {
                     // Informational only — stdin stays enabled. Input is queued, never
@@ -2968,10 +3125,19 @@
         try {
             entry.term.write(text, () => {
                 entry.suppressAnswerback = false;
+                // The replay has been fully parsed and no live chunk has been parsed
+                // yet (WriteBuffer._innerWrite fires each item's callback before
+                // starting the next), so this is the exact boundary at which the
+                // recorded mode state must overwrite whatever the replay left set.
+                if (entry.pendingModes) {
+                    applyServerModes(entry, entry.pendingModes);
+                    entry.pendingModes = null;
+                }
                 onWriteParsed(entry, text.length);
             });
         } catch (err) {
             entry.suppressAnswerback = false;
+            entry.pendingModes = null;
             entry.writeThrowCount = (entry.writeThrowCount || 0) + 1;
             console.error(`[Terminals] replay write failed for terminal ${entry.name}:`, err);
         }

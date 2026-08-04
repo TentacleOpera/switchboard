@@ -16,11 +16,48 @@ export const INPUT_HIGH_WATER_BYTES = 64 * 1024; // 64 KB
 export const INPUT_LOW_WATER_BYTES = 16 * 1024; // 16 KB
 
 /**
- * Ceiling on the partial-escape carry in scanBracketedPasteMode. Long enough for
+ * Ceiling on the partial-escape carry in scanTerminalModes. Long enough for
  * any real DEC private-mode set (`\x1b[?1049;2004;1000;1002;1006h` is 28 bytes),
  * short enough that a stream of bare ESCs cannot grow the carry without limit.
  */
 export const MODE_SCAN_CARRY_MAX = 64;
+
+/**
+ * DEC private modes whose state must survive a client reattach.
+ *
+ * A fresh xterm starts with every one of these at its default while the pty app's
+ * belief persists, and an app never re-announces a mode it thinks is settled. The
+ * ring cannot be relied on to carry the last transition: it evicts at
+ * MAX_SCROLLBACK_BYTES, so an enable can outlive its own reset inside the replay.
+ *
+ *   9               X10 mouse reporting. Does NOT claim the wheel (X10:{events:1}
+ *                   is DOWN only; the WHEEL bit is 16), so it cannot cause the
+ *                   no-scroll symptom — but areMouseEventsActive() is
+ *                   `0 !== protocols[active].events`, so events:1 still trips it and
+ *                   xterm still disables its SelectionService. Stale mode 9 therefore
+ *                   produces HALF the reported bug: clicks cannot clear a selection
+ *                   while the wheel works fine.
+ *   1000/1002/1003  mouse reporting (VT200 / drag / any-motion). All three claim the
+ *                   WHEEL (events 19 / 23 / 31 — bit 16 set in each), so a stale
+ *                   enable makes the pane unscrollable AND kills selection. This is
+ *                   the reported bug.
+ *   1006            SGR mouse coordinates — meaningless alone, but it rides with
+ *                   the above and a half-restored pair reports garbage coordinates.
+ *   1004            focus reporting. Benign if wrong, cheap to carry, and losing it
+ *                   makes a TUI think it never regained focus.
+ *   2004            bracketed paste — the one mode already tracked here, and the
+ *                   reason this mechanism exists.
+ *   1049            alternate screen. RECORDED here for completeness (so RIS/DECSTR
+ *                   bookkeeping is whole), but the client writes NEITHER direction
+ *                   except under a live buffer-type check — see applyServerModes in
+ *                   terminals.js. Do not assume tracked implies re-armed.
+ *
+ * NOT tracked: 1005 and 1015. The vendored xterm answers DECRQM for both with
+ * "permanently reset" (`1005===u?4:…:1015===u?4:`) and logs
+ * "DECSET 1005 not supported (see #2507)" on set/reset, i.e. it does not implement
+ * them, so a record would describe a mode the client cannot enter.
+ */
+export const TRACKED_DEC_MODES = [9, 1000, 1002, 1003, 1004, 1006, 1049, 2004] as const;
 
 interface InputQueue {
     chunks: Buffer[];
@@ -137,21 +174,25 @@ export class TerminalWsGateway {
     private clients = new Set<ClientState>();
     private inputQueues = new Map<string, InputQueue>();
     /**
-     * Last observed value of DEC private mode 2004 (bracketed paste) per terminal.
-     * Absent = never observed; do NOT coerce that to false (see setupClient).
+     * Last observed value of the tracked DEC private modes per terminal.
      *
-     * This exists because the mode is CLIENT state: every `new Terminal()` starts
-     * with bracketedPasteMode off and only flips when its own parser consumes
-     * `\x1b[?2004h`. A TUI emits that once, at startup, so on any terminal that has
+     * Same rationale as the original bracketed-paste-only record, generalised: the
+     * mode is CLIENT state, every `new Terminal()` starts at the defaults, and a TUI
+     * emits the enabling escape once at startup — so on any terminal that has
      * produced more than MAX_SCROLLBACK_BYTES the escape is long evicted from the
-     * ring and an attaching client can never learn it — leaving that view pasting
-     * unbracketed forever, which a raw-mode agent CLI reads as one Enter per line.
-     * The gateway sees the stream from terminal creation, so it is the only place
-     * that can answer authoritatively.
+     * ring and an attaching client can never learn it. The gateway sees the stream
+     * from terminal creation, so it is the only place that can answer
+     * authoritatively. Mouse reporting (1000/1002/1003/1006/9) and alt screen
+     * (1049) ride the same mechanism for the same reason.
+     *
+     * Inner map: mode number -> last observed h/l. A mode ABSENT from the inner map
+     * has never been ruled on and must be OMITTED from hello, never sent as false —
+     * telling a client to DISABLE a mode nobody has ruled on is a regression, not a
+     * default.
      */
-    private bracketedPasteModes = new Map<string, boolean>();
+    private decModes = new Map<string, Map<number, boolean>>();
 
-    /** Trailing partial escape carried between scans — see scanBracketedPasteMode. */
+    /** Trailing partial escape carried between scans — see scanTerminalModes. */
     private modeScanCarry = new Map<string, string>();
     private pingInterval?: NodeJS.Timeout;
     private drainInterval?: NodeJS.Timeout;
@@ -411,7 +452,7 @@ export class TerminalWsGateway {
         const combined = taken.join('');
         // Before the ring append: the ring EVICTS, and the whole point of the
         // recorded flag is to outlive eviction.
-        this.scanBracketedPasteMode(terminalName, combined);
+        this.scanTerminalModes(terminalName, combined);
         const buffer = this.scrollbackBuffers.get(terminalName);
         let seq = 0;
 
@@ -442,10 +483,10 @@ export class TerminalWsGateway {
     }
 
     /**
-     * Update the recorded bracketed-paste mode from a slice of pty OUTPUT.
+     * Update the recorded DEC private modes from a slice of pty OUTPUT.
      *
      * ONE regex pass, so the LAST state-changing event in DOCUMENT ORDER wins. All
-     * three events that change the mode are alternatives of the same pattern, and
+     * three events that change a mode are alternatives of the same pattern, and
      * that is the point — ranking them in separate passes means an unrelated DECSET
      * after a reset makes the reset lose a position compare and the mode goes
      * stale-true:
@@ -453,17 +494,19 @@ export class TerminalWsGateway {
      *   \x1bc               RIS    — full reset
      *   \x1b[!p             DECSTR — soft reset
      *
-     * RIS and DECSTR clear the mode because that is exactly what the client's own
-     * parser does on the same bytes: in the vendored bundle DECSTR calls
-     * `_coreService.reset()`, and RIS routes fullReset -> onRequestReset ->
+     * RIS and DECSTR set every tracked mode to false because that is exactly what
+     * the client's own parser does on the same bytes: in the vendored bundle DECSTR
+     * calls `_coreService.reset()`, and RIS routes fullReset -> onRequestReset ->
      * Terminal.reset -> CoreTerminal.reset -> `coreService.reset()`, whose body
-     * re-clones the DEC private-mode defaults — in which 2004 is false.
+     * re-clones the DEC private-mode defaults — in which every tracked mode is
+     * false. Recording false (rather than forgetting, which would omit the mode
+     * from hello) leaves a stale client-side enable standing.
      *
      * Only final bytes `h` and `l` change state. `\x1b[?2004$p` is a DECRQM *request*
      * and `\x1b[?2004;1$y` its reply; `[0-9;]` cannot match `$`, so neither can match
      * at all. Params are compared WHOLE (`2004`, never a substring) so `12004` and
      * `20040` cannot false-positive, and a multi-param set like `\x1b[?1049;2004h` is
-     * still honoured.
+     * still honoured — every param in the set is recorded.
      *
      * The `{0,MODE_SCAN_CARRY_MAX}` bound caps per-start backtracking: an unbounded
      * `[0-9;]*` after `\x1b[?` walks back one character at a time when no final byte
@@ -480,24 +523,43 @@ export class TerminalWsGateway {
      * `\x1b[?20` and `04h` routinely arrive in different chunks and a stateless scan
      * would miss the only escape that matters.
      */
-    private scanBracketedPasteMode(terminalName: string, data: string): void {
+    private scanTerminalModes(terminalName: string, data: string): void {
         const carry = this.modeScanCarry.get(terminalName) || '';
         const text = carry ? carry + data : data;
 
         const modeEvent = /\x1bc|\x1b\[!p|\x1b\[\?([0-9;]{0,64})([hl])/g;
         let match: RegExpExecArray | null;
         let consumedEnd = 0;
+        let modes = this.decModes.get(terminalName);
         while ((match = modeEvent.exec(text)) !== null) {
             consumedEnd = match.index + match[0].length;
             if (match[2]) {
-                // DECSET / DECRST — only 2004 is tracked; other modes are ignored but
-                // still advance consumedEnd so they cannot be re-scanned via the carry.
-                if (match[1].split(';').includes('2004')) {
-                    this.bracketedPasteModes.set(terminalName, match[2] === 'h');
+                // DECSET / DECRST. Params are compared WHOLE, so `12004` and `20040`
+                // cannot false-positive, and a multi-param set like
+                // `\x1b[?1049;1000;1006h` records all three.
+                const on = match[2] === 'h';
+                for (const param of match[1].split(';')) {
+                    const mode = Number(param);
+                    if (TRACKED_DEC_MODES.includes(mode as typeof TRACKED_DEC_MODES[number])) {
+                        if (!modes) {
+                            modes = new Map<number, boolean>();
+                            this.decModes.set(terminalName, modes);
+                        }
+                        modes.set(mode, on);
+                    }
                 }
             } else {
-                // RIS or DECSTR.
-                this.bracketedPasteModes.set(terminalName, false);
+                // RIS or DECSTR. Both re-clone xterm's DEC private-mode defaults, in
+                // which every tracked mode is false — so record false rather than
+                // forgetting, which would omit the mode from hello and leave a stale
+                // client-side enable standing.
+                if (!modes) {
+                    modes = new Map<number, boolean>();
+                    this.decModes.set(terminalName, modes);
+                }
+                for (const mode of TRACKED_DEC_MODES) {
+                    modes.set(mode, false);
+                }
             }
         }
 
@@ -531,7 +593,7 @@ export class TerminalWsGateway {
         this.pausedTerminals.delete(name);
         this.pausedSince.delete(name);
         this.inputQueues.delete(name);
-        this.bracketedPasteModes.delete(name);
+        this.decModes.delete(name);
         this.modeScanCarry.delete(name);
 
         // Notify and close attached clients
@@ -591,7 +653,7 @@ export class TerminalWsGateway {
         moveMap(this.pendingOutput);
         moveMap(this.inputQueues);
         moveMap(this.pausedSince);
-        moveMap(this.bracketedPasteModes);
+        moveMap(this.decModes);
         moveMap(this.modeScanCarry);
         moveSet(this.pendingFlushTerminals);
         moveSet(this.pausedTerminals);
@@ -794,7 +856,8 @@ export class TerminalWsGateway {
 
         // Hello frame carries the terminal's current high-water seq so a client can
         // tell how far ahead the stream already is.
-        const bracketedPaste = this.bracketedPasteModes.get(terminal.name);
+        const modes = this.decModes.get(terminal.name);
+        const bracketedPaste = modes?.get(2004);
         this.safeSend(ws, {
             t: 'hello',
             name: terminal.name,
@@ -804,8 +867,10 @@ export class TerminalWsGateway {
             seq: buffer ? buffer.nextSeq - 1 : 0,
             replayChars,
             // Omitted, NOT false, when nothing has been observed: telling a client to
-            // DISABLE a mode nobody has ruled on is a regression, not a default.
+            // DISABLE a mode nobody has ruled on is a regression, not a default. Same
+            // rule per-mode inside `modes`, which only ever contains observed modes.
             ...(typeof bracketedPaste === 'boolean' ? { bracketedPaste } : {}),
+            ...(modes && modes.size > 0 ? { modes: Object.fromEntries(modes) } : {}),
         });
 
         // Replay scrollback BEFORE any live frame. This block is synchronous, and
@@ -1012,7 +1077,7 @@ export class TerminalWsGateway {
         this.pendingFlushTerminals.clear();
         this.pendingOutput.clear();
         this.inputQueues.clear();
-        this.bracketedPasteModes.clear();
+        this.decModes.clear();
         this.modeScanCarry.clear();
         for (const client of this.clients) {
             try { client.ws.close(); } catch { /* ignore */ }

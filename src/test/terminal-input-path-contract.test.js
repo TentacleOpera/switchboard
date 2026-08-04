@@ -112,23 +112,25 @@ test('input is independent of output backpressure', () => {
         'conflating the two directions would make a terminal that is merely lagging on OUTPUT unusable for input');
 });
 
-test('the gateway records bracketed-paste mode outside the evicting ring', () => {
-    assert.ok(gatewayCode.includes('private bracketedPasteModes = new Map<string, boolean>()'),
-        'the mode must be recorded per terminal — a TUI emits \\x1b[?2004h once at startup and the 256 KB ring evicts it, so an attaching client can never learn it from replay');
+test('the gateway records the tracked DEC mode set outside the evicting ring', () => {
+    assert.ok(gatewayCode.includes('private decModes = new Map<string, Map<number, boolean>>()'),
+        'the mode set must be recorded per terminal — a TUI emits \\x1b[?2004h once at startup and the 256 KB ring evicts it, so an attaching client can never learn it from replay');
     // End marker also pins PLACEMENT: the scanner must sit between these two.
-    const flush = block(gatewayCode, 'private flushOutput(', 'private scanBracketedPasteMode(');
-    const scanIdx = flush.indexOf('this.scanBracketedPasteMode(');
+    const flush = block(gatewayCode, 'private flushOutput(', 'private scanTerminalModes(');
+    const scanIdx = flush.indexOf('this.scanTerminalModes(');
     const ringIdx = flush.indexOf('buffer.chunks.push(');
     assert.ok(scanIdx !== -1 && ringIdx !== -1 && scanIdx < ringIdx,
         'the scan must run before the ring append — the ring evicts, and outliving eviction is the entire point');
 });
 
 test('the mode scanner ranks resets and DECSET by position, in one pass', () => {
-    const scan = block(gatewayCode, 'private scanBracketedPasteMode(', 'private untrackTerminalData(');
+    const scan = block(gatewayCode, 'private scanTerminalModes(', 'private untrackTerminalData(');
     assert.ok(scan.includes('([hl])'),
         'only final bytes h/l may change state — \\x1b[?2004$p is a status REQUEST and \\x1b[?2004;1$y its reply');
-    assert.ok(scan.includes("split(';').includes('2004')"),
-        'params must be compared whole, or 12004/20040 false-positive and \\x1b[?1049;2004h is missed');
+    assert.ok(scan.includes("match[1].split(';')"),
+        'params must be split so a multi-param set like \\x1b[?1049;2004h is honoured');
+    assert.ok(scan.includes('TRACKED_DEC_MODES.includes('),
+        'params must be compared whole against the tracked set, or 12004/20040 false-positive and \\x1b[?1049;2004h is missed');
     assert.ok(scan.includes('\\x1bc|') && scan.includes('\\x1b\\[!p'),
         'RIS and DECSTR must be alternatives in the SAME pass — scanned separately, an unrelated DECSET after a reset makes the reset lose a position compare and the mode goes stale-true');
     // Pinned on the MATCHER DECLARATION, not the body. A body-wide grep for a
@@ -177,10 +179,13 @@ test('hello omits the mode when unobserved and the client re-arms from it', () =
     assert.ok(hello.includes("typeof bracketedPaste === 'boolean'"),
         'omitted, NOT false, when unobserved — telling a client to DISABLE a mode nobody ruled on is a regression');
     const arm = block(terminalsJs, "frame.t === 'hello'", "frame.t === 'inputThrottled'");
-    assert.ok(arm.includes('\\x1b[?2004h'),
-        'a rebuilt view starts with bracketedPasteMode false and would paste unbracketed — one Enter per line to a raw-mode agent CLI');
+    assert.ok(arm.includes('entry.pendingModes'),
+        'a rebuilt view starts with bracketedPasteMode false and would paste unbracketed — the recorded mode set is armed on the entry and applied after the replay');
     assert.ok(!arm.includes('batchQueue'),
         'the mode escape must bypass batchQueue: that path is billed to pendingAckChars and synthetic chars corrupt the backpressure ledger');
+    const apply = block(terminalsJs, 'function applyServerModes(', 'function isAnswerback(');
+    assert.ok(apply.includes('REARMABLE_DEC_MODES'),
+        'the authoritative mode write is built from the re-armable allowlist, not the legacy single-mode literal');
 });
 
 /**
@@ -196,7 +201,7 @@ test('hello omits the mode when unobserved and the client re-arms from it', () =
  * duplicate cannot drift from the original.
  */
 function loadScanner() {
-    const SIG = 'private scanBracketedPasteMode(terminalName: string, data: string): void {';
+    const SIG = 'private scanTerminalModes(terminalName: string, data: string): void {';
     const start = gatewayCode.indexOf(SIG);
     assert.ok(start !== -1, `scanner signature changed — update SIG in loadScanner: ${SIG}`);
     let depth = 0;
@@ -205,26 +210,42 @@ function loadScanner() {
         if (gatewayCode[i] === '{') { depth++; }
         else if (gatewayCode[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
     }
-    assert.ok(end !== -1, 'unbalanced braces in scanBracketedPasteMode');
+    assert.ok(end !== -1, 'unbalanced braces in scanTerminalModes');
     // The only type annotation in the body. Kept as a targeted strip rather than a
-    // general one so a NEW annotation fails loudly here instead of silently.
+    // general one so a NEW annotation fails loudly here instead of silently. The
+    // `as typeof TRACKED_DEC_MODES[number]` cast is TypeScript syntax that
+    // `new Function` cannot parse — strip it so the body is JS-executable while the
+    // gateway source keeps its type-safe cast.
     const body = gatewayCode.slice(start + SIG.length, end)
-        .replace('let match: RegExpExecArray | null;', 'let match;');
+        .replace('let match: RegExpExecArray | null;', 'let match;')
+        .replace(/ as typeof TRACKED_DEC_MODES\[number\]/g, '')
+        .replace(/new Map<number, boolean>\(\)/g, 'new Map()');
     const leftover = /:\s*(?:RegExpExecArray|string|number|boolean)\b/.exec(body);
     assert.ok(!leftover, `unstripped type annotation in the extracted body (${leftover && leftover[0]}) — add it to the replace list above`);
 
     const carryMax = /MODE_SCAN_CARRY_MAX = (\d+)/.exec(gatewayCode);
     assert.ok(carryMax, 'MODE_SCAN_CARRY_MAX must be declared');
-    const scan = new Function('MODE_SCAN_CARRY_MAX', 'terminalName', 'data', `"use strict";${body}`);
+    // TRACKED_DEC_MODES is a module-level const the extracted body references but
+    // `new Function` does not close over the module scope. Hard-coded here with a
+    // separate assertion (below) that the gateway's literal matches — that
+    // assertion is what catches a future mode being added to the gateway and not to
+    // the harness.
+    const TRACKED_DEC_MODES = [9, 1000, 1002, 1003, 1004, 1006, 1049, 2004];
+    const trackedDecl = /export const TRACKED_DEC_MODES = \[([^\]]+)\] as const;/.exec(gatewayCode);
+    assert.ok(trackedDecl, 'TRACKED_DEC_MODES must be declared in the gateway');
+    const trackedLiteral = trackedDecl[1].split(',').map(s => Number(s.trim()));
+    assert.deepStrictEqual(trackedLiteral, TRACKED_DEC_MODES,
+        'the harness TRACKED_DEC_MODES must match the gateway literal — a mode added to the gateway and not here throws `TRACKED_DEC_MODES is not defined`');
+    const scan = new Function('MODE_SCAN_CARRY_MAX', 'TRACKED_DEC_MODES', 'terminalName', 'data', `"use strict";${body}`);
     return {
         carryMax: Number(carryMax[1]),
         gw() {
             return {
-                bracketedPasteModes: new Map(),
+                decModes: new Map(),
                 modeScanCarry: new Map(),
                 feed(name, ...chunks) {
-                    for (const c of chunks) { scan.call(this, Number(carryMax[1]), name, c); }
-                    return this.bracketedPasteModes.get(name);
+                    for (const c of chunks) { scan.call(this, Number(carryMax[1]), TRACKED_DEC_MODES, name, c); }
+                    return (this.decModes.get(name) || new Map()).get(2004);
                 },
             };
         },
@@ -267,12 +288,12 @@ test('the carry is bounded and per-terminal', () => {
         assert.ok((drip.modeScanCarry.get('t') || '').length <= carryMax,
             `carry grew past MODE_SCAN_CARRY_MAX — an unterminated escape must degrade to a missed detection, never unbounded growth`);
     }
-    assert.strictEqual(drip.bracketedPasteModes.get('t'), undefined, 'a digit drip must not set the mode');
+    assert.strictEqual(drip.decModes.get('t'), undefined, 'a digit drip must not set the mode');
 
     const cross = gw();
     cross.feed('a', '\x1b[?20');
     cross.feed('b', '04h');
-    assert.strictEqual(cross.bracketedPasteModes.get('b'), undefined,
+    assert.strictEqual(cross.decModes.get('b'), undefined,
         "terminal b must not complete terminal a's partial escape — the carry is per terminal");
     assert.strictEqual(cross.feed('a', '04h'), true, "a's own carry must still complete");
 });
@@ -296,11 +317,23 @@ test('a hostile digit run does not stall the output hot path', () => {
 
 test('the recorded mode is torn down with the terminal', () => {
     const untrack = block(gatewayCode, 'private untrackTerminalData(', 'private drainPending(');
-    assert.ok(untrack.includes('this.bracketedPasteModes.delete(name)'),
+    assert.ok(untrack.includes('this.decModes.delete(name)'),
         'a terminal re-created under the same name must not inherit the dead process mode');
     assert.ok(untrack.includes('this.modeScanCarry.delete(name)'), 'carry must not leak across processes');
-    assert.ok(block(gatewayCode, 'public dispose()', 'for (const client of this.clients)').includes('this.bracketedPasteModes.clear()'),
+    assert.ok(block(gatewayCode, 'public dispose()', 'for (const client of this.clients)').includes('this.decModes.clear()'),
         'dispose must clear the recorded modes too');
+});
+
+test('a multi-param DECSET records every tracked mode in the set', () => {
+    const { gw } = loadScanner();
+    const g = gw();
+    g.feed('t', '\x1b[?1049;1000;1006h');
+    const modes = g.decModes.get('t');
+    assert.ok(modes, 'the inner mode map must be created on the first mode event');
+    assert.strictEqual(modes.get(1049), true, '1049 in the multi-param set');
+    assert.strictEqual(modes.get(1000), true, '1000 in the multi-param set');
+    assert.strictEqual(modes.get(1006), true, '1006 in the multi-param set');
+    assert.strictEqual(modes.get(2004), undefined, '2004 was not in the set — omitted, not false');
 });
 
 console.log(`\nResults: ${passed} passed, ${failed} failed.`);
