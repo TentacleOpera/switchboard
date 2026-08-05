@@ -32,3 +32,7 @@ Design panel opens on the wrong surface with nothing selected: PREVIEWS is a con
 
 All four subtasks were implemented in the recommended order. `src/webview/design.html` now has an HTML tab, a separate IMAGES tab, and only two Previews sources. `src/webview/design.js` remaps legacy persisted Images state, defaults Previews to `html-preview`, restores and validates the last active Stitch project, and seeds the Stitch HTML picker from the STITCH tab. `src/services/DesignPanelProvider.ts` now returns `stitch.projectId` and `stitchHtml.projectId` so the restored state is actually read back. No compilation or test suite was run per the dispatch directive; only static grep checks were performed, and the HTML move was verified to leave only two `previews-subpanel` divs.
 
+## Review Findings
+
+Independent review pass completed across all 4 subtasks. One MAJOR finding fixed: stale "PREVIEWS → Stitch HTML" tooltip text in `design.html:4038` and `design.js:2428` updated to "HTML → Stitch HTML" to match the renamed tab. Verification: `tsc --noEmit` (no new errors), `eslint` (no new warnings), 4 design/stitch test suites (54 tests total, all pass), `push-routing:check`/`parity:check`/`verb-returns:check` all pass, CI gate-wiring confirmed for all three PRD gates. Remaining risks: stale CSS comment at `design.html:220` references "three panes" (cosmetic); `stitchHtml.projectId` shipped by provider but not consumed by webview (plan-scoped as out-of-range).
+

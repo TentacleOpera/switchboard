@@ -2425,7 +2425,7 @@
             previewBtnHtml = newHtmlBtn;
             previewBtnHtml.disabled = !screen.htmlPath;
             previewBtnHtml.title = screen.htmlPath
-                ? "Open this screen's cached HTML under PREVIEWS → Stitch HTML for further editing"
+                ? "Open this screen's cached HTML under HTML → Stitch HTML for further editing"
                 : 'HTML not cached yet — it downloads automatically as the screen loads';
             previewBtnHtml.addEventListener('click', () => {
                 if (!screen.htmlPath) return;

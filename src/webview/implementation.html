@@ -2190,6 +2190,7 @@
                     }
                     toggleOnboarding(message.needsSetup === true);
                     break;
+                case 'memoUpdated':
                 case 'memoContent': {
                     const textarea = document.getElementById('memo-textarea');
                     if (textarea) {
@@ -2237,6 +2238,10 @@
                     wsSelect.value = selected;
                     if (selected && selected !== memoWorkspaceRoot) {
                         memoWorkspaceRoot = selected;
+                        // A fallback (explicit root no longer listed) must clear the
+                        // explicit flag — otherwise workspaceChanged's guard keeps the
+                        // memo stuck on the fallback instead of tracking the board.
+                        memoWorkspaceExplicit = false;
                         if (currentAgentTab === 'memo') {
                             const ta = document.getElementById('memo-textarea');
                             if (ta) ta.value = '';

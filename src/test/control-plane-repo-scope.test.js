@@ -96,6 +96,10 @@ async function run() {
         const db = KanbanDatabase.forWorkspace(workspaceRoot);
         const ready = await db.createIfMissing();
         assert.strictEqual(ready, true, `expected kanban DB to initialize, got: ${db.lastInitError}`);
+        // createIfMissing()'s _persist() only arms a 300 ms trailing debounce, so the file
+        // is not on disk when it resolves. Reading db.dbPath without flushing first threw
+        // ENOENT — flushPersist() is the documented way to force the pending write.
+        await db.flushPersist();
 
         const sqlDb = await openSqlDb(db.dbPath);
         try {

@@ -243,6 +243,29 @@ function getMemoWorkspaceRoot() { return memoWorkspaceRoot || currentWorkspaceRo
 
 Send to Coder
 
+## Review Findings
+
+**Review pass:** inline adversarial review with regression analysis and code fixes applied.
+
+**Files changed by review:**
+- `src/test/memo-browser-clear-and-copy-contract.test.js` — updated `workspaceChanged` test to use the new `#memo-workspace-select` picker instead of the removed `#memo-workspace` span (CRITICAL fix: test referenced a deleted DOM element).
+- `src/webview/memo.js` — `_populateWorkspaceSelect`: clear `_wsRootExplicit` on fallback so a removed explicit root doesn't leave the memo stuck on the fallback forever (MAJOR fix).
+- `src/webview/implementation.html` — `memoWorkspaceItems` handler: same orphaned-explicit-flag fix as memo.js (MAJOR fix).
+- `src/webview/implementation.html` — added `case 'memoUpdated':` fallthrough to the `memoContent` handler, fixing a regression from commit `1c7de0f6` (Headless Host Correctness plan) where the file watcher stopped pushing `memoContent` and the sidebar never handled `memoUpdated` (MAJOR fix — sidebar now receives file-watcher memo updates again).
+
+**Validation results:**
+- `npm run catalog:check` ✅ — no drift, allowlist matches catalog.
+- `npm run parity:check` ✅ — allowlist ≡ catalog, dispatchers present.
+- `npm run push-routing:check` ✅ — all providers within baseline.
+- `npm run verb-returns:check` ✅ — all providers within ceiling.
+- `memo-browser-clear-and-copy-contract.test.js`: 16 passed, 1 failed (pre-existing `unresolvable-workspace` failure from commit 30d82f81's seam-root change in `_getWorkspaceRoots`, not caused by this plan).
+- `tsc --noEmit`: 6 pre-existing errors (module resolution config + unrelated `cli.ts` issue), none from this plan's changes.
+- CI gate-wiring audit: all four PRD-mandated checks (`catalog:check`, `parity:check`, `push-routing:check`, `verb-returns:check`) are wired in `.github/workflows/integration-tests.yml`; the memo contract test is wired at line 264.
+
+**Remaining risks:**
+- The pre-existing `unresolvable-workspace` test failure (seam roots take precedence over `vscode.workspace.workspaceFolders` in `_getWorkspaceRoots`) is out of scope for this plan but should be addressed separately.
+- A co-mingled change in commit `1c7de0f6` removed the `memoContent` push from `_serveMemoContent` (file-watcher path), leaving only `memoUpdated`; the sidebar previously handled only `memoContent`. Fixed in this review pass by adding `case 'memoUpdated':` fallthrough to the sidebar's `memoContent` handler.
+
 ## Completion Summary
 
 Implemented the memo workspace indicator and independent workspace picker across both memo surfaces. Added a `memoListWorkspaces` verb to `TaskViewerProvider`, routed it through `PlanningPanelProvider`, and added its schema; regenerated the protocol catalog and verb allowlist. Updated `memo.html`/`memo.js` and `implementation.html` to show a labelled `Saving to` picker, debounced-save flushing on switch, explicit-override state that survives board workspace changes, and correct routing of all memo verbs through the selected workspace. `npm run catalog:generate`, `npm run parity:check`, and `npm run catalog:check` all pass.

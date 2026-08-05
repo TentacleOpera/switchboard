@@ -208,7 +208,13 @@ export class ControlPlaneMigrationService {
             await this.bootstrapControlPlaneLayout(preview.parentDir, options.extensionPath);
 
             const targetDb = KanbanDatabase.forWorkspace(preview.parentDir);
-            const ready = await targetDb.ensureReady();
+            // createIfMissing, NOT ensureReady: the control-plane parent is normally a
+            // brand-new folder with no kanban.db, and ensureReady() only opens an
+            // existing file — it returned false and aborted every migration into a fresh
+            // parent before any repo was touched. createIfMissing returns true whether it
+            // created the DB or found one already there, which is the same primitive
+            // MultiRepoScaffoldingService._doScaffold uses for this exact job.
+            const ready = await targetDb.createIfMissing();
             if (!ready) {
                 return {
                     success: false,
@@ -217,6 +223,10 @@ export class ControlPlaneMigrationService {
                     error: `Failed to initialize control-plane database at ${targetDb.dbPath}.`
                 };
             }
+
+            // reconcileDatabases below merges by file path, so a just-created DB has to be
+            // on disk first — createIfMissing()'s _persist() only arms a trailing debounce.
+            await targetDb.flushPersist();
 
             await ensureWorkspaceIdentity(preview.parentDir);
 

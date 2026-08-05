@@ -135,6 +135,53 @@ function exitFlushed(code: number): never {
     return undefined as never;
 }
 
+/**
+ * Drain pending kanban.db writes for `workspaceRoot`, then exit.
+ *
+ * `KanbanDatabase._persist()` does NOT write — it arms a 300 ms trailing debounce and
+ * returns true immediately (KanbanDatabase.ts:9056). So a one-shot command that exits
+ * as soon as `createIfMissing()`/`executeMigration()` resolves kills the process before
+ * the export()+atomic-rename ever runs: `init` reported a created DB and left no
+ * kanban.db on disk at all. `invalidateWorkspace` is the existing drain — it awaits the
+ * in-flight write tail, flushes the pending coalesced persist, then closes the handle.
+ * The long-running server path does not need this (its debounce fires normally).
+ */
+/**
+ * Send every stdout-bound console channel to stderr for the rest of the process.
+ *
+ * `control-plane detect|preview|migrate` exist to put machine-readable JSON on stdout,
+ * but the services they call narrate constantly: `KanbanDatabase._loadSqlJs` logs five
+ * lines per DB open, V17/V18 report skipped migration steps via console.debug and
+ * V27/V29 via console.info. In Node **log, info and debug all write to stdout** — so all
+ * three have to move, not just console.log — otherwise that chatter prefixes the payload
+ * and `npx switchboard control-plane preview <dir> | jq` fails on invalid JSON.
+ *
+ * Deliberately never restored: background DB work (board-mirror and state-backup writes)
+ * reopens the database and logs *after* the awaited call returns, so scoping the redirect
+ * to the service call still lets a late line race the payload. These handlers always
+ * exit, so a one-way redirect is safe. warn/error already go to stderr and are untouched.
+ */
+function routeLogsToStderr(): void {
+    const toStderr = (...args: unknown[]): void => { console.error(...args); };
+    console.log = toStderr;
+    console.info = toStderr;
+    console.debug = toStderr;
+}
+
+/** Write a JSON payload to stdout directly, bypassing the redirected console.log. */
+function emitJson(payload: unknown): void {
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+}
+
+async function flushWorkspaceDb(workspaceRoot: string): Promise<void> {
+    try {
+        const { KanbanDatabase } = require('../services/KanbanDatabase');
+        await KanbanDatabase.invalidateWorkspace(workspaceRoot);
+    } catch (err) {
+        console.error(`[switchboard] Warning: could not flush the kanban database: ${err instanceof Error ? err.message : String(err)}`);
+    }
+}
+
 async function probeHealth(port: number, hostname = '127.0.0.1', timeoutMs = 2000): Promise<boolean> {
     return new Promise(resolve => {
         const req = http.get(`http://${hostname}:${port}/health`, (res) => {
@@ -318,6 +365,11 @@ async function main() {
 
             await ensureWorkspaceIdentity(workspaceRoot);
 
+            // Land the DB before reporting. createIfMissing()'s _persist() only arms a
+            // trailing debounce, so both the report below and the process exit would
+            // otherwise race the actual write — and win, leaving no kanban.db at all.
+            await flushWorkspaceDb(workspaceRoot);
+
             // bootstrapControlPlaneLayout silently skips the bundled-file copy when the
             // package root lacks .agents/ (ControlPlaneMigrationService.ts:693); AGENTS.md
             // and the CLAUDE.md seed are gated on <repoRoot>/AGENTS.md separately (:703,
@@ -337,7 +389,8 @@ async function main() {
             };
 
             console.log('[switchboard] Scaffolding complete.');
-            console.log('[switchboard]   .switchboard/  (plans, inbox, archive, kanban.db)');
+            console.log('[switchboard]   .switchboard/  (plans, inbox, archive)');
+            reportLine(path.join('.switchboard', 'kanban.db'), '.switchboard/kanban.db');
             reportLine('.agents', '.agents/       (workflows, skills)');
             if (reportAgents) { reportLine('AGENTS.md', 'AGENTS.md      (protocol file)'); }
             if (reportClaude) {
@@ -401,6 +454,9 @@ async function main() {
             repoRoot
         );
 
+        // The control-plane DB _doScaffold created is only debounce-armed, not written.
+        await flushWorkspaceDb(scaffoldRoot);
+
         for (const repo of result.repos) {
             const tag = repo.status === 'cloned' ? '✓' : repo.status === 'skipped' ? '○' : '✗';
             console.log(`  ${tag} ${repo.dir} — ${repo.status}${repo.error ? ': ' + repo.error : ''}`);
@@ -458,13 +514,16 @@ async function main() {
         KanbanDatabase.setPathConfigProvider(new StandaloneHostPathConfigProvider(parentDir));
         const repoRoot = path.resolve(__dirname, '..', '..');
 
+        // stdout is this subcommand's data channel from here on.
+        routeLogsToStderr();
+
         if (sub === 'detect') {
             const candidate = await ControlPlaneMigrationService.detectCandidateParent(workspaceRoot);
-            console.log(JSON.stringify(candidate, null, 2));
+            emitJson(candidate);
             exitFlushed(0);
         } else if (sub === 'preview') {
             const preview = await ControlPlaneMigrationService.previewMigration(parentDir);
-            console.log(JSON.stringify(preview, null, 2));
+            emitJson(preview);
             exitFlushed(0);
         } else {
             let cleanupConfirmed = cleanupRepos;
@@ -477,11 +536,16 @@ async function main() {
                 extensionPath: repoRoot,
                 cleanupConfirmed
             });
-            console.log(JSON.stringify(result, null, 2));
+            // executeMigration merges source rows and imports plan files into the parent
+            // DB; every one of those writes is debounce-armed, so drain before exiting.
+            await flushWorkspaceDb(parentDir);
+
+            emitJson(result);
             if (result.success) {
+                // Warnings go to stderr so stdout stays parseable JSON.
                 console.warn('[switchboard] Note: integration sync of imported plans is deferred — open this workspace in the VS Code extension to sync ClickUp/Linear.');
                 if (result.workspaceFilePath) {
-                    console.log(`[switchboard] Workspace file: ${result.workspaceFilePath}`);
+                    console.warn(`[switchboard] Workspace file: ${result.workspaceFilePath}`);
                 }
             }
             exitFlushed(result.success ? 0 : 1);

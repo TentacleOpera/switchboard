@@ -60,6 +60,10 @@
         _wsSelect.value = selected;
         if (selected && selected !== _wsRoot) {
             _wsRoot = selected;
+            // A fallback (explicit root no longer listed) must clear the explicit
+            // flag — otherwise workspaceChanged's _wsRootExplicit guard keeps the
+            // memo stuck on the fallback forever instead of tracking the board.
+            _wsRootExplicit = false;
             _memoDirty = false;
             _submittedContent = null;
             const ta = document.getElementById('memo-textarea');

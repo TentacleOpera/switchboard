@@ -124,3 +124,7 @@ None run — the dispatch directive excludes compilation and automated tests fro
 5. **UAT — no first-paint flash.** Reload with JS throttled (or watch the first frame): the HTML previews pane is the one that appears, never Stitch HTML first.
 6. **UAT — Stitch deep link unaffected.** From the STITCH tab gallery, click a screen's HTML-preview action: it still lands on Previews with `Stitch HTML` selected and that screen open.
 7. **UAT — reconnect.** With Previews open on HTML Previews, restart the API server so the transport reconnects; the pane stays on HTML Previews and files still refresh.
+
+## Review Findings
+
+Reviewed against plan requirements: initial state defaults to `'html-preview'` (`design.js:79`), `selectPreviewsSource` fallback is `'html-preview'` (`design.js:186-188`), reconnect fallback is `'html-preview'` (`design.js:44`), and the `active` class is on `#html-preview-content` not `#stitch-html-content` (`design.html:3847`). No remaining `'stitch-html'` default literals — all 8 occurrences are guards, branch conditions, the deep-link assignment, or restore whitelists. Files changed: `src/webview/design.js`, `src/webview/design.html`. No findings — implementation matches the plan exactly. Verification: `tsc --noEmit` (no new errors), 4 design/stitch test suites (54 tests, all pass), `push-routing:check`/`parity:check`/`verb-returns:check` all pass. No remaining risks.

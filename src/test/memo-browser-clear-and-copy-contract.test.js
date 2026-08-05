@@ -450,11 +450,24 @@ async function main() {
 
     await test('workspaceChanged relabels, clears, and re-issues memoLoad for the new root', async () => {
         const p = bootMemoPanel('/tmp/ws-a');
-        assert.strictEqual(p.el('memo-workspace').textContent, 'ws-a', 'initial workspace label missing');
+        // The workspace indicator is now a <select> populated by memoWorkspaceItems
+        // (replacing the old bare #memo-workspace span). memo.js requests the list
+        // at boot — deliver it so the picker has options to show.
+        const wsItems = [
+            { workspaceRoot: '/tmp/ws-a', label: 'ws-a' },
+            { workspaceRoot: '/tmp/ws-b', label: 'ws-b' },
+        ];
+        p.deliver({ type: 'memoWorkspaceItems', items: wsItems, activeWorkspaceRoot: '/tmp/ws-a' });
+        assert.strictEqual(p.el('memo-workspace-select').value, '/tmp/ws-a',
+            'initial workspace not selected in picker');
         p.type('ws-a memo text');
         p.deliver({ type: 'workspaceChanged', workspaceRoot: '/tmp/ws-b' });
         assert.strictEqual(p.value, '', 'the previous workspace\'s text survived the switch');
-        assert.strictEqual(p.el('memo-workspace').textContent, 'ws-b', 'header did not follow the switch');
+        // workspaceChanged (non-explicit) re-requests memoListWorkspaces — deliver
+        // the refreshed list so the picker can update to the new active root.
+        p.deliver({ type: 'memoWorkspaceItems', items: wsItems, activeWorkspaceRoot: '/tmp/ws-b' });
+        assert.strictEqual(p.el('memo-workspace-select').value, '/tmp/ws-b',
+            'picker did not follow the workspace switch');
         const loads = p.posted.filter(m => m.type === 'memoLoad');
         assert.ok(loads.length >= 2 && loads[loads.length - 1].workspaceRoot === '/tmp/ws-b',
             'no memoLoad re-issued for the new root');
