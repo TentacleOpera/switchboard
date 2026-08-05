@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as http from 'http';
+import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import { startHeadlessSwitchboard } from './bootstrap';
@@ -99,6 +100,41 @@ function resolveHostname(input: string | undefined): string | undefined {
     return candidate;
 }
 
+/**
+ * Expand a leading `~` the way the scaffolding services do.
+ *
+ * `--parent-dir`/`<parent-dir>` reach the services through
+ * `MultiRepoScaffoldingService._normalizeOptions` (expandHome + path.resolve), so the
+ * CLI must resolve them the same way before installing the shim workspace root —
+ * otherwise the root points at a literal `./~/...` that holds no config.
+ */
+function expandHomePath(input: string): string {
+    if (input === '~') { return os.homedir(); }
+    if (input.startsWith('~/') || input.startsWith('~\\')) {
+        return path.join(os.homedir(), input.slice(2));
+    }
+    return input;
+}
+
+/**
+ * Exit only once stdout has drained.
+ *
+ * `process.exit()` discards queued async writes, and when stdout is a pipe (rather
+ * than a TTY) Node buffers asynchronously — so `control-plane preview <dir> | jq`
+ * could lose the JSON that is the entire product of the command. A hard exit is still
+ * required: the DB services leave handles behind, so returning normally is not
+ * guaranteed to end the process.
+ */
+function exitFlushed(code: number): never {
+    if (process.stdout.writableLength === 0) {
+        process.exit(code);
+    }
+    process.stdout.write('', () => process.exit(code));
+    // Belt-and-braces: if the drain callback never fires, do not hang forever.
+    setTimeout(() => process.exit(code), 2000).unref();
+    return undefined as never;
+}
+
 async function probeHealth(port: number, hostname = '127.0.0.1', timeoutMs = 2000): Promise<boolean> {
     return new Promise(resolve => {
         const req = http.get(`http://${hostname}:${port}/health`, (res) => {
@@ -162,8 +198,15 @@ async function main() {
         process.exit(1);
     }
 
+    // `scaffold` and `control-plane` operate on a directory named by their own
+    // arguments and never touch the cwd. Creating .switchboard/ here would leave a
+    // stray control-plane marker in whatever directory the command was launched from
+    // — including $HOME, which `isAllowedSwitchboardLocation` exists to keep out.
+    // Every other path (server start, secrets, init) does use workspaceRoot.
+    const subcommand = process.argv[2];
+    const subcommandTargetsCwd = subcommand !== 'scaffold' && subcommand !== 'control-plane';
     const switchboardDir = path.join(workspaceRoot, '.switchboard');
-    if (!fs.existsSync(switchboardDir)) {
+    if (subcommandTargetsCwd && !fs.existsSync(switchboardDir)) {
         fs.mkdirSync(switchboardDir, { recursive: true });
     }
 

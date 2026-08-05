@@ -31,11 +31,22 @@ Communication is localhost HTTP rather than MCP, so any CLI that can make a requ
 
 ## Dependencies & sequencing
 
-**Phone-a-Friend per-instance addressing is independent** — it improves a shipped feature and can land first, last, or alongside anything else. It is sequenced first only because it is the cheapest way to prove the instance-identity model before the contract commits to it.
+**Phone-a-Friend per-instance addressing is independent** — it improves a shipped feature and can land first, last, or alongside anything else, in either direction.
 
-**The subagent contract must land before the terminals work.** Terminal lifecycle, the Agents-tab definitions, and the pane-frame control all depend on `agentInstanceId` and on the dispatch/join endpoints existing. The reverse is not true: the contract ships and is fully testable with curl against manually-started terminals.
+> **Superseded:** "It is sequenced first only because it is the cheapest way to prove the instance-identity model before the contract commits to it."
+> **Reason:** It cannot prove that model, because it operates on a different terminal backend in a different process (see the Superseded callout on its bullet above). Keeping this rationale would tell a coder that landing it de-risks the contract, which it does not.
+> **Replaced with:** It has no sequencing relationship to the other two. Land it whenever convenient — including in parallel, since it shares no file with them.
 
-Two decisions are fixed across the set and should not be relitigated per subtask:
+**The subagent contract must land before the terminals work.** Terminal lifecycle, the Agents-tab definitions, and the pane-frame control all depend on `agentInstanceId` and on the dispatch/join endpoints existing. The reverse is not true: the contract ships and is fully testable with curl against pty terminals created by hand through the `ptyCreateTerminal` verb.
 
-- **Identity is an opaque `agentInstanceId`, never a terminal name.** Names are renameable and reused, and there is existing machinery migrating name-keyed collections on rename. This is the decision most expensive to unwind once terminals and UI depend on it.
-- **Failure semantics are inverted from Phone-a-Friend.** Its silent-drop, must-not-throw contract is correct for a best-effort nudge and fatal for delegation — a parent blocking on a child that was never dispatched would hang. Subagent dispatch fails fast; the join always terminates.
+So the only hard edge in the set is **`…180001` → `…180002`**. `…180000` floats.
+
+## Reconciled end-state — implement to one design
+
+Five decisions are fixed across the set and must not be relitigated per subtask. Three were already recorded; two were established by the reconciliation pass.
+
+- **Everything delegation-related targets the pty fleet, not `vscode.Terminal`.** The fleet, the WS gateway, and prompt delivery live in the pty host child process (`src/standalone/ptyHost.ts`), or in-process under the standalone `npx` host. Only the pty fleet can be spawned with a per-child CLI, and only the pty fleet gives the host the output visibility the evidence detector requires — the extension cannot read a `vscode.Terminal`'s bytes at all. Delegation state therefore lives **in the pty host**, with `LocalApiServer` forwarding.
+- **Identity is an opaque `agentInstanceId`, never a terminal name.** Names are renameable, reused, and collision-counted at create time (`PtyFleetService.create()`), and there is existing machinery migrating name-keyed collections on rename plus a contract test that parses that collection list. This is the decision most expensive to unwind once terminals and UI depend on it. Note the id must also be added to the `ptyCreateTerminal` / `ptyListTerminals` verb payloads, which expose no id today — otherwise it is invisible outside the pty host.
+- **Code says `delegate`, never `subagent`.** A shipped per-role addon family already owns that word and means the opposite thing — `subagentPolicy` / `customSubagentName` / `featureSubagentPolicy` are *prompt text* telling a CLI whether to use its own in-process sub-agents (`agentConfig.ts:31-32`; `sharedDefaults.js:87-95`, present on every role). Endpoints are `/delegates/dispatch`, `/delegates/await`, `/delegates/result`; the config key is `delegates`. The **feature name stays as it is** — this is an identifier-level decision, not a product rename.
+- **The join is bounded and resumable, not an unbounded block.** The blocking read is still the right shape — results land inside the parent's turn — but the parent issues it through its own shell tool, and those tools cap command duration (Claude Code's Bash tool: 120 s default, 600 s max). A repeat `await` on the same `batchId` resumes and returns current state; the skill teaches the re-join loop. A single unbounded block passes a fast test and fails exactly on the long jobs delegation exists for.
+- **Failure semantics are inverted from Phone-a-Friend.** Its silent-drop, must-not-throw contract is correct for a best-effort nudge and fatal for delegation — a parent blocking on a child that was never dispatched would hang. Delegate dispatch fails fast; the join always terminates. Relatedly, the delegate endpoints reuse the pty host's existing session token (they start processes), while Phone-a-Friend stays unauthenticated (it cannot, and tokenising it would break in-flight prompts).

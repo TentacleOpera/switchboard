@@ -19,8 +19,8 @@ Add CLI subcommands to the standalone Switchboard binary for initialising scaffo
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Standalone `init` Command — Bootstrap Switchboard Scaffolding Into a Repo From the CLI](../plans/feature_plan_20260804081225_standalone-init-scaffolding-command.md) — **CODER CODED**
-- [ ] [Standalone Multi-Repo Scaffold + Control Plane CLI Commands](../plans/feature_plan_20260804081226_standalone-multi-repo-scaffold-and-control-plane-cli.md) — **CODER CODED**
+- [ ] [Standalone `init` Command — Bootstrap Switchboard Scaffolding Into a Repo From the CLI](../plans/feature_plan_20260804081225_standalone-init-scaffolding-command.md) — **CODE REVIEWED**
+- [ ] [Standalone Multi-Repo Scaffold + Control Plane CLI Commands](../plans/feature_plan_20260804081226_standalone-multi-repo-scaffold-and-control-plane-cli.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Completion Report
