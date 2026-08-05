@@ -20,8 +20,12 @@ Three additive capabilities for the browser Terminals panel: repurpose an unused
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Add "New Window" Button to Pop Out the Full Terminals Panel](../plans/feature_plan_20260804110138_terminals-new-window-popout.md) — **LEAD CODED**
-- [ ] [Paste Images into Browser Terminals](../plans/feature_plan_20260804132725_paste_images_into_browser_terminals.md) — **LEAD CODED**
-- [ ] [Kanban-Mode Pane in the Terminals Grid](../plans/feature_plan_20260804135951_kanban-mode-pane-in-terminals-grid.md) — **LEAD CODED**
+- [ ] [Add "New Window" Button to Pop Out the Full Terminals Panel](../plans/feature_plan_20260804110138_terminals-new-window-popout.md) — **CODE REVIEWED**
+- [ ] [Paste Images into Browser Terminals](../plans/feature_plan_20260804132725_paste_images_into_browser_terminals.md) — **CODE REVIEWED**
+- [ ] [Kanban-Mode Pane in the Terminals Grid](../plans/feature_plan_20260804135951_kanban-mode-pane-in-terminals-grid.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+
+## Review Findings
+
+Direct reviewer pass over all three subtasks as landed in `adbc5fd`; 10 defects fixed across `src/webview/terminals.js`, `src/standalone/ptyHost.ts` and `src/services/LocalApiServer.ts`. New Window needed no changes. Paste Images had two MAJOR server-side holes (uncapped request buffering on the ptyHost route, which could OOM the child and kill the whole PTY fleet; and a 413 that reset the socket before sending its body). Kanban Pane carried the weight: two CRITICAL pane-header defects from repurposing the pin button, plus seating paths that let Open All bulldoze the pane, a 5 s re-render that fought the operator's own dropdown and scroll, a missing in-flight guard, a stranded empty state, and a solo-mode write that clobbered shared persisted state. The implementation commit also broke `terminal-pane-grid-reconcile-contract` (green at `adbc5fd~1`) — fixed by delegating the toggle listener and relocating the kanban helpers out of the pinned span, without weakening the test. Verification: `tsc --noEmit` clean apart from 5 pre-existing `TS2835` errors byte-identical in the parent commit; `catalog:check`, `parity:check`, `push-routing:check`, `verb-returns:check` green; 20/20 CI-wired terminal/pty/panel contract tests green. Gate-wiring audit: every automated check named across the three plans is genuinely invoked by `.github/workflows/integration-tests.yml` — no defined-but-uninvoked gates.
 

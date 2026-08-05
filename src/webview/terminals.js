@@ -31,6 +31,8 @@
     // Cached flat ordered column list from getKanbanStructure.
     let kanbanColumnsCache = [];
     let kanbanPollTimer = null;
+    // Pane indices with a getBoardCards request in flight — see fetchBoardCardsForPane.
+    const kanbanFetchInFlight = new Set();
     const collapsedGroups = new Set();
     let osNotifyEnabled = false;
 
@@ -668,6 +670,12 @@
         }
         soloStatusEl.style.display = 'none';
         paneGridEl.style.display = 'grid';
+        // The initial fit may have measured a just-transitioned box; the ladder
+        // re-fits but never re-syncs the scroll area.
+        requestAnimationFrame(() => {
+            const entry = terminalsMap.get(soloTerminalName);
+            if (entry) { refreshTerminalScrollbar(entry); }
+        });
     }
 
     /** Single-level undo of the last assignment mutation. Cleared when the terminal it
@@ -1194,9 +1202,24 @@
         if (isOpen(focusedPaneIndex)) {
             target = focusedPaneIndex;
         }
-        if (target === -1 || paneAssignments[target]) {
+        // A kanban-mode slot is unassigned but occupied by a live board column, so it
+        // is not a free seat: it must never be preferred over a genuinely empty pane,
+        // and the focused pane being one must not short-circuit the scan. With no
+        // kanban panes anywhere this is byte-for-byte the previous behaviour.
+        const isFree = (i) => !paneAssignments[i] && paneModes[i] !== 'kanban';
+        if (target === -1 || !isFree(target)) {
             for (let i = 0; i < rendered; i++) {
-                if (isOpen(i) && !paneAssignments[i]) { target = i; break; }
+                if (isOpen(i) && isFree(i)) { target = i; break; }
+            }
+        }
+        // Nothing free — this is a displacing click. Prefer displacing a terminal pane
+        // over a kanban pane: the operator opened that column deliberately, and the
+        // terminal keeps running either way. NOT widened to occupied targets in
+        // general — a displacing click must still land on the FOCUSED pane, which is
+        // what the retained `target` carries here.
+        if (target === -1 || paneModes[target] === 'kanban') {
+            for (let i = 0; i < rendered; i++) {
+                if (isOpen(i) && paneModes[i] !== 'kanban') { target = i; break; }
             }
         }
         if (target === -1) {
@@ -1577,8 +1600,7 @@
             e.stopPropagation();
             const targetName = paneAssignments[index];
             if (!targetName) { return; }
-            const label = isTerseLayout() ? 'c' : 'clear';
-            withClearingFeedback(paneClearBtn, () => clearTerminal(targetName), label);
+            withClearingFeedback(paneClearBtn, () => clearTerminal(targetName), 'clear');
         });
 
         const unassignBtn = document.createElement('button');
@@ -1597,20 +1619,54 @@
             renderSidebarList();
         });
 
+        // Pane-mode toggle back to terminal. Its OWN button, not a repurposed one.
+        // renderKanbanPane used to overwrite children[0] — the pin button — setting
+        // its className and .onclick; updatePaneElement re-derives label/title/display
+        // but never className or onclick, so the pin permanently lost .btn-pin-pane
+        // and kept firing the mode handler alongside its own listener. Panes are
+        // reused rather than rebuilt, so that damage outlived every later render.
+        const modeBtn = document.createElement('button');
+        modeBtn.className = 'btn-unassign-pane';
+        modeBtn.textContent = 'term';
+        modeBtn.title = 'Switch this pane to terminal mode';
+        modeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            paneModes[index] = 'terminal';
+            saveLayoutSettings();
+            renderPaneGrid();
+        });
+
         actionsEl.appendChild(pinBtn);
         actionsEl.appendChild(paneClearBtn);
         actionsEl.appendChild(unassignBtn);
+        actionsEl.appendChild(modeBtn);
         headerEl.appendChild(titleEl);
         headerEl.appendChild(actionsEl);
         paneEl.appendChild(headerEl);
 
         const contentEl = document.createElement('div');
         contentEl.className = 'pane-content';
+        // Delegated, because the kanban-mode toggle lives inside the empty-slot
+        // placeholder that updatePaneElement rebuilds on every reconcile — attaching
+        // there would put listener creation on a per-render path. Reads paneModes at
+        // call time, like every other handler on this element.
+        contentEl.addEventListener('click', (e) => {
+            const target = e.target;
+            if (!target || !target.classList || !target.classList.contains('pane-mode-toggle')) { return; }
+            e.stopPropagation();
+            paneModes[index] = 'kanban';
+            if (!kanbanPaneColumn[index]) { kanbanPaneColumn[index] = 'CREATED'; }
+            saveLayoutSettings();
+            renderPaneGrid();
+            fetchBoardCardsForPane(index);
+        });
         paneEl.appendChild(contentEl);
         return paneEl;
     }
 
-    /** The 6- and 9-pane headers cannot fit the two-word button labels. */
+    /** Dense 6-/9-pane headers: the input-state chip (inside the ellipsizing
+     *  title) collapses to a dot there. Button labels are NOT condensed — the
+     *  title ellipsizes first by flex design. */
     function isTerseLayout() {
         return effectiveLayout === '2x3' || effectiveLayout === '3x3';
     }
@@ -1636,22 +1692,40 @@
         const actionsEl = paneEl.querySelector('.pane-actions');
         const contentEl = paneEl.querySelector('.pane-content');
         const assignedName = paneAssignments[index];
-        const terse = isTerseLayout();
         const slotCount = getSlotCount(effectiveLayout);
 
-        // Solo mode pins one terminal and never offers grid choices — kanban mode
-        // is meaningless there. Force terminal mode so no toggle renders.
-        if (document.body.classList.contains('is-solo')) {
-            paneModes[index] = 'terminal';
-        }
+        // Solo mode pins one terminal and never offers grid choices, so kanban mode
+        // is SUPPRESSED there — never written back. paneModes is persisted to a
+        // shared setting, so a solo pop-out forcing paneModes[0] = 'terminal' would
+        // clobber the cockpit window's kanban choice on its next saveLayoutSettings.
+        const isSolo = document.body.classList.contains('is-solo');
 
         // Kanban-mode pane: render a live kanban column viewer in this slot
         // instead of a terminal viewport. Only on empty slots — a kanban pane
         // must NOT displace an assigned terminal (paneAssignments is untouched).
-        if (paneModes[index] === 'kanban' && !assignedName && !document.body.classList.contains('is-solo')) {
+        if (paneModes[index] === 'kanban' && !assignedName && !isSolo) {
             renderKanbanPane(paneEl, index);
             return;
         }
+
+        // A terminal reached a slot still marked kanban. The seating paths skip
+        // kanban slots, so this is the deliberate all-panes-taken displacement (or a
+        // persisted mode meeting a restored assignment). Drop the mode so unassigning
+        // does not silently teleport the slot back to kanban, and drop the plan list:
+        // the assigned branch below removes only .pane-empty-slot, so the list would
+        // otherwise sit in the pane alongside the terminal viewport.
+        if (paneModes[index] === 'kanban' && assignedName) {
+            paneModes[index] = 'terminal';
+        }
+        // Both kanban bodies: the plan list AND the "No plans in …" empty state. The
+        // empty state also carries .pane-empty-slot, which the placeholder branch below
+        // treats as "already correct" — leaving it would strand the pane on a board
+        // message with no kanban-mode toggle to get back.
+        const staleKanban = contentEl.querySelectorAll('.kanban-pane-list, .kanban-pane-empty');
+        staleKanban.forEach(el => el.remove());
+        // renderKanbanPane's skip-if-unchanged guard is keyed on this; a stale value
+        // surviving a mode round trip would make it skip rendering into empty content.
+        delete contentEl.dataset.kanbanSig;
 
         titleEl.textContent = '';
         if (assignedName) {
@@ -1688,16 +1762,26 @@
             titleEl.textContent = `Pane ${index + 1} (Empty)`;
         }
 
-        // Labels are re-derived every reconcile: a 2x3 pane demoted to 2h must lose
-        // its `c`/`h` initials, which a create-time-only label would keep forever.
-        // Indexed, not destructured: the buttons share a class name, so there is
-        // no selector that tells them apart, and children[] is the honest read.
-        // children[0] = pin, [1] = clear, [2] = hide (order set in createPaneElement).
+        // Labels are re-derived every reconcile so a layout change can never leave
+        // a stale word on a reused button. Indexed, not destructured: the buttons
+        // share a class name, so there is no selector that tells them apart, and
+        // children[] is the honest read.
+        // children[0] = pin, [1] = clear, [2] = hide, [3] = mode (order set in
+        // createPaneElement).
         const pinBtn = actionsEl.children[0];
         const clearBtn = actionsEl.children[1];
         const hideBtn = actionsEl.children[2];
-        clearBtn.textContent = terse ? 'c' : 'clear';
-        hideBtn.textContent = terse ? 'h' : 'hide';
+        const modeBtn = actionsEl.children[3];
+        clearBtn.textContent = 'clear';
+        hideBtn.textContent = 'hide';
+
+        // Restored explicitly, not left to the container's display. renderKanbanPane
+        // hides these three INDIVIDUALLY, and panes are reused rather than rebuilt —
+        // without this, any pane that ever showed kanban mode loses clear and hide
+        // for the life of the page.
+        clearBtn.style.display = '';
+        hideBtn.style.display = '';
+        modeBtn.style.display = 'none';
 
         // Pin toggle: text labels (not emoji) to match clear/hide treatment; state
         // carried by colour via .btn-pin-pane.is-pinned and by aria-pressed.
@@ -1705,7 +1789,7 @@
         // solo mode forces effectiveLayout = '1' so this covers pop-outs too.
         const pinActive = slotCount > 1;
         const isPinned = Boolean(pinnedPanes[index]);
-        pinBtn.textContent = terse ? (isPinned ? 'u' : 'p') : (isPinned ? 'unpin' : 'pin');
+        pinBtn.textContent = isPinned ? 'unpin' : 'pin';
         pinBtn.title = isPinned
             ? 'Unpin — this pane can be reassigned again'
             : 'Pin — keep this agent in this pane; other agents go elsewhere';
@@ -1727,6 +1811,8 @@
                 // THE invariant of this change: no move when already in place.
                 if (entry.container.parentNode !== contentEl) {
                     contentEl.appendChild(entry.container);
+                    refreshTerminalScrollbar(entry);   // same-size re-parent
+                                                      // leaves the scroll area stale
                 }
                 entry.container.classList.add('active');
             }
@@ -1740,23 +1826,41 @@
             // Kanban-mode toggle: repurpose this dead slot as a live kanban column
             // viewer. Suppressed in solo mode (one pinned terminal, no grid) and in
             // a single-slot grid (no surplus slot to repurpose).
-            if (slotCount > 1 && !document.body.classList.contains('is-solo')) {
+            if (slotCount > 1 && !isSolo) {
+                // No listener here — createPaneElement delegates clicks on
+                // .pane-mode-toggle from contentEl. This function runs on every
+                // reconcile, and attaching listeners in it is what the pane-grid
+                // reconcile contract forbids.
                 const kanbanToggle = document.createElement('button');
                 kanbanToggle.className = 'pane-mode-toggle';
                 kanbanToggle.textContent = 'kanban mode';
                 kanbanToggle.title = 'Show a kanban column here instead';
-                kanbanToggle.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    paneModes[index] = 'kanban';
-                    if (!kanbanPaneColumn[index]) { kanbanPaneColumn[index] = 'CREATED'; }
-                    saveLayoutSettings();
-                    renderPaneGrid();
-                    fetchBoardCardsForPane(index);
-                });
                 emptySlot.appendChild(kanbanToggle);
             }
             contentEl.appendChild(emptySlot);
         }
+    }
+
+    /**
+     * Resolve the layout the window can actually render. Below the floor xterm shows a
+     * handful of unreadable columns, so we step DOWN to the next-simpler layout rather
+     * than subdivide further.
+     */
+    function resolveFlooredLayout() {
+        const rect = paneGridEl.getBoundingClientRect();
+        // Zero box = panel hidden or not laid out yet. Assume the user's pick; the next
+        // real resize re-evaluates.
+        if (rect.width <= 0 || rect.height <= 0) { return currentLayout; }
+
+        const start = LAYOUT_FLOOR_ORDER.indexOf(currentLayout);
+        if (start === -1) { return '1'; }
+
+        for (let i = start; i < LAYOUT_FLOOR_ORDER.length; i++) {
+            const mode = LAYOUT_FLOOR_ORDER[i];
+            const spec = LAYOUTS[mode];
+            if (rect.width >= spec.minW && rect.height >= spec.minH) { return mode; }
+        }
+        return '1';
     }
 
     /** Merge getKanbanStructure's `structure` (built-in + custom, ordered) into a
@@ -1786,53 +1890,75 @@
         const actionsEl = paneEl.querySelector('.pane-actions');
         const contentEl = paneEl.querySelector('.pane-content');
 
-        titleEl.textContent = '';
-        const idxEl = document.createElement('span');
-        idxEl.className = 'pane-index-chip';
-        idxEl.textContent = `P${index + 1}`;
-        titleEl.appendChild(idxEl);
+        const chosen = kanbanPaneColumn[index];
+        // Before the first getKanbanStructure lands the cache is empty. Fall back to
+        // the chosen id so the picker is never a blank <select> the operator cannot
+        // read — it is repopulated in place once the structure arrives.
+        const columns = (kanbanColumnsCache.length > 0)
+            ? kanbanColumnsCache
+            : (chosen ? [{ id: chosen, label: chosen }] : []);
+        const pickerSig = columns.map(c => `${c.id} ${c.label}`).join('');
 
-        const picker = document.createElement('select');
-        picker.className = 'kanban-pane-column-picker';
-        picker.title = 'Kanban column to display';
-        for (const col of kanbanColumnsCache) {
-            const opt = document.createElement('option');
-            opt.value = col.id;
-            opt.textContent = col.label;
-            if (col.id === kanbanPaneColumn[index]) { opt.selected = true; }
-            picker.appendChild(opt);
+        // Header rebuilt only when the option set actually changed. The 5s poll
+        // re-renders this pane on every tick, and recreating the <select> each time
+        // slammed an open dropdown shut and dropped keyboard focus mid-selection.
+        let picker = titleEl.querySelector('.kanban-pane-column-picker');
+        if (!picker || picker.dataset.sig !== pickerSig) {
+            titleEl.textContent = '';
+            const idxEl = document.createElement('span');
+            idxEl.className = 'pane-index-chip';
+            idxEl.textContent = `P${index + 1}`;
+            titleEl.appendChild(idxEl);
+
+            picker = document.createElement('select');
+            picker.className = 'kanban-pane-column-picker';
+            picker.title = 'Kanban column to display';
+            picker.dataset.sig = pickerSig;
+            for (const col of columns) {
+                const opt = document.createElement('option');
+                opt.value = col.id;
+                opt.textContent = col.label;
+                picker.appendChild(opt);
+            }
+            const pickerEl = picker;
+            pickerEl.addEventListener('change', () => {
+                kanbanPaneColumn[index] = pickerEl.value;
+                // Drop the old column's cards so the pane cannot show them under the
+                // new column's heading while the fetch is in flight.
+                kanbanPaneCards[index] = [];
+                saveLayoutSettings();
+                fetchBoardCardsForPane(index);
+            });
+            titleEl.appendChild(pickerEl);
         }
-        picker.addEventListener('change', () => {
-            kanbanPaneColumn[index] = picker.value;
-            saveLayoutSettings();
-            fetchBoardCardsForPane(index);
-        });
-        titleEl.appendChild(picker);
+        if (chosen && picker.value !== chosen) { picker.value = chosen; }
 
-        // Reuse the actions slot: hide pin/clear/hide (they are terminal-only)
-        // and repurpose the block for a single "term" toggle back to terminal mode.
+        // Terminal-only actions off, mode toggle on. ONLY style.display is touched —
+        // never className or onclick — so updatePaneElement can restore them when this
+        // slot goes back to terminal mode.
         actionsEl.style.display = '';
+        const modeBtn = actionsEl.children[3];
         for (let i = 0; i < actionsEl.children.length; i++) {
-            actionsEl.children[i].style.display = 'none';
+            actionsEl.children[i].style.display = (actionsEl.children[i] === modeBtn) ? '' : 'none';
         }
-        const termBtn = actionsEl.children[0]; // reuse first btn slot
-        termBtn.style.display = '';
-        termBtn.textContent = 'term';
-        termBtn.title = 'Switch this pane to terminal mode';
-        termBtn.className = 'btn-unassign-pane';
-        termBtn.onclick = (e) => {
-            e.stopPropagation();
-            paneModes[index] = 'terminal';
-            saveLayoutSettings();
-            renderPaneGrid();
-        };
 
-        // Body: plan list
-        contentEl.textContent = '';
+        // Body: plan list. Signature-gated — the 5s poll calls this on every tick, and
+        // an unconditional rebuild reset the list's scroll position and wiped the
+        // "Copied!" state off a button mid-timeout.
         const cards = kanbanPaneCards[index] || [];
+        const bodySig = `${chosen || ''}`
+            + cards.map(c => `${c.planId || c.sessionId || ''} ${c.topic || c.title || ''}`).join('');
+        if (contentEl.dataset.kanbanSig === bodySig) { return; }
+        contentEl.dataset.kanbanSig = bodySig;
+
+        contentEl.textContent = '';
         if (cards.length === 0) {
             const empty = document.createElement('div');
-            empty.className = 'pane-empty-slot';
+            // Tagged kanban-pane-empty as well as pane-empty-slot: updatePaneElement's
+            // terminal path skips rebuilding the placeholder when a .pane-empty-slot is
+            // already present, so an untagged kanban empty state left the pane stuck on
+            // "No plans in …" with no way back once the mode flipped.
+            empty.className = 'pane-empty-slot kanban-pane-empty';
             empty.textContent = `No plans in ${kanbanPaneColumn[index] || '—'}`;
             contentEl.appendChild(empty);
             return;
@@ -1920,13 +2046,22 @@
     async function fetchBoardCardsForPane(index) {
         const col = kanbanPaneColumn[index];
         if (!col) { return; }
+        // One request per pane at a time. setInterval does not await the previous
+        // tick, and the mode-toggle handler fetches directly on top of the poll's
+        // immediate first pass — so a slow board (large DB, busy host) overlapped
+        // requests and let an older response land after a newer one and render
+        // stale cards. Dropping the duplicate is correct: the next tick is 5s away.
+        if (kanbanFetchInFlight.has(index)) { return; }
+        kanbanFetchInFlight.add(index);
         try {
             const res = await fetch('/kanban/verb/getBoardCards', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ column: col })
             });
             const data = await res.json();
-            if (data.success) {
+            // Re-check the column: the operator can change the picker while this is
+            // in flight, and the response describes the column we ASKED for.
+            if (data.success && kanbanPaneColumn[index] === col) {
                 kanbanPaneCards[index] = data.cards;
                 // Re-render just this pane if it still exists and is still kanban mode.
                 const paneEl = paneGridEl.children[index];
@@ -1935,28 +2070,7 @@
                 }
             }
         } catch { /* ignore — keep stale list */ }
-    }
-
-    /**
-     * Resolve the layout the window can actually render. Below the floor xterm shows a
-     * handful of unreadable columns, so we step DOWN to the next-simpler layout rather
-     * than subdivide further.
-     */
-    function resolveFlooredLayout() {
-        const rect = paneGridEl.getBoundingClientRect();
-        // Zero box = panel hidden or not laid out yet. Assume the user's pick; the next
-        // real resize re-evaluates.
-        if (rect.width <= 0 || rect.height <= 0) { return currentLayout; }
-
-        const start = LAYOUT_FLOOR_ORDER.indexOf(currentLayout);
-        if (start === -1) { return '1'; }
-
-        for (let i = start; i < LAYOUT_FLOOR_ORDER.length; i++) {
-            const mode = LAYOUT_FLOOR_ORDER[i];
-            const spec = LAYOUTS[mode];
-            if (rect.width >= spec.minW && rect.height >= spec.minH) { return mode; }
-        }
-        return '1';
+        finally { kanbanFetchInFlight.delete(index); }
     }
 
     /**
@@ -2095,6 +2209,51 @@
         } catch { /* ignore */ }
     }
 
+    /**
+     * Re-sync xterm's scroll area after a same-size DOM re-parent or a
+     * display:none -> grid flip. fit() short-circuits when cols/rows match,
+     * so onDimensionsChange never fires and Viewport.syncScrollArea() is
+     * never called; the thumb renders at zero height until the next buffer
+     * write. The fit ladder (startFitLadder) verifies cols/rows/canvas but
+     * never the scroll area — this closes that gap.
+     *
+     * Primary: xterm's own Viewport.syncScrollArea (private surface, same
+     * precedent as term._core._renderService at resyncPaneRenderer).
+     * Fallback: a one-frame overflowY toggle forces the browser to drop and
+     * recreate the native scrollbar widget (rAF split so Chromium commits
+     * 'hidden' first — a synchronous toggle coalesces into a no-op).
+     * Scroll position is preserved across both paths.
+     */
+    function refreshTerminalScrollbar(entry) {
+        if (!entry || entry.disposed || !entry.term) { return; }
+        const container = entry.container;
+        if (!container) { return; }
+        const viewport = container.querySelector('.xterm-viewport');
+        if (!viewport) { return; }
+        const savedScrollTop = viewport.scrollTop;
+        let synced = false;
+        try {
+            const vp = entry.term._core && entry.term._core.viewport;
+            if (vp && typeof vp.syncScrollArea === 'function') {
+                vp.syncScrollArea();
+                synced = true;
+            }
+        } catch { /* ignore — private shape changed, fall through */ }
+        if (!synced) {
+            viewport.style.overflowY = 'hidden';
+            requestAnimationFrame(() => {
+                if (entry.disposed) { return; }
+                viewport.style.overflowY = '';
+            });
+        }
+        requestAnimationFrame(() => {
+            if (entry.disposed) { return; }
+            if (viewport.scrollTop !== savedScrollTop) {
+                viewport.scrollTop = savedScrollTop;
+            }
+        });
+    }
+
     function startFitLadder(name) {
         const gen = (fitLadderGen.get(name) || 0) + 1;
         fitLadderGen.set(name, gen);
@@ -2127,7 +2286,10 @@
             }
 
             const after = inspectPaneFit(entry);
-            if (after === 'ok' || after === 'skip') { return; }
+            if (after === 'ok' || after === 'skip') {
+                if (after === 'ok') { refreshTerminalScrollbar(entry); }
+                return;
+            }
             if (after === 'stale-canvas' || after === 'mismatch') {
                 resyncPaneRenderer(entry, after);
             }
@@ -2443,7 +2605,11 @@
 
         let changed = false;
         for (let i = 0; i < slotCount && unseated.length > 0; i++) {
-            if (!paneAssignments[i]) {
+            // A kanban-mode slot has no assignment but is NOT free: it is showing the
+            // operator a live board column. Seating into it silently bulldozed that
+            // pane on every Open All. Kanban panes are only ever displaced by an
+            // explicit sidebar click with nowhere else to go (see the target scan).
+            if (!paneAssignments[i] && paneModes[i] !== 'kanban') {
                 paneAssignments[i] = unseated.shift();
                 changed = true;
             }

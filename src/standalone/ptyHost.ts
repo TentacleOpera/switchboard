@@ -205,8 +205,29 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
             // JSON.stringify/parse). name + mimeType travel in the query string.
             if (verb === 'ptyPasteImage' && req.headers['content-type'] === 'application/octet-stream') {
                 const chunks: Buffer[] = [];
-                req.on('data', (chunk: Buffer) => { chunks.push(chunk); });
+                // Capped BEFORE buffering, not after Buffer.concat. handlePtyVerb's 4 MB
+                // check is an image-policy ceiling that only runs once the whole body is
+                // already in memory; this route takes unauthenticated loopback POSTs, so
+                // an oversize body would OOM this child process and take every live PTY
+                // in the fleet with it. 10 MB mirrors LocalApiServer's transport cap.
+                const MAX_BODY_BYTES = 10 * 1024 * 1024;
+                let totalBytes = 0;
+                let aborted = false;
+                req.on('data', (chunk: Buffer) => {
+                    if (aborted) { return; }
+                    totalBytes += chunk.length;
+                    if (totalBytes > MAX_BODY_BYTES) {
+                        aborted = true;
+                        chunks.length = 0;
+                        res.writeHead(413, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: false, error: 'Image exceeds max size' }));
+                        req.destroy();
+                        return;
+                    }
+                    chunks.push(chunk);
+                });
                 req.on('end', async () => {
+                    if (aborted) { return; }
                     const imageBuffer = Buffer.concat(chunks);
                     const payload = {
                         name: parsed.query.name || '',

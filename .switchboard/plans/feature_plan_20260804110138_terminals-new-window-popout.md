@@ -193,6 +193,14 @@ Key risks: named-window target reloads the existing popout on a second click (do
 8. **Manual — popup blocked:**
    - Temporarily block popups for the site, click "NEW WINDOW", confirm the button briefly disables and a pane toast appears telling the user to allow popups (no crash, no silent failure).
 
+## Review Findings
+
+Reviewed as-landed in `adbc5fd`; no code changes required for this subtask. Verified `.secondary-btn.is-teal` genuinely exists (`terminals.html:170`), so the button is really styled rather than an unstyled stub; the `is-standalone` gate uses the same `window.parent === window` test as `postFleetStateToShell()`; and `showPaneToast(text)` with no `onUndo` correctly hides the Undo button. Two NITs left as-is: the `!popout || popout.closed` check cannot distinguish "blocked" from "named-target reused" (harmless, reuse succeeds), and live theme fan-out remains the documented v1 limitation. Validation (run independently of the plan's superseded skip notes): `tsc --noEmit` clean apart from 5 pre-existing `TS2835` dynamic-import errors byte-identical in `adbc5fd~1`; `terminal-solo-popout-contract` 11/11 green, confirming solo mode still hides the whole toolbar and `resolveInitialTheme` still inherits via `window.opener`. Remaining risk: none for this subtask.
+
 ## Completion Summary
 
 Implemented the "New Window" pop-out button. Added a `#btn-new-window` teal button to the `.toolbar-actions` row in `src/webview/terminals.html` (left of the OS Notifications toggle) plus a `body.is-standalone #btn-new-window { display: none !important; }` CSS rule. In `src/webview/terminals.js` `init()`, set `body.is-standalone` when `window.parent === window` and wired the click handler to `window.open('/terminals', 'sb-terminals-panel', 'width=1200,height=800')` with a `showPaneToast` + momentary disable fallback when the popup is blocked. No server or route changes — `/terminals` is already served standalone. Solo mode is unaffected (its existing `body.is-solo .layout-toolbar { display: none !important; }` hides the whole toolbar). No issues encountered.
+
+## Reviewer Pass (2026-08-05)
+
+Direct in-place reviewer pass completed. No code changes were needed for this subtask — the button, the `is-standalone` CSS gate, the popup-blocked toast and the theme-inherit path all check out against the plan. Verification was run independently of this file's superseded skip notes: `tsc --noEmit` shows no new errors (5 pre-existing `TS2835` dynamic-import errors, byte-identical in `adbc5fd~1`) and `terminal-solo-popout-contract` passes 11/11. See `## Review Findings` above for the two accepted NITs.

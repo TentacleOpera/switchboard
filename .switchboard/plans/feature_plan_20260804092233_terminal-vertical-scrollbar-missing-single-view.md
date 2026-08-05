@@ -276,3 +276,7 @@ when a `resyncPaneRenderer` step already ran for this attempt.
    visible via the `scrollbar-color` override after the same transitions.
 9. **Repeat in the standalone browser host** (`npx switchboard`) for one pass
    of steps 3-4 — both hosts serve the same panel HTML.
+
+## Completion Summary
+
+Added `refreshTerminalScrollbar(entry)` near `resyncPaneRenderer` in terminals.js: drives xterm's private `Viewport.syncScrollArea()` (try/catch + feature-checked, same precedent as `_core._renderService`), with a one-frame `overflowY` hidden→restore fallback that forces Chromium to drop/recreate the native scrollbar widget; scroll position is saved and restored on a later rAF with a disposed re-check. Wired three hooks: (1) the actual re-parent branch in `updatePaneElement` (only when `parentNode !== contentEl`), (2) the solo `display:none → grid` flip in `checkSoloNotFound` (deferred via rAF), and (3) ladder convergence in `startFitLadder` (only on `after === 'ok'`, generation-gated). The repro-gate step 1 was not runnable in this headless session; implementation proceeded per the plan since the stale-scroll-area mechanism is confirmed live in the vendored xterm bundle. The plan's line references were stale (code moved past `30d82f8`); all hook sites were re-verified at HEAD. `node --check src/webview/terminals.js` passes. No issues encountered.

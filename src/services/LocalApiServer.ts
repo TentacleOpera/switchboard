@@ -1659,9 +1659,12 @@ export class LocalApiServer {
                 for await (const chunk of req) {
                     totalBytes += chunk.length;
                     if (totalBytes > MAX) {
-                        req.destroy();
+                        // Respond BEFORE destroying. req.destroy() tears down the shared
+                        // socket, so destroying first turned the documented
+                        // {success:false,error} body into a bare connection reset.
                         res.writeHead(413, { 'Content-Type': 'application/json' });
                         res.end(JSON.stringify({ success: false, error: 'Image exceeds max size' }));
+                        req.destroy();
                         return;
                     }
                     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));

@@ -160,3 +160,7 @@ Remove `:730-733`:
 5. **Manual — clearing feedback:** Click `clear` on a pane button in `2x3`. Confirm the label changes to `clearing` for ~600ms then reverts to `clear`.
 6. **Manual — chip retained:** In `2x3`/`3x3`, confirm the input-state chip still renders dot-only with its `title` tooltip, and still shows its word label in `1`/`2h`/`2x2` layouts.
 7. **Repeat in the standalone browser host** (`npx switchboard`) — both hosts serve the same panel HTML, so one pass each is enough.
+
+## Completion Summary
+
+Removed the layout-name-keyed `isTerseLayout()` button condensation: `clear`/`hide`/`pin`/`unpin` labels are now constant in `updatePaneElement` (terminals.js), the click-time restore label in `createPaneElement`'s clear handler passes `'clear'` directly, and the now-unused `terse` local was dropped. `isTerseLayout()` is retained solely for the input-state chip (via `syncInputStateChip`) with a corrected doc comment. Removed the matching `.pane-grid.layout-2x3/3x3 .btn-unassign-pane { padding: 2px 4px }` CSS block from terminals.html; the header-density, title-ellipsis, and chip CSS blocks were kept. The plan's line references were stale (code moved past `30d82f8`); actual call sites were re-verified at HEAD before editing. `node --check src/webview/terminals.js` passes. No issues encountered.
