@@ -38,9 +38,16 @@ function block(code, startMarker, endMarker) {
     return code.substring(start, end);
 }
 
-test('the focus ring is driven by xterm focus, not by pane selection', () => {
-    assert.ok(terminalsJs.includes('term.onFocus('), 'xterm onFocus must drive the ring');
-    assert.ok(terminalsJs.includes('term.onBlur('), 'xterm onBlur must clear it');
+test('the focus ring is driven by real caret focus, not by pane selection', () => {
+    // term.textarea, NOT term.onFocus/onBlur. Those emitters exist only on the
+    // internal CoreTerminal subclass in the vendored bundle — the public Terminal
+    // this file constructs has no focus pair, so subscribing to them threw from the
+    // middle of the view builder and took the WebSocket with it. The helper textarea
+    // is the node that actually holds the caret.
+    assert.ok(/term\.textarea\.addEventListener\('focus'/.test(terminalsJs),
+        'the ring must be driven by focus on the node that actually holds the caret');
+    assert.ok(/term\.textarea\.addEventListener\('blur'/.test(terminalsJs),
+        'blur on that same node must clear it');
     assert.ok(terminalsHtml.includes('.terminal-pane.has-caret'),
         '.has-caret is the real typing signal — .focused is selection and survives blur');
 });
@@ -48,8 +55,8 @@ test('the focus ring is driven by xterm focus, not by pane selection', () => {
 test('blur clears EVERY pane, not the one that blurred', () => {
     assert.ok(terminalsJs.includes('function clearCaretRing()'),
         'a sweep is the only form correct in every case — Chromium fires no blur on detach');
-    assert.ok(/onBlur\(\(\)\s*=>\s*clearCaretRing\(\)\)/.test(terminalsJs),
-        'onBlur must go through clearCaretRing, not a single-pane classList.remove');
+    assert.ok(/addEventListener\('blur',\s*\(\)\s*=>\s*clearCaretRing\(\)\)/.test(terminalsJs),
+        'blur must go through clearCaretRing, not a single-pane classList.remove');
 });
 
 test('renderPaneGrid sweeps a ring stranded by a detached container', () => {
@@ -116,6 +123,27 @@ test('the input-state chip is derived, never cached', () => {
         'the title prints "(exited)" from fleetList — a chip that ignores it contradicts the title beside it');
     assert.ok(resolver.indexOf('entry.exited') < resolver.indexOf('WebSocket.OPEN'),
         'a dead terminal on an OPEN socket is read-only — order is load-bearing');
+});
+
+test('the live state renders no chip, and one writer creates AND removes it', () => {
+    const sync = block(terminalsJs, 'function syncInputStateChip(', 'function notifyInputDropped(');
+    // The whole point of the trim: a badge on every healthy pane reports the
+    // normal case. Only the two states an operator must act on get drawn.
+    assert.ok(/state\.key === 'live'/.test(sync) && /chip\.remove\(\)/.test(sync),
+        'the live state must render no chip and must remove one left by a previous state');
+    // The conditional element is why the old early-return-on-missing is a bug now:
+    // refreshInputState is handed a live pane with no chip to repaint on every
+    // connecting → live, and a chipless pane on every live → connecting.
+    assert.ok(/createElement\('span'\)/.test(sync) && /appendChild\(chip\)/.test(sync),
+        'the same writer must create the chip — a disconnect arrives at a pane that has none');
+    const refresh = block(terminalsJs, 'function refreshInputState(name)', 'function syncInputStateChip(');
+    assert.ok(refresh.includes('syncInputStateChip('),
+        'the out-of-band refresh must go through the one writer, not repaint inline');
+    assert.ok(!/querySelector\('\.pane-input-state'\)[\s\S]*if \(!chip\) \{ return; \}/.test(refresh),
+        'refreshInputState must not early-return on a missing chip — that skips every disconnect');
+    const render = block(terminalsJs, 'function updatePaneElement(', 'function resolveFlooredLayout()');
+    assert.ok(render.includes('syncInputStateChip(') && !/className = 'pane-input-state'/.test(render),
+        'the render path must delegate too — two chip builders would drift on the live case');
 });
 
 test('the CONNECTING window has a nudge site', () => {

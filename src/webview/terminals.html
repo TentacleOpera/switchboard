@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{NONCE}}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:*; frame-src 'none';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{NONCE}}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'none';">
     <title>Terminals</title>
     <link rel="stylesheet" href="{{XTERM_CSS_URI}}">
     <style>
@@ -47,11 +47,6 @@
                change, per the no-literals rule the accent family already follows. */
             --state-connecting: #d7a03a;
             --state-readonly:   #f85149;
-            /* Mouse captured by the pty app. Same family and same reasoning as
-               --state-connecting: a condition the operator did not ask for, so it
-               reads identically in both themes and is deliberately NOT redeclared
-               in body.theme-claudify. */
-            --state-mouse-captured: #d7a03a;
         }
 
         /* ── Themes ────────────────────────────────────────────────────────────
@@ -405,32 +400,6 @@
         }
         .jump-to-latest.visible { display: inline-flex; }
         .jump-to-latest:hover { filter: brightness(1.12); }
-        /* Same family as .jump-to-latest — anchored to the view host so it is
-           re-parented with the terminal on every renderPaneGrid() rebuild, shown by
-           state rather than hover, stacked above the jump pill so both can be
-           visible at once. Amber rather than teal: this one reports a condition the
-           operator did not ask for. */
-        .mouse-mode-release {
-            position: absolute;
-            right: 22px;
-            bottom: 40px;
-            display: none;
-            align-items: center;
-            gap: 4px;
-            padding: 3px 9px;
-            font-size: 11px;
-            font-family: inherit;
-            line-height: 1.4;
-            color: var(--term-surface);
-            background: var(--state-mouse-captured);
-            border: none;
-            border-radius: 10px;
-            cursor: pointer;
-            z-index: 3;
-            box-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
-        }
-        .mouse-mode-release.visible { display: inline-flex; }
-        .mouse-mode-release:hover { filter: brightness(1.12); }
         .empty-state {
             display: flex;
             flex-direction: column;
@@ -706,10 +675,8 @@
             background: currentColor;
             flex-shrink: 0;
         }
-        .is-input-live .pane-input-state {
-            color: var(--accent-teal);
-            background: color-mix(in srgb, var(--accent-teal) 12%, transparent);
-        }
+        /* No .is-input-live rule: the live state renders no chip at all — see
+           syncInputStateChip. Only the two states an operator must act on. */
         .is-input-connecting .pane-input-state {
             color: var(--state-connecting);
             background: color-mix(in srgb, var(--state-connecting) 12%, transparent);

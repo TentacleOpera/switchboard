@@ -3,78 +3,60 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' {{WEBVIEW_CSP_SOURCE}}; script-src 'nonce-{{NONCE}}' {{WEBVIEW_CSP_SOURCE}}; img-src {{WEBVIEW_CSP_SOURCE}} https: data:; font-src {{WEBVIEW_CSP_SOURCE}};">
+    <!-- The connect-src directive below is load-bearing, and not because this panel talks
+         to the internet: its "https:" form is the exact literal getTicketsHtml() rewrites
+         into the loopback API/WS origins when the panel is served to a BROWSER
+         (headlessPanelHtml.ts) — the same seam planning.html / design.html /
+         project.html sit on. This CSP was written fresh during the Tickets extraction and
+         omitted the directive entirely, so the rewrite silently matched nothing,
+         default-src 'none' governed connections, and every transport.js fetch() plus the
+         state WebSocket was blocked: the browser Tickets panel rendered fully and then
+         reached no source at all, API key or not. In the editor webview the panel talks
+         over postMessage and never needs it, which is why the omission was invisible
+         there. Keep the directive spelled exactly as the host expects — and note that the
+         rewrite is a FIRST-MATCH string replace, so that spelling must not appear
+         anywhere above the meta tag (an earlier draft of this very comment quoted it and
+         absorbed the rewrite, leaving the real CSP unwidened).
+         img-src carries the loopback origins for the same reason as planning.html: local
+         ticket screenshots are emitted as absolute http://127.0.0.1:<port>/… URLs so one
+         string satisfies both hosts. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' {{WEBVIEW_CSP_SOURCE}}; script-src 'nonce-{{NONCE}}' {{WEBVIEW_CSP_SOURCE}}; img-src {{WEBVIEW_CSP_SOURCE}} https: http://127.0.0.1:* http://localhost:* data: file:; font-src {{WEBVIEW_CSP_SOURCE}}; connect-src https:;">
     <title>Tickets</title>
     <style>
-        :root {
-            color-scheme: dark;
-            --panel-bg: #1e1e1e;
-            --panel-bg2: #252526;
-            --text-primary: #cccccc;
-            --text-secondary: #858585;
-            --border-color: #333333;
-            --accent-teal: #4ec9b0;
-            --font-code: var(--vscode-editor-font-family, monospace);
+        /* ═══════════════════════════════════════════════════════════════════
+           SHARED ARTIFACTS STYLESHEET — ported verbatim from planning.html.
+           This panel was cut out of planning.html's TICKETS tab, so its look is
+           defined by planning.html's stylesheet, not by anything local. Kept as a
+           verbatim copy, which is this repo's convention: every panel inlines its
+           own CSS, the one shared-stylesheet attempt (the dead SHARED_TABS_CSS_URI
+           wiring) was never linked by any panel, and CSS does not cross the
+           shell's iframe boundary anyway.
+           Rules for planning-only widgets come along and are simply dead here;
+           that is the cheap direction of the trade. The expensive direction was a
+           curated subset, which is how the extraction shipped a panel missing its
+           palette, its fonts, 116 of 126 Afterburner theme rules, all 39 Claudify
+           rules, and ~75 component classes — including the markdown-preview-tickets
+           and tree-pane-tickets rules planning.html had written FOR this UI.
+           When planning.html's stylesheet changes, re-port; do not re-type.
+           Source: planning.html's two style blocks, minus its ungated scrollbar
+           block (see the scrollbar note further down).
+           ═══════════════════════════════════════════════════════════════════ */
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
         }
-        body { margin: 0; padding: 0; background: var(--panel-bg); color: var(--text-primary); font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
-        .shared-tab-bar { display: flex; background: var(--panel-bg2); border-bottom: 1px solid var(--border-color); padding: 0 8px; }
-        .shared-tab-btn { background: none; border: none; color: var(--text-secondary); padding: 8px 16px; font-size: 11px; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; }
-        .shared-tab-btn.active { color: var(--text-primary); border-bottom-color: var(--accent-teal); }
-        .container { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-        .shared-tab-content { display: none; flex: 1; flex-direction: column; overflow: hidden; }
-        .shared-tab-content.active { display: flex; }
-        .controls-strip { display: flex; flex-direction: column; background: var(--panel-bg2); border-bottom: 1px solid var(--border-color); padding: 6px 12px; gap: 6px; }
-        .controls-strip-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-        .strip-btn { background: var(--panel-bg); border: 1px solid var(--border-color); color: var(--text-primary); padding: 4px 8px; font-size: 11px; border-radius: 3px; cursor: pointer; }
-        .strip-btn:hover { border-color: var(--accent-teal); }
-        .content-row { flex: 1; display: flex; overflow: hidden; }
-        #tree-pane-tickets { width: 280px; min-width: 200px; border-right: 1px solid var(--border-color); display: flex; flex-direction: column; background: var(--panel-bg2); }
-        .content-row.collapsed #tree-pane-tickets { width: 36px !important; min-width: 36px !important; }
-        .content-row.collapsed #tree-pane-tickets > *:not(.sidebar-toggle-row) { display: none !important; }
-        #tree-pane-tickets .sidebar-toggle-row { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--border-color); }
-        .content-row.collapsed #tree-pane-tickets .sidebar-toggle-row > *:not(.sidebar-toggle-btn) { display: none !important; }
-        .sidebar-search-row { padding: 6px 8px; border-bottom: 1px solid var(--border-color); }
-        .sidebar-search-input { width: 100%; box-sizing: border-box; background: var(--panel-bg); border: 1px solid var(--border-color); color: var(--text-primary); padding: 4px 8px; font-size: 11px; border-radius: 3px; }
-        .preview-panel-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
-        .empty-state { padding: 24px; text-align: center; color: var(--text-secondary); font-size: 12px; }
-        .overflow-menu { position: relative; display: inline-block; }
-        .overflow-menu-popover { display: none; position: absolute; right: 0; top: 100%; background: var(--panel-bg2); border: 1px solid var(--border-color); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 1000; min-width: 160px; padding: 4px 0; }
-        .overflow-menu-popover[data-open="true"] { display: flex; flex-direction: column; }
-        .overflow-menu-item { display: block; width: 100%; text-align: left; background: none; border: none; padding: 6px 12px; color: var(--text-primary); font-size: 11px; cursor: pointer; }
-        .overflow-menu-item:hover { background: var(--border-color); }
-
-        ::-webkit-scrollbar {
-            width: 6px;
-            height: 6px;
+        @keyframes skeleton-shimmer {
+            0% { background-position: -200px 0; }
+            100% { background-position: calc(200px + 100%) 0; }
         }
-        ::-webkit-scrollbar-track {
-            background: transparent;
+        .sidebar-skeleton {
+            height: 18px;
+            margin: 8px 12px;
+            border-radius: 4px;
+            background: linear-gradient(90deg, var(--panel-bg2) 25%, var(--card-bg-hover) 50%, var(--panel-bg2) 75%);
+            background-size: 200px 100%;
+            animation: skeleton-shimmer 1.5s infinite ease-in-out;
         }
-        ::-webkit-scrollbar-corner {
-            background: transparent;
-        }
-        ::-webkit-scrollbar-thumb {
-            background: var(--vscode-scrollbarSlider-background, var(--border-color));
-            border-radius: 3px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background: var(--vscode-scrollbarSlider-hoverBackground, var(--text-secondary));
-        }
-
-        /* Firefox only. DO NOT hoist these two properties out of the @supports
-           gate: Chromium 121+ and Safari 17.4+ ignore EVERY ::-webkit-scrollbar
-           rule on a scroller that declares scrollbar-width or scrollbar-color,
-           so an ungated copy silently deletes the 6px styling above. Chromium
-           and Safari report this selector as supported and skip the block;
-           Gecko reports it unsupported and enters it. */
-        @supports not selector(::-webkit-scrollbar) {
-            :root {
-                scrollbar-width: thin;
-                scrollbar-color: var(--border-color) transparent;
-            }
-        }
-
-        /* ── Icon mask rules (byte-exact from planning.html) ─────────────── */
         .sb-icon {
             display: inline-block;
             width: 16px;
@@ -88,11 +70,201 @@
         }
         .sb-icon-sm { width: 10px; height: 10px; }
         .sb-icon-xs { width: 6px; height: 6px; }
+        .sb-icon-reset-view { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tcmVzZXQtdmlldy5zdmcgLS0+CjwhLS0gZmlsbCBpcyBpZ25vcmVkIHVuZGVyIENTUyBtYXNrOyBmaWxsPSIjNDVlMGU2IiBpcyBmcm96ZW4gZm9yIHBhcml0eSBjaGVjayAtLT4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2Ij4KICA8cGF0aCBmaWxsPSIjNDVlMGU2IiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik04IDJhNiA2IDAgMSAwIDYgNiAxIDEgMCAxIDEgMiAwIDggOCAwIDEgMS0yLjM0LTUuNjZsLTEuNDIgMS40MmExIDEgMCAwIDEtMS43LS43MVYxYTEgMSAwIDAgMSAxLTFoMi4wNWExIDEgMCAwIDEgLjcxIDEuNzFsLTEuNDUgMS40NUE3Ljk2IDcuOTYgMCAwIDEgOCAyeiIvPgo8L3N2Zz4K'); }
+        .sb-icon-fit-view { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tZml0LXZpZXcuc3ZnIC0tPgo8IS0tIGZpbGwgaXMgaWdub3JlZCB1bmRlciBDU1MgbWFzazsgZmlsbD0iIzQ1ZTBlNiIgaXMgZnJvemVuIGZvciBwYXJpdHkgY2hlY2sgLS0+CjxzdmcgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB2aWV3Qm94PSIwIDAgMTYgMTYiIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+CiAgPHBhdGggZmlsbD0iIzQ1ZTBlNiIgZmlsbC1ydWxlPSJldmVub2RkIiBkPSJNMSAxaDR2MkgzdjJIMVYxem0xMCAwaDR2NGgtMlYzaC0yVjF6TTEgMTFoMnYyaDJ2Mkgxdi00em0xMiAyaC0ydjJoNHYtNGgtMnYyeiIvPgo8L3N2Zz4K'); }
+        .sb-icon-pan { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tcGFuLnN2ZyAtLT4KPCEtLSBmaWxsIGlzIGlnbm9yZWQgdW5kZXIgQ1NTIG1hc2s7IGZpbGw9IiM0NWUwZTYiIGlzIGZyb3plbiBmb3IgcGFyaXR5IGNoZWNrIC0tPgo8c3ZnIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgdmlld0JveD0iMCAwIDE2IDE2IiB3aWR0aD0iMTYiIGhlaWdodD0iMTYiPgogIDxwYXRoIGZpbGw9IiM0NWUwZTYiIGZpbGwtcnVsZT0iZXZlbm9kZCIgZD0iTTggMGwzIDNIOXY0aDRWNWwzIDMtMyAzdi0ySDl2NGgybC0zIDMtMy0zaDJWOUgzdjJMMCA4bDMtM3YyaDRWM0g1bDMtM3oiLz4KPC9zdmc+Cg=='); }
         .sb-icon-refresh { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tcmVmcmVzaC5zdmcgLS0+CjwhLS0gZmlsbCBpcyBpZ25vcmVkIHVuZGVyIENTUyBtYXNrOyBmaWxsPSIjNDVlMGU2IiBpcyBmcm96ZW4gZm9yIHBhcml0eSBjaGVjayAtLT4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2Ij4KICA8cGF0aCBmaWxsPSIjNDVlMGU2IiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik04IDNhNSA1IDAgMSAwIDQuNTQ2IDIuOTE0Ljc1Ljc1IDAgMCAxIDEuMzYtLjYzQTYuNSA2LjUgMCAxIDEgOCAxLjVWLjc1YS43NS43NSAwIDAgMSAxLjI4LS41M2wyLjI1IDIuMjVhLjc1Ljc1IDAgMCAxIDAgMS4wNmwtMi4yNSAyLjI1QS43NS43NSAwIDAgMSA4IDUuMjVWM3oiLz4KPC9zdmc+Cg=='); }
         .sb-icon-chevron-right { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tY2hldnJvbi1yaWdodC5zdmcgLS0+CjwhLS0gZmlsbCBpcyBpZ25vcmVkIHVuZGVyIENTUyBtYXNrOyBmaWxsPSIjNDVlMGU2IiBpcyBmcm96ZW4gZm9yIHBhcml0eSBjaGVjayAtLT4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2Ij4KICA8cGF0aCBmaWxsPSIjNDVlMGU2IiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik02LjIyIDMuMjJhLjc1Ljc1IDAgMCAxIDEuMDYgMGw0LjI1IDQuMjVhLjc1Ljc1IDAgMCAxIDAgMS4wNmwtNC4yNSA0LjI1YS43NS43NSAwIDAgMS0xLjA2LTEuMDZMOS45NCA4IDYuMjIgNC4yOGEuNzUuNzUgMCAwIDEgMC0xLjA2eiIvPgo8L3N2Zz4K'); }
+        .sb-icon-chevron-down { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tY2hldnJvbi1kb3duLnN2ZyAtLT4KPCEtLSBmaWxsIGlzIGlnbm9yZWQgdW5kZXIgQ1NTIG1hc2s7IGZpbGw9IiM0NWUwZTYiIGlzIGZyb3plbiBmb3IgcGFyaXR5IGNoZWNrIC0tPgo8c3ZnIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgdmlld0JveD0iMCAwIDE2IDE2IiB3aWR0aD0iMTYiIGhlaWdodD0iMTYiPgogIDxwYXRoIGZpbGw9IiM0NWUwZTYiIGZpbGwtcnVsZT0iZXZlbm9kZCIgZD0iTTMuMjIgNi4yMmEuNzUuNzUgMCAwIDEgMS4wNiAwTDggOS45NGwzLjcyLTMuNzJhLjc1Ljc1IDAgMSAxIDEuMDYgMS4wNmwtNC4yNSA0LjI1YS43NS43NSAwIDAgMS0xLjA2IDBMMy4yMiA3LjI4YS43NS43NSAwIDAgMSAwLTEuMDZ6Ii8+Cjwvc3ZnPgo='); }
+        .sb-icon-close { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tY2xvc2Uuc3ZnIC0tPgo8IS0tIGZpbGwgaXMgaWdub3JlZCB1bmRlciBDU1MgbWFzazsgZmlsbD0iIzQ1ZTBlNiIgaXMgZnJvemVuIGZvciBwYXJpdHkgY2hlY2sgLS0+CjxzdmcgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB2aWV3Qm94PSIwIDAgMTYgMTYiIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+CiAgPHBhdGggZmlsbD0iIzQ1ZTBlNiIgZmlsbC1ydWxlPSJldmVub2RkIiBkPSJNMy43MiAzLjcyYS43NS43NSAwIDAgMSAxLjA2IDBMOCA2Ljk0bDMuMjItMy4yMmEuNzUuNzUgMCAxIDEgMS4wNiAxLjA2TDkuMDYgOGwzLjIyIDMuMjJhLjc1Ljc1IDAgMSAxLTEuMDYgMS4wNkw4IDkuMDZsLTMuMjIgMy4yMmEuNzUuNzUgMCAwIDEtMS4wNi0xLjA2TDYuOTQgOCAzLjcyIDQuNzhhLjc1Ljc1IDAgMCAxIDAtMS4wNnoiLz4KPC9zdmc+Cg=='); }
         .sb-icon-overflow { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tb3ZlcmZsb3cuc3ZnIC0tPgo8IS0tIGZpbGwgaXMgaWdub3JlZCB1bmRlciBDU1MgbWFzazsgZmlsbD0iIzQ1ZTBlNiIgaXMgZnJvemVuIGZvciBwYXJpdHkgY2hlY2sgLS0+CjxzdmcgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB2aWV3Qm94PSIwIDAgMTYgMTYiIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+CiAgPHBhdGggZmlsbD0iIzQ1ZTBlNiIgZmlsbC1ydWxlPSJldmVub2RkIiBkPSJNMyA4YTEuNSAxLjUgMCAxIDEtMyAwIDEuNSAxLjUgMCAwIDEgMyAwem02LjUgMGExLjUgMS41IDAgMSAxLTMgMCAxLjUgMS41IDAgMCAxIDMgMHpNMTYgOGExLjUgMS41IDAgMSAxLTMgMCAxLjUgMS41IDAgMCAxIDMgMHoiLz4KPC9zdmc+Cg=='); }
+        @font-face {
+            font-family: 'GeistPixel';
+            src: url('{{GEIST_PIXEL_FONT_URI}}') format('woff2');
+            font-weight: normal;
+            font-style: normal;
+        }
+        @font-face {
+            font-family: 'Hanken Grotesk';
+            src: url('{{HANKEN_FONT_URI}}') format('woff2');
+            font-weight: 100 900;
+            font-display: swap;
+        }
+        :root {
+            /* Kanban dark theme - matching kanban screen */
+            --kanban-bg: #000000;
+            --panel-bg: #000000;
+            --panel-bg2: #0a0a0a;
+            --border-color: #333333;
+            --border-bright: #444444;
 
-        /* ── Form element styles (byte-exact from planning.html) ────────── */
+            /* Accent colors - matching kanban screen */
+            --accent-primary: #00e5ff;
+            --accent-teal: var(--accent-primary);
+            --accent-teal-dim: color-mix(in srgb, var(--accent-teal) 40%, transparent);
+            --accent-teal-bright: #5ce8e6;
+            --sweep-grid: 32px;   /* afterburner grid pitch — sweep aligns to the cyan body grid */
+            --accent-orange: #d18616;
+            --accent-neon: var(--accent-teal);
+            --glow-teal: 0 0 10px color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            --display-font: 'GeistPixel';
+            --display-letter-spacing: -0.05em;
+            --display-font-stretch: 90%;
+
+            /* Card/container backgrounds */
+            --card-bg: #0d0d0d;
+            --card-bg-hover: #1a1a1a;
+            --card-border: 1px solid #333333;
+
+            /* Semantic text colors */
+            --text-primary: #e0e0e0;
+            --text-secondary: #8C8C8C;
+            --font-family: 'Hanken Grotesk', Menlo, Consolas, sans-serif;
+            --font-code:   Menlo, Consolas, monospace;
+
+            /* Spacing rhythm */
+            --spacing-unit: 8px;
+            --spacing-xs: calc(var(--spacing-unit) / 2);  /* 4px */
+            --spacing-sm: var(--spacing-unit);            /* 8px */
+            --spacing-md: calc(var(--spacing-unit) * 1.5); /* 12px */
+            --spacing-lg: calc(var(--spacing-unit) * 2);  /* 16px */
+
+            /* Shadows for depth */
+            --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.2);
+            --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
+
+            /* Doc preview tokens — aligned with switchboard-site readability */
+            --doc-bg: #1a1a1a;
+            --doc-border: #1d2323;   /* site --outline-variant — grey H2 rule + code borders */
+            --doc-text: #a0a6a6;     /* site --on-surface-variant — the muted value <p> actually renders */
+            --doc-text-bright: #e2e8f0; /* site .docs-article / --on-surface — bright inherited text for non-<p> elements */
+            --doc-heading: var(--accent-primary);
+
+        }
+
+        body.theme-claudify {
+            /* The teal family derives from --accent-primary ON :root, so it resolves to cyan
+               there and inherits cyan everywhere. Each must be redeclared here to go terracotta. */
+            --accent-primary: #D97757;
+            --accent-teal: #D97757;
+            --accent-teal-dim: color-mix(in srgb, #D97757 40%, transparent);
+            --accent-teal-bright: #E2A188;
+            --sweep-grid: 32px;   /* claudify grid pitch — now 32px, matching afterburner */
+            --accent-neon: #D97757;
+            --glow-teal: none;           /* kill all variable-routed neon glow */
+            --text-secondary: #8C8C8C;
+            --border-color: #333333;
+            --border-bright: #444444;
+            /* Backgrounds NOT set here — the grid block below provides a solid near-black surface. */
+            /* Display-font vars NOT overridden — --display-font is unused; H1 inherits Hanken Grotesk (pixel-font H1 feature removed). */
+        }
+
+        /* Claudify: remove neon glow from base (non-cyber) interactive states */
+        body.theme-claudify .tree-node.selected,
+        body.theme-claudify .kanban-plan-item.selected,
+        body.theme-claudify .ticket-node.selected,
+        body.theme-claudify .ticket-status-light { box-shadow: none; }
+
+        /* Claudify: cards/sidebar items = an exact copy of implementation.html's .secondary-btn
+           (the COMPLETE/COPY/CREATE buttons): solid --panel-bg2 fill, --border-color border,
+           --text-secondary text. NO terracotta — the accent is not in these buttons. */
+        body.theme-claudify .tree-node:not(.folder-subheader),
+        body.theme-claudify .ticket-node,
+        body.theme-claudify .kanban-plan-item {
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
+            border: 1px solid #333333 !important;
+            color: var(--text-secondary) !important;
+            box-shadow: none !important;
+        }
+        body.theme-claudify .tree-node:not(.folder-subheader):hover,
+        body.theme-claudify .ticket-node:hover,
+        body.theme-claudify .kanban-plan-item:hover {
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 9%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
+            border-color: #555555 !important;
+            color: var(--text-primary) !important;
+            box-shadow: none !important;
+        }
+        /* Selected: clear terracotta highlight (border + left bar) so the selection is obvious.
+           The :hover variants are listed so a hovered selected card keeps the terracotta — the
+           docs-card hover selector (.tree-node:not(.folder-subheader):hover) otherwise out-ranks
+           plain .selected and the selection would revert to grey on hover. */
+        body.theme-claudify .tree-node.selected,
+        body.theme-claudify .tree-node.selected:hover,
+        body.theme-claudify .ticket-node.selected,
+        body.theme-claudify .ticket-node.selected:hover,
+        body.theme-claudify .kanban-plan-item.selected,
+        body.theme-claudify .kanban-plan-item.selected:hover {
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
+            border-color: var(--accent-primary) !important;
+            color: var(--text-primary) !important;
+            box-shadow: inset 0 0 0 1px var(--accent-primary) !important;
+        }
+        /* Card titles (tree, tickets, kanban) hardcode/inherit either harsh white or the muted
+           subtitle colour. Give them a mid-tone so the title is brighter than the subtitle
+           (--text-secondary) without being the harsh cream (--text-primary). */
+        body.theme-claudify .card-title,
+        body.theme-claudify .tickets-issue-title,
+        body.theme-claudify .kanban-plan-topic {
+            color: color-mix(in srgb, var(--text-primary) 60%, var(--text-secondary)) !important;
+        }
+        /* No warm text — doc filenames fall back to the neutral grey base. */
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--font-family);
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            font-size: 13px;
+            color: var(--text-primary);
+            background: var(--panel-bg);
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 40px);
+        }
+
+        #local-content,
+        #online-content,
+        #kanban-content,
+        #tickets-content {
+            display: none;
+            flex-direction: column;
+            height: calc(100vh - 40px);
+            background: var(--panel-bg);
+        }
+
+        #local-content.active,
+        #online-content.active,
+        #kanban-content.active,
+        #tickets-content.active {
+            display: flex;
+        }
+
+        .controls-strip {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            background: var(--panel-bg2);
+            border-bottom: 1px solid var(--border-color);
+            flex-shrink: 0;
+            overflow-x: auto;
+            flex-wrap: nowrap;
+        }
+
+        .controls-strip > * {
+            flex-shrink: 0;
+        }
+
         .workspace-filter-select {
             font-size: 11px;
             letter-spacing: 0.5px;
@@ -113,6 +285,350 @@
             outline: 1px solid var(--accent-teal);
         }
 
+        .strip-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-family: var(--font-family);
+            font-size: 10px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            padding: 4px 10px;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+        }
+
+        .strip-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+            border-color: var(--accent-teal-dim);
+            color: var(--accent-teal);
+        }
+
+        .strip-btn.active {
+            background: var(--accent-teal-dim);
+            border-color: var(--accent-teal);
+            color: var(--accent-teal);
+            font-weight: 600;
+        }
+
+        .strip-btn--primary {
+            background: var(--accent-teal-dim);
+            border-color: var(--accent-teal);
+            color: var(--accent-teal);
+        }
+        .strip-btn--primary:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 18%, transparent);
+        }
+
+        .strip-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            border-color: var(--border-color);
+            color: var(--text-secondary);
+        }
+
+        .content-row {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+        .content-row > * {
+            transition: flex 0.2s ease;
+        }
+        .content-row > :first-child {
+            flex: 1;
+            overflow-y: auto;
+        }
+        .content-row > :last-child {
+            flex: 3;
+            overflow-y: auto;
+        }
+
+        .content-row.collapsed > :first-child {
+            flex: 0 0 40px !important;
+        }
+        .content-row.collapsed > :last-child {
+            flex: 1 !important;
+        }
+
+        .content-row.collapsed #tree-pane,
+        .content-row.collapsed #tree-pane-online,
+        .content-row.collapsed #tree-pane-tickets,
+        .content-row.collapsed #tree-pane-planning-html,
+        .content-row.collapsed #kanban-list-pane {
+            padding: 4px;
+            overflow: hidden;
+        }
+
+        .content-row.collapsed #tree-pane > *:not(.sidebar-toggle-row),
+        .content-row.collapsed #tree-pane-online > *:not(.sidebar-toggle-row),
+        .content-row.collapsed #tree-pane-tickets > *:not(.sidebar-toggle-row),
+        .content-row.collapsed #tree-pane-planning-html > *:not(.sidebar-toggle-row),
+        .content-row.collapsed #kanban-list-pane > *:not(.sidebar-toggle-row) {
+            display: none !important;
+        }
+
+        .sidebar-toggle-row {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        /* Tickets sidebar row: New Ticket / Link all / Kanban all stay
+           left-justified as a group; only the collapse toggle («) is pinned
+           to the right. Other tabs keep the default right-justified layout. */
+        #tree-pane-tickets .sidebar-toggle-row {
+            justify-content: flex-start;
+        }
+        #tree-pane-tickets .sidebar-toggle-row .sidebar-toggle-btn {
+            margin-left: auto;
+        }
+        /* Preserve the collapsed layout: strip buttons hide, lone toggle centers. */
+        .content-row.collapsed #tree-pane-tickets .sidebar-toggle-row {
+            justify-content: center;
+        }
+        .content-row.collapsed #tree-pane-tickets .sidebar-toggle-row .sidebar-toggle-btn {
+            margin-left: 0;
+        }
+
+        .sidebar-toggle-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 14px;
+            line-height: 1;
+            transition: all 0.15s;
+        }
+
+        .sidebar-folders-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-family: var(--font-family);
+            line-height: 1.2;
+            transition: all 0.15s;
+            margin-right: auto;
+            display: flex;
+            align-items: center;
+        }
+
+        .cyber-theme-enabled .sidebar-folders-btn:hover {
+            color: var(--accent-neon);
+            border-color: var(--accent-neon);
+            box-shadow: 0 0 5px color-mix(in srgb, var(--accent-neon) 40%, transparent);
+            background: color-mix(in srgb, var(--accent-neon) 10%, transparent);
+        }
+
+        .sidebar-folders-btn:hover {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+        }
+
+        .sidebar-toggle-btn:hover {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+        }
+
+        .content-row.collapsed .sidebar-toggle-row {
+            position: static;
+            display: flex;
+            justify-content: center;
+            margin-bottom: 8px;
+        }
+
+        .content-row.collapsed .sidebar-folders-btn {
+            display: none !important;
+        }
+
+        /* Hide tickets strip-btns when collapsed — !important needed because JS sets
+           inline style.display on #tickets-import-all-kanban in renderTicketsLinearList()
+           and renderTicketsClickUpPanel() (planning.js) */
+        .content-row.collapsed #tree-pane-tickets .sidebar-toggle-row .strip-btn {
+            display: none !important;
+        }
+
+        /* Active Design Doc Header */
+        .active-doc-banner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 12px;
+            background: var(--accent-teal-dim);
+            border-bottom: 1px solid var(--accent-teal);
+            flex-shrink: 0;
+        }
+
+        .active-doc-banner.inactive {
+            background: var(--panel-bg2);
+            border-bottom-color: var(--border-color);
+        }
+
+        .active-doc-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+        }
+
+        .active-doc-label {
+            color: var(--text-secondary);
+        }
+
+        .active-doc-name {
+            color: var(--accent-teal);
+            font-weight: 500;
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .active-doc-banner.inactive .active-doc-name {
+            color: var(--text-secondary);
+        }
+
+        .btn-disable-doc {
+            background: transparent;
+            border: 1px solid var(--accent-teal);
+            color: var(--accent-teal);
+            font-size: 10px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            padding: 3px 10px;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+        }
+
+        .btn-disable-doc:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+        }
+
+        .active-doc-banner.inactive .btn-disable-doc {
+            display: none;
+        }
+
+        /* Subtask navigation — matches Online Docs .page-navigation pattern */
+        #tickets-subtasks-nav {
+            margin-bottom: 16px;
+            padding: 12px;
+            background: var(--panel-bg2);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 4px;
+        }
+        #tickets-subtasks-nav .subtasks-header {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--accent-teal);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        #tickets-subtasks-nav .subtask-nav-item {
+            padding: 6px 8px;
+            cursor: pointer;
+            border-radius: 3px;
+            transition: background 0.1s;
+            font-size: 13px;
+            color: var(--accent-teal);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        #tickets-subtasks-nav .subtask-nav-item:hover {
+            background: var(--accent-teal-dim);
+        }
+        #tickets-subtasks-nav .subtask-nav-item.selected {
+            background: var(--accent-teal-dim);
+        }
+        #tickets-subtasks-nav .subtask-nav-status {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        /* Planning Cards */
+        .planning-card {
+            border: var(--card-border);
+            border-radius: 6px;
+            padding: 16px;
+            background: var(--card-bg);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            box-shadow: var(--shadow-md);
+            margin-bottom: 16px;
+            transition: all 0.15s;
+        }
+
+
+        .planning-card-header {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--accent-teal);
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--accent-teal-dim);
+        }
+
+        .planning-card-description {
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--text-primary);
+        }
+
+        .planning-card-section {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        /* Add separator between consecutive card sections */
+        .planning-card-section + .planning-card-section {
+            margin-top: 8px;
+            border-top: 1px solid var(--accent-teal-dim);
+            padding-top: 16px;
+        }
+
+        .planning-card-section-title {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--accent-teal);
+            margin-top: 12px;
+            margin-bottom: 8px;
+        }
+
+        .planning-status {
+            font-size: 10px;
+            color: var(--text-secondary);
+            padding: 4px 0;
+        }
+
+        /* Controls & Buttons */
+        .planning-controls {
+            display: flex;
+            flex-direction: row;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 12px;
+            justify-content: flex-start;
+        }
+
         .planning-button {
             padding: 8px 16px;
             font-size: 11px;
@@ -126,31 +642,37 @@
             border-radius: 3px;
             transition: all 0.15s;
         }
+
         .planning-button:active {
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
         }
+
         .planning-button:hover:not(:disabled) {
             background: var(--accent-teal);
             color: #111111;
             box-shadow: var(--glow-teal);
         }
+
         .planning-button:disabled {
             opacity: 0.4;
             cursor: not-allowed;
             border-color: var(--border-color);
             color: var(--text-secondary);
         }
+
         .planning-button.secondary {
             border: 1px solid var(--border-color);
             background: var(--card-bg);
             color: var(--text-primary);
         }
+
         .planning-button.secondary:hover:not(:disabled) {
             background: var(--card-bg-hover);
             color: var(--text-primary);
             box-shadow: none;
         }
 
+        /* Form Elements */
         .planning-select {
             flex: 1;
             font-size: 12px;
@@ -161,7 +683,1976 @@
             border-radius: 2px;
         }
 
-        /* ── Folder/Source modal styles (byte-exact from planning.html) ──── */
+        .planning-input {
+            width: 100%;
+            font-size: 12px;
+            padding: 4px 8px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            box-sizing: border-box;
+        }
+
+        .planning-custom-row {
+            padding: 4px 0;
+        }
+
+        .planning-hint {
+            font-size: 9px;
+            color: var(--text-secondary);
+            padding: 4px 0;
+        }
+
+        .planning-preview {
+            margin: 4px 0;
+            font-size: 10px;
+            color: var(--text-secondary);
+            padding: 8px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-family: var(--font-code);
+            white-space: pre-line;
+            line-height: 1.4;
+        }
+
+        .empty-state {
+            padding: 12px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            text-align: center;
+            font-style: italic;
+        }
+
+        .planning-error {
+            min-height: 0;
+            padding: 4px 0;
+            color: #f14c4c;
+            font-size: 10px;
+        }
+
+        #tree-pane,
+        #tree-pane-online,
+        #tree-pane-tickets,
+        #tree-pane-planning-html {
+            position: relative;
+            background: var(--panel-bg2);
+            border-right: 1px solid var(--border-color);
+            overflow-y: auto;
+            padding: 12px;
+            min-height: 100%;
+        }
+
+        /* Docs tab sidebar: fixed width to match project.html kanban layout.
+           The generic .content-row > :first-child { flex: 1 } rule would
+           otherwise grow this pane proportionally (25% of the row), making
+           the preview narrower than the kanban plans view. */
+        #tree-pane {
+            flex: 0 0 320px;
+        }
+
+        .source-header {
+            font-weight: 600;
+            padding: 8px 0 4px 0;
+            margin-top: 8px;
+            margin-bottom: 8px;
+            color: var(--text-primary);
+            text-transform: uppercase;
+            font-size: 10px;
+            letter-spacing: 1px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .source-header:first-of-type {
+            margin-top: 0;
+        }
+
+        .folder-subheader {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 12px 8px 4px 8px;
+            margin-top: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .folder-subheader.folder-subheader-collapsible {
+            cursor: pointer;
+        }
+
+        .folder-subheader.folder-subheader-collapsible .section-chevron {
+            margin-right: 6px;
+            color: var(--text-secondary);
+        }
+
+        .folder-subheader:first-of-type {
+            margin-top: 0;
+            padding-top: 8px;
+        }
+
+        .folder-subheader .folder-link-btn,
+        .folder-subheader .folder-create-btn,
+        .folder-subheader .folder-import-btn {
+            color: var(--text-secondary);
+            border-color: var(--border-color);
+        }
+        .folder-subheader .folder-link-btn:hover,
+        .folder-subheader .folder-create-btn:hover,
+        .folder-subheader .folder-import-btn:hover {
+            background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+            border-color: var(--text-secondary);
+        }
+
+        .source-folder-path {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 200px;
+        }
+
+        .type-subheader {
+            font-size: 9px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 8px 8px 4px 24px;
+            margin-top: 0;
+        }
+        .source-folder-header + .type-subheader {
+            margin-top: 0;
+            padding-top: 8px;
+        }
+
+        .source-folder-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--accent-teal);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin: 8px 0 4px 0;
+        }
+
+        .folder-import-btn,
+        .folder-link-btn,
+        .folder-create-btn {
+            font-size: 11px;
+            padding: 2px 6px;
+            background: transparent;
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.15s;
+            line-height: 1;
+        }
+        .folder-import-btn {
+            margin-left: auto;
+        }
+        .folder-link-btn,
+        .folder-create-btn {
+            margin-left: 4px;
+        }
+        .folder-import-btn:hover,
+        .folder-link-btn:hover,
+        .folder-create-btn:hover {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border-color: var(--accent-teal);
+        }
+
+        .source-header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 10px;
+            background: color-mix(in srgb, var(--accent-teal) 6%, var(--panel-bg2));
+            border-bottom: 1px solid var(--accent-teal-dim);
+            border-left: 3px solid var(--accent-teal-dim);
+            border-radius: 3px;
+            margin: 4px 0;
+        }
+
+        .source-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .source-refresh-btn {
+            font-size: 11px;
+            padding: 2px 6px;
+            background: transparent;
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .source-refresh-btn:hover {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border-color: var(--accent-teal);
+        }
+        .source-new-btn {
+            font-size: 11px;
+            padding: 2px 8px;
+            background: transparent;
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .source-new-btn:hover {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border-color: var(--accent-teal);
+        }
+        .source-location-btn {
+            font-size: 11px;
+            padding: 2px 6px;
+            background: transparent;
+            color: var(--text-secondary);
+            border: none;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .source-location-btn:hover {
+            color: var(--accent-teal);
+        }
+        .source-folder-header:first-of-type {
+            margin-top: 4px;
+        }
+
+        /* Reset margin on first folder-subheader after a source-folder header */
+        .source-folder-header + .folder-subheader {
+            margin-top: 0;
+            padding-top: 8px;
+        }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            cursor: pointer;
+            border-radius: 2px;
+            font-size: 12px;
+            color: var(--text-primary);
+        }
+
+        .file-item:hover {
+            background: var(--card-bg-hover);
+        }
+
+        .file-item .file-icon {
+            flex-shrink: 0;
+            font-size: 12px;
+        }
+
+        .file-item .file-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .tree-node-container {
+            /* No visual styling — purely structural wrapper */
+        }
+
+        .tree-node {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 10px;
+            border-radius: 4px;
+            margin: 3px 0;
+            border: 1px solid var(--border-color);
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg) 100%);
+            cursor: pointer;
+            user-select: none;
+            font-size: 12px;
+            line-height: 1.4;
+            transition: all 0.15s;
+        }
+
+        .tree-node:hover {
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+        }
+
+        .tree-node.selected {
+            border-color: var(--accent-teal);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
+                        inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            color: var(--accent-teal);
+        }
+
+        /* Document cards: vertical column layout matching Kanban plan cards */
+        .tree-node:has(.card-text) {
+            flex-direction: column;
+            align-items: stretch;
+            padding: 10px 12px;
+            gap: 8px;
+        }
+        .tree-node:has(.card-text) .card-actions {
+            margin-top: 0;
+        }
+
+        .tree-node.folder-subheader {
+            background: transparent;
+            border: none;
+            border-left: none;
+            box-shadow: none;
+            padding: 12px 8px 4px 8px;
+            margin: 0;
+            border-radius: 0;
+        }
+        .tree-node.folder-subheader:hover {
+            background: transparent;
+            border-color: transparent;
+            border-left-color: transparent;
+            box-shadow: none;
+        }
+
+        /* The tree chevron sat as a 12px glyph inside this 16px box; mask-size keeps
+           that ink size, since .tree-node .icon (0,2,0) overrides any .sb-icon-* box. */
+        .tree-node .icon.sb-icon { mask-size: 12px; }
+
+        .tree-node .icon {
+            flex-shrink: 0;
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+        }
+
+        .tree-node .label {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .tree-children {
+            margin-left: 16px;
+        }
+
+        .tree-placeholder {
+            color: var(--text-secondary);
+            font-style: italic;
+            padding: 4px 8px;
+            font-size: 12px;
+        }
+
+        #preview-pane,
+        #preview-pane-online,
+        #preview-pane-tickets,
+        #preview-pane-planning-html {
+            display: flex;
+            flex-direction: column;
+            background: var(--panel-bg, #000000);
+            /* Removed dot-pattern — VS Code preview uses solid backgrounds */
+            overflow-y: auto;
+            padding: 0 16px 16px 16px;
+            height: 100%;
+        }
+
+        .preview-content-wrapper {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+        }
+
+        #status {
+            margin-left: auto;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        /* Sidebar Hierarchy Fix */
+        .imported-docs-header {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-secondary); /* Subdued from accent-teal */
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        /* Unified Markdown Preview Styling (Local, Online, Design & Kanban) */
+        #markdown-preview,
+        #markdown-preview-online,
+        #markdown-preview-design,
+        #markdown-preview-tickets,
+        #kanban-preview-pane {
+            flex: 1;
+            overflow-y: auto;
+            padding: 32px 24px 40px;
+            width: 100%;
+            box-sizing: border-box;
+            margin: 0;
+            font-family: var(--font-family);
+            font-size: 14px;
+            line-height: 1.6;
+            word-wrap: break-word;
+            color: var(--doc-text-bright);
+        }
+
+        #markdown-preview h1, #markdown-preview h2, #markdown-preview h3, #markdown-preview h4, #markdown-preview h5, #markdown-preview h6,
+        #markdown-preview-online h1, #markdown-preview-online h2, #markdown-preview-online h3, #markdown-preview-online h4, #markdown-preview-online h5, #markdown-preview-online h6,
+        #markdown-preview-design h1, #markdown-preview-design h2, #markdown-preview-design h3, #markdown-preview-design h4, #markdown-preview-design h5, #markdown-preview-design h6,
+        #kanban-preview-pane h1, #kanban-preview-pane h2, #kanban-preview-pane h3, #kanban-preview-pane h4, #kanban-preview-pane h5, #kanban-preview-pane h6,
+        #markdown-preview-tickets h1, #markdown-preview-tickets h2, #markdown-preview-tickets h3, #markdown-preview-tickets h4, #markdown-preview-tickets h5, #markdown-preview-tickets h6 {
+            margin-top: 24px;
+            margin-bottom: 12px;
+            font-weight: 600;
+            line-height: 1.25;
+            color: var(--doc-heading);
+        }
+
+        /* Cyber theme — display heading typography */
+        body.cyber-theme-enabled #markdown-preview h1, body.cyber-theme-enabled #markdown-preview h2, body.cyber-theme-enabled #markdown-preview h3, body.cyber-theme-enabled #markdown-preview h4, body.cyber-theme-enabled #markdown-preview h5, body.cyber-theme-enabled #markdown-preview h6,
+        body.cyber-theme-enabled #markdown-preview-online h1, body.cyber-theme-enabled #markdown-preview-online h2, body.cyber-theme-enabled #markdown-preview-online h3, body.cyber-theme-enabled #markdown-preview-online h4, body.cyber-theme-enabled #markdown-preview-online h5, body.cyber-theme-enabled #markdown-preview-online h6,
+        body.cyber-theme-enabled #markdown-preview-design h1, body.cyber-theme-enabled #markdown-preview-design h2, body.cyber-theme-enabled #markdown-preview-design h3, body.cyber-theme-enabled #markdown-preview-design h4, body.cyber-theme-enabled #markdown-preview-design h5, body.cyber-theme-enabled #markdown-preview-design h6,
+        body.cyber-theme-enabled #kanban-preview-pane h1, body.cyber-theme-enabled #kanban-preview-pane h2, body.cyber-theme-enabled #kanban-preview-pane h3, body.cyber-theme-enabled #kanban-preview-pane h4, body.cyber-theme-enabled #kanban-preview-pane h5, body.cyber-theme-enabled #kanban-preview-pane h6,
+        body.cyber-theme-enabled #markdown-preview-tickets h1, body.cyber-theme-enabled #markdown-preview-tickets h2, body.cyber-theme-enabled #markdown-preview-tickets h3, body.cyber-theme-enabled #markdown-preview-tickets h4, body.cyber-theme-enabled #markdown-preview-tickets h5, body.cyber-theme-enabled #markdown-preview-tickets h6 {
+            font-family: var(--font-family);
+            line-height: 1.2;
+        }
+        /* Cyber theme — doc preview h1 white, h2-h6 cyan (no glow) */
+        body.cyber-theme-enabled #markdown-preview h1,
+        body.cyber-theme-enabled #markdown-preview-online h1,
+        body.cyber-theme-enabled #markdown-preview-design h1,
+        body.cyber-theme-enabled #kanban-preview-pane h1,
+        body.cyber-theme-enabled #markdown-preview-tickets h1 {
+            color: var(--doc-heading);
+        }
+        /* Cyber theme — doc preview h2-h6 use accent color */
+        body.cyber-theme-enabled #markdown-preview h2, body.cyber-theme-enabled #markdown-preview h3, body.cyber-theme-enabled #markdown-preview h4, body.cyber-theme-enabled #markdown-preview h5, body.cyber-theme-enabled #markdown-preview h6,
+        body.cyber-theme-enabled #markdown-preview-online h2, body.cyber-theme-enabled #markdown-preview-online h3, body.cyber-theme-enabled #markdown-preview-online h4, body.cyber-theme-enabled #markdown-preview-online h5, body.cyber-theme-enabled #markdown-preview-online h6,
+        body.cyber-theme-enabled #markdown-preview-design h2, body.cyber-theme-enabled #markdown-preview-design h3, body.cyber-theme-enabled #markdown-preview-design h4, body.cyber-theme-enabled #markdown-preview-design h5, body.cyber-theme-enabled #markdown-preview-design h6,
+        body.cyber-theme-enabled #kanban-preview-pane h2, body.cyber-theme-enabled #kanban-preview-pane h3, body.cyber-theme-enabled #kanban-preview-pane h4, body.cyber-theme-enabled #kanban-preview-pane h5, body.cyber-theme-enabled #kanban-preview-pane h6,
+        body.cyber-theme-enabled #markdown-preview-tickets h2, body.cyber-theme-enabled #markdown-preview-tickets h3, body.cyber-theme-enabled #markdown-preview-tickets h4, body.cyber-theme-enabled #markdown-preview-tickets h5, body.cyber-theme-enabled #markdown-preview-tickets h6 {
+            color: var(--accent-primary);
+        }
+
+        #markdown-preview h1,
+        #markdown-preview-online h1,
+        #markdown-preview-design h1,
+        #kanban-preview-pane h1,
+        #markdown-preview-tickets h1 {
+            font-size: 2.25rem; /* 36px — matches site .docs-article h1 */
+            margin-top: 0;
+            padding-bottom: 0.3em;
+            border-bottom: 1px solid var(--accent-teal-dim);
+            border-left: 3px solid var(--accent-teal-dim);
+            padding-left: 8px;
+            text-transform: uppercase;
+        }
+
+        #markdown-preview h2,
+        #markdown-preview-online h2,
+        #markdown-preview-design h2,
+        #kanban-preview-pane h2,
+        #markdown-preview-tickets h2 {
+            font-size: 1.5rem; /* 24px — matches site .docs-article h2 */
+            margin-top: 36px;
+            padding-bottom: 0.3em;
+            border-bottom: 1px solid var(--doc-border);
+            border-left: 2px solid var(--accent-teal-dim);
+            padding-left: 6px;
+            text-transform: uppercase;
+            color: var(--accent-teal);
+        }
+
+        #markdown-preview h3,
+        #markdown-preview-online h3,
+        #markdown-preview-design h3,
+        #kanban-preview-pane h3,
+        #markdown-preview h4,
+        #markdown-preview-online h4,
+        #markdown-preview-design h4,
+        #kanban-preview-pane h4,
+        #markdown-preview h5,
+        #markdown-preview-online h5,
+        #markdown-preview-design h5,
+        #kanban-preview-pane h5,
+        #markdown-preview h6,
+        #markdown-preview-online h6,
+        #markdown-preview-design h6,
+        #kanban-preview-pane h6,
+        #markdown-preview-tickets h3, #markdown-preview-tickets h4, #markdown-preview-tickets h5, #markdown-preview-tickets h6 {
+            text-transform: uppercase;
+            color: var(--accent-teal);
+        }
+
+        #markdown-preview h3,
+        #markdown-preview-online h3,
+        #markdown-preview-design h3,
+        #kanban-preview-pane h3,
+        #markdown-preview-tickets h3 {
+            font-size: 1.2rem; /* 19px — matches site .docs-article h3 */
+        }
+
+        #markdown-preview h4,
+        #markdown-preview-online h4,
+        #markdown-preview-design h4,
+        #kanban-preview-pane h4,
+        #markdown-preview-tickets h4 {
+            font-size: 1em;
+        }
+
+        #markdown-preview h5,
+        #markdown-preview-online h5,
+        #markdown-preview-design h5,
+        #kanban-preview-pane h5,
+        #markdown-preview-tickets h5 {
+            font-size: 0.875em;
+        }
+
+        #markdown-preview h6,
+        #markdown-preview-online h6,
+        #markdown-preview-design h6,
+        #kanban-preview-pane h6,
+        #markdown-preview-tickets h6 {
+            font-size: 0.85em;
+        }
+
+        #markdown-preview p,
+        #markdown-preview-online p,
+        #markdown-preview-design p,
+        #kanban-preview-pane p,
+        #markdown-preview-tickets p {
+            margin-bottom: 16px;
+            line-height: inherit; /* Inherits from container's 1.5 */
+            color: var(--doc-text);
+            font-size: inherit; /* Inherits from container's 14px */
+        }
+
+        #markdown-preview li,
+        #markdown-preview-online li,
+        #markdown-preview-design li,
+        #kanban-preview-pane li,
+        #markdown-preview-tickets li {
+            margin-bottom: 6px; /* Tighter list item spacing */
+            line-height: inherit;
+            color: var(--doc-text-bright);
+            font-size: inherit;
+        }
+
+        #markdown-preview li p,
+        #markdown-preview-online li p,
+        #markdown-preview-design li p,
+        #kanban-preview-pane li p,
+        #markdown-preview-tickets li p {
+            margin-bottom: 0; /* Paragraphs inside list items: zero extra margin (li already spaced) */
+        }
+
+        #markdown-preview pre,
+        #markdown-preview-online pre,
+        #markdown-preview-design pre,
+        #kanban-preview-pane pre,
+        #markdown-preview-tickets pre {
+            background-color: var(--vscode-textCodeBlock-background, rgba(255,255,255,0.04));
+            border: 1px solid var(--vscode-widget-border, rgba(127, 127, 127, 0.35));
+            border-radius: 3px;
+            overflow-x: auto;
+            padding: 16px; /* VS Code default */
+            margin: 16px 0;
+        }
+
+        #markdown-preview pre code,
+        #markdown-preview-online pre code,
+        #markdown-preview-design pre code,
+        #kanban-preview-pane pre code,
+        #markdown-preview-tickets pre code {
+            background: none;
+            padding: 0;
+            border: none;
+            display: inline-block;
+            color: var(--vscode-editor-foreground, #cccccc);
+            tab-size: 4;
+        }
+
+        #markdown-preview code,
+        #markdown-preview-online code,
+        #markdown-preview-design code,
+        #kanban-preview-pane code,
+        #markdown-preview-tickets code {
+            font-family: var(--font-code);
+            font-size: 1em; /* Match VS Code: inline code is same size as surrounding text */
+            line-height: 1.357em;
+            color: var(--accent-teal);
+            background-color: color-mix(in srgb, var(--accent-teal) 12%, transparent);
+            border: 1px solid var(--accent-teal-dim);
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+
+        #markdown-preview blockquote,
+        #markdown-preview-online blockquote,
+        #markdown-preview-design blockquote,
+        #kanban-preview-pane blockquote,
+        #markdown-preview-tickets blockquote {
+            margin: 0;
+            padding: 0 16px 0 10px; /* Match VS Code's markdown.css */
+            border-left: 5px solid var(--vscode-textBlockQuote-border, var(--border-color));
+            border-radius: 2px;
+            color: var(--doc-text);
+            background: transparent;
+        }
+
+        #markdown-preview ul, #markdown-preview ol,
+        #markdown-preview-online ul, #markdown-preview-online ol,
+        #markdown-preview-design ul, #markdown-preview-design ol,
+        #kanban-preview-pane ul, #kanban-preview-pane ol,
+        #markdown-preview-tickets ul, #markdown-preview-tickets ol {
+            margin-bottom: 16px; /* Match VS Code's tighter list spacing */
+            padding-left: 2em;
+        }
+
+        /* Table Styling */
+        #markdown-preview table,
+        #markdown-preview-online table,
+        #markdown-preview-design table,
+        #kanban-preview-pane table,
+        #markdown-preview-tickets table {
+            border-collapse: collapse;
+            margin-bottom: 0.7em;
+            font-size: inherit; /* Inherits from container */
+        }
+
+        #markdown-preview th,
+        #markdown-preview-online th,
+        #markdown-preview-design th,
+        #kanban-preview-pane th,
+        #markdown-preview-tickets th {
+            text-align: left;
+            border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.69));
+            font-weight: 600;
+            padding: 5px 10px;
+        }
+
+        #markdown-preview td,
+        #markdown-preview-online td,
+        #markdown-preview-design td,
+        #kanban-preview-pane td,
+        #markdown-preview-tickets td {
+            padding: 5px 10px;
+            border-top: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
+            color: var(--vscode-editor-foreground, var(--text-primary));
+        }
+
+        #markdown-preview tr:hover td,
+        #markdown-preview-online tr:hover td,
+        #markdown-preview-design tr:hover td,
+        #kanban-preview-pane tr:hover td,
+        #markdown-preview-tickets tr:hover td {
+            background: var(--vscode-list-hoverBackground, var(--card-bg-hover));
+        }
+
+        #markdown-preview .table-wrapper,
+        #markdown-preview-online .table-wrapper,
+        #markdown-preview-design .table-wrapper,
+        #kanban-preview-pane .table-wrapper,
+        #markdown-preview-tickets .table-wrapper {
+            overflow-x: auto;
+            max-width: 100%;
+            margin-bottom: 16px;
+        }
+
+        /* Subtle, Interactive Links */
+        #markdown-preview a,
+        #markdown-preview-online a,
+        #markdown-preview-design a,
+        #kanban-preview-pane a,
+        #markdown-preview-tickets a {
+            color: var(--vscode-textLink-foreground, var(--accent-teal));
+            text-decoration: none;
+        }
+
+        #markdown-preview a:hover,
+        #markdown-preview-online a:hover,
+        #markdown-preview-design a:hover,
+        #kanban-preview-pane a:hover,
+        #markdown-preview-tickets a:hover {
+            color: var(--vscode-textLink-activeForeground, var(--accent-teal-bright));
+            text-decoration: underline;
+        }
+
+        #markdown-preview hr,
+        #markdown-preview-online hr,
+        #markdown-preview-design hr,
+        #kanban-preview-pane hr,
+        #markdown-preview-tickets hr {
+            border: 0;
+            height: 1px;
+            border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
+        }
+
+        #markdown-preview img,
+        #markdown-preview-online img,
+        #markdown-preview-design img,
+        #kanban-preview-pane img,
+        #markdown-preview-tickets img {
+            max-width: 100%;
+            max-height: 100%;
+            position: relative;
+            z-index: 7; /* Above .cyber-scanlines (z-index: 5) and sweep animation to prevent overlay distortion */
+            box-shadow: 0 0 6px rgba(0, 0, 0, 0.4); /* Intentional elevation so the pop-out above scanlines looks designed */
+        }
+
+        #markdown-preview .empty-state,
+        #markdown-preview-online .empty-state,
+        #markdown-preview-design .empty-state,
+        #kanban-preview-pane .empty-state,
+        #markdown-preview-tickets .empty-state {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--vscode-editor-foreground, var(--text-secondary));
+            font-size: inherit; /* Inherits from container's 14px */
+            opacity: 0.5;
+        }
+
+        .error-state {
+            color: #f14c4c;
+            padding: 16px;
+        }
+
+        .filter-row {
+            padding: 4px 4px 8px 4px;
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            gap: 6px;
+        }
+
+        .filter-select {
+            flex: 1;
+            font-size: 12px;
+            padding: 2px 4px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: var(--font-family);
+        }
+
+        .folder-config {
+            padding: 4px 4px 8px 4px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .folder-config input {
+            flex: 1;
+            font-size: 12px;
+            padding: 2px 4px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: var(--font-family);
+        }
+
+        .folder-config button {
+            font-size: 11px;
+            padding: 2px 8px;
+            border: 1px solid var(--border-color);
+            background: var(--card-bg);
+            color: var(--text-primary);
+            cursor: pointer;
+            border-radius: 2px;
+        }
+
+        .folder-config button:hover {
+            background: var(--card-bg-hover);
+        }
+
+        .folder-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            max-height: 120px;
+            overflow-y: auto;
+            margin-top: 4px;
+        }
+
+        .folder-list-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--panel-bg2);
+            padding: 3px 6px;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            font-size: 11px;
+            gap: 8px;
+        }
+
+        .folder-path {
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: var(--text-primary);
+        }
+
+        .folder-list-remove-btn {
+            background: transparent;
+            border: none;
+            color: #ff5555;
+            cursor: pointer;
+            font-size: 10px;
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+
+        .folder-list-remove-btn:hover {
+            background: rgba(255, 85, 85, 0.1);
+        }
+
+        .folder-list-empty {
+            font-size: 11px;
+            color: var(--text-secondary);
+            padding: 6px;
+            text-align: center;
+            font-style: italic;
+        }
+
+        .source-doc-list {
+            margin-left: 0;
+        }
+
+        /* Imported Docs Section */
+        .imported-docs-section {
+            margin-top: 16px;
+            padding-top: 12px;
+            border-top: 1px solid var(--accent-teal-dim);
+        }
+
+        .imported-docs-header {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-secondary);
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .imported-docs-doc-subheader {
+            padding: 6px 8px 2px;
+            font-size: 11px;
+            color: var(--text-primary);
+            font-weight: 500;
+            border-top: 1px solid var(--border-color);
+            margin-top: 4px;
+        }
+
+        .imported-doc-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            border-radius: 2px;
+            font-size: 12px;
+        }
+
+        .imported-doc-row:hover {
+            background: var(--card-bg-hover);
+        }
+
+        .source-badge {
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--accent-teal);
+            background: var(--panel-bg2);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 3px;
+            padding: 1px 4px;
+            flex-shrink: 0;
+        }
+
+        .imported-doc-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .last-synced {
+            font-size: 10px;
+            color: var(--text-secondary);
+            flex-shrink: 0;
+        }
+
+        .sync-btn {
+            font-size: 10px;
+            padding: 2px 8px;
+            border: 1px solid var(--accent-teal-dim);
+            background: var(--panel-bg2);
+            color: var(--accent-teal);
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+            flex-shrink: 0;
+        }
+
+        .sync-btn:hover:not(:disabled) {
+            background: var(--accent-teal);
+            color: #111111;
+        }
+
+        .sync-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            border-color: var(--border-color);
+            color: var(--text-secondary);
+        }
+
+        /* Duplicate Modal */
+        .duplicate-modal {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .duplicate-modal .modal-content {
+            background: var(--panel-bg);
+            padding: 24px;
+            border-radius: 8px;
+            max-width: 400px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+        .duplicate-modal .modal-content h3 { margin: 0 0 12px 0; color: var(--text-primary); }
+        .duplicate-modal .modal-content p { margin: 0 0 8px 0; color: var(--text-secondary); }
+        .duplicate-modal .modal-actions { display: flex; gap: 12px; margin-top: 16px; }
+        .duplicate-modal button {
+            flex: 1; padding: 8px 16px;
+            border: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border-radius: 4px; cursor: pointer; font-size: 13px;
+        }
+        .duplicate-modal button:hover { background: var(--accent-teal-dim); }
+        .duplicate-modal .modal-btn-replace { border-color: var(--accent-teal); color: var(--accent-teal); }
+
+        /* Research Tab Content */
+        #research-content {
+            flex-direction: column;
+            padding: 16px;
+            gap: 16px;
+            overflow-y: auto;
+            height: 100%;
+            background: var(--panel-bg);
+        }
+
+        /* Prompt Buttons Container */
+        .prompt-buttons-container {
+            display: flex;
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        /* Segmented Control */
+        .segmented-control {
+            display: flex;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 12px;
+        }
+
+        .segmented-btn {
+            flex: 1;
+            padding: 8px 16px;
+            background: var(--panel-bg2);
+            border: none;
+            border-right: 1px solid var(--border-color);
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--text-secondary);
+            transition: all 0.15s;
+        }
+
+        .segmented-btn:last-child {
+            border-right: none;
+        }
+
+        .segmented-btn.active {
+            background: var(--accent-teal-dim);
+            color: var(--accent-teal);
+            font-weight: 600;
+        }
+
+        .segmented-btn:hover:not(.active) {
+            background: var(--card-bg-hover);
+        }
+
+        /* Radio Group */
+        .radio-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .radio-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--text-primary);
+        }
+
+        .radio-option input[type="radio"] {
+            cursor: pointer;
+            accent-color: var(--accent-teal);
+        }
+
+        /* Toggle Switch */
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 24px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: var(--border-color);
+            transition: 0.2s;
+            border-radius: 24px;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: var(--text-primary);
+            transition: 0.2s;
+            border-radius: 50%;
+        }
+
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: var(--accent-teal-dim);
+        }
+
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(20px);
+            background-color: var(--accent-teal);
+        }
+
+        .toggle-label {
+            font-size: 13px;
+            color: var(--text-primary);
+        }
+
+        .antigravity-artifact-node {
+            margin-left: 12px; /* Indent under date header */
+        }
+
+        .planning-card-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-family: var(--font-family);
+            font-size: 9px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            padding: 2px 6px;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+        .planning-card-btn:hover {
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+            border-color: var(--accent-teal-dim);
+            color: var(--accent-teal);
+        }
+        .planning-card-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        .card-icon-btn {
+            flex-shrink: 0;
+            width: 22px;
+            height: 22px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            line-height: 1;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .card-icon-btn:hover {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+        }
+        .card-icon-btn.card-delete-btn:hover {
+            background: #f14c4c;
+            border-color: #f14c4c;
+            color: white;
+        }
+        .card-icon-btn[title*="browser"]:hover {
+            color: var(--accent-teal);
+        }
+        .card-icon-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        @keyframes copyFlash {
+            0%   { background-color: var(--vscode-testing-iconPassed, #73c991); color: #ffffff; }
+            70%  { background-color: var(--vscode-testing-iconPassed, #73c991); color: #ffffff; }
+            100% { background-color: transparent; color: var(--text-secondary); }
+        }
+        .copied {
+            animation: copyFlash 1.5s ease-out forwards;
+            pointer-events: none;
+        }
+        @keyframes importBtnSuccess {
+            0%   { background-color: var(--vscode-testing-iconPassed, #73c991); color: #000; }
+            70%  { background-color: var(--vscode-testing-iconPassed, #73c991); color: #000; }
+            100% { background-color: var(--panel-bg2); color: var(--accent-teal); }
+        }
+        @keyframes importBtnError {
+            0%   { background-color: #f14c4c; color: #fff; }
+            70%  { background-color: #f14c4c; color: #fff; }
+            100% { background-color: var(--panel-bg2); color: var(--accent-teal); }
+        }
+        .planning-button.import-success {
+            animation: importBtnSuccess 1.5s ease-out forwards;
+            pointer-events: none;
+        }
+        .planning-button.import-error {
+            animation: importBtnError 1.5s ease-out forwards;
+            pointer-events: none;
+        }
+        @keyframes iconFlash {
+            0%   { transform: scale(1); }
+            50%  { transform: scale(1.2); opacity: 0.7; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .flash {
+            animation: iconFlash 0.3s ease-out forwards;
+        }
+        /* HTML-specific icon+text hybrid buttons — override fixed width */
+        .card-icon-btn.html-serve-btn,
+        .card-icon-btn.html-link-btn {
+            width: auto;
+            min-width: 22px;
+            padding: 0 4px;
+            gap: 2px;
+        }
+        .card-icon-btn .btn-label {
+            font-size: 10px;
+            margin-left: 2px;
+            display: inline;
+        }
+        .content-row.collapsed .card-icon-btn .btn-label {
+            display: none;
+        }
+        .antigravity-date-subheader {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 12px 8px 4px 8px;
+            margin-top: 8px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .antigravity-date-subheader:first-child {
+            margin-top: 0;
+            padding-top: 4px;
+        }
+        .tree-node .card-title {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-primary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .tree-node .card-subtitle {
+            font-size: 10px;
+            color: var(--text-secondary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .tree-node .card-actions {
+            display: flex;
+            gap: 4px;
+            margin-top: 4px;
+            flex-wrap: wrap;
+        }
+        .tree-node .card-text {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        details.planning-card summary.planning-card-header {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+        details.planning-card[open] summary.planning-card-header {
+            border-bottom: 1px solid var(--accent-teal-dim);
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+        }
+
+        /* Kanban Plans Tab */
+        .kanban-controls-strip {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px;
+            border-bottom: 1px solid var(--border-color, rgba(255,255,255,0.08));
+        }
+        .kanban-controls-strip select,
+        .kanban-controls-strip input {
+            background: var(--input-bg, rgba(255,255,255,0.06));
+            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+            color: inherit;
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 12px;
+        }
+        .sidebar-search-input {
+            flex: 0 1 180px;
+            min-width: 90px;
+            max-width: 200px;
+            margin-left: auto;
+            height: 24px;
+            box-sizing: border-box;
+            padding: 3px 8px;
+            background: var(--panel-bg2, rgba(10, 10, 10, 0.7));
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            color: var(--text-primary);
+            font-family: var(--font-family);
+            font-size: 12px;
+        }
+        .sidebar-search-input::placeholder { color: var(--text-secondary); }
+        .sidebar-search-input:focus {
+            outline: none;
+            border-color: var(--accent-teal-dim);
+        }
+        .cyber-theme-enabled .sidebar-search-input {
+            background: rgba(10, 10, 10, 0.70);
+            border-color: var(--border-color);
+        }
+
+        /* Tickets sidebar search row: full-width search input at the top of the
+           ticket sidebar (moved out of the top control strip). The wrapper row
+           is a direct child of #tree-pane-tickets so the existing collapse rule
+           (which hides all non-toggle-row children) already hides it when the
+           sidebar is collapsed; the explicit rule below is belt-and-suspenders
+           for any JS-set inline display on the input itself. */
+        #tree-pane-tickets .sidebar-search-row {
+            margin: 0 0 8px 0;
+        }
+        #tree-pane-tickets .sidebar-search-input {
+            flex: 1 1 auto;
+            width: 100%;
+            max-width: none;
+            margin: 0;
+        }
+        .content-row.collapsed #tree-pane-tickets .sidebar-search-input,
+        .content-row.collapsed #tree-pane-tickets .sidebar-search-row {
+            display: none !important;
+        }
+        #kanban-content-row { display: flex; gap: 0; height: 100%; overflow: hidden; }
+        #kanban-list-pane { flex: 1; overflow-y: auto; }
+        .kanban-preview-pane { overflow-y: auto; padding: 12px; border-left: 1px solid var(--border-color, rgba(255,255,255,0.08)); background: var(--panel-bg, #000000); }
+        .kanban-plan-item {
+            position: relative;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: 4px;
+            margin: 4px 0;
+            border: 1px solid var(--border-color);
+            /* Match kanban board card gradient */
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg) 100%);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .kanban-plan-item:hover {
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+        }
+        .kanban-plan-item.selected {
+            border-color: var(--accent-teal);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
+                        inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+        .kanban-plan-topic { font-size: 13px; font-weight: 500; flex: 1; }
+        .kanban-column-badge {
+            font-size: 10px;
+            padding: 2px 7px;
+            border-radius: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            /* Neutral grey/black for all status labels */
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+        }
+        .kanban-column-badge[data-column="CREATED"] { background: color-mix(in srgb, var(--accent-primary) 20%, transparent); color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent); }
+        .kanban-column-badge[data-column="PLAN_REVIEWED"] { background: rgba(187, 134, 252, 0.2); color: #bb86fc; border-color: rgba(187, 134, 252, 0.3); }
+        .kanban-column-badge[data-column="CODED"] { background: rgba(255, 183, 77, 0.2); color: #ffb74d; border-color: rgba(255, 183, 77, 0.3); }
+        .kanban-column-badge[data-column="CODE_REVIEWED"] { background: rgba(255, 138, 101, 0.2); color: #ff8a65; border-color: rgba(255, 138, 101, 0.3); }
+        .kanban-column-badge[data-column="COMPLETED"] { background: rgba(102, 187, 106, 0.2); color: #66bb6a; border-color: rgba(102, 187, 106, 0.3); }
+        /* Fallback for custom columns */
+        .kanban-column-badge:not([data-column="CREATED"]):not([data-column="PLAN_REVIEWED"]):not([data-column="CODED"]):not([data-column="CODE_REVIEWED"]):not([data-column="COMPLETED"]) {
+            background: rgba(255, 255, 255, 0.08); color: var(--text-secondary); border: 1px solid var(--border-color);
+        }
+
+        .markdown-alert { padding: 8px 12px; border-left: 4px solid; border-radius: 4px; margin: 12px 0; }
+        .markdown-alert-title { font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+        .alert-note { border-left-color: var(--accent-teal); background: color-mix(in srgb, var(--accent-teal) 8%, transparent); }
+        .alert-note .markdown-alert-title { color: var(--accent-teal); }
+        .alert-tip { border-left-color: #66bb6a; background: rgba(102, 187, 106, 0.08); }
+        .alert-tip .markdown-alert-title { color: #66bb6a; }
+        .alert-important { border-left-color: #bb86fc; background: rgba(187, 134, 252, 0.08); }
+        .alert-important .markdown-alert-title { color: #bb86fc; }
+        .alert-warning { border-left-color: #ffb74d; background: rgba(255, 183, 77, 0.08); }
+        .alert-warning .markdown-alert-title { color: #ffb74d; }
+        .alert-caution { border-left-color: #ff8a65; background: rgba(255, 138, 101, 0.08); }
+        .alert-caution .markdown-alert-title { color: #ff8a65; }
+
+        .cyber-scanlines {
+            display: none; /* Hidden by default; shown only when .cyber-theme-enabled is on body */
+            position: absolute;
+            inset: 0;
+            pointer-events: none; /* CRITICAL: must not block interaction with content below */
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0, 0, 0, 0.07) 2px,
+                rgba(0, 0, 0, 0.07) 4px
+            );
+            z-index: 5;
+        }
+        .cyber-theme-enabled .cyber-scanlines,
+        body.theme-claudify .cyber-scanlines { display: block; }
+
+        /* Grid-lighting mask sweep — ported from switchboard-site .bg-grid::after.
+           A mask-position-animated silver-grid reveal that lights the cyan body grid
+           in place as the band descends, then parks off-screen for ~11s of the 16s cycle.
+           Only active when animation is not disabled. */
+        body:not(.cyber-animation-disabled) .cyber-scanlines::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 6;
+            background-image:
+                linear-gradient(180deg, transparent, rgba(214, 232, 238, 0.02), transparent),
+                linear-gradient(to right, rgba(214, 232, 238, 0.11) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(214, 232, 238, 0.11) 1px, transparent 1px);
+            background-size: 100% 100%, var(--sweep-grid) var(--sweep-grid), var(--sweep-grid) var(--sweep-grid);
+            /* Anchor the sweep grid to the viewport so its tiling shares the same origin as the
+               theme's background grid (both tile from viewport 0,0). --sweep-grid matches each
+               theme's pitch: 32px afterburner (cyan grid), 40px claudify (grey grid). */
+            background-attachment: fixed;
+            -webkit-mask-image: linear-gradient(180deg, transparent, #000 45%, #000 55%, transparent);
+            mask-image: linear-gradient(180deg, transparent, #000 45%, #000 55%, transparent);
+            -webkit-mask-size: 100% 40vh;
+            mask-size: 100% 40vh;
+            -webkit-mask-repeat: no-repeat;
+            mask-repeat: no-repeat;
+            -webkit-mask-position: 0 -50vh;
+            mask-position: 0 -50vh;
+            animation: grid-sweep 16s ease-in-out infinite;
+        }
+
+        @keyframes grid-sweep {
+            0%   { mask-position: 0 -50vh; -webkit-mask-position: 0 -50vh; }
+            30%  { mask-position: 0 110vh; -webkit-mask-position: 0 110vh; }
+            100% { mask-position: 0 110vh; -webkit-mask-position: 0 110vh; }
+        }
+
+        /* Respect reduced-motion preference — suppress ONLY the sweep animation,
+           not the static scanline texture. Selector matches the animated rule precisely. */
+        @media (prefers-reduced-motion: reduce) {
+            body:not(.cyber-animation-disabled) .cyber-scanlines::before {
+                animation: none;
+                display: none;
+            }
+        }
+
+        /* Zoomable content wrapper */
+        .zoomable-container {
+            position: relative;
+            flex: 1;
+            overflow: hidden;
+            cursor: grab;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .zoomable-container.panning {
+            cursor: grabbing;
+        }
+        .zoomable-viewport {
+            transform-origin: top left;
+            will-change: transform;
+        }
+
+        /* The Planning HTML iframe viewport is sized to the previewed page's natural
+           pixel dims (via sbContentDims). As a flex child of the centered .zoomable-container
+           it would be shrunk on the main axis and centered (negative origin) on the cross
+           axis — both break the transform-based fit/pan math, which assumes a fixed-size
+           box anchored at the container's top-left. Take it out of flex flow so the
+           reported dims are honored and the top-left origin holds. In the default
+           100%×100% state this is a no-op. */
+        #planning-html-preview-wrapper > .zoomable-viewport {
+            position: absolute;
+            top: 0;
+            left: 0;
+            flex-shrink: 0;
+        }
+
+        /* Transparent layer above the iframe so pan/zoom mouse events reach the
+           container instead of disappearing into the iframe document. Hidden by
+           default; shown only while Space is held or Pan mode is on. */
+        .zoom-event-layer {
+            position: absolute;
+            inset: 0;
+            z-index: 5;
+            cursor: grab;
+            display: none;
+        }
+        body.space-pan-active .zoom-event-layer {
+            display: block;
+        }
+        /* While Inspect Mode is active the iframe must receive hover/click, so the
+           pan capture layer is never shown even if Pan mode / Space is engaged.
+           Panning during inspect is done via forwarded wheel (see sbWheel). */
+        body.inspect-active .zoom-event-layer {
+            display: none !important;
+        }
+
+        /* Image preview viewports must fill the container so flex centering is a no-op
+           and fitToContainer's top-left-origin pan math holds. */
+        #image-preview-container .zoomable-viewport {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Class-based scanline suppression — toggled by JS */
+        .preview-panel-wrapper.scanlines-suppressed > .cyber-scanlines {
+            display: none !important;
+        }
+
+        /* Global scanline suppression — toggled by the Setup panel checkbox (both themes) */
+        .cyber-scanlines-disabled .cyber-scanlines {
+            display: none !important;
+        }
+
+        /* Floating zoom toolbar */
+        .zoom-toolbar {
+            position: absolute;
+            bottom: 12px;
+            right: 12px;
+            display: flex;
+            gap: 4px;
+            z-index: 10;
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(4px);
+            padding: 4px;
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
+        }
+        .zoom-btn {
+            width: 28px;
+            height: 28px;
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 14px;
+            line-height: 1;
+            cursor: pointer;
+            border-radius: 3px;
+            transition: all 0.15s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .zoom-btn:hover {
+            border-color: var(--accent-teal-dim);
+            color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+        }
+        .zoom-btn.active {
+            background: var(--accent-teal-dim);
+            border-color: var(--accent-teal);
+            color: var(--accent-teal);
+            font-weight: 600;
+        }
+
+        /* ── Cyber Panel Theme: Neon Glow Effects ── */
+        /* Headings: no glow (Hanken, H1 white / H2–H6 cyan) per D13. */
+
+        /* Preview panel wrapper: no surface glow — matches switchboard-site, whose
+           .docs-article reading surface has no inset glow (that glow lives only on the
+           site's decorative .window/.clip frames, not the docs page). */
+
+        /* Inline code: no glow (site inline code has none) */
+
+        /* Code blocks: faint glow border, matching the site's 5% */
+        .cyber-theme-enabled #markdown-preview pre,
+        .cyber-theme-enabled #markdown-preview-online pre,
+        .cyber-theme-enabled #markdown-preview-design pre,
+        .cyber-theme-enabled #kanban-preview-pane pre,
+        .cyber-theme-enabled #markdown-preview-tickets pre {
+            box-shadow: 0 0 15px color-mix(in srgb, var(--accent-teal) 5%, transparent),
+                        inset 0 0 10px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Blockquotes: cyan left border, no glow (matches the site) */
+        .cyber-theme-enabled #markdown-preview blockquote,
+        .cyber-theme-enabled #markdown-preview-online blockquote,
+        .cyber-theme-enabled #markdown-preview-design blockquote,
+        .cyber-theme-enabled #kanban-preview-pane blockquote,
+        .cyber-theme-enabled #markdown-preview-tickets blockquote {
+            border-left-color: var(--accent-teal);
+        }
+
+        /* Markdown alerts: no glow (matches the site — tint + left border only) */
+
+        /* Kanban plan items: neon glow on selection/hover */
+        .cyber-theme-enabled .kanban-plan-item.selected {
+            box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 40%, transparent),
+                        inset 0 0 6px color-mix(in srgb, var(--accent-teal) 15%, transparent);
+        }
+        .cyber-theme-enabled .kanban-plan-item:hover {
+            box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+
+        /* Tree node items: neon glow on selection/hover */
+        .cyber-theme-enabled .tree-node.selected {
+            box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 40%, transparent),
+                        inset 0 0 6px color-mix(in srgb, var(--accent-teal) 15%, transparent);
+        }
+        .cyber-theme-enabled .tree-node:hover {
+            box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+
+        /* Column badges: neon glow matching their color */
+        .cyber-theme-enabled .kanban-column-badge[data-column="CREATED"] { box-shadow: 0 0 6px color-mix(in srgb, var(--accent-primary) 30%, transparent); }
+        .cyber-theme-enabled .kanban-column-badge[data-column="PLAN_REVIEWED"] { box-shadow: 0 0 6px rgba(187, 134, 252, 0.3); }
+        .cyber-theme-enabled .kanban-column-badge[data-column="CODED"] { box-shadow: 0 0 6px rgba(255, 183, 77, 0.3); }
+        .cyber-theme-enabled .kanban-column-badge[data-column="CODE_REVIEWED"] { box-shadow: 0 0 6px rgba(255, 138, 101, 0.3); }
+        .cyber-theme-enabled .kanban-column-badge[data-column="COMPLETED"] { box-shadow: 0 0 6px rgba(102, 187, 106, 0.3); }
+
+
+
+        /* Controls strip buttons: glow on hover */
+        .cyber-theme-enabled .strip-btn:hover:not(:disabled) {
+            box-shadow: var(--glow-teal);
+        }
+
+        /* ── Cyber Panel Theme: Immersive Background ── */
+        /* NOTE: body.cyber-theme-enabled (not .cyber-theme-enabled body) because the class is
+           applied directly to document.body via classList.add — body cannot be a descendant of itself. */
+        body.cyber-theme-enabled {
+            background-color: #171717;   /* neutral dark surface — a touch lighter than the site's #101414, no teal bias */
+            background-image:
+                /* Cyan grid lines at 32px — restored to match switchboard-site .bg-grid */
+                linear-gradient(rgba(0, 229, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 229, 255, 0.03) 1px, transparent 1px);
+            background-size: 32px 32px, 32px 32px;
+        }
+
+
+
+        /* Controls strip */
+        .cyber-theme-enabled .controls-strip {
+            background: rgba(10, 10, 10, 0.65);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-bottom-color: var(--border-color);
+        }
+
+        /* Sidebar tree panes */
+        .cyber-theme-enabled #tree-pane,
+        .cyber-theme-enabled #tree-pane-online,
+        .cyber-theme-enabled #tree-pane-tickets {
+            background: rgba(10, 10, 10, 0.70);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border-right-color: var(--border-color);
+        }
+
+        /* Kanban list pane */
+        .cyber-theme-enabled #kanban-list-pane {
+            background: rgba(10, 10, 10, 0.70);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+
+        /* Preview panel wrapper — transparent passthrough in cyber mode.
+           The wrapper has overflow: hidden (base CSS) which kills backdrop-filter on children;
+           we make it a transparent container and apply glass directly on the scroll panes. */
+        .cyber-theme-enabled .preview-panel-wrapper {
+            background: transparent;
+        }
+
+        /* Preview scroll panes — transparent so the single cyan body grid shows through.
+           Glass overlay + per-pane grey grid removed (no blur, no moiré). */
+        .cyber-theme-enabled #preview-pane,
+        .cyber-theme-enabled #preview-pane-online,
+        .cyber-theme-enabled #preview-pane-tickets {
+            background: transparent;
+        }
+
+        /* Kanban preview — same transparent approach */
+        .cyber-theme-enabled #kanban-preview-pane {
+            background: transparent;
+        }
+
+        /* Tab content wrappers — solid backgrounds that block the body grid */
+        .cyber-theme-enabled #research-content {
+            background: transparent;
+        }
+
+        /* Kanban board content area */
+        .cyber-theme-enabled #kanban-content {
+            background: transparent;
+        }
+
+        /* Local and online content views */
+        .cyber-theme-enabled #local-content,
+        .cyber-theme-enabled #online-content,
+        .cyber-theme-enabled #tickets-content {
+            background: transparent;
+        }
+
+        /* Planning cards */
+        .cyber-theme-enabled .planning-card {
+            background: rgba(13, 13, 13, 0.60);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border-color: var(--border-color);
+            box-shadow: 0 0 12px color-mix(in srgb, var(--accent-primary) 6%, transparent), 0 4px 12px rgba(0, 0, 0, 0.4);
+        }
+
+        /* Duplicate modal */
+        .cyber-theme-enabled .duplicate-modal .modal-content {
+            background: rgba(10, 10, 10, 0.88);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid color-mix(in srgb, var(--accent-primary) 25%, transparent);
+            box-shadow: 0 0 24px color-mix(in srgb, var(--accent-primary) 12%, transparent), 0 8px 32px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Folder modal */
+        .cyber-theme-enabled .folder-modal .modal-content {
+            background: rgba(10, 10, 10, 0.88);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
+            box-shadow: 0 0 24px color-mix(in srgb, var(--accent-primary) 12%, transparent), 0 8px 32px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Primary planning buttons: brighter neon border in cyber mode */
+        .cyber-theme-enabled .planning-button {
+            border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
+            box-shadow: 0 0 6px color-mix(in srgb, var(--accent-primary) 10%, transparent);
+        }
+        .cyber-theme-enabled .planning-button:hover:not(:disabled) {
+            box-shadow: 0 0 14px color-mix(in srgb, var(--accent-primary) 45%, transparent);
+        }
+
+        /* Secondary planning buttons */
+        .cyber-theme-enabled .planning-button.secondary {
+            border-color: var(--border-color);
+            background: rgba(10, 10, 10, 0.50);
+        }
+        .cyber-theme-enabled .planning-button.secondary:hover:not(:disabled) {
+            border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+            background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
+        }
+
+        /* Select and input controls */
+        .cyber-theme-enabled .planning-select,
+        .cyber-theme-enabled .planning-input {
+            background: rgba(10, 10, 10, 0.70);
+            border-color: var(--border-color);
+        }
+        .cyber-theme-enabled .planning-select:focus,
+        .cyber-theme-enabled .planning-input:focus {
+            border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-primary) 15%, transparent);
+        }
+
+        /* Cyan scrollbar thumbs in cyber mode */
+        .cyber-theme-enabled ::-webkit-scrollbar-thumb {
+            background: color-mix(in srgb, var(--accent-primary) 25%, transparent);
+        }
+        .cyber-theme-enabled ::-webkit-scrollbar-thumb:hover {
+            background: color-mix(in srgb, var(--accent-primary) 45%, transparent);
+        }
+
+        .cyber-theme-enabled .kanban-controls-strip {
+            background: transparent;
+        }
+
+        .cyber-theme-enabled .markdown-editor {
+            background: transparent;
+        }
+
+        body.theme-claudify #docs-content,
+        body.theme-claudify #research-content,
+        body.theme-claudify #tickets-content,
+        body.theme-claudify #preview-pane,
+        body.theme-claudify #preview-pane-tickets {
+            background-color: #171717;   /* neutral flat surface (claudify has no glass overlay) */
+            background-image:
+                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+            background-size: 32px 32px, 32px 32px;
+            background-attachment: fixed;   /* viewport-anchored so the grid-sweep aligns to it */
+        }
+
+        /* Claudify: h2-h6 — Hanken, terracotta */
+        body.theme-claudify #markdown-preview h2, body.theme-claudify #markdown-preview h3, body.theme-claudify #markdown-preview h4, body.theme-claudify #markdown-preview h5, body.theme-claudify #markdown-preview h6,
+        body.theme-claudify #markdown-preview-tickets h2, body.theme-claudify #markdown-preview-tickets h3, body.theme-claudify #markdown-preview-tickets h4, body.theme-claudify #markdown-preview-tickets h5, body.theme-claudify #markdown-preview-tickets h6 {
+            font-family: var(--font-family);
+            letter-spacing: normal;
+            font-stretch: 100%;
+            color: #D97757;
+        }
+
+        .preview-panel-wrapper {
+            position: relative;
+            flex: 3;
+            height: 100%;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .kanban-plan-meta { font-size: 11px; opacity: 0.55; }
+        .kanban-plan-actions { display: flex; gap: 6px; margin-top: 4px; }
+        .kanban-plan-copy-link {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 10px;
+            font-family: var(--font-family);
+            padding: 2px 7px;
+            cursor: pointer;
+            border-radius: 10px;
+            transition: all 0.15s;
+            margin-left: auto;
+            white-space: nowrap;
+        }
+        .kanban-plan-copy-link:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+            border-color: var(--accent-teal);
+        }
+        .kanban-plan-copy-prompt {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 10px;
+            font-family: var(--font-family);
+            padding: 2px 8px;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+        .kanban-plan-copy-prompt:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+            border-color: var(--accent-teal);
+        }
+        .kanban-column-badge.clickable {
+            cursor: pointer;
+        }
+        .kanban-column-badge.clickable:hover {
+            opacity: 0.8;
+        }
+        .kanban-column-dropdown {
+            position: absolute;
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 2px;
+            z-index: 100;
+            font-size: 11px;
+            color: var(--text-primary);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        .kanban-empty-state { padding: 32px; text-align: center; opacity: 0.5; font-size: 13px; }
+
+        .markdown-editor {
+            width: 100%;
+            height: 100%;
+            background: var(--panel-bg);
+            color: var(--text-primary);
+            font-family: var(--font-code);
+            font-size: 13px;
+            border: none;
+            padding: 16px;
+            resize: none;
+            outline: none;
+            white-space: pre;
+            tab-size: 4;
+            box-sizing: border-box;
+        }
+        #tickets-detail-content .markdown-editor {
+            background: transparent;
+        }
+        #json-preview-container-design {
+            font-size: 12px;
+            line-height: 1.6;
+        }
+        .json-node { margin-left: 16px; }
+        .json-row { display: flex; gap: 4px; padding: 1px 0; }
+        .json-key { color: #9cdcfe; }
+        .json-string { color: #ce9178; }
+        .json-number { color: #b5cea8; }
+        .json-boolean { color: #569cd6; }
+        .json-null { color: #569cd6; font-style: italic; }
+        .json-bracket { color: #d4d4d4; cursor: pointer; }
+        .json-error { color: var(--vscode-errorForeground, #ff6b6b); padding: 12px; }
+        .json-error button { margin-top: 8px; padding: 4px 12px; cursor: pointer; }
+        .edit-mode #markdown-preview,
+        .edit-mode #markdown-preview-online,
+        .edit-mode #kanban-preview-content {
+            display: none !important;
+        }
+        .edit-mode .markdown-editor {
+            display: block !important;
+        }
+        .comment-popup {
+            position: fixed;
+            z-index: 999;
+            width: min(420px, calc(100vw - 24px));
+            background: var(--panel-bg, #000000);
+            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+            border-radius: 6px;
+            padding: 10px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+            display: none;
+        }
+        .comment-popup.visible {
+            display: block;
+        }
+        .popup-label {
+            font-size: 11px;
+            color: var(--text-secondary, #888);
+            margin-bottom: 6px;
+        }
+        .selected-preview {
+            font-size: 12px;
+            color: var(--text-primary, #ccc);
+            background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent-primary) 22%, transparent);
+            border-radius: 4px;
+            padding: 8px;
+            margin-bottom: 8px;
+            max-height: 80px;
+            overflow: auto;
+        }
+        .comment-popup textarea {
+            width: 100%;
+            min-height: 76px;
+            resize: vertical;
+            background: var(--input-bg, rgba(255,255,255,0.06));
+            color: var(--text-primary, #ccc);
+            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+            border-radius: 4px;
+            padding: 8px;
+            font-family: var(--font-family, sans-serif);
+            font-size: 13px;
+            margin-bottom: 10px;
+        }
+        .popup-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+        .popup-actions button {
+            background: transparent;
+            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+            color: var(--text-secondary, #888);
+            padding: 4px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .popup-actions button.primary {
+            background: var(--accent-teal, var(--accent-primary));
+            color: #000;
+            border-color: var(--accent-teal, var(--accent-primary));
+        }
+        /* Folder Modal */
         .folder-modal {
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
@@ -248,61 +2739,1016 @@
             max-height: none;
         }
 
-        /* ── 2f: Agent API modal styles (moved from planning.html). ── */
-        .agent-api-list li {
-            display: flex;
-            align-items: flex-start;
-            justify-content: space-between;
-            gap: 12px;
-            padding: 10px 12px;
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            background: var(--panel-bg2, var(--card-bg, #1a1a2e));
-        }
-        .agent-api-list .agent-api-text { flex: 1; min-width: 0; }
-        .agent-api-list .agent-api-name { font-size: 12px; font-weight: 600; color: var(--text-primary); }
-        .agent-api-list .agent-api-desc { font-size: 11px; color: var(--text-secondary); line-height: 1.4; margin-top: 2px; }
-        .agent-api-list .agent-api-copy { white-space: nowrap; flex: 0 0 auto; }
+        /* ── 2f: agent-api-list styles moved to tickets.html. ── */
 
-        /* ── Cyber-theme overrides (byte-exact from planning.html) ──────── */
-        .cyber-theme-enabled .folder-modal .modal-content {
-            background: rgba(10, 10, 10, 0.88);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
-            box-shadow: 0 0 24px color-mix(in srgb, var(--accent-primary) 12%, transparent), 0 8px 32px rgba(0, 0, 0, 0.5);
+
+        /* Tickets Tab Styles */
+        #controls-strip-tickets input {
+            flex: 1;
+            min-width: 200px;
+            padding: 6px 10px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-size: 11px;
         }
-        .cyber-theme-enabled .planning-button {
-            border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
-            box-shadow: 0 0 6px color-mix(in srgb, var(--accent-primary) 10%, transparent);
+
+        #controls-strip-tickets input:focus {
+            outline: none;
+            border-color: var(--accent-teal);
         }
-        .cyber-theme-enabled .planning-button:hover:not(:disabled) {
-            box-shadow: 0 0 14px color-mix(in srgb, var(--accent-primary) 45%, transparent);
+
+        #controls-strip-tickets select {
+            padding: 6px 10px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-size: 11px;
         }
-        .cyber-theme-enabled .planning-button.secondary {
-            border-color: var(--border-color);
-            background: var(--card-bg);
+
+        /* Inline filter selects — override .planning-select flex:1 to prevent layout expansion */
+        #controls-strip-tickets .planning-select {
+            flex: none;
+            max-width: 140px;
+            height: 26px;
+            font-size: 11px;
+        }
+
+        #controls-strip-tickets {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 6px;
+        }
+        #controls-strip-planning-html {
+            flex-direction: row;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        #controls-strip-planning-html input[type="text"]#planning-html-artifact-url {
+            flex: 1;
+            min-width: 200px;
+            padding: 6px 10px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-size: 11px;
+        }
+        #controls-strip-planning-html input[type="text"]#planning-html-artifact-url:focus {
+            outline: none;
+            border-color: var(--accent-teal);
+        }
+        .controls-strip-row {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+            width: 100%;
+        }
+
+        .stitch-btn-primary {
+            background: var(--accent-teal-dim);
+            border-color: var(--accent-teal);
+            color: var(--accent-teal);
+            font-weight: 600;
+        }
+        .stitch-btn-primary:hover:not(:disabled) {
+            background: var(--accent-teal);
+            color: #000;
+        }
+
+        /* Inspect Mode controls + tweak popup (mirrors Design panel's styles) */
+        .preview-overlay-btn {
+            border: 1px solid rgba(255,255,255,0.25);
+            background: rgba(0,0,0,0.3);
+            color: rgba(255,255,255,0.85);
+            border-radius: 4px;
+            padding: 3px 10px;
+            font-size: 11px;
+            cursor: pointer;
+            font-family: var(--font-family);
+            transition: all 0.15s;
+        }
+        .preview-overlay-btn:hover {
+            background: rgba(255,255,255,0.12);
+            border-color: rgba(255,255,255,0.5);
+        }
+        .preview-overlay-btn.primary {
+            background: var(--accent-teal);
+            color: #000;
+            border: none;
+            font-weight: 600;
+        }
+        .preview-overlay-btn.primary:hover {
+            background: var(--accent-teal-bright);
+        }
+        .preview-overlay-btn.active {
+            background: var(--accent-teal);
+            color: #000;
+            border-color: var(--accent-teal);
+        }
+        .preview-overlay-btn.active:hover {
+            background: var(--accent-teal-bright);
+        }
+        .stitch-input {
+            width: 100%;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            padding: 6px 8px;
+            font-family: var(--font-family);
+            font-size: 12px;
+            box-sizing: border-box;
+        }
+        .stitch-input:focus {
+            outline: 1px solid var(--accent-teal);
+            border-color: var(--accent-teal);
+        }
+
+        .ticket-node {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding: 10px 12px;
+            border-radius: 4px;
+            margin: 4px 0;
+            border: 1px solid var(--border-color);
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg) 100%);
+            cursor: pointer;
+            user-select: none;
+            font-size: 12px;
+            line-height: 1.4;
+            transition: all 0.15s;
+        }
+
+        .ticket-node:hover {
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+        }
+
+        .ticket-node.selected {
+            border-color: var(--accent-teal);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
+                        inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            color: var(--accent-teal);
+        }
+
+        .cyber-theme-enabled .ticket-node.selected {
+            box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 40%, transparent),
+                        inset 0 0 6px color-mix(in srgb, var(--accent-teal) 15%, transparent);
+        }
+        .cyber-theme-enabled .ticket-node:hover {
+            box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+
+        .ticket-node .tickets-issue-title {
+            font-size: 12px;
+            font-weight: 700;
             color: var(--text-primary);
         }
-        .cyber-theme-enabled .planning-button.secondary:hover:not(:disabled) {
+
+        .ticket-node .tickets-issue-meta {
+            font-size: 11px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            font-family: var(--font-family);
+        }
+        /* Status meta row hosts the sync badge inline next to the state name. */
+        .ticket-node .tickets-issue-meta.ticket-status-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .ticket-node .tickets-issue-meta.ticket-status-row .ticket-sync-badge {
+            flex-shrink: 0;
+            align-self: center; /* overrides base .ticket-sync-badge align-self: flex-start */
+        }
+        /* Editable status & assignee rows on sidebar cards afford clicking. */
+        .ticket-node .tickets-issue-meta[data-edit-status],
+        .ticket-node .tickets-issue-meta[data-edit-assignees] {
+            cursor: pointer;
+            align-self: flex-start; /* override .ticket-node's align-items:stretch */
+            width: fit-content;     /* size the click target to the text, not the row */
+            max-width: 100%;        /* never overflow the card on long assignee lists */
+        }
+        .ticket-node .tickets-issue-meta[data-edit-status]:hover,
+        .ticket-node .tickets-issue-meta[data-edit-assignees]:hover {
+            text-decoration: underline;
+            color: var(--accent-teal, #00ffcc);
+        }
+
+        /* Card action row always occupies its space so card height is stable
+           regardless of hover — no layout shift while scanning the list. At rest
+           the row is dimmed (opacity 0.55) and brightens on hover/selection.
+           pointer-events stay auto so the buttons are clickable at rest. */
+        .ticket-node .card-actions {
+            display: flex;
+            gap: 4px;
+            margin-top: 4px;
+            flex-wrap: wrap;
+            justify-content: flex-start;
+            max-height: none;
+            overflow: visible;
+            opacity: 0.55;
+            pointer-events: auto;
+            transition: opacity 0.15s ease;
+        }
+
+        .ticket-node:hover .card-actions,
+        .ticket-node.selected .card-actions,
+        .ticket-node:focus-within .card-actions {
+            opacity: 1;
+        }
+
+        .ticket-node .card-actions .card-icon-btn {
+            width: auto;
+            padding: 0 6px;
+            font-size: 10px;
+            height: 22px;
+        }
+
+        .ticket-priority-dot,
+        .ticket-status-light {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .ticket-status-light {
+            box-shadow: 0 0 4px color-mix(in srgb, currentColor 0%, transparent);
+            border: 1px solid color-mix(in srgb, var(--panel-bg) 40%, transparent);
+        }
+
+        .ticket-priority-dot {
+            cursor: pointer;
+            border: 1px solid color-mix(in srgb, var(--panel-bg) 40%, transparent);
+            transition: transform 0.1s ease, box-shadow 0.1s ease;
+        }
+        .ticket-priority-dot:hover {
+            transform: scale(1.2);
+            box-shadow: 0 0 6px currentColor;
+        }
+        .ticket-priority-dot.busy {
+            pointer-events: none;
+            opacity: 0.5;
+        }
+
+        .ticket-priority-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            font-size: 12px;
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: background 0.1s ease;
+        }
+        .ticket-priority-option:hover {
+            background: var(--panel-bg2, #2a2a3e);
+        }
+        .ticket-priority-option.selected {
+            background: var(--accent-teal-dim, #113f3f);
+            font-weight: bold;
+        }
+        .priority-option-swatch {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .priority-option-swatch.hollow {
+            border: 1.5px dashed var(--text-muted, #555);
+            background: transparent !important;
+        }
+
+
+        .ticket-status-group-header:hover,
+        .sidebar-drilldown-header:hover {
+            background: var(--panel-bg, #2a2a3e) !important;
+        }
+        .accordion-arrow {
+            display: inline-block;
+            font-size: 10px;
+            transition: transform 0.2s ease;
+        }
+        .ticket-status-group-body {
+            transition: max-height 0.2s ease;
+        }
+
+        .ticket-sync-badge {
+            font-size: 9px;
+            letter-spacing: 0.02em;
+            padding: 1px 5px;
+            border-radius: 3px;
+            align-self: flex-start;
+            pointer-events: none;
+            user-select: none;
+        }
+        .ticket-sync-synced {
+            color: var(--vscode-testing-iconPassed, #73c991);
+            opacity: 0.7;
+        }
+        .ticket-sync-modified {
+            color: var(--vscode-editorWarning-foreground, #cca700);
+        }
+        .ticket-sync-local {
+            color: var(--text-secondary);
+            opacity: 0.7;
+        }
+
+        /* ── Ticket Detail Preview Pane ── */
+        /* Matches #markdown-preview typography and spacing */
+        #preview-pane-tickets {
+            font-size: 13px;
+            line-height: 1.5;
+            color: var(--text-primary);
+            padding: 0;
+        }
+
+        /* Section headers inside ticket preview — match markdown h2/h3 */
+        .tickets-section-header {
+            font-size: 1.25em;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-top: 24px;
+            margin-bottom: 12px;
+            padding-bottom: 0.3em;
+            border-bottom: 1px solid var(--accent-teal-dim);
+            letter-spacing: 0.3px;
+        }
+
+        /* Comment items — clean list style */
+        .tickets-comment-item {
+            padding: 8px 12px;
+            margin-bottom: 8px;
+            border-left: 3px solid var(--accent-teal-dim);
+            border-radius: 0 4px 4px 0;
+            background: color-mix(in srgb, var(--accent-teal) 6%, var(--panel-bg));
+        }
+
+        .tickets-comment-author {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--accent-teal);
+        }
+
+        .tickets-comment-date {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-family: var(--font-code);
+            margin-left: 8px;
+        }
+
+        .tickets-comment-body {
+            font-size: 13px;
+            color: var(--text-primary);
+            line-height: 1.5;
+            margin-top: 4px;
+        }
+
+        /* ── Comment Manager: threads + replies + mentions ── */
+        .cm-thread {
+            margin-bottom: 12px;
+            border-left: 3px solid var(--accent-teal-dim);
+            border-radius: 0 4px 4px 0;
+            background: color-mix(in srgb, var(--accent-teal) 6%, var(--panel-bg));
+            padding: 8px 12px;
+        }
+        .cm-thread-header {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            margin-bottom: 4px;
+        }
+        .cm-thread-author {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--accent-teal);
+        }
+        .cm-thread-date {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-family: var(--font-code);
+        }
+        .cm-thread-body {
+            font-size: 13px;
+            color: var(--text-primary);
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .cm-thread-actions {
+            margin-top: 6px;
+            display: flex;
+            gap: 8px;
+        }
+        .cm-reply-btn {
+            font-size: 11px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            background: none;
+            border: none;
+            padding: 0;
+            text-decoration: underline;
+        }
+        .cm-reply-btn:hover {
+            color: var(--accent-teal);
+        }
+        .cm-replies {
+            margin-top: 8px;
+            margin-left: 16px;
+            border-left: 2px solid var(--border-color);
+            padding-left: 10px;
+        }
+        .cm-reply {
+            margin-bottom: 6px;
+            padding: 6px 8px;
+            background: color-mix(in srgb, var(--accent-teal) 3%, var(--panel-bg));
+            border-radius: 3px;
+        }
+        .cm-reply-header {
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
+            margin-bottom: 2px;
+        }
+        .cm-reply-author {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--accent-teal);
+        }
+        .cm-reply-date {
+            font-size: 10px;
+            color: var(--text-secondary);
+            font-family: var(--font-code);
+        }
+        .cm-reply-body {
+            font-size: 12px;
+            color: var(--text-primary);
+            line-height: 1.4;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .cm-comment-image {
+            max-width: 100%;
+            max-height: 300px;
+            border-radius: 4px;
+            margin: 4px 0;
+            display: block;
+            border: 1px solid var(--border-color);
+        }
+        .cm-reply-box {
+            margin-top: 6px;
+            margin-left: 16px;
+        }
+        .cm-reply-box textarea {
+            width: 100%;
+            height: 50px;
+            background: var(--input-bg);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 12px;
+            padding: 4px;
+            box-sizing: border-box;
+            resize: vertical;
+        }
+        .cm-reply-box-actions {
+            margin-top: 4px;
+            display: flex;
+            justify-content: flex-end;
+            gap: 6px;
+        }
+        .cm-mention-token {
+            color: var(--accent-teal);
+            font-weight: 600;
+        }
+        .cm-mention-item {
+            padding: 6px 10px;
+            cursor: pointer;
+            font-size: 12px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+        }
+        .cm-mention-item:hover, .cm-mention-item.cm-mention-active {
+            background: color-mix(in srgb, var(--accent-teal) 15%, var(--panel-bg));
+        }
+        .cm-mention-item-name {
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+        .cm-mention-item-email {
+            color: var(--text-secondary);
+            font-size: 10px;
+        }
+        .cm-empty {
+            text-align: center;
+            padding: 24px;
+            color: var(--text-secondary);
+            font-size: 12px;
+        }
+        .cm-loading {
+            text-align: center;
+            padding: 16px;
+            color: var(--text-secondary);
+            font-size: 12px;
+        }
+        .cm-error {
+            padding: 8px 12px;
+            color: var(--vscode-errorForeground, #f48771);
+            font-size: 12px;
+            background: color-mix(in srgb, #f48771 10%, var(--panel-bg));
+            border-radius: 4px;
+            margin: 8px 0;
+        }
+        .cm-optimistic {
+            opacity: 0.6;
+        }
+
+        /* Attachment items — inline link style */
+        .tickets-attachment-item {
+            display: inline-block;
+            padding: 4px 10px;
+            margin: 0 4px 4px 0;
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 3px;
+            background: transparent;
+            color: var(--accent-teal);
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .tickets-attachment-item:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+            border-color: var(--accent-teal);
+        }
+
+        /* Cyber theme overrides for ticket detail preview */
+        .cyber-theme-enabled #tickets-subtasks-nav .subtask-nav-item {
+            background: rgba(13, 13, 13, 0.40);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+        }
+        .cyber-theme-enabled #tickets-subtasks-nav .subtask-nav-item:hover {
+            box-shadow: 0 0 6px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+        }
+
+        .cyber-theme-enabled .tickets-comment-item {
+            background: rgba(13, 13, 13, 0.40);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+        }
+
+        .cyber-theme-enabled .tickets-attachment-item {
+            box-shadow: 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+
+        /* ── 2b: .tickets-hierarchy-nav CSS moved to tickets.html ── */
+
+        /* Complexity dot — coloured circle indicator */
+        .complexity-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            flex-shrink: 0;
+            vertical-align: middle;
+        }
+        .complexity-dot.unknown { background: #7f848e; }
+        .complexity-dot.very-low { background: var(--accent-teal); }
+        .complexity-dot.low { background: #98c379; }
+        .complexity-dot.medium { background: var(--accent-orange); }
+        .complexity-dot.high { background: #da3633; }
+        .complexity-dot.very-high { background: #ff00ff; }
+
+        /* Tickets local/online mode switch */
+        .tickets-mode-switch { display: flex; gap: 4px; flex: 1; min-width: 0; }
+        .tickets-mode-btn {
+            flex: 1; background: transparent; border: 1px solid var(--border-color, #333);
+            color: var(--text-secondary); font-size: 10px;
+            letter-spacing: 1px; text-transform: uppercase; padding: 4px 6px;
+            cursor: pointer; border-radius: 3px;
+        }
+        .tickets-mode-btn.active {
+            border-color: var(--accent-teal); color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+
+        /* Kanban preview meta bar */
+        #kanban-preview-meta-bar, #tickets-preview-meta-bar, #tickets-local-meta-bar, #docs-preview-meta-bar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 6px 10px;
+            border-bottom: 1px solid var(--border-color, #333);
+            background: var(--panel-bg2, #1a1a2e);
+            font-family: var(--font-code);
+            font-size: 11px;
+            color: var(--text-secondary);
+            flex-wrap: wrap;
+        }
+        /* Delete is the one destructive action here — pushed to the far right,
+           on its own, away from the everyday edit/assign/comment buttons. */
+        #btn-delete-ticket {
+            margin-left: auto;
+        }
+
+        /* Reusable multi-instance overflow menu ("⋯ More" popover).
+           Used by the ticket preview meta bar and the Tickets top control strip.
+           Scoped by [data-overflow-menu] / [data-overflow-trigger] / [data-overflow-popover]
+           data attributes so N independent instances can coexist without id collisions.
+           The popover is position:fixed so it escapes any ancestor overflow:auto / overflow-x:auto
+           (the top strip is overflow-x:auto; the meta bar is flex-wrap:wrap with no overflow). */
+        .overflow-menu {
+            position: relative;
+            display: inline-flex;
+        }
+        .overflow-menu-trigger {
+            /* inherits strip-btn styling */
+        }
+        .overflow-menu-popover {
+            position: fixed;
+            z-index: 10000;
+            display: none;
+            flex-direction: column;
+            gap: 2px;
+            padding: 4px;
+            background: var(--panel-bg, var(--panel-bg2, #1a1a2e));
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            min-width: 160px;
+            max-width: 280px;
+        }
+        .overflow-menu-popover[data-open="true"] {
+            display: flex;
+        }
+        .overflow-menu-item {
+            width: 100%;
+            justify-content: flex-start;
+            text-align: left;
+            white-space: nowrap;
+        }
+        .overflow-menu-trigger[hidden],
+        .overflow-menu[data-empty="true"] {
+            display: none !important;
+        }
+        .kanban-meta-group {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .kanban-meta-label {
+            color: var(--text-secondary);
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .kanban-meta-value {
+            color: var(--accent-teal);
+            cursor: pointer;
+            padding: 1px 4px;
+            border-radius: 2px;
+            border: 1px solid transparent;
+        }
+        .kanban-meta-value:hover {
+            border-color: var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+        .kanban-meta-dropdown {
+            font-size: 11px;
+            background: var(--panel-bg, #0d1117);
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 2px;
+            padding: 2px 4px;
+            outline: none;
+        }
+        .kanban-meta-dropdown:focus {
+            border-color: var(--accent-teal);
+        }
+
+        /* Kanban plan log modal overlay */
+        .kanban-log-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+        }
+        .kanban-log-modal {
+            background: var(--panel-bg, #0d1117);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 6px;
+            padding: 16px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 70vh;
+            display: flex;
+            flex-direction: column;
+            font-family: var(--font-code);
+            font-size: 11px;
+        }
+        .kanban-log-modal h3 {
+            margin: 0 0 12px 0;
+            color: var(--accent-teal);
+            font-size: 13px;
+        }
+        .kanban-log-entries {
+            overflow-y: auto;
+            flex: 1;
+        }
+        .kanban-log-entry {
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border-color, #222);
+            line-height: 1.4;
+        }
+        .kanban-log-entry:last-child { border-bottom: none; }
+        .kanban-log-timestamp {
+            color: var(--text-secondary);
+            font-size: 10px;
+        }
+        .kanban-log-workflow {
+            color: var(--accent-teal);
+        }
+        .kanban-log-details {
+            color: var(--text-primary, #ccc);
+        }
+        .kanban-log-close {
+            margin-top: 12px;
+            align-self: flex-end;
+            padding: 4px 12px;
+            font-size: 11px;
+            background: transparent;
+            border: 1px solid var(--accent-teal-dim);
+            color: var(--accent-teal);
+            border-radius: 2px;
+            cursor: pointer;
+        }
+        .kanban-log-close:hover {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+/* Tag pills */
+.ticket-tag-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border: 1px solid transparent;
+    background: var(--panel-bg2);
+    color: var(--text-secondary);
+}
+
+.ticket-tag-pill.clickup {
+    background: var(--tag-bg, var(--panel-bg2));
+    color: var(--tag-fg, var(--text-secondary));
+    border-color: var(--tag-bg, var(--border-color));
+}
+
+.ticket-tag-pill.linear {
+    background: var(--accent-teal-dim);
+    color: var(--accent-teal);
+    border-color: var(--accent-teal-dim);
+}
+
+/* Tags modal checkbox styling */
+.tag-checkbox-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.tag-checkbox-item:hover {
+    background: var(--card-bg-hover);
+}
+
+.tag-checkbox-item input[type="checkbox"] {
+    margin: 0;
+    cursor: pointer;
+}
+
+.tag-checkbox-label {
+    font-size: 12px;
+    color: var(--text-primary);
+}
+
+.shared-tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 16px 0;
+  background: var(--panel-bg);
+  border-bottom: 1px solid var(--border-color);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.shared-tab-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  color: var(--text-secondary);
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 8px 16px;
+  cursor: pointer;
+  border-radius: 3px 3px 0 0;
+  transition: all 0.15s;
+  position: relative;
+  top: 1px;
+}
+.shared-tab-btn:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent-teal) 5%, transparent);
+}
+.shared-tab-btn.active {
+  color: var(--accent-teal);
+  background: var(--panel-bg2);
+  border-color: var(--border-color);
+  border-bottom-color: var(--panel-bg2);
+}
+
+.shared-tab-content {
+  display: none;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+.shared-tab-content.active {
+  display: flex;
+  overflow-y: auto;
+}
+.cyber-theme-enabled .shared-tab-btn.active {
+  box-shadow: 0 -2px 8px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+}
+.cyber-theme-enabled .shared-tab-bar {
+  background: var(--panel-bg);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* Claudify: neutral-grey tab nav (active tab keeps the terracotta accent). */
+body.theme-claudify .shared-tab-btn:not(.active) { color: #8a8a8a; }
+/* Active tab = invisible rectangle: fill + bottom border match the bar so only the
+   terracotta text reads (D14). */
+body.theme-claudify .shared-tab-btn.active {
+  background: var(--panel-bg);
+  border-color: transparent;
+  border-bottom-color: transparent;
+}
+body.theme-claudify .shared-tab-btn:hover:not(.active) {
+  color: #c8c8c8;
+  background: color-mix(in srgb, #ffffff 5%, transparent);
+}
+
+        /* Toast notification */
+        .toast-notification {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            z-index: 10000;
+            max-width: 400px;
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-size: 12px;
+            line-height: 1.4;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            animation: toast-slide-in 0.2s ease-out;
+        }
+        .toast-notification.toast-error {
+            background: #5d2424;
+            color: #ffb0b0;
+            border: 1px solid #8a3838;
+        }
+        .toast-notification.toast-success {
+            background: #1e4030;
+            color: #8fdab0;
+            border: 1px solid #2e6a4a;
+        }
+        .toast-notification.toast-info {
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+        @keyframes toast-slide-in {
+            from { opacity: 0; transform: translateY(8px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        /* ── Create Plans tab ─────────────────────────────────────────── */
+        .cp-wrap { max-width: 760px; margin: 0 auto; padding: 24px 20px 40px; overflow-y: auto; height: 100%; box-sizing: border-box; }
+        .cp-intro { font-size: 13px; color: var(--text-secondary); line-height: 1.6; margin-bottom: 20px; }
+        .cp-section { margin-bottom: 20px; padding: 14px 16px; background: var(--panel-bg2); border: 1px solid var(--border-color); border-radius: 4px; }
+        .cp-label { font-size: 10px; letter-spacing: 1px; color: var(--accent-teal); margin-bottom: 10px; }
+        .cp-radio { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; margin-bottom: 8px; cursor: pointer; line-height: 1.5; }
+        .cp-radio input { margin-top: 2px; flex: none; }
+        .cp-input { width: 100%; box-sizing: border-box; padding: 6px 8px; margin-bottom: 8px; background: var(--panel-bg); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 3px; font-size: 12px; }
+        .cp-textarea { width: 100%; box-sizing: border-box; min-height: 160px; padding: 8px; background: var(--panel-bg); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 3px; font-family: var(--font-code); font-size: 11px; resize: vertical; margin-bottom: 8px; }
+        .cp-row { display: flex; align-items: center; gap: 10px; }
+        .cp-hint { font-size: 11px; color: var(--text-secondary); }
+        .cp-optional { opacity: 0.85; }
+
+        /* ═══════════════════════════════════════════════════════════════════
+           TICKETS-PANEL-LOCAL RULES
+           Everything above this line is the shared Artifacts stylesheet, ported
+           verbatim. Only rules that exist nowhere else belong below it — if a
+           rule here starts duplicating a planning.html rule, delete it and let
+           the ported copy win. A hand-rewritten "equivalent" is what broke this
+           panel the first time: the extraction shipped 59 re-typed copies whose
+           palette (#1e1e1e greys, a #4ec9b0 green accent) had nothing to do
+           with Switchboard's, so the panel rendered as a different application.
+           ═══════════════════════════════════════════════════════════════════ */
+
+        :root {
+            /* NOT in planning.html's :root, and both are load-bearing here.
+               color-scheme is asserted by browser-panel-scrollbar-contract.test.js
+               (without it a plain browser paints light native scrollbars and
+               light form controls on a black panel). --border-dim arrived with
+               the ClickUp/Linear tabs, which came from setup.html — the only
+               other files that define it are setup.html and implementation.html. */
+            color-scheme: dark;
+            --border-dim: #252525;
+        }
+
+        /* Scrollbars. planning.html's copy is deliberately NOT ported: it has no
+           @supports gate and is on browser-panel-scrollbar-contract.test.js's
+           PENDING list. This panel is not, so it carries the gated version.
+           DO NOT hoist scrollbar-width / scrollbar-color out of the @supports
+           block: Chromium 121+ and Safari 17.4+ ignore EVERY ::-webkit-scrollbar
+           rule on a scroller that declares either, so an ungated copy silently
+           deletes the 6px styling. Chromium and Safari report this selector as
+           supported and skip the block; Gecko reports it unsupported and enters it. */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-corner {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--vscode-scrollbarSlider-background, var(--border-color));
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--vscode-scrollbarSlider-hoverBackground, var(--text-secondary));
+        }
+        @supports not selector(::-webkit-scrollbar) {
+            :root {
+                scrollbar-width: thin;
+                scrollbar-color: var(--border-color) transparent;
+            }
+        }
+
+        /* The provider/hierarchy summary beside the Source button. In the Artifacts
+           panel this span carried no class at all, so nothing was left behind to
+           port — the class is new to this panel and needs its own rule. */
+        .workspace-static-label {
+            font-size: 11px;
+            color: var(--text-secondary);
+            letter-spacing: 0.5px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 320px;
+        }
+
+        /* planning.html styles .overflow-menu-item but never its hover state. */
+        .overflow-menu-item:hover {
             background: var(--card-bg-hover);
             color: var(--text-primary);
-            box-shadow: none;
-        }
-        .cyber-theme-enabled .planning-select,
-        .cyber-theme-enabled .planning-input {
-            background: rgba(10, 10, 10, 0.70);
-            border-color: var(--border-color);
-        }
-        .cyber-theme-enabled .planning-select:focus,
-        .cyber-theme-enabled .planning-input:focus {
-            border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent);
-            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-primary) 15%, transparent);
         }
 
-        /* ── Agent API list (for the Agent API modal, not moved yet but ──── */
-        /* referenced by getTicketsTabElements — keep the CSS so later slices */
-        /* don't hit unstyled markup) */
+        /* Agent API modal. */
         .agent-api-list li {
             display: flex;
             align-items: flex-start;
@@ -311,21 +3757,20 @@
             padding: 10px 12px;
             border: 1px solid var(--border-color);
             border-radius: 6px;
-            background: var(--panel-bg2, var(--card-bg, #1a1a2e));
+            background: var(--panel-bg2);
         }
         .agent-api-list .agent-api-text { flex: 1; min-width: 0; }
         .agent-api-list .agent-api-name { font-size: 12px; font-weight: 600; color: var(--text-primary); }
         .agent-api-list .agent-api-desc { font-size: 11px; color: var(--text-secondary); line-height: 1.4; margin-top: 2px; }
         .agent-api-list .agent-api-copy { white-space: nowrap; flex: 0 0 auto; }
 
-        /* ── Hierarchy nav styles (byte-exact from planning.html) ────────── */
+        /* Source-hierarchy nav (provider → space → folder → list drilldown). */
         .tickets-hierarchy-nav {
             display: flex;
             gap: 8px;
             align-items: center;
             flex-wrap: wrap;
         }
-
         .tickets-hierarchy-nav select {
             padding: 4px 8px;
             background: var(--panel-bg2);
@@ -334,7 +3779,6 @@
             border-radius: 2px;
             font-size: 10px;
         }
-
         .tickets-hierarchy-nav button {
             padding: 4px 8px;
             background: transparent;
@@ -344,13 +3788,12 @@
             cursor: pointer;
             font-size: 9px;
         }
-
         .tickets-hierarchy-nav button:hover {
             background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
             border-color: var(--accent-teal);
         }
 
-        /* ── Plan 4: ClickUp/Linear config tab styles (moved from setup.html) ── */
+        /* ── ClickUp / Linear config tabs (moved from setup.html) ──────────── */
         .hidden { display: none !important; }
         .flex { display: flex; }
         .gap-2 { gap: 8px; }
@@ -478,7 +3921,9 @@
             outline: none;
         }
 
-        /* Config tab content: scrollable, not the tickets flex layout */
+        /* The config tabs scroll as a document; they do not use the TICKETS tab's
+           three-pane flex layout. The id+class selector deliberately out-ranks the
+           ported `.shared-tab-content` rules. */
         #clickup-fields.shared-tab-content,
         #linear-fields.shared-tab-content {
             display: none;
@@ -503,10 +3948,13 @@
         <div id="tickets-content" class="shared-tab-content active" data-tab-content="tickets">
             <div class="controls-strip" id="controls-strip-tickets">
                 <div class="controls-strip-row">
-                    <div class="tickets-workspace-picker">
-                        <select id="tickets-workspace-filter" class="workspace-filter-select" style="display:none;"></select>
-                        <span id="tickets-workspace-label" class="workspace-static-label" style="display:none;"></span>
-                    </div>
+                    <!-- No workspace picker. Tickets are global: the panel shows one ticket
+                         source for the machine, and `ticketsWorkspaceRoot` is only a
+                         file-save destination, never a scope. The element carried over
+                         from planning.html (where it was hidden) and was un-hidden as
+                         extraction scaffolding; do not re-add it, hidden or otherwise.
+                         `test:contract:panel-runtime-surface` fails the build if it
+                         comes back. -->
                     <button id="tickets-source-btn" class="strip-btn" title="Choose provider and navigate the source hierarchy">Source</button>
                     <span id="tickets-source-summary" class="workspace-static-label"></span>
                     <select id="tickets-project-picker" class="planning-select" style="display:none" title="Filter by Linear project"></select>
@@ -593,6 +4041,14 @@
                         </div>
                         <div id="tickets-status-footer" style="display:none; padding: 8px 16px; font-size: 10px; color: var(--text-secondary); border-top: 1px solid var(--border-color); background: var(--panel-bg2, #1a1a2e);"></div>
                     </div>
+                    <!-- Scanline overlay. Must be a DIRECT child of .preview-panel-wrapper:
+                         the per-pane suppression rule is `.preview-panel-wrapper.scanlines-suppressed
+                         > .cyber-scanlines`, so nesting it any deeper makes suppression a
+                         silent no-op. Hidden unless a theme class is on <body>, and
+                         pointer-events:none so it never eats clicks. Every other themed
+                         panel carries one; this panel shipped without it, which is part of
+                         why it read as flat and untextured next to the Artifacts panel. -->
+                    <div class="cyber-scanlines"></div>
                 </div>
             </div>
         </div>
@@ -1008,6 +4464,7 @@
                 </div>
         </div>
     </div>
+    <!-- Source modal — provider picker and source-hierarchy drilldown. Note that
          the close button ids and the move-mode controls are referenced by
          tickets.js (slice 2b/2c). The Agent API modal stays in planning.html
          until its own slice. -->

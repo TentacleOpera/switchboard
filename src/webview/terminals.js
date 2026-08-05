@@ -834,16 +834,26 @@
 
     function renderSidebarList() {
         listEl.innerHTML = '';
+        // The empty state and the pane grid are in the MAIN area; the workspace groups
+        // below are in the sidebar. So an empty fleet toggles those two and then keeps
+        // going — it does NOT return.
+        //
+        // It used to return here, and that is what hid the workspaces until the operator
+        // opened a terminal: every parent group carries the per-workspace `+` that spawns
+        // INTO that workspace, so a zero-terminal fleet rendered a sidebar with no spawn
+        // targets at all. Creating a terminal by any other route repopulated fleetList,
+        // the guard stopped firing, and the workspaces appeared — which read as "the list
+        // only loads once you open a terminal". The parents list does not depend on the
+        // fleet (ptyListTerminals returns it either way), so neither should its render.
         if (fleetList.length === 0) {
             if (!soloTerminalName) {
                 emptyStateEl.style.display = 'flex';
                 paneGridEl.style.display = 'none';
             }
-            return;
+        } else {
+            emptyStateEl.style.display = 'none';
+            paneGridEl.style.display = 'grid';
         }
-
-        emptyStateEl.style.display = 'none';
-        paneGridEl.style.display = 'grid';
 
         let parents = Array.isArray(parentsList) ? [...parentsList] : [];
         if (parents.length === 0) {
@@ -1244,9 +1254,15 @@
      * "(exited)" a few pixels to the chip's left (see updatePaneElement), and
      * entry.exited is only ever set by an error/exit FRAME. A terminal that died
      * without a frame — host restart, socket cut before the exit arrived — would
-     * otherwise have a title saying "(exited)" and a chip saying "accepts input"
-     * in the same 22px header. Two sources of truth for "dead" in one header is
-     * the exact dishonesty this chip exists to remove.
+     * otherwise resolve `live`, and `live` renders NO chip, so the header would
+     * read "(exited)" beside the blank space that means healthy. Two sources of
+     * truth for "dead" in one header is the exact dishonesty this chip exists to
+     * remove.
+     *
+     * `live` still carries a label even though nothing prints it. The caller
+     * decides whether a state is worth drawing; the resolver's job is to name the
+     * state, and a shape that changes per branch is harder to read than a string
+     * that goes unused.
      */
     function resolveInputState(name) {
         const entry = terminalsMap.get(name);
@@ -1276,11 +1292,42 @@
         const state = resolveInputState(name);
         paneEl.classList.remove('is-input-live', 'is-input-connecting', 'is-input-readonly');
         paneEl.classList.add(`is-input-${state.key}`);
-        const chip = paneEl.querySelector('.pane-input-state');
-        if (!chip) { return; }
-        // isTerseLayout(), not a second inline copy of the layout list — the render
-        // path in updatePaneElement uses the helper, and two definitions of "terse"
-        // would let the out-of-band refresh print a word the render path hides.
+        syncInputStateChip(paneEl, paneEl.querySelector('.pane-title'), state);
+    }
+
+    /**
+     * Sync `paneEl`'s input-state chip to `state` — creating, updating or removing
+     * it. The single writer for both call sites: the grid render in
+     * updatePaneElement and the out-of-band refreshInputState.
+     *
+     * `live` renders NOTHING. The chip's entire job is to say "your keystrokes
+     * will not land"; when they will, it has nothing to say, and a badge on every
+     * healthy pane is chrome reporting the normal case — nine dots in a 3x3 that
+     * never change. The focused-pane half of the signal is unaffected: the ring
+     * still recolours via .has-caret.is-input-*.
+     *
+     * That conditional is why this both creates AND removes. refreshInputState
+     * fires on socket transitions, so it is routinely handed a live pane with no
+     * chip to repaint (connecting → live) or a connecting pane with no chip to
+     * find (live → connecting). Its old early-return on a missing element would
+     * now silently skip every disconnect.
+     */
+    function syncInputStateChip(paneEl, titleEl, state) {
+        let chip = paneEl.querySelector('.pane-input-state');
+        if (state.key === 'live') {
+            if (chip) { chip.remove(); }
+            return;
+        }
+        if (!chip) {
+            const host = titleEl || paneEl.querySelector('.pane-title');
+            if (!host) { return; }
+            chip = document.createElement('span');
+            chip.className = 'pane-input-state';
+            host.appendChild(chip);
+        }
+        // isTerseLayout(), not an inline copy of the layout list: 2x3 and 3x3
+        // headers are 10px tall with an ellipsised title, and a word here eats the
+        // terminal name. Dot only there, title attribute carries the meaning.
         chip.textContent = isTerseLayout() ? '' : state.label;
         chip.title = state.label;
     }
@@ -1557,15 +1604,7 @@
             // transitions nudge it out-of-band via refreshInputState.
             const state = resolveInputState(assignedName);
             paneEl.classList.add(`is-input-${state.key}`);
-
-            const stateEl = document.createElement('span');
-            stateEl.className = 'pane-input-state';
-            // 2x3 and 3x3 headers are 10px tall with an ellipsised title —
-            // a word here eats the terminal name. Dot only, title attribute
-            // carries the meaning.
-            stateEl.textContent = terse ? '' : state.label;
-            stateEl.title = state.label;
-            titleEl.appendChild(stateEl);
+            syncInputStateChip(paneEl, titleEl, state);
         } else {
             titleEl.textContent = `Pane ${index + 1} (Empty)`;
         }
@@ -2491,14 +2530,6 @@
             entry.scrollDisposable = null;
         }
         entry.jumpBtn = null;
-        // A MutationObserver is not an xterm disposable and term.dispose() will not
-        // disconnect it — the first MutationObserver in this file, so the teardown
-        // pattern is established here rather than copied.
-        if (entry.mouseModeObserver) {
-            try { entry.mouseModeObserver.disconnect(); } catch { /* ignore */ }
-            entry.mouseModeObserver = null;
-        }
-        entry.mouseModeBtn = null;
         if (entry.container && entry.container.parentNode) {
             try { entry.container.parentNode.removeChild(entry.container); } catch { /* ignore */ }
         }
@@ -2551,9 +2582,7 @@
             disposed: false,
             suppressAnswerback: false,
             awaitingReplayFrame: false,
-            pendingModes: null,
-            mouseModeBtn: null,
-            mouseModeObserver: null
+            pendingModes: null
         };
         terminalsMap.set(name, entry);
         whenRendered(entry, () => materializeTerminalView(entry));
@@ -2630,19 +2659,64 @@
         term.open(container);
         entry.rendererAddon = attachRenderer(term, entry);
         attachJumpToLatest(entry, term, container);
-        attachMouseModeRelease(entry, term, container);
         if (fitAddon) {
             try { fitAddon.fit(); } catch { /* ignore */ }
         }
         // Shift-wheel always scrolls the viewport, even while an app is capturing the
-        // wheel (mode 1000's event mask includes WHEEL, so a plain wheel is reported
-        // to the app and cancelled). Returning false makes xterm skip its own wheel
-        // handling entirely — no mouse report AND no preventDefault — so the
-        // browser's native scroll on .xterm-viewport proceeds. Verified against both
-        // wheel paths in the vendored bundle, each of which checks
-        // _customWheelEventHandler first.
+        // wheel (1000/1002/1003 all set the WHEEL bit, so a plain wheel is reported to
+        // the app instead of scrolling).
+        //
+        // Returning false is NOT sufficient on its own, and that difference is why this
+        // is not a one-liner. xterm installs TWO wheel listeners and both consult
+        // _customWheelEventHandler first, but they differ in what runs AFTER it:
+        //
+        //   mouse reporting OFF — the viewport listener is
+        //     `e => { if (custom(e) === false) return false; … viewport.handleWheel(e) … }`
+        //   so a false return leaves before any cancel() and the browser's own scroll on
+        //   .xterm-viewport proceeds untouched.
+        //
+        //   mouse reporting ON — the mouse-report listener is
+        //     `e => (report(e), this.cancel(e, true))`
+        //   registered `{passive: false}`, and `cancel(e, t)` is
+        //     `if (this.options.cancelEvents || t) return e.preventDefault(), e.stopPropagation(), false`
+        //   with t hard-coded true. So cancel runs UNCONDITIONALLY: a false return
+        //   suppresses the mouse REPORT but NOT the preventDefault, and native scroll is
+        //   dead in exactly the state this bypass exists for.
+        //
+        // So in the mouse-reporting state we scroll the viewport ourselves. The state
+        // read is xterm's own public `enable-mouse-events` class on term.element —
+        // written on the same statement as the SelectionService toggle, so it cannot
+        // drift from which listener is actually installed. Do NOT scroll in both
+        // branches: with mouse reporting off nothing prevents the default, so a manual
+        // scroll would land on top of the browser's and double the distance.
         if (typeof term.attachCustomWheelEventHandler === 'function') {
-            term.attachCustomWheelEventHandler((ev) => !ev.shiftKey);
+            term.attachCustomWheelEventHandler((ev) => {
+                if (!ev.shiftKey) { return true; }
+                // deltaX because the OS/browser rewrites shift+vertical-wheel to a
+                // horizontal delta on several platforms; xterm's own getLinesScrolled
+                // reads deltaY only, which is part of why that path is not reusable here.
+                const delta = ev.deltaY || ev.deltaX;
+                if (!delta || !term.element || !term.element.classList.contains('enable-mouse-events')) {
+                    return false;
+                }
+                try {
+                    if (ev.deltaMode === 0) {
+                        // DOM_DELTA_PIXEL — the common case. .xterm-viewport is the element
+                        // the browser and xterm's own scrollbar both drive, and its scroll
+                        // listener syncs the buffer, so a pixel delta needs no row-height
+                        // guess.
+                        const viewport = term.element.querySelector('.xterm-viewport');
+                        if (viewport) { viewport.scrollTop += delta; }
+                    } else {
+                        // DOM_DELTA_LINE (1) / DOM_DELTA_PAGE (2). Both public calls run
+                        // xterm's _verifyIntegers, so the amount must be a whole number,
+                        // and it must never round to 0 or the gesture is swallowed.
+                        const amount = delta > 0 ? Math.max(1, Math.round(delta)) : Math.min(-1, Math.round(delta));
+                        if (ev.deltaMode === 2) { term.scrollPages(amount); } else { term.scrollLines(amount); }
+                    }
+                } catch { /* disposed mid-gesture, or a vendor bundle without scrollLines */ }
+                return false;
+            });
         }
 
         let resizeTimer = null;
@@ -2669,7 +2743,19 @@
         // updatePaneElement reparents this container whenever the slot's
         // assignment changes, so a captured reference goes stale on the first
         // reassignment. closest() reads the live tree.
-        term.onFocus(() => {
+        //
+        // `term.textarea`, NOT `term.onFocus`/`term.onBlur`. Those two emitters exist only
+        // on the INTERNAL CoreTerminal subclass in the vendored bundle — the public
+        // `Terminal` this file constructs has no focus pair, so the call threw
+        // `TypeError: term.onFocus is not a function` from the middle of this builder, and
+        // connectTerminalSocket() is BELOW here, so the throw took the WebSocket with it:
+        // every pane rendered a blank xterm and read `connecting` forever. The helper
+        // textarea is the node that actually holds the caret; `term.open()` above created
+        // it. `test:contract:panel-runtime-surface` fails the build if this file ever
+        // subscribes to an event the vendored public class does not expose, which is why
+        // there is no guard here — a guard would only turn that build failure into a
+        // silent one.
+        term.textarea.addEventListener('focus', () => {
             clearCaretRing();
             const paneEl = entry.container.closest('.terminal-pane');
             if (paneEl) { paneEl.classList.add('has-caret'); }
@@ -2685,7 +2771,7 @@
         // detached container survives on a live element instead of dying with a
         // discarded one. renderPaneGrid's tail carries the matching sweep; see the
         // note there.
-        term.onBlur(() => clearCaretRing());
+        term.textarea.addEventListener('blur', () => clearCaretRing());
 
         term.onData((data) => {
             // Scrollback replay re-parses queries the CLI emitted while this view
@@ -2803,61 +2889,6 @@
             entry.jumpScrollHandler = update;
         }
         entry.scrollDisposable = term.onScroll(update);
-        update();
-    }
-
-    /**
-     * A pill for a pane whose app has claimed the mouse.
-     *
-     * While mouse reporting is active xterm hands the wheel to the app (mode 1000's
-     * event mask includes WHEEL) and disables its SelectionService, so the pane
-     * cannot be scrolled and a click can neither start nor clear a selection. That is
-     * correct behaviour for a TUI that wants clicks — and indistinguishable from an
-     * app that died still holding the mode, which no amount of server-side tracking
-     * can fix because there was never a reset to observe.
-     *
-     * `enable-mouse-events` is xterm's own class on term.element, added and removed on
-     * every protocol change, so this reads a public signal rather than
-     * _coreMouseService. It is also written on the same statement as the
-     * SelectionService toggle that causes the symptom, so it cannot drift from it.
-     */
-    function attachMouseModeRelease(entry, term, container) {
-        const btn = document.createElement('button');
-        btn.className = 'mouse-mode-release';
-        btn.type = 'button';
-        btn.tabIndex = -1;   // the terminal owns the keyboard; this is a pointer control
-        btn.title = 'This app is capturing the mouse — release it to scroll and select';
-        btn.setAttribute('aria-label', 'Release the mouse from the running application');
-        btn.textContent = 'release mouse';
-        container.appendChild(btn);
-        entry.mouseModeBtn = btn;
-
-        const update = () => {
-            if (entry.disposed || !term.element) { return; }
-            btn.classList.toggle('visible', term.element.classList.contains('enable-mouse-events'));
-        };
-
-        // click, NOT mousedown — same reason as the jump pill: the pane's own
-        // mousedown must run first so the press also selects the pane.
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            // To the PARSER, not the pty: the app keeps its own belief, xterm stops
-            // acting on it. EVERY mouse protocol is reset, not just the active one —
-            // the operator wants their pointer back, not a negotiation. Mode 9 (X10)
-            // is included and is NOT optional: the pill's visibility reads
-            // `enable-mouse-events`, which xterm sets for any non-zero event mask
-            // including X10's, so omitting `?9l` would show the pill for a mode this
-            // click cannot clear — a dead button.
-            try { term.write('\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l'); } catch { /* disposed */ }
-            update();
-        });
-
-        // Attribute-filtered: fires on a real protocol change, not on every render.
-        const observer = new MutationObserver(update);
-        if (term.element) {
-            observer.observe(term.element, { attributes: true, attributeFilter: ['class'] });
-        }
-        entry.mouseModeObserver = observer;
         update();
     }
 

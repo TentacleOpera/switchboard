@@ -636,7 +636,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _sessionLogs = new Map<string, SessionActionLog>();
     private _kanbanProvider?: KanbanProvider;
     private _setupPanelProvider?: SetupPanelProvider;
-    private _ticketsPanelProvider?: { handleServiceVerb(verb: string, payload: any): Promise<any> };
+    private _ticketsPanelProvider?: { postMessage?(message: any): void; handleServiceVerb(verb: string, payload: any): Promise<any> };
     private _designPanelProvider?: { postMessage(message: any): void; handleServiceVerb(verb: string, payload: any): Promise<any>; getDesignAssetRoots?(workspaceRoot: string): string[] };
     private _planningPanelProvider?: { postMessage(message: any): void; handleServiceVerb(verb: string, payload: any): Promise<any> };
     private _kanbanDbs = new Map<string, KanbanDatabase>();
@@ -2404,6 +2404,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (this._planningPanelProvider && typeof (this._planningPanelProvider as any).setApiServer === 'function') {
             (this._planningPanelProvider as any).setApiServer(this._localApiServer);
         }
+        // Tickets was absent from this list, and extension.ts passes `undefined` for the
+        // constructor's apiServer argument, so the panel had no route to the browser at
+        // all. Every push-shaped reply it makes was dropped for the cockpit.
+        if (this._ticketsPanelProvider && typeof (this._ticketsPanelProvider as any).setApiServer === 'function') {
+            (this._ticketsPanelProvider as any).setApiServer(this._localApiServer);
+        }
 
         try {
             const port = await this._localApiServer.start();
@@ -3566,6 +3572,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     public setTicketsPanelProvider(provider: { handleServiceVerb(verb: string, payload: any): Promise<any> }) {
         this._ticketsPanelProvider = provider;
+        // Same handshake as setDesignPanelProvider / setPlanningPanelProvider below.
+        // Without it the Tickets panel's BroadcastHub is built with apiServer:null and
+        // every push-shaped reply is dropped for the browser cockpit — the panel renders
+        // and then never learns which provider to load. Registration and server creation
+        // can happen in either order, which is why both sites do this.
+        if (this._localApiServer && typeof (provider as any).setApiServer === 'function') {
+            (provider as any).setApiServer(this._localApiServer);
+        }
     }
 
     public setDesignPanelProvider(provider: { postMessage(message: any): void; handleServiceVerb(verb: string, payload: any): Promise<any> }) {
@@ -6209,6 +6223,14 @@ Each plan file must include:
         this._kanbanProvider?.postMessage(message);
         this._designPanelProvider?.postMessage(message);
         this._planningPanelProvider?.postMessage(message);
+        // Tickets was omitted when it was extracted out of the Artifacts panel, so
+        // every broadcast routed here — theme, scanline and animation changes — stopped
+        // at the four panels above. In the browser host shell.js fans the theme out to
+        // each iframe itself, which is why this gap only showed in the editor webview:
+        // the panel kept whatever theme applyThemeBodyClass stamped at first paint and
+        // disagreed with every other panel until reload. Optional call: the narrow
+        // service-verb shape this field also accepts has no postMessage.
+        this._ticketsPanelProvider?.postMessage?.(message);
     }
 
     private async _postSidebarConfigurationState(workspaceRoot?: string): Promise<void> {

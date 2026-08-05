@@ -87,6 +87,30 @@ export class TicketsPanelProvider {
         this._taskViewerProvider = provider;
     }
 
+    /**
+     * Hand this panel the LocalApiServer, which is what makes its pushes reach a
+     * BROWSER as well as the editor webview.
+     *
+     * This method did not exist, and extension.ts constructs the provider with the
+     * `apiServer` argument as a literal `undefined` — so `_apiServer` stayed unset for
+     * the whole session. BroadcastHub was therefore built with `apiServer: null`, and
+     * every `postMessageToWebview` went to the editor webview only. In the browser
+     * cockpit that silently deleted every push-shaped reply this panel makes:
+     * `ticketsDefaultRoot`, `integrationProviderStates`, the ClickUp hierarchy loads,
+     * the ticket listings. Verbs that answer in the HTTP body (fetchRoots) worked,
+     * which is exactly why the panel looked alive while reaching no source at all.
+     *
+     * The sibling panels (Design, Planning, Setup, Kanban) all get this handshake from
+     * TaskViewerProvider in two places — when the provider is registered and when the
+     * server is created, because either can happen first. Tickets was missing from
+     * both. `_apiServer` also feeds the local-asset port (see _buildLocalAssetUrl), so
+     * ticket screenshots were losing their origin for the same reason.
+     */
+    public setApiServer(server: any): void {
+        this._apiServer = server;
+        this._broadcaster?.setApiServer(server);
+    }
+
     public async handleServiceVerb(verb: string, payload: any): Promise<any> {
         if (!this._broadcaster) {
             this._initTicketsService();
@@ -149,6 +173,19 @@ export class TicketsPanelProvider {
     // Alias matching PlanningPanelProvider's naming so the moved 2c verb handlers
     // can post responses without a rewrite.
     private postMessageToWebview(message: any): void {
+        this._pushTo(this._panel, 'tickets', message);
+    }
+
+    /**
+     * Public entry point for host-wide broadcasts (theme / scanline / animation
+     * changes) that are not replies to a verb. Routes through the broadcaster like
+     * every other push, so the browser panel gets them over WS too.
+     *
+     * Named `postMessage` to match KanbanProvider / DesignPanelProvider /
+     * PlanningPanelProvider, which is what `TaskViewerProvider.broadcastToWebviews`
+     * calls on each panel it fans out to.
+     */
+    public postMessage(message: any): void {
         this._pushTo(this._panel, 'tickets', message);
     }
 
@@ -606,7 +643,12 @@ export class TicketsPanelProvider {
                 localResourceRoots: [
                     vscode.Uri.file(path.join(this._context.extensionPath, 'dist')),
                     vscode.Uri.file(path.join(this._context.extensionPath, 'src', 'webview')),
-                    vscode.Uri.file(path.join(this._context.extensionPath, 'static'))
+                    vscode.Uri.file(path.join(this._context.extensionPath, 'static')),
+                    // The stylesheet's @font-face sources live here. Without this root
+                    // asWebviewUri still returns a URL, but the webview refuses to load
+                    // it — a silent fall back to the generic sans stack, which is not
+                    // distinguishable from "the font-face rule is missing".
+                    vscode.Uri.file(path.join(this._context.extensionPath, 'designs'))
                 ]
             }
         );
@@ -679,6 +721,22 @@ export class TicketsPanelProvider {
         htmlContent = htmlContent.replace(/\{\{SHARED_UTILS_URI\}\}/g, asUri('dist', 'webview', 'sharedUtils.js'));
         htmlContent = htmlContent.replace(/\{\{TICKETS_JS_URI\}\}/g, asUri('dist', 'webview', 'tickets.js'));
         htmlContent = htmlContent.replace(/\{\{MARKDOWN_EDITOR_URI\}\}/g, asUri('dist', 'webview', 'markdownEditor.js'));
+
+        // The stylesheet's @font-face rules. The standalone host already substitutes
+        // both (headlessPanelHtml.ts getTicketsHtml), so the browser panel was never
+        // affected — but the editor webview left them unreplaced, which resolves to a
+        // literal `{{HANKEN_FONT_URI}}` request, no font, and a silent fall back to
+        // the generic sans stack while every other panel renders Hanken Grotesk.
+        // font-src in this panel's CSP is already {{WEBVIEW_CSP_SOURCE}}, so no CSP
+        // change is needed here.
+        htmlContent = htmlContent.replace(
+            /\{\{GEIST_PIXEL_FONT_URI\}\}/g,
+            asUri('designs', 'GeistPixel-Square.woff2')
+        );
+        htmlContent = htmlContent.replace(
+            /\{\{HANKEN_FONT_URI\}\}/g,
+            asUri('designs', 'HankenGrotesk-Variable.woff2')
+        );
 
         return applyThemeBodyClass(htmlContent);
     }

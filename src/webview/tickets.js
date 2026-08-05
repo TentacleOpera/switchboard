@@ -39,56 +39,21 @@
     // Restore persisted state (webview-local, survives reload via the seed above).
     const persistedState = (vscode ? vscode.getState() : {}) || {};
 
-    // ── Workspace-dropdown + tab-state persistence helpers ──────────────────
-    // NOTE: `persistTab`, `populateWorkspaceDropdown`, `registerWorkspaceDropdown`
-    // and `getRestoredState` are NOT yet in sharedUtils.js — plan 1's promotion of
-    // `persistTab` was reverted in review (the lifted copy was a degraded rewrite,
-    // so the originals stayed authoritative in planning.js / design.js). Until a
-    // later plan promotes them for real, this panel carries its own copies matching
-    // design.js byte-for-byte, exactly as design.js does. `escapeHtml`, `escapeAttr`
-    // and `initOverflowMenus` ARE sharedUtils.js globals and are NOT re-declared here.
-
-    function populateWorkspaceDropdown(selectElOrId, workspaceItems, selectedValue, includeAllOption = true) {
-        const select = typeof selectElOrId === 'string' ? document.getElementById(selectElOrId) : selectElOrId;
-        if (!select) return;
-        const current = selectedValue || '';
-        select.innerHTML = '';
-        if (includeAllOption) {
-            select.innerHTML = '<option value="">All Workspaces</option>';
-        }
-        for (const item of workspaceItems) {
-            const option = document.createElement('option');
-            option.value = item.workspaceRoot;
-            option.textContent = item.label;
-            if (item.workspaceRoot === current) {
-                option.selected = true;
-            }
-            select.appendChild(option);
-        }
-    }
+    // ── Tab-state persistence helpers ───────────────────────────────────────
+    // NOTE: `persistTab` and `getRestoredState` are NOT yet in sharedUtils.js —
+    // plan 1's promotion of `persistTab` was reverted in review (the lifted copy was
+    // a degraded rewrite, so the originals stayed authoritative in planning.js /
+    // design.js). Until a later plan promotes them for real, this panel carries its
+    // own copies matching design.js byte-for-byte, exactly as design.js does.
+    // `escapeHtml`, `escapeAttr` and `initOverflowMenus` ARE sharedUtils.js globals
+    // and are NOT re-declared here.
+    //
+    // `populateWorkspaceDropdown` / `registerWorkspaceDropdown` / `updateDropdown`
+    // came over with them and are GONE: this panel has no workspace dropdown to
+    // populate, and nothing else called them. See the note in tickets.html.
 
     let _restoredPanelState = { panel: {}, byRoot: {} };
-    let _registeredDropdowns = []; // Array of { selectElOrId, tabKey, includeAllOption }
     let _workspaceItems = [];
-    let _workspaceItemsReceived = false;
-
-    // Helper to register a dropdown for updates
-    function registerWorkspaceDropdown(selectElOrId, tabKey, includeAllOption = true) {
-        _registeredDropdowns.push({ selectElOrId, tabKey, includeAllOption });
-        if (_workspaceItems.length > 0) {
-            updateDropdown(selectElOrId, tabKey, includeAllOption);
-        }
-    }
-
-    function updateDropdown(selectElOrId, tabKey, includeAllOption) {
-        const select = typeof selectElOrId === 'string' ? document.getElementById(selectElOrId) : selectElOrId;
-        if (!select) return;
-        let currentVal = select.value;
-        if (tabKey === 'tickets' && ticketsWorkspaceRoot) {
-            currentVal = ticketsWorkspaceRoot;
-        }
-        populateWorkspaceDropdown(select, _workspaceItems, currentVal, includeAllOption);
-    }
 
     const _debounceTimers = {};
     function persistTab(tabKey, tabState, workspaceRoot) {
@@ -109,7 +74,6 @@
     }
 
     window.persistTab = persistTab;
-    window.registerWorkspaceDropdown = registerWorkspaceDropdown;
     window.getRestoredState = function (tabKey, workspaceRoot) {
         if (workspaceRoot) {
             return (_restoredPanelState.byRoot[tabKey] || {})[workspaceRoot];
@@ -123,9 +87,14 @@
     // ticketsWorkspaceRoot + lastIntegrationProvider to be live, but every
     // declaration moves now so later slices don't have to reopen this region.
 
-    // "no integrations configured" from "the answer hasn't arrived", so the
-    // tickets picker never claims un-configured while still loading. Also gates
-    // the fetchRootsComplete body fallback so a WS push isn't handled twice.
+    // True while the last listing ran with NO list/project scope (so it returned every
+    // file, or the ClickUp "pick a list" placeholder). restoreTicketsStateForRoot reads
+    // it to re-list once a scope finally arrives — an unscoped listing is not the answer
+    // to a scoped question.
+    //
+    // The comment that used to sit here was the tail of a sentence about
+    // `_integrationWorkspacesReceived`, which no longer exists; it described the
+    // workspace picker, not this flag.
     let _ticketsListedUnscoped = false;
     // Last listLocalTicketFiles response's scope-coverage counts, when list/project
     // scoping hid every candidate file. Drives the distinguishing empty-state copy.
@@ -389,39 +358,19 @@
         }
     }
 
-    function updateTicketsWorkspacePicker() {
-        const select = document.getElementById('tickets-workspace-filter');
-        const staticLabel = document.getElementById('tickets-workspace-label');
-        if (!select || !staticLabel) return;
-
-        if (_workspaceItems.length === 0) {
-            // Silent until the host has actually answered. initTicketsTab() runs this
-            // at page load, long before fetchRoots returns — claiming "not configured"
-            // there is a guess, and in the browser it used to be a permanent one.
-            select.style.display = 'none';
-            if (!_workspaceItemsReceived) {
-                staticLabel.style.display = 'none';
-                return;
-            }
-            // Genuinely no workspaces — show the static prompt.
-            staticLabel.style.display = '';
-            staticLabel.textContent = 'No workspaces found.';
-            return;
-        }
-
-        // Foundation slice: show the dropdown so the user can pick a workspace root
-        // and verify the selection survives reload. Later slices may re-introduce the
-        // "tickets are global, hide picker" behaviour once the integration verb
-        // surface moves into TicketsPanelProvider.
-        populateWorkspaceDropdown(select, _workspaceItems, ticketsWorkspaceRoot, false);
-        select.style.display = '';
-        staticLabel.style.display = 'none';
-
-        // Ensure ticketsWorkspaceRoot is set for internal file-save context.
-        if (!ticketsWorkspaceRoot) {
-            ticketsWorkspaceRoot = _workspaceItems[0].workspaceRoot;
-            persistTicketsRoot();
-        }
+    /**
+     * Default the save root once the host has answered fetchRoots.
+     *
+     * All this ever needed to do. It used to be `updateTicketsWorkspacePicker()` and
+     * spent most of its body showing/hiding a workspace dropdown and writing a "No
+     * workspaces found." label — a picker this panel is not supposed to have, and a
+     * label for a state a workspace-scoped panel cannot reach. Both are deleted; the
+     * root default is the real work.
+     */
+    function ensureTicketsRootDefault() {
+        if (ticketsWorkspaceRoot || _workspaceItems.length === 0) { return; }
+        ticketsWorkspaceRoot = _workspaceItems[0].workspaceRoot;
+        persistTicketsRoot();
     }
 
     // ── Slice 2b additions: Source modal, provider hierarchy, ticket folders ──
@@ -444,8 +393,14 @@
     let folderModalScope = 'local';
 
     // Integration provider states (received from the host).
-    let _integrationWorkspaces = [];
-    let _integrationWorkspacesReceived = false;
+    //
+    // `_integrationWorkspaces` / `_integrationWorkspacesReceived` are deliberately GONE.
+    // They came over from planning.js as declarations only — the host push that filled
+    // them was not extracted — so they read as an available "roots that have an
+    // integration configured" list while being permanently empty. The workspace picker
+    // was rewired onto the all-roots `_workspaceItems` to compensate, which is how the
+    // Tickets tab grew a workspace dropdown it never had. Do not reintroduce them as
+    // bare declarations; if the integration-scoped list is wanted, wire the push too.
     let _integrationProviderStatesReceived = false;
 
     // Tickets folder paths by root (from ticketsFoldersListed / localDocsReady).
@@ -4198,10 +4153,49 @@
         }
     }
 
+    /**
+     * Two independent facts to establish, so two independent asks — NOT an either/or.
+     *
+     * The root only needs a file watcher. The PROVIDER is what every source load is
+     * gated on (`lastIntegrationProvider === 'clickup' ? loadClickUpSpaces() : …`, and
+     * renderTicketsTab's whole dispatch), and `ticketsDefaultRoot` is the only message
+     * that answers it on a cold start.
+     *
+     * This used to be `if (root) watcher else defaultRoot`, which was survivable while
+     * the root arrived from the integration-scoped workspace list. It stopped being
+     * survivable when the picker was rewired onto the all-roots list: that path
+     * synthesises `ticketsWorkspaceRoot = _workspaceItems[0]` the moment rootsFetched
+     * lands — before this runs, and with no provider attached — so the root was always
+     * truthy, the else branch became dead code, `lastIntegrationProvider` stayed null
+     * forever, and the panel connected to the host and then loaded no source at all. A
+     * configured API key made no difference, because nothing ever asked which provider
+     * to use.
+     */
+    /**
+     * Load whatever source the resolved provider names. ONE definition and ONE gate.
+     *
+     * The `ticketsDefaultRoot` arm had this same four-line block copied per branch with
+     * subtly different guards, and the branch added for the provider fix would have made
+     * a third copy. `loadClickUpSpaces()` has no internal guard, so drifting copies is
+     * how a panel ends up double-fetching its own hierarchy.
+     *
+     * `!ticketsLoadedOnce` covers every caller: the one branch that intends a reload
+     * clears the flag immediately before calling.
+     */
+    function loadActiveTicketSource() {
+        if (!isTicketsTabActive() || !lastIntegrationProvider || ticketsLoadedOnce) { return; }
+        if (lastIntegrationProvider === 'clickup') { loadClickUpSpaces(); }
+        else if (lastIntegrationProvider === 'linear') { loadLinearProject(); }
+        loadLocalTicketFiles();
+    }
+
     function restoreTicketsState() {
         if (ticketsWorkspaceRoot) {
             vscode.postMessage({ type: 'setupTicketsWatcher', workspaceRoot: ticketsWorkspaceRoot });
-        } else {
+        }
+        // Gated on the PROVIDER, not the root. Cheap and idempotent — the arm below
+        // keeps whichever root is already chosen.
+        if (!lastIntegrationProvider) {
             vscode.postMessage({ type: 'ticketsDefaultRoot' });
         }
     }
@@ -4374,37 +4368,15 @@
             initOverflowMenus();
         }
 
-        // Register the workspace dropdown so a later workspaceItemsUpdated push
-        // repopulates it. (TicketsPanelProvider answers fetchRoots with a rootsFetched
-        // push, handled below; registerWorkspaceDropdown is here for parity with the
-        // other panels and for the restoredTabState path later slices wire in.)
-        registerWorkspaceDropdown('tickets-workspace-filter', 'tickets', false);
+        ensureTicketsRootDefault();
 
-        // Custom update call to populate dropdown if roots already fetched.
-        updateTicketsWorkspacePicker();
-
-        // Ask the host for the workspace roots. TicketsPanelProvider handles
-        // `fetchRoots` and pushes back `rootsFetched`. This is the only host verb
-        // the foundation slice needs to know its workspace.
+        // Ask the host for the workspace roots. TicketsPanelProvider answers
+        // `fetchRoots` with a `rootsFetched` push; the arm there sets the save root.
+        // There is no dropdown to register or repopulate, and no root-selection
+        // listener — the user does not choose a root in this panel.
         if (vscode) {
             vscode.postMessage({ type: 'fetchRoots' });
         }
-
-        // This slice's one listener: workspace root selection. Persists
-        // tickets.root host-side and mirrors it into webview-local state so the
-        // seed restores it on reload.
-        const wsFilter = document.getElementById('tickets-workspace-filter');
-        wsFilter?.addEventListener('change', (e) => {
-            const newRoot = e.target.value;
-            if (!newRoot) return;
-            ticketsWorkspaceRoot = newRoot;
-            persistTicketsRoot();
-            // Read the new root's persisted nav state.
-            const rootState = (_restoredPanelState.byRoot['tickets'] || {})[newRoot];
-            if (rootState) {
-                restoreTicketsStateForRoot(rootState);
-            }
-        });
 
         // ── 2b listeners: Source modal, provider selector, folder modal ──
 
@@ -6395,18 +6367,44 @@ Instructions:
         const message = event.data;
         if (!message) return;
         switch (message.type) {
+            // ── Theme ────────────────────────────────────────────────────────
+            // applyThemeBodyClass stamps the correct class at HTML-generation time,
+            // so first paint is already right; these keep the panel in step when the
+            // theme changes at RUNTIME. Without them the panel held its served theme
+            // while every other panel switched, until a reload.
+            case 'switchboardThemeChanged': {
+                // Remove only the theme classes that should NOT be present, and add
+                // only missing ones — never reset className. The body also carries
+                // kanban-icons-colour / cyber-animation-disabled / cyber-scanlines-disabled
+                // / ultracode-animation-enabled, injected server-side by the same
+                // helper, and a wholesale rewrite would drop them.
+                const desired = message.theme === 'claudify' ? 'theme-claudify' : 'cyber-theme-enabled';
+                for (const cls of ['theme-claudify', 'cyber-theme-enabled']) {
+                    if (cls !== desired) { document.body.classList.remove(cls); }
+                }
+                document.body.classList.add(desired);
+                break;
+            }
+            case 'cyberAnimationSetting': {
+                document.body.classList.toggle('cyber-animation-disabled', message.disabled);
+                break;
+            }
+            case 'cyberScanlinesSetting': {
+                document.body.classList.toggle('cyber-scanlines-disabled', message.disabled);
+                break;
+            }
+            case 'ultracodeAnimationSetting': {
+                document.body.classList.toggle('ultracode-animation-enabled', message.enabled === true);
+                break;
+            }
             case 'rootsFetched': {
                 _workspaceItems = message.items || [];
-                _workspaceItemsReceived = true;
                 // If a root was already restored from the seed / persisted state, keep it
                 // provided it is still present in the fresh list; otherwise take the first.
                 if (ticketsWorkspaceRoot && !_workspaceItems.some(item => item.workspaceRoot === ticketsWorkspaceRoot)) {
                     ticketsWorkspaceRoot = '';
                 }
-                _registeredDropdowns.forEach(d => {
-                    updateDropdown(d.selectElOrId, d.tabKey, d.includeAllOption);
-                });
-                updateTicketsWorkspacePicker();
+                ensureTicketsRootDefault();
                 if (ticketsWorkspaceRoot) {
                     persistTicketsRoot();
                 }
@@ -6419,8 +6417,6 @@ Instructions:
                     const restoredRoot = _restoredPanelState.panel['tickets.root'];
                     if (restoredRoot && _workspaceItems.some(item => item.workspaceRoot === restoredRoot)) {
                         ticketsWorkspaceRoot = restoredRoot;
-                        const dropdown = document.getElementById('tickets-workspace-filter');
-                        if (dropdown) dropdown.value = ticketsWorkspaceRoot;
                         const restoredState = getRestoredState('tickets', restoredRoot);
                         if (restoredState) {
                             restoreTicketsStateForRoot(restoredState);
@@ -6443,8 +6439,6 @@ Instructions:
                 if (newRoot && newRoot !== ticketsWorkspaceRoot) {
                     ticketsWorkspaceRoot = newRoot;
                     persistTicketsRoot();
-                    const dropdown = document.getElementById('tickets-workspace-filter');
-                    if (dropdown) dropdown.value = ticketsWorkspaceRoot;
                 }
                 break;
             }
@@ -6452,33 +6446,30 @@ Instructions:
             // ── 2b response arms: provider hierarchy, folders, default root ──
 
             case 'ticketsDefaultRoot': {
-                if (ticketsWorkspaceRoot && _workspaceItems.some(item => item.workspaceRoot === ticketsWorkspaceRoot)) {
-                    break;
-                }
-                ticketsWorkspaceRoot = message.workspaceRoot || '';
+                // The provider is adopted BEFORE the root guard, not after it. The guard
+                // protects an already-chosen ROOT from being overwritten — it has nothing
+                // to say about the provider, and bailing out with it still unset was the
+                // other half of "the panel connects to no source": the root is now always
+                // set by the time this reply lands (see restoreTicketsState), so the
+                // early return below discarded the one message that names the provider.
                 if (!lastIntegrationProvider) {
                     lastIntegrationProvider = message.provider || null;
                 }
-                const select = document.getElementById('tickets-workspace-filter');
-                if (select) {
-                    select.value = ticketsWorkspaceRoot;
+                if (ticketsWorkspaceRoot && _workspaceItems.some(item => item.workspaceRoot === ticketsWorkspaceRoot)) {
+                    // Keep the chosen root, but the provider just arrived — so the source
+                    // load this reply exists to unblock still has to happen.
+                    loadActiveTicketSource();
+                    break;
                 }
+                ticketsWorkspaceRoot = message.workspaceRoot || '';
                 if (ticketsWorkspaceRoot) {
                     const restoredState = getRestoredState('tickets', ticketsWorkspaceRoot);
                     if (restoredState) {
                         restoreTicketsStateForRoot(restoredState);
-                        if (isTicketsTabActive() && lastIntegrationProvider && !ticketsLoadedOnce) {
-                            if (lastIntegrationProvider === 'clickup') loadClickUpSpaces();
-                            else if (lastIntegrationProvider === 'linear') loadLinearProject();
-                            loadLocalTicketFiles();
-                        }
+                        loadActiveTicketSource();
                     } else if (Object.keys(_restoredPanelState.byRoot).length > 0) {
                         ticketsLoadedOnce = false;
-                        if (isTicketsTabActive() && lastIntegrationProvider) {
-                            if (lastIntegrationProvider === 'clickup') loadClickUpSpaces();
-                            else if (lastIntegrationProvider === 'linear') loadLinearProject();
-                            loadLocalTicketFiles();
-                        }
+                        loadActiveTicketSource();
                     } else {
                         _pendingTicketsRestore = true;
                     }

@@ -18,7 +18,6 @@ const assert = require('assert');
 
 const gatewayCode = fs.readFileSync(path.join(__dirname, '../standalone/terminalWsGateway.ts'), 'utf8');
 const terminalsJs = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
-const terminalsHtml = fs.readFileSync(path.join(__dirname, '../webview/terminals.html'), 'utf8');
 
 let passed = 0;
 let failed = 0;
@@ -94,7 +93,12 @@ test('alt screen is reset-only and buffer-gated', () => {
     assert.ok(!terminalsJs.includes('\\x1b[?1049h'),
         'the client must NEVER write ?1049h — it would switch a fresh xterm to an empty alt buffer and hide the replayed scrollback');
     const apply = block(terminalsJs, 'function applyServerModes(', 'function isAnswerback(');
-    assert.ok(!/REARMABLE_DEC_MODES\s*=\s*\[[^\]]*1049/.test(apply),
+    // Parsed from the DECLARATION, which sits ABOVE applyServerModes and is therefore
+    // outside the slice above — a regex run against `apply` can never match it and the
+    // assertion would pass no matter what the list contained.
+    const rearmDecl = /const REARMABLE_DEC_MODES = \[([^\]]+)\];/.exec(terminalsJs);
+    assert.ok(rearmDecl, 'REARMABLE_DEC_MODES must be declared');
+    assert.ok(!rearmDecl[1].split(',').map(s => Number(s.trim())).includes(1049),
         '1049 must be absent from REARMABLE_DEC_MODES — it is handled separately and conditionally');
     // The gate: `inAlt` is read from term.buffer.active.type === 'alternate', and
     // the ?1049l write is gated on `inAlt`. Both must live in applyServerModes and
@@ -130,30 +134,11 @@ test('decModes is torn down at all three name-keyed collection sites', () => {
         'dispose must clear the mode maps too');
 });
 
-// 7. Mode 9 parity across all three lists — the dead-button guard. Every mouse
-//    mode the pill can display must be a mode the pill can clear. Written as a
-//    parity assertion derived from a single source, not three independent greps.
-test('mode 9 is present in all three mouse-mode lists — the dead-button guard', () => {
-    // The pill's release write is the authoritative list of modes it can clear.
-    const pill = block(terminalsJs, 'function attachMouseModeRelease(', 'function connectTerminalSocket(');
-    const releaseMatch = /term\.write\('([^']*\?9l[^']*)'\)/.exec(pill);
-    assert.ok(releaseMatch, 'the pill must write a release escape sequence');
-    const releaseSeq = releaseMatch[1];
-    const releasedModes = [];
-    const modeRe = /\?(\d+)l/g;
-    let m;
-    while ((m = modeRe.exec(releaseSeq)) !== null) { releasedModes.push(Number(m[1])); }
-    // The pill's visibility signal is `enable-mouse-events`, which xterm sets for
-    // ANY non-zero event mask — including X10's. So every mouse mode that can
-    // show the pill must be in the release write. Derive the mouse subset from the
-    // gateway's tracked set: 9, 1000, 1002, 1003, 1006 (1004 is focus, 1049 is alt
-    // screen, 2004 is paste — none show the mouse-events class).
-    const mouseModes = [9, 1000, 1002, 1003, 1006];
-    for (const mode of mouseModes) {
-        assert.ok(releasedModes.includes(mode),
-            `mode ${mode} can show the pill (enable-mouse-events) but is not in the release write — a dead button`);
-    }
-    // And 9 must be in the gateway's tracked set and the client's re-armable set.
+// 7. Mode 9 parity across both lists. X10 mouse reporting is the one mouse mode
+//    that is easy to forget — it predates the 1000-family and reads as legacy —
+//    so a terminal that tracks it server-side but cannot re-arm it (or the
+//    reverse) restores a pane into a half-live mouse state on reattach.
+test('mode 9 is tracked by the gateway and re-armable on the client', () => {
     const trackedDecl = /export const TRACKED_DEC_MODES = \[([^\]]+)\] as const;/.exec(gatewayCode);
     const tracked = trackedDecl[1].split(',').map(s => Number(s.trim()));
     assert.ok(tracked.includes(9), 'mode 9 must be tracked by the gateway');
@@ -172,37 +157,28 @@ test('pendingModes is reset on reconnect and cleared on the replay throw path', 
         'the throw path must clear pendingModes alongside suppressAnswerback');
 });
 
-test('the mouse-mode MutationObserver is disconnected in destroyTerminalView', () => {
-    const destroy = block(terminalsJs, 'function destroyTerminalView(name)', 'function createTerminalView(');
-    assert.ok(destroy.includes('entry.mouseModeObserver'),
-        'the MutationObserver must be torn down — term.dispose() will not disconnect it');
-    assert.ok(destroy.includes('entry.mouseModeObserver.disconnect()'),
-        'the observer must be explicitly disconnected');
-});
-
 test('macOptionClickForcesSelection is true in the constructor', () => {
     const ctor = block(terminalsJs, 'new window.Terminal({', '});');
     assert.ok(ctor.includes('macOptionClickForcesSelection: true'),
         'Option-drag must select even while an app is capturing the mouse — without it there is no modifier that can select text in a mouse-reporting app on macOS');
 });
 
-test('the wheel handler returns !ev.shiftKey so Shift-wheel scrolls', () => {
-    const mat = block(terminalsJs, 'function materializeTerminalView(entry)', 'term.onFocus(');
+test('Shift-wheel scrolls the viewport even while the app is capturing the wheel', () => {
+    const mat = block(terminalsJs, 'function materializeTerminalView(entry)', "term.textarea.addEventListener('focus'");
     assert.ok(mat.includes('attachCustomWheelEventHandler'),
         'the custom wheel handler must be registered');
     assert.ok(mat.includes('!ev.shiftKey'),
-        'returning false for Shift-wheel makes xterm skip its own handling and let the browser scroll the viewport');
-});
-
-test('--state-mouse-captured is declared in :root with no hex literal in the rule', () => {
-    const rootBlock = block(terminalsHtml, ':root {', '}');
-    assert.ok(rootBlock.includes('--state-mouse-captured'),
-        'the mouse-captured token must be declared in :root — a condition the operator did not ask for reads identically in both themes');
-    const rule = block(terminalsHtml, '.mouse-mode-release {', '}');
-    assert.ok(rule.includes('var(--state-mouse-captured)'),
-        'the pill must use the token, not a hex literal');
-    assert.ok(!/#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b/.test(rule),
-        'no hex literal inside the .mouse-mode-release rule — the no-literals convention the accent family follows');
+        'a plain wheel must still reach xterm untouched — only Shift-wheel is intercepted');
+    // The load-bearing half, and the one a "simplification" back to `!ev.shiftKey`
+    // would silently delete. While mouse reporting is active xterm's mouse-report
+    // listener runs `cancel(e, true)` UNCONDITIONALLY — preventDefault fires whatever
+    // the custom handler returns — so returning false suppresses the mouse report but
+    // NOT the preventDefault, and native scroll is dead in exactly the state this
+    // bypass exists for. The scroll therefore has to be performed here.
+    assert.ok(mat.includes("classList.contains('enable-mouse-events')"),
+        'the Shift-wheel branch must detect the mouse-reporting state — that is the state where xterm preventDefaults regardless of our return value');
+    assert.ok(/scrollTop \+= delta/.test(mat) && mat.includes('term.scrollLines(') && mat.includes('term.scrollPages('),
+        'the handler must scroll the viewport itself in the mouse-reporting state — a bare `false` return leaves preventDefault standing and the gesture does nothing');
 });
 
 console.log(`\nResults: ${passed} passed, ${failed} failed.`);
