@@ -556,7 +556,7 @@
                 const reqId = ++currentRequestId;
                 renderPreview(content).then(html => {
                     if (reqId === currentRequestId) {
-                        preview.innerHTML = html || '<div class="md-preview-placeholder">Nothing to preview</div>';
+                        preview.innerHTML = (typeof externalizeAnchors === 'function' ? externalizeAnchors(html) : html) || '<div class="md-preview-placeholder">Nothing to preview</div>';
                     }
                 }).catch(err => {
                     if (reqId === currentRequestId) {

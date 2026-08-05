@@ -8038,7 +8038,9 @@ Return ONLY the drafted prompt with no additional commentary.`;
         const priorityName = _clickUpPriorityName(task);
         const priorityDot = `<span class="ticket-priority-dot" style="background:${escapeAttr(priorityColor)}" data-priority-value="${priorityVal}" data-priority-provider="clickup" data-ticket-id="${escapeAttr(task.id)}" title="Priority: ${escapeAttr(priorityName)}"></span>`;
         const openUrl = _ticketExternalUrl('clickup', task.id, task.url);
-        const openBtn = openUrl ? `<button type="button" class="card-icon-btn" data-open-ticket-url="${escapeAttr(openUrl)}">Open</button>` : '';
+        // <a> not <button> — native webview link interception opens directly,
+        // bypassing vscode.env.openExternal and its permission prompt.
+        const openBtn = openUrl ? `<a href="${escapeAttr(openUrl)}" target="_blank" rel="noopener noreferrer" class="card-icon-btn" data-open-ticket-url="${escapeAttr(openUrl)}">Open</a>` : '';
         return `
         <div class="ticket-node${isSelected ? ' selected' : ''}" data-clickup-task-id="${escapeAttr(task.id)}">
             ${priorityDot}
@@ -8070,7 +8072,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
         const priorityName = _linearPriorityName(priorityVal);
         const priorityDot = `<span class="ticket-priority-dot" style="background:${escapeAttr(priorityColor)}" data-priority-value="${priorityVal}" data-priority-provider="linear" data-ticket-id="${escapeAttr(issue.id)}" title="Priority: ${escapeAttr(priorityName)}"></span>`;
         const openUrl = _ticketExternalUrl('linear', issue.identifier || issue.id, issue.url);
-        const openBtn = openUrl ? `<button type="button" class="card-icon-btn" data-open-ticket-url="${escapeAttr(openUrl)}">Open</button>` : '';
+        // <a> not <button> — see the ClickUp card comment above.
+        const openBtn = openUrl ? `<a href="${escapeAttr(openUrl)}" target="_blank" rel="noopener noreferrer" class="card-icon-btn" data-open-ticket-url="${escapeAttr(openUrl)}">Open</a>` : '';
         return `
         <div class="ticket-node${isSelected ? ' selected' : ''}" data-linear-issue-id="${escapeAttr(issue.id)}">
             ${priorityDot}
@@ -8449,7 +8452,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         let contentHtml = `<h1>${escapeHtml(issue.title || issue.identifier || issue.id)}</h1>`;
 
         if (selectedLinearIssue.renderedDescriptionHtml) {
-            contentHtml += selectedLinearIssue.renderedDescriptionHtml;
+            contentHtml += externalizeAnchors(selectedLinearIssue.renderedDescriptionHtml);
         } else {
             contentHtml += `<p>${escapeHtml((issue.description || '').trim() || 'No description provided.').replace(/\n/g, '<br>')}</p>`;
         }
@@ -8833,7 +8836,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         let contentHtml = `<h1>${escapeHtml(task.title || task.identifier || task.id)}</h1>`;
 
         if (selectedClickUpIssue.renderedDescriptionHtml) {
-            contentHtml += selectedClickUpIssue.renderedDescriptionHtml;
+            contentHtml += externalizeAnchors(selectedClickUpIssue.renderedDescriptionHtml);
         } else {
             contentHtml += `<p>${escapeHtml((task.markdownDescription || task.description || '').trim() || 'No description provided.').replace(/\n/g, '<br>')}</p>`;
         }

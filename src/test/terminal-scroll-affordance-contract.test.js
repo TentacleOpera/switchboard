@@ -98,5 +98,37 @@ test('both listeners are torn down with the view', () => {
         'remove it, so it leaks once per unassign/re-assign cycle');
 });
 
+test('the scrollbar repair verifies the sync instead of trusting it', () => {
+    const m = JS.match(/function refreshTerminalScrollbar\([\s\S]*?\n    \}/);
+    assert.ok(m, 'refreshTerminalScrollbar not found');
+    const body = m[0];
+
+    // syncScrollArea(e) forwards e to Viewport._refresh(e); _refresh(false) only
+    // schedules an rAF, so the default arg leaves the DOM stale and unverifiable
+    // on the next line.
+    assert.match(body, /syncScrollArea\(\s*true\s*\)/,
+        'syncScrollArea must be called with true (synchronous refresh) or the DOM ' +
+        'check below reads a pre-refresh layout');
+
+    // The bug this guards: syncScrollArea self-suppresses unless the buffer length,
+    // viewport height, scrollTop or device cell height changed. A long-lived pane at
+    // the scrollback cap in a static grid matches none of them — buffer length is
+    // pinned by eviction — so the call is a no-op in exactly the state the repair
+    // exists for. Returning on the call alone made the overflowY fallback unreachable.
+    assert.ok(!/syncScrollArea\([^)]*\);\s*\n\s*return;/.test(body),
+        'must not return immediately after syncScrollArea — that makes the overflowY ' +
+        'fallback dead code in the one state that needs it');
+
+    assert.match(body, /scrollHeight[\s\S]{0,120}clientHeight/,
+        'the repair must confirm against the DOM that the viewport can actually scroll');
+    assert.match(body, /buffer[\s\S]{0,60}length\s*>\s*[\s\S]{0,30}rows/,
+        'a thumb is only owed when the buffer exceeds the visible rows — in the alt ' +
+        'buffer length === rows and returning early is correct, not a defect');
+
+    // The fallback must still be after the primary path, not replaced by it.
+    assert.match(body, /overflowY\s*=\s*'hidden'/,
+        'the overflowY fallback was removed rather than made reachable');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) { process.exit(1); }

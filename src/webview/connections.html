@@ -2,56 +2,90 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Connections</title>
     <style>
+        /* Ported from the panel family (tickets.html), not hand-approximated. A
+           hand-written "equivalent" palette gets the colours close and the fonts
+           wrong, and every gate stays green while the panel looks foreign next to
+           its neighbours. The two font URIs are substituted by getConnectionsHtml,
+           so omitting the @font-face blocks silently drops both typefaces. */
+        @font-face {
+            font-family: 'GeistPixel';
+            src: url('{{GEIST_PIXEL_FONT_URI}}') format('woff2');
+            font-weight: normal;
+            font-style: normal;
+        }
+        @font-face {
+            font-family: 'Hanken Grotesk';
+            src: url('{{HANKEN_FONT_URI}}') format('woff2');
+            font-weight: 100 900;
+            font-display: swap;
+        }
         :root {
-            --bg-color: #1e1e1e;
-            --panel-bg: #252526;
-            --panel-bg2: #2d2d2d;
-            --text-primary: #cccccc;
-            --text-secondary: #858585;
-            --border-color: rgba(127,127,127,0.2);
-            --accent-color: #0e639c;
-            --accent-teal: #45e0e6;
-            --button-hover: #1177bb;
+            color-scheme: dark;
+
+            --bg-color: #000000;
+            --panel-bg: #000000;
+            --panel-bg2: #0a0a0a;
+            --card-bg: #0d0d0d;
+            --border-color: #333333;
+            --border-bright: #444444;
+            --text-primary: #e0e0e0;
+            --text-secondary: #8C8C8C;
+            --accent-primary: #00e5ff;
+            --accent-teal: var(--accent-primary);
+            --font-family: 'Hanken Grotesk', Menlo, Consolas, sans-serif;
+            --display-font: 'GeistPixel';
+            --font-code: Menlo, Consolas, monospace;
+            --display-letter-spacing: -0.05em;
         }
 
-        body.vscode-light {
-            --bg-color: #ffffff;
-            --panel-bg: #f3f3f3;
-            --panel-bg2: #e8e8e8;
-            --text-primary: #333333;
-            --text-secondary: #707070;
-            --border-color: rgba(0,0,0,0.1);
-            --accent-color: #007acc;
-            --accent-teal: #008080;
-            --button-hover: #0062a3;
+        /* Scrollbars — the standard properties stay inside the @supports gate on
+           purpose: declaring scrollbar-width/scrollbar-color at top level makes
+           Chromium 121+ and Safari 17.4+ ignore EVERY ::-webkit-scrollbar rule on
+           that scroller, silently deleting the 6px styling. */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
         }
-
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-corner {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--vscode-scrollbarSlider-background, var(--border-color));
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--vscode-scrollbarSlider-hoverBackground, var(--text-secondary));
+        }
+        @supports not selector(::-webkit-scrollbar) {
+            :root {
+                scrollbar-width: thin;
+                scrollbar-color: var(--border-color) transparent;
+            }
         }
 
         body {
             background-color: var(--bg-color);
             color: var(--text-primary);
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            font-size: 12px;
-            height: 100vh;
+            font-family: var(--font-family);
+            margin: 0;
+            padding: 0;
             display: flex;
             flex-direction: column;
-            overflow: hidden;
+            height: 100vh;
         }
 
         .shared-tab-bar {
             display: flex;
-            background: var(--panel-bg);
+            background: #181818;
             border-bottom: 1px solid var(--border-color);
             padding: 0 8px;
             gap: 4px;
+            flex: 0 0 auto;
         }
 
         .shared-tab-btn {
@@ -59,20 +93,27 @@
             border: none;
             color: var(--text-secondary);
             padding: 8px 12px;
+            font-family: var(--display-font), var(--font-family);
+            letter-spacing: var(--display-letter-spacing);
             font-size: 11px;
+            text-transform: uppercase;
             cursor: pointer;
             border-bottom: 2px solid transparent;
         }
 
-        .shared-tab-btn.active {
+        .shared-tab-btn:hover:not(.active) {
             color: var(--text-primary);
+        }
+
+        .shared-tab-btn.active {
+            color: var(--accent-teal);
             border-bottom-color: var(--accent-teal);
-            font-weight: bold;
         }
 
         .shared-tab-content {
             display: none;
-            flex: 1;
+            flex: 1 1 auto;
+            min-height: 0;
             overflow-y: auto;
             padding: 16px;
         }
@@ -81,70 +122,107 @@
             display: block;
         }
 
-        .section-label {
-            font-weight: bold;
-            font-size: 12px;
-            color: var(--text-primary);
-            margin-bottom: 8px;
-        }
-
-        .db-subsection {
-            background: var(--panel-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
-            padding: 12px;
-            margin-bottom: 16px;
-        }
-
-        .action-btn, .secondary-btn {
-            background: var(--accent-color);
-            color: #fff;
-            border: none;
-            padding: 6px 12px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 11px;
-        }
-
-        .action-btn:hover, .secondary-btn:hover {
-            background: var(--button-hover);
-        }
-
-        select, input[type="number"], input[type="text"], textarea {
-            background: var(--panel-bg2);
-            border: 1px solid var(--border-color);
-            color: var(--text-primary);
-            padding: 6px 8px;
-            border-radius: 4px;
-            font-size: 11px;
-        }
-
-        .remote-checkbox-list {
-            border: 1px solid var(--border-color);
-            background: var(--panel-bg2);
-            border-radius: 4px;
-            padding: 8px;
-            max-height: 160px;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
-
-        .intro-banner {
-            background: var(--panel-bg);
+        .conn-card {
+            background: var(--card-bg);
             border: 1px solid var(--border-color);
             border-left: 3px solid var(--accent-teal);
             border-radius: 4px;
-            padding: 10px 12px;
-            margin-bottom: 16px;
+            padding: 12px 14px;
+            margin-bottom: 14px;
+            max-width: 720px;
             font-size: 11px;
-            line-height: 1.5;
+            line-height: 1.6;
             color: var(--text-secondary);
         }
 
-        .intro-banner strong {
+        .conn-card strong { color: var(--text-primary); }
+
+        .conn-card code {
+            font-family: var(--font-code);
+            color: var(--accent-teal);
+        }
+
+        .conn-heading {
+            font-family: var(--display-font), var(--font-family);
+            letter-spacing: var(--display-letter-spacing);
+            text-transform: uppercase;
+            font-size: 11px;
             color: var(--text-primary);
+            margin-bottom: 6px;
+        }
+
+        .form-row {
+            margin-bottom: 12px;
+        }
+
+        .form-row label {
+            display: block;
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+
+        select, input[type="text"], textarea {
+            width: 100%;
+            max-width: 500px;
+            background: #1e1e1e;
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 6px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            box-sizing: border-box;
+        }
+
+        textarea {
+            font-family: var(--font-code);
+            min-height: 80px;
+            resize: vertical;
+        }
+
+        .btn-action {
+            background: #0e639c;
+            color: #ffffff;
+            border: none;
+            padding: 6px 12px;
+            font-size: 11px;
+            border-radius: 2px;
+            cursor: pointer;
+            margin-right: 8px;
+            margin-top: 6px;
+        }
+
+        .btn-action:hover {
+            background: #1177bb;
+        }
+
+        .btn-secondary {
+            background: #3c3c3c;
+            color: #cccccc;
+        }
+
+        .btn-secondary:hover {
+            background: #4c4c4c;
+        }
+
+        .status-msg {
+            margin-top: 8px;
+            font-size: 11px;
+            color: var(--accent-teal);
+        }
+
+        .checkbox-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-top: 6px;
+        }
+
+        .checkbox-group label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
         }
     </style>
     <!-- SHARED_DEFAULTS_SCRIPT -->
@@ -157,174 +235,155 @@
         <button class="shared-tab-btn" data-tab="web-agents" role="tab" aria-selected="false">Web Agents</button>
     </div>
 
-    <!-- Sub-tab 1: Providers (Remote Control) -->
+    <!-- SUB-TAB 1: PROVIDERS -->
     <div class="shared-tab-content active" id="providers-fields" data-tab-content="providers">
-        <div class="intro-banner">
-            <strong>Connections (formerly Remote Control)</strong><br>
-            Connect external AI surfaces and providers to Switchboard. Work away from desk or side-by-side with external AI tools (e.g. Gemini Spark or Claude Cowork) spending a separate AI quota pool.
+        <div class="conn-card">
+            <div class="conn-heading" id="remote-subsection-title">Remote Control (External AI Surfaces)</div>
+            Drive the board from external AI surfaces (Linear, Notion, ClickUp). Enable sync to poll remote comments or issues and dispatch actions.
         </div>
 
-        <div class="db-subsection" style="border-top:none;">
-            <div class="section-label" style="margin-bottom: 6px;"><span id="remote-subsection-title">Remote Control Provider</span></div>
-            <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:12px;">
-                Drive your boards remotely via Notion, Linear, or ClickUp. Moving a card between remote states moves it here and dispatches that column's agent; comments route back through the remote.
+        <div class="form-row">
+            <label for="remote-workspace">Workspace Folder</label>
+            <select id="remote-workspace"></select>
+        </div>
+
+        <div class="form-row">
+            <label for="remote-provider">Provider</label>
+            <select id="remote-provider">
+                <option value="linear">Linear</option>
+                <option value="notion">Notion</option>
+                <option value="clickup">ClickUp</option>
+            </select>
+        </div>
+
+        <div class="form-row">
+            <label>Remote Control Toggle</label>
+            <button id="btn-remote-control-toggle" class="btn-action">Start Remote Control</button>
+            <span id="remote-control-state" style="margin-left: 8px; font-size: 11px; color: var(--accent-teal);"></span>
+        </div>
+
+        <div class="form-row">
+            <label for="remote-frequency">Ping Frequency (seconds)</label>
+            <input type="text" id="remote-frequency" value="30" style="max-width: 120px;" />
+        </div>
+
+        <div class="form-row">
+            <label>Sync Mode</label>
+            <div class="checkbox-group">
+                <label><input type="radio" name="remote-mode" id="remote-mode-ingest" value="ingest" checked /> Ingest only (plan first, do not auto-code)</label>
+                <label><input type="radio" name="remote-mode" id="remote-mode-full" value="full" /> Ingest & Execute (auto-code remotely)</label>
             </div>
+        </div>
 
-            <!-- Provider selector -->
-            <label style="display:block; margin-bottom:10px;">
-                <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Provider</span>
-                <select id="remote-provider" class="workspace-project-select" style="width:100%;">
-                    <option value="linear">Linear</option>
-                    <option value="notion">Notion</option>
-                    <option value="clickup">ClickUp</option>
-                </select>
-            </label>
-
-            <!-- Workspace selector -->
-            <label style="display:block; margin-bottom:10px;">
-                <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Workspace</span>
-                <select id="remote-workspace" class="workspace-project-select" style="width:100%;"></select>
-            </label>
-
-            <!-- Boards to sync -->
-            <div style="margin-bottom:10px;">
-                <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Boards to sync</span>
-                <div id="remote-boards-list" class="remote-checkbox-list"></div>
+        <div class="form-row">
+            <label>Options</label>
+            <div class="checkbox-group">
+                <label><input type="checkbox" id="remote-comments" checked /> Auto-comment progress updates back to issue</label>
+                <label><input type="checkbox" id="remote-content" checked /> Include plan file content in remote issue description</label>
+                <label><input type="checkbox" id="remote-push" checked /> Auto-push local card state changes to remote</label>
             </div>
+        </div>
 
-            <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
-                <input type="checkbox" id="remote-silent-sync">
-                <span>Silent syncing — keep selected boards mirrored with provider even while pinging is off</span>
-            </label>
+        <div class="form-row" id="remote-boards-container"></div>
 
-            <!-- Remote mode -->
-            <div style="margin-bottom:10px;">
-                <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Remote mode</span>
-                <label style="display:inline-flex; align-items:center; gap:4px; margin-right:16px; cursor:pointer;">
-                    <input type="radio" name="remote-mode" value="ingest" id="remote-mode-ingest">
-                    <span>Ingest (pull only)</span>
-                </label>
-                <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer;">
-                    <input type="radio" name="remote-mode" value="full" id="remote-mode-full">
-                    <span>Full (pull + mirror + dispatch)</span>
-                </label>
-            </div>
+        <div class="form-row" id="remote-linear-agent-skill">
+            <button id="remote-linear-copy-skill" class="btn-action btn-secondary">Copy Linear Agent Skill Prompt</button>
+        </div>
+        <div class="form-row" id="remote-notion-setup" style="display: none;">
+            <button id="btn-run-notion-remote-setup" class="btn-action btn-secondary">Setup Notion Integration</button>
+        </div>
+        <div class="form-row" id="remote-clickup-setup" style="display: none;">
+            <button id="btn-run-clickup-remote-setup" class="btn-action btn-secondary">Setup ClickUp Integration</button>
+        </div>
 
-            <!-- Comment polling toggle -->
-            <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
-                <input type="checkbox" id="remote-comments">
-                <span>Poll comments from remote</span>
-            </label>
-
-            <!-- Content polling toggle -->
-            <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
-                <input type="checkbox" id="remote-content">
-                <span>Poll content from remote</span>
-            </label>
-
-            <!-- Push toggle -->
-            <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;" id="remote-push-label">
-                <input type="checkbox" id="remote-push">
-                <span>Push status &amp; content to remote</span>
-            </label>
-
-            <label style="display:block; margin-bottom:12px;">
-                <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Ping frequency (seconds, 30–120)</span>
-                <input type="number" id="remote-ping-frequency" class="remote-number-input" min="30" max="120" step="5" value="60" style="width:80px;">
-            </label>
-
-            <!-- Start/stop pinging -->
-            <div style="margin-bottom:12px; display:flex; align-items:center; gap:10px;">
-                <button id="btn-remote-control-toggle" class="action-btn">Start Remote Control</button>
-                <span id="remote-control-state" style="font-size:10px; color:var(--text-secondary);"></span>
-            </div>
-
-            <!-- Sync health -->
-            <div id="remote-health-section" style="margin-bottom:12px; padding:8px 10px; border:1px solid var(--border-color); border-radius:4px; font-size:11px; line-height:1.6; display:none; background:var(--panel-bg);">
-                <div class="section-label" style="margin-bottom:6px; font-size:11px;">Sync Health</div>
-                <div id="remote-health-poll" style="color:var(--text-secondary);"></div>
-                <div id="remote-health-push" style="color:var(--text-secondary);"></div>
-                <div id="remote-health-throttle" style="color:var(--text-secondary); display:none;"></div>
-                <div id="remote-health-failure" style="color:var(--text-secondary); display:none; margin-top:4px; font-weight:bold;"></div>
-            </div>
-
-            <!-- Linear-only setup helper -->
-            <div id="remote-linear-agent-skill" style="margin-bottom:12px; display:none;">
-                <button id="btn-copy-linear-agent-skill" class="action-btn" title="Copy tailored instructions for Linear's native AI agent">
-                    Copy Linear Agent Skill
-                </button>
-                <span id="copy-linear-agent-skill-status" style="font-size:11px; color:var(--text-secondary); margin-left:8px;"></span>
-            </div>
-
-            <!-- Notion-only setup -->
-            <div id="remote-notion-setup" style="display:none; margin-top:6px; margin-bottom:10px; padding-top:10px; border-top:1px solid var(--border-color);">
-                <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
-                    Run this once after selecting boards to create Notion databases and match column select options.
-                </div>
-                <div style="display:flex; align-items:center; gap:8px;">
-                    <button id="btn-remote-notion-setup" class="secondary-btn">Provision Notion DBs &amp; Match Board</button>
-                    <span id="remote-notion-setup-status" style="font-size:11px; color:var(--text-secondary);"></span>
-                </div>
-            </div>
-
-            <!-- ClickUp-only setup -->
-            <div id="remote-clickup-setup" style="display:none; margin-top:6px; margin-bottom:10px; padding-top:10px; border-top:1px solid var(--border-color);">
-                <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
-                    Run this once after selecting lists to ensure custom fields and status mappings are provisioned.
-                </div>
-                <div style="display:flex; align-items:center; gap:8px;">
-                    <button id="btn-remote-clickup-setup" class="secondary-btn">Provision ClickUp Fields &amp; Statuses</button>
-                    <span id="remote-clickup-setup-status" style="font-size:11px; color:var(--text-secondary);"></span>
-                </div>
-            </div>
+        <div id="remote-health-section" style="display: none; margin-top: 14px;">
+            <div class="conn-heading">Connection Health</div>
+            <div id="remote-health-content" style="font-size: 11px; color: var(--text-secondary);">Checking connection...</div>
         </div>
     </div>
 
-    <!-- Sub-tab 2: Hand-offs (populated by sibling subtask) -->
+    <!-- SUB-TAB 2: HAND-OFFS -->
     <div class="shared-tab-content" id="handoffs-fields" data-tab-content="handoffs">
-        <div class="intro-banner">
-            <strong>External-Agent Skill Launchers</strong><br>
-            Copy pre-written skill prompts for external AI surfaces (Gemini Spark, Claude Cowork, etc.). Results write directly back into <code>.switchboard/</code> where watchers import them.
+        <div class="conn-card">
+            <div class="conn-heading">External-Agent Skill Launchers</div>
+            Hand off planning, review, or memo processing tasks to external models (Gemini Spark, Claude, ChatGPT, Jules). Select a launcher and target file to generate a structured prompt.
         </div>
-        <div id="handoffs-container"></div>
+
+        <div class="form-row">
+            <label for="handoff-launcher-select">Skill Launcher</label>
+            <select id="handoff-launcher-select">
+                <option value="memo-process">Memo Process — Refine captured memo entries into plan files</option>
+                <option value="plan-write">Plan Write — Deepen and flesh out plan file specification</option>
+                <option value="plan-review">Plan Review — Review plan for gaps, risks, and edge cases</option>
+                <option value="feature-review">Feature Review — Review multi-subtask feature consistency</option>
+            </select>
+        </div>
+
+        <div class="form-row">
+            <label for="handoff-target-path">Target Artifact / Plan Path (Optional)</label>
+            <input type="text" id="handoff-target-path" placeholder=".switchboard/plans/feature_plan_...md or issue description" />
+        </div>
+
+        <div class="form-row">
+            <button id="btn-copy-handoff-prompt" class="btn-action">Copy Launcher Prompt to Clipboard</button>
+            <div id="handoff-prompt-result" class="status-msg"></div>
+        </div>
     </div>
 
-    <!-- Sub-tab 3: Jobs (populated by sibling subtask) -->
+    <!-- SUB-TAB 3: JOBS -->
     <div class="shared-tab-content" id="jobs-fields" data-tab-content="jobs">
-        <div class="intro-banner">
-            <strong>Scheduled External Jobs</strong><br>
-            Monitor unattended jobs, instruction inbox status, and declared board moves.
+        <div class="conn-card">
+            <div class="conn-heading">Scheduled External Jobs & Context Exporter</div>
+            Standing background jobs scan the instruction inbox <code>.switchboard/instructions/</code> and apply declared board moves.
         </div>
-        <div id="jobs-container"></div>
+
+        <div class="conn-card">
+            <div class="conn-heading">Standing Job Definitions</div>
+            <ul style="margin: 4px 0 0 16px; padding: 0;">
+                <li><code>memo-to-plans.md</code> — Converts memo entries into structured plan files</li>
+                <li><code>nightly-code-review.md</code> — Reviews completed plans for potential bugs</li>
+                <li><code>research-unknowns.md</code> — Resolves uncertain assumptions via research</li>
+                <li><code>pipeline-manager.md</code> — Produces declared moves in <code>.switchboard/instructions/moves/</code></li>
+            </ul>
+        </div>
+
+        <div class="form-row">
+            <div class="conn-heading">Uploadable AI Surface Context</div>
+            <p style="font-size: 11px; margin-bottom: 8px;">Export <code>.switchboard/switchboard-spark.md</code> to upload as persistent system context to Gemini Spark or Claude Cowork.</p>
+            <button id="btn-regenerate-spark-context" class="btn-action">Re-generate Spark Context Skill</button>
+            <div id="spark-context-result" class="status-msg"></div>
+        </div>
+
+        <div class="form-row" style="margin-top: 16px;">
+            <div class="conn-heading">Recent Job Activity</div>
+            <div id="jobs-list" style="font-size: 11px; color: var(--text-secondary);">No job runs recorded yet. Standing jobs read instructions on scheduled passes.</div>
+        </div>
     </div>
 
-    <!-- Sub-tab 4: Web Agents (populated by sibling subtask) -->
+    <!-- SUB-TAB 4: WEB AGENTS -->
     <div class="shared-tab-content" id="web-agents-fields" data-tab-content="web-agents">
-        <div class="intro-banner">
-            <strong>Web Agents &amp; Document Ingestion</strong><br>
-            Point external AI agents at your documents to extract high-level plans.
+        <div class="conn-card">
+            <div class="conn-heading">Web Agents & Paste-Back Plan Cards</div>
+            Zip your documentation or codebase docs, hand off to a web-based AI surface (Claude Web, ChatGPT Plus), and paste the returned plan back onto the Switchboard.
         </div>
-        <div id="web-agents-container"></div>
+
+        <div class="form-row">
+            <button id="create-plans-zip-btn" class="btn-action btn-secondary">Select Folder & Download ZIP</button>
+            <button id="create-plans-copy-prompt-btn" class="btn-action btn-secondary">Copy Web Agent Prompt</button>
+        </div>
+
+        <div class="form-row" style="margin-top: 14px;">
+            <label for="create-plans-paste-textarea">Paste Returned Markdown Plan</label>
+            <textarea id="create-plans-paste-textarea" placeholder="Paste full markdown plan returned by external web agent here..."></textarea>
+        </div>
+
+        <div class="form-row">
+            <button id="create-plans-paste-btn" class="btn-action">Create Plan Card on Board</button>
+            <div id="create-plans-paste-status" class="status-msg"></div>
+        </div>
     </div>
 
-    <script>
-        // Sub-tab switching script
-        document.querySelectorAll('.shared-tab-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const targetTab = btn.getAttribute('data-tab');
-                document.querySelectorAll('.shared-tab-btn').forEach(b => {
-                    b.classList.remove('active');
-                    b.setAttribute('aria-selected', 'false');
-                });
-                document.querySelectorAll('.shared-tab-content').forEach(c => {
-                    c.classList.remove('active');
-                });
-                btn.classList.add('active');
-                btn.setAttribute('aria-selected', 'true');
-                const content = document.querySelector(`[data-tab-content="${targetTab}"]`);
-                if (content) content.classList.add('active');
-            });
-        });
-    </script>
+    <!-- SHARED_DEFAULTS_SCRIPT -->
+    <script nonce="{{NONCE}}" src="{{CONNECTIONS_JS_URI}}"></script>
 </body>
 </html>

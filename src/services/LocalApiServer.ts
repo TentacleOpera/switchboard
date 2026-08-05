@@ -16,6 +16,7 @@ import {
     CustomKanbanColumnConfig
 } from './agentConfig';
 import { WsHub } from './wsHub';
+import { PLANNING_VERBS, SETUP_VERBS } from '../generated/verbAllowlist';
 import { isLoopbackHostHeader, isLoopbackOrigin } from '../utils/loopbackHostname';
 
 /** Canonical form for column refs (IDs and labels alike): 'lead-coded' /
@@ -3529,6 +3530,37 @@ export class LocalApiServer {
             } else if (pathname.startsWith('/setup/verb/') && req.method === 'POST') {
                 const verb = decodeURIComponent(pathname.slice('/setup/verb/'.length));
                 await this._handleSetupVerb(verb, req, res);
+            } else if (pathname.startsWith('/connections/verb/') && req.method === 'POST') {
+                // Connections is the one panel that spans two providers: the Remote /
+                // provider-config arms live in SetupPanelProvider, the six createPlans*
+                // arms in PlanningPanelProvider. The webview cannot pick between them —
+                // transport.js derives ONE route prefix per panel from `data-panel`
+                // (`transport.js:26`) and has no per-call override — so the split is the
+                // server's job, resolved from the generated allowlists rather than a
+                // hand-maintained list that would drift from protocol-catalog.json.
+                //
+                // Setup wins ties. As of this writing the two allowlists overlap on
+                // exactly one verb — `openTicketsPanel` — and both arms do the same
+                // thing, so the precedence is currently unobservable; it is declared
+                // anyway so a future overlap resolves deterministically instead of by
+                // whichever branch happens to be first. Neither handler is bypassed:
+                // each still runs its own auth, secret-write gate, schema validation
+                // and body parse.
+                const verb = decodeURIComponent(pathname.slice('/connections/verb/'.length));
+                if (SETUP_VERBS.has(verb)) {
+                    await this._handleSetupVerb(verb, req, res);
+                } else if (PLANNING_VERBS.has(verb)) {
+                    await this._handlePlanningVerb(verb, req, res);
+                } else {
+                    // Fail loudly rather than 404-as-not-found: a Connections verb that
+                    // is in neither allowlist is a wiring bug in the panel, and a silent
+                    // miss here reads to the user as a dead button.
+                    res.writeHead(404, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        success: false,
+                        error: `Unknown connections verb '${verb}' — it is in neither SETUP_VERBS nor PLANNING_VERBS. Add the arm to its provider and run \`npm run catalog:generate\`.`
+                    }));
+                }
             } else if (pathname.startsWith('/taskViewer/verb/') && req.method === 'POST') {
                 const verb = decodeURIComponent(pathname.slice('/taskViewer/verb/'.length));
                 await this._handleTaskViewerVerb(verb, req, res);

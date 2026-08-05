@@ -516,6 +516,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _planFsDebounceTimers = new Map<string, NodeJS.Timeout>(); // debounce native plan watcher events
     private _memoWatchers: vscode.FileSystemWatcher[] = [];
     private _memoFsDebounce?: NodeJS.Timeout;
+    private _lastServedMemoContent: string = '';
     private _clickUpConfigCache: Map<string, any> = new Map();
     private _recentNativePlanCreations = new Map<string, NodeJS.Timeout>(); // 4s TTL dedup: prevents native fs.watch double-fire after VS Code watcher has already handled the creation
     private _recentlyDeletedPaths = new Map<string, NodeJS.Timeout>(); // 10s TTL: prevents reconciliation from reviving just-deleted plans
@@ -12523,6 +12524,7 @@ Each plan file must include:
                         try {
                             content = await fs.promises.readFile(memoPath, 'utf8');
                         } catch { /* file doesn't exist yet — that's fine */ }
+                        this._lastServedMemoContent = content;
                         this.postMessage({ type: 'memoContent', content });
                         return { success: true, content };
                     }
@@ -12535,7 +12537,9 @@ Each plan file must include:
                         const memoPath = this._getMemoPath(workspaceRoot);
                         const dir = path.dirname(memoPath);
                         await fs.promises.mkdir(dir, { recursive: true });
-                        await fs.promises.writeFile(memoPath, typeof data.content === 'string' ? data.content : '', 'utf8');
+                        const contentToSave = typeof data.content === 'string' ? data.content : '';
+                        this._lastServedMemoContent = contentToSave;
+                        await fs.promises.writeFile(memoPath, contentToSave, 'utf8');
                         return { success: true };
                     }
                     case 'memoClear': {
@@ -13201,7 +13205,12 @@ What would you like to find?`;
         } catch (e: any) {
             if (e?.code !== 'ENOENT') { return; }
         }
+        if (content === this._lastServedMemoContent) {
+            return;
+        }
+        this._lastServedMemoContent = content;
         this.postMessage({ type: 'memoContent', content });
+        this.postMessage({ type: 'memoUpdated', content });
     }
 
     private _setupSessionWatcher() {
@@ -22499,6 +22508,18 @@ What would you like to find?`;
             // we get live data, not a stale 5-min snapshot that would miss
             // recently-deleted tasks. Never delete based on a failed/partial
             // fetch — the fetchSucceeded flag gates the sweep.
+            //
+            // "Succeeded" MUST mean authoritative, not merely "did not throw".
+            // _fetchListTasksInternal exits its pagination loop with complete=false
+            // on an empty page or a run that never observes last_page:true, and
+            // returns those short results normally — no exception. Trusting the
+            // absence of a throw deleted five real tickets on 2026-08-05: a short
+            // 200 response produced a fullRemoteIds set missing every local file,
+            // and the sweep unlinked them all plus their imported_docs rows.
+            // This mirrors the non-delta gate (fetchIsAuthoritative, ~line 22320):
+            // complete AND non-empty. A genuinely-emptied list is therefore no
+            // longer swept here — which matches the full-import path, whose
+            // rawItemCount > 0 term already declines to sweep that case.
             if (isDelta) {
                 let fetchSucceeded = false;
                 let fullRemoteIds = new Set<string>();
@@ -22506,23 +22527,38 @@ What would you like to find?`;
                     if (provider === 'clickup' && listId) {
                         this._getCacheService(resolvedRoot).invalidateTaskCache('clickup', listId);
                         const clickup = this._getClickUpService(resolvedRoot);
-                        const allTasks = await clickup.getListTasks(listId, { forceRefresh: true });
+                        // getListTasksLive is the same _fetchListTasksInternal call the
+                        // previous getListTasks({forceRefresh:true}) made — it just also
+                        // returns the `complete` flag instead of discarding it.
+                        const { tasks: allTasks, complete } = await clickup.getListTasksLive(listId);
                         fullRemoteIds = new Set(allTasks.map((t: any) => String(t.id)));
-                        fetchSucceeded = true;
+                        fetchSucceeded = complete && fullRemoteIds.size > 0;
+                        if (!fetchSucceeded) {
+                            console.warn(
+                                `[TaskViewerProvider] Deletion sweep (delta): non-authoritative ClickUp fetch for list ${listId} ` +
+                                `(complete=${complete}, ids=${fullRemoteIds.size}) — skipping sweep.`
+                            );
+                        }
                     } else if (provider === 'linear' && projectId) {
                         // Use fetchAllIssueIds (uncapped) — NOT queryIssues (capped at 100).
+                        // It returns a bare Set with no completeness signal, so the only
+                        // check available here is non-emptiness. That still blocks the
+                        // catastrophic case (empty set → delete everything); a truncated
+                        // page-cap run remains possible and needs fetchAllIssueIds to
+                        // report completeness before it can be gated properly.
                         const linear = this._getLinearService(resolvedRoot);
                         fullRemoteIds = await linear.fetchAllIssueIds(projectId);
-                        fetchSucceeded = true;
+                        fetchSucceeded = fullRemoteIds.size > 0;
+                        if (!fetchSucceeded) {
+                            console.warn(
+                                `[TaskViewerProvider] Deletion sweep (delta): empty Linear ID set for project ${projectId} — skipping sweep.`
+                            );
+                        }
                     }
                 } catch (e) {
                     console.warn('[TaskViewerProvider] Deletion sweep (delta): full ID-set fetch failed, skipping sweep:', e);
                     fetchSucceeded = false;
                 }
-                // Only sweep if the fetch succeeded — never delete based on a
-                // failed/partial fetch. An empty set with fetchSucceeded=true
-                // means the list is intentionally empty (all tasks deleted
-                // remotely) → sweep deletes all local files for this list.
                 if (fetchSucceeded) {
                     try {
                         const cacheService = this._getCacheService(resolvedRoot);

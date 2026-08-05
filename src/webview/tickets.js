@@ -556,7 +556,11 @@
         const priorityName = _clickUpPriorityName(task);
         const priorityDot = `<span class="ticket-priority-dot" style="background:${escapeAttr(priorityColor)}" data-priority-value="${priorityVal}" data-priority-provider="clickup" data-ticket-id="${escapeAttr(task.id)}" title="Priority: ${escapeAttr(priorityName)}"></span>`;
         const openUrl = _ticketExternalUrl('clickup', task.id, task.url);
-        const openBtn = openUrl ? `<button type="button" class="card-icon-btn" data-open-ticket-url="${escapeAttr(openUrl)}">Open</button>` : '';
+        // Render as an <a> so the VS Code webview's native link interception opens
+        // it directly in the system browser — bypassing vscode.env.openExternal and
+        // its extension-domain permission prompt. The data-open-ticket-url attribute
+        // is kept only for the flash feedback; the click handler no longer postMessages.
+        const openBtn = openUrl ? `<a href="${escapeAttr(openUrl)}" target="_blank" rel="noopener noreferrer" class="card-icon-btn" data-open-ticket-url="${escapeAttr(openUrl)}">Open</a>` : '';
         return `
         <div class="ticket-node${isSelected ? ' selected' : ''}" data-clickup-task-id="${escapeAttr(task.id)}">
             ${priorityDot}
@@ -588,7 +592,8 @@
         const priorityName = _linearPriorityName(priorityVal);
         const priorityDot = `<span class="ticket-priority-dot" style="background:${escapeAttr(priorityColor)}" data-priority-value="${priorityVal}" data-priority-provider="linear" data-ticket-id="${escapeAttr(issue.id)}" title="Priority: ${escapeAttr(priorityName)}"></span>`;
         const openUrl = _ticketExternalUrl('linear', issue.identifier || issue.id, issue.url);
-        const openBtn = openUrl ? `<button type="button" class="card-icon-btn" data-open-ticket-url="${escapeAttr(openUrl)}">Open</button>` : '';
+        // <a> not <button> — see the ClickUp card comment above for why.
+        const openBtn = openUrl ? `<a href="${escapeAttr(openUrl)}" target="_blank" rel="noopener noreferrer" class="card-icon-btn" data-open-ticket-url="${escapeAttr(openUrl)}">Open</a>` : '';
         return `
         <div class="ticket-node${isSelected ? ' selected' : ''}" data-linear-issue-id="${escapeAttr(issue.id)}">
             ${priorityDot}
@@ -3184,7 +3189,7 @@
         let contentHtml = `<h1>${escapeHtml(issue.title || issue.identifier || issue.id)}</h1>`;
 
         if (selectedLinearIssue.renderedDescriptionHtml) {
-            contentHtml += selectedLinearIssue.renderedDescriptionHtml;
+            contentHtml += externalizeAnchors(selectedLinearIssue.renderedDescriptionHtml);
         } else {
             contentHtml += `<p>${escapeHtml((issue.description || '').trim() || 'No description provided.').replace(/\n/g, '<br>')}</p>`;
         }
@@ -3289,7 +3294,7 @@
         let contentHtml = `<h1>${escapeHtml(task.title || task.identifier || task.id)}</h1>`;
 
         if (selectedClickUpIssue.renderedDescriptionHtml) {
-            contentHtml += selectedClickUpIssue.renderedDescriptionHtml;
+            contentHtml += externalizeAnchors(selectedClickUpIssue.renderedDescriptionHtml);
         } else {
             contentHtml += `<p>${escapeHtml((task.markdownDescription || task.description || '').trim() || 'No description provided.').replace(/\n/g, '<br>')}</p>`;
         }
@@ -5063,11 +5068,11 @@ Instructions:
             }
             const openTicketBtn = e.target.closest('[data-open-ticket-url]');
             if (openTicketBtn) {
-                const url = openTicketBtn.dataset.openTicketUrl;
-                if (url) {
-                    vscode.postMessage({ type: 'openExternalUrl', url });
-                    flashIconBtn(openTicketBtn);
-                }
+                // The Open control is now an <a href>, so the VS Code webview's
+                // native link interception opens the URL directly — no postMessage
+                // to openExternalUrl (which would trigger the permission modal).
+                // Just flash for visual feedback; the native default action proceeds.
+                flashIconBtn(openTicketBtn);
                 return;
             }
             // A click on a card's "⋯" overflow trigger opens its menu (handled by the

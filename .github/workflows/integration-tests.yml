@@ -389,6 +389,17 @@ jobs:
       - name: Multi-parent terminals contract (attribution, spawn targeting, hierarchy)
         run: npm run test:contract:multi-parent-terminals
 
+      # The external-agent file protocol has no human in the loop, so every failure
+      # here is silent by construction: a claim that never expires wedges an inbox
+      # item forever, a planId handed to the session_id-keyed move path skips every
+      # card while reporting success, a run-log re-read duplicates history, and an
+      # eager mkdir scaffolds .switchboard/ into workspaces that never opted in.
+      # Also pins that the fakes mirror the REAL API surface — the first version of
+      # this suite asserted against db.all/db.run and a planId-keyed move, none of
+      # which exist.
+      - name: Scheduled jobs + Connections contract (claims, declared moves, ingestion, spark)
+        run: npm run test:contract:scheduled-jobs
+
       # Every failure mode of surface scoping is a panel that silently stops updating.
       # Pins the three traps: untagged-means-everyone, parse-before-resync, and
       # every-panel-gets-`common`. Also pins the client/server panel-map mirror (a

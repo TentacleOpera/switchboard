@@ -71,7 +71,7 @@ async function run() {
     check('inline code in list', '- use `foo` here', (h) =>
         h.includes('<li>use <code>foo</code> here</li>'));
     check('inline link in list', '- see [docs](https://example.com)', (h) =>
-        h.includes('<li>see <a href="https://example.com">docs</a></li>'));
+        h.includes('<li>see <a href="https://example.com" target="_blank" rel="noopener noreferrer">docs</a></li>'));
 
     // Code fence containing a list-like line is NOT converted to a list.
     check('code fence not list', '```\n* foo\n- bar\n```', (h) =>

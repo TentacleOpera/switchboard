@@ -128,3 +128,13 @@ Tests are skipped per session directive, and compilation is skipped per session 
 ## Recommendation
 
 Complexity 2 → **Send to Intern.**
+
+---
+
+## Review Findings
+
+**Not implemented.** No code was written for this plan: `src/services/TaskViewerProvider.ts` and `src/webview/memo.js` are both absent from the commit, and a grep for `watchFile` in `TaskViewerProvider.ts` returns nothing. Missing in full: the `hostSeams.watchFile` registration on `<workspaceRoot>/.switchboard/memo.md`, the 150–300 ms debounce, the content-comparison echo guard, the native `fs.watch` fallback with dedup guard the plan identified at `TaskViewerProvider.ts:13077-13099`, watcher disposal, and the `memo.js` push handler with its unsaved-edit guard. Nothing was fixed — this is a whole feature, not a defect, and writing it under a review pass would ship unreviewed service-layer watcher code into the provider three other subtasks also want to touch. Validation: `tsc --noEmit` and `npm run lint` pass; the plan's echo-guard and debounce tests do not exist. Note that `npm run test:contract:memo-browser-clear` is red, but pre-existing — it exercises memo verbs in files this feature never touched.
+
+### Second review pass (post-coder)
+
+**Correction to the finding above: a memo watcher already existed.** `_setupMemoWatcher` has been at `TaskViewerProvider.ts:13140` all along, registered at `:848` / `:6002` and disposed at `:21474`, with debounce (`_memoFsDebounce`) and a native-fallback shape already in place; `memo.js`'s unsaved-edit guard (`isFocused || _memoDirty`) also predates this work. The first-pass verdict "not implemented at all" was wrong — the real gap was narrower. **Now closed:** the coder added the content-comparison echo guard (`_lastServedMemoContent`, set on `memoLoad`/`memoSave`, compared before broadcast) and a `memoUpdated` case in `memo.js`. This plan is substantially complete. Two NITs left: `_handleMemoFileChange` posts **both** `memoContent` and `memoUpdated` with identical payloads and `memo.js` handles them by fallthrough, so every external change renders twice — drop one; and the plan's echo-guard and debounce unit tests still do not exist.

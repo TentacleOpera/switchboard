@@ -17,6 +17,26 @@ import type { TaskViewerProvider } from './TaskViewerProvider';
 import { KanbanDatabase, type WorkspaceDatabaseMapping } from './KanbanDatabase';
 import type { KanbanProvider } from './KanbanProvider';
 import { getMappingsFromIndex, resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentityService';
+import { LAUNCHER_REGISTRY, composeExternalPrompt } from './externalAgentPrompts';
+import { generateSparkContext } from './SparkContextExporter';
+
+/**
+ * The running extension's version, read from the packaged `package.json`.
+ *
+ * `SetupPanelProvider` is constructed with only an extension URI — it holds no
+ * `ExtensionContext` — so `context.extension.packageJSON.version` is not reachable
+ * here. The version is stamped into the generated Spark artifact and is what makes
+ * staleness visible after an upgrade, so a wrong-but-plausible constant is worse
+ * than 'unknown': it would read as fresh forever.
+ */
+function getExtensionVersion(extensionUri: vscode.Uri): string {
+    try {
+        const pkg = JSON.parse(fs.readFileSync(path.join(extensionUri.fsPath, 'package.json'), 'utf8'));
+        return typeof pkg?.version === 'string' ? pkg.version : 'unknown';
+    } catch {
+        return 'unknown';
+    }
+}
 
 // Switchboard writes only a marker-delimited MANAGED BLOCK into CLAUDE.md / AGENTS.md
 // (see extension.ts ensureProtocolFile) and only ledger-tracked skills into `.claude/`
@@ -320,6 +340,53 @@ export class SetupPanelProvider implements vscode.Disposable {
                         this._pendingSection = undefined;
                     }
                     return { success: true };
+                case 'getLauncherPrompt': {
+                    const workspaceRoot = this._getCurrentWorkspaceRoot() || '';
+                    const launcherId = message.launcherId;
+                    // An unrecognised id must fail, not fall back: silently composing a
+                    // different launcher's prompt hands the user output for a job they
+                    // did not ask for, and it looks identical to success.
+                    const spec = LAUNCHER_REGISTRY.find(l => l.id === launcherId);
+                    if (!spec) {
+                        return {
+                            success: false,
+                            error: `Unknown launcher '${launcherId}' — known ids: ${LAUNCHER_REGISTRY.map(l => l.id).join(', ')}`
+                        };
+                    }
+                    // targetKind !== 'none' means the prompt's write-back sentence names a
+                    // path the caller must supply. Composing without one yields a prompt
+                    // that says "write to the path provided" and provides none.
+                    if (spec.targetKind !== 'none' && !message.targetPath) {
+                        return {
+                            success: false,
+                            error: `Launcher '${spec.id}' needs a target ${spec.targetKind}; pass targetPath.`
+                        };
+                    }
+                    let target: { absPath: string; content: string } | undefined;
+                    if (message.targetPath) {
+                        let content = '';
+                        try { content = await fs.promises.readFile(message.targetPath, 'utf8'); } catch { /* new file — empty body is correct */ }
+                        target = { absPath: message.targetPath, content };
+                    }
+                    const res = composeExternalPrompt(spec, workspaceRoot, target);
+                    if (res.prompt) {
+                        await this._seams().clipboard.writeText(res.prompt);
+                    }
+                    // resolvedSkillPath is surfaced, not swallowed: a null here means every
+                    // skill-file candidate missed and the prompt fell back to the inline
+                    // text, which produces visibly weaker output with no other symptom.
+                    if (!res.resolvedSkillPath) {
+                        console.warn(`[SetupPanelProvider] launcher '${spec.id}': no skill file resolved from ${spec.skillPaths.join(', ')} — used the inline fallback prompt.`);
+                    }
+                    return { success: true, prompt: res.prompt, resolvedSkillPath: res.resolvedSkillPath };
+                }
+                case 'regenerateSparkContext': {
+                    const workspaceRoot = this._getCurrentWorkspaceRoot() || '';
+                    const version = getExtensionVersion(this._extensionUri);
+                    const res = generateSparkContext(workspaceRoot, version);
+                    this.postMessage({ type: 'sparkContextResult', success: true, path: res.path, skippedSections: res.skippedSections });
+                    return { success: true, ...res };
+                }
                 case 'getIntegrationSetupStates': {
                     const states = await this._taskViewerProvider.getIntegrationSetupStates();
                     this.postMessage({ type: 'integrationSetupStates', ...states });

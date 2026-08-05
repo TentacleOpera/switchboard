@@ -38,6 +38,7 @@ import { validateVerbPayload } from './verbSchemas';
 import { BroadcastHub } from './broadcastHub';
 import type { AutobanConfigState } from './autobanState';
 import type { TaskViewerProvider } from './TaskViewerProvider';
+import { processDeclaredMoves, ingestJobActivity } from './ScheduledJobsService';
 import { ClickUpAutomationService } from './ClickUpAutomationService';
 import { ClickUpSyncService, type ClickUpConfig, type ClickUpSyncResult } from './ClickUpSyncService';
 import { ClickUpDocsAdapter } from './ClickUpDocsAdapter';
@@ -809,6 +810,8 @@ export class KanbanProvider implements vscode.Disposable {
                     continue;
                 }
                 await this._globalPlanWatcher.triggerScan(folder);
+                await processDeclaredMoves(folder, this);
+                await ingestJobActivity(folder, db);
                 // One-time complexity-column backfill for pre-fix installs.
                 // Runs after the scan so freshly-imported rows are also
                 // reconciled. Guarded once-per-workspace by
@@ -10342,8 +10345,17 @@ ${FOCUS_DIRECTIVE}`;
                 const cards = await this._buildBoardCards(db, wsId, workspaceRoot, activeRows, completedRows, timeoutMs);
                 // Optional column filter (narrow to one column for the kanban-mode pane).
                 const column = typeof msg.column === 'string' ? msg.column : null;
-                const filtered = column ? cards.filter(c => c.column === column) : cards;
-                return { success: true, cards: filtered };
+                let filtered = column ? cards.filter(c => c.column === column) : cards;
+                // Optional project filter (narrow to one project for the kanban-mode pane).
+                // An empty-string project matches plans with no project assigned (the
+                // board's UNASSIGNED_PROJECT_FILTER convention).
+                if (typeof msg.project === 'string' && msg.project !== '') {
+                    filtered = filtered.filter(c => (c.project || '') === msg.project);
+                }
+                // Return the workspace's project list alongside the cards so the pane
+                // can populate its project picker without a separate round-trip.
+                const projects = await db.getProjects(wsId);
+                return { success: true, cards: filtered, projects };
             }
             case 'getAutoArchiveConfig': {
                 const payload = await this.autoArchiveGetConfigPayload(msg.workspaceRoot);

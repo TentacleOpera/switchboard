@@ -429,6 +429,14 @@ async function refreshWorkspaceControlPlane(
             if (currentVersion) {
                 setLastCopiedAgentVersion(root, currentVersion);
             }
+            // Auto-generate / refresh switchboard-spark.md context skill artifact on activation
+            try {
+                const { generateSparkContext } = require('./services/SparkContextExporter');
+                const v = currentVersion || '1.0.0';
+                generateSparkContext(root, v);
+            } catch (sparkErr) {
+                console.warn(`[Switchboard] Spark context generation failed for ${root}:`, sparkErr);
+            }
         } catch (err) {
             console.error(`[Switchboard] Protocol-file migration failed for ${root}, continuing:`, err);
         }

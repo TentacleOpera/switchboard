@@ -204,6 +204,30 @@ CREATE TABLE IF NOT EXISTS linear_issue_links (
     plan_path  TEXT NOT NULL,
     synced_at  TEXT
 );
+CREATE TABLE IF NOT EXISTS job_runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp   TEXT NOT NULL,
+    job         TEXT NOT NULL,
+    summary     TEXT NOT NULL,
+    source      TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS job_instructions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    file        TEXT NOT NULL UNIQUE,
+    status      TEXT NOT NULL DEFAULT 'pending',
+    claimed_ts  TEXT,
+    agent       TEXT,
+    result      TEXT
+);
+CREATE TABLE IF NOT EXISTS board_move_requests (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    file        TEXT NOT NULL,
+    plan_id     TEXT NOT NULL,
+    to_column   TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'applied',
+    reason      TEXT DEFAULT '',
+    timestamp   TEXT NOT NULL
+);
 `;
 
 // Index DDL, one statement per entry so a single failure (e.g. a column not yet
@@ -3771,6 +3795,69 @@ export class KanbanDatabase {
         } finally {
             stmt.free();
         }
+    }
+
+    // ── Job-activity store ───────────────────────────────────────────────────
+    // Files are the wire (an external agent can only read/write the filesystem);
+    // the DB is the record the Jobs UI reads. These are the ONLY sanctioned way
+    // to write the three job tables: `KanbanDatabase` exposes no generic `run`
+    // or `all`, so a caller reaching for `db.run(...)` / `db.all(...)` is calling
+    // a method that does not exist and silently records nothing.
+
+    /**
+     * Append a job run, ignoring a line already ingested.
+     *
+     * Idempotency is enforced here rather than by the caller because `job_runs`
+     * has no UNIQUE constraint — `INSERT OR IGNORE` on that table never ignores,
+     * so a re-read of an append-only run-log would duplicate every line.
+     */
+    public async recordJobRun(timestamp: string, job: string, summary: string, source: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        const stmt = this._db.prepare(
+            `SELECT id FROM job_runs WHERE source = ? OR (timestamp = ? AND job = ?) LIMIT 1`
+        );
+        try {
+            stmt.bind([source, timestamp, job]);
+            if (stmt.step()) { return false; }
+        } finally {
+            stmt.free();
+        }
+        this._db.run(
+            `INSERT INTO job_runs (timestamp, job, summary, source) VALUES (?, ?, ?, ?)`,
+            [timestamp, job, summary, source]
+        );
+        await this._persist();
+        return true;
+    }
+
+    /** Record the outcome of one declared board-move line: applied, or skipped with a reason. */
+    public async recordBoardMoveRequest(
+        file: string, planId: string, toColumn: string,
+        status: 'applied' | 'skipped', reason: string, timestamp: string
+    ): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        this._db.run(
+            `INSERT INTO board_move_requests (file, plan_id, to_column, status, reason, timestamp) VALUES (?, ?, ?, ?, ?, ?)`,
+            [file, planId, toColumn, status, reason, timestamp]
+        );
+        await this._persist();
+        return true;
+    }
+
+    /** Upsert an inbox item's lifecycle row. `file` is UNIQUE, so re-ingestion updates in place. */
+    public async upsertJobInstruction(
+        file: string, status: 'pending' | 'claimed' | 'done' | 'stuck',
+        claimedTs?: string, agent?: string, result?: string
+    ): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        this._db.run(
+            `INSERT INTO job_instructions (file, status, claimed_ts, agent, result) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(file) DO UPDATE SET status = excluded.status,
+                 claimed_ts = excluded.claimed_ts, agent = excluded.agent, result = excluded.result`,
+            [file, status, claimedTs ?? null, agent ?? null, result ?? null]
+        );
+        await this._persist();
+        return true;
     }
 
     public async updateWorktreeStatus(id: number, status: 'merged' | 'abandoned'): Promise<boolean> {

@@ -1,5 +1,6 @@
 
 import { HostSeams, HostWatchHandle, TerminalHandle, createVscodeHostSeams } from './hostSeams';
+import { composeExternalPrompt, LAUNCHER_REGISTRY } from './externalAgentPrompts';
 import {
     SharedUtilityVerbDeps,
     handleOpenExternalUrl,

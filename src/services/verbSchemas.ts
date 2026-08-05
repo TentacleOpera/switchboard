@@ -171,13 +171,15 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             workspaceRoot: { type: 'string' },
         },
     },
-    // Read-only board-cards verb for the terminals kanban-mode pane. Both fields
-    // optional: column narrows to one column; workspaceRoot defaults to the
-    // server's workspace root. Permissive per PRD contract #5 — the arm
-    // dereferences neither as required.
+    // Read-only board-cards verb for the terminals kanban-mode pane. All fields
+    // optional: column narrows to one column; project narrows to one project
+    // (empty string = unassigned); workspaceRoot defaults to the server's
+    // workspace root. Permissive per PRD contract #5 — the arm dereferences
+    // neither as required.
     getBoardCards: {
         fields: {
             column: { type: 'string' },
+            project: { type: 'string' },
             workspaceRoot: { type: 'string' },
         },
     },

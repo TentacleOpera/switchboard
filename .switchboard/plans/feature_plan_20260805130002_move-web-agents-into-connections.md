@@ -65,7 +65,7 @@ It offers three ways to get docs to an external agent — zip a folder, a public
 * Listeners — `src/webview/planning.js:1907-1962` (`cp-*` element handles and the six `postMessage` calls).
 * Verb arms — `PlanningPanelProvider`, reachable at `POST /planning/verb/<name>`.
 * Generated allowlist — `src/generated/verbAllowlist.ts`; regenerate, do not hand-edit.
-* **Routing decision reconciled with plan 1:** no new `/connections/verb/<name>` route is created. The Connections webview addresses the rail that owns each verb directly — provider config over `/setup/verb/<name>`, `createPlans*` over `/planning/verb/<name>`. These six arms stay in `PlanningPanelProvider` — see Proposed Changes.
+* **Routing decision, corrected (code review 2026-08-05):** the earlier reconciliation — "no new route; the Connections webview addresses the rail that owns each verb directly" — rested on a false premise about the transport shim and has been reversed. `transport.js:26` derives **one** route prefix per panel from `data-panel`, at script load, with no per-call override, so a `data-panel="connections"` page can only ever post to `/connections/verb/…`. That route now exists (`LocalApiServer.ts:3532`) and dispatches by generated allowlist — `SETUP_VERBS` first, then `PLANNING_VERBS`. The six `createPlans*` arms still stay in `PlanningPanelProvider`; only the door changed.
 
 ---
 
@@ -84,9 +84,13 @@ Key risks: (1) **a dead button after the move** — six live verbs and a dozen e
 
 ### 1. Verb routing — keep the arms, move only the UI
 
-**Context:** the six arms are Planning verbs and work today. Plan 1 creates no new verb route — the reconciled decision is that the Connections webview addresses owning rails directly.
+**Context:** the six arms are Planning verbs and work today. Plan 1 now creates `/connections/verb/<name>` (`LocalApiServer.ts:3532`), which dispatches by generated allowlist — `SETUP_VERBS` first, then `PLANNING_VERBS`.
 
-**Implementation:** **do not move the arms between providers.** Have the Connections webview address the rail that owns each verb — Remote/provider config over `/setup/verb/<name>`, `createPlans*` over `/planning/verb/<name>`. The transport shim already targets a route per call, so a panel talking to two rails is a configuration detail, not an architectural change.
+**Implementation:** **do not move the arms between providers.** Post from the Connections webview exactly as any panel does — `vscode.postMessage({type: 'createPlansCopyPrompt', …})` — and let the shim's single `data-panel`-derived prefix carry it to `/connections/verb/createPlansCopyPrompt`, where the server routes it to `PlanningPanelProvider`. Nothing in the moved listener block changes; only the prefix it lands on differs.
+
+> **Superseded:** "Have the Connections webview address the rail that owns each verb — `/setup/verb/<name>` … `/planning/verb/<name>`. The transport shim already targets a route per call."
+> **Reason:** it does not. `transport.js:26` computes one `routePrefix` at script load from `data-panel` and `:280` uses it for every call; there is no per-message override, so a Connections page cannot reach either of those prefixes.
+> **Replaced with:** the single `/connections/verb/` route above.
 
 **Logic:** moving six working arms between providers means new allowlist blocks, new schema entries, and a changed return-contract baseline for two providers — all risk, no user-visible benefit. The UI needs to live in Connections; the arms do not need to move with it. There is precedent for the inverse already: `/project/verb/` and `/memo/verb/` both route to `planningVerb`.
 
@@ -149,3 +153,9 @@ Offering both, clearly labelled, is the correct end state. If write-back is ever
 ## Recommendation
 
 Complexity 4 → **Send to Coder.**
+
+---
+
+## Review Findings
+
+**The surface was deleted, not moved — fixed in this pass.** `planning.html:3668` (tab button) and `:3862-3922` (the whole `cp-*` block) were removed, and `connections.html` received an empty `<div id="web-agents-container">` in their place, so a shipped, working feature vanished on ~4,000 installs; `planning.js:1898-1962` still holds every `cp-*` handle and all six `postMessage` calls, saved from throwing only by its `if (!rows.zip || !btnZip) return;` guard, which made the loss silent. `src/webview/planning.html` is now restored byte-exact to its pre-feature state, so WEB AGENTS works again where it always did; `connections.html`'s Web Agents sub-tab carries an honest pointer instead of an empty container. MAJOR, now resolved: the move had been blocked by this plan's premise that "the transport shim already targets a route per call" — it does not (`transport.js:26` derives one prefix per panel at script load, `:280` uses it for every call), so the six `createPlans*` Planning verbs were unreachable from a `data-panel="connections"` page. `/connections/verb/<name>` now exists (`LocalApiServer.ts:3532`) and dispatches by generated allowlist; all six verbs were verified to resolve to `planningVerb`, so the move is ordinary work again — the arms still do not move, only the markup and listeners do. **Outstanding for the next coding pass:** move `planning.html:3862-3922` and `planning.js:1898-1962` verbatim with the `cp-*` CSS, click all six controls (a render check is precisely how this failed), and leave the Artifacts signpost. Validation: `tsc --noEmit`, `npm run lint`, `catalog:check`, `parity:check`, `push-routing:check`, `verb-returns:check`, `mirror:check`, `icons:parity` and 13 request-chain contract suites (including `panel-scrollbars`, previously 4 red) all pass.

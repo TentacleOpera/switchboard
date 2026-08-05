@@ -556,7 +556,7 @@
                 // Ignore stale responses for a project the user has since switched away from.
                 if (_selectedProjectName === msg.projectName) {
                     if (projectsPreviewContent) {
-                        projectsPreviewContent.innerHTML = msg.content || '';  // HTML from markdown.api.render
+                        projectsPreviewContent.innerHTML = externalizeAnchors(msg.content || '');  // HTML from markdown.api.render
                     }
                     if (projectsEditor) projectsEditor.value = msg.rawContent || '';  // raw markdown for editing
                     state.editOriginalContent.projects = msg.rawContent || '';
@@ -603,7 +603,7 @@
                         if (msg.error) {
                             kanbanPreviewContent.innerHTML = `<div class="kanban-empty-state" style="color: var(--vscode-errorForeground, #ff6b6b);">Error reading file: ${escapeHtml(msg.error)}</div>`;
                         } else {
-                            kanbanPreviewContent.innerHTML = msg.content || '';
+                            kanbanPreviewContent.innerHTML = externalizeAnchors(msg.content || '');
                         }
                         state.editOriginalContent.kanban = msg.rawContent || '';
                         if (_pendingAutoEdit) {
@@ -616,7 +616,7 @@
                     if (state.editMode.features) {
                         state.externalChangePending.features = true;
                     } else if (!msg.error) {
-                        featuresPreviewContent.innerHTML = msg.content || '';
+                        featuresPreviewContent.innerHTML = externalizeAnchors(msg.content || '');
                         state.editOriginalContent.features = msg.rawContent || '';
                         const dynamicEditFeaturesBtn = document.getElementById('btn-edit-features');
                         if (dynamicEditFeaturesBtn) dynamicEditFeaturesBtn.disabled = false;
@@ -938,7 +938,7 @@
                         } else {
                             vscode.postMessage({ type: 'getConstitutionStatus', workspaceRoot: _constitutionSelectedWorkspace.workspaceRoot });
                             if (msg.exists) {
-                                constitutionPreviewContent.innerHTML = msg.renderedHtml || '';
+                                constitutionPreviewContent.innerHTML = externalizeAnchors(msg.renderedHtml || '');
                                 state.editOriginalContent.constitution = msg.content || '';
                                 _constitutionSelectedFile = msg.filePath;
                                 if (btnEditConstitution) btnEditConstitution.disabled = false;
@@ -990,7 +990,7 @@
                             state.externalChangePending.system = true;
                         } else {
                             if (msg.exists) {
-                                systemPreviewContent.innerHTML = msg.renderedHtml || '';
+                                systemPreviewContent.innerHTML = externalizeAnchors(msg.renderedHtml || '');
                                 state.editOriginalContent.system = msg.content || '';
                                 _systemSelectedFile = msg.filePath;
                                 if (btnEditSystem) btnEditSystem.disabled = false;
@@ -1087,7 +1087,7 @@
                     _tuningSelectedWorkspaceRoot = '';
                     break;
                 }
-                tuningPreviewContent.innerHTML = msg.renderedHtml || escapeHtml(msg.content);
+                tuningPreviewContent.innerHTML = externalizeAnchors(msg.renderedHtml || escapeHtml(msg.content));
                 _tuningSelectedInsight = msg.filename;
                 _tuningSelectedWorkspaceRoot = msg.workspaceRoot || '';
                 const actionsDiv = document.createElement('div');

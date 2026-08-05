@@ -45,9 +45,23 @@ function renderInlineMarkdown(text) {
         .replace(/`([^`]+)`/g, '<code>$1</code>')
         .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, t, url) => {
             const safeUrl = escapeAttr(sanitizeUrl(url));
-            return `<a href="${safeUrl}">${t}</a>`;
+            return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${t}</a>`;
         })
         .replace(/\\([\\`*_{}[\]()#+\-.!|])/g, '$1');
+}
+
+/**
+ * Post-process rendered HTML to add target="_blank" rel="noopener noreferrer" to
+ * all <a> tags that don't already have a target. Needed for HTML from VS Code's
+ * markdown.api.render (which emits bare <a href="…">) — in the browser host the
+ * panel lives in an iframe, so a plain <a href> navigates the iframe itself
+ * (same tab) instead of opening a new tab. In the VS Code webview the host
+ * intercepts <a> clicks regardless of target, so adding target="_blank" is a
+ * no-op there.
+ */
+function externalizeAnchors(html) {
+    if (!html) return html;
+    return html.replace(/<a\s+(?![^>]*\btarget=)/gi, '<a target="_blank" rel="noopener noreferrer" ');
 }
 
 const TABLE_SEPARATOR_REGEX = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
@@ -351,7 +365,7 @@ function renderMarkdown(markdown) {
         })
         .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, text, url) => {
             const safeUrl = escapeAttr(sanitizeUrl(url));
-            return `<a href="${safeUrl}">${text}</a>`;
+            return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${text}</a>`;
         })
         .replace(/\\([\\`*_{}[\]()#+\-.!|])/g, '$1');
 

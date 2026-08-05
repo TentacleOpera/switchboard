@@ -26,11 +26,25 @@
     let paneModes = [];
     // Per-slot chosen kanban column id (only meaningful when paneModes[i]==='kanban').
     let kanbanPaneColumn = [];
+    // Per-slot chosen workspace root for the kanban pane. Defaults to the first
+    // parent's parentFolder when entering kanban mode. Without this, getBoardCards
+    // falls back to the backend's _currentWorkspaceRoot (whatever the Kanban board
+    // tab last selected) or auto-selects the first allowed root — which is the
+    // wrong workspace when multiple parent projects are open.
+    let kanbanPaneWorkspace = [];
+    // Per-slot chosen project filter for the kanban pane. Empty string = all
+    // projects (no filter). Only meaningful when paneModes[i]==='kanban'.
+    let kanbanPaneProject = [];
+    // index -> projects[] cache (from the getBoardCards response).
+    let kanbanPaneProjectsCache = {};
     // index -> cards[] cache populated by the poll loop.
     let kanbanPaneCards = {};
     // Cached flat ordered column list from getKanbanStructure.
     let kanbanColumnsCache = [];
     let kanbanPollTimer = null;
+    // Timestamp of the last getKanbanStructure fetch. Column structure changes
+    // rarely, so it is refreshed on a 30s cadence rather than every 5s poll tick.
+    let kanbanStructureTimer = 0;
     // Pane indices with a getBoardCards request in flight — see fetchBoardCardsForPane.
     const kanbanFetchInFlight = new Set();
     const collapsedGroups = new Set();
@@ -430,6 +444,15 @@
             });
         }
 
+        const btnKanbanToolbar = document.getElementById('btn-kanban-toolbar');
+        if (btnKanbanToolbar) {
+            btnKanbanToolbar.addEventListener('click', () => toggleFocusedPaneKanban());
+        }
+        const btnKanbanSidebar = document.getElementById('btn-kanban-sidebar');
+        if (btnKanbanSidebar) {
+            btnKanbanSidebar.addEventListener('click', () => toggleFocusedPaneKanban());
+        }
+
         window.addEventListener('message', (event) => {
             const message = event.data;
             if (!message) return;
@@ -571,6 +594,8 @@
         const savedPins = await loadSetting('terminals.pinnedPanes', []);
         const savedModes = await loadSetting('terminals.paneModes', []);
         const savedKanbanCols = await loadSetting('terminals.kanbanPaneColumn', []);
+        const savedKanbanWs = await loadSetting('terminals.kanbanPaneWorkspace', []);
+        const savedKanbanProj = await loadSetting('terminals.kanbanPaneProject', []);
 
         if (LAYOUT_MODES.includes(savedMode)) {
             currentLayout = savedMode;
@@ -588,6 +613,12 @@
         if (Array.isArray(savedKanbanCols)) {
             kanbanPaneColumn = savedKanbanCols;
         }
+        if (Array.isArray(savedKanbanWs)) {
+            kanbanPaneWorkspace = savedKanbanWs;
+        }
+        if (Array.isArray(savedKanbanProj)) {
+            kanbanPaneProject = savedKanbanProj;
+        }
         if (Array.isArray(savedCollapsed)) {
             savedCollapsed.forEach(c => collapsedGroups.add(c));
         }
@@ -604,6 +635,8 @@
         saveSetting('terminals.collapsedGroups', Array.from(collapsedGroups));
         saveSetting('terminals.paneModes', paneModes);
         saveSetting('terminals.kanbanPaneColumn', kanbanPaneColumn);
+        saveSetting('terminals.kanbanPaneWorkspace', kanbanPaneWorkspace);
+        saveSetting('terminals.kanbanPaneProject', kanbanPaneProject);
     }
 
     async function fetchTerminalList() {
@@ -1472,6 +1505,8 @@
         // kanban-mode slot's mode + chosen column survive a shrink-grow round trip.
         while (paneModes.length < getMaxSlotCount()) { paneModes.push('terminal'); }
         while (kanbanPaneColumn.length < getMaxSlotCount()) { kanbanPaneColumn.push(undefined); }
+        while (kanbanPaneWorkspace.length < getMaxSlotCount()) { kanbanPaneWorkspace.push(undefined); }
+        while (kanbanPaneProject.length < getMaxSlotCount()) { kanbanPaneProject.push(''); }
 
         // Sampled BEFORE any mutation. Both the surplus-pane removal below and the
         // per-pane update can drop the caret (removing or re-parenting the focused
@@ -1656,6 +1691,7 @@
             e.stopPropagation();
             paneModes[index] = 'kanban';
             if (!kanbanPaneColumn[index]) { kanbanPaneColumn[index] = 'CREATED'; }
+            if (!kanbanPaneWorkspace[index]) { kanbanPaneWorkspace[index] = defaultKanbanWorkspace(); }
             saveLayoutSettings();
             renderPaneGrid();
             fetchBoardCardsForPane(index);
@@ -1880,10 +1916,61 @@
         return list;
     }
 
+    /** Build a flat [{root, label}] list of available workspace roots from
+     *  parentsList. Each parent's `parentFolder` is a resolved absolute path
+     *  that the backend's _resolveWorkspaceRoot accepts as workspaceRoot.
+     *  Used to populate the kanban pane's workspace picker so cards come from
+     *  the workspace the operator is actually working in, not whatever the
+     *  Kanban board tab last selected. */
+    function buildWorkspaceList() {
+        const list = [];
+        const seen = new Set();
+        for (const p of parentsList) {
+            const root = p && p.parentFolder;
+            if (root && !seen.has(root)) {
+                seen.add(root);
+                list.push({ root, label: p.name || root.split('/').pop() || root });
+            }
+        }
+        return list;
+    }
+
+    /** Complexity score → category label. Mirrors the board's scoreToCategory
+     *  (kanban.html:6655) so the pane and the board agree on what "6" means. */
+    function scoreToCategory(scoreStr) {
+        if (scoreStr === 'High') return 'High';
+        if (scoreStr === 'Low') return 'Low';
+        const score = parseInt(scoreStr, 10);
+        if (isNaN(score) || score <= 0) return 'Unknown';
+        if (score <= 2) return 'Very Low';
+        if (score <= 4) return 'Low';
+        if (score <= 6) return 'Medium';
+        if (score <= 8) return 'High';
+        if (score <= 10) return 'Very High';
+        return 'Unknown';
+    }
+
+    function categoryToCssClass(category) {
+        return category.toLowerCase().replace(' ', '-');
+    }
+
+    /** Resolve the default workspace root for a new kanban pane. Prefers the
+     *  focused pane's terminal's parentRoot, then the first parent, then
+     *  undefined (the backend will fall back to its own resolution). */
+    function defaultKanbanWorkspace() {
+        const focusedName = paneAssignments[focusedPaneIndex];
+        if (focusedName) {
+            const term = fleetList.find(t => t.friendlyName === focusedName);
+            if (term && term.parentRoot) { return term.parentRoot; }
+        }
+        const ws = buildWorkspaceList();
+        return ws.length > 0 ? ws[0].root : undefined;
+    }
+
     /** Render a kanban column viewer into a pane slot (replaces the terminal
-     *  viewport). The pane header carries a column picker + a "term" toggle to
-     *  switch back to terminal mode; the body lists plan rows with "Copy &
-     *  Advance" buttons that hit the existing promptSelected verb. */
+     *  viewport). The pane header carries a workspace picker + a column picker
+     *  + a "term" toggle to switch back to terminal mode; the body lists plan
+     *  rows with "Copy Prompt" (advance is implied) and "Link" buttons. */
     function renderKanbanPane(paneEl, index) {
         paneEl.classList.remove('is-input-live', 'is-input-connecting', 'is-input-readonly');
         const titleEl = paneEl.querySelector('.pane-title');
@@ -1891,24 +1978,85 @@
         const contentEl = paneEl.querySelector('.pane-content');
 
         const chosen = kanbanPaneColumn[index];
+        const chosenWs = kanbanPaneWorkspace[index];
+        const chosenProj = kanbanPaneProject[index] || '';
+        const projects = kanbanPaneProjectsCache[index] || [];
         // Before the first getKanbanStructure lands the cache is empty. Fall back to
         // the chosen id so the picker is never a blank <select> the operator cannot
         // read — it is repopulated in place once the structure arrives.
         const columns = (kanbanColumnsCache.length > 0)
             ? kanbanColumnsCache
             : (chosen ? [{ id: chosen, label: chosen }] : []);
-        const pickerSig = columns.map(c => `${c.id} ${c.label}`).join('');
+        const pickerSig = columns.map(c => `${c.id} ${c.label}`).join('');
+        const workspaces = buildWorkspaceList();
+        const wsSig = workspaces.map(w => `${w.root} ${w.label}`).join('');
+        const projSig = projects.join('|');
 
         // Header rebuilt only when the option set actually changed. The 5s poll
         // re-renders this pane on every tick, and recreating the <select> each time
         // slammed an open dropdown shut and dropped keyboard focus mid-selection.
         let picker = titleEl.querySelector('.kanban-pane-column-picker');
-        if (!picker || picker.dataset.sig !== pickerSig) {
+        let wsPicker = titleEl.querySelector('.kanban-pane-workspace-picker');
+        let projPicker = titleEl.querySelector('.kanban-pane-project-picker');
+        if (!picker || picker.dataset.sig !== pickerSig || !wsPicker || wsPicker.dataset.sig !== wsSig || !projPicker || projPicker.dataset.sig !== projSig) {
             titleEl.textContent = '';
             const idxEl = document.createElement('span');
             idxEl.className = 'pane-index-chip';
             idxEl.textContent = `P${index + 1}`;
             titleEl.appendChild(idxEl);
+
+            // Workspace picker — only when more than one workspace is available.
+            // With a single workspace the backend resolves correctly and the extra
+            // control is noise.
+            if (workspaces.length > 1) {
+                wsPicker = document.createElement('select');
+                wsPicker.className = 'kanban-pane-workspace-picker';
+                wsPicker.title = 'Workspace to show cards from';
+                wsPicker.dataset.sig = wsSig;
+                for (const ws of workspaces) {
+                    const opt = document.createElement('option');
+                    opt.value = ws.root;
+                    opt.textContent = ws.label;
+                    wsPicker.appendChild(opt);
+                }
+                const wsPickerEl = wsPicker;
+                wsPickerEl.addEventListener('change', () => {
+                    kanbanPaneWorkspace[index] = wsPickerEl.value;
+                    // Reset project filter — projects are workspace-specific.
+                    kanbanPaneProject[index] = '';
+                    kanbanPaneProjectsCache[index] = [];
+                    kanbanPaneCards[index] = [];
+                    saveLayoutSettings();
+                    fetchBoardCardsForPane(index);
+                });
+                titleEl.appendChild(wsPickerEl);
+            }
+
+            // Project picker — only when the workspace has projects defined.
+            if (projects.length > 0) {
+                projPicker = document.createElement('select');
+                projPicker.className = 'kanban-pane-project-picker';
+                projPicker.title = 'Filter by project';
+                projPicker.dataset.sig = projSig;
+                const allOpt = document.createElement('option');
+                allOpt.value = '';
+                allOpt.textContent = 'All projects';
+                projPicker.appendChild(allOpt);
+                for (const proj of projects) {
+                    const opt = document.createElement('option');
+                    opt.value = proj;
+                    opt.textContent = proj;
+                    projPicker.appendChild(opt);
+                }
+                const projPickerEl = projPicker;
+                projPickerEl.addEventListener('change', () => {
+                    kanbanPaneProject[index] = projPickerEl.value;
+                    kanbanPaneCards[index] = [];
+                    saveLayoutSettings();
+                    fetchBoardCardsForPane(index);
+                });
+                titleEl.appendChild(projPickerEl);
+            }
 
             picker = document.createElement('select');
             picker.className = 'kanban-pane-column-picker';
@@ -1932,6 +2080,8 @@
             titleEl.appendChild(pickerEl);
         }
         if (chosen && picker.value !== chosen) { picker.value = chosen; }
+        if (wsPicker && chosenWs && wsPicker.value !== chosenWs) { wsPicker.value = chosenWs; }
+        if (projPicker && projPicker.value !== chosenProj) { projPicker.value = chosenProj; }
 
         // Terminal-only actions off, mode toggle on. ONLY style.display is touched —
         // never className or onclick — so updatePaneElement can restore them when this
@@ -1946,12 +2096,20 @@
         // an unconditional rebuild reset the list's scroll position and wiped the
         // "Copied!" state off a button mid-timeout.
         const cards = kanbanPaneCards[index] || [];
-        const bodySig = `${chosen || ''}`
-            + cards.map(c => `${c.planId || c.sessionId || ''} ${c.topic || c.title || ''}`).join('');
+        const hasFetched = index in kanbanPaneCards;
+        const bodySig = `${chosenWs || ''} ${chosenProj || ''} ${chosen || ''} ${hasFetched ? '1' : '0'}`
+            + cards.map(c => `${c.planId || c.sessionId || ''} ${c.topic || c.title || ''} ${c.complexity || ''} ${c.working ? 'w' : ''} ${c.project || ''} ${c.isFeature ? 'f' : ''}`).join('');
         if (contentEl.dataset.kanbanSig === bodySig) { return; }
         contentEl.dataset.kanbanSig = bodySig;
 
         contentEl.textContent = '';
+        if (!hasFetched) {
+            const loading = document.createElement('div');
+            loading.className = 'kanban-pane-loading';
+            loading.textContent = 'Loading…';
+            contentEl.appendChild(loading);
+            return;
+        }
         if (cards.length === 0) {
             const empty = document.createElement('div');
             // Tagged kanban-pane-empty as well as pane-empty-slot: updatePaneElement's
@@ -1968,16 +2126,71 @@
         for (const card of cards) {
             const row = document.createElement('div');
             row.className = 'kanban-pane-row';
+            if (card.working) { row.classList.add('is-working'); }
+            if (card.isFeature) { row.classList.add('is-feature'); }
+
+            const rowText = document.createElement('div');
+            rowText.className = 'kanban-pane-row-text';
+
             const label = document.createElement('span');
             label.className = 'kanban-pane-row-title';
             label.textContent = card.topic || card.title || card.planId || '(untitled)';
             label.title = label.textContent;
-            row.appendChild(label);
+            rowText.appendChild(label);
+
+            // Meta line: complexity badge + working indicator + project.
+            // Mirrors the board's card-meta density (complexity category + project).
+            const meta = document.createElement('div');
+            meta.className = 'kanban-pane-row-meta';
+            const complexityVal = card.complexity || 'Unknown';
+            const complexityCat = scoreToCategory(complexityVal);
+            const complexityBadge = document.createElement('span');
+            complexityBadge.className = `kanban-pane-complexity ${categoryToCssClass(complexityCat)}`;
+            complexityBadge.textContent = complexityCat;
+            meta.appendChild(complexityBadge);
+            if (card.working) {
+                const working = document.createElement('span');
+                working.className = 'kanban-pane-working';
+                working.textContent = '● working';
+                meta.appendChild(working);
+            }
+            if (card.project) {
+                const proj = document.createElement('span');
+                proj.className = 'kanban-pane-project';
+                proj.textContent = card.project;
+                proj.title = card.project;
+                meta.appendChild(proj);
+            }
+            rowText.appendChild(meta);
+            row.appendChild(rowText);
+
+            const btnGroup = document.createElement('div');
+            btnGroup.className = 'kanban-pane-row-actions';
+
+            const linkBtn = document.createElement('button');
+            linkBtn.className = 'kanban-pane-link-btn';
+            linkBtn.textContent = 'link';
+            linkBtn.title = 'Open this plan in the planning panel';
+            linkBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                try {
+                    await fetch('/kanban/verb/selectPlan', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            sessionId: card.sessionId || '',
+                            planId: card.planId || '',
+                            workspaceRoot: card.workspaceRoot || kanbanPaneWorkspace[index]
+                        })
+                    });
+                } catch { /* ignore */ }
+            });
+            btnGroup.appendChild(linkBtn);
 
             const copyBtn = document.createElement('button');
             copyBtn.className = 'kanban-pane-copy-btn';
-            copyBtn.textContent = 'Copy & Advance';
-            copyBtn.title = 'Copy prompt to clipboard and advance to next column';
+            copyBtn.textContent = 'Copy Prompt';
+            copyBtn.title = 'Copy prompt to clipboard (card advances to next column)';
             copyBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 copyBtn.disabled = true;
@@ -1989,7 +2202,7 @@
                         body: JSON.stringify({
                             column: card.column,
                             sessionIds: [card.planId || card.sessionId],
-                            workspaceRoot: card.workspaceRoot
+                            workspaceRoot: card.workspaceRoot || kanbanPaneWorkspace[index]
                         })
                     });
                     const data = await res.json();
@@ -2003,12 +2216,48 @@
                 } catch {
                     copyBtn.textContent = 'Error';
                 }
-                setTimeout(() => { copyBtn.disabled = false; copyBtn.textContent = 'Copy & Advance'; }, 2000);
+                setTimeout(() => { copyBtn.disabled = false; copyBtn.textContent = 'Copy Prompt'; }, 2000);
             });
-            row.appendChild(copyBtn);
+            btnGroup.appendChild(copyBtn);
+            row.appendChild(btnGroup);
             list.appendChild(row);
         }
         contentEl.appendChild(list);
+    }
+
+    /** Toggle the focused pane to kanban mode (or back to terminal mode if
+     *  already kanban). This is the primary, discoverable entry point — the
+     *  empty-slot "kanban mode" toggle is a secondary path. If the focused pane
+     *  has a terminal assigned, it is unassigned first (the terminal keeps
+     *  running, same as the unassign button). */
+    function toggleFocusedPaneKanban() {
+        const isSolo = document.body.classList.contains('is-solo');
+        if (isSolo) { return; }
+        const slotCount = getSlotCount(effectiveLayout);
+        if (slotCount <= 1) { return; }
+
+        let targetIndex = focusedPaneIndex;
+        // If the focused pane is already kanban, toggle it back to terminal.
+        if (paneModes[targetIndex] === 'kanban') {
+            paneModes[targetIndex] = 'terminal';
+            saveLayoutSettings();
+            renderPaneGrid();
+            return;
+        }
+        // If the focused pane has a terminal, unassign it first (terminal keeps
+        // running). This mirrors the unassign button's behavior.
+        const assignedName = paneAssignments[targetIndex];
+        if (assignedName) {
+            paneAssignments[targetIndex] = null;
+            pinnedPanes[targetIndex] = false;
+        }
+        paneModes[targetIndex] = 'kanban';
+        if (!kanbanPaneColumn[targetIndex]) { kanbanPaneColumn[targetIndex] = 'CREATED'; }
+        if (!kanbanPaneWorkspace[targetIndex]) { kanbanPaneWorkspace[targetIndex] = defaultKanbanWorkspace(); }
+        if (!kanbanPaneProject[targetIndex]) { kanbanPaneProject[targetIndex] = ''; }
+        saveLayoutSettings();
+        renderPaneGrid();
+        fetchBoardCardsForPane(targetIndex);
     }
 
     function startKanbanPoll() {
@@ -2028,19 +2277,25 @@
             if (paneModes[i] === 'kanban' && !paneAssignments[i]) { kanbanSlots.push(i); }
         }
         if (kanbanSlots.length === 0) { stopKanbanPoll(); return; }
-        // Refresh column structure once per poll (cheap, cached server-side).
-        try {
-            const structRes = await fetch('/kanban/verb/getKanbanStructure', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
-            });
-            const structData = await structRes.json();
-            if (structData.success) {
-                kanbanColumnsCache = buildColumnList(structData.structure, structData.customColumns);
-            }
-        } catch { /* ignore — keep stale cache */ }
-        for (const idx of kanbanSlots) {
-            await fetchBoardCardsForPane(idx);
+        // Column structure changes rarely (agent config, custom columns). Refresh
+        // it on a 30s cadence, not every 5s tick — the per-pane card fetches are
+        // the hot path, and hammering getKanbanStructure every poll is waste.
+        if (!kanbanStructureTimer || Date.now() - kanbanStructureTimer > 30000) {
+            kanbanStructureTimer = Date.now();
+            try {
+                const structRes = await fetch('/kanban/verb/getKanbanStructure', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+                });
+                const structData = await structRes.json();
+                if (structData.success) {
+                    kanbanColumnsCache = buildColumnList(structData.structure, structData.customColumns);
+                }
+            } catch { /* ignore — keep stale cache */ }
         }
+        // Fire all pane fetches in parallel. The previous for…of await made the
+        // Nth pane wait for all prior fetches, so a slow board stretched the poll
+        // cycle linearly with pane count.
+        await Promise.all(kanbanSlots.map(idx => fetchBoardCardsForPane(idx)));
     }
 
     async function fetchBoardCardsForPane(index) {
@@ -2054,15 +2309,20 @@
         if (kanbanFetchInFlight.has(index)) { return; }
         kanbanFetchInFlight.add(index);
         try {
+            const wsRoot = kanbanPaneWorkspace[index];
+            const proj = kanbanPaneProject[index] || '';
             const res = await fetch('/kanban/verb/getBoardCards', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ column: col })
+                body: JSON.stringify({ column: col, workspaceRoot: wsRoot, project: proj })
             });
             const data = await res.json();
             // Re-check the column: the operator can change the picker while this is
             // in flight, and the response describes the column we ASKED for.
             if (data.success && kanbanPaneColumn[index] === col) {
                 kanbanPaneCards[index] = data.cards;
+                if (Array.isArray(data.projects)) {
+                    kanbanPaneProjectsCache[index] = data.projects;
+                }
                 // Re-render just this pane if it still exists and is still kanban mode.
                 const paneEl = paneGridEl.children[index];
                 if (paneEl && paneModes[index] === 'kanban' && !paneAssignments[index]) {
@@ -2248,8 +2508,32 @@
         try {
             const vp = entry.term._core && entry.term._core.viewport;
             if (vp && typeof vp.syncScrollArea === 'function') {
-                vp.syncScrollArea();
-                return;
+                // `true` = refresh SYNCHRONOUSLY. syncScrollArea(e) forwards e to
+                // Viewport._refresh(e), and _refresh(false) only schedules an rAF —
+                // so with the default arg the DOM is still stale on the next line and
+                // the verification below could not read it.
+                vp.syncScrollArea(true);
+                // syncScrollArea SELF-SUPPRESSES, so calling it is not the same as
+                // repairing anything. It only reaches _refresh when the buffer LENGTH
+                // changed, or the viewport height, or scrollTop, or the device cell
+                // height. A long-lived pane sitting idle in a static grid matches none
+                // of them: once the buffer hits the `scrollback` cap its length is
+                // pinned (eviction, not growth), so even continuous output stops
+                // moving that first condition. That is the state this function exists
+                // for, and it is exactly the state the primary path silently no-ops in.
+                // Returning unconditionally here made the fallback below unreachable.
+                //
+                // Verify against the DOM instead of trusting the call. A thumb is owed
+                // only when the buffer actually has scrollback beyond the visible rows
+                // (in the ALT buffer length === rows, so no thumb is owed and the
+                // early return is correct — nothing to scroll is not a defect).
+                const buf = entry.term.buffer && entry.term.buffer.active;
+                const owesThumb = !!buf && buf.length > entry.term.rows;
+                // +1 absorbs sub-pixel rounding on fractional row heights.
+                const domCanScroll = viewport.scrollHeight > viewport.clientHeight + 1;
+                if (!owesThumb || domCanScroll) { return; }
+                // Owed a thumb and the DOM still says otherwise ⇒ the sync was
+                // suppressed. Fall through to the overflowY repair.
             }
         } catch { /* ignore — private shape changed, fall through */ }
         const savedScrollTop = viewport.scrollTop;

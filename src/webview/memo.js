@@ -66,6 +66,7 @@
                 }
                 break;
             }
+            case 'memoUpdated':
             case 'memoContent': {
                 const textarea = document.getElementById('memo-textarea');
                 if (textarea) {

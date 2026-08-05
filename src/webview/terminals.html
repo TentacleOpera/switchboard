@@ -846,7 +846,9 @@
             gap: 8px;
         }
 
-        /* Kanban-mode pane — a live kanban column viewer in an empty grid slot. */
+        /* Kanban-mode pane — a live kanban column viewer in an empty grid slot.
+           Styling mirrors the board's .kanban-card design language: gradient
+           background, border-color hover, compact action buttons. */
         .kanban-pane-list {
             overflow-y: auto;
             height: 100%;
@@ -860,18 +862,72 @@
             align-items: center;
             justify-content: space-between;
             gap: 6px;
-            padding: 4px 6px;
+            padding: 6px 8px;
             border: 1px solid var(--border-color);
-            border-radius: 3px;
-            background: var(--panel-bg2);
+            border-radius: 4px;
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg) 100%);
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .kanban-pane-row:hover {
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-teal) 15%, transparent);
+        }
+        .kanban-pane-row.is-working {
+            border-color: color-mix(in srgb, var(--accent-teal) 60%, transparent);
+        }
+        .kanban-pane-row.is-feature {
+            border-left: 3px solid var(--feature-accent, #7c3aed);
+        }
+        .kanban-pane-row-text {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
         }
         .kanban-pane-row-title {
             font-size: 11px;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
-            flex: 1;
-            min-width: 0;
+            color: var(--text-primary);
+        }
+        .kanban-pane-row-meta {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 9px;
+            color: var(--text-secondary);
+        }
+        .kanban-pane-complexity {
+            padding: 1px 4px;
+            border-radius: 2px;
+            font-size: 8px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            color: #fff;
+        }
+        .kanban-pane-complexity.very-low { background: #2980b9; }
+        .kanban-pane-complexity.low { background: #16a085; }
+        .kanban-pane-complexity.medium { background: #8e7355; }
+        .kanban-pane-complexity.high { background: #c0392b; }
+        .kanban-pane-complexity.very-high { background: #9b2d20; }
+        .kanban-pane-complexity.unknown { background: var(--border-bright); color: var(--text-secondary); }
+        .kanban-pane-working {
+            color: var(--accent-teal);
+            font-size: 9px;
+        }
+        .kanban-pane-project {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 80px;
+        }
+        .kanban-pane-row-actions {
+            display: flex;
+            gap: 4px;
+            flex-shrink: 0;
         }
         .kanban-pane-copy-btn {
             background: transparent;
@@ -879,22 +935,50 @@
             color: var(--accent-teal);
             font-size: 9px;
             font-family: inherit;
-            padding: 2px 5px;
-            border-radius: 2px;
+            padding: 3px 6px;
+            border-radius: 3px;
             cursor: pointer;
             flex-shrink: 0;
+            transition: background 0.15s;
         }
-        .kanban-pane-copy-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-teal) 12%, transparent); }
+        .kanban-pane-copy-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-teal) 15%, transparent); }
         .kanban-pane-copy-btn:disabled { opacity: 0.5; cursor: default; }
-        .kanban-pane-column-picker {
+        .kanban-pane-link-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 9px;
+            font-family: inherit;
+            padding: 3px 6px;
+            border-radius: 3px;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: border-color 0.15s, color 0.15s;
+        }
+        .kanban-pane-link-btn:hover { border-color: var(--border-bright); color: var(--text-primary); }
+        .kanban-pane-column-picker,
+        .kanban-pane-workspace-picker,
+        .kanban-pane-project-picker {
             background: var(--panel-bg);
             color: var(--text-primary);
             border: 1px solid var(--border-bright);
-            border-radius: 2px;
+            border-radius: 3px;
             font-size: 11px;
             font-family: inherit;
-            padding: 0 2px;
+            padding: 1px 4px;
             max-width: 120px;
+            cursor: pointer;
+        }
+        .kanban-pane-workspace-picker { max-width: 100px; }
+        .kanban-pane-project-picker { max-width: 90px; }
+        .kanban-pane-loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-style: italic;
         }
         .pane-mode-toggle {
             display: block;
@@ -1085,6 +1169,8 @@
         <div class="sidebar-ops">
             <button type="button" id="btn-open-all" class="secondary-btn is-teal w-full"
                     title="Open a terminal for every visible agent role">OPEN AGENT TERMINALS</button>
+            <button type="button" id="btn-kanban-sidebar" class="secondary-btn w-full"
+                    title="Toggle the focused pane between kanban board view and terminal">KANBAN MODE</button>
             <button type="button" id="btn-clear-all" class="secondary-btn w-full"
                     title="Send /clear to every active terminal">CLEAR ALL TERMINALS</button>
         </div>
@@ -1101,6 +1187,8 @@
                 <button type="button" class="btn-layout" data-layout="3x3">3x3</button>
             </div>
             <div class="toolbar-actions">
+                <button type="button" id="btn-kanban-toolbar" class="secondary-btn"
+                        title="Toggle the focused pane between kanban board view and terminal">KANBAN</button>
                 <button type="button" id="btn-new-window" class="secondary-btn is-teal"
                         title="Open the terminals panel in a new browser window (no shell sidebar)">NEW WINDOW</button>
                 <label class="notify-toggle-label">
