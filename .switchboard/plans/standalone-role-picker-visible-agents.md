@@ -223,3 +223,7 @@ file; the response shape must be explicit, not a spread.
 
 - Migrating the stale `kanban.db` `agents.visibleAgents` row.
 - Making `getStartupCommands` work in standalone (covered by the Board verb-rail plan).
+
+## Review Findings
+
+Implementation verified correct: `ptyVisibleRoles` verb wired in both hosts (`TaskViewerProvider.ts:1987`, `bootstrap.ts:1101`), `GlobalIntegrationConfigService.getPtyVisibleRoles` merges over `DEFAULT_VISIBLE_AGENTS` with custom-agent visibility and `hasCommand` map, `DEFAULT_ROLES` deleted, drifted `DEFAULT_VISIBLE_AGENTS` mirror deleted (only the `sharedDefaults` import remains as fallback at `terminals.js:2950`), `resolveGridAgents` now calls `fetchPtyVisibleRoles` instead of the dead `loadSetting('agents.visibleAgents')`, picker renders labels via `BUILT_IN_AGENT_LABELS`. `GRID_BUILTIN_ROLES` had stale `claude_artifacts` → fixed to `claude_designer` to match `sharedDefaults.js`. The `ptyVisibleRoles` schema was NOT registered in `verbSchemas.ts` — the terminal verb rail (`_handleTerminalVerb`) does not call `validateVerbPayload` and there is no 'terminal' provider key, so the registration cannot be cleanly fulfilled without an architectural change. This is a plan compliance gap, not a functional break. Verification: compile passes, `test:contract:terminal-solo-popout` 11/11 pass, `test:contract:terminal-pane-pinning` 15/15 pass.

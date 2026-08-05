@@ -727,7 +727,11 @@ export async function activate(context: vscode.ExtensionContext) {
      * condemn a store that standalone and the CLI also depend on.
      */
     const importSecretFromGlobalStore = async (key: string) => {
-        if (!globalSecrets) { return; }
+        // Same key gate as the write direction. The only caller iterates
+        // MIRRORED_SECRET_KEYS, so this is symmetry rather than a live guard — but an
+        // import path that would pull ANY key out of a machine-global store into the
+        // workspace keychain is not something to leave to its call site.
+        if (!globalSecrets || !MIRRORED_SECRET_KEYS.has(key)) { return; }
         try {
             const existing = await context.secrets.get(key);
             if (existing && existing.trim().length > 0) { return; }   // keychain wins

@@ -112,3 +112,7 @@ const clearBtn = document.createElement('button');
    - Click `clear` → `/clear` is sent to the terminal. Click `rename` → inline rename works. Click `close` → terminal closes. None of these should also trigger a row-seat (they call `e.stopPropagation()`).
    - Trigger an inbound `focusTerminal` message from the board (e.g. click a terminal entry on the shell strip) → the terminal is still seated + focused in the cockpit. This verifies the message arm path is intact.
 4. **Visual check:** Confirm `clear`/`rename`/`close` still render with the `.locate-btn` styling (no broken layout from the missing sibling).
+
+## Review Findings
+
+Implementation verified clean: `locateBtn` block deleted from `renderTerminalRow` (comment at `terminals.js:960-963` marks the spot), `locateTerminal` function retained (called by row click at `:1004` and `focusTerminal` message arm), `.locate-btn` CSS class retained (used by `clear`/`rename`/`close`), no orphaned `locateBtn` references remain. `clear`/`rename`/`close` buttons each call `e.stopPropagation()`. Verification: `test:contract:shell-terminal-strip` passes (2 pre-existing failures unrelated to this change — CSS margin-top and Setup icon placement), compile passes. No issues found.

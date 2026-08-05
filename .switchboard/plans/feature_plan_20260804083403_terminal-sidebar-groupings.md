@@ -252,3 +252,7 @@ npm run compile                                 # webpack copies src/webview/* �
 ---
 
 **Recommendation: Send to Coder** (Complexity 6).
+
+## Review Findings
+
+Review found and fixed a CRITICAL data-loss bug: the "Show all terminals" toggle at `terminals.js:1089-1098` was setting `terminalGroups = []` and `activeGroupId = null`, destroying all saved groups. Replaced with a persisted `groupsView` flag (loaded/saved as `terminals.groupsView`) that toggles between flat and group mode without deleting groups. Added a "Show groups" toggle at the bottom of the flat list for the return path. Also fixed: the groupings contract test file (`src/test/terminal-sidebar-groupings-contract.test.js`) was never created — added 15 contract tests and wired in `package.json` + CI. `GRID_BUILTIN_ROLES` had stale `claude_artifacts` → updated to `claude_designer` to match `sharedDefaults.js`. Verification: compile passes, `test:contract:terminal-sidebar-groupings` 15/15 pass, `test:contract:terminal-solo-popout` 11/11 pass, `test:contract:terminal-pane-pinning` 15/15 pass. Remaining risk: the `ptyVisibleRoles` verb schema registration in `verbSchemas.ts` was not done (terminal rail has no provider key — architectural gap, not a functional break).

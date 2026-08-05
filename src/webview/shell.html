@@ -179,13 +179,15 @@
             padding-top: 0;
         }
 
-        /* Settings cluster at the foot of the rail. `margin-top: auto` lives on
-           #strip-terminals (or, when Terminals is unavailable, on .theme-toggle-btn —
-           see renderTerminalSection); this class only supplies the separator, so it must
-           not add its own auto margin or it would fight the anchor. */
+        /* Settings cluster at the foot of the rail. The bottom anchor (the lone
+           auto top margin that absorbs the rail's free space) is handed to the
+           FIRST member of this cluster at runtime by applyBottomAnchor in
+           shell.js — so this rule declares only the separator and a static
+           margin. A second auto top margin here would split the free space and
+           park the cluster mid-rail, which is why the anchor is applied inline
+           and never declared twice in CSS. */
         .strip-icon.strip-placement-bottom {
             border-top: 1px solid var(--border);
-            padding-top: 0;
             margin-top: 6px;
         }
 

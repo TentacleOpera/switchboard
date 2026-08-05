@@ -106,18 +106,40 @@ export async function isHostnameReachable(
     timeoutMs = 500
 ): Promise<boolean> {
     return new Promise(resolve => {
-        const req = http.get(`http://${hostname}:${port}/health`, (res) => {
-            let body = '';
-            res.on('data', c => body += c);
-            res.on('end', () => {
-                try {
-                    const json = JSON.parse(body);
-                    resolve(json.status === 'ok' && json.port === port);
-                } catch { resolve(false); }
+        let settled = false;
+        let req: http.ClientRequest | undefined;
+        const finish = (result: boolean) => {
+            if (settled) { return; }
+            settled = true;
+            clearTimeout(timer);
+            try { req?.destroy(); } catch { /* already gone */ }
+            resolve(result);
+        };
+        // A wall-clock guard, not only `req.setTimeout`. That one arms on socket
+        // INACTIVITY once a socket exists, so a name lookup that neither resolves
+        // nor NXDOMAINs (a captive resolver, a proxy swallowing the query) leaves
+        // this promise pending forever — and both openInBrowser and the standalone
+        // launch await it, so a hang there means no URL and no error at all.
+        const timer = setTimeout(() => finish(false), timeoutMs);
+        try {
+            req = http.get(`http://${hostname}:${port}/health`, (res) => {
+                let body = '';
+                res.on('data', c => body += c);
+                res.on('end', () => {
+                    try {
+                        const json = JSON.parse(body);
+                        finish(json.status === 'ok' && json.port === port);
+                    } catch { finish(false); }
+                });
             });
-        });
-        req.on('error', () => resolve(false));
-        req.setTimeout(timeoutMs, () => { try { req.destroy(); } catch { } resolve(false); });
+            req.on('error', () => finish(false));
+            req.setTimeout(timeoutMs, () => finish(false));
+        } catch {
+            // http.get throws SYNCHRONOUSLY on a malformed hostname (an explicit
+            // --hostname the caller validated as loopback can still be a shape the
+            // URL parser rejects). Unreachable, not fatal.
+            finish(false);
+        }
     });
 }
 

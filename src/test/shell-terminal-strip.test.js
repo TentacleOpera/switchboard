@@ -378,15 +378,45 @@ test('the overlay hides on rail scroll, click, and terminal-section rebuild', ()
 
 test('the Setup icon is placed in the bottom rail cluster', () => {
     const manifestSrc = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'headlessPanelHtml.ts'), 'utf8');
-    assert.ok(/id:\s*'setup'[^}]*placement:\s*'bottom'/.test(manifestSrc),
+    // Line-scoped, not `[^}]*`: the entry interpolates `${iconDir}`, so a brace-
+    // excluding class can never reach the end of the row it is meant to match.
+    assert.ok(/\{\s*id:\s*'setup',[^\n]*placement:\s*'bottom'/.test(manifestSrc),
         "the setup manifest entry must carry placement: 'bottom'");
     const shellSrc = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'shell.js'), 'utf8');
     // Ordering is the whole point: bottom icons must be appended after the top
-    // group and BEFORE the theme toggle, so the fleet container's margin-top:auto
-    // still anchors the cluster.
+    // group and BEFORE the theme toggle, so the whole cluster sits at the foot of
+    // the rail.
     assert.ok(shellSrc.indexOf('bottomPanels.push(icon)') !== -1, 'placement must be honoured in renderManifest');
     assert.ok(shellSrc.indexOf('for (const icon of bottomPanels)') < shellSrc.indexOf('const themeBtn = buildThemeToggle()'),
         'bottom icons must be appended before the theme toggle');
+});
+
+test('the bottom anchor is reconciled onto the FIRST cluster member, not just the toggle', () => {
+    // DOM order alone does not move an icon to the bottom: the free space collapses
+    // into whichever child holds the auto top margin, and everything before that
+    // child stays packed with the top group. So appending Setup ahead of
+    // #strip-terminals / the toggle leaves it under the workspace panels with the
+    // gap BELOW it — the exact defect this cluster exists to avoid.
+    const fn = block(shellJs, 'function applyBottomAnchor() {', 'function renderTerminalSection(terminals) {');
+    assert.ok(
+        fn.includes(".strip-placement-bottom'"),
+        'the reconciler must consider placement icons as cluster members'
+    );
+    assert.ok(
+        /const first = members\[0\]/.test(fn),
+        'the anchor belongs to the FIRST member — anything earlier is not "at the bottom"'
+    );
+    assert.ok(
+        /container\.style\.marginTop = '0'/.test(fn),
+        "#strip-terminals owns the anchor in CSS; it must be neutralised inline when something precedes it, or the free space splits"
+    );
+    // Both composition changes must reconcile: Terminals present (container created)
+    // and Terminals absent (container removed, toggle takes the inline default).
+    const section = block(shellJs, 'function renderTerminalSection(terminals) {', 'function renderManifest(manifest) {');
+    assert.strictEqual(
+        (section.match(/applyBottomAnchor\(\)/g) || []).length, 2,
+        'both branches of renderTerminalSection must reconcile the anchor'
+    );
 });
 
 console.log(`\nResults: ${passed} passed, ${failed} failed`);

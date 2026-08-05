@@ -56,6 +56,7 @@
     // it fixes the live paneAssignments.
     let terminalGroups = []; // [{ id, name, layout, assignments }]
     let activeGroupId = null; // which group is currently seated, or null for "none/unsaved"
+    let groupsView = true; // when groups exist + !solo, true → group sidebar, false → flat list
 
     let soloTerminalName = null;
     let hasFetchedList = false;
@@ -635,6 +636,8 @@
         }
         const savedActive = await loadSetting('terminals.activeGroupId', null);
         activeGroupId = (typeof savedActive === 'string' || savedActive === null) ? savedActive : null;
+        const savedGroupsView = await loadSetting('terminals.groupsView', true);
+        groupsView = savedGroupsView !== false;
 
         if (LAYOUT_MODES.includes(savedMode)) {
             currentLayout = savedMode;
@@ -674,6 +677,7 @@
         saveSetting('terminals.kanbanPaneProject', kanbanPaneProject);
         saveSetting('terminals.groups', terminalGroups);
         saveSetting('terminals.activeGroupId', activeGroupId);
+        saveSetting('terminals.groupsView', groupsView);
     }
 
     async function fetchTerminalList() {
@@ -1018,6 +1022,7 @@
         };
         terminalGroups.push(group);
         activeGroupId = id;
+        groupsView = true;
         saveLayoutSettings();
         renderSidebarList();
     }
@@ -1035,6 +1040,7 @@
         if (!group) { return; }
         paneAssignments = group.assignments.slice();
         activeGroupId = id;
+        groupsView = true;
         setLayoutMode(group.layout);
         saveLayoutSettings();
     }
@@ -1091,8 +1097,7 @@
         allRow.textContent = 'Show all terminals';
         allRow.style.opacity = '0.75';
         allRow.addEventListener('click', () => {
-            terminalGroups = [];
-            activeGroupId = null;
+            groupsView = false;
             saveLayoutSettings();
             renderSidebarList();
         });
@@ -1122,7 +1127,7 @@
             paneGridEl.style.display = 'grid';
         }
 
-        if (terminalGroups.length > 0 && !soloTerminalName) {
+        if (terminalGroups.length > 0 && !soloTerminalName && groupsView) {
             renderGroupSidebar();
             return;
         }
@@ -1333,6 +1338,20 @@
 
             parentDiv.appendChild(itemsContainer);
             listEl.appendChild(parentDiv);
+        }
+
+        // When groups exist but the operator toggled to flat mode, offer the way back.
+        if (terminalGroups.length > 0 && !soloTerminalName && !groupsView) {
+            const groupsRow = document.createElement('div');
+            groupsRow.className = 'worktree-group-header';
+            groupsRow.textContent = 'Show groups';
+            groupsRow.style.opacity = '0.75';
+            groupsRow.addEventListener('click', () => {
+                groupsView = true;
+                saveLayoutSettings();
+                renderSidebarList();
+            });
+            listEl.appendChild(groupsRow);
         }
     }
 
@@ -3043,7 +3062,7 @@
      */
     const GRID_BUILTIN_ROLES = [
         'planner', 'lead', 'coder', 'intern', 'reviewer', 'tester',
-        'analyst', 'ticket_updater', 'researcher', 'claude_artifacts', 'phone_a_friend'
+        'analyst', 'ticket_updater', 'researcher', 'claude_designer', 'phone_a_friend'
     ];
 
     async function resolveGridAgents() {

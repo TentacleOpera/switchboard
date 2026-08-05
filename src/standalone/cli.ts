@@ -25,10 +25,10 @@ Aliases for secrets commands:
 Options:
   --workspace <path>   Workspace root to serve or init (default: cwd)
   --port <number>      Preferred port; 0 for ephemeral (default: 0)
-  --hostname <name>    Hostname for the board URL (default: switchboard.localhost,
+  --hostname <name>    Hostname for the board URL (default: ${DEFAULT_DISPLAY_HOSTNAME},
                        falling back to 127.0.0.1 if that name is unreachable).
                        Must be a loopback name: localhost, 127.0.0.1, or anything
-                       under the reserved .localhost TLD, e.g. switchboard.localhost
+                       under the reserved .localhost TLD, e.g. ${DEFAULT_DISPLAY_HOSTNAME}
   --no-open            Do not open a browser
   --target <name>      Protocol target for 'init': agents, claude, or both (default: both)
   --pat <token>        PAT for cloning (visible in process list — prefer SWITCHBOARD_PAT env var)

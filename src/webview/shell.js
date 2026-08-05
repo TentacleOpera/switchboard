@@ -235,6 +235,42 @@
         return frame;
     }
 
+    /**
+     * Hand the rail's bottom anchor to the FIRST member of the bottom cluster.
+     *
+     * The rail is a column flex box, so its free space collapses into whichever
+     * child carries `margin-top: auto` — and everything BEFORE that child stays
+     * packed with the top group. That is why appending the Setup icon ahead of
+     * the anchor is not enough to move it: the icon lands directly under the
+     * workspace panels with the gap below it, which is the opposite of "at the
+     * bottom, next to the theme toggle".
+     *
+     * The cluster's composition changes at runtime (Setup can be disabled,
+     * #strip-terminals appears and disappears with the Terminals panel), so the
+     * anchor has to be reconciled rather than declared once. Exactly one member
+     * may hold it: two auto margins SPLIT the free space and park the cluster
+     * mid-rail. #strip-terminals owns the anchor in CSS, so it is neutralised
+     * inline whenever something precedes it.
+     */
+    function applyBottomAnchor() {
+        const container = document.getElementById('strip-terminals');
+        const themeBtn = strip.querySelector('.theme-toggle-btn');
+        const members = [
+            ...strip.querySelectorAll('.strip-placement-bottom'),
+            container,
+            themeBtn
+        ].filter(Boolean);
+        if (members.length === 0) { return; }
+        for (const el of members) {
+            // '' restores the stylesheet value: 6px for a placement icon, auto for
+            // #strip-terminals, nothing for the toggle (which owns its anchor inline).
+            el.style.marginTop = '';
+        }
+        const first = members[0];
+        if (container && container !== first) { container.style.marginTop = '0'; }
+        if (first !== container) { first.style.marginTop = 'auto'; }
+    }
+
     function renderTerminalSection(terminals) {
         // A fleet-state push rebuilds every terminal button (innerHTML = ''
         // below). If the hovered button is removed mid-hover, no mouseout ever
@@ -250,6 +286,10 @@
             if (themeBtn) {
                 themeBtn.style.marginTop = 'auto';
             }
+            // The line above is the no-bottom-icons default; applyBottomAnchor then
+            // moves the anchor onto the Setup icon when one is present, so the
+            // cluster reads `Setup | Toggle Theme` at the foot of the rail.
+            applyBottomAnchor();
             return;
         }
 
@@ -266,6 +306,7 @@
                 strip.appendChild(container);
             }
         }
+        applyBottomAnchor();
 
         container.innerHTML = '';
         if (!Array.isArray(terminals) || terminals.length === 0) {

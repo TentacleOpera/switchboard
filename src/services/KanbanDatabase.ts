@@ -8794,6 +8794,14 @@ FROM plans
         const cmd = (mergedCommands[role] || '').trim();
         if (!cmd) return null;
         const binary = cmd.split(/\s+/)[0];
+        const base = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
+        // Brand-name overrides must stay in step with TaskViewerProvider.CLI_BRAND_NAMES
+        // so the kanban column subline and the terminals sidebar never disagree.
+        const CLI_BRAND_NAMES: Record<string, string> = {
+            agy: 'Antigravity CLI',
+            antigravity: 'Antigravity CLI',
+        };
+        if (CLI_BRAND_NAMES[base]) { return CLI_BRAND_NAMES[base]; }
         const name = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase();
         return `${name} CLI`;
     }

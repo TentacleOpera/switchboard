@@ -374,6 +374,9 @@ jobs:
       - name: Terminal pane pinning contract
         run: npm run test:contract:terminal-pane-pinning
 
+      - name: Terminal sidebar groupings contract
+        run: npm run test:contract:terminal-sidebar-groupings
+
       # Terminal scroll affordance. Both halves of this one fail SILENTLY, which is
       # why it needs a gate rather than a manual pass. CSS: the terminal rules are
       # scoped (.xterm-viewport::-webkit-scrollbar) and the Firefox override lives

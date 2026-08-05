@@ -220,8 +220,72 @@ check('no launch surface hardcodes the 127.0.0.1 display URL', () => {
         'openInBrowser must build its URL from resolveDisplayHostname');
 });
 
-if (failures > 0) {
-    console.error(`\n${failures} assertion(s) failed.`);
-    process.exit(1);
+// ------------------------------------------------ resolveDisplayHostname behaviour
+// The probe is the ENTIRE mitigation for defaulting to a name the OS resolver may
+// not implement (Windows, stock macOS/Safari), so "the default is
+// switchboard.localhost" is only half the contract — the other half is that a
+// failed probe never reaches the user. Both branches below are machine-independent:
+// a closed port refuses on every platform, whether or not `*.localhost` resolves.
+async function behavioural() {
+    const http = require('http');
+    const srv = http.createServer((_req, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', port: srv.address().port }));
+    });
+    await new Promise(r => srv.listen(0, '127.0.0.1', r));
+    const livePort = srv.address().port;
+
+    await checkAsync('an explicit, reachable hostname is returned verbatim and warns nothing', async () => {
+        const warnings = [];
+        const host = await resolveDisplayHostname('127.0.0.1', livePort, m => warnings.push(m));
+        assert.strictEqual(host, '127.0.0.1');
+        assert.deepStrictEqual(warnings, [], 'a reachable explicit name must not warn');
+    });
+
+    await new Promise(r => srv.close(r));
+
+    await checkAsync('an unreachable default falls back to 127.0.0.1 and logs one line', async () => {
+        const warnings = [];
+        const host = await resolveDisplayHostname(undefined, livePort, m => warnings.push(m));
+        assert.strictEqual(host, '127.0.0.1',
+            'never hand the user a URL that failed its own probe — that reads as "Switchboard is broken"');
+        assert.strictEqual(warnings.length, 1, 'the fallback must be announced exactly once');
+    });
+
+    await checkAsync('an explicit name survives a failed probe — the user may manage a hosts entry', async () => {
+        const warnings = [];
+        const host = await resolveDisplayHostname('other.localhost', livePort, m => warnings.push(m));
+        assert.strictEqual(host, 'other.localhost', 'an explicit choice outranks the probe: warn, never override');
+        assert.strictEqual(warnings.length, 1);
+    });
+
+    await checkAsync('an unreachable probe resolves rather than hanging the launch', async () => {
+        // isHostnameReachable is awaited by openInBrowser and by the standalone
+        // bootstrap, so a pending promise is a command that never opens a browser
+        // and never reports an error.
+        const started = Date.now();
+        await resolveDisplayHostname(undefined, livePort, () => { });
+        assert.ok(Date.now() - started < 5000, 'the probe must be bounded by its own timeout');
+    });
 }
-console.log('\nAll loopback hostname contract assertions passed.');
+
+async function checkAsync(name, fn) {
+    try {
+        await fn();
+        console.log(`  ok  ${name}`);
+    } catch (err) {
+        failures++;
+        console.error(`  FAIL ${name}\n       ${err.message}`);
+    }
+}
+
+behavioural().then(() => {
+    if (failures > 0) {
+        console.error(`\n${failures} assertion(s) failed.`);
+        process.exit(1);
+    }
+    console.log('\nAll loopback hostname contract assertions passed.');
+}, err => {
+    console.error('\nloopback hostname contract harness error:', err);
+    process.exit(1);
+});

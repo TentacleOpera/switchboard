@@ -862,6 +862,7 @@
     "test:contract:terminal-focus-affordance": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-focus-affordance-contract.test.js",
     "test:contract:shell-terminal-strip": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/shell-terminal-strip.test.js",
     "test:contract:terminal-pane-pinning": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-pane-pinning-contract.test.js",
+    "test:contract:terminal-sidebar-groupings": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-sidebar-groupings-contract.test.js",
     "test:contract:terminal-scroll-affordance": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-scroll-affordance-contract.test.js",
     "test:contract:terminal-dec-mode-restore": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-dec-mode-restore-contract.test.js",
     "test:contract:terminal-operations-no-periodic-reopen": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-operations-no-periodic-reopen.test.js",
