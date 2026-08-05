@@ -1,17 +1,13 @@
 ---
-description: Remote Switchboard control — drive plans via Linear or Notion when the local machine is off
+description: Remote Connections & Remote Control — drive plans via Linear, Notion, or external AI surfaces (side-by-side or away from desk)
 ---
 
 
-# Remote Switchboard Session Entry Point
+# Connections & Remote Switchboard Session Entry Point
 
-You are entering a **remote Switchboard planning session**. The local machine and
-VS Code extension are not running. Plans live in Linear or Notion — not in local
-`.md` files. MCP (or the LocalApiServer proxy) is the control surface. Git is not
-used for planning.
+You are entering a **Connections & Remote Switchboard planning session**. Drive board planning either remotely (away from desk) or side-by-side using external AI surfaces (e.g. Gemini Spark or Claude Cowork). Plans live in Linear, Notion, or external file return paths. MCP or file watchers serve as the integration layer.
 
-This is the remote counterpart to `/sw` (switchboard-chat). Use `/sw` when you have
-local access; use `/sw-remote` when you don't.
+This is the external/remote counterpart to `/sw` (switchboard-chat). Use `/sw` when you have local access; use `/sw-remote` for external surfaces or away-from-desk control.
 
 ## 1. Confirm Remote Context
 

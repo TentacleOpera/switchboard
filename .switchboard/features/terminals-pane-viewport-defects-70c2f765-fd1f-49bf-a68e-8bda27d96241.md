@@ -20,7 +20,11 @@ Two live rendering defects in the browser Terminals pane grid: per-pane action b
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Terminal vertical scrollbar goes missing, especially in single/solo view mode](../plans/feature_plan_20260804092233_terminal-vertical-scrollbar-missing-single-view.md) — **CODER CODED**
-- [ ] [Terminal pane buttons condensed to single letters by layout name, not by actual width](../plans/feature_plan_20260804092302_terminal-pane-buttons-condensed-by-layout-name.md) — **CODER CODED**
+- [ ] [Terminal vertical scrollbar goes missing, especially in single/solo view mode](../plans/feature_plan_20260804092233_terminal-vertical-scrollbar-missing-single-view.md) — **CODE REVIEWED**
+- [ ] [Terminal pane buttons condensed to single letters by layout name, not by actual width](../plans/feature_plan_20260804092302_terminal-pane-buttons-condensed-by-layout-name.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+
+## Review Findings
+
+Reviewed both subtasks in place against their plan files, with caller/consumer tracing through the pane-grid reconcile and fit-ladder paths. Three findings needed code: the buttons subtask shipped **CI red** — two CI-wired contract suites (`terminal-pane-grid-reconcile`, `terminal-pane-pinning`) hard-asserted the removed terse ternaries, contradicting the plan's "no tests reference the terse labels" claim — and the scrollbar subtask's `scrollTop` save/restore fought xterm's own authoritative `_innerRefresh`, converting a cosmetic thumb glitch into a real jump to the top of the scrollback on every pane re-parent. Files changed by the review: `src/webview/terminals.js` (restore confined to the fallback path; ladder hook comment-pinned), `src/test/terminal-pane-grid-reconcile-contract.test.js` and `src/test/terminal-pane-pinning-contract.test.js` (assertions moved to the new full-label contract with reverse guards). Validation: `node --check` clean, 16 of 17 terminal/webview contract suites green (`terminal-operations-no-periodic-reopen` is a pre-existing failure on untouched `implementation.html`), `npm run lint` 0 errors, and the `parity`/`push-routing`/`verb-returns`/`catalog`/`mirror` gates all exit 0. Remaining risk: both plans' verification is manual-heavy (wide/narrow viewport degradation, the scrollbar repro matrix, Firefox, and the `npx switchboard` standalone pass) and none of it was executable headlessly — the scrollbar fix also still rides a feature-checked private xterm surface.
 

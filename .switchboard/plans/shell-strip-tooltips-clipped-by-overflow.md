@@ -317,6 +317,7 @@ session.
 9. **Accessibility unregressed.** Every strip button keeps its `aria-label`; the fleet terminal label
    still spells out the activity state, so the shape-coded status dot (`shell.html:176-202`) still has
    a text equivalent. The overlay stays `pointer-events: none` and is not announced as content.
+
 10. **Panels unaffected.** Open Board and hover a column icon — `kanban.html`'s own `#tooltip-overlay`
     still works. The shell's overlay lives in the parent document and the panels' in their iframes;
     confirm no duplicate or cross-frame tooltip.
@@ -341,3 +342,9 @@ session.
 - Keyboard-triggered tooltips on focus. The `aria-label`s already give keyboard and screen-reader users
   the names; hover parity is the reported gap. Worth a follow-up, not a silent scope addition.
 - Touch/mobile hover equivalents.
+
+---
+
+## Completion Report
+
+Implemented the portal-tooltip port exactly as planned: `src/webview/shell.html` gained a body-level `#tooltip-overlay` (sibling of `#strip` and `#content`, `position: fixed; z-index: 9999; pointer-events: none; white-space: pre-line`, styled on the shell's own tokens) and lost the `.strip-icon .strip-label` / `:hover` CSS rules; `src/webview/shell.js` gained a right-placed tooltip module (measure-off-screen-then-place, flip-to-left fallback, vertical clamping, delegated `mouseover`/`mouseout` with the `relatedTarget` containment check) with hides on capture-phase rail scroll, click, and at the top of `renderTerminalSection` before its `innerHTML = ''` wipe. All three builders now set `data-tooltip` (`buildIcon` from `panel.label || panel.id` with the label-guard dropped, theme toggle `'Toggle Theme'`, terminals `name · role · worktreeBase [light]` plus the full `worktreePath` on a second line), and the native `btn.title` was deleted; `aria-label`s are untouched. `src/test/shell-terminal-strip.test.js` gained five source-text contract tests: non-empty `data-tooltip` on every builder, zero surviving `strip-label` traces, overlay-is-a-body-sibling (the root-cause guard), no native `title`, and hide-before-wipe ordering. Issues: one self-caught defect — a code comment in `shell.html` literally contained the string `.strip-label`, which would have tripped the dead-code guard; reworded before landing. Per session directives, compilation and automated tests were not run; `node --check src/webview/shell.js` passes, and the new contract tests are authored, not executed (they run under `node src/test/shell-terminal-strip.test.js`).

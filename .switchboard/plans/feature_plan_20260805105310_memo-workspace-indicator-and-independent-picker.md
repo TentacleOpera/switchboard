@@ -30,7 +30,7 @@ The memo is a per-workspace file (`.switchboard/memo.md`), written by verbs that
 - **Complexity:** 5
 - **Tags:** frontend, backend, ui, ux
 - **Project:** Browser Switchboard
-- **Files touched:** `src/webview/memo.html`, `src/webview/memo.js`, `src/webview/implementation.html`, `src/services/TaskViewerProvider.ts`, `protocol-catalog.json`, `src/generated/verbAllowlist.ts` (regenerated)
+- **Files touched:** `src/services/PlanningPanelProvider.ts`, `src/services/TaskViewerProvider.ts`, `src/services/verbSchemas.ts`, `protocol-catalog.json`, `src/generated/verbAllowlist.ts` (regenerated), `src/webview/memo.html`, `src/webview/memo.js`, `src/webview/implementation.html`
 - **Risk:** Medium — the memo file is user-authored content. A picker that changes the target without flushing the pending debounced save writes the note into the wrong workspace, or loses it.
 
 ## User Review Required
@@ -63,11 +63,42 @@ None. The three requirements (show the workspace, add a picker, default to the K
 9. **WS surface.** Memo messages are tagged `SURFACES.memo` (`wsHub.ts:49`). Any new push (e.g. a workspace-items update) must be tagged for the memo surface or the browser panel never receives it.
 10. **No confirmation dialogs.** Switching workspace with unsaved text flushes and switches; it does not ask.
 
+## Dependencies
+
+- `protocol-catalog.json` (defines service verb catalog)
+- `src/generated/verbAllowlist.ts` (generated allowlist via `npm run catalog:generate`)
+- `src/services/PlanningPanelProvider.ts` (memo verb delegation)
+- `src/services/TaskViewerProvider.ts` (memo verb handlers)
+- `src/services/verbSchemas.ts` (verb payload schemas)
+- `src/webview/memo.html` and `src/webview/memo.js` (standalone memo webview)
+- `src/webview/implementation.html` (sidebar memo sub-tab)
+
+## Adversarial Synthesis
+
+### Grumpy Architect Critique
+
+> "Ah, fantastic! Another 'simple dropdown' feature where you write a debounced save directly across a workspace boundary! Let me guess: the user types 'Critical Production Hotfix Steps', decides 'Oh wait, let me check workspace B', flips the dropdown, and your 800ms debounce timer happily fires `memoSave` against workspace B — clobbering B's memo with A's uncommitted hotfix text. Outstanding!
+>
+> And what happens when the incoming `memoContent` message arrives from workspace B? Your local `_memoDirty` flag is still `true` because the user was typing 100ms ago. So your content handler politely drops the incoming message from B to 'prevent clobbering typing'! Now the UI displays A's text while pretending it loaded B, and the user's next keystroke overwrites B's file forever.
+>
+> Oh, and let's not forget the PlanningPanelProvider gate! You added `memoListWorkspaces` to `TaskViewerProvider.ts` and `protocol-catalog.json`, but forgot `PlanningPanelProvider.ts:114` where `handleServiceVerb` delegates memo verbs! So the webview sends `memoListWorkspaces` to `PlanningPanelProvider`, which rejects it with an unknown verb error because it's not in the delegation guard!
+>
+> Fix the race conditions, flush synchronously before retargeting, clear the dirty flag, and route the verb delegation properly before you touch a single line of UI code!"
+
+### Architectural Synthesis
+
+The Grumpy Architect correctly identifies three critical state and delegation hazards:
+1. **Debounced Save Cross-Contamination:** A pending save timer MUST be cancelled and flushed against the *old* `_wsRoot` BEFORE updating `_wsRoot` to the new target.
+2. **Dirty Guard Lockout:** `_memoDirty` must be explicitly reset to `false` prior to issuing `memoLoad` for the new workspace root, so the incoming content for the new workspace is not ignored by the webview message handler.
+3. **Delegation Guard Gap:** `PlanningPanelProvider.ts:114` explicitly checks memo verbs before delegating to `TaskViewerProvider`. `memoListWorkspaces` MUST be added to this check alongside `memoLoad`, `memoSave`, `memoClear`, and `memoGeneratePrompt`.
+
 ## Proposed Changes
 
 ### `protocol-catalog.json` + regenerate
 
-Add a `memoListWorkspaces` verb to the TaskViewer provider's verb list, then run `npm run catalog:generate` to regenerate `src/generated/verbAllowlist.ts` (never hand-edit the generated file). Route it alongside the other memo verbs in `PlanningPanelProvider.handleServiceVerb` (`PlanningPanelProvider.ts:114`):
+Add a `memoListWorkspaces` verb to the TaskViewer provider's verb list in `protocol-catalog.json`, then run `npm run catalog:generate` to regenerate `src/generated/verbAllowlist.ts` (never hand-edit the generated file). 
+
+Route it alongside the other memo verbs in `PlanningPanelProvider.handleServiceVerb` (`src/services/PlanningPanelProvider.ts:114`):
 
 ```ts
 if (verb === 'memoLoad' || verb === 'memoSave' || verb === 'memoClear'
@@ -76,7 +107,7 @@ if (verb === 'memoLoad' || verb === 'memoSave' || verb === 'memoClear'
 
 ### `src/services/TaskViewerProvider.ts`
 
-Add the handler beside `memoLoad` (~line 12487):
+Add the handler beside `memoLoad` (~line 12515):
 
 ```ts
 case 'memoListWorkspaces': {
@@ -98,7 +129,7 @@ Add a matching schema entry in `src/services/verbSchemas.ts` (no required fields
 
 ### `src/webview/memo.html`
 
-Replace the header (lines 185-188) with a labelled, selectable row:
+Replace the header (`memo.html:185-188`) with a labelled, selectable row:
 
 ```html
 <div class="memo-header">
@@ -196,15 +227,18 @@ function getMemoWorkspaceRoot() { return memoWorkspaceRoot || currentWorkspaceRo
 
 ## Verification Plan
 
-1. **Build & tests:** `npm run compile`; run `npm run catalog:generate` and confirm `src/generated/verbAllowlist.ts` gained `memoListWorkspaces` with no hand edits; run the full suite diffed against a pre-change baseline.
-2. **UAT — indicator, browser panel.** Open `/#memo` in a multi-root workspace: the header reads `Saving to  <workspace>` with the Kanban board's workspace preselected.
-3. **UAT — indicator, sidebar.** Open the Switchboard sidebar → Memo sub-tab: the workspace row is present and preselected to the sidebar's workspace.
-4. **UAT — override targets the right file.** Pick workspace B in the memo picker, type `hello-B`, wait for autosave, and confirm `B/.switchboard/memo.md` contains it and `A/.switchboard/memo.md` does not.
-5. **UAT — no board side effect.** With the board showing workspace A, switch the memo picker to B. The board's cards, its workspace/project dropdown, and its project filter must all be unchanged.
-6. **UAT — pending-save flush.** Type into workspace A's memo and, within the autosave debounce window, switch the picker to B. `A/.switchboard/memo.md` must contain the typed text; B's memo must not.
-7. **UAT — content loads after switch.** With different text already in A and B, switch between them repeatedly: the textarea shows the correct file's content each time (i.e. the dirty-guard does not swallow the load).
-8. **UAT — Clear / Copy Prompt / Send to Planner** each act on the selected memo workspace, not the board's.
-9. **UAT — board switch does not stomp the override.** Set the memo picker to B, then switch the *board* to workspace C. The memo picker stays on B. Then reload the memo panel: it defaults back to the board's workspace (no persistence).
-10. **UAT — root list changes.** Remove workspace B from the VS Code workspace while the memo panel is open: the picker drops it and falls back to a valid root; no memo write targets the removed path.
-11. **UAT — single root.** In a single-root workspace, the picker shows the one entry and the memo works normally.
-12. **UAT — no scaffolding.** Select a workspace that has no `.switchboard/` directory and do not type: confirm no directory or memo file is created until the first save.
+*(Note: Per task constraints, automated test suite execution and project compilation steps are skipped).*
+
+1. **UAT — indicator, browser panel.** Open `/#memo` in a multi-root workspace: the header reads `Saving to  <workspace>` with the Kanban board's workspace preselected.
+2. **UAT — indicator, sidebar.** Open the Switchboard sidebar → Memo sub-tab: the workspace row is present and preselected to the sidebar's workspace.
+3. **UAT — override targets the right file.** Pick workspace B in the memo picker, type `hello-B`, wait for autosave, and confirm `B/.switchboard/memo.md` contains it and `A/.switchboard/memo.md` does not.
+4. **UAT — no board side effect.** With the board showing workspace A, switch the memo picker to B. The board's cards, its workspace/project dropdown, and its project filter must all be unchanged.
+5. **UAT — pending-save flush.** Type into workspace A's memo and, within the autosave debounce window, switch the picker to B. `A/.switchboard/memo.md` must contain the typed text; B's memo must not.
+6. **UAT — content loads after switch.** With different text already in A and B, switch between them repeatedly: the textarea shows the correct file's content each time (i.e. the dirty-guard does not swallow the load).
+7. **UAT — Clear / Copy Prompt / Send to Planner** each act on the selected memo workspace, not the board's.
+8. **UAT — board switch does not stomp the override.** Set the memo picker to B, then switch the *board* to workspace C. The memo picker stays on B. Then reload the memo panel: it defaults back to the board's workspace (no persistence).
+9. **UAT — root list changes.** Remove workspace B from the VS Code workspace while the memo panel is open: the picker drops it and falls back to a valid root; no memo write targets the removed path.
+10. **UAT — single root.** In a single-root workspace, the picker shows the one entry and the memo works normally.
+11. **UAT — no scaffolding.** Select a workspace that has no `.switchboard/` directory and do not type: confirm no directory or memo file is created until the first save.
+
+Send to Coder

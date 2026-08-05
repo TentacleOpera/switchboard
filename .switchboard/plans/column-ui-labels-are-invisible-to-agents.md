@@ -570,3 +570,9 @@ the first two are now **resolved by direct code inspection during this review** 
 ---
 
 **Recommendation: Send to Coder** (complexity 5).
+
+---
+
+## Completion Report
+
+Implemented the full label-exposure fix: one resolver (`resolveColumnLabel` + `LEGACY_COLUMN_LABELS` + `DISPLAY_ONLY_COLUMN_LABELS` in `src/services/agentConfig.ts`) now backs every surface — the write path (`LocalApiServer._canonicalColumnId` gained an ID-first, label-second pass with an explicit `AUTOCODE` refusal, and both 400 messages now list `ID (Label)` pairs), the read path (`KanbanDatabase` emits `**Label:**` per state file, `Label` columns in both `kanban-board.md` tables, and a label-rendered `Board:` line, with newline-stripping and pipe-escaping), and `GET /kanban/columns` (`custom` is now `{id,label,labelSource}[]` plus a new `displayOnly` field). The stale hardcoded humanization tables were deleted from `.claude/skills/switchboard/SKILL.md` and `.agents/workflows/switchboard.md` and replaced with a resolve-from-the-board rule (examples updated to "New"/"Planned"); the two `switchboard-orchestration` skill docs were updated to the new `custom` shape (the only in-repo consumers of that field, verified by grep). Files changed: `src/services/agentConfig.ts`, `src/services/LocalApiServer.ts`, `src/services/KanbanDatabase.ts`, `.claude/skills/switchboard/SKILL.md`, `.agents/workflows/switchboard.md`, `.claude/skills/switchboard-orchestration/SKILL.md`, `.agents/skills/switchboard-orchestration/SKILL.md`, `src/test/kanban-auto-export.test.ts` (new parity guard: ten-entry definition assertion, resolver/export/canonicalizer round-trips, `AUTOCODE` refusal). Issues: none blocking — the installed extension copy (`~/.windsurf/extensions/turnzero.switchboard-1.7.3`) ships no `.agents` directory, so there was no installed copy to sync; the repo edit is the live dev copy. Per session directives, compilation and tests were not run; the parity test is authored, not executed.

@@ -441,6 +441,29 @@ export function getTicketsHtml(repoRoot: string, workspaceRoot: string, capabili
     return { html: content, csp };
 }
 
+export function getConnectionsHtml(repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult {
+    const candidates = [
+        path.join(repoRoot, 'dist', 'webview', 'connections.html'),
+        path.join(repoRoot, 'src', 'webview', 'connections.html'),
+    ];
+    const htmlPath = findFile(candidates);
+    if (!htmlPath) {
+        return { html: '<html><body>Connections panel HTML not found.</body></html>', csp: '' };
+    }
+    let content = fs.readFileSync(htmlPath, 'utf8');
+    const nonce = makeNonce();
+    const csp = `default-src 'self'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval' 'unsafe-inline'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self';`;
+    content = content.replace(/<script>/g, `<script nonce="${nonce}">`);
+    content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', `<script nonce="${nonce}">`, true);
+    content = content.replace(/\{\{HANKEN_FONT_URI\}\}/g, '/static/designs/HankenGrotesk-Variable.woff2');
+    content = content.replace(/\{\{GEIST_PIXEL_FONT_URI\}\}/g, '/static/designs/GeistPixel-Square.woff2');
+    const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
+    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="connections" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
+    content = injectBodyAttributes(content, bodyAttr);
+    content = applyThemeClass(content, themeClass);
+    return { html: content, csp };
+}
+
 export interface PanelManifestEntry {
     id: string;
     label: string;
@@ -455,6 +478,7 @@ export interface PanelAvailability {
     planning?: boolean;
     terminals?: boolean;
     tickets?: boolean;
+    connections?: boolean;
 }
 
 export function getPanelsManifest(availability?: PanelAvailability): PanelManifestEntry[] {
@@ -462,6 +486,7 @@ export function getPanelsManifest(availability?: PanelAvailability): PanelManife
     const planningEnabled = availability?.planning !== false;
     const designEnabled = availability?.design !== false;
     const ticketsEnabled = availability?.tickets !== false;
+    const connectionsEnabled = availability?.connections !== false;
     const terminalsEnabled = availability?.terminals === true; // Fail-closed!
     const iconDir = '/static/icons';
     return [
@@ -472,6 +497,7 @@ export function getPanelsManifest(availability?: PanelAvailability): PanelManife
         { id: 'planning', label: 'Artifacts', icon: `${iconDir}/nav-artifacts.svg`, route: '/planning', enabled: planningEnabled },
         { id: 'design', label: 'Design', icon: `${iconDir}/nav-design.svg`, route: '/design', enabled: designEnabled },
         { id: 'setup', label: 'Setup', icon: `${iconDir}/nav-setup.svg`, route: '/setup', enabled: setupEnabled },
+        { id: 'connections', label: 'Connections', icon: `${iconDir}/nav-connections.svg`, route: '/connections', enabled: connectionsEnabled },
         { id: 'terminals', label: 'Terminals', icon: `${iconDir}/nav-terminals.svg`, route: '/terminals', enabled: terminalsEnabled },
     ];
 }
@@ -485,8 +511,10 @@ export function getPanelHtmlById(id: string, repoRoot: string, workspaceRoot: st
         case 'planning': return getPlanningHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'design': return getDesignHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'setup': return getSetupHtml(repoRoot, workspaceRoot, capabilities, themeClass);
+        case 'connections': return getConnectionsHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'terminals': return getTerminalsHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         default: return null;
     }
 }
+
 

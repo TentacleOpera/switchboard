@@ -107,25 +107,34 @@
             cursor: not-allowed;
         }
         .strip-icon[disabled]:hover { background: transparent; color: var(--text-dim); }
-        .strip-icon .strip-label {
-            position: absolute;
-            left: 44px;
-            top: 50%;
-            transform: translateY(-50%);
+        /* Body-level tooltip overlay — port of kanban.html's overlay on the
+           shell's own tokens. It MUST live outside #strip: the strip (and the
+           nested #strip-terminals) clips overflow on both axes, which is what
+           made the old in-flow hover labels invisible — painted 2px past the
+           clip edge, so zero pixels survived. position:fixed + z-index here is
+           exempt from every ancestor clip. */
+        #tooltip-overlay {
+            position: fixed;
+            z-index: 9999;
+            pointer-events: none;
             background: var(--bg-elev);
-            border: 1px solid var(--border);
             color: var(--text);
-            padding: 3px 8px;
-            border-radius: 4px;
             font-size: 11px;
             font-family: var(--font);
-            white-space: nowrap;
+            padding: 3px 8px;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            white-space: pre-line;
+            text-align: left;
+            max-width: 320px;
             opacity: 0;
-            pointer-events: none;
-            transition: opacity 120ms ease;
-            z-index: 100;
+            visibility: hidden;
+            transition: none;
         }
-        .strip-icon:hover .strip-label { opacity: 1; }
+        #tooltip-overlay.visible {
+            opacity: 1;
+            visibility: visible;
+        }
         #content {
             flex: 1 1 auto;
             position: relative;
@@ -240,6 +249,7 @@
 <body>
     <div id="strip" role="tablist" aria-label="Switchboard panels"></div>
     <div id="content"></div>
+    <div id="tooltip-overlay"></div>
     <script nonce="{{NONCE}}" src="/static/webview/shell.js"></script>
 </body>
 

@@ -3,6 +3,13 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { KanbanDatabase, VALID_KANBAN_COLUMNS } from '../services/KanbanDatabase';
+import {
+    DEFAULT_KANBAN_COLUMNS,
+    DISPLAY_ONLY_COLUMN_LABELS,
+    LEGACY_COLUMN_LABELS,
+    resolveColumnLabel
+} from '../services/agentConfig';
+import { LocalApiServer } from '../services/LocalApiServer';
 
 function columnSlug(col: string): string {
     return col.toLowerCase().replace(/\s+/g, '-');
@@ -363,5 +370,76 @@ suite('Kanban Auto-Export (Markdown)', () => {
         content = readPerColumnFile(tempDir, 'INTERN CODED');
         assert.ok(content.includes('**Agent:** CLAUDE CLI'), 'Second write should show CLAUDE CLI after config-only change');
         assert.ok(!content.includes('**Agent:** AGY CLI'), 'Stale AGY CLI line should be gone');
+    });
+
+    test('Column label parity — resolver, exports, canonicalizer, and definition guard', async function() {
+        this.timeout(8000);
+        const workspaceId = 'test-ws-labels';
+        await db.setWorkspaceId(workspaceId);
+
+        // Definition guard: the webview renders one column per DEFAULT_KANBAN_COLUMNS
+        // entry, so the legacy IDs must NEVER join the list — they would render as
+        // extra board columns. Their labels live in LEGACY_COLUMN_LABELS instead.
+        assert.strictEqual(DEFAULT_KANBAN_COLUMNS.length, 10, 'DEFAULT_KANBAN_COLUMNS must stay at exactly ten entries');
+        assert.ok(!DEFAULT_KANBAN_COLUMNS.some(c => c.id === 'BACKLOG' || c.id === 'CODED'),
+            'BACKLOG/CODED must not appear in DEFAULT_KANBAN_COLUMNS');
+
+        // Every column ID the board can hold resolves to a real (non-fallback) label.
+        const boardColumns = [...DEFAULT_KANBAN_COLUMNS.map(c => c.id), ...Object.keys(LEGACY_COLUMN_LABELS)];
+        for (const id of boardColumns) {
+            const resolved = resolveColumnLabel(id);
+            assert.notStrictEqual(resolved.labelSource, 'fallback', `${id} should resolve to a real label`);
+            assert.ok(resolved.label.length > 0, `${id} label should be non-empty`);
+        }
+
+        // The labels not derivable from their IDs by any string transform.
+        assert.strictEqual(resolveColumnLabel('CREATED').label, 'New');
+        assert.strictEqual(resolveColumnLabel('PLAN REVIEWED').label, 'Planned');
+        assert.strictEqual(resolveColumnLabel('CODE REVIEWED').label, 'Reviewed');
+        assert.strictEqual(resolveColumnLabel('BACKLOG').label, 'Backlog');
+        assert.strictEqual(resolveColumnLabel('CODED').label, 'Coded');
+        // Unknown ID falls back to the ID itself, tagged so callers can tell a stand-in.
+        assert.deepStrictEqual(resolveColumnLabel('NO SUCH COLUMN'), { label: 'NO SUCH COLUMN', labelSource: 'fallback' });
+
+        await db.flushLocalBoardMirror();
+
+        // Labels land on the exported markdown an agent reads at entry.
+        assert.ok(readPerColumnFile(tempDir, 'CREATED').includes('**Label:** New'),
+            'CREATED state file should carry **Label:** New');
+        assert.ok(readPerColumnFile(tempDir, 'PLAN REVIEWED').includes('**Label:** Planned'));
+        assert.ok(readPerColumnFile(tempDir, 'CODE REVIEWED').includes('**Label:** Reviewed'));
+        assert.ok(readPerColumnFile(tempDir, 'BACKLOG').includes('**Label:** Backlog'));
+        assert.ok(readPerColumnFile(tempDir, 'CODED').includes('**Label:** Coded'));
+
+        const boardMd = fs.readFileSync(path.join(tempDir, '.switchboard', 'kanban-board.md'), 'utf8');
+        assert.ok(boardMd.includes('| Column | Label | File |'), 'board table should have a Label column');
+        assert.ok(boardMd.includes('| CREATED | New |'), 'board table should pair CREATED with New');
+        assert.ok(boardMd.includes('| Column | Label | Plans | Features |'), 'snapshot table should have a Label column');
+
+        // Write path: labels canonicalize back to IDs; IDs keep precedence (no
+        // label-shadowing); display-only AUTOCODE refuses rather than picking one
+        // of its three backing coder columns.
+        const server = new LocalApiServer({
+            workspaceRoot: tempDir,
+            getKanbanDatabase: async () => db
+        } as any);
+        const canon = (raw: string): Promise<string | null> => (server as any)._canonicalColumnId(raw, tempDir);
+        assert.strictEqual(await canon('New'), 'CREATED');
+        assert.strictEqual(await canon('new'), 'CREATED');
+        assert.strictEqual(await canon('Planned'), 'PLAN REVIEWED');
+        assert.strictEqual(await canon('Reviewed'), 'CODE REVIEWED');
+        assert.strictEqual(await canon('Backlog'), 'BACKLOG');
+        assert.strictEqual(await canon('Coded'), 'CODED');
+        assert.strictEqual(await canon('Coder'), 'CODER CODED');
+        assert.strictEqual(await canon('lead-coded'), 'LEAD CODED');
+        assert.strictEqual(await canon('CREATED'), 'CREATED', 'ID pass must keep precedence over labels');
+        assert.strictEqual(await canon('AUTOCODE'), null, 'AUTOCODE must refuse, never pick one coder column');
+        assert.strictEqual(await canon('Nonsense'), null);
+        const autocodeMsg: string = (server as any)._unknownColumnError('AUTOCODE');
+        for (const id of DISPLAY_ONLY_COLUMN_LABELS['AUTOCODE'].aliasOf) {
+            assert.ok(autocodeMsg.includes(id), `AUTOCODE refusal should name ${id}`);
+        }
+        assert.ok((server as any)._unknownColumnError('Nonsense').includes('CREATED (New)'),
+            'unknown-column message should list ID (Label) pairs');
     });
 });

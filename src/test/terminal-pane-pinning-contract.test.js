@@ -225,10 +225,13 @@ test('the pin toggle is gated on slotCount > 1 and uses text labels, not an emoj
         /const pinActive = slotCount > 1;/.test(fn),
         'the pin toggle visibility must be gated on slotCount > 1'
     );
-    // Text labels, not emoji.
+    // Text labels, not emoji — and the FULL words at every layout. The old
+    // `terse ? (isPinned ? 'u' : 'p')` form keyed off the layout name (2x3/3x3)
+    // rather than measured header width, so `p`/`u` appeared on wide monitors where
+    // the words fit; .pane-actions is flex-shrink: 0 and the title ellipsizes first.
     assert.ok(
-        /pinBtn\.textContent = terse \? \(isPinned \? 'u' : 'p'\) : \(isPinned \? 'unpin' : 'pin'\);/.test(fn),
-        'the pin toggle must use text labels (pin/unpin, terse p/u) — not an emoji glyph beside clear/hide'
+        /pinBtn\.textContent = isPinned \? 'unpin' : 'pin';/.test(fn),
+        'the pin toggle must use full text labels (pin/unpin) — not an emoji glyph, and not layout-name-keyed p/u initials'
     );
     assert.ok(
         /pinBtn\.setAttribute\('aria-pressed', isPinned \? 'true' : 'false'\)/.test(fn),

@@ -59,11 +59,21 @@ test('detach timers are still swept against the FULL assignment array', () => {
     );
 });
 
-test('terse button labels are re-derived from the live layout', () => {
-    assert.ok(SRC.includes('function isTerseLayout('), 'the terse flag must be a function, not a per-render const');
+test('button labels are re-assigned every reconcile and never condensed by layout name', () => {
+    // Still a function, not a per-render const: it is now read by the input-state
+    // chip alone (syncInputStateChip), and other spans in this suite use its
+    // declaration as a block delimiter.
+    assert.ok(SRC.includes('function isTerseLayout('), 'the dense-header flag must be a function, not a per-render const');
     const update = block('function updatePaneElement(', 'function resolveFlooredLayout() {');
-    assert.ok(update.includes("terse ? 'c' : 'clear'"), 'clear label must be re-derived');
-    assert.ok(update.includes("terse ? 'h' : 'hide'"), 'hide label must be re-derived');
+    assert.ok(update.includes("clearBtn.textContent = 'clear'"), 'the clear label must be re-assigned on every reconcile');
+    assert.ok(update.includes("hideBtn.textContent = 'hide'"), 'the hide label must be re-assigned on every reconcile');
+    // The condensation was keyed on the LAYOUT NAME (2x3/3x3), never on measured
+    // header width, so `c`/`h` fired on wide monitors where the words fit with room
+    // to spare. .pane-title carries min-width: 0 + text-overflow: ellipsis and
+    // .pane-actions is flex-shrink: 0, so a genuinely narrow header truncates the
+    // title first and the buttons stay readable — that is the degradation order.
+    assert.ok(!update.includes("terse ? 'c'"), 'the layout-name-keyed clear condensation must not come back');
+    assert.ok(!update.includes("terse ? 'h'"), 'the layout-name-keyed hide condensation must not come back');
 });
 
 test('pane listeners are attached at creation, never per render', () => {

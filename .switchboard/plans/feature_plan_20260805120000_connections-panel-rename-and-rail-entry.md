@@ -19,6 +19,25 @@ So the rename is not cosmetic polish to be done last. It determines the panel la
 
 **Why a panel and not just a better tab position.** The connections surface is about to grow: the sibling plan *External-Agent Skill Launchers* adds per-surface prompt hand-offs to it, and Remote Control's provider config (Notion / Linear) is already a multi-section form. A tenth Setup sub-tab does not hold that, and Setup is the wrong parent — Setup is about configuring Switchboard itself, whereas Connections is about wiring **external surfaces** into the board.
 
+> ### Added after review (2026-08-05) — the panel is sub-tabbed, and it has two existing tenants
+>
+> Two things surfaced after this plan was reviewed. Neither changes its approach; both change its shape, so they are recorded here rather than silently applied.
+>
+> **1. Connections is sub-tabbed, not a flat form.** Four things live here, split along config-vs-operations lines:
+>
+> | Sub-tab | Contents | Source |
+> |---|---|---|
+> | **Providers** | Remote Control provider config (Notion / Linear) | moved from `setup.html` — this plan |
+> | **Hand-offs** | pre-written skill launchers | sibling plan (reviewed) |
+> | **Jobs** | standing jobs, inbox status, last run, declared-move outcomes | sibling plans — jobs machinery (headless) + Jobs tab UI |
+> | **Web Agents** | docs → external agent → plan, paste-back | moved from `planning.html` — separate plan |
+>
+> This plan builds the panel with the sub-tab strip and lands **Providers** in it. The other three arrive in their own plans. Use the inline per-panel tab-strip pattern the panel family already uses (`setup.html:670-678`, `planning.html:3665-3668`) — the shared stylesheet is not the live mechanism; panels carry their own tab CSS.
+>
+> **2. Connections is not a new-feature panel — it is a home for two shipped surfaces.** Remote Control (`setup.html`, ninth tab) and WEB AGENTS (`planning.html:3668`, content `:3862-3922`) both already exist and both already work. That materially lowers the speculative risk of building this panel and raises the cost of not building it: today there are two external-AI hand-off surfaces in two unrelated panels, and nothing tells a user the other one exists.
+>
+> **3. Deliberately not vendor-named.** No "Spark" or "Cowork" panel, no vendor in a sub-tab label. The instruction/inbox model is file-based and surface-agnostic by construction — any cron-capable agent with folder access consumes it. Naming a vendor in the UI hard-codes a supplier into a mechanism that does not know about suppliers, and it is the same error as calling the feature "Remote": naming the wrong axis.
+
 ---
 
 ## Metadata
@@ -112,10 +131,12 @@ Key risks: (1) **silent form breakage** — the Remote config is live on shipped
 
 ```ts
 } else if ((pathname === '/connections' || pathname === '/connections.html') && req.method === 'GET') {
-    await this._handleServeConnections(req, res);
+    await this._handleServePanelById('connections', req, res);
 ```
 
-with `_handleServeConnections` mirroring `_handleServeProject` / `_handleServeSetup`.
+> **Superseded:** with `_handleServeConnections` mirroring `_handleServeProject` / `_handleServeSetup`.
+> **Reason:** `_handleServeSetup` does not exist. Setup — like memo, planning, tickets, design and terminals — is served through the generic `_handleServePanelById('<id>', …)` (`LocalApiServer.ts:3562-3573`, helper at `:774`); only `/project` has a bespoke handler (`:644`). Naming a non-existent method sends the coder hunting for a handler that was never written.
+> **Replaced with:** serve the panel through the existing generic helper — `await this._handleServePanelById('connections', req, res);` — which resolves via the new `case 'connections'` in `getPanelHtmlById()`. No new handler method is needed.
 
 **Edge cases:** the panel is served only when `serveStatic` is configured, as with every other panel — no change to that gate.
 
@@ -123,13 +144,13 @@ with `_handleServeConnections` mirroring `_handleServeProject` / `_handleServeSe
 
 **Context:** PRD contract #7. The Remote form's messages are handled today by the Setup panel's provider, because the markup lives in `setup.html`.
 
-**Implementation:** decide and record one of two options, then implement it consistently:
-* **(a)** Keep the arms in `SetupPanelProvider` and route `/connections/verb/<name>` to `setupVerb`. Cheapest, zero arm churn, and the precedent already exists — `/project/verb/` and `/memo/verb/` both route to `planningVerb` (`:3567-3572`).
-* **(b)** Introduce a `ConnectionsPanelProvider`. Cleaner long-term, but it is a new provider file with a new allowlist block, new schemas and a new ratchet baseline entry.
+**Implementation:** decision recorded after cross-plan reconciliation with *Move the WEB AGENTS Tab into Connections*:
 
-**Recommendation: (a).** It matches the existing multiplexing pattern, keeps `verbSchemas.ts` and the return-contract baselines untouched, and does not add a provider to the burndown. Revisit only if the Connections surface grows arms that have nothing to do with Setup.
+> **Superseded:** (a) Keep the arms in `SetupPanelProvider` and route `/connections/verb/<name>` to `setupVerb`. / (b) Introduce a `ConnectionsPanelProvider`. Recommendation: (a).
+> **Reason:** the WEB AGENTS move plan resolves the same question from the other side and its resolution makes the alias route dead on arrival: the Connections webview addresses **the rail that owns each verb directly** — `/setup/verb/<name>` for provider config, `/planning/verb/<name>` for the six `createPlans*` arms. A new `/connections/verb/<name>` route that aliases `setupVerb` would have no caller: it duplicates an existing route, adds a branch to `LocalApiServer`, and still cannot serve the Planning arms, so the panel talks to two rails either way.
+> **Replaced with:** **no new verb route.** Keep every arm in its current provider; the Connections webview calls `/setup/verb/<name>` and `/planning/verb/<name>` per verb (the transport shim already targets a route per call). What this plan must still guarantee is the PRD contract #7 layer: the **Setup and Planning verb routers are constructed in both hosts** (`TaskViewerProvider._startLocalApiServer` and `src/standalone/bootstrap.ts`). Where either is not constructed, the manifest row reports `enabled: false` for that host. Introducing a `ConnectionsPanelProvider` (old option b) remains rejected for the same reasons as before — new allowlist block, new schemas, new ratchet entry, no user-visible benefit.
 
-**Edge cases:** whichever option is chosen, confirm the router is constructed in **both** `TaskViewerProvider._startLocalApiServer` and `src/standalone/bootstrap.ts`. Where it is not, the manifest row must report `enabled: false` for that host.
+**Edge cases:** confirm both routers (`setupVerb`, `planningVerb`) are constructed in **both** `TaskViewerProvider._startLocalApiServer` and `src/standalone/bootstrap.ts`. Where either is not, the manifest row must report `enabled: false` for that host.
 
 ### 4. `src/webview/setup.html` → `src/webview/connections.html` — move the form
 

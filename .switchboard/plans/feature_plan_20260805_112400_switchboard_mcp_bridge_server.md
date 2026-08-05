@@ -1,5 +1,21 @@
 # Switchboard Model Context Protocol (MCP) Bridge Server
 
+> ## ⏸️ PARKED — do not dispatch (2026-08-05)
+>
+> **Not cancelled. Blocked on a cost/benefit that currently does not clear.** Everything below is verified against the codebase and stays valid if the situation changes; nothing here needs re-deriving.
+>
+> **Why parked — what the research established:**
+> 1. **Gemini Spark rejects `http://` and cannot reach loopback.** Its MCP fetch originates from Google's cloud, which cannot route to `127.0.0.1` on the user's machine. Local TLS does not help: a locally-trusted certificate on a loopback address is unreachable regardless of how valid it is.
+> 2. **The only route is a public HTTPS tunnel** (ngrok / Cloudflare). That exposes a port publicly — and a tunnel forwards **every path on that port**, not just `/mcp`, so pointing one at `LocalApiServer` would publish `/kanban/*`, `/terminals/verb/*`, the board UI and the WS gateway. On the extension host, where `_checkAuth` short-circuits to loopback trust (`LocalApiServer.ts:528-529`), that is an unauthenticated control plane that can dispatch agents and write into live shells.
+> 3. **Spark's *Connected Apps* dialog takes only a URL, an OAuth client id and an OAuth client secret** — no header field — so auth would likely mean standing up an OAuth 2.1 authorization server. The SDK's helpers are express-only (`server/auth/router.d.ts:1, 64, 88`), so on this raw `http.createServer` it is hand-rolled `/authorize` + `/token` + `/register` + two discovery documents.
+> 4. **Spark is slow by design** (built for long-running tool calls), which makes synchronous tool calling a poor fit even if all of the above were solved.
+>
+> **What replaced it.** The actual goal — running long authoring and review work on Google's AI quota instead of Anthropic's — is served by an asynchronous prompt hand-off with a file-based return, needing no new transport at all. See the sibling plans: *Connections Panel*, *External-Agent Skill Launchers*, *Memo Write-Back Watcher*.
+>
+> **What is still worth keeping here.** The twelve-tool mapping in change 3 is ground-truth-verified against `LocalApiServer` on path *and* method, the in-process call paths are correct, and the transport mount in change 1 is accurate for the installed SDK 1.25.3. If a synchronous MCP surface is ever wanted — for a client that can reach localhost, or once a hardened dedicated listener exists — start from this plan rather than a blank file.
+>
+> **If unparked, it is three plans, not one:** (A) `/mcp` transport + tools on a dedicated MCP-only listener with mandatory auth; (B) tunnel integration and docs; (C) OAuth authorization server. Complexity 8-9 overall. Do **not** implement the plan below as a single unit.
+
 ## Goal
 Build a local TypeScript-based Model Context Protocol (MCP) server that connects Gemini Spark (and other MCP-compatible AI models) directly to Switchboard's `LocalApiServer` over stdio IPC. This provides native, structured tool calling for board operations, plan dispatches, card movements, and terminal messaging, bypassing shell command policies and socket connection restrictions.
 

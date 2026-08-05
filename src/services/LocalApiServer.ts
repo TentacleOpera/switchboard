@@ -7,9 +7,22 @@ import type { ClickUpSyncService } from './ClickUpSyncService';
 import type { LinearSyncService } from './LinearSyncService';
 import type { NotionFetchService } from './NotionFetchService';
 import { importPlanFiles } from './PlanFileImporter';
-import { DEFAULT_KANBAN_COLUMNS } from './agentConfig';
+import {
+    DEFAULT_KANBAN_COLUMNS,
+    DISPLAY_ONLY_COLUMN_LABELS,
+    LEGACY_COLUMN_LABELS,
+    parseCustomKanbanColumns,
+    resolveColumnLabel,
+    CustomKanbanColumnConfig
+} from './agentConfig';
 import { WsHub } from './wsHub';
 import { isLoopbackHostHeader, isLoopbackOrigin } from '../utils/loopbackHostname';
+
+/** Canonical form for column refs (IDs and labels alike): 'lead-coded' /
+ *  'lead_coded' / 'Lead Coded' all → 'LEAD CODED'. */
+function _canonColumnRef(s: string): string {
+    return String(s || '').trim().toUpperCase().replace(/[-_]+/g, ' ').replace(/\s+/g, ' ');
+}
 
 interface LocalApiServerOptions {
     workspaceRoot: string;
@@ -1078,10 +1091,10 @@ export class LocalApiServer {
      * while project.html shows the raw value: the same card in two "columns".
      */
     private async _canonicalColumnId(raw: string, workspaceRoot?: string): Promise<string | null> {
-        const canon = (s: string) => s.trim().toUpperCase().replace(/[-_]+/g, ' ').replace(/\s+/g, ' ');
-        const target = canon(raw);
+        const target = _canonColumnRef(raw);
         if (!target) return null;
         const ids: string[] = DEFAULT_KANBAN_COLUMNS.map((c: any) => String(c.id));
+        let customCols: CustomKanbanColumnConfig[] = [];
         try {
             const db = await this._options.getKanbanDatabase?.(workspaceRoot);
             if (db) {
@@ -1090,12 +1103,43 @@ export class LocalApiServer {
                     const col = (p as any).kanbanColumn;
                     if (col && !ids.includes(col)) { ids.push(String(col)); }
                 }
+                try {
+                    customCols = parseCustomKanbanColumns(db.getConfigJsonSync?.('kanban.customColumns', []));
+                } catch { /* labels fall back to IDs */ }
             }
         } catch { /* built-ins remain the floor */ }
         // Built-ins are listed first, so a canonical ID always wins over a rogue
         // stored variant that canonicalizes to the same target.
-        for (const id of ids) { if (canon(id) === target) return id; }
+        for (const id of ids) { if (_canonColumnRef(id) === target) return id; }
+        // Label pass — runs ONLY when no ID matched, so a user-authored custom
+        // column named e.g. 'New' can never shadow the built-in CREATED. Display-only
+        // labels (AUTOCODE) are deliberately absent: a many→one label must refuse,
+        // never silently pick one of its backing columns.
+        const labelCandidates: string[] = [
+            ...ids,
+            ...customCols.map(c => c.id).filter(id => !ids.includes(id)),
+            ...Object.keys(LEGACY_COLUMN_LABELS).filter(id => !ids.includes(id))
+        ];
+        for (const id of labelCandidates) {
+            const { label } = resolveColumnLabel(id, customCols);
+            if (label && _canonColumnRef(label) === target) return id;
+        }
         return null;
+    }
+
+    /**
+     * The 400 text for a column ref that matched no ID and no label. Display-only
+     * labels get an explicit refusal naming their backing IDs (a many→one label
+     * must never resolve by picking one); everything else lists ID (Label) pairs
+     * so a rejected call teaches the caller the board's real vocabulary.
+     */
+    private _unknownColumnError(rawColumn: string): string {
+        const displayOnly = DISPLAY_ONLY_COLUMN_LABELS[_canonColumnRef(rawColumn)];
+        if (displayOnly) {
+            return `Unknown targetColumn '${rawColumn}' — '${_canonColumnRef(rawColumn)}' is the collapsed view of ${displayOnly.aliasOf.join(' | ')}; pick one`;
+        }
+        const cols = DEFAULT_KANBAN_COLUMNS.map((c: any) => `${c.id} (${c.label})`).join(' | ');
+        return `Unknown targetColumn '${rawColumn}' — valid columns: ${cols} (plus any custom columns; see GET /kanban/columns)`;
     }
 
     /**
@@ -1186,7 +1230,7 @@ export class LocalApiServer {
             } else {
                 targetColumn = await this._canonicalColumnId(rawColumn, workspaceRoot);
                 if (!targetColumn) {
-                    return fail(400, `Unknown targetColumn '${rawColumn}' — valid column IDs: ${DEFAULT_KANBAN_COLUMNS.map((c: any) => c.id).join(' | ')} (plus any custom columns; see GET /kanban/columns)`);
+                    return fail(400, this._unknownColumnError(rawColumn));
                 }
             }
 
@@ -1289,7 +1333,7 @@ export class LocalApiServer {
             const targetColumn = await this._canonicalColumnId(rawColumn, workspaceRoot);
             if (!targetColumn) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: `Unknown targetColumn '${rawColumn}' — valid column IDs: ${DEFAULT_KANBAN_COLUMNS.map((c: any) => c.id).join(' | ')} (plus any custom columns; see GET /kanban/columns)` }));
+                res.end(JSON.stringify({ error: this._unknownColumnError(rawColumn) }));
                 return;
             }
 
@@ -2497,24 +2541,33 @@ export class LocalApiServer {
         });
     }
 
-    /** GET /kanban/columns — built-in column definitions + custom columns present on the board. */
+    /** GET /kanban/columns — built-in column definitions + custom columns present
+     *  on the board, each resolved to its UI label via resolveColumnLabel, plus the
+     *  display-only labels (e.g. AUTOCODE) that name no writable column. */
     private async _handleGetColumns(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         await this._handleReadEndpoint(req, res, async () => {
             const builtIn = DEFAULT_KANBAN_COLUMNS;
-            let custom: string[] = [];
+            let custom: { id: string; label: string; labelSource: string }[] = [];
             const db = await this._resolveDbFromQuery(req);
             if (db) {
                 try {
                     const board = await this._resolveBoard(db);
                     const builtInIds = new Set(builtIn.map(c => c.id));
-                    custom = Array.from(new Set(
+                    let customCols: CustomKanbanColumnConfig[] = [];
+                    try {
+                        customCols = parseCustomKanbanColumns(db.getConfigJsonSync?.('kanban.customColumns', []));
+                    } catch { /* labels fall back to IDs */ }
+                    const ids = Array.from(new Set(
                         (board || [])
                             .map((p: any) => p.kanbanColumn)
                             .filter((c: string) => c && !builtInIds.has(c))
                     ));
+                    custom = ids.map(id => ({ id, ...resolveColumnLabel(id, customCols) }));
                 } catch { /* best-effort custom-column derivation */ }
             }
-            return { builtIn, custom };
+            const displayOnly = Object.entries(DISPLAY_ONLY_COLUMN_LABELS)
+                .map(([label, entry]) => ({ label, aliasOf: entry.aliasOf }));
+            return { builtIn, custom, displayOnly };
         });
     }
 
@@ -3569,6 +3622,8 @@ export class LocalApiServer {
                 await this._handleServePanelById('design', req, res);
             } else if ((pathname === '/setup' || pathname === '/setup.html') && req.method === 'GET') {
                 await this._handleServePanelById('setup', req, res);
+            } else if ((pathname === '/connections' || pathname === '/connections.html') && req.method === 'GET') {
+                await this._handleServePanelById('connections', req, res);
             } else if ((pathname === '/terminals' || pathname === '/terminals.html') && req.method === 'GET') {
                 await this._handleServePanelById('terminals', req, res);
             } else if (pathname === '/design/asset' && req.method === 'GET') {

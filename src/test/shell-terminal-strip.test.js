@@ -314,6 +314,68 @@ test('the section scrolls inside itself and adds no second scrollbar block', () 
     assert.strictEqual(bare, 1, 'reuse the existing 6px scrollbar rules — a second bare block fails the scrollbar contract');
 });
 
+// ------------------------------------------------------------------ strip tooltips
+
+test('every strip button builder sets a non-empty data-tooltip', () => {
+    const icon = block(shellJs, 'function buildIcon(panel) {', 'function buildThemeToggle() {');
+    assert.ok(
+        icon.includes('btn.dataset.tooltip = panel.label || panel.id'),
+        'panel icons must tooltips from the manifest label, falling back to the id (never silently none)'
+    );
+    const toggle = block(shellJs, 'function buildThemeToggle() {', 'const popoutWindows');
+    assert.ok(toggle.includes("btn.dataset.tooltip = 'Toggle Theme'"), 'the theme toggle must carry a tooltip');
+    const section = block(shellJs, 'function renderTerminalSection(terminals) {', 'function renderManifest(manifest) {');
+    assert.ok(
+        /btn\.dataset\.tooltip = t\.worktreePath \? `[^`]*labelText[^`]*\\n[^`]*` : labelText/.test(section),
+        'terminal buttons must tooltip the aria text (light state included) plus the full worktreePath on a second line'
+    );
+});
+
+test('the old in-flow .strip-label system is fully deleted', () => {
+    // The dead hover element that only "worked" if someone removed the strip's
+    // overflow is what made this bug invisible — no trace of it may survive.
+    assert.ok(!shellHtml.includes('strip-label'), 'no .strip-label CSS may survive in shell.html');
+    assert.ok(!shellJs.includes('strip-label'), 'no .strip-label JS may survive in shell.js');
+});
+
+test('the tooltip overlay is a direct child of body, outside the strip clip box', () => {
+    // This assertion encodes the root cause: #strip and #strip-terminals both
+    // clip overflow on both axes, so an overlay nested inside either is painted
+    // but invisible. Re-nesting it must break the build, not the UI.
+    const stripDiv = block(shellHtml, '<div id="strip"', '</div>');
+    assert.ok(!stripDiv.includes('tooltip-overlay'), 'the overlay must NOT live inside #strip');
+    const body = block(shellHtml, '<body>', '<script');
+    assert.ok(
+        /<div id="content"><\/div>\s*<div id="tooltip-overlay"><\/div>/.test(body),
+        'the overlay must be a body-level sibling of #strip and #content'
+    );
+    const css = block(shellHtml, '#tooltip-overlay {', '}');
+    assert.ok(/position:\s*fixed/.test(css), 'the overlay must be position:fixed to escape ancestor clips');
+    assert.ok(/z-index:\s*9999/.test(css), 'the overlay must paint above the iframe content');
+    assert.ok(/pointer-events:\s*none/.test(css), 'the overlay must never swallow clicks');
+    assert.ok(/white-space:\s*pre-line/.test(css), 'the overlay must render the terminal worktreePath second line');
+});
+
+test('no strip button sets a native title tooltip', () => {
+    // Native title tooltips are painted by the browser chrome, so a leftover one
+    // double-fires beside the styled overlay — the asymmetry that hid this bug.
+    assert.ok(!/\.title\s*=/.test(shellJs), 'shell.js must not set native title tooltips');
+});
+
+test('the overlay hides on rail scroll, click, and terminal-section rebuild', () => {
+    // A position:fixed tooltip does not follow a scrolling or removed target.
+    assert.ok(
+        /addEventListener\('scroll',[\s\S]*?true\)/.test(shellJs),
+        'scroll hide must listen in the capture phase — scroll does not bubble'
+    );
+    assert.ok(shellJs.includes("document.addEventListener('click', hideStripTooltip)"), 'click must hide the tooltip');
+    const section = block(shellJs, 'function renderTerminalSection(terminals) {', 'function renderManifest(manifest) {');
+    const hideAt = section.indexOf('hideStripTooltip();');
+    const wipeAt = section.indexOf("container.innerHTML = '';");
+    assert.ok(hideAt !== -1 && wipeAt !== -1 && hideAt < wipeAt,
+        'the section must hide the tooltip BEFORE wiping the buttons, or a mid-hover fleet update strands it');
+});
+
 console.log(`\nResults: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
     process.exit(1);

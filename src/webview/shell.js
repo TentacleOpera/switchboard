@@ -51,6 +51,93 @@
         return glyph;
     }
 
+    /* ── Strip tooltip overlay ──────────────────────────────────────────
+       Single body-level position:fixed overlay (a right-placed port of
+       kanban.html's tooltip system) — no ancestor overflow can clip it, which
+       is the whole point: #strip and #strip-terminals both clip, and that clip
+       is load-bearing (the rail scrolls). Text goes through textContent, never
+       innerHTML. */
+    const tooltipOverlay = document.getElementById('tooltip-overlay');
+    let tooltipTarget = null;
+
+    function showStripTooltip(el) {
+        if (!tooltipOverlay) { return; }
+        const text = el.getAttribute('data-tooltip');
+        if (!text) { return; }
+        tooltipTarget = el;
+        tooltipOverlay.textContent = text;
+
+        // Measure off-screen first — the text is variable width.
+        tooltipOverlay.style.left = '-9999px';
+        tooltipOverlay.style.top = '-9999px';
+        tooltipOverlay.classList.add('visible');
+
+        const rect = el.getBoundingClientRect();
+        const tipRect = tooltipOverlay.getBoundingClientRect();
+        const viewportW = document.documentElement.clientWidth;
+        const viewportH = document.documentElement.clientHeight;
+        const GAP = 6;
+
+        // Horizontal: right of the icon; flip left when that would overflow the
+        // viewport (in a 48px rail the flip lands over the icon itself — a
+        // degenerate-window cosmetic case, accepted).
+        let left = rect.right + GAP;
+        if (left + tipRect.width > viewportW - 4) {
+            left = rect.left - tipRect.width - GAP;
+        }
+        if (left < 4) { left = 4; }
+
+        // Vertical: centred on the icon, clamped on-screen so buttons near the
+        // top or bottom of a scrolled strip keep their tooltip fully visible.
+        let top = rect.top + rect.height / 2 - tipRect.height / 2;
+        if (top < 4) { top = 4; }
+        if (top + tipRect.height > viewportH - 4) {
+            top = viewportH - tipRect.height - 4;
+        }
+
+        tooltipOverlay.style.left = left + 'px';
+        tooltipOverlay.style.top = top + 'px';
+    }
+
+    function hideStripTooltip() {
+        if (!tooltipOverlay) { return; }
+        tooltipOverlay.classList.remove('visible');
+        tooltipOverlay.style.left = '-9999px';
+        tooltipOverlay.style.top = '-9999px';
+        tooltipTarget = null;
+    }
+
+    // Delegation via mouseover/mouseout (these bubble; mouseenter/mouseleave do
+    // not). The relatedTarget containment check stops flicker when moving
+    // between a button and its own glyph child.
+    document.addEventListener('mouseover', (e) => {
+        const el = e.target.closest('[data-tooltip]');
+        if (!el) { return; }
+        if (el === tooltipTarget) { return; }
+        hideStripTooltip();
+        showStripTooltip(el);
+    });
+    document.addEventListener('mouseout', (e) => {
+        const el = e.target.closest('[data-tooltip]');
+        if (!el) { return; }
+        const related = e.relatedTarget;
+        if (related && el.contains(related)) { return; }
+        hideStripTooltip();
+    });
+    // A position:fixed tooltip does not follow a scrolling target — hide on any
+    // scroll inside the rail (capture phase: scroll does not bubble) and on
+    // click. The third strand case — renderTerminalSection wiping the hovered
+    // button mid-hover so no mouseout ever fires — is handled inside
+    // renderTerminalSection itself.
+    document.addEventListener('scroll', (e) => {
+        if (!tooltipTarget) { return; }
+        const scroller = e.target;
+        if (scroller === strip || (scroller instanceof Element && scroller.id === 'strip-terminals')) {
+            hideStripTooltip();
+        }
+    }, true);
+    document.addEventListener('click', hideStripTooltip);
+
     function buildIcon(panel) {
         const btn = document.createElement('button');
         btn.className = 'strip-icon';
@@ -58,6 +145,9 @@
         btn.role = 'tab';
         btn.dataset.panel = panel.id;
         btn.setAttribute('aria-label', panel.label || panel.id);
+        // Tooltip for every manifest entry — a panel with no label gets its id
+        // rather than silently none.
+        btn.dataset.tooltip = panel.label || panel.id;
         if (panel.enabled === false) { btn.disabled = true; }
         if (panel.icon && panel.icon.endsWith('.svg')) {
             // Single-color SVG: render via CSS mask + currentColor so the glyph
@@ -77,12 +167,6 @@
             glyph.textContent = panel.icon || panel.id.charAt(0).toUpperCase();
             btn.appendChild(glyph);
         }
-        if (panel.label) {
-            const label = document.createElement('span');
-            label.className = 'strip-label';
-            label.textContent = panel.label;
-            btn.appendChild(label);
-        }
         btn.addEventListener('click', () => {
             if (panel.enabled === false) { return; }
             selectPanel(panel.id);
@@ -95,12 +179,9 @@
         btn.className = 'strip-icon theme-toggle-btn';
         btn.type = 'button';
         btn.setAttribute('aria-label', 'Toggle Theme');
+        btn.dataset.tooltip = 'Toggle Theme';
         btn.style.marginTop = 'auto';
         btn.appendChild(buildMaskedGlyph('/static/icons/nav-theme.svg'));
-        const label = document.createElement('span');
-        label.className = 'strip-label';
-        label.textContent = 'Toggle Theme';
-        btn.appendChild(label);
 
         btn.addEventListener('click', async () => {
             const isClaudify = document.body.classList.contains('theme-claudify');
@@ -155,6 +236,10 @@
     }
 
     function renderTerminalSection(terminals) {
+        // A fleet-state push rebuilds every terminal button (innerHTML = ''
+        // below). If the hovered button is removed mid-hover, no mouseout ever
+        // fires and the overlay strands beside empty space — hide it first.
+        hideStripTooltip();
         let container = document.getElementById('strip-terminals');
         const themeBtn = document.querySelector('.theme-toggle-btn');
 
@@ -201,7 +286,10 @@
 
             const labelText = `${t.name} · ${t.role || 'Terminal'} · ${wtBase} [${t.light}]`;
             btn.setAttribute('aria-label', labelText);
-            btn.title = t.worktreePath || t.name;
+            // Tooltip mirrors the accessible name (light state included) plus the
+            // full worktree path on a second line — what the removed native
+            // btn.title used to show, minus the double-tooltip asymmetry.
+            btn.dataset.tooltip = t.worktreePath ? `${labelText}\n${t.worktreePath}` : labelText;
 
             const glyph = document.createElement('span');
             glyph.textContent = roleChar;
@@ -210,11 +298,6 @@
             const dot = document.createElement('span');
             dot.className = `strip-term-dot dot-${t.light}`;
             btn.appendChild(dot);
-
-            const label = document.createElement('span');
-            label.className = 'strip-label';
-            label.textContent = `${t.name} · ${t.role || 'Terminal'} · ${wtBase}`;
-            btn.appendChild(label);
 
             btn.addEventListener('click', () => {
                 const slug = t.name.replace(/[^A-Za-z0-9_-]/g, '_');

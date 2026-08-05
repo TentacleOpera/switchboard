@@ -3665,7 +3665,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         <button class="shared-tab-btn active" data-tab="docs">DOCS</button>
         <button class="shared-tab-btn" data-tab="html">HTML</button>
         <button class="shared-tab-btn" data-tab="research">RESEARCH</button>
-        <button class="shared-tab-btn" data-tab="create-plans">WEB AGENTS</button>
     </div>
     <div class="container">
         <!-- Unified Docs Tab: breadcrumb on top, then sidebar + content -->
@@ -3857,66 +3856,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             </div>
         </div>
 
-        <!-- Create Plans Tab — point an agent at your docs, get a behaviour-level plan back.
-             Docs-first by design: no dev-docs toggle, no mode variants, no code-reading step. -->
         <div id="create-plans-content" class="shared-tab-content">
-            <div class="cp-wrap">
+            <div class="cp-wrap" style="padding:16px;">
                 <div class="cp-intro">
-                    Point an agent at your docs and get back a <strong>high-level plan</strong> — user flows and
-                    logic, not code. Paste the plan below and it lands on the board, where Switchboard's own
-                    planner turns it into an implementation. How detailed the plan is tracks how good your docs are.
-                </div>
-
-                <div class="cp-section">
-                    <div class="cp-label">1 · WHERE ARE YOUR DOCS?</div>
-                    <label class="cp-radio"><input type="radio" name="cp-source" value="zip" checked>
-                        <span><strong>Zip a folder</strong> — pick a folder; the zip is built from the docs in it. Docs only, never code.</span></label>
-                    <label class="cp-radio"><input type="radio" name="cp-source" value="link">
-                        <span><strong>Public link</strong> — GitHub Pages, a public repo branch, any fetchable URL.</span></label>
-                    <label class="cp-radio"><input type="radio" name="cp-source" value="platform">
-                        <span><strong>Platform</strong> — docs live in Notion / ClickUp / Linear; the agent reads them via that platform's MCP.</span></label>
-                </div>
-
-                <div class="cp-section" id="cp-zip-row">
-                    <div class="cp-row">
-                        <button id="cp-btn-folder" class="strip-btn">Choose folder…</button>
-                        <span id="cp-folder-path" class="cp-hint">No folder chosen.</span>
-                    </div>
-                    <label class="cp-radio" style="margin-top:6px;"><input type="checkbox" id="cp-include-extras">
-                        <span>Also include the managed docs (constitution, PRDs, README) on top of the folder.</span></label>
-                    <div class="cp-row" style="margin-top:6px;">
-                        <button id="cp-btn-zip" class="strip-btn strip-btn--primary" disabled title="Choose a folder first">Download docs zip</button>
-                        <span id="cp-zip-hint" class="cp-hint">Bundles the folder's docs with a HOW-TO-PLAN.md the agent follows.</span>
-                    </div>
-                </div>
-
-                <div class="cp-section" id="cp-link-row" style="display:none;">
-                    <input type="text" id="cp-url" class="cp-input" placeholder="https://…  (where the docs are published)">
-                    <button id="cp-btn-copy-link" class="strip-btn strip-btn--primary" disabled title="Enter the public docs URL first">Copy planning prompt</button>
-                </div>
-
-                <div class="cp-section" id="cp-platform-row" style="display:none;">
-                    <select id="cp-platform" class="cp-input" style="max-width:140px;">
-                        <option value="Notion">Notion</option>
-                        <option value="ClickUp">ClickUp</option>
-                        <option value="Linear">Linear</option>
-                    </select>
-                    <input type="text" id="cp-ref" class="cp-input" placeholder="Page / doc / project reference the agent should read">
-                    <button id="cp-btn-copy-platform" class="strip-btn strip-btn--primary" disabled title="Enter the reference first">Copy planning prompt</button>
-                </div>
-
-                <div class="cp-section">
-                    <div class="cp-label">2 · PASTE THE PLAN BACK</div>
-                    <textarea id="cp-paste" class="cp-textarea" placeholder="Paste the returned markdown plan here — it becomes a card on the board."></textarea>
-                    <div class="cp-row">
-                        <button id="cp-btn-create" class="strip-btn strip-btn--primary" disabled title="Paste a markdown plan first">Create plan card</button>
-                        <span id="cp-status" class="cp-hint"></span>
-                    </div>
-                </div>
-
-                <div class="cp-section cp-optional">
-                    <button id="cp-btn-improve" class="strip-btn">Improve my docs with an agent</button>
-                    <span class="cp-hint">Optional — copies a doc-improvement prompt for a configured docs folder. Reads no code.</span>
+                    <strong>WEB AGENTS has moved to Connections</strong><br>
+                    The document ingestion and web agent hand-off tools are now located in the <strong>Connections</strong> panel (Web Agents sub-tab) in the left rail.
                 </div>
             </div>
         </div>

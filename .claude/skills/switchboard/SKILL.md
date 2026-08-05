@@ -88,12 +88,20 @@ two commands.
      columns appearing here IS the in-flight-work signal. **Omit `CODE REVIEWED` and
      every column after it** from the headline. If a custom column's position relative to
      CODE REVIEWED is unknown, show it by name.
-   - **Humanize column names for display** — never print raw backend column IDs. Mapping:
-     `BACKLOG` → Backlog · `CREATED` → Created · `PLAN REVIEWED` → Plan Reviewed ·
-     `CODED` → Coded · `LEAD CODED` → Lead Coder · `CODER CODED` → Coder ·
-     `INTERN CODED` → Intern · `CODE REVIEWED` → Code Reviewed ·
-     `ACCEPTANCE TESTED` → Acceptance Tested · `COMPLETED` → Completed.
-     Custom columns: title-case the slug. **Display-only** — API calls use uppercase IDs.
+   - **Column labels come from the board, never from a hardcoded table** — each
+     kanban-state file carries a `**Label:** <label>` line directly under its
+     `## <ID>` header; print that label, never the raw column ID. If the line is
+     absent (older export, mid-rewrite), `GET /kanban/columns` is authoritative —
+     and always is on conflict. Never title-case an ID to produce a name:
+     `CREATED` is **New**, not "Created"; `PLAN REVIEWED` is **Planned**;
+     `CODE REVIEWED` is **Reviewed**. **Display-only for prose** — but the API
+     write path also accepts labels (`targetColumn: "New"` resolves to `CREATED`),
+     so pass the user's own word straight through rather than rejecting it.
+   - **When the user's word matches no ID and no label**, name the labels that DO
+     exist instead of claiming the column does not exist.
+   - **`BACKLOG` is a view of New, not an eleventh column. `AUTOCODE` is the
+     collapsed view of the three coder columns** — it cannot be written to
+     directly; the API rejects it and names the three real IDs.
    - **Column IDs vs slugs:** the state FILES are slugs (`kanban-state-lead-coded.md`)
      but canonical column IDs for API calls are uppercase display names (`LEAD CODED`).
    - **Do NOT list feature names on entry.**
@@ -109,7 +117,7 @@ two commands.
    Terminals: Devin CLI (intern), Claude Code (coder)
 
    **switchboard Kanban Board**  
-     Backlog 30 · Created 5 · Plan Reviewed 2  
+     Backlog 30 · New 5 · Planned 2  
      In flight: Lead Coder 1 · Coder 2 · Intern 1
 
    What would you like to do?

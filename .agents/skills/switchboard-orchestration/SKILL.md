@@ -56,7 +56,7 @@ primary workspace.
 | `GET /kanban/plans?column=<col>` | Plans filtered to one column |
 | `GET /kanban/plans?featureId=<id>` | Subtasks of a feature |
 | `GET /kanban/plan?planId=<id>` | **One** plan record **plus its full file content** (`.data.content`) |
-| `GET /kanban/columns` | `{ builtIn: [...defs], custom: [...ids] }` |
+| `GET /kanban/columns` | `{ builtIn: [...defs], custom: [{id,label,labelSource}], displayOnly: [{label,aliasOf}] }` |
 | `GET /kanban/features` | All features (`isFeature` rows) |
 | `GET /worktree/list` | All worktree rows (`path`, `branch`, `subtask_plan_id`, `feature_id`, `tier`, `status`, `base_branch`) |
 | `GET /orchestrator/inbox` | Pending request files: `[{ file, content }]` |

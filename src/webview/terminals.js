@@ -2218,11 +2218,26 @@
      * never the scroll area — this closes that gap.
      *
      * Primary: xterm's own Viewport.syncScrollArea (private surface, same
-     * precedent as term._core._renderService at resyncPaneRenderer).
+     * precedent as term._core._renderService at resyncPaneRenderer). This path
+     * does NOT save and restore scrollTop, and must not start doing so.
+     * syncScrollArea defers to Viewport._innerRefresh, which re-derives
+     * scrollTop from buffer.ydisp — xterm's authoritative scroll position —
+     * and sets _ignoreNextScrollEvent so its own write does not feed back.
+     * A restore scheduled here lands one frame LATER and therefore wins:
+     * it overwrites the repair with the pre-refresh DOM value, and because
+     * that write carries no ignore flag, Viewport._handleScroll turns it into
+     * a real scrollLines request. Both callers make that value wrong — a
+     * re-parent has already zeroed scrollTop, and a stale (short) scroll area
+     * clamps it — so restoring it drags the view to the top of the scrollback
+     * in exactly the case this function exists to fix.
+     *
      * Fallback: a one-frame overflowY toggle forces the browser to drop and
      * recreate the native scrollbar widget (rAF split so Chromium commits
-     * 'hidden' first — a synchronous toggle coalesces into a no-op).
-     * Scroll position is preserved across both paths.
+     * 'hidden' first — a synchronous toggle coalesces into a no-op). 'hidden'
+     * makes the element non-scrollable and zeroes scrollTop itself, so THIS
+     * path does save and restore it — undoing its own damage, not
+     * second-guessing xterm. The restored value agrees with ydisp, so the
+     * resulting scroll event resolves to scrollLines(0).
      */
     function refreshTerminalScrollbar(entry) {
         if (!entry || entry.disposed || !entry.term) { return; }
@@ -2230,24 +2245,18 @@
         if (!container) { return; }
         const viewport = container.querySelector('.xterm-viewport');
         if (!viewport) { return; }
-        const savedScrollTop = viewport.scrollTop;
-        let synced = false;
         try {
             const vp = entry.term._core && entry.term._core.viewport;
             if (vp && typeof vp.syncScrollArea === 'function') {
                 vp.syncScrollArea();
-                synced = true;
+                return;
             }
         } catch { /* ignore — private shape changed, fall through */ }
-        if (!synced) {
-            viewport.style.overflowY = 'hidden';
-            requestAnimationFrame(() => {
-                if (entry.disposed) { return; }
-                viewport.style.overflowY = '';
-            });
-        }
+        const savedScrollTop = viewport.scrollTop;
+        viewport.style.overflowY = 'hidden';
         requestAnimationFrame(() => {
             if (entry.disposed) { return; }
+            viewport.style.overflowY = '';
             if (viewport.scrollTop !== savedScrollTop) {
                 viewport.scrollTop = savedScrollTop;
             }
@@ -2287,6 +2296,17 @@
 
             const after = inspectPaneFit(entry);
             if (after === 'ok' || after === 'skip') {
+                // Belt-and-braces only, and deliberately NOT hoisted above the
+                // `before === 'ok'` early return above. Reaching here means a fit
+                // actually changed dimensions, which fires onResize ->
+                // RenderService.handleResize -> onDimensionsChange -> the viewport's
+                // own syncScrollArea; this call is near-redundant on that path. The
+                // already-converged pane never reaches here, and covering it would
+                // put a syncScrollArea plus an rAF on every batchFitVisiblePanes pass
+                // — nine panes per broadcast. The scroll area only goes stale on a
+                // transition, and those are covered at their source: the re-parent
+                // branch in updatePaneElement and the solo display flip in
+                // checkSoloNotFound.
                 if (after === 'ok') { refreshTerminalScrollbar(entry); }
                 return;
             }

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- Connections — two connected nodes / link motif -->
+  <g fill="#45e0e6">
+    <circle cx="4" cy="8" r="2.5" />
+    <circle cx="12" cy="8" r="2.5" />
+    <rect x="5.5" y="7" width="5" height="2" rx="0.5" />
+    <circle cx="8" cy="4" r="1.5" />
+    <rect x="7.25" y="4.5" width="1.5" height="3" />
+  </g>
+</svg>

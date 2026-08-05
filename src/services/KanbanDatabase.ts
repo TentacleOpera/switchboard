@@ -10,6 +10,7 @@ import {
     DEFAULT_KANBAN_COLUMNS,
     parseCustomAgents,
     parseCustomKanbanColumns,
+    resolveColumnLabel,
     CustomAgentConfig,
     CustomKanbanColumnConfig
 } from './agentConfig';
@@ -8749,9 +8750,21 @@ FROM plans
                 ...customColumns.entries(),
             ];
 
+            // One label resolution per column, shared by the per-column files, the
+            // board table, and the Manager Snapshot. Newline-stripped: custom labels
+            // are user-authored free text and a multi-line label would corrupt the
+            // markdown structure.
+            const labelFor = (col: string): string =>
+                resolveColumnLabel(col, agentConfig.customKanbanColumns).label.replace(/[\r\n]+/g, ' ');
+
             for (const [col, plans] of allColumns) {
                 const perColPath = path.join(exportRoot, '.switchboard', `kanban-state-${_columnSlug(col)}.md`);
                 let colMd = `## ${col}\n\n`;
+                // **Label:** the column's UI label (New, Planned, Reviewed, …) — the
+                // name a user reads off the board header. One line, newline-stripped
+                // (custom labels are user-authored free text). resolveColumnLabel's
+                // fallback emits the ID itself so the line is always present.
+                colMd += `**Label:** ${labelFor(col)}\n\n`;
                 const agentName = this._resolveAgentForColumn(
                     col,
                     agentConfig.startupCommands,
@@ -8792,10 +8805,10 @@ FROM plans
 
             let md = `# Kanban Board\n\n`;
             md += `*Workspace: ${workspaceId}* · *Updated: ${new Date().toISOString()}*\n\n`;
-            md += `| Column | File |\n|---|---|\n`;
+            md += `| Column | Label | File |\n|---|---|---|\n`;
             for (const [col, plans] of allColumns) {
                 const slug = _columnSlug(col);
-                md += `| ${col} | [kanban-state-${slug}.md](./kanban-state-${slug}.md) |\n`;
+                md += `| ${col} | ${labelFor(col).replace(/\|/g, '\\|')} | [kanban-state-${slug}.md](./kanban-state-${slug}.md) |\n`;
             }
 
             // Manager Snapshot — pre-digested board state for the switchboard-manage skill's
@@ -8807,7 +8820,7 @@ FROM plans
             // Live terminal registration is in-memory only and NOT included — /health is the
             // sole truthful source (see the provenance note below).
             md += `\n## Manager Snapshot\n\n`;
-            md += `| Column | Plans | Features |\n|---|---|---|\n`;
+            md += `| Column | Label | Plans | Features |\n|---|---|---|---|\n`;
             const POST_CODE = new Set(['CODED', 'LEAD CODED', 'CODER CODED', 'INTERN CODED',
                 'CODE REVIEWED', 'ACCEPTANCE TESTED', 'COMPLETED']);
             let terminalTotal = 0;
@@ -8815,16 +8828,20 @@ FROM plans
             for (const [col, plans] of allColumns) {
                 const feats = plans.filter(p => p.isFeature).length;
                 const plain = plans.length - feats;
-                md += `| ${col} | ${plain} | ${feats} |\n`;
+                md += `| ${col} | ${labelFor(col).replace(/\|/g, '\\|')} | ${plain} | ${feats} |\n`;
+                // The Board: line is the entry snapshot a human (or agent) reads —
+                // render labels, not IDs. The table above keeps canonical uppercase
+                // IDs in the first cell, so API calls built from it cannot strand a card.
+                const label = labelFor(col);
                 if (POST_CODE.has(col)) {
                     terminalTotal += plain;
                 } else if (plain > 0 && feats > 0) {
-                    preCodeParts.push(`${col} ${plain} (+${feats} feature${feats === 1 ? '' : 's'})`);
+                    preCodeParts.push(`${label} ${plain} (+${feats} feature${feats === 1 ? '' : 's'})`);
                 } else if (plain > 0) {
-                    preCodeParts.push(`${col} ${plain}`);
+                    preCodeParts.push(`${label} ${plain}`);
                 } else if (feats > 0) {
                     // Feature-only column: render explicitly so <COL> 0 is not misread as empty.
-                    preCodeParts.push(`${col} 0 (+${feats} feature${feats === 1 ? '' : 's'})`);
+                    preCodeParts.push(`${label} 0 (+${feats} feature${feats === 1 ? '' : 's'})`);
                 }
             }
             const boardLine = preCodeParts.length === 0 && terminalTotal === 0

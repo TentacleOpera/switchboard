@@ -142,6 +142,47 @@ export const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
     { id: 'COMPLETED', label: 'Completed', order: 9999, kind: 'completed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli' },
 ];
 
+/** Display labels for stored column IDs that are NOT peer columns and MUST NOT
+ *  appear in DEFAULT_KANBAN_COLUMNS (the webview renders one column per entry).
+ *  - BACKLOG: rendered as a display mode of CREATED (kanban.html backlog toggle).
+ *  - CODED:   legacy alias normalized to LEAD CODED (KanbanProvider et al). */
+export const LEGACY_COLUMN_LABELS: Record<string, { label: string; displayModeOf?: string; legacyAliasOf?: string }> = {
+    'BACKLOG': { label: 'Backlog', displayModeOf: 'CREATED' },
+    'CODED':   { label: 'Coded',   legacyAliasOf: 'LEAD CODED' },
+};
+
+/** Display-only labels with no stored column ID — an agent may be asked about
+ *  these by name but can never write to them. Keyed by the canonical uppercase
+ *  form of the label. */
+export const DISPLAY_ONLY_COLUMN_LABELS: Record<string, { aliasOf: string[] }> = {
+    'AUTOCODE': { aliasOf: ['LEAD CODED', 'CODER CODED', 'INTERN CODED'] },
+};
+
+export interface ResolvedColumnLabel {
+    label: string;
+    labelSource: 'built-in' | 'custom' | 'legacy' | 'fallback';
+}
+
+/**
+ * The ONE column-ID → UI-label resolver. Every agent-facing surface (state-file
+ * export, GET /kanban/columns, write-path canonicalization) consumes this so the
+ * mapping cannot drift. Fallback emits the ID itself as the label so the shape is
+ * uniform for parsers — callers can distinguish a real label from a stand-in via
+ * labelSource.
+ */
+export function resolveColumnLabel(
+    id: string,
+    customKanbanColumns: CustomKanbanColumnConfig[] = []
+): ResolvedColumnLabel {
+    const builtIn = DEFAULT_KANBAN_COLUMNS.find(c => c.id === id);
+    if (builtIn) { return { label: builtIn.label, labelSource: 'built-in' }; }
+    const custom = customKanbanColumns.find(c => c.id === id);
+    if (custom) { return { label: custom.label, labelSource: 'custom' }; }
+    const legacy = LEGACY_COLUMN_LABELS[id];
+    if (legacy) { return { label: legacy.label, labelSource: 'legacy' }; }
+    return { label: id, labelSource: 'fallback' };
+}
+
 const DEFAULT_CUSTOM_AGENT_KANBAN_ORDER = Math.max(300, ...DEFAULT_KANBAN_COLUMNS.filter(c => c.kind !== 'completed').map(c => c.order)) + 100;
 const DEFAULT_CUSTOM_USER_KANBAN_ORDER = DEFAULT_CUSTOM_AGENT_KANBAN_ORDER + 100;
 const KANBAN_REWEIGHT_STEP = 100;
