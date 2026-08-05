@@ -182,3 +182,15 @@ Keep the scope at exactly two call sites.
 ## Completion Report
 
 Implemented both call-site fixes. `src/webview/kanban.html` now shows the unresolved custom-agent error in the status bar instead of posting a non-verb result. `src/webview/project.js` no longer sends the dead `fetchFeatureDocuments` message on feature saves. Grep confirms `fetchFeatureDocuments` is gone from `src/` and `exportAgentAsSkillResult` only remains as provider-to-webview pushes. No compilation or tests were run per the dispatch directive.
+
+## Review Findings
+
+**Implementation accepted as written — no code changes needed.** Both deletions are exactly the two call sites and nothing more. `showStatusBarMessage('Could not resolve custom agent ID', { isError: true })` at `kanban.html:4831` matches the function's real signature (`:5124`, `{ isError = false } = {}`) and the established error convention at `:7692`; the early `return` is preserved, so the failure path is no longer silent. No inbound `case`, verb or schema was added, and the provider→webview pushes were correctly left untouched.
+
+**Plan grep-gate met exactly** (machine-checked, not eyeballed): `fetchFeatureDocuments` appears **0** times in `src/` and 0 times in the regenerated catalog; `exportAgentAsSkillResult` resolves to **6 pushSites, all in `KanbanProvider.ts`, and 0 requestSites** — precisely the out-of-scope additive pushes.
+
+**MAJOR (fixed under the sibling catalog subtask).** These two deletions left `protocol-catalog.json` stale, so the CI-wired `npm run catalog:check` (`.github/workflows/integration-tests.yml:26`) was red — `totalRequestSites` 623 vs a regenerated 621. Regenerated; `catalog:check` and `parity:check` now green. This is the one way two harmless subtractions could still break the build.
+
+**Validation.** Typecheck 0 errors, lint 0 errors, all five PRD gates green, 12 contract tests pass including `panel-runtime-surface`, `render-guard` and `drag-guard`.
+
+**Remaining risks.** None. The `Uncertain Assumptions` question (is `fetchFeatureDocuments` half-built under another name?) resolves to "dead": no `featureDocuments`-shaped inbound handler, allowlist entry or schema exists anywhere in `src/`.

@@ -21,9 +21,13 @@ Four first-boot and probe failures found against a booted standalone server: the
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Standalone verb rail: two verbs that are not verbs](../plans/standalone-verb-robustness-hardening.md) — **INTERN CODED**
-- [ ] [KanbanDatabase: V20 migration fails on every fresh DB and dumps two stack traces](../plans/kanban-db-v20-migration-fresh-db-failure.md) — **INTERN CODED**
-- [ ] [Standalone: `GET /catalog` 404s for every workspace except the switchboard repo](../plans/standalone-catalog-endpoint.md) — **INTERN CODED**
-- [ ] [Standalone PTY: the darwin spawn-helper chmod never runs under the bundler](../plans/standalone-pty-spawn-helper-chmod.md) — **INTERN CODED**
+- [ ] [Standalone verb rail: two verbs that are not verbs](../plans/standalone-verb-robustness-hardening.md) — **CODE REVIEWED**
+- [ ] [KanbanDatabase: V20 migration fails on every fresh DB and dumps two stack traces](../plans/kanban-db-v20-migration-fresh-db-failure.md) — **CODE REVIEWED**
+- [ ] [Standalone: `GET /catalog` 404s for every workspace except the switchboard repo](../plans/standalone-catalog-endpoint.md) — **CODE REVIEWED**
+- [ ] [Standalone PTY: the darwin spawn-helper chmod never runs under the bundler](../plans/standalone-pty-spawn-helper-chmod.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+
+## Review Findings
+
+Reviewed all four subtasks in one pass with verification run independently (the plan files' "no tests per dispatch directive" notes are records of the coding session, not reviewer directives — this dispatch carried no `SKIP TESTS:` line). Three subtasks — catalog endpoint, PTY spawn-helper chmod, and the verb-rail deletions — were accepted as written and confirmed against the **built** `dist/standalone/cli.js`: `GET /catalog` returns HTTP 200 for a workspace with no catalog file (404 with the corrected message when the artifact is genuinely absent), and the boot log has zero `Failed to chmod`/`ERR_INVALID_ARG_TYPE`. The V20 subtask was **rejected and reworked**: its baseline stamp rested on a false premise, and running the plan's own schema-equivalence check for the first time showed stamped-fresh DBs missing `stitch_projects`/`stitch_screens`, `plan_events.plan_id`, three `imported_docs` columns and 7 indexes — while being inert in standalone, which never calls `createIfMissing()`; the stamp was removed and the column-explicit V20 `INSERT` (plus a post-migration index re-apply and deletion of the 19-line V20 step log) now delivers the clean first boot on its own. One adjacent CI breakage was fixed: the verb-rail deletions left `protocol-catalog.json` stale, reddening the CI-wired `catalog:check`. Files changed in review: `src/services/KanbanDatabase.ts`, `src/standalone/cli.ts` (two pre-existing `noImplicitAny` errors from another feature in the same auto-commit, which were blocking the repo typecheck), and a regenerated `protocol-catalog.json`; final state is typecheck 0 errors, lint 0 errors, all five PRD gates green, 12 contract tests passing, plus 23/23 fresh-DB and 15/15 V19-fixture schema assertions.
 

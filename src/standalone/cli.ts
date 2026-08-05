@@ -327,7 +327,9 @@ async function main() {
             console.log('Warnings:');
             for (const w of result.warnings) { console.log(`  ! ${w}`); }
         }
-        const anyFailed = result.repos.some(r => r.status === 'failed');
+        // The service is lazily `require`d above, so `result` is untyped here — annotate
+        // the callback param rather than widening noImplicitAny.
+        const anyFailed = result.repos.some((r: { status: string }) => r.status === 'failed');
         if (result.success) {
             console.log(`\n[switchboard] Workspace file: ${result.workspaceFilePath}`);
             console.log(`[switchboard] Open with: code "${result.workspaceFilePath}"`);
@@ -375,7 +377,7 @@ async function main() {
             let cleanupConfirmed = cleanupRepos;
             if (cleanupAll) {
                 const preview = await ControlPlaneMigrationService.previewMigration(parentDir);
-                cleanupConfirmed = [...new Set([...cleanupRepos, ...preview.sources.map(s => s.repoName)])];
+                cleanupConfirmed = [...new Set([...cleanupRepos, ...preview.sources.map((s: { repoName: string }) => s.repoName)])];
             }
 
             const result = await ControlPlaneMigrationService.executeMigration(parentDir, {

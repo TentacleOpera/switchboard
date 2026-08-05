@@ -1,6 +1,6 @@
 # Subagent Delegation — Cost-Routed Child Terminals
 
-**Complexity:** 7
+**Complexity:** 8
 
 ## Goal
 
@@ -12,7 +12,11 @@ Communication is localhost HTTP rather than MCP, so any CLI that can make a requ
 
 ## How the Subtasks Achieve This
 
-- **Phone-a-Friend: per-instance addressing instead of one global role**: Re-keys the existing Phone-a-Friend feature from role to terminal instance, so `coder-1` and `coder-2` can have different friends and the callback identifies which terminal called it. Ships and pays for itself independently — the role-level ambiguity is a live defect once more than one coder runs — while establishing the caller-identity and per-target-locking primitives the subagent contract then builds on.
+- **Phone-a-Friend: per-instance addressing instead of one global role**: Re-keys the existing Phone-a-Friend feature from role to terminal instance, so `coder-1` and `coder-2` can have different friends and the callback identifies which terminal called it. Ships and pays for itself independently — the role-level ambiguity is a live defect once more than one coder runs.
+
+  > **Superseded:** "…while establishing the caller-identity and per-target-locking primitives the subagent contract then builds on."
+  > **Reason:** Verified against source during the feature reconciliation pass and it is false. Switchboard has two unrelated terminal backends. Phone-a-Friend dispatches exclusively to `vscode.Terminal` objects (`allowPtyFleet=false`; `TaskViewerProvider.ts:4673` states its target "is always a `vscode.Terminal`"). Delegate children are node-pty handles owned by `PtyFleetService` in a **separate pty host child process** (`TaskViewerProvider.ts:24-28`: *"the fleet itself, the WebSocket gateway and the prompt-delivery helpers now live in the pty host child. The extension is control plane: it never constructs a fleet and never sees terminal bytes."*). A map keyed on `vscode.Terminal` display names in the extension process establishes no primitive for a pty fleet in another process.
+  > **Replaced with:** This subtask is **fully independent**. It shares the *shape* of an idea with the contract (address instances, not roles) but no code, no config key, and no primitive.
 
 - **Subagent contract: dispatch, correlation, and a real join**: The protocol layer, and the load-bearing piece. Defines durable agent identity that survives terminal renames, a dispatch envelope carrying each child's assigned file scope, a typed result envelope, and a blocking join that hands children's results back inside the parent's turn. Adds the completion detectors so a child that forgets to report is still joinable by evidence. Drivable entirely by curl, so it is verifiable before any UI exists.
 
@@ -20,9 +24,9 @@ Communication is localhost HTTP rather than MCP, so any CLI that can make a requ
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Phone-a-Friend: per-instance addressing instead of one global role](../plans/feature_plan_20260805180000_phone-a-friend-per-instance-addressing.md) — **CREATED**
-- [ ] [Subagent contract: dispatch, correlation, and a real join](../plans/feature_plan_20260805180001_subagent-contract-and-join.md) — **CREATED**
-- [ ] [Subagent terminals: definition, co-launch, and lazy viewing](../plans/feature_plan_20260805180002_subagent-terminals-lifecycle-and-lazy-view.md) — **CREATED**
+- [ ] [Phone-a-Friend: per-instance addressing instead of one global role](../plans/feature_plan_20260805180000_phone-a-friend-per-instance-addressing.md) — **PLAN REVIEWED**
+- [ ] [Subagent contract: dispatch, correlation, and a real join](../plans/feature_plan_20260805180001_subagent-contract-and-join.md) — **PLAN REVIEWED**
+- [ ] [Subagent terminals: definition, co-launch, and lazy viewing](../plans/feature_plan_20260805180002_subagent-terminals-lifecycle-and-lazy-view.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

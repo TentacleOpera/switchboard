@@ -20,16 +20,28 @@ private async _dispatchExecuteMessage(
 ): Promise<boolean>
 ```
 
-Of its eight call sites, only two pass it (`:5411` batch dispatch, `:19316` single-card dispatch). Four pass nothing and are therefore permanently VS Code-only, even when the caller is the browser:
+> **Superseded:** "Of its eight call sites, only two pass it."
+> **Reason:** Verified against `src/services/TaskViewerProvider.ts` on 2026-08-06 — there are **seven** call sites, not eight: `:4675`, `:5411`, `:9387`, `:9975`, `:10923`, `:19316`, `:21411`. The count matters because the plan's own contract test asserts on it (see Proposed Changes §4); a wrong number makes the test fail on correct code.
+> **Replaced with:** seven call sites — two pass the flag (`:5411` batch dispatch, `:19316` single-card dispatch), five do not. Four of those five are owned here; the fifth (`:4675`) belongs to the sibling plan.
+
+Of its seven call sites, only two pass it (`:5411` batch dispatch, `:19316` single-card dispatch). Four of the remaining five are owned by this plan and are therefore permanently VS Code-only, even when the caller is the browser:
 
 | Site | What it sends | Resolution call | Browser entry point |
 |---|---|---|---|
 | `:9387` | Orchestrator **kickoff** prompt to `ORCHESTRATOR_TERMINAL_NAME` | fixed name, no resolution | `startOrchestrator` (`KANBAN_VERBS`) → board AUTOMATION tab |
 | `:10923` | Orchestrator **wake** prompt to `ORCHESTRATOR_TERMINAL_NAME` | fixed name, no resolution | autoban wake timer, armed from the same browser click |
-| `:9975` | Pair-programming prompt to the coder | `:9972` `_resolveAgentTerminalForPlan('coder', workspaceRoot, worktreePath)` — **3-arg**, `allowPtyFleet` defaults false | `dispatchToCoderTerminal` via `:5459` (batch dispatch, pair mode) and `switchboard.dispatchToCoderTerminal` (`src/extension.ts:1773`) |
+| `:9975` | Pair-programming prompt to the coder | `:9972` `_resolveAgentTerminalForPlan('coder', workspaceRoot, worktreePath)` — **3-arg**, `allowPtyFleet` defaults false | `dispatchToCoderTerminal` via `:5459` (batch dispatch, pair mode), `switchboard.dispatchToCoderTerminal` (`src/extension.ts:1773`), **and the board's own pair-programming chain — `KanbanProvider._dispatchWithPairProgrammingIfNeeded` (`:5521`) → `executeCommand('switchboard.dispatchToCoderTerminal', …)` (`:5549`), which has 10 call sites** |
 | `:21411` | Airlock patch prompt to the coder | `:21403` `_getAgentNameForRole('coder')` — **no workspaceRoot, no flag** | `airlock_sendToCoder` (`TASKVIEWER_VERBS`) |
 
-(The eighth site, `:4675`, is `dispatchCustomPromptToRole` — owned by the sibling plan `browser-send-to-planner-drops-surface-flag`.)
+(The remaining site, `:4675`, is `dispatchCustomPromptToRole` — owned by the sibling plan `browser-send-to-planner-drops-surface-flag`.)
+
+### Scope correction — the pair-programming chain is the board's main path, and it was missed
+
+> **Superseded:** the pair-programming entry points are "`dispatchToCoderTerminal` via `:5459` (batch dispatch, pair mode) and `switchboard.dispatchToCoderTerminal` (`src/extension.ts:1773`)".
+> **Reason:** Verified 2026-08-06. There is a third, larger chain the original audit missed: `KanbanProvider._dispatchWithPairProgrammingIfNeeded` (`KanbanProvider.ts:5521-5551`) ends in `await this._seams().commands.executeCommand('switchboard.dispatchToCoderTerminal', coderPrompt, worktreePath)` at `:5549` — **two arguments, no surface flag** — and it is invoked from **ten** call sites: `:8110`, `:8165`, `:8203`, `:8802`, `:8886`, `:9055`, `:9198`, `:9345`, `:9454`. This is the path a *board* dispatch actually takes when pair-programming mode is on, i.e. the browser's primary entry point for this defect. Threading the flag only through `TaskViewerProvider:5459` and `extension.ts:1773` would leave the browser board's pair-programming sends VS Code-only, and every source-level contract test in this plan would still pass.
+> **Replaced with:** the chain is in scope. `_dispatchWithPairProgrammingIfNeeded` takes a trailing `options?: { apiOriginated?: boolean }` and forwards it as the command's third argument; all ten call sites pass it. The flag is already in scope at those sites — `:8101` reads `!!msg?.apiOriginated` for the main dispatch on the line immediately above `:8110`, so the value is available and merely discarded today.
+
+This raises the plan's real size from "four one-line parameter additions" to four sites plus one KanbanProvider signature change with ten call sites, two orchestrator entry points, and one handler signature change (airlock). The complexity score is raised accordingly (5 → 6).
 
 ### Root cause
 
@@ -46,22 +58,36 @@ Consequences, per site:
 
 ## Metadata
 
-- **Complexity:** 5
+- **Complexity:** 6
 - **Tags:** backend, bugfix, reliability
 - **Project:** Browser Switchboard
 
+> **Superseded:** **Complexity:** 5
+> **Reason:** The scope correction above adds a KanbanProvider signature change with ten call sites, a second orchestrator entry point (`TaskViewerProvider.ts:2390`, the LocalApiServer `orchestrationStart` callback), and a confirmed handler-signature change for the airlock arm (`data` is not in scope there). That is multi-file coordination across three providers plus `extension.ts`, not a set of one-line parameter additions.
+> **Replaced with:** **Complexity:** 6
+
+## User Review Required
+
+None. The one genuine design decision — whether the orchestrator's starting surface is remembered on run state or re-read per dispatch — is resolved in Proposed Changes §1 (remembered on run state, because the wake fires from a timer with no request in scope). No open questions for the user.
+
 ## Complexity Audit
 
-**Complex/risky — small diff, four independent call chains, and one of them is unattended automation.**
+**Complex/risky — small per-site diff, but five independent call chains, one signature change with ten call sites, and one chain that is unattended automation.**
 
-Risky:
+### Routine
+
+- No DB work, no migration, no schema change, no new verb, no UI change.
+- Every fleet branch this enables is already implemented and exercised by `:5411` / `:19316`.
+- The ten `_dispatchWithPairProgrammingIfNeeded` call sites take an identical mechanical edit, and the value they need (`!!msg?.apiOriginated`) is already in scope at each one.
+- No return-contract ratchet impact: this plan converts no `break` to `return` in any provider's `_handleMessage`, so `scripts/verb-return-contract-baseline.json` is untouched.
+
+### Complex / Risky
 
 - **The orchestrator sites are unattended.** A regression here does not throw an error a human sees; it silently stops a batch overnight. Both sites must be verified by observing the prompt actually land in the terminal, not by a green test.
 - **Fail-closed default must survive.** `allowPtyFleet` must stay `false`-by-default at every layer. The editor's own orchestrator/pair/airlock flows must keep VS Code-only routing — a sidebar dispatch that lands in a browser PTY is a prompt sent into a window the user is not looking at, which is the exact bug the flag was introduced to prevent.
 - **The orchestrator's surface is *persistent*, not per-request.** Kickoff comes from an HTTP click, but the wake fires from a timer with no request in scope. The flag therefore has to be *remembered* for the duration of the orchestrator run, not read from a body. This is the one genuine design decision in the plan (see Proposed Changes) and the only part that is not a mechanical parameter addition.
-- **Pair programming has an existing test suite** (`src/test/pair-programming-comprehensive.test.ts:85,156-178,299`) that asserts on `switchboard.dispatchToCoderTerminal` being invoked with `(prompt, worktreePath)`. Adding a third argument must keep those `calledWithMatch` assertions passing — they match on the command name, so an appended optional argument is safe, but the command registration in `src/extension.ts:1773` must forward it.
-
-Routine: no DB work, no migration, no schema change, no new verb, no UI change. Every fleet branch it enables is already implemented and exercised by `:5411` / `:19316`.
+- **Pair programming has an existing test suite** (`src/test/pair-programming-comprehensive.test.ts:85,156-178,299`) that asserts on `switchboard.dispatchToCoderTerminal` being invoked with `(prompt, worktreePath)`. Adding a third argument must keep those `calledWithMatch` assertions passing — verified: they match on the command **name** only (`calledWithMatch('switchboard.dispatchToCoderTerminal')` at `:156`, and a negative form at `:178`), so an appended optional argument is safe. The command registration in `src/extension.ts:1773-1775` must forward it.
+- **Two orchestrator start entry points, not one.** `startOrchestratorFromKanban(workspaceRoot?, initiatorProject?)` (`TaskViewerProvider.ts:9231`) is reached from (a) `KanbanProvider.ts:7881`, the `startOrchestrator` verb arm, where `msg.apiOriginated` is in scope, and (b) `TaskViewerProvider.ts:2390`, the LocalApiServer `orchestrationStart` callback, which is HTTP **by construction** and must therefore pass `true` unconditionally rather than reading a body it does not have. Missing (b) leaves `POST`-driven orchestrator runs VS Code-only while the board button works — the worst kind of partial fix, because the two paths are documented as equivalent (`LocalApiServer.ts:2220`: "the same path the AUTOMATION tab button" takes).
 
 ## Edge-Case & Dependency Audit
 
@@ -74,6 +100,16 @@ Routine: no DB work, no migration, no schema change, no new verb, no UI change. 
 - **`ok` is discarded at three of four sites.** `:9387`, `:9975`, `:21411` ignore the boolean. Once delivery can succeed for browser callers, a discarded `false` means "orchestrator started" / "sent to coder" is reported to the browser when nothing arrived. Capture and report it at each site.
 - **Reference implementation to copy.** `sendToTerminal` (`:12864-12897`) already does exactly this correctly: `if (data?.apiOriginated && this._ptyHostPort) { … ptyListTerminals … ptyWrite … }` with a comment recording that *"every browser 'send to terminal' failed as 'not found or not local'"* before it was added. Mirror its structure rather than inventing a new shape.
 - **Do not switch `ptyWrite` for `ptySendPrompt` or vice versa.** `_attemptDirectTerminalPush` deliberately uses `ptySendPrompt` (`:18899-18905`) because the child owns bracketed-paste framing, chunking and the send lock; `sendToTerminal` deliberately uses `ptyWrite` because it mirrors a bare line submit. These four sites all send multi-line prompts, so they must go through `_dispatchExecuteMessage` (i.e. `ptySendPrompt`) — do not hand-roll a `ptyWrite`.
+
+## Dependencies
+
+- None blocking. No session dependency (`sess_*`) applies.
+- Sibling coupling (same feature): `browser-direct-terminal-helpers-not-fleet-aware` adds a new `_dispatchExecuteMessage` call site, which interacts with this plan's contract test — see Proposed Changes §4.1. Whichever lands second must confirm the property assertion still holds; nothing needs reordering.
+- Sibling coupling: `browser-send-to-planner-drops-surface-flag` owns the seventh `_dispatchExecuteMessage` site (`:4675`). Independent of this plan's four.
+
+## Adversarial Synthesis
+
+**Risk summary.** Two risks dominate. First, silent unattended failure: the orchestrator wake fires from a timer with no request in scope, so if the remembered surface is wrong (or never set at the LocalApiServer `orchestrationStart` entry point) an overnight batch simply never wakes and nothing reports it — which is why both orchestrator sites must be verified by reading the terminal, never by a green test or a log line. Second, an incomplete fix that tests green: the pair-programming chain reaches `dispatchToCoderTerminal` through `KanbanProvider._dispatchWithPairProgrammingIfNeeded` (10 call sites), and a fix confined to the two originally-listed callers passes every source-level assertion while the browser board's pair sends stay VS Code-only. Mitigations: set the run-state flag at both start entry points and reset it on stop; assert *properties* over all call sites rather than counts; capture and report the discarded `ok` at the three sites that drop it; and keep the `false` default at every layer so a sidebar dispatch can never land in a terminal VS Code cannot show.
 
 ## Proposed Changes
 
@@ -94,7 +130,44 @@ Add a field next to the other orchestrator run state:
     private _orchestratorApiOriginated = false;
 ```
 
-Set it where the orchestrator is started (the `startOrchestrator` arm / `_startOrchestrator…` entry) from `!!msg?.apiOriginated`, clear it to `false` on stop, then:
+Set it at **both** start entry points and clear it on stop. `startOrchestratorFromKanban` (`:9231`) gains a trailing surface parameter:
+
+```ts
+-    public async startOrchestratorFromKanban(workspaceRoot?: string, initiatorProject?: string | null): Promise<void> {
++    public async startOrchestratorFromKanban(
++        workspaceRoot?: string,
++        initiatorProject?: string | null,
++        options?: { apiOriginated?: boolean }
++    ): Promise<void> {
++        // Remember the starting surface for the life of the run — the WAKE dispatch
++        // has no request in scope. Fail-closed default: a sidebar start stays VS Code-only.
++        this._orchestratorApiOriginated = !!options?.apiOriginated;
+```
+
+and `stopOrchestratorFromKanban` (`:9417`) resets it:
+
+```ts
++        this._orchestratorApiOriginated = false;
+```
+
+Both callers must pass it:
+
+- `src/services/KanbanProvider.ts:7881` — the `startOrchestrator` verb arm, where the flag is in scope:
+  ```ts
+  -                    await this._taskViewerProvider.startOrchestratorFromKanban(workspaceRoot);
+  +                    await this._taskViewerProvider.startOrchestratorFromKanban(workspaceRoot, undefined, { apiOriginated: !!msg?.apiOriginated });
+  ```
+- `src/services/TaskViewerProvider.ts:2390` — the LocalApiServer `orchestrationStart` callback. This path is HTTP **by construction** (there is no in-process caller), so it passes `true` unconditionally rather than reading a body it does not receive:
+  ```ts
+               orchestrationStart: async (wsRoot) => {
+  -                await this.startOrchestratorFromKanban(wsRoot);
+  +                // POST /kanban/orchestration/start — an HTTP caller by definition, so the
+  +                // surface is known statically here. There is no body to stamp.
+  +                await this.startOrchestratorFromKanban(wsRoot, undefined, { apiOriginated: true });
+               },
+  ```
+
+Then at the two dispatch sites:
 
 ```ts
 -        await this._dispatchExecuteMessage(root, ORCHESTRATOR_TERMINAL_NAME, kickoffPrompt, { orchestrationKickoff: true });
@@ -164,7 +237,7 @@ Set it where the orchestrator is started (the `startOrchestrator` arm / `_startO
      }
 ```
 
-Callers:
+Callers — all three chains:
 
 - `src/services/TaskViewerProvider.ts:5459` — inside the batch-dispatch pair path, where `allowPtyFleet` is already computed at `:5320`. Pass it: `await this.dispatchToCoderTerminal(coderPrompt, group.worktreePath, { apiOriginated: allowPtyFleet });`
 - `src/extension.ts:1773-1775` — forward a third argument through the command registration:
@@ -174,6 +247,26 @@ Callers:
           await taskViewerProvider.dispatchToCoderTerminal(prompt, worktreePath, options);
       });
   ```
+- **`src/services/KanbanProvider.ts:5521-5551` — `_dispatchWithPairProgrammingIfNeeded`, the board's own pair-programming chain (the site the original audit missed).** Add a trailing surface parameter and forward it as the command's third argument:
+  ```ts
+       private async _dispatchWithPairProgrammingIfNeeded(
+           cards: KanbanCard[],
+  -        workspaceRoot: string
+  +        workspaceRoot: string,
+  +        options?: { apiOriginated?: boolean }
+       ): Promise<void> {
+           …
+  -            await this._seams().commands.executeCommand('switchboard.dispatchToCoderTerminal', coderPrompt, worktreePath);
+  +            // Third arg is the fix: without it the pair-programming coder send is
+  +            // VS Code-only even when the board click came from the browser cockpit.
+  +            // The value is already in scope at every call site (see :8101).
+  +            await this._seams().commands.executeCommand(
+  +                'switchboard.dispatchToCoderTerminal', coderPrompt, worktreePath,
+  +                { apiOriginated: !!options?.apiOriginated }
+  +            );
+       }
+  ```
+  Then pass `{ apiOriginated: !!msg?.apiOriginated }` at all **ten** call sites: `:8110`, `:8165`, `:8203`, `:8802`, `:8886`, `:9055`, `:9198`, `:9345`, `:9454`. At each of these, `msg` is the same object the surrounding dispatch already reads the flag from (e.g. `:8101` `apiOriginated: !!msg?.apiOriginated`), so this is a copy of the adjacent line — not a new derivation. Do **not** invent a different source for the flag at any site; if `msg` is genuinely out of scope at one of them, thread it rather than defaulting to `true`.
 
 ### 3. `src/services/TaskViewerProvider.ts` — Airlock send-to-coder (`:21398-21418`)
 
@@ -214,31 +307,57 @@ Callers:
 +            this.postMessage({ type: 'airlock_coderSent' });
 ```
 
-`data` must be in scope in this handler — if the enclosing method does not receive the verb payload, thread `apiOriginated` in from the `airlock_sendToCoder` arm.
+**`data` is NOT in scope here — the handler signature must change.** Verified 2026-08-06: the enclosing method is `private async _handleAirlockSendToCoder(text: string): Promise<void>` (`:21380`) — it receives only the patch text. Thread the flag in from the `airlock_sendToCoder` arm:
+
+```ts
+-    private async _handleAirlockSendToCoder(text: string): Promise<void> {
++    private async _handleAirlockSendToCoder(text: string, options?: { apiOriginated?: boolean }): Promise<void> {
+```
+
+and at the `airlock_sendToCoder` arm, pass `{ apiOriginated: !!data.apiOriginated }`. Note `workspaceRoot` at `:21385` comes from `this._resolveWorkspaceRoot()` with **no argument**, i.e. the selected/primary root rather than the panel's — the same latent wrong-workspace bug flagged in the dependency audit. Passing that same `workspaceRoot` into `_getAgentNameForRole` (as this plan does) at least makes resolution and delivery agree on one root, which is the fix in scope; re-scoping the airlock handler to the panel's root is not.
 
 ### 4. `src/test/browser-stray-dispatch-surface.test.js` (new)
 
 Source-level contract test, matching the suite's existing style:
 
-1. Every `_dispatchExecuteMessage(` call site in `TaskViewerProvider.ts` passes **six** arguments (i.e. no site relies on the `allowPtyFleet` default). Assert on the count of call sites so a newly added site fails the test rather than slipping through.
-2. `_orchestratorApiOriginated` exists, is initialised `false`, and is read at both orchestrator dispatch sites.
+1. Every `_dispatchExecuteMessage(` call site in `TaskViewerProvider.ts` passes **six** arguments (i.e. no site relies on the `allowPtyFleet` default).
+
+   > **Superseded:** "Assert on the count of call sites so a newly added site fails the test rather than slipping through."
+   > **Reason:** The sibling plan `browser-direct-terminal-helpers-not-fleet-aware` **adds** an eighth call site (its shared `_tryFleetDeliveryForRole` helper delivers through `_dispatchExecuteMessage`). A hardcoded count would turn that correct change into a red test, and the coder's likely reaction — bump the number — silently removes the guard. Asserting the *property* over every site is strictly stronger anyway: a new site that omits the flag fails on its own merits, no count needed.
+   > **Replaced with:** assert the property over **every** matched call site (all pass an explicit sixth argument), and additionally assert the count is **≥ 7** as a discovery floor — never an equality. If a future change legitimately raises it, the floor still holds.
+
+2. `_orchestratorApiOriginated` exists, is initialised `false`, is **set at both start entry points** (`KanbanProvider.ts:7881` from `msg`, `TaskViewerProvider.ts:2390` as a literal `true`), is reset in `stopOrchestratorFromKanban`, and is read at both orchestrator dispatch sites.
 3. `dispatchToCoderTerminal` declares an `options` parameter, returns `Promise<boolean>`, and passes a 4th arg to `_resolveAgentTerminalForPlan`.
 4. The airlock arm passes `workspaceRoot` to `_getAgentNameForRole` and gates `airlock_coderSent` on the delivery result.
+5. `KanbanProvider._dispatchWithPairProgrammingIfNeeded` declares an `options` parameter, forwards it as the third argument to `executeCommand('switchboard.dispatchToCoderTerminal', …)`, and **every one of its call sites passes an `apiOriginated` value** — count them and assert none uses the 2-arg form. This is the assertion that would have caught the missed chain.
+6. Fail-closed: no `options?.apiOriginated` read in any of the touched files defaults to a literal `true`, except the `orchestrationStart` callback at `TaskViewerProvider.ts:2390`, which must be allowlisted by name in the test with the reason (HTTP-only path, no body to read).
 
 ## Verification Plan
 
-1. **Compile + suite:** `npx tsc --noEmit -p .` and `npm test`. New contract test green; `pair-programming-comprehensive` must stay green (its assertions match on the command name, so the appended argument is safe — confirm, do not assume).
+### Automated Tests
 
-2. **Editor regression, fail-closed.** With only a VS Code coder terminal open, run a pair-programming dispatch from the editor board and confirm the prompt lands there. Then close it, leave only a browser PTY coder running, and repeat from the **editor**: it must still refuse (VS Code-only), proving the default did not flip.
+1. **Compile + suite:** `npx tsc --noEmit -p .` and `npm test`. New contract test green; `pair-programming-comprehensive` must stay green (its assertions match on the command name at `:156`/`:178`, so the appended argument is safe — confirmed by reading the test, but re-run it).
+2. **Ratchet + parity unchanged:** `npm run verb-returns:check`, `npm run parity:check`, `npm run push-routing:check` pass with **no baseline edit**. This plan converts no `break` to `return`.
+3. **New test must fail pre-fix.** Stash the changes and run `browser-stray-dispatch-surface`; it must name the four bare `_dispatchExecuteMessage` sites and the 2-arg `executeCommand('switchboard.dispatchToCoderTerminal', …)` at `KanbanProvider.ts:5549`.
 
-3. **Browser orchestrator kickoff.** From the browser board AUTOMATION tab, Start orchestrator. Confirm: the orchestrator terminal receives the kickoff prompt (visible text beginning "You are the Switchboard orchestrator"), and the board does not report a started run if delivery failed. Note which panel the terminal appeared in — if it appears in VS Code rather than the browser fleet, apply the creation-side fix flagged in the dependency audit before signing this off.
+### Manual / UAT
 
-4. **Browser orchestrator wake.** With the run armed, wait for (or force) a wake tick and confirm the wake prompt arrives in the same terminal. This is the site that silently killed unattended runs, so verify by reading the terminal, not by a log line.
+4. **Editor regression, fail-closed.** With only a VS Code coder terminal open, run a pair-programming dispatch from the editor board and confirm the prompt lands there. Then close it, leave only a browser PTY coder running, and repeat from the **editor**: it must still refuse (VS Code-only), proving the default did not flip.
 
-5. **Browser pair programming.** Enable pair-programming mode, dispatch a Routine card from the browser board, and confirm the coder prompt lands in the browser coder PTY. Before the fix nothing happens and the only report is an invisible VS Code toast.
+5. **Browser orchestrator kickoff.** From the browser board AUTOMATION tab, Start orchestrator. Confirm: the orchestrator terminal receives the kickoff prompt (visible text beginning "You are the Switchboard orchestrator"), and the board does not report a started run if delivery failed. Note which panel the terminal appeared in — if it appears in VS Code rather than the browser fleet, apply the creation-side fix flagged in the dependency audit before signing this off.
 
-6. **Browser airlock.** From the NotebookLM/Airlock surface in the browser, send a patch to the coder. Confirm the prompt arrives in the browser coder terminal. Then close every coder terminal and repeat: the browser must show `airlock_coderError` naming the patch path, and must **not** show "sent".
+6. **Orchestrator start over HTTP, not just the button.** `POST /kanban/orchestration/start` (the `orchestrationStart` callback at `TaskViewerProvider.ts:2390`) must also deliver the kickoff. Curl it and read the terminal. This is the entry point the original plan missed; a working AUTOMATION-tab button proves nothing about it.
 
-7. **Fleet-less install.** Stop the PTY host (`terminalFleet` false in `/health`-derived capabilities) and re-run steps 2, 5 and 6 from the editor. Everything must behave exactly as before the change.
+7. **Browser orchestrator wake.** With the run armed, wait for (or force) a wake tick and confirm the wake prompt arrives in the same terminal. This is the site that silently killed unattended runs, so verify by reading the terminal, not by a log line.
 
-8. **Worktree routing preserved.** Dispatch a pair-programming card whose plan lives in a worktree and confirm it still routes to that worktree's coder terminal (the third argument was not displaced by the new fourth one).
+8. **Browser pair programming — via the board, not just the batch path.** Enable pair-programming mode, then dispatch a **lead**-role card from the browser board so the flow goes through `KanbanProvider._dispatchWithPairProgrammingIfNeeded` (`:8110` is the site reached by a single-card lead dispatch). Confirm the coder prompt lands in the browser coder PTY. Repeat via a batch/high-complexity dispatch (`:8802`/`:8886`) to cover the second family of call sites. Before the fix nothing happens and the only report is an invisible VS Code toast.
+
+9. **Browser airlock.** From the NotebookLM/Airlock surface in the browser, send a patch to the coder. Confirm the prompt arrives in the browser coder terminal. Then close every coder terminal and repeat: the browser must show `airlock_coderError` naming the patch path, and must **not** show "sent".
+
+10. **Fleet-less install.** Stop the PTY host (`terminalFleet` false in `/health`-derived capabilities) and re-run steps 4, 8 and 9 from the editor. Everything must behave exactly as before the change.
+
+11. **Worktree routing preserved.** Dispatch a pair-programming card whose plan lives in a worktree and confirm it still routes to that worktree's coder terminal (the third argument was not displaced by the new fourth one).
+
+## Recommendation
+
+Complexity 6 → **Send to Coder.**

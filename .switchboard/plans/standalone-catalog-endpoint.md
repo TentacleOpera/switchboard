@@ -207,3 +207,13 @@ verification must run from an installed/packed CLI, not only from the repo.
 ## Completion Report
 
 Wired a `catalogProvider` in `src/standalone/bootstrap.ts` that tries `protocol-catalog.json` at the CLI install root first, then the served workspace, returning `null` when neither exists. `src/services/LocalApiServer.ts` now returns a 404 message that points to a missing build artifact rather than instructing the user to generate a catalog in their workspace. No skill doc update was needed because neither copy currently references `/catalog`. No compilation or tests were run per the dispatch directive.
+
+## Review Findings
+
+**Implementation accepted as written — no code changes needed.** The provider mirrors `TaskViewerProvider.ts:2413` exactly, uses plain `path.join` (never `require.resolve`), and returns `null` rather than throwing. `repoRoot` resolution was confirmed sound against the build config: the standalone bundle emits to `dist/standalone/cli.js` (`webpack.config.js:136`) with `node: { __dirname: false }`, so `path.resolve(__dirname,'..','..')` is the package root; `protocol-catalog.json` ships (no `files` whitelist, no `.npmignore`).
+
+**MAJOR (fixed, adjacent).** `npm run catalog:check` — CI-wired at `.github/workflows/integration-tests.yml:26` — was **red**, because the checked-in `protocol-catalog.json` still listed the two call sites deleted by the sibling verb-rail subtask (`totalRequestSites` 623 vs 621). Regenerated via `catalog:generate`; `catalog:check` and `parity:check` are now green.
+
+**Validation.** Booted `dist/standalone/cli.js` against a scratch workspace containing no `protocol-catalog.json`: `GET /catalog` → **HTTP 200**, 370 KB, 522 verbs, 6 providers, `phone-a-friend` present. Renamed the install-root artifact and re-booted: **HTTP 404** with the corrected message (`catalog not found; protocol-catalog.json is missing from this Switchboard build or package`), artifact restored afterwards. Typecheck, lint and 12 contract tests green.
+
+**Remaining risks.** None material. The workspace-root fallback is now unreachable in standalone (by design, per User Review 2); the extension host path is untouched.

@@ -781,7 +781,6 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
 `;
 
 const MIGRATION_VERSION_KEY = 'kanban_db_migration_version';
-const CURRENT_SCHEMA_VERSION = 57;
 const ORPHAN_PURGE_CONFIRMATION_DELAY_MS = 350;
 
 const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
@@ -1877,13 +1876,31 @@ export class KanbanDatabase {
             this._safeExec('SCHEMA_TABLES (create)', SCHEMA_TABLES_SQL);
             this._ensureSchemaColumns();
             this._applySchemaIndexes('SCHEMA_INDEXES (create)');
-            // A DB created from the current SCHEMA_TABLES already satisfies every historical
-            // migration up through V57. Stamp the baseline before _runMigrations() so fresh
-            // databases skip the gated V20-V57 chain (including the V20 SELECT * shape mismatch)
-            // without losing rollback safety for real pre-baseline databases.
-            await this.setMigrationVersion(CURRENT_SCHEMA_VERSION);
+            // DO NOT stamp a baseline migration version here. SCHEMA_TABLES is NOT a
+            // superset of the migrated schema, so a freshly created DB genuinely needs the
+            // historical chain to reach the current shape. Measured by schema diff
+            // (stamped-fresh vs migrated-fresh, 2026-08-06), stamping the baseline loses:
+            //   - stitch_projects / stitch_screens — created ONLY by MIGRATION_V32_SQL,
+            //     absent from SCHEMA_TABLES entirely (getStitchProjects would throw
+            //     "no such table" on every fresh install);
+            //   - plan_events.plan_id — V20 steps 9-12 rebuild the table off plan_id,
+            //     while SCHEMA_TABLES still declares the deprecated session_id column;
+            //   - imported_docs.content_type / url / needs_file_path_relative;
+            //   - idx_plans_worktree (V26), idx_plans_feature_id + idx_plans_is_feature
+            //     (V29), idx_stitch_screens_project (V32), idx_imported_docs_type.
+            // _ensureSchemaColumns() cannot recover any of it — it reconciles against
+            // SCHEMA_TABLES, which is precisely what is stale. Skipping the chain is the
+            // "stamped-but-missing-schema" corruption class of the V42 incident, traded
+            // for cosmetic log noise. The V20 INSERT is column-explicit below, so the
+            // chain now completes cleanly on a fresh DB instead of failing — which is
+            // what actually fixes the reported first-boot stack traces.
             await this._runMigrations();
             this._ensureSchemaColumns();
+            // V20 rebuilds `plans` (DROP + RENAME) and so destroys the indexes applied
+            // above, recreating only its own six. Re-apply SCHEMA_INDEXES so a
+            // newly-created DB does not sit without idx_plans_project_id /
+            // idx_plans_workspace_name until some later process happens to re-open it.
+            this._applySchemaIndexes('SCHEMA_INDEXES (post-migration)');
 
             // Persist to disk
             await this._persist();
@@ -7034,7 +7051,13 @@ export class KanbanDatabase {
                 for (const sql of MIGRATION_V20_SQL) {
                     step++;
                     try {
-                        console.log(`[KanbanDatabase] V20 step ${step}: ${sql.substring(0, 100)}...`);
+                        // No per-step success log. V20 now runs to completion on every
+                        // freshly created DB (the INSERT below is column-explicit), so a
+                        // per-step trace is 19 lines of first-boot noise — the very noise
+                        // this change exists to remove. `console.debug` is NOT a way to
+                        // hide it: in Node it still writes to stdout. The catch below
+                        // prints the step number and the offending SQL on real failures,
+                        // which is the only time the detail is wanted.
                         this._db.exec(sql);
                     } catch (stepErr) {
                         console.error(`[KanbanDatabase] V20 step ${step} FAILED: ${sql.substring(0, 200)}... Error:`, stepErr);

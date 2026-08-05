@@ -23,12 +23,16 @@ In the browser Switchboard, buttons that send a prompt to the planner produce an
 Every request that arrives on a verb rail is stamped api-originated by the server before dispatch:
 
 ```ts
-// src/services/LocalApiServer.ts:1755-1765
+// src/services/LocalApiServer.ts:1762-1765
 private _stampHttpSurface(body: any): any {
     body.apiOriginated = true;
     return body;
 }
 ```
+
+**Verified (2026-08-06): the premise holds for all eight call sites this plan owns, but not for every rail.** `_stampHttpSurface` is called from exactly four of the seven verb-rail handlers — `_handleKanbanVerb` (`:1794`), `_handlePlanningVerb` (`:1823`), `_handleTicketsVerb` (`:1852`), `_handleTaskViewerVerb` (`:1961`). `/project/verb/*` and `/memo/verb/*` both route to `_handlePlanningVerb` (`LocalApiServer.ts:3540-3545`), so the five `PlanningPanelProvider` arms, the memo arm, the board arm and the tickets arm are all stamped. `_handleDesignVerb` (`:1865-1899`) and `_handleSetupVerb` (`:1901-1943`) do **not** stamp — that gap breaks the sibling plan `browser-direct-terminal-helpers-not-fleet-aware`, which owns the fix. Nothing in *this* plan depends on the design or setup rail.
+
+The memo path crosses one provider boundary and survives it: `/memo/verb/memoGeneratePrompt` → `_handlePlanningVerb` (stamped) → `PlanningPanelProvider.handleServiceVerb` delegates memo verbs to `TaskViewerProvider.handleServiceVerb` (`PlanningPanelProvider.ts:115-121`, passing `payload` unmodified) → `_handleMessage({ ...payload, type: verb })` (`TaskViewerProvider.ts:347`). So `data.apiOriginated` is genuinely readable in the memo arm.
 
 That flag is the whole per-surface routing discriminator. Downstream it becomes `allowPtyFleet`, which decides whether a dispatch may resolve and deliver into the **PTY fleet** — the browser Terminals panel — or is restricted to `vscode.Terminal` instances:
 
@@ -45,10 +49,12 @@ public async dispatchCustomPromptToRole(role: string, prompt: string, workspaceR
     // :4651  planner set from the VS Code-only autoban registry
     const { terminals, locationKey } = await this.getRoleTerminalSet('planner', resolvedWorkspaceRoot);
     …
-    // :4662  THREE-ARG CALL — worktreePath and allowPtyFleet both default
+    // :4663  THREE-ARG CALL — worktreePath and allowPtyFleet both default
     targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot);
     …
-    // :4674  FOUR-ARG CALL — allowPtyFleet defaults to false (:18790)
+    // :4674  unconditional reveal (correct only for a vscode.Terminal target)
+    this._seams().commands.executeCommand('switchboard.focusTerminalByName', targetAgent, { silent: true });
+    // :4675  FOUR-ARG CALL — allowPtyFleet defaults to false (:18790)
     const success = await this._dispatchExecuteMessage(resolvedWorkspaceRoot, targetAgent, prompt, {});
 }
 ```
@@ -73,18 +79,27 @@ Thread the already-present `apiOriginated` flag from each verb payload into `dis
 - **Tags:** backend, bugfix, reliability, api
 - **Project:** Browser Switchboard
 
+## User Review Required
+
+None. Every decision in this plan is determined by the existing `allowPtyFleet` contract: the parameter is additive and trailing, the default is fail-closed, and the failure-only `prompt` field follows the established `transport.js` clipboard convention. No user input is needed before coding.
+
 ## Complexity Audit
 
 **Complex / risky — the risk is in the direction of the flag, not the size of the diff.**
 
-Risky aspects:
+### Routine
+
+- No DB work, no migration, no schema change, no new verb, no UI layout change.
+- The `allowPtyFleet` plumbing this hooks into already exists and is exercised by the board's own api-originated dispatch path (`KanbanProvider.ts:8101`, `:8187`).
+- Five of the eight call sites (`PlanningPanelProvider.ts:4226/4342/4355/4374/4410`) take an identical one-line change.
+- No ratchet impact: this plan edits the `dispatchCustomPromptToRole(...)` argument list only and converts no `break` to `return`, so `scripts/verb-return-contract-baseline.json` is untouched. (The sibling plan `browser-direct-terminal-helpers-not-fleet-aware` edits the *next* line of the same five arms and **does** change Planning's residual — see the merge note in Proposed Changes.)
+
+### Complex / Risky
 
 - **Fail-closed default must be preserved.** The new parameter must default to `false`. Every in-process/sidebar caller (autoban, oversight pass, the extension's own buttons) relies on that default so a sidebar dispatch can never land in a terminal VS Code cannot show. Making `allowPtyFleet` default to `true`, or deriving it from anything other than an explicit caller opt-in, silently breaks the editor.
 - **An existing contract test asserts today's behaviour.** `src/test/pty-dispatch-focus-contract.test.js:170-180` asserts `dispatchCustomPromptToRole` must **not** use the PTY predicate, on the grounds that "it resolves and delivers with `allowPtyFleet=false`, so its target is always a `vscode.Terminal`". That premise is exactly what this plan changes; the test and the comment at `TaskViewerProvider.ts:4671-4673` must be updated in the same commit or the suite goes red.
 - **Focus call becomes conditional.** With PTY targets now possible, the unconditional `switchboard.focusTerminalByName` at `:4674` must be guarded by `_isLikelyPtyDispatchTarget(targetAgent, allowPtyFleet)`, mirroring `:19198-19201`. A PTY has no VS Code terminal to reveal.
-- **Eight call sites, three providers, one command boundary.** The tickets path crosses `TicketsPanelProvider → switchboard.askAgentTask → TaskViewerProvider.askAgentTask`, so the flag has to ride through the command payload.
-
-Routine aspects: no DB work, no migration, no schema change, no new verb, no UI layout change. The `allowPtyFleet` plumbing it hooks into already exists and is exercised by the board's own api-originated dispatch path (`KanbanProvider.ts:8101`, `:8187`).
+- **Eight call sites, three providers, one command boundary.** The tickets path crosses `TicketsPanelProvider → switchboard.askAgentTask → TaskViewerProvider.askAgentTask`, so the flag has to ride through the command payload — and that boundary **drops unknown fields today** (verified, see Proposed Changes: `src/extension.ts:2085-2086` destructures the payload field-by-field). Threading the flag on the `TicketsPanelProvider` side alone is a silent no-op.
 
 ## Edge-Case & Dependency Audit
 
@@ -102,6 +117,15 @@ Routine aspects: no DB work, no migration, no schema change, no new verb, no UI 
   - *Verb-routing misses* — `project.js` posts `improvePlan` (`src/webview/project.js:2075`, in `KANBAN_VERBS` only) and `webviewReady` (`:1166`, in no allowlist at all), so the browser rail throws `Unknown Planning verb: '<verb>'` where the editor either swallows it or handles it (`browser-project-panel-verbs-rejected-by-planning-allowlist`).
 
   They are separate plans because each is independently shippable and touches a different method set — not because any of them is deferred. Land them in any order; they do not conflict except where noted below.
+
+## Dependencies
+
+- None blocking. No session dependency (`sess_*`) applies — this plan is self-contained within the existing `allowPtyFleet` plumbing, which is already shipped and exercised.
+- Sibling coupling (same feature, no ordering requirement): `browser-direct-terminal-helpers-not-fleet-aware` edits the line immediately following this plan's edit in the same five `PlanningPanelProvider` arms. Either order works; the second to land adds one argument to an already-edited block. See the merge note in Proposed Changes.
+
+## Adversarial Synthesis
+
+**Risk summary.** The single load-bearing risk is direction, not size: if `allowPtyFleet` is ever derived from anything other than an explicit caller opt-in — or defaulted to `true` — every sidebar dispatch becomes eligible to land in a browser terminal the editor user cannot see, which is the exact defect the flag was introduced to prevent. The second risk is a false green: three source-level tests (`pty-dispatch-focus-contract`, `memo-browser-clear-and-copy-contract`, and the new surface test) can all pass while the tickets path stays broken, because the flag dies at the `switchboard.askAgentTask` command boundary in `extension.ts` rather than in any of the methods those tests inspect. Mitigations: keep the parameter trailing and optional with a `!!options?.apiOriginated` derivation; invert the stale contract-test assertion in the same commit; make the `extension.ts:2085` forward a required edit with its own UAT line (Verification step 3, tickets row); and prove the failure path by pasting from the *browser* clipboard, not by reading a log.
 
 ## Proposed Changes
 
@@ -248,7 +272,23 @@ Forward the flag across the command boundary:
                      );
 ```
 
-Check `src/extension.ts`'s `switchboard.askAgentTask` registration passes the payload object through unmodified; if it destructures fields explicitly, add `apiOriginated` there too.
+### `src/extension.ts` (lines 2085-2086) — REQUIRED, not optional
+
+> **Superseded:** "Check `src/extension.ts`'s `switchboard.askAgentTask` registration passes the payload object through unmodified; if it destructures fields explicitly, add `apiOriginated` there too."
+> **Reason:** Verified 2026-08-06 — it *does* destructure, field by field. Leaving this as a conditional check invites a coder to skip it, and the flag would then be silently dropped at the command boundary: the tickets *Ask agent* button would still fail in the browser while every source-level contract test passed.
+> **Replaced with:** a required edit, below.
+
+```ts
+-    const askAgentTaskDisposable = vscode.commands.registerCommand('switchboard.askAgentTask', async (data: { workspaceRoot: string; id: string; title: string; description: string; provider: 'linear' | 'clickup' }) => {
+-        return taskViewerProvider.askAgentTask(data.workspaceRoot, { id: data.id, title: data.title, description: data.description, provider: data.provider });
++    const askAgentTaskDisposable = vscode.commands.registerCommand('switchboard.askAgentTask', async (data: { workspaceRoot: string; id: string; title: string; description: string; provider: 'linear' | 'clickup'; apiOriginated?: boolean }) => {
++        // apiOriginated MUST be forwarded explicitly: this registration destructures the
++        // payload field-by-field, so any field not named here is dropped at the command
++        // boundary. Without it the browser tickets 'Ask agent' button keeps failing even
++        // though TicketsPanelProvider set the flag one call earlier.
++        return taskViewerProvider.askAgentTask(data.workspaceRoot, { id: data.id, title: data.title, description: data.description, provider: data.provider, apiOriginated: !!data.apiOriginated });
+     });
+```
 
 ### `src/test/pty-dispatch-focus-contract.test.js` (lines 170-180)
 
@@ -264,24 +304,34 @@ Source-level contract test asserting:
 
 ## Verification Plan
 
+### Automated Tests
+
 1. **Compile + suite:** `npx tsc --noEmit -p .` then `npm test`. The updated `pty-dispatch-focus-contract` and the new `browser-planner-dispatch-surface` test must be green; `memo-browser-clear-and-copy-contract` must stay green (the trailing optional parameter keeps its stubs valid).
+2. **Ratchet + parity unchanged:** `npm run verb-returns:check`, `npm run parity:check`, `npm run push-routing:check` must all pass with **no baseline edit** — this plan converts no `break` to `return`. A ratchet diff here means scope leaked in from the sibling plan.
+3. **Show the new test fails pre-fix.** Stash the provider changes, run `browser-planner-dispatch-surface`, and confirm it reports the three-arg `_resolveAgentTerminalForPlan` call and the four-arg `_dispatchExecuteMessage` call. A contract test that passes on the unfixed tree proves nothing.
 
-2. **Editor regression (fail-closed default holds).** With the extension sidebar focused and a VS Code `planner-1` open, click the project panel's *Build PRD via planner*. Confirm the prompt lands in the VS Code terminal and that no PTY was targeted. Then close all VS Code agent terminals, leave only a browser PTY planner running, and repeat from the **editor**: it must still refuse (today's behaviour) rather than reaching into the browser fleet.
+### Manual / UAT
 
-3. **Browser happy path — PTY planner.** In the browser cockpit, open the Terminals panel and start a `planner` PTY. Then from the browser:
+4. **Editor regression (fail-closed default holds).** With the extension sidebar focused and a VS Code `planner-1` open, click the project panel's *Build PRD via planner*. Confirm the prompt lands in the VS Code terminal and that no PTY was targeted. Then close all VS Code agent terminals, leave only a browser PTY planner running, and repeat from the **editor**: it must still refuse (today's behaviour) rather than reaching into the browser fleet.
+
+5. **Browser happy path — PTY planner.** In the browser cockpit, open the Terminals panel and start a `planner` PTY. Then from the browser:
    - memo panel → type an entry → *Send to Planner*;
    - project panel → *Build PRD via planner*, *Build/Update constitution*, *Build AGENTS.md*, *Open architect terminal*;
-   - tickets panel → *Ask agent* on a ticket;
+   - tickets panel → *Ask agent* on a ticket — **this is the one that also proves the `extension.ts:2085` forward**; if every other button works and this one does not, the command boundary is still dropping the flag;
    - board → *Dispatch manager pass* on a selection (role `lead`).
 
    Each must deliver the prompt into the browser PTY terminal, with no error banner. Before the fix, each raises an error.
 
-4. **Browser happy path — VS Code planner only.** With no PTY fleet running and a VS Code `planner-1` open, repeat step 3 from the browser. Every button must still succeed (fleet branches guard on `_ptyHostPort`, so this degrades to the old path).
+6. **Browser happy path — VS Code planner only.** With no PTY fleet running and a VS Code `planner-1` open, repeat step 5 from the browser. Every button must still succeed (fleet branches guard on `_ptyHostPort`, so this degrades to the old path).
 
-5. **Browser failure path is honest.** Close every planner terminal in both fleets, then click memo *Send to Planner*. Expect: an error banner in the browser stating the real reason, `memo.md` **not** cleared (preserved for retry), and the generated prompt on the **browser** clipboard (paste it somewhere to confirm). Before the fix the browser clipboard is untouched despite the message promising otherwise.
+7. **Browser failure path is honest.** Close every planner terminal in both fleets, then click memo *Send to Planner*. Expect: an error banner in the browser stating the real reason, `memo.md` **not** cleared (preserved for retry), and the generated prompt on the **browser** clipboard (paste it somewhere to confirm). Before the fix the browser clipboard is untouched despite the message promising otherwise.
 
-6. **Success does not clobber the clipboard.** Put a known string on the browser clipboard, then do a *successful* memo send. Paste — the known string must still be there (proves `prompt` is failure-only).
+8. **Success does not clobber the clipboard.** Put a known string on the browser clipboard, then do a *successful* memo send. Paste — the known string must still be there (proves `prompt` is failure-only).
 
-7. **Rotation cursor unaffected.** With two VS Code planner terminals registered, dispatch twice from the editor and confirm alternation still works (`switchboard.planner.rotationCursor` advances). With a PTY-resolved target, confirm the cursor is *not* advanced and nothing throws.
+9. **Rotation cursor unaffected.** With two VS Code planner terminals registered, dispatch twice from the editor and confirm alternation still works (`switchboard.planner.rotationCursor` advances). With a PTY-resolved target, confirm the cursor is *not* advanced and nothing throws.
 
-8. **Explicit root, no ambiguity.** Run the browser checks with the panel's workspace selector set to the same root as `GET /health` → `selectedWorkspaceRoot`, so a primary-vs-selected root mismatch cannot be mistaken for a dispatch failure.
+10. **Explicit root, no ambiguity.** Run the browser checks with the panel's workspace selector set to the same root as `GET /health` → `selectedWorkspaceRoot`, so a primary-vs-selected root mismatch cannot be mistaken for a dispatch failure.
+
+## Recommendation
+
+Complexity 6 → **Send to Coder.**

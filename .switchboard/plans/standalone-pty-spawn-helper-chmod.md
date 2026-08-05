@@ -208,3 +208,13 @@ handled by reporting rather than failing.
 ## Completion Report
 
 Replaced the webpack-rewritten `require.resolve('node-pty/package.json')` with a guarded `__non_webpack_require__` resolver in `src/standalone/ptyBackend.ts`, falling back to plain `require` when running unbundled. The darwin `spawn-helper` chmod now resolves correctly and warns clearly when the helper cannot be located. The warning text also flags the consequence (terminal spawning may fail) instead of dumping a bare TypeError. No compilation or tests were run per the dispatch directive.
+
+## Review Findings
+
+**Implementation accepted as written — no code changes needed.** Verified where the plan demanded it: against the built artifact, not ts-node. `dist/standalone/cli.js` emits `const req = typeof require !== 'undefined' ? require : __webpack_require__(81);` — webpack substituted the **real Node `require`** into both the `typeof` guard and the value position, so `req.resolve('node-pty/package.json')` returns a path string and `path.dirname()` no longer receives a number. The nested `try/catch` around `chmodSync` correctly preserves report-and-continue on a read-only `node_modules`, and `fs.existsSync` plus the `darwin`-only outer guard are retained.
+
+**Validation.** End-to-end boot of the rebuilt `dist/standalone/cli.js` against a scratch workspace: **zero** `Failed to chmod darwin spawn-helper` and **zero** `ERR_INVALID_ARG_TYPE` (both were present on every boot before the fix). `pty-host-gating`, `pty-route-surface` and `pty-dispatch-focus` contract tests pass; typecheck and lint clean. The unbundled path is exercised by those tests via `out/`, where `__non_webpack_require__` is undefined and the guard falls through to plain `require`.
+
+**NIT (not fixed).** The `: require` fallback makes webpack emit `Critical dependency: require function is used in a way in which dependencies cannot be statically extracted` for `ptyBackend.ts` on every build — a new warning introduced by this change, and its emitted fallback (`__webpack_require__(81)`) is the original numeric-id bug. It is unreachable (`typeof require` is always defined in a CJS bundle), so this was left alone rather than churn a verified-working bundler fix; `createRequire(__filename)` would remove both the warning and the dead trap if it is ever worth a follow-up.
+
+**Remaining risks.** `isPtyAvailable()` still proves loadability, not spawnability — recorded as a follow-up per User Review 3, deliberately out of scope.
