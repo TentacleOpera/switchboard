@@ -126,3 +126,25 @@ hideTooltip();
 7. **UAT — positioning.** Scroll the automation panel so the toggle is near the top of the viewport and hover: the tooltip flips below instead of being clipped. Then scroll it near the right edge and confirm horizontal clamping.
 8. **UAT — no stale overlay.** Hover a toggle and hold still for at least one automation-panel refresh cycle (~10s): the overlay must not be left showing text for a destroyed element, and no duplicate overlay appears.
 9. **UAT — behaviour untouched.** Click DRAIN then WATCH: the active-button styling still updates and the mode still persists (reload the panel and confirm the selection stuck).
+
+## Review Findings
+
+**Files reviewed:** `src/webview/kanban.html` (createTriggerModeToggle L9384-9442, renderAutobanPanel L10807-10823, tooltip overlay handlers L4150-4173).
+
+**Stage 1 (Grumpy):** Welcome, mortals. I see you've finally decided to explain your own toggle. Let's see if you did it right.
+- ✅ `title` attributes gone, `data-tooltip` + `aria-label` set once at construction — not inside `updateStyles`. Good.
+- ✅ `hideTooltip()` at top of `renderAutobanPanel` (L10813) — stale overlay on re-render: handled.
+- ✅ Copy is a faithful condensation of the Watch warning banner facts.
+- NIT: No wrapper `data-tooltip` — correct per plan's "buttons only" decision, but the wrapper's 18px height with overflow:hidden means a 1px seam between buttons has no tooltip. Acceptable — the seam is sub-pixel in practice.
+
+**Stage 2 (Balanced):** All findings are clean or NIT-level. No CRITICAL or MAJOR issues. The implementation matches the plan exactly: `data-tooltip` on buttons only, `aria-label` for accessibility, `hideTooltip()` on panel re-render, attributes set outside `updateStyles`. The delegated mouseover/mouseout handlers correctly swap tooltips on DRAIN→WATCH transitions (siblings, not parent-child, so `el.contains(related)` is false and `hideTooltip()` fires).
+
+**Verification:** `npm run compile` — 0 errors (4 pre-existing warnings). `npm run lint` — 0 errors. `npm run parity:check`, `push-routing:check`, `verb-returns:check` — all pass. Static grep confirms no `drainBtn.title`/`watchBtn.title` remaining. Kanban contract tests (drag-guard, render-guard, drag-confirm-order) all pass. 3 pre-existing failures in kanban-auto-export.test.js are unrelated (agent name resolution in markdown export, not automation tab UI).
+
+**Gate-wiring audit:** No plan-specific automated checks named. PRD gates (verb-returns, parity, push-routing) wired in `.github/workflows/integration-tests.yml` L35-41 — all pass.
+
+**Remaining risks:** None material. UAT-only verification items (hover swap, positioning, per-column instances) cannot be verified statically.
+
+## Completion Report
+
+Reviewed the DRAIN/WATCH tooltip implementation in `src/webview/kanban.html`. The `data-tooltip` and `aria-label` attributes are correctly set on both buttons at construction (outside `updateStyles`), `hideTooltip()` is called at the top of `renderAutobanPanel`, and native `title` attributes are fully removed. Compilation, lint, parity, push-routing, and verb-returns checks all pass. No code fixes were needed — the implementation matches the plan exactly.

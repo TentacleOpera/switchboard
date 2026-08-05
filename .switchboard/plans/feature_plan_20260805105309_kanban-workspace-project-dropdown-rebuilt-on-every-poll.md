@@ -256,3 +256,29 @@ Reset `_lastWorkspaceSelectionSignature = null` at the same place `_lastColumnsS
 8. **UAT — project filter with unchanged options.** Assign selected plans to a project: the dropdown's selected option moves to that project and `#btn-delete-project` becomes enabled without any option-list change.
 9. **UAT — workspace folder added.** Add a folder to the VS Code workspace: it appears in the dropdown.
 10. **Instrumentation check.** Temporarily log each `updateWorkspaceProjectDropdown` rebuild; on an idle board with no user action, the count must stay at its initial value across several minutes of polling.
+
+## Review Findings
+
+**Files reviewed:** `src/webview/kanban.html` (guard state L4231-4269, `syncDeleteProjectButton` L4879-4886, `updateWorkspaceProjectDropdown` L4888-4995, signature invalidation sites L7993/8683/8698/8744, `updateWorkspaceSelection` handler L7535-7561). `src/services/KanbanProvider.ts` (`_lastWorkspaceSelectionSignature` field L174, three guarded poll sites L1978-1998/3519-3539/3703-3723, unguarded connect-time resync L1153-1169, reset on dispose L1530).
+
+**Stage 1 (Grumpy):** Ah, the dropdown that ate itself every ten seconds. Let me see if you actually fixed it or just made it eat itself more quietly.
+- ✅ Provider-side: three poll sites signature-guarded. Connect-time resync at L1153-1169 is NOT guarded — correct, starving reconnecting clients would be the sharpest edge.
+- ✅ `_lastWorkspaceSelectionSignature` reset on dispose (L1530) alongside `_lastColumnsSignature`.
+- ✅ Webview guard: own flag (`isWorkspaceDropdownInteracting`), own timer (4s), deferred replay (never discard). Events: `mousedown`/`focus`/`keydown`/`input` arm; `change`/`blur` release.
+- ✅ Signature covers selection inputs (`explicitRoot`, `currentWorkspaceRoot`, `boardProjectFilter`, `activeWorkspaceFilter`) not just option list — a filter change with identical options still moves the selection.
+- ✅ Explicit-root calls bypass the interaction guard (L4894: `if (!explicitRoot && isWorkspaceDropdownInteracting)`) — backend-driven workspace switch always applies immediately.
+- ✅ `syncDeleteProjectButton` factored out, called at all three restore cascade exit points (L4955, L4967, L4994).
+- ✅ `lastWorkspaceDropdownSignature = null` at all 4 `lastBoardSignature = ''` invalidation sites (L7993, L8683, L8698, L8744).
+- NIT: The 4s guard timeout is generous for a native `<select>` popup, but the `change`/`blur` immediate-release means the timer is only a safety net for abandoned interactions. Acceptable.
+
+**Stage 2 (Balanced):** No CRITICAL or MAJOR issues. The implementation is thorough and matches the plan's design exactly. The dual-layer fix (provider signature-guard + webview interaction guard with deferred replay) correctly addresses both the unnecessary post and the destructive rebuild. Race conditions are handled: pending updates are replayed (never discarded), explicit-root calls bypass the guard, and the signature is invalidated on all deliberate refresh sites. The `JSON.stringify` signature on the provider payload is consistent across all three poll sites (same fields, same `resolvedWorkspaceRoot` argument).
+
+**Verification:** `npm run compile` — 0 errors. `npm run lint` — 0 errors. `npm run parity:check`, `push-routing:check`, `verb-returns:check` — all pass. Kanban contract tests (drag-guard, render-guard, drag-confirm-order) all pass. 3 pre-existing failures in kanban-auto-export.test.js are unrelated (agent name resolution in markdown export).
+
+**Gate-wiring audit:** No plan-specific automated checks named. PRD gates (verb-returns, parity, push-routing) wired in `.github/workflows/integration-tests.yml` L35-41 — all pass.
+
+**Remaining risks:** UAT items (popup survives 30s+ polling, new project appears after deferred replay, browser host verification) cannot be verified statically. The provider-side `JSON.stringify` signature depends on consistent key ordering in `allWorkspaceProjects` — if the underlying query returns keys in different order across calls, the signature would change spuriously (causing an unnecessary but harmless rebuild, not a missed update). This mirrors the existing `_columnsSignature` pattern and has not been observed as a problem.
+
+## Completion Report
+
+Reviewed the workspace/project dropdown rebuild fix in `src/webview/kanban.html` and `src/services/KanbanProvider.ts`. The provider-side signature guard is correctly applied to the three poll sites (not the connect-time resync), and the webview-side interaction guard with deferred replay, change-detection signature, and factored `syncDeleteProjectButton` helper are all implemented per plan. All `lastBoardSignature = ''` invalidation sites have corresponding `lastWorkspaceDropdownSignature = null` resets. Compilation, lint, parity, push-routing, and verb-returns checks all pass. No code fixes were needed — the implementation matches the plan exactly.
