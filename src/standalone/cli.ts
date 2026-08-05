@@ -3,10 +3,13 @@ import * as http from 'http';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import { startHeadlessSwitchboard } from './bootstrap';
-import { isLoopbackHostname } from '../utils/loopbackHostname';
+import { DEFAULT_DISPLAY_HOSTNAME, isLoopbackHostname } from '../utils/loopbackHostname';
 
 function usage(): string {
     return `Usage: npx switchboard [options]
+       npx switchboard init [--target <agents|claude|both>] [--workspace <path>]
+       npx switchboard scaffold --parent-dir <dir> --workspace-name <name> --repo <url> [--repo <url>...] [--pat <token>] [--keep-sub-repo-db]
+       npx switchboard control-plane <detect|preview|migrate> [parent-dir] [--cleanup <repo>...] [--cleanup-all]
        npx switchboard secrets set <clickup|linear|notion|stitch|apiToken|key> <value>
        npx switchboard secrets list
        npx switchboard secrets delete <clickup|linear|notion|stitch|apiToken|key>
@@ -19,12 +22,18 @@ Aliases for secrets commands:
   apiToken  -> switchboard.apiToken
 
 Options:
-  --workspace <path>   Workspace root to serve (default: cwd)
+  --workspace <path>   Workspace root to serve or init (default: cwd)
   --port <number>      Preferred port; 0 for ephemeral (default: 0)
-  --hostname <name>    Hostname for the board URL (default: 127.0.0.1). Must be a
-                       loopback name: localhost, 127.0.0.1, or anything under the
-                       reserved .localhost TLD, e.g. switchboard.localhost
+  --hostname <name>    Hostname for the board URL (default: switchboard.localhost,
+                       falling back to 127.0.0.1 if that name is unreachable).
+                       Must be a loopback name: localhost, 127.0.0.1, or anything
+                       under the reserved .localhost TLD, e.g. switchboard.localhost
   --no-open            Do not open a browser
+  --target <name>      Protocol target for 'init': agents, claude, or both (default: both)
+  --pat <token>        PAT for cloning (visible in process list — prefer SWITCHBOARD_PAT env var)
+  --keep-sub-repo-db   Keep an existing sub-repo kanban.db instead of deleting it (headless default: delete)
+  --cleanup <repo>     migrate: archive the named source repo's .switchboard/ after merging (repeatable)
+  --cleanup-all        migrate: archive ALL source repos' .switchboard/ after merging
   --help               Show this help
 `;
 }
@@ -77,8 +86,8 @@ function parseArgs(argv: string[]): { workspace?: string; port?: number; hostnam
  * print an inviting URL, open a browser, and then hit the DNS-rebinding guard —
  * burning the one-time token on a request that can never succeed.
  */
-function resolveHostname(input: string | undefined): string {
-    if (input === undefined) { return '127.0.0.1'; }
+function resolveHostname(input: string | undefined): string | undefined {
+    if (input === undefined) { return undefined; }
     const candidate = input.trim().toLowerCase();
     if (!isLoopbackHostname(candidate)) {
         console.error(`[switchboard] --hostname '${input}' is not a loopback name.`);
@@ -90,9 +99,9 @@ function resolveHostname(input: string | undefined): string {
     return candidate;
 }
 
-async function probeHealth(port: number, timeoutMs = 2000): Promise<boolean> {
+async function probeHealth(port: number, hostname = '127.0.0.1', timeoutMs = 2000): Promise<boolean> {
     return new Promise(resolve => {
-        const req = http.get(`http://127.0.0.1:${port}/health`, (res) => {
+        const req = http.get(`http://${hostname}:${port}/health`, (res) => {
             let body = '';
             res.on('data', c => body += c);
             res.on('end', () => {
@@ -134,7 +143,7 @@ async function openBrowser(url: string): Promise<void> {
 async function waitForHealth(port: number, timeoutMs = 10000): Promise<void> {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
-        if (await probeHealth(port, 1000)) return;
+        if (await probeHealth(port, '127.0.0.1', 1000)) return;
         await new Promise(r => setTimeout(r, 250));
     }
     throw new Error(`Health check timed out on port ${port}`);
@@ -203,6 +212,190 @@ async function main() {
     }
 
 
+    if (process.argv[2] === 'init') {
+        const { __setStandaloneWorkspaceRoot } = require('./vscodeShim');
+        const { ControlPlaneMigrationService } = require('../services/ControlPlaneMigrationService');
+        const { KanbanDatabase } = require('../services/KanbanDatabase');
+        const { StandaloneHostPathConfigProvider } = require('./hostServices');
+        const { ensureWorkspaceIdentity } = require('../services/WorkspaceIdentityService');
+
+        let target: string = 'both';
+        for (let i = 3; i < process.argv.length; i++) {
+            if (process.argv[i] === '--target' && process.argv[i + 1]) {
+                target = process.argv[++i];
+            }
+        }
+        if (!['agents', 'claude', 'both'].includes(target)) {
+            console.error(`[switchboard] --target must be 'agents', 'claude', or 'both' (got '${target}')`);
+            process.exit(1);
+        }
+
+        __setStandaloneWorkspaceRoot(workspaceRoot);
+
+        const configProvider = new StandaloneHostPathConfigProvider(workspaceRoot);
+        KanbanDatabase.setPathConfigProvider(configProvider);
+        await configProvider.updateConfigWorkspace('protocol.target', target);
+
+        const repoRoot = path.resolve(__dirname, '..', '..');
+
+        console.log(`[switchboard] Initialising Switchboard scaffolding in ${workspaceRoot} (target: ${target})…`);
+
+        try {
+            await ControlPlaneMigrationService.bootstrapControlPlaneLayout(workspaceRoot, repoRoot);
+
+            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+            const dbExisted = fs.existsSync(db.dbPath);
+            const dbCreated = await db.createIfMissing();
+            if (!dbCreated) {
+                console.error(`[switchboard] Failed to create kanban database at ${db.dbPath}.`);
+                process.exit(1);
+            }
+            if (dbExisted) {
+                console.log(`[switchboard] Existing kanban.db kept (${db.dbPath}).`);
+            }
+
+            await ensureWorkspaceIdentity(workspaceRoot);
+
+            if (!fs.existsSync(path.join(repoRoot, '.agents'))) {
+                console.warn(`[switchboard] Warning: bundled .agents/ not found at ${repoRoot}. Directory structure created but protocol files were not copied.`);
+            }
+
+            console.log('[switchboard] Scaffolding complete.');
+            console.log('[switchboard]   .switchboard/  (plans, inbox, archive, kanban.db)');
+            console.log('[switchboard]   .agents/       (workflows, skills)');
+            if (target === 'agents' || target === 'both') {
+                console.log('[switchboard]   AGENTS.md      (protocol file)');
+            }
+            if (target === 'claude' || target === 'both') {
+                console.log('[switchboard]   CLAUDE.md      (Claude Code managed block)');
+                console.log('[switchboard]   .claude/skills (mirror)');
+            }
+            console.log('[switchboard]   worktrees/');
+            if (!fs.existsSync(path.join(workspaceRoot, '.git'))) {
+                console.log(`[switchboard] Note: no git repository detected in ${workspaceRoot}.`);
+            }
+            process.exit(0);
+        } catch (err) {
+            console.error(`[switchboard] Init failed: ${err instanceof Error ? err.message : String(err)}`);
+            process.exit(1);
+        }
+    }
+
+    if (process.argv[2] === 'scaffold') {
+        const { __setStandaloneWorkspaceRoot } = require('./vscodeShim');
+        const { MultiRepoScaffoldingService } = require('../services/MultiRepoScaffoldingService');
+        const { StandaloneHostPathConfigProvider } = require('./hostServices');
+        const { KanbanDatabase } = require('../services/KanbanDatabase');
+
+        let parentDir = '';
+        let workspaceName = '';
+        let repoUrls: string[] = [];
+        let pat = process.env.SWITCHBOARD_PAT || '';
+        let subRepoDbAction: 'delete' | 'keep' = 'delete';
+        for (let i = 3; i < process.argv.length; i++) {
+            const a = process.argv[i];
+            if (a === '--parent-dir') { parentDir = process.argv[++i]; }
+            else if (a === '--workspace-name') { workspaceName = process.argv[++i]; }
+            else if (a === '--repo') { repoUrls.push(process.argv[++i]); }
+            else if (a === '--pat') {
+                pat = process.argv[++i];
+                console.warn('[switchboard] --pat is visible in the process list. Prefer SWITCHBOARD_PAT env var.');
+            }
+            else if (a === '--keep-sub-repo-db') { subRepoDbAction = 'keep'; }
+        }
+
+        if (!parentDir) { console.error('Usage: npx switchboard scaffold --parent-dir <dir> --workspace-name <name> --repo <url> [--repo <url>...]'); process.exit(1); }
+        if (!workspaceName) { console.error('--workspace-name is required'); process.exit(1); }
+        if (repoUrls.length === 0) { console.error('At least one --repo <url> is required'); process.exit(1); }
+        if (!pat) { console.error('PAT is required. Pass --pat <token> or set SWITCHBOARD_PAT env var.'); process.exit(1); }
+
+        __setStandaloneWorkspaceRoot(workspaceRoot);
+        KanbanDatabase.setPathConfigProvider(new StandaloneHostPathConfigProvider(workspaceRoot));
+        const repoRoot = path.resolve(__dirname, '..', '..');
+
+        console.log(`[switchboard] Scaffolding multi-repo control plane into ${parentDir}…`);
+        const result = await MultiRepoScaffoldingService.scaffold(
+            { parentDir, workspaceName, repoUrls, pat, headlessDefaults: { subRepoDbAction } },
+            repoRoot
+        );
+
+        for (const repo of result.repos) {
+            const tag = repo.status === 'cloned' ? '✓' : repo.status === 'skipped' ? '○' : '✗';
+            console.log(`  ${tag} ${repo.dir} — ${repo.status}${repo.error ? ': ' + repo.error : ''}`);
+        }
+        if (result.warnings?.length) {
+            console.log('Warnings:');
+            for (const w of result.warnings) { console.log(`  ! ${w}`); }
+        }
+        const anyFailed = result.repos.some(r => r.status === 'failed');
+        if (result.success) {
+            console.log(`\n[switchboard] Workspace file: ${result.workspaceFilePath}`);
+            console.log(`[switchboard] Open with: code "${result.workspaceFilePath}"`);
+            process.exit(anyFailed ? 1 : 0);
+        } else {
+            console.error(`\n[switchboard] Scaffold failed: ${result.error || 'unknown error'}`);
+            process.exit(1);
+        }
+    }
+
+    if (process.argv[2] === 'control-plane') {
+        const sub = process.argv[3];
+        const { __setStandaloneWorkspaceRoot } = require('./vscodeShim');
+        const { ControlPlaneMigrationService } = require('../services/ControlPlaneMigrationService');
+        const { StandaloneHostPathConfigProvider } = require('./hostServices');
+        const { KanbanDatabase } = require('../services/KanbanDatabase');
+
+        __setStandaloneWorkspaceRoot(workspaceRoot);
+        KanbanDatabase.setPathConfigProvider(new StandaloneHostPathConfigProvider(workspaceRoot));
+        const repoRoot = path.resolve(__dirname, '..', '..');
+
+        if (sub === 'detect') {
+            const candidate = await ControlPlaneMigrationService.detectCandidateParent(workspaceRoot);
+            console.log(JSON.stringify(candidate, null, 2));
+            process.exit(0);
+        } else if (sub === 'preview') {
+            const parentDir = process.argv[4];
+            if (!parentDir) { console.error('Usage: npx switchboard control-plane preview <parent-dir>'); process.exit(1); }
+            const preview = await ControlPlaneMigrationService.previewMigration(parentDir);
+            console.log(JSON.stringify(preview, null, 2));
+            process.exit(0);
+        } else if (sub === 'migrate') {
+            const positional: string[] = [];
+            const cleanupRepos: string[] = [];
+            let cleanupAll = false;
+            for (let i = 4; i < process.argv.length; i++) {
+                const a = process.argv[i];
+                if (a === '--cleanup') { cleanupRepos.push(process.argv[++i]); }
+                else if (a === '--cleanup-all') { cleanupAll = true; }
+                else { positional.push(a); }
+            }
+            const parentDir = positional[0];
+            if (!parentDir) { console.error('Usage: npx switchboard control-plane migrate <parent-dir> [--cleanup <repo>...] [--cleanup-all]'); process.exit(1); }
+
+            let cleanupConfirmed = cleanupRepos;
+            if (cleanupAll) {
+                const preview = await ControlPlaneMigrationService.previewMigration(parentDir);
+                cleanupConfirmed = [...new Set([...cleanupRepos, ...preview.sources.map(s => s.repoName)])];
+            }
+
+            const result = await ControlPlaneMigrationService.executeMigration(parentDir, {
+                extensionPath: repoRoot,
+                cleanupConfirmed
+            });
+            console.log(JSON.stringify(result, null, 2));
+            if (result.success) {
+                console.warn('[switchboard] Note: integration sync of imported plans is deferred — open this workspace in the VS Code extension to sync ClickUp/Linear.');
+                if (result.workspaceFilePath) {
+                    console.log(`[switchboard] Workspace file: ${result.workspaceFilePath}`);
+                }
+            }
+            process.exit(result.success ? 0 : 1);
+        } else {
+            console.error('Usage: npx switchboard control-plane <detect|preview|migrate> [parent-dir] [--cleanup <repo>...] [--cleanup-all]');
+            process.exit(1);
+        }
+    }
+
     const existing = await findRunningInstance(workspaceRoot);
     if (existing !== null) {
         console.error(`[switchboard] Another Switchboard instance is already running on port ${existing} for ${workspaceRoot}.`);
@@ -221,16 +414,17 @@ async function main() {
 
     await waitForHealth(instance.port);
 
+    const displayHost = new URL(instance.url).hostname;
     const boardUrl = `${instance.url}/?token=${instance.oneTimeToken}`;
 
     console.log(`\nSwitchboard is running at ${instance.url}`);
     console.log(`Board URL (one-time token): ${boardUrl}`);
-    if (hostname !== '127.0.0.1') {
+    if (displayHost !== '127.0.0.1') {
         // The token is consumed server-side, so a name the browser fails to
         // resolve never reaches the server and never spends it — this fallback
         // stays valid. Printed up front because the failure mode (a browser that
         // does not map *.localhost to loopback) looks like Switchboard is down.
-        console.log(`If your browser cannot resolve ${hostname}, use http://127.0.0.1:${instance.port}/?token=${instance.oneTimeToken} instead.`);
+        console.log(`If your browser cannot resolve ${displayHost}, use http://127.0.0.1:${instance.port}/?token=${instance.oneTimeToken} instead.`);
     }
     console.log('Press Ctrl+C to stop.\n');
 

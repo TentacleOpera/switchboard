@@ -41,8 +41,9 @@
         const activeTabBtn = document.querySelector('.shared-tab-btn.active');
         let activeTab = activeTabBtn ? activeTabBtn.dataset.tab : (state.activeTab || 'stitch');
         if (activeTab === 'previews') {
-            activeTab = state.previewsSource || 'stitch-html';
+            activeTab = state.previewsSource || 'html-preview';
         }
+        // 'images' already IS the effective surface id — pass it through unchanged.
         vscode.postMessage({
             type: 'activeTabChanged',
             tab: activeTab,
@@ -72,7 +73,10 @@
         designSystemDocSourceId: null,
         designSystemDocId: null,
         selectedEl: null,
-        previewsSource: 'stitch-html',
+        // 'html-preview' is a local readdir; 'stitch-html' unconditionally hits the
+        // Stitch API (DesignPanelProvider stitchListProjects is cache-then-ALWAYS-network)
+        // and shows "No project selected" until one is picked. Default to the local one.
+        previewsSource: 'html-preview',
         previewRequestId: 0,
         htmlFolderPathsByRoot: persistedState.htmlFolderPathsByRoot || {},
         designFolderPathsByRoot: persistedState.designFolderPathsByRoot || {},
@@ -132,6 +136,7 @@
     let _restoredPanelState = { panel: {}, byRoot: {} };
     let _registeredDropdowns = []; // Array of { selectElOrId, tabKey, includeAllOption }
     let _workspaceItems = [];
+    let _lastScreensFetchProjectId = '';
 
     // Helper to register a dropdown for updates
     function registerWorkspaceDropdown(selectElOrId, tabKey, includeAllOption = true) {
@@ -175,7 +180,12 @@
     };
 
     function selectPreviewsSource(source) {
-        state.previewsSource = source || 'stitch-html';
+        // 'images' is a top-level tab now; a legacy persisted value must not
+        // select a sub-panel that no longer lives here. Default is 'html-preview'
+        // (local readdir, no Stitch API call).
+        state.previewsSource = (source === 'stitch-html' || source === 'html-preview')
+            ? source
+            : 'html-preview';
         const sel = document.getElementById('previews-source-select');
         if (sel && sel.value !== state.previewsSource) sel.value = state.previewsSource;
         document.querySelectorAll('#previews-content .previews-subpanel').forEach(p => {
@@ -187,7 +197,17 @@
         vscode.postMessage({ type: 'activeTabChanged', tab: state.previewsSource });
 
         if (state.previewsSource === 'stitch-html') {
+            const seeded = seedStitchHtmlProjectFromStitchTab();
             populateStitchHtmlProjectSelect(state.stitchProjects || []);
+            if (seeded) {
+                // Local cache read, not a Stitch API call — safe to add alongside the
+                // single stitchListProjects this branch already posts.
+                vscode.postMessage({
+                    type: 'stitchHtmlListDocs',
+                    projectId: state.selectedStitchHtmlProjectId,
+                    workspaceRoot: state.stitchWorkspaceRoot
+                });
+            }
             vscode.postMessage({
                 type: 'stitchListProjects',
                 workspaceRoot: state.stitchWorkspaceRoot
@@ -246,6 +266,9 @@
             vscode.postMessage({ type: 'activeTabChanged', tab: tabName });
         } else if (tabName === 'previews') {
             selectPreviewsSource(state.previewsSource);
+        } else if (tabName === 'images') {
+            vscode.postMessage({ type: 'activeTabChanged', tab: 'images' });
+            vscode.postMessage({ type: 'refreshDocsForTab', tab: 'images' });
         } else {
             vscode.postMessage({ type: 'activeTabChanged', tab: tabName });
         }
@@ -1080,6 +1103,29 @@
                 loadDocumentPreview(sourceId, doc.id, doc.name);
             }
         });
+    }
+
+    /**
+     * Seed the Stitch HTML project picker from the STITCH tab's selection.
+     *
+     * Conditional on purpose: the two selections stay independently steerable, so a
+     * user who points Stitch HTML at a different project than the gallery keeps it.
+     * Only seeds a project the loaded list actually contains — populateStitchHtml-
+     * ProjectSelect assigns select.value directly, and an id with no matching option
+     * silently resolves to the empty option, desyncing the dropdown from state.
+     * Returns true when a seed was applied (caller then needs the docs list).
+     */
+    function seedStitchHtmlProjectFromStitchTab() {
+        if (state.selectedStitchHtmlProjectId) { return false; }
+        const candidate = state.selectedStitchProjectId || '';
+        if (!candidate) { return false; }
+        const projects = state.stitchProjects || [];
+        if (!projects.some(p => p.id === candidate)) { return false; }
+        state.selectedStitchHtmlProjectId = candidate;
+        if (state.stitchWorkspaceRoot) {
+            persistTab('stitchHtml.projectId', candidate, state.stitchWorkspaceRoot);
+        }
+        return true;
     }
 
     function populateStitchHtmlProjectSelect(projects) {
@@ -2738,6 +2784,40 @@
         });
     }
 
+    /**
+     * Resolve which Stitch project the picker should show for `root`.
+     *
+     * Tiers, highest first:
+     *   1. an explicit in-memory selection the user made this session
+     *   2. the persisted per-root selection (stitch.projectId)
+     *   3. the configured stitch.defaultProjectId
+     *   4. the most recently updated project in the list
+     *
+     * Every candidate is validated against the loaded list. populateStitchProjects
+     * assigns select.value directly, so an id with no matching <option> resolves to
+     * the empty option and desyncs state from UI — with setStitchBusy(true) left on
+     * if we had fetched screens for it.
+     */
+    function resolveStitchProjectSelection(projects, defaultProjectId) {
+        const ids = new Set((projects || []).map(p => p.id));
+        const candidates = [
+            state.selectedStitchProjectId,
+            getRestoredState('stitch.projectId', state.stitchWorkspaceRoot),
+            defaultProjectId,
+        ];
+        for (const c of candidates) {
+            if (c && ids.has(c)) { return c; }
+        }
+        // Fallback: most recent. populateStitchProjects sorts by updateTime desc;
+        // mirror that ordering here rather than trusting input order.
+        const sorted = [...(projects || [])].sort((a, b) => {
+            const ta = a.updateTime ? new Date(a.updateTime).getTime() : 0;
+            const tb = b.updateTime ? new Date(b.updateTime).getTime() : 0;
+            return tb - ta;
+        });
+        return sorted.length > 0 ? sorted[0].id : '';
+    }
+
     function populateStitchProjects(projects, defaultProjectId) {
         if (!stitchProjectSelect) return;
 
@@ -2747,14 +2827,12 @@
             return tb - ta;
         });
 
-        // Only select if there's an explicit in-memory selection
-        // Do NOT auto-select defaultProjectId or first project
-        const current = state.selectedStitchProjectId || '';
+        const current = resolveStitchProjectSelection(sortedProjects, defaultProjectId);
         stitchProjectSelect.innerHTML = '<option value="">Select Project...</option>';
         if (designSystemProjectSelect) {
             designSystemProjectSelect.innerHTML = '<option value="">Select Project...</option>';
         }
-        
+
         sortedProjects.forEach(p => {
             const opt = document.createElement('option');
             opt.value = p.id;
@@ -2776,9 +2854,13 @@
         if (designSystemProjectSelect) {
             designSystemProjectSelect.value = current;
         }
-        
-        // Update selectedStitchProjectId to whatever was selected
+
+        // Update selectedStitchProjectId to whatever was selected, and persist so
+        // tier 3/4 fallbacks become tier 2 on the next load.
         state.selectedStitchProjectId = stitchProjectSelect.value;
+        if (state.selectedStitchProjectId && state.stitchWorkspaceRoot) {
+            persistTab('stitch.projectId', state.selectedStitchProjectId, state.stitchWorkspaceRoot);
+        }
     }
 
     // --- "Generating…" placeholder card ------------------------------------
@@ -3115,10 +3197,12 @@
                             filterSelect.value = state.stitchWorkspaceRoot;
                         }
                         
-                        // Restore project selection for this root — DISABLED per initialization requirements
-                        // const rootState = getRestoredState('stitch.projectId', state.stitchWorkspaceRoot);
-                        // state.selectedStitchProjectId = rootState || '';
-                        state.selectedStitchProjectId = '';
+                        // Restore the per-root project selection. Validated later by
+                        // resolveStitchProjectSelection against the loaded list, so a stale id for a
+                        // project deleted on the Stitch side degrades to an empty picker rather than a
+                        // selection the dropdown cannot show.
+                        state.selectedStitchProjectId =
+                            getRestoredState('stitch.projectId', state.stitchWorkspaceRoot) || '';
                         
                         vscode.postMessage({
                             type: 'stitchListProjects',
@@ -3165,9 +3249,8 @@
                         if (filterSelect) {
                             filterSelect.value = state.stitchWorkspaceRoot;
                         }
-                        // const rootState = getRestoredState('stitch.projectId', state.stitchWorkspaceRoot);
-                        // state.selectedStitchProjectId = rootState || '';
-                        state.selectedStitchProjectId = '';
+                        state.selectedStitchProjectId =
+                            getRestoredState('stitch.projectId', state.stitchWorkspaceRoot) || '';
                         
                         vscode.postMessage({
                             type: 'stitchListProjects',
@@ -3205,18 +3288,21 @@
                 if (imagesSelect) imagesSelect.value = state.imagesWorkspaceRootFilter;
 
                 const restoredPreviewsSource = (msg.panel || {})['previews.source'];
-                if (restoredPreviewsSource && ['stitch-html', 'html-preview', 'images'].includes(restoredPreviewsSource)) {
+                if (restoredPreviewsSource && ['stitch-html', 'html-preview'].includes(restoredPreviewsSource)) {
                     state.previewsSource = restoredPreviewsSource;
                 }
 
-                // Override active tab with persisted value if it differs from the HTML default
                 let restoredTab = (msg.panel || {})['activeTab'];
-                if (['stitch-html', 'html-preview', 'images'].includes(restoredTab)) {
+                // Legacy shape: Images used to be a PREVIEWS source, so both keys could
+                // carry 'images'. Either now means the top-level IMAGES tab.
+                if (restoredTab === 'images' || restoredPreviewsSource === 'images') {
+                    restoredTab = 'images';
+                } else if (['stitch-html', 'html-preview'].includes(restoredTab)) {
                     state.previewsSource = restoredTab;
                     restoredTab = 'previews';
                 }
 
-                const validTabs = ['stitch', 'previews', 'design'];
+                const validTabs = ['stitch', 'previews', 'images', 'design'];
                 if (restoredTab && validTabs.includes(restoredTab)) {
                     const currentTab = document.querySelector('.shared-tab-btn.active')?.dataset.tab;
                     if (currentTab !== restoredTab || restoredTab === 'previews') {
@@ -3723,6 +3809,13 @@
             case 'stitchProjectsReady':
                 state.stitchProjects = msg.projects || [];
                 populateStitchProjects(state.stitchProjects, msg.defaultProjectId);
+                if (state.previewsSource === 'stitch-html' && seedStitchHtmlProjectFromStitchTab()) {
+                    vscode.postMessage({
+                        type: 'stitchHtmlListDocs',
+                        projectId: state.selectedStitchHtmlProjectId,
+                        workspaceRoot: state.stitchWorkspaceRoot
+                    });
+                }
                 populateStitchHtmlProjectSelect(state.stitchProjects);
                 if (!persistedState.stitchModelId && msg.defaultModelId) {
                     state.stitchModelId = msg.defaultModelId;
@@ -3747,8 +3840,12 @@
                         projectId: msg.selectProjectId,
                         workspaceRoot: state.stitchWorkspaceRoot
                     });
-                } else if (state.selectedStitchProjectId) {
-                    // Automatically load screens for the selected project
+                } else if (state.selectedStitchProjectId
+                           && state.selectedStitchProjectId !== _lastScreensFetchProjectId) {
+                    // Automatically load screens for the selected project.
+                    // Guard against the cache→network double push so a restored id
+                    // does not trigger two fetches.
+                    _lastScreensFetchProjectId = state.selectedStitchProjectId;
                     setStitchStatus('Loading project screens…', 'busy');
                     setStitchBusy(true);
                     vscode.postMessage({
@@ -3756,7 +3853,7 @@
                         projectId: state.selectedStitchProjectId,
                         workspaceRoot: state.stitchWorkspaceRoot
                     });
-                } else {
+                } else if (!state.selectedStitchProjectId) {
                     setStitchStatus('', 'info');
                 }
                 break;
@@ -4137,6 +4234,12 @@
             state.selectedStitchProjectId = '';
             state.stitchScreens = [];
             state.activePreviewScreenId = null;
+            _lastScreensFetchProjectId = '';
+            // Same reason: a project id is workspace-scoped, and this picker is seeded
+            // from the Stitch tab's selection.
+            state.selectedStitchHtmlProjectId = '';
+            const shSelect = document.getElementById('stitch-html-project-select');
+            if (shSelect) { shSelect.value = ''; }
             if (stitchProjectSelect) {
                 stitchProjectSelect.value = '';
             }

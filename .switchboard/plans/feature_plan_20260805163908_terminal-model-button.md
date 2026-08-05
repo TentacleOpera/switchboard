@@ -191,3 +191,7 @@ No CSS changes are required — the model button reuses the existing `btn-unassi
    - Click **model** on an exited terminal → confirm it is a silent no-op, no console error thrown.
 3. **Sidebar regression:** the sidebar clear button is untouched; confirm it still sends `/clear`.
 4. **No-confirm rule:** the model button performs its action immediately on click — no `confirm()` / modal / two-click gate (per the project's hard rule against confirmation dialogs).
+
+## Completion Summary
+
+Implemented the `/model` pane button as a mechanical mirror of the existing clear button. Added `modelPty` in `src/standalone/ptyPromptDelivery.ts`, wired `ptySendModel` in both `src/standalone/ptyHost.ts` and `src/standalone/bootstrap.ts`, and added the `model` action button to `src/webview/terminals.js` with the correct `children[]` indexing and kanban-mode restore path. Updated `src/test/pty-route-surface-contract.test.js` to include the new verb in the PTY surface contract list. No compilation or test suite was run per the task directives; no issues were encountered during the edits.

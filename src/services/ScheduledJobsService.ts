@@ -284,29 +284,76 @@ export async function processDeclaredMoves(workspaceRoot: string, kanbanProvider
 }
 
 export async function ingestJobActivity(workspaceRoot: string, db: any): Promise<void> {
-    const runLogPath = path.join(workspaceRoot, '.switchboard', 'instructions', 'run-log.md');
-    if (!fs.existsSync(runLogPath) || !db) return;
+    if (!db) return;
 
-    try {
-        const content = await fs.promises.readFile(runLogPath, 'utf8');
-        const lines = content.split('\n').filter(l => l.trim().length > 0);
-        for (const line of lines) {
-            if (line.startsWith('#') || line.startsWith('---')) continue;
-            const parts = line.split('|').map(s => s.trim());
-            if (parts.length >= 3) {
-                const ts = parts[0];
-                const job = parts[1];
-                const summary = parts.slice(2).join(' | ');
-                // `recordJobRun` owns the dedup check and the insert. The previous
-                // `db.all(...)` / `db.run(...)` pair called methods KanbanDatabase does
-                // not expose: the dedup query threw, the catch swallowed it, and no run
-                // was ever ingested — the job-activity tables stayed empty forever.
-                if (typeof db.recordJobRun === 'function') {
-                    try {
-                        await db.recordJobRun(ts, job, summary, line);
-                    } catch { /* one bad line must not abort the sweep */ }
+    // 1. Ingest run-log appended lines into `job_runs`. RecordJobRun owns dedup.
+    const runLogPath = path.join(workspaceRoot, '.switchboard', 'instructions', 'run-log.md');
+    if (fs.existsSync(runLogPath)) {
+        try {
+            const content = await fs.promises.readFile(runLogPath, 'utf8');
+            const lines = content.split('\n').filter(l => l.trim().length > 0);
+            for (const line of lines) {
+                if (line.startsWith('#') || line.startsWith('---')) continue;
+                const parts = line.split('|').map(s => s.trim());
+                if (parts.length >= 3) {
+                    const ts = parts[0];
+                    const job = parts[1];
+                    const summary = parts.slice(2).join(' | ');
+                    if (typeof db.recordJobRun === 'function') {
+                        try {
+                            await db.recordJobRun(ts, job, summary, line);
+                        } catch { /* one bad line must not abort the sweep */ }
+                    }
                 }
             }
+        } catch { /* non-fatal */ }
+    }
+
+    // 2. Ingest the instruction-inbox lifecycle into `job_instructions`.
+    const baseDir = path.join(workspaceRoot, '.switchboard', 'instructions');
+    const inboxDir = path.join(baseDir, 'inbox');
+    const claimedDir = path.join(inboxDir, 'claimed');
+    if (!fs.existsSync(inboxDir) || typeof db.upsertJobInstruction !== 'function') {
+        return;
+    }
+
+    try {
+        const STALENESS_MS = 24 * 3600 * 1000;
+        const entries = await fs.promises.readdir(inboxDir, { withFileTypes: true });
+        for (const entry of entries) {
+            if (!entry.isFile() || !entry.name.endsWith('.md')) { continue; }
+
+            const fileKey = `inbox/${entry.name}`;
+            const claimPath = path.join(claimedDir, `${entry.name}.claim`);
+            if (!fs.existsSync(claimPath)) {
+                try { await db.upsertJobInstruction(fileKey, 'pending'); } catch { /* non-fatal */ }
+                continue;
+            }
+
+            const claimContent = await fs.promises.readFile(claimPath, 'utf8');
+            const claimedTsMatch = claimContent.match(/^claimed_ts:\s*(.+)$/m);
+            const agentMatch = claimContent.match(/^agent:\s*(.+)$/m);
+            const hasResult = /^result:/m.test(claimContent);
+
+            const claimedTs = claimedTsMatch ? claimedTsMatch[1].trim() : undefined;
+            const agent = agentMatch ? agentMatch[1].trim() : undefined;
+            const isActive = claimedTs ? (Date.now() - new Date(claimedTs).getTime()) < STALENESS_MS : false;
+
+            let status: 'claimed' | 'done' | 'stuck';
+            let result: string | undefined;
+            if (hasResult) {
+                status = 'done';
+                const resultMatch = claimContent.match(/^result:\s*(.+)$/m);
+                result = resultMatch ? resultMatch[1].trim() : undefined;
+            } else if (isActive) {
+                status = 'claimed';
+            } else {
+                status = 'stuck';
+            }
+
+            try {
+                await db.upsertJobInstruction(fileKey, status, claimedTs, agent, result);
+            } catch { /* one bad item must not abort the sweep */ }
         }
     } catch { /* non-fatal */ }
 }

@@ -12,6 +12,7 @@ import { GlobalPlanWatcherService } from './services/GlobalPlanWatcherService';
 import { KanbanDatabase, type WorkspaceDatabaseMapping } from './services/KanbanDatabase';
 import { resolveEffectiveWorkspaceRootFromMappings, getMappingsFromIndex } from './services/WorkspaceIdentityService';
 import { SetupPanelProvider } from './services/SetupPanelProvider';
+import { ConnectionsPanelProvider } from './services/ConnectionsPanelProvider';
 import { ReviewCommentRequest, ReviewCommentResult } from './services/reviewTypes';
 import { sendRobustText } from './services/terminalUtils';
 import { importPlanFiles } from './services/PlanFileImporter';
@@ -44,6 +45,7 @@ import { switchboardCommandRegistry } from './services/commandRegistry';
 import { stateFile } from './utils/stateHome';
 import { GlobalIntegrationConfigService } from './services/GlobalIntegrationConfigService';
 import { StandaloneHostSecrets as EncryptedSecretsStore } from './services/encryptedSecretsStore';
+import { resolveDisplayHostname } from './utils/loopbackHostname';
 
 /**
  * Verb Engine · 1 — register a `switchboard.*` command in BOTH the host-agnostic
@@ -430,10 +432,23 @@ async function refreshWorkspaceControlPlane(
                 setLastCopiedAgentVersion(root, currentVersion);
             }
             // Auto-generate / refresh switchboard-spark.md context skill artifact on activation
+            // only when the file is missing or the stamped version differs from the
+            // running one. A manual button-click still regenerates on demand.
             try {
                 const { generateSparkContext } = require('./services/SparkContextExporter');
                 const v = currentVersion || '1.0.0';
-                generateSparkContext(root, v);
+                const sparkPath = path.join(root, '.switchboard', 'switchboard-spark.md');
+                let shouldGenerate = true;
+                if (fs.existsSync(sparkPath)) {
+                    const existing = fs.readFileSync(sparkPath, 'utf8');
+                    const m = existing.match(/\*\*Extension Version:\*\*\s*([^\n]+)/);
+                    if (m && m[1].trim() === v) {
+                        shouldGenerate = false;
+                    }
+                }
+                if (shouldGenerate) {
+                    generateSparkContext(root, v);
+                }
             } catch (sparkErr) {
                 console.warn(`[Switchboard] Spark context generation failed for ${root}:`, sparkErr);
             }
@@ -694,11 +709,43 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     };
 
+    /**
+     * Import from the machine-global store into VS Code SecretStorage.
+     *
+     * The mirror was write-only (keychain → file), so a token stored with
+     * `npx switchboard secrets set …` or entered in the standalone browser Setup
+     * panel was invisible to the editor host — which is why the browser panels'
+     * hint could only ever say "open VS Code".
+     *
+     * Fill-only, never overwrite: the keychain is authoritative here. Overwriting
+     * would let a stale file value clobber a token the user just entered in the
+     * Setup panel, and combined with the onDidChange delete-propagation it would
+     * resurrect tokens the user deliberately cleared.
+     *
+     * Read failures are swallowed. A missing .master-key or absent
+     * SWITCHBOARD_MASTER_PASSPHRASE must never rename, delete, or otherwise
+     * condemn a store that standalone and the CLI also depend on.
+     */
+    const importSecretFromGlobalStore = async (key: string) => {
+        if (!globalSecrets) { return; }
+        try {
+            const existing = await context.secrets.get(key);
+            if (existing && existing.trim().length > 0) { return; }   // keychain wins
+            const fromStore = await globalSecrets.get(key);
+            if (!fromStore || fromStore.trim().length === 0) { return; }
+            await context.secrets.store(key, fromStore);
+            outputChannel?.appendLine(`[Switchboard] Imported ${key} from the machine-global secrets store`);
+        } catch (err) {
+            console.warn(`[Switchboard] Secrets import failed for ${key}:`, err);
+        }
+    };
+
     // 1. Activation backfill sweep — write-only, never deletes.
     (async () => {
-        for (const key of MIRRORED_SECRET_KEYS) {
-            await syncSecretToGlobalStore(key, false);
-        }
+        // Import BEFORE the write-only backfill: the sweep reads the keychain, so if it
+        // ran first it would see nothing to mirror and the import would be a no-op race.
+        for (const key of MIRRORED_SECRET_KEYS) { await importSecretFromGlobalStore(key); }
+        for (const key of MIRRORED_SECRET_KEYS) { await syncSecretToGlobalStore(key, false); }
     })().catch(err => console.warn('[Switchboard] Secrets activation sweep error:', err));
 
     // 2. On change listener — the only path allowed to propagate deletes.
@@ -1194,7 +1241,11 @@ export async function activate(context: vscode.ExtensionContext) {
             return;
         }
         const token = activeTaskViewerProvider.mintBrowserToken();
-        const url = `http://127.0.0.1:${port}/?token=${token}`;
+        // Same helper the standalone CLI uses, so the extension button and `npx
+        // switchboard` can never hand out different hostnames — and so a name the
+        // server's Host guard would 403 can never be opened.
+        const host = await resolveDisplayHostname(undefined, port, m => outputChannel?.appendLine('[Switchboard] ' + m));
+        const url = `http://${host}:${port}/?token=${token}`;
         await vscode.env.openExternal(vscode.Uri.parse(url));
     });
     context.subscriptions.push(openInBrowserDisposable);
@@ -1252,6 +1303,14 @@ export async function activate(context: vscode.ExtensionContext) {
     kanbanProvider!.setPlanningPanelProvider(planningPanelProvider);
     planningPanelProvider.setKanbanProvider(kanbanProvider!);
     planningPanelProvider.setTaskViewerProvider(taskViewerProvider);
+
+    const connectionsPanelProvider = new ConnectionsPanelProvider(
+        context.extensionUri,
+        setupPanelProvider,
+        planningPanelProvider,
+        () => kanbanProvider!.getCurrentWorkspaceRoot() ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+    );
+    context.subscriptions.push(connectionsPanelProvider);
 
     const designPanelProvider = new DesignPanelProvider(
         context.extensionUri,
@@ -1325,6 +1384,11 @@ export async function activate(context: vscode.ExtensionContext) {
         await setupPanelProvider.open(typeof section === 'string' ? section : undefined);
     });
     context.subscriptions.push(openSetupPanelDisposable);
+
+    const openConnectionsPanelDisposable = registerSwitchboardCommand('switchboard.openConnectionsPanel', async (section?: string) => {
+        await connectionsPanelProvider.open(typeof section === 'string' ? section : undefined);
+    });
+    context.subscriptions.push(openConnectionsPanelDisposable);
     const scaffoldMultiRepoDisposable = vscode.commands.registerCommand('switchboard.scaffoldMultiRepo', async () => {
         await vscode.commands.executeCommand('switchboard.openSetupPanel', 'control-plane:fresh-setup');
     });
@@ -3414,9 +3478,8 @@ export async function activate(context: vscode.ExtensionContext) {
                                 terminal.sendText(cmd.trim(), true);
                                 outputChannel?.appendLine(`[Extension] Sent startup command for '${agent.name}' (${agent.role}): ${cmd.trim()}`);
 
-                                // NEW: Cache the binary-derived agent display name
-                                const binary = cmd.trim().split(/\s+/)[0];
-                                const displayName = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase() + ' CLI';
+                                // NEW: Cache the brand-aware agent display name
+                                const displayName = taskViewerProvider.deriveAgentDisplayName(cmd);
                                 taskViewerProvider.setTerminalAgentInfo(suffixedName(agent.name), agent.role, displayName);
 
                                 if (!registeredTerminals.has(suffixedName(agent.name))) {

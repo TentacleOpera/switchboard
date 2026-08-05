@@ -286,9 +286,9 @@ suite('Kanban Auto-Export (Markdown)', () => {
         await db.flushLocalBoardMirror();
 
         const content = readPerColumnFile(tempDir, 'INTERN CODED');
-        assert.ok(content.includes('**Agent:** AGY CLI'), 'INTERN CODED header should include **Agent:** AGY CLI');
+        assert.ok(content.includes('**Agent:** Antigravity CLI'), 'INTERN CODED header should include **Agent:** Antigravity CLI');
         // Header order: ## COL, blank, **Agent:**, blank, then per-plan lines.
-        const agentIdx = content.indexOf('**Agent:** AGY CLI');
+        const agentIdx = content.indexOf('**Agent:** Antigravity CLI');
         const planIdx = content.indexOf('plan-1.md');
         assert.ok(agentIdx > -1 && planIdx > agentIdx, 'Agent line should precede plan lines');
     });
@@ -363,7 +363,7 @@ suite('Kanban Auto-Export (Markdown)', () => {
         });
         await db.flushLocalBoardMirror();
         let content = readPerColumnFile(tempDir, 'INTERN CODED');
-        assert.ok(content.includes('**Agent:** AGY CLI'), 'First write should show AGY CLI');
+        assert.ok(content.includes('**Agent:** Antigravity CLI'), 'First write should show Antigravity CLI');
 
         // Config-only change: no card move, just rewrite state.json.
         await writeStateJson(tempDir, {
@@ -373,7 +373,7 @@ suite('Kanban Auto-Export (Markdown)', () => {
         await db.flushLocalBoardMirror();
         content = readPerColumnFile(tempDir, 'INTERN CODED');
         assert.ok(content.includes('**Agent:** CLAUDE CLI'), 'Second write should show CLAUDE CLI after config-only change');
-        assert.ok(!content.includes('**Agent:** AGY CLI'), 'Stale AGY CLI line should be gone');
+        assert.ok(!content.includes('**Agent:** Antigravity CLI'), 'Stale Antigravity CLI line should be gone');
     });
 
     test('Column label parity — resolver, exports, canonicalizer, and definition guard', async function() {

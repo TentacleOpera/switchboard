@@ -42,3 +42,11 @@ Full setup steps: **[Installation guide](https://tentacleopera.github.io/switchb
 ---
 
 **MIT License** — fully open source. 100% local-first: no external proxy servers, no telemetry, no tracking.
+
+## Legal Notices & Trademarks
+
+- **Claude** and **Claude Code** are registered trademarks of Anthropic, PBC.
+- **Google** and **Google Antigravity** are registered trademarks of Google LLC.
+- **Devin** is a registered trademark of Cognition AI, Inc.
+
+Switchboard is an independent, open-source project. All third-party product names, logos, and brands mentioned herein are the property of their respective owners. Reference to these brands is strictly for nominative compatibility identification and does not imply affiliation, sponsorship, or endorsement.

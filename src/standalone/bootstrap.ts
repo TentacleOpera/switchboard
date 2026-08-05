@@ -31,8 +31,9 @@ import { createStandalonePlanIngestionHost, readPlanScannerCustomSourceDirs } fr
 import { PtyFleetService, PTY_IDE_NAME } from './ptyFleetService';
 import { isPtyAvailable } from './ptyBackend';
 import { SURFACES } from '../services/wsHub';
+import { GlobalIntegrationConfigService } from '../services/GlobalIntegrationConfigService';
 import { TerminalWsGateway } from './terminalWsGateway';
-import { sendPromptToPty, clearPty } from './ptyPromptDelivery';
+import { sendPromptToPty, clearPty, modelPty } from './ptyPromptDelivery';
 
 import { ClickUpSyncService } from '../services/ClickUpSyncService';
 import { LinearSyncService } from '../services/LinearSyncService';
@@ -61,7 +62,7 @@ import { createVscodeHostSeams, type HostSeams } from '../services/hostSeams';
 // workspace root before any service that touches `vscode.workspace.getConfiguration`
 // is constructed.
 import { __setStandaloneWorkspaceRoot, createStandaloneSecretStorage } from './vscodeShim';
-import { isLoopbackHostname } from '../utils/loopbackHostname';
+import { isLoopbackHostname, resolveDisplayHostname } from '../utils/loopbackHostname';
 
 export interface HeadlessSwitchboardOptions {
     workspaceRoot: string;
@@ -628,6 +629,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     const setupProvider = new SetupPanelProvider({ fsPath: repoRoot } as any);
     (setupProvider as any)._hostSeams = headlessSeams;
     (setupProvider as any)._broadcaster = headlessBroadcaster;
+    (setupProvider as any)._headless = true;
 
     // Tickets: extensionUri, context, stateStore. The ticket verb surface still lives in
     // PlanningPanelProvider, so this currently serves the panel's own chrome verbs only.
@@ -1096,6 +1098,11 @@ Read the current content above. Deepen the problem analysis, verify every file p
      */
     const handlePtyVerb = async (verb: string, payload: any, root: string): Promise<any> => {
         switch (verb) {
+                case 'ptyVisibleRoles': {
+                    const roles = await GlobalIntegrationConfigService.getPtyVisibleRoles();
+                    return { success: true, ...roles };
+                }
+
                 case 'ptyCreateTerminal': {
                     // The sidebar's per-parent `+` posts `parentRoot`, never `cwd` — the
                     // extension host translates it in its proxy. This host has no proxy in
@@ -1144,6 +1151,13 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     const handle = ptyFleetService.get(payload.name);
                     if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
                     if (handle.status === 'active') { await clearPty(handle); }
+                    return { success: true };
+                }
+
+                case 'ptySendModel': {
+                    const handle = ptyFleetService.get(payload.name);
+                    if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
+                    if (handle.status === 'active') { await modelPty(handle); }
                     return { success: true };
                 }
 
@@ -1497,10 +1511,23 @@ Each plan file must include:
         // before a restart (or a direct API caller) can still reach these verbs, and
         // an unguarded call would surface as an unhandled spawn exception.
         terminalVerb: async (verb: string, payload: any, workspaceRootArg?: string) => {
-            if (!ptyReady) {
+            if (verb !== 'ptyVisibleRoles' && !ptyReady) {
                 return { success: false, error: 'PTY terminals are unavailable: the optional node-pty module could not be loaded on this machine.' };
             }
             return handlePtyVerb(verb, payload, workspaceRootArg || payload?.workspaceRoot || workspaceRoot);
+        },
+        catalogProvider: async () => {
+            const candidates = [
+                path.join(repoRoot, 'protocol-catalog.json'),
+                path.join(workspaceRoot, 'protocol-catalog.json'),
+            ];
+            for (const catalogPath of candidates) {
+                try {
+                    const raw = await fs.promises.readFile(catalogPath, 'utf8');
+                    return JSON.parse(raw);
+                } catch { /* try next candidate */ }
+            }
+            return null;
         },
         planningVerb,
         designVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
@@ -1589,7 +1616,7 @@ Each plan file must include:
     // The bind address is 127.0.0.1 unconditionally; `hostname` only changes the
     // name the user is handed. Validated here as well as in the CLI so a library
     // caller cannot mint a URL the server's Host guard would then reject.
-    const displayHost = opts.hostname ?? '127.0.0.1';
+    const displayHost = await resolveDisplayHostname(opts.hostname, port, m => log(opts, m));
     if (!isLoopbackHostname(displayHost)) {
         throw new Error(`hostname must resolve to loopback (localhost, *.localhost or 127.0.0.1); got '${displayHost}'`);
     }

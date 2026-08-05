@@ -2496,7 +2496,15 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             case 'ready': {
                 const allRoots = this._getWorkspaceRoots();
                 const items = buildWorkspaceItems(allRoots);
-                const tabKeys = ['stitch', 'html-preview', 'images', 'design', 'html.root', 'claude.root', 'design.root', 'stitch.root', 'images.root', 'activeTab', 'previews.source'];
+                // stitch.projectId / stitchHtml.projectId are written by design.js
+                // (persistTab(..., workspaceRoot)) on every project change. They were absent
+                // here, which made them write-only: PanelStateStore.getAllStates iterates only
+                // the keys it is handed, so the webview's restore read returned undefined and
+                // the picker opened empty on every load.
+                const tabKeys = ['stitch', 'html-preview', 'images', 'design', 'html.root',
+                                 'claude.root', 'design.root', 'stitch.root', 'images.root',
+                                 'activeTab', 'previews.source', 'stitch.projectId',
+                                 'stitchHtml.projectId'];
                 const statePayload = this._stateStore.getAllStates(tabKeys, allRoots);
                 this.postMessage({
                     type: 'workspaceItemsUpdated',

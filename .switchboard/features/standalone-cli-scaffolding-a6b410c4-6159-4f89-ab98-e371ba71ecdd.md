@@ -19,7 +19,11 @@ Add CLI subcommands to the standalone Switchboard binary for initialising scaffo
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Standalone `init` Command — Bootstrap Switchboard Scaffolding Into a Repo From the CLI](../plans/feature_plan_20260804081225_standalone-init-scaffolding-command.md) — **PLAN REVIEWED**
-- [ ] [Standalone Multi-Repo Scaffold + Control Plane CLI Commands](../plans/feature_plan_20260804081226_standalone-multi-repo-scaffold-and-control-plane-cli.md) — **PLAN REVIEWED**
+- [ ] [Standalone `init` Command — Bootstrap Switchboard Scaffolding Into a Repo From the CLI](../plans/feature_plan_20260804081225_standalone-init-scaffolding-command.md) — **CODER CODED**
+- [ ] [Standalone Multi-Repo Scaffold + Control Plane CLI Commands](../plans/feature_plan_20260804081226_standalone-multi-repo-scaffold-and-control-plane-cli.md) — **CODER CODED**
 <!-- END SUBTASKS -->
+
+## Completion Report
+
+Implemented `npx switchboard init`, `scaffold`, and `control-plane detect/preview/migrate` subcommands in `src/standalone/cli.ts`, updated `usage()` help. Added `headlessDefaults` to `ScaffoldOptions` / `MultiRepoScaffoldingService._reviewSubRepoDb` to fix silent headless cancel; added `SetupPanelProvider._headless` and set it in `src/standalone/bootstrap.ts`. No compilation or automated tests run per dispatch directive.
 

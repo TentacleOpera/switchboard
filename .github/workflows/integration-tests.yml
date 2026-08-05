@@ -178,6 +178,13 @@ jobs:
       - name: Verb engine tickets contract (in-body failure, schema validation, allowlist gating)
         run: npm run test:contract:verb-engine-tickets
 
+      # The Connections panel is the only one that spans two providers. This pins
+      # that the extension-host forwarder and the /connections/verb/ HTTP branch
+      # resolve every posted verb to the same provider, and that the forwarder
+      # contributes no verb arms of its own.
+      - name: Connections dual-provider routing contract
+        run: npm run test:contract:connections-routing
+
       - name: Design per-client view state contract (seats, poll lifecycle, wsHub keepalive)
         run: npm run test:contract:design-view-state
 
@@ -224,6 +231,22 @@ jobs:
 
       - name: Tickets sidebar list scoping contract
         run: npm run test:contract:tickets-sidebar-scoping
+
+      # 2026-08-05: the delta refresh sweep unlinked five live ticket files and their
+      # imported_docs rows while ClickUp still held all five tasks. Its authorisation
+      # check meant "did not throw", and _fetchListTasksInternal returns short results
+      # without throwing. Deletion here is irreversible — the file AND its DB row go,
+      # so nothing records that the file ever existed. Every ambiguous case must
+      # resolve to no-delete. Keep this wired.
+      - name: Tickets delta deletion-sweep authorisation gate (short fetch must not delete)
+        run: npm run test:contract:tickets-delta-sweep-gate
+
+      # Tickets replies are BROADCAST to every surface. Unstamped, a reply for another
+      # panel's list is indistinguishable from your own and overwrites the sidebar
+      # ("flashes with a lot of stuff and then disappears"). Both halves — the backend
+      # stamp and the frontend predicate — must stay; either alone reintroduces it.
+      - name: Tickets cross-panel reply scope contract (stamp + filter)
+        run: npm run test:contract:tickets-cross-panel-scope
 
       - name: Tickets subtask embedding contract
         run: npm run test:contract:tickets-subtasks
@@ -399,6 +422,11 @@ jobs:
       # which exist.
       - name: Scheduled jobs + Connections contract (claims, declared moves, ingestion, spark)
         run: npm run test:contract:scheduled-jobs
+
+      # Spark context artifact curation: selected AGENTS.md sections, jobs protocol,
+      # exclusions, anti-confabulation rule, and a secret-leak assertion.
+      - name: Spark context exporter contract
+        run: npm run test:contract:spark-context-exporter
 
       # Column ID -> UI label. The bug this guards is invisible to every other gate:
       # `CREATED` renders as "New", `PLAN REVIEWED` as "Planned", `CODE REVIEWED` as

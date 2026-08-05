@@ -242,3 +242,7 @@ function getMemoWorkspaceRoot() { return memoWorkspaceRoot || currentWorkspaceRo
 11. **UAT — no scaffolding.** Select a workspace that has no `.switchboard/` directory and do not type: confirm no directory or memo file is created until the first save.
 
 Send to Coder
+
+## Completion Summary
+
+Implemented the memo workspace indicator and independent workspace picker across both memo surfaces. Added a `memoListWorkspaces` verb to `TaskViewerProvider`, routed it through `PlanningPanelProvider`, and added its schema; regenerated the protocol catalog and verb allowlist. Updated `memo.html`/`memo.js` and `implementation.html` to show a labelled `Saving to` picker, debounced-save flushing on switch, explicit-override state that survives board workspace changes, and correct routing of all memo verbs through the selected workspace. `npm run catalog:generate`, `npm run parity:check`, and `npm run catalog:check` all pass.

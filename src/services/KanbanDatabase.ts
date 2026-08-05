@@ -539,12 +539,24 @@ const MIGRATION_V20_SQL = [
     // For duplicate (plan_file, workspace_id) pairs, keep the most recently updated row.
     // For rows with NULL or empty plan_file, fabricate a unique value from session_id
     // so the UNIQUE(plan_file, workspace_id) constraint is not violated.
-    `INSERT INTO plans_v20
-     SELECT * FROM plans
-     WHERE rowid IN (
-         SELECT MAX(rowid) FROM plans
-         GROUP BY COALESCE(NULLIF(plan_file, ''), '_orphan_' || session_id), workspace_id
-     )`,
+    `INSERT INTO plans_v20 (
+        plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
+        dependencies, repo_scope, workspace_id, created_at, updated_at, last_action,
+        source_type, brain_source_path, mirror_path, routed_to, dispatched_agent,
+        dispatched_ide, clickup_task_id, linear_issue_id, needs_path_fix,
+        needs_relative_conversion
+    )
+    SELECT
+        plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
+        dependencies, repo_scope, workspace_id, created_at, updated_at, last_action,
+        source_type, brain_source_path, mirror_path, routed_to, dispatched_agent,
+        dispatched_ide, clickup_task_id, linear_issue_id, needs_path_fix,
+        needs_relative_conversion
+    FROM plans
+    WHERE rowid IN (
+        SELECT MAX(rowid) FROM plans
+        GROUP BY COALESCE(NULLIF(plan_file, ''), '_orphan_' || session_id), workspace_id
+    )`,
     // Step 3: Patch any remaining NULL/empty plan_file values with a fabricated unique key.
     // These are orphan records (no plan file on disk) that must still be preserved.
     `UPDATE plans_v20
@@ -769,6 +781,7 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
 `;
 
 const MIGRATION_VERSION_KEY = 'kanban_db_migration_version';
+const CURRENT_SCHEMA_VERSION = 57;
 const ORPHAN_PURGE_CONFIRMATION_DELAY_MS = 350;
 
 const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
@@ -1864,6 +1877,11 @@ export class KanbanDatabase {
             this._safeExec('SCHEMA_TABLES (create)', SCHEMA_TABLES_SQL);
             this._ensureSchemaColumns();
             this._applySchemaIndexes('SCHEMA_INDEXES (create)');
+            // A DB created from the current SCHEMA_TABLES already satisfies every historical
+            // migration up through V57. Stamp the baseline before _runMigrations() so fresh
+            // databases skip the gated V20-V57 chain (including the V20 SELECT * shape mismatch)
+            // without losing rollback safety for real pre-baseline databases.
+            await this.setMigrationVersion(CURRENT_SCHEMA_VERSION);
             await this._runMigrations();
             this._ensureSchemaColumns();
 
@@ -7286,7 +7304,12 @@ export class KanbanDatabase {
         if (v27 < 27) {
             for (const sql of MIGRATION_V27_SQL) {
                 try { this._db.exec(sql); } catch (e) {
-                    console.debug('[KanbanDatabase] V27 migration step skipped (already applied):', e);
+                    const msg = e instanceof Error ? e.message : String(e);
+                    if (msg.includes('already exists') || msg.includes('duplicate column')) {
+                        console.info('[KanbanDatabase] V27 migration step skipped (already exists):', msg);
+                    } else {
+                        console.error('[KanbanDatabase] V27 migration step failed:', e);
+                    }
                 }
             }
             await this.setMigrationVersion(27);
@@ -7310,7 +7333,12 @@ export class KanbanDatabase {
         if (v29 < 29) {
             for (const sql of MIGRATION_V29_SQL) {
                 try { this._db.exec(sql); } catch (e) {
-                    console.debug('[KanbanDatabase] V29 migration step skipped:', e);
+                    const msg = e instanceof Error ? e.message : String(e);
+                    if (msg.includes('already exists') || msg.includes('duplicate column')) {
+                        console.info('[KanbanDatabase] V29 migration step skipped (already exists):', msg);
+                    } else {
+                        console.error('[KanbanDatabase] V29 migration step failed:', e);
+                    }
                 }
             }
             await this.setMigrationVersion(29);

@@ -20,8 +20,12 @@ Three board-surface defects: the DRAIN/WATCH trigger toggle explains itself only
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Kanban Automation Tab: DRAIN/WATCH Toggle Needs Real Tooltips](../plans/feature_plan_20260805105307_kanban-automation-drain-watch-tooltips.md) — **PLAN REVIEWED**
-- [ ] [Kanban Automation Tab: Remove the Unselectable "Antigravity Batch (legacy)" Mode](../plans/feature_plan_20260805105308_remove-antigravity-batch-legacy-automation-mode.md) — **PLAN REVIEWED**
-- [ ] [Kanban Board: Workspace/Project Dropdown Is Torn Down and Rebuilt on Every Board Poll](../plans/feature_plan_20260805105309_kanban-workspace-project-dropdown-rebuilt-on-every-poll.md) — **PLAN REVIEWED**
+- [ ] [Kanban Automation Tab: DRAIN/WATCH Toggle Needs Real Tooltips](../plans/feature_plan_20260805105307_kanban-automation-drain-watch-tooltips.md) — **INTERN CODED**
+- [ ] [Kanban Automation Tab: Remove the Unselectable "Antigravity Batch (legacy)" Mode](../plans/feature_plan_20260805105308_remove-antigravity-batch-legacy-automation-mode.md) — **INTERN CODED**
+- [ ] [Kanban Board: Workspace/Project Dropdown Is Torn Down and Rebuilt on Every Board Poll](../plans/feature_plan_20260805105309_kanban-workspace-project-dropdown-rebuilt-on-every-poll.md) — **INTERN CODED**
 <!-- END SUBTASKS -->
+
+## Completion Report
+
+Implemented all three subtasks in `src/webview/kanban.html` and `src/services/KanbanProvider.ts`. Tooltips now use `data-tooltip` and `aria-label` on the DRAIN/WATCH toggle, with `renderAutobanPanel` clearing any live tooltip before re-render. The unselectable `antigravity-batch` mode entry, its unreachable branches, and `lastAntigravity*` state were removed while leaving `remapAutomationMode` and the union alias intact. The workspace/project dropdown now uses signature-gated `updateWorkspaceSelection` posts at the three poll sites and a webview-side interaction guard with deferred replay, plus a shared `syncDeleteProjectButton` helper. No automated tests or compilation were run per session directive; static grep checks confirm the expected removals and the resync push remains unguarded.
 

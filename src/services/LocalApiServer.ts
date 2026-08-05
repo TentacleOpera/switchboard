@@ -2404,7 +2404,7 @@ export class LocalApiServer {
                 // file is absent — surface that as the plan-specified 404 rather than a
                 // misleading 200 {data:null}.
                 if (data == null) {
-                    const err: any = new Error('catalog not generated; run `node scripts/generate-protocol-catalog.js --write` and ship protocol-catalog.json');
+                    const err: any = new Error('catalog not found; protocol-catalog.json is missing from this Switchboard build or package');
                     err.statusCode = 404;
                     throw err;
                 }
@@ -2416,7 +2416,7 @@ export class LocalApiServer {
                 const raw = await fs.readFile(catalogPath, 'utf8');
                 return JSON.parse(raw);
             } catch {
-                const err: any = new Error('catalog not generated; run `node scripts/generate-protocol-catalog.js --write` in the workspace root');
+                const err: any = new Error('catalog not found; protocol-catalog.json is missing from this Switchboard build or package');
                 err.statusCode = 404;
                 throw err;
             }

@@ -178,6 +178,17 @@
             border-top: none;
             padding-top: 0;
         }
+
+        /* Settings cluster at the foot of the rail. `margin-top: auto` lives on
+           #strip-terminals (or, when Terminals is unavailable, on .theme-toggle-btn —
+           see renderTerminalSection); this class only supplies the separator, so it must
+           not add its own auto margin or it would fight the anchor. */
+        .strip-icon.strip-placement-bottom {
+            border-top: 1px solid var(--border);
+            padding-top: 0;
+            margin-top: 6px;
+        }
+
         .strip-term-btn {
             font-weight: 600;
             font-size: 13px;

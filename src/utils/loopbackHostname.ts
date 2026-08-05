@@ -24,6 +24,8 @@
  * (`localhost.evil.example` is an attacker-controlled name and must 403).
  */
 
+import * as http from 'http';
+
 /** `*.localhost`: one or more LDH labels, then the reserved `.localhost` TLD. */
 const DOT_LOCALHOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+localhost$/;
 
@@ -76,4 +78,74 @@ export function isLoopbackOrigin(origin: string): boolean {
     } catch {
         return false;
     }
+}
+
+/**
+ * The hostname Switchboard hands the user when nothing else is specified.
+ *
+ * Not a bind address — the server binds 127.0.0.1 unconditionally. This is the
+ * NAME in the printed/opened URL. `.localhost` is reserved by RFC 6761 §6.3 and
+ * is unspoofable, which is why the Host guard accepts it.
+ */
+export const DEFAULT_DISPLAY_HOSTNAME = 'switchboard.localhost';
+
+/**
+ * Can a client actually reach the server under `hostname`?
+ *
+ * A DNS lookup is not enough: the Windows resolver does not implement the
+ * `.localhost` TLD (browsers do it internally, the OS does not), and a resolver
+ * that answers `::1` first would hand back an address an IPv4-only listener
+ * refuses. So probe the real thing — GET /health over that name.
+ *
+ * /health is unauthenticated and idempotent; the one-time launch token must NOT
+ * be used here (consumeOneTimeToken succeeds exactly once).
+ */
+export async function isHostnameReachable(
+    hostname: string,
+    port: number,
+    timeoutMs = 500
+): Promise<boolean> {
+    return new Promise(resolve => {
+        const req = http.get(`http://${hostname}:${port}/health`, (res) => {
+            let body = '';
+            res.on('data', c => body += c);
+            res.on('end', () => {
+                try {
+                    const json = JSON.parse(body);
+                    resolve(json.status === 'ok' && json.port === port);
+                } catch { resolve(false); }
+            });
+        });
+        req.on('error', () => resolve(false));
+        req.setTimeout(timeoutMs, () => { try { req.destroy(); } catch { } resolve(false); });
+    });
+}
+
+/**
+ * Resolve the display hostname for a launch.
+ *
+ * - explicit input: honoured verbatim (already validated by the caller); probe
+ *   only to warn, never to override — the user may manage a hosts entry.
+ * - no input: prefer DEFAULT_DISPLAY_HOSTNAME, but fall back to 127.0.0.1 when
+ *   the probe fails. A default that hands out an unreachable URL is worse than a
+ *   plain one.
+ */
+export async function resolveDisplayHostname(
+    explicit: string | undefined,
+    port: number,
+    warn: (msg: string) => void
+): Promise<string> {
+    if (explicit) {
+        const reachable = await isHostnameReachable(explicit, port);
+        if (!reachable) {
+            warn(`hostname '${explicit}' did not respond to /health; browser may not be able to reach it`);
+        }
+        return explicit;
+    }
+    const reachable = await isHostnameReachable(DEFAULT_DISPLAY_HOSTNAME, port);
+    if (reachable) {
+        return DEFAULT_DISPLAY_HOSTNAME;
+    }
+    warn(`${DEFAULT_DISPLAY_HOSTNAME} is not reachable; falling back to 127.0.0.1`);
+    return '127.0.0.1';
 }

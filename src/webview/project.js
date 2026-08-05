@@ -1068,7 +1068,6 @@
                             if (_featureSelectedPlan) selectFeature(_featureSelectedPlan);
                         }
                         vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
-                        vscode.postMessage({ type: 'fetchFeatureDocuments' });
                     }
                 } else {
                     showToast('Save failed: ' + (msg.error || 'Unknown error'), 'error');

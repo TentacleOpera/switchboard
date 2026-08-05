@@ -115,3 +115,7 @@ Note the `data-layout="2h"` button (columns) now comes first and reads `2V`, sat
 4. **UAT — persistence.** Select `2V`, reload the panel. The same side-by-side grid returns. (Highlight-restore after reload is the sibling plan "The Layout Picker Lies"'s fix — if this plan is UAT'd alone, expect the grid to be correct but the highlight to sit on `1`; that is the known defect the sibling resolves, not a regression from this change.)
 5. **UAT — pre-existing saved value.** With `terminals.layoutMode` already equal to `'2h'` from before the change, reload: the grid is side by side (i.e. no user's saved layout silently changed shape); once the sibling sync plan lands, `2V` is highlighted too.
 6. **UAT — tooltips.** Hovering each two-pane button shows the orientation sentence.
+
+## Completion Report
+
+Implemented the two-pane label fix in `src/webview/terminals.html`: the `data-layout="2h"` button now reads `2V` with a side-by-side tooltip, the `data-layout="2v"` button reads `2H` with a stacked tooltip, and the side-by-side option is listed first. Added the inverted-key comment explaining that the `data-layout` keys name the split axis while the labels name the pane orientation. No persisted identifiers, CSS rules, or JS selectors were changed. Static review confirms the JS still keys on `data-layout`, and `node --check src/webview/terminals.js` passed.

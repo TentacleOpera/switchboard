@@ -342,7 +342,27 @@
         .item-role {
             font-size: 10px;
             color: var(--text-secondary);
-            text-transform: capitalize;
+            /* The subline now leads with friendlyName, an identity key whose case is
+               meaningful ("planner-2", and any mixed-case custom rename). text-transform
+               was decoration for the old `role · CLI LABEL` content; kept, it would print
+               "Planner-2". */
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .item-role-row {
+            display: flex;
+            align-items: center;
+            gap: 0;
+        }
+        .item-role-icon {
+            width: 12px;
+            height: 12px;
+            flex-shrink: 0;
+            align-self: center;
+            margin-right: 4px;
+            opacity: 0.85;
+            /* Monochrome SVGs use currentColor; inherit the role text colour. */
         }
         .status-dot {
             width: 7px;
@@ -807,6 +827,15 @@
             align-items: center;
             gap: 6px;
         }
+        /* The name is the ONLY shrinkable child of the .pane-title flex row — the
+           pane-index chip, badge and input-state chip must keep their intrinsic width
+           (see the mandatory note on .pane-title above). */
+        .pane-title-name {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
         .pane-badge {
             background: var(--accent-teal);
             color: #000;
@@ -1164,15 +1193,26 @@
                     title="Toggle the focused pane between kanban board view and terminal">KANBAN MODE</button>
             <button type="button" id="btn-clear-all" class="secondary-btn w-full"
                     title="Send /clear to every active terminal">CLEAR ALL TERMINALS</button>
+            <button type="button" id="btn-save-group" class="secondary-btn w-full"
+                    title="Save the current pane arrangement as a named group">SAVE AS GROUP</button>
         </div>
         <div id="terminals-list" class="terminals-list"></div>
     </div>
     <div id="terminals-main" class="terminals-main">
         <div class="layout-toolbar">
             <div class="layout-picker">
+                <!-- The `data-layout` keys name the SPLIT AXIS ("2h" = one horizontal split →
+                     two columns); the labels name what the operator counts on screen ("2V" =
+                     two vertical terminals). They are deliberately inverted, and the keys are
+                     load-bearing: `terminals.layoutMode` persists them and .pane-grid.layout-*
+                     styles them. Change a label freely; never a key. -->
+                <!-- `active` here is the PRE-JS default only: loadLayoutSettings() is an async
+                     verb call, so something must be highlighted on the first frame. terminals.js
+                     calls syncLayoutPickerUI() once the persisted layout resolves. Do not remove
+                     this class, and do not add `active` to any other button. -->
                 <button type="button" class="btn-layout active" data-layout="1">1</button>
-                <button type="button" class="btn-layout" data-layout="2h">2h</button>
-                <button type="button" class="btn-layout" data-layout="2v">2v</button>
+                <button type="button" class="btn-layout" data-layout="2h" title="Two vertical terminals, side by side">2V</button>
+                <button type="button" class="btn-layout" data-layout="2v" title="Two horizontal terminals, stacked">2H</button>
                 <button type="button" class="btn-layout" data-layout="2x2">2x2</button>
                 <button type="button" class="btn-layout" data-layout="2x3">2x3</button>
                 <button type="button" class="btn-layout" data-layout="3x3">3x3</button>

@@ -25,9 +25,13 @@ Rework the browser Terminals sidebar list: brand each row with the real CLI icon
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Terminals role picker: read the real visible-agents store in both hosts](../plans/standalone-role-picker-visible-agents.md) — **PLAN REVIEWED**
-- [ ] [Terminal Sidebar Groupings — Saved Pane-Assignment Sets, One-Click Switch](../plans/feature_plan_20260804083403_terminal-sidebar-groupings.md) — **PLAN REVIEWED**
-- [ ] [Remove redundant "locate" button from browser terminals.html sidebar](../plans/feature_plan_20260804115941_remove-redundant-locate-button-browser-terminals-sidebar.md) — **PLAN REVIEWED**
-- [ ] [Brand the terminals.html sidebar list with real CLI brand icons and names](../plans/feature_plan_20260804120328_brand-cli-sidebar-list-with-icons.md) — **PLAN REVIEWED**
+- [ ] [Terminals role picker: read the real visible-agents store in both hosts](../plans/standalone-role-picker-visible-agents.md) — **CODER CODED**
+- [ ] [Terminal Sidebar Groupings — Saved Pane-Assignment Sets, One-Click Switch](../plans/feature_plan_20260804083403_terminal-sidebar-groupings.md) — **CODER CODED**
+- [ ] [Remove redundant "locate" button from browser terminals.html sidebar](../plans/feature_plan_20260804115941_remove-redundant-locate-button-browser-terminals-sidebar.md) — **CODER CODED**
+- [ ] [Brand the terminals.html sidebar list with real CLI brand icons and names](../plans/feature_plan_20260804120328_brand-cli-sidebar-list-with-icons.md) — **CODER CODED**
 <!-- END SUBTASKS -->
+
+## Completion Summary
+
+Implemented all four subtasks. Added the `ptyVisibleRoles` verb on the shared `/terminals/verb/` rail, replaced the terminals.js role picker and OPEN AGENT TERMINALS grid with the real visible-agents store, and deleted the drifted hardcoded `DEFAULT_ROLES` and `DEFAULT_VISIBLE_AGENTS` lists. Removed the redundant `locate` button from `renderTerminalRow`. Extracted `deriveAgentDisplayName` into `TaskViewerProvider`, updated all five derivation sites and the `kanban-auto-export` `AGY CLI` assertions to `Antigravity CLI`, added four monochrome `currentColor` brand SVGs to `icons/`, wired the icon placeholders in `headlessPanelHtml.ts`, and added the brand-glyph render in `terminals.js`. Added the persisted `terminalGroups`/`activeGroupId` store, a SAVE AS GROUP inline input, group sidebar mode in `renderSidebarList`, `switchToGroup` routed through `setLayoutMode`, rename fixup for saved group assignments, and appended the trademark notice to `README.md`. Verification was limited to static inspection per the SKIP COMPILATION / SKIP TESTS directive; no build or test suite was run.
 

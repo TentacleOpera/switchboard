@@ -12,6 +12,10 @@ export interface ScaffoldOptions {
     workspaceName: string;
     repoUrls: string[];
     pat: string;
+    /** When set, skip vscode.window dialogs and apply these defaults (headless mode). */
+    headlessDefaults?: {
+        subRepoDbAction: 'delete' | 'keep';
+    };
 }
 
 export interface RepoOutcome {
@@ -44,6 +48,9 @@ type NormalizedScaffoldOptions = {
     repoUrls: string[];
     pat: string;
     repos: RepoPreflight[];
+    headlessDefaults?: {
+        subRepoDbAction: 'delete' | 'keep';
+    };
 };
 
 const DELETE_SUB_REPO_DB_ACTION = 'Delete sub-repo DB (Recommended)';
@@ -249,7 +256,8 @@ export class MultiRepoScaffoldingService {
             workspaceName,
             repoUrls,
             pat,
-            repos
+            repos,
+            headlessDefaults: options.headlessDefaults
         };
     }
 
@@ -283,7 +291,7 @@ export class MultiRepoScaffoldingService {
                 };
                 repos.push(outcome);
 
-                const cleanup = await this._reviewSubRepoDb(repo.targetDir, outcome, warnings);
+                const cleanup = await this._reviewSubRepoDb(repo.targetDir, outcome, warnings, options.headlessDefaults);
                 if (cleanup.cancelled) {
                     return {
                         success: false,
@@ -321,7 +329,7 @@ export class MultiRepoScaffoldingService {
                 continue;
             }
 
-            const cleanup = await this._reviewSubRepoDb(repo.targetDir, outcome, warnings);
+            const cleanup = await this._reviewSubRepoDb(repo.targetDir, outcome, warnings, options.headlessDefaults);
             if (cleanup.cancelled) {
                 return {
                     success: false,
@@ -371,7 +379,8 @@ export class MultiRepoScaffoldingService {
     private static async _reviewSubRepoDb(
         targetDir: string,
         outcome: RepoOutcome,
-        warnings: string[]
+        warnings: string[],
+        headlessDefaults?: { subRepoDbAction: 'delete' | 'keep' }
     ): Promise<{ cancelled: boolean; error?: string }> {
         const dbPath = getSubRepoDbPath(targetDir);
         if (!fs.existsSync(dbPath)) {
@@ -379,6 +388,30 @@ export class MultiRepoScaffoldingService {
         }
 
         outcome.existingSubRepoDb = true;
+
+        if (headlessDefaults) {
+            if (headlessDefaults.subRepoDbAction === 'delete') {
+                try {
+                    await Promise.all([
+                        fs.promises.rm(dbPath, { force: true }),
+                        fs.promises.rm(`${dbPath}-wal`, { force: true }),
+                        fs.promises.rm(`${dbPath}-shm`, { force: true })
+                    ]);
+                    outcome.cleanupAction = 'deleted';
+                    warnings.push(`Headless: deleted existing sub-repo kanban.db for ${outcome.dir} (control-plane parent is authoritative).`);
+                    return { cancelled: false };
+                } catch (error) {
+                    return {
+                        cancelled: false,
+                        error: `Failed to delete the existing sub-repo kanban.db for ${outcome.dir}: ${error instanceof Error ? error.message : String(error)}`
+                    };
+                }
+            }
+            outcome.cleanupAction = 'kept';
+            warnings.push(`Headless: kept ${outcome.dir}/.switchboard/kanban.db with an explicit warning.`);
+            return { cancelled: false };
+        }
+
         const selection = await vscode.window.showWarningMessage(
             `Switchboard found an existing sub-repo kanban.db in ${outcome.dir}. Delete it so the Control Plane parent stays authoritative, or keep it and proceed with a warning.`,
             { modal: true },

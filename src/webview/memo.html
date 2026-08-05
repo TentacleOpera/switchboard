@@ -70,6 +70,22 @@
         .memo-actions .secondary-btn { flex: 1; }
         #memo-status { font-size: 11px; color: var(--text-secondary); min-height: 14px; display: block; margin-top: 8px; }
 
+        .memo-workspace-row {
+            display: flex; align-items: center; gap: 8px;
+        }
+        .memo-workspace-label {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+        .memo-workspace-select {
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            font-size: 11px;
+            padding: 2px 4px;
+            border-radius: 2px;
+            max-width: 240px;
+        }
         .section-label {
             font-size: 10px;
             text-transform: uppercase;
@@ -184,7 +200,11 @@
 <body>
     <div class="memo-header">
         <span class="section-label">Memo</span>
-        <span id="memo-workspace" class="memo-hint" title="Workspace this memo is saved to"></span>
+        <label class="memo-workspace-row" for="memo-workspace-select">
+            <span class="memo-workspace-label">Saving to</span>
+            <select id="memo-workspace-select" class="memo-workspace-select"
+                    title="Which workspace this memo is saved to. Does not change the board."></select>
+        </label>
     </div>
     <div class="memo-body">
         <p class="memo-hint">

@@ -36,7 +36,10 @@ function testTicketsSidebarListScoping() {
     // Assertion 5: Latch site in case 'localTicketFilesListed' is guarded by !msg.unscopedPlaceholder
     const localListedIdx = ticketsJs.indexOf("case 'localTicketFilesListed':");
     assert.strictEqual(localListedIdx !== -1, true, "case 'localTicketFilesListed': must exist in tickets.js");
-    const localListedBody = ticketsJs.slice(localListedIdx, localListedIdx + 300);
+    // Window is generous on purpose: the arm now opens with the cross-panel scope
+    // guard (`if (!_isForThisPanel(message)) { break; }`), so a tight 300-char slice
+    // truncates before the latch and fails on a change that did not touch the latch.
+    const localListedBody = ticketsJs.slice(localListedIdx, localListedIdx + 600);
     assert.match(
         localListedBody,
         /if\s*\(\s*!message\.unscopedPlaceholder\s*\)\s*\{\s*ticketsLoadedOnce\s*=\s*true;\s*\}/,
@@ -106,7 +109,9 @@ function testTicketsSidebarListScoping() {
     );
     assert.match(
         providerListLocalBody,
-        /const res = \{ type: 'localTicketFilesListed', provider, tickets, \.\.\.\(scopeCoverage \?/,
+        // `this._scoped(` is the cross-panel reply stamp — optional here because this
+        // assertion is about scopeCoverage travelling back, not about the stamp.
+        /const res = (?:this\._scoped\()?\{ type: 'localTicketFilesListed', provider, tickets, \.\.\.\(scopeCoverage \?/,
         'localTicketFilesListed response must carry scopeCoverage'
     );
     assert.match(

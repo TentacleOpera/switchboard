@@ -29,6 +29,8 @@ const {
     isLoopbackHostname,
     isLoopbackHostHeader,
     isLoopbackOrigin,
+    DEFAULT_DISPLAY_HOSTNAME,
+    resolveDisplayHostname,
 } = require(path.join(OUT, 'utils', 'loopbackHostname.js'));
 
 let failures = 0;
@@ -199,6 +201,23 @@ check('every CSP that allows ws://localhost also allows ws://*.localhost', () =>
             );
         });
     }
+});
+
+check('the DEFAULT display hostname is switchboard.localhost, not 127.0.0.1', () => {
+    assert.strictEqual(DEFAULT_DISPLAY_HOSTNAME, 'switchboard.localhost');
+    assert.ok(isLoopbackHostname(DEFAULT_DISPLAY_HOSTNAME));
+});
+
+check('no launch surface hardcodes the 127.0.0.1 display URL', () => {
+    // Regression guard for the exact gap: the flag existed, the guard existed,
+    // the CSP existed — and every builder still emitted 127.0.0.1.
+    for (const f of ['src/standalone/cli.ts', 'src/standalone/bootstrap.ts', 'src/extension.ts']) {
+        const src = fs.readFileSync(path.join(process.cwd(), f), 'utf8');
+        assert.ok(!/\?\?\s*'127\.0\.0\.1'/.test(src), `${f} must not default the display host to 127.0.0.1`);
+    }
+    const extSrc = fs.readFileSync(path.join(process.cwd(), 'src', 'extension.ts'), 'utf8');
+    assert.ok(!/http:\/\/127\.0\.0\.1:\$\{port\}\/\?token=/.test(extSrc),
+        'openInBrowser must build its URL from resolveDisplayHostname');
 });
 
 if (failures > 0) {

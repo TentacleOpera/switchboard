@@ -1541,6 +1541,7 @@ export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
             action: { type: 'string' },
         },
     },
+    memoListWorkspaces: {},
     getRecentActivity: {
         fields: {
             limit: { type: 'number' },

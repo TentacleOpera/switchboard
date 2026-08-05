@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { stateFile } from '../utils/stateHome';
+import { parseCustomAgents } from './agentConfig';
 
 export interface GlobalConfig {
     migrationComplete?: boolean;
@@ -408,6 +409,47 @@ export class GlobalIntegrationConfigService {
         const globalConfig = await this.loadGlobal();
         delete globalConfig[provider];
         await this.saveGlobal(globalConfig);
+    }
+
+    private static DEFAULT_VISIBLE_AGENTS: Record<string, boolean> = {
+        lead: true,
+        coder: true,
+        intern: true,
+        reviewer: true,
+        tester: false,
+        planner: true,
+        analyst: true,
+        jules: false,
+        ticket_updater: false,
+        researcher: false,
+        claude_designer: false,
+        phone_a_friend: false,
+        project_manager: true
+    };
+
+    /**
+     * Read the machine-global visible-agents store and merge it over the built-in
+     * defaults. Custom agents default to visible. Also returns a `hasCommand` map
+     * so the UI can annotate roles with no configured startup command.
+     */
+    public static async getPtyVisibleRoles(): Promise<{ visibleAgents: Record<string, boolean>; hasCommand: Record<string, boolean> }> {
+        const fileValue = (await this.getAgentConfig<Record<string, boolean>>('visibleAgents')) || {};
+        const customRaw = await this.getAgentConfig<unknown[]>('customAgents');
+        const custom = Array.isArray(customRaw) ? customRaw.filter(a => a && typeof (a as any).role === 'string') : [];
+        const commands = (await this.getAgentStartupCommands()) || {};
+
+        const visible: Record<string, boolean> = { ...this.DEFAULT_VISIBLE_AGENTS };
+        for (const agent of parseCustomAgents(custom)) {
+            visible[agent.role] = true;
+        }
+        Object.assign(visible, fileValue);
+
+        const hasCommand: Record<string, boolean> = {};
+        for (const role of Object.keys(visible)) {
+            const cmd = commands[role];
+            hasCommand[role] = typeof cmd === 'string' && cmd.trim() !== '';
+        }
+        return { visibleAgents: visible, hasCommand };
     }
 
     /**

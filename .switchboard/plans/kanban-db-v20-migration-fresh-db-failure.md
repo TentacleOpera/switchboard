@@ -222,3 +222,7 @@ smaller win.
 - The repeated `kanban-archive.db … not creating` messages during boot (separate noise, different
   cause).
 - Any new schema version.
+
+## Completion Report
+
+Added `CURRENT_SCHEMA_VERSION` (57) and stamp it inside `KanbanDatabase.createIfMissing()` before `_runMigrations()`, so fresh databases skip the gated V20-V57 chain. Made the V20 `INSERT` column-explicit to remove the `SELECT *` shape dependency for any DB that still runs it. Downgraded V27 and V29 benign `already exists`/`duplicate column` skips to one-line `console.info` while preserving full `console.error` for genuine failures. No compilation or tests were run per the dispatch directive.

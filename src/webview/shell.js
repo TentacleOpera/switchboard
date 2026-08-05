@@ -140,7 +140,7 @@
 
     function buildIcon(panel) {
         const btn = document.createElement('button');
-        btn.className = 'strip-icon';
+        btn.className = 'strip-icon' + (panel.placement === 'bottom' ? ' strip-placement-bottom' : '');
         btn.type = 'button';
         btn.role = 'tab';
         btn.dataset.panel = panel.id;
@@ -368,6 +368,8 @@
             strip.appendChild(err);
             return;
         }
+
+        const bottomPanels = [];
         for (const panel of manifest) {
             // A panel the host did not enable is OMITTED, not greyed out. `enabled`
             // reflects a capability this host does not have at all (e.g. Terminals
@@ -379,9 +381,18 @@
             const frame = buildFrame(panel);
             icons.set(panel.id, icon);
             frames.set(panel.id, frame);
-            strip.appendChild(icon);
             content.appendChild(frame);
+            // Frames are position-independent (display-toggled, keyed by id); only the
+            // ICON's rail position depends on placement.
+            if (panel.placement === 'bottom') { bottomPanels.push(icon); } else { strip.appendChild(icon); }
         }
+
+        // Bottom cluster, in reading order: settings icons, then the fleet list, then
+        // the theme toggle. The fleet container carries `margin-top: auto`, so anything
+        // appended BEFORE it and AFTER the top group lands at the top of the bottom
+        // cluster — which is what keeps Setup adjacent to the theme toggle even as the
+        // fleet list grows toward its 40vh cap.
+        for (const icon of bottomPanels) { strip.appendChild(icon); }
 
         const themeBtn = buildThemeToggle();
         strip.appendChild(themeBtn);

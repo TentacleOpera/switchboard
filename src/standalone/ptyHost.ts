@@ -7,7 +7,7 @@ import { parse as parseUrl } from 'url';
 import { isPtyAvailable } from './ptyBackend';
 import { PtyFleetService } from './ptyFleetService';
 import { TerminalWsGateway } from './terminalWsGateway';
-import { clearPty, sendPromptToPty } from './ptyPromptDelivery';
+import { clearPty, modelPty, sendPromptToPty } from './ptyPromptDelivery';
 
 interface PtyHostOptions {
     workspaceRoot: string;
@@ -108,6 +108,12 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                 const handle = fleet.get(payload.name);
                 if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
                 if (handle.status === 'active') { await clearPty(handle); }
+                return { success: true };
+            }
+            case 'ptySendModel': {
+                const handle = fleet.get(payload.name);
+                if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
+                if (handle.status === 'active') { await modelPty(handle); }
                 return { success: true };
             }
             case 'ptyClearAllTerminals': {

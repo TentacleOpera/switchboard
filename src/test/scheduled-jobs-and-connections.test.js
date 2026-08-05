@@ -299,6 +299,45 @@ async function main() {
         }
     });
 
+    console.log('\n── connections panel: remote config round-trip ──');
+
+    // Static assertions over connections.js. The Providers tab renders a SUBSET of
+    // the Remote form, and `setRemoteConfig` REPLACES the stored object
+    // (RemoteControlService.setConfig re-derives every field), so any save built
+    // from the visible inputs alone wipes the fields the tab cannot show — the
+    // user's board selection above all. This shipped once with invented field
+    // names (frequencySeconds / autoPush / autoComment / includeContent) on both
+    // the read and the write side, which rendered defaults over real settings and
+    // then wrote those defaults back.
+    const CONNECTIONS_JS = fs.readFileSync(path.join(__dirname, '..', 'webview', 'connections.js'), 'utf8');
+    const CANONICAL = ['provider', 'boards', 'silentSync', 'pingFrequencySeconds', 'mode', 'push', 'comments', 'content'];
+    const INVENTED = ['frequencySeconds', 'autoPush', 'autoComment', 'includeContent'];
+
+    await test('the remote config save merges over the host-supplied config', async () => {
+        assert.match(CONNECTIONS_JS, /_lastRemoteConfig/,
+            'no retained base config — a save built only from the visible inputs replaces and wipes boards/silentSync');
+        assert.match(CONNECTIONS_JS, /if \(!_lastRemoteConfig\)\s*\{\s*return/,
+            'saveRemoteConfig must no-op until the host has sent the stored config');
+    });
+
+    await test('connections.js uses only canonical RemoteConfig field names', async () => {
+        // Comments legitimately name the wrong fields to explain why they are wrong,
+        // so the check runs over code only.
+        const code = CONNECTIONS_JS
+            .split('\n')
+            .map(l => l.replace(/\/\/.*$/, ''))
+            .join('\n')
+            .replace(/\/\*[\s\S]*?\*\//g, '');
+        for (const bad of INVENTED) {
+            assert.ok(!new RegExp(`\\b${bad}\\b`).test(code),
+                `'${bad}' is not a RemoteConfig field — see RemoteControlService.ts:42-59; it silently reads/writes nothing`);
+        }
+        for (const good of ['pingFrequencySeconds', 'comments', 'content', 'push', 'provider']) {
+            assert.ok(CONNECTIONS_JS.includes(good), `canonical field '${good}' is not referenced at all`);
+        }
+        assert.ok(CANONICAL.length === 8, 'RemoteConfig field list drifted — re-check this test against the interface');
+    });
+
     for (const d of tmpDirs) {
         try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best effort */ }
     }

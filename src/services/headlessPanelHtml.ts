@@ -406,7 +406,8 @@ export function getTerminalsHtml(repoRoot: string, workspaceRoot: string, capabi
     content = content.replace(/\{\{GEIST_PIXEL_FONT_URI\}\}/g, '/static/designs/GeistPixel-Square.woff2');
     content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', `<script nonce="${nonce}" src="/static/webview/terminals.js"></script>`);
     const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
-    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="terminals" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
+    const brandIconDir = '/static/icons';
+    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="terminals" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}" data-brand-icon-claude="${brandIconDir}/brand-claude.svg" data-brand-icon-antigravity="${brandIconDir}/brand-antigravity.svg" data-brand-icon-devin="${brandIconDir}/brand-devin.svg" data-brand-icon-default="${brandIconDir}/brand-cli-default.svg"`;
     content = injectBodyAttributes(content, bodyAttr);
     content = applyThemeClass(content, themeClass);
     return { html: content, csp };
@@ -472,6 +473,15 @@ export interface PanelManifestEntry {
     icon: string;
     route: string;
     enabled: boolean;
+    /**
+     * Rail placement. Omitted = the main (top) panel group, in manifest order.
+     * 'bottom' = the settings cluster at the foot of the rail, beside the theme
+     * toggle. A marker rather than a manifest reorder on purpose: manifest ORDER
+     * also determines defaultPanelId (first enabled entry), and getPanelHtmlById
+     * routing reads ids, so reordering would couple rail layout to unrelated
+     * behaviour.
+     */
+    placement?: 'bottom';
 }
 
 export interface PanelAvailability {
@@ -498,7 +508,7 @@ export function getPanelsManifest(availability?: PanelAvailability): PanelManife
         { id: 'tickets', label: 'Tickets', icon: `${iconDir}/nav-tickets.svg`, route: '/tickets', enabled: ticketsEnabled },
         { id: 'planning', label: 'Artifacts', icon: `${iconDir}/nav-artifacts.svg`, route: '/planning', enabled: planningEnabled },
         { id: 'design', label: 'Design', icon: `${iconDir}/nav-design.svg`, route: '/design', enabled: designEnabled },
-        { id: 'setup', label: 'Setup', icon: `${iconDir}/nav-setup.svg`, route: '/setup', enabled: setupEnabled },
+        { id: 'setup', label: 'Setup', icon: `${iconDir}/nav-setup.svg`, route: '/setup', enabled: setupEnabled, placement: 'bottom' },
         { id: 'connections', label: 'Connections', icon: `${iconDir}/nav-connections.svg`, route: '/connections', enabled: connectionsEnabled },
         { id: 'terminals', label: 'Terminals', icon: `${iconDir}/nav-terminals.svg`, route: '/terminals', enabled: terminalsEnabled },
     ];

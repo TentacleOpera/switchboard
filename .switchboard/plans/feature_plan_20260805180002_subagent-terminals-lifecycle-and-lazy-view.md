@@ -18,7 +18,9 @@ No bug — this is new capability. The design constraints come from measured beh
 
 **Constraint 3 — the role/visibility model is a flat list.** `GRID_BUILTIN_ROLES` (`terminals.js:2773`) and `DEFAULT_VISIBLE_AGENTS` (`:2787`) are flat maps of role → visible, mirrored by hand from `TaskViewerProvider._defaultVisibleAgents()` with a comment saying to keep them in step. There is no notion of one agent belonging to another. Subagents need a parent relation, and adding it must not break the mirroring contract or silently open the opt-in roles the extension deliberately leaves shut (`tester`, `researcher`, `phone_a_friend` are all `false` by default).
 
-**Constraint 4 — concurrent writers need isolation.** Subagents that write code in parallel conflict in one tree. Worktree machinery already exists and is already the answer used elsewhere; reuse it rather than inventing per-child sandboxing.
+**Constraint 4 — children share the working tree, deliberately.** This feature exists to save tokens, not time: an expensive head agent delegates *writing* to a cheaper or free model and spends its own tokens only on *reviewing*. Isolating a child would mean merging its work back, and the merge costs the head agent the tokens the delegation was meant to save. So: no worktrees, no branches, no per-child sandboxes. Attribution comes from the **assigned scope** in the dispatch (see `feature_plan_20260805180001`), not from isolation.
+
+This also means **which model/CLI a child runs is the point of the feature**, not a detail. A subagent definition must be able to say "this child is a Devin terminal" or "this child is a cheaper model" — a subagent that runs the same expensive model as its parent has no reason to exist.
 
 ## Metadata
 
@@ -38,7 +40,7 @@ None. The one decision that shapes everything — lazy attach rather than attach
 | Parent/child model | The visibility and role maps are flat and hand-mirrored in two places. Adding hierarchy touches both, plus the grid builder. |
 | Lazy attach | The panel currently opens a socket per terminal it renders. Separating "exists" from "attached" is a real change to the terminal entry lifecycle. |
 | Co-launch + teardown | Opening a head agent spawns N ptys. Closing it must not orphan them, and must not kill children still reporting results. |
-| Worktree per child | Setup cost and cleanup; the existing worktree path assumes plan-scoped, not agent-scoped, lifetimes. |
+| Per-child CLI/model launch | A child is launched with a *different* startup command than its parent (a Devin terminal, a cheaper model). Startup commands are per-workspace today, and there is a known defect class where a per-workspace mirror clobbers per-agent values — this must be per-agent and must not write back over siblings. |
 
 ## Edge-Case & Dependency Audit
 
@@ -56,9 +58,15 @@ None. The one decision that shapes everything — lazy attach rather than attach
 
 ## Proposed Changes
 
-### 1. Subagent definition per agent
+### 1. Subagent definition per agent — in the Kanban panel's Agents tab
 
-Extend the agent config so an agent can declare children: role/label, count, isolation (`worktree` | `none`), and default-visible (which should default to **false**, matching how opt-in roles are treated today). Keep it additive — an agent with no children behaves exactly as now.
+This is the primary user-facing surface of the whole feature: the operator defines an agent's subagents here, including **which CLI/model each child launches with**. Everything else in this plan is lifecycle that follows from these definitions.
+
+Implementation note: `kanban.html` is a self-contained webview — its handlers live in its own inline script, not in a shared module. Wire the Agents-tab controls there rather than reaching for an external file.
+
+Extend the agent config so an agent can declare children: role/label, count, **the CLI/startup command the child launches with** (this is the cost-routing lever and the reason the feature exists), and default-visible — which should default to **false**, matching how opt-in roles are treated today. Keep it additive: an agent with no children behaves exactly as now.
+
+No isolation field. Children run in the workspace tree alongside their parent; attribution is the `scope` in the dispatch envelope.
 
 ### 2. Parent relation in the fleet model
 
@@ -76,9 +84,9 @@ Today building a pane opens a socket. Introduce an explicit attach/detach on the
 
 A control in the pane frame that reveals the focused head agent's children — attaching their sockets on open and detaching on close. Insert it into the action row with the positional-index reads in `updatePaneElement` updated in the same change, and give it the same per-pane-mode visibility treatment the existing controls have.
 
-### 6. Worktree isolation per child
+### 6. Per-child launch command
 
-When a child declares `isolation: "worktree"`, provision through the existing worktree path and clean up on teardown, including the unchanged-worktree case.
+A child terminal launches with its own CLI/model rather than inheriting its parent's. This is the mechanism the whole feature rests on — delegating to a cheaper model is the point — so it must be settable per child in the agent definition and must not be mirrored back over sibling agents' startup commands.
 
 ## Verification Plan
 
@@ -92,4 +100,5 @@ When a child declares `isolation: "worktree"`, provision through the existing wo
 8. Fresh install, no saved visibility entries → no subagent terminal opens by itself, and `tester` / `researcher` / `phone_a_friend` remain shut.
 9. Exceed the per-parent and global child caps → refused with a stated reason, no partial spawn.
 10. Pane action row: pin/clear/hide/mode all still operate on the right buttons after the insertion (the `children[N]` index trap), in both terminal and kanban pane modes.
-11. Worktree-isolated child → provisioned, cleaned up on teardown, unchanged worktree removed.
+11. A child defined with a different CLI (e.g. a Devin terminal) launches with that command, not its parent's — and setting it does not alter any sibling agent's startup command.
+12. Head agent and two children all editing the same tree: no isolation is provisioned, no branch is created, and the head agent reviews the combined diff in place.

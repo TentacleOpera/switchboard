@@ -171,6 +171,7 @@ export class KanbanProvider implements vscode.Disposable {
     private _cliTriggersEnabled: boolean;
     private _dynamicComplexityRoutingEnabled: boolean;
     private _lastColumnsSignature: string | null = null;
+    private _lastWorkspaceSelectionSignature: string | null = null;
     private _autobanState?: AutobanConfigState;
     private _kanbanDbs = new Map<string, KanbanDatabase>();
     private _clickUpServices = new Map<string, ClickUpSyncService>();
@@ -231,6 +232,7 @@ export class KanbanProvider implements vscode.Disposable {
     private _plannerPromptWriter: any | null = null;
     private _outputChannel?: vscode.OutputChannel;
     private _nativeFsWatchers?: FSWatcher[];
+    private _movesFsWatchers: FSWatcher[] = [];
     private _workspaceSaveTimeout: NodeJS.Timeout | null = null;
     private _globalPlanWatcher?: import('./GlobalPlanWatcherService').GlobalPlanWatcherService;
     // Root-recovery state for the startup race where workspace folders / identity
@@ -812,6 +814,18 @@ export class KanbanProvider implements vscode.Disposable {
                 await this._globalPlanWatcher.triggerScan(folder);
                 await processDeclaredMoves(folder, this);
                 await ingestJobActivity(folder, db);
+                // Watch instructions/moves/ for declared-intent move files so they
+                // are applied live while Switchboard is running, not just on open.
+                const movesDir = path.join(folder, '.switchboard', 'instructions', 'moves');
+                if (fs.existsSync(movesDir)) {
+                    const watcher = fs.watch(movesDir, (_event: any, filename: any) => {
+                        if (typeof filename === 'string' && filename.endsWith('.md')) {
+                            // Give the writing agent a moment to finish.
+                            setTimeout(() => { void processDeclaredMoves(folder, this); }, 150);
+                        }
+                    });
+                    this._movesFsWatchers.push(watcher);
+                }
                 // One-time complexity-column backfill for pre-fix installs.
                 // Runs after the scan so freshly-imported rows are also
                 // reconciled. Guarded once-per-workspace by
@@ -1434,6 +1448,10 @@ export class KanbanProvider implements vscode.Disposable {
             });
             this._nativeFsWatchers = undefined;
         }
+        this._movesFsWatchers.forEach(w => {
+            try { w.close(); } catch { }
+        });
+        this._movesFsWatchers = [];
         this._stopRootRecovery();
         this._integrationAutoPull.dispose();
         this._remoteControls.forEach(rc => rc.dispose());
@@ -1509,6 +1527,7 @@ export class KanbanProvider implements vscode.Disposable {
         this._panel.onDidDispose(() => {
             this._panel = undefined;
             this._lastColumnsSignature = null;
+            this._lastWorkspaceSelectionSignature = null;
             // Reset the board-snapshot dedup cache too: it's a singleton field that
             // outlives the panel, so a freshly reopened webview would otherwise have
             // its `updateBoard` push skipped as "unchanged" and render an empty board
@@ -1951,7 +1970,12 @@ export class KanbanProvider implements vscode.Disposable {
             const allWorkspaceProjects = await this._getAllWorkspaceProjects();
 
             const cpStatus = this.getControlPlaneSelectionStatus(resolvedWorkspaceRoot);
-            this.postMessage({
+
+            // Same treatment as updateColumns above: the payload is byte-identical between
+            // polls in the common case (workspace folders and project lists change on user
+            // action, not on the 10s live-sync timer), and the webview's handler rebuilds a
+            // native <select> on receipt — which closes it under a user who is using it.
+            const selectionPayload = {
                 type: 'updateWorkspaceSelection',
                 workspaceRoot: resolvedWorkspaceRoot,
                 workspaces: workspaceItems,
@@ -1966,7 +1990,12 @@ export class KanbanProvider implements vscode.Disposable {
                 pendingCandidate: cpStatus.pendingCandidate,
                 repoScopeFilter: cpStatus.repoScopeFilter,
                 projectContextEnabled: await this._resolveProjectContextEnabled(resolvedWorkspaceRoot)
-            });
+            };
+            const nextSelectionSignature = JSON.stringify(selectionPayload);
+            if (this._lastWorkspaceSelectionSignature !== nextSelectionSignature) {
+                this.postMessage(selectionPayload);
+                this._lastWorkspaceSelectionSignature = nextSelectionSignature;
+            }
 
             // THE critical message — sends cards to webview
             const allWorktrees = await db.getWorktrees();
@@ -3482,7 +3511,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const allWorkspaceProjects = await this._getAllWorkspaceProjects();
 
             const cpStatus2 = this.getControlPlaneSelectionStatus(resolvedWorkspaceRoot);
-            this.postMessage({
+
+            // Same treatment as updateColumns above: the payload is byte-identical between
+            // polls in the common case (workspace folders and project lists change on user
+            // action, not on the 10s live-sync timer), and the webview's handler rebuilds a
+            // native <select> on receipt — which closes it under a user who is using it.
+            const selectionPayload = {
                 type: 'updateWorkspaceSelection',
                 workspaceRoot: resolvedWorkspaceRoot,
                 workspaces: workspaceItems,
@@ -3497,7 +3531,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 pendingCandidate: cpStatus2.pendingCandidate,
                 repoScopeFilter: cpStatus2.repoScopeFilter,
                 projectContextEnabled: await this._resolveProjectContextEnabled(resolvedWorkspaceRoot)
-            });
+            };
+            const nextSelectionSignature = JSON.stringify(selectionPayload);
+            if (this._lastWorkspaceSelectionSignature !== nextSelectionSignature) {
+                this.postMessage(selectionPayload);
+                this._lastWorkspaceSelectionSignature = nextSelectionSignature;
+            }
             this._lastCards = cards;
             const allWorktrees = dbReady ? await db.getWorktrees() : [];
             const featureWorktrees = allWorktrees
@@ -3656,7 +3695,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const allWorkspaceProjects = await this._getAllWorkspaceProjects();
 
             const cpStatus3 = this.getControlPlaneSelectionStatus(resolvedWorkspaceRoot);
-            this.postMessage({
+
+            // Same treatment as updateColumns above: the payload is byte-identical between
+            // polls in the common case (workspace folders and project lists change on user
+            // action, not on the 10s live-sync timer), and the webview's handler rebuilds a
+            // native <select> on receipt — which closes it under a user who is using it.
+            const selectionPayload = {
                 type: 'updateWorkspaceSelection',
                 workspaceRoot: resolvedWorkspaceRoot,
                 workspaces: workspaceItems,
@@ -3671,7 +3715,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 pendingCandidate: cpStatus3.pendingCandidate,
                 repoScopeFilter: cpStatus3.repoScopeFilter,
                 projectContextEnabled: await this._resolveProjectContextEnabled(resolvedWorkspaceRoot)
-            });
+            };
+            const nextSelectionSignature = JSON.stringify(selectionPayload);
+            if (this._lastWorkspaceSelectionSignature !== nextSelectionSignature) {
+                this.postMessage(selectionPayload);
+                this._lastWorkspaceSelectionSignature = nextSelectionSignature;
+            }
             this._lastCards = cards;
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'updateBoard',

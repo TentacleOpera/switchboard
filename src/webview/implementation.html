@@ -1583,6 +1583,12 @@
             </div>
             <div id="agent-list-memo" class="agent-list hidden">
                 <div class="memo-tab-content" style="padding: 10px; display: flex; flex-direction: column; gap: 8px;">
+                    <label class="startup-row" style="display:block; margin-bottom:6px;">
+                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">
+                            Saving to workspace
+                        </span>
+                        <select id="memo-workspace-select" style="width:100%; font-size:11px;"></select>
+                    </label>
                     <p style="font-size: 11px; color: var(--text-secondary); margin: 0 0 4px;">
                         Jot down bugs, thoughts, or issues — one per line or paragraph. Saved automatically.
                         Send to an agent via Copy Prompt / Send to Planner to create
@@ -1649,6 +1655,9 @@
         let analystButtonFeedbackTimer = null;
 
         let currentWorkspaceRoot = '';
+        let memoWorkspaceRoot = '';
+        let memoWorkspaceExplicit = false;
+        function getMemoWorkspaceRoot() { return memoWorkspaceRoot || currentWorkspaceRoot; }
         const selectArrow = document.querySelector('.select-arrow');
 
         // Global helper — no class scope (underscore prefix is convention only, not enforced)
@@ -2202,6 +2211,40 @@
                     if (statusEl) { statusEl.textContent = message.message || 'Memo error'; }
                     break;
                 }
+                case 'memoWorkspaceItems': {
+                    const wsSelect = document.getElementById('memo-workspace-select');
+                    if (!wsSelect) break;
+                    const list = Array.isArray(message.items) ? message.items : [];
+                    wsSelect.innerHTML = '';
+                    for (const item of list) {
+                        const opt = document.createElement('option');
+                        opt.value = item.workspaceRoot || '';
+                        opt.textContent = item.label || item.workspaceRoot || '';
+                        wsSelect.appendChild(opt);
+                    }
+                    const effectiveRoot = getMemoWorkspaceRoot();
+                    const hasEffective = list.some(i => i.workspaceRoot === effectiveRoot);
+                    let selected = effectiveRoot;
+                    if (memoWorkspaceExplicit && hasEffective) {
+                        selected = memoWorkspaceRoot;
+                    } else if (message.activeWorkspaceRoot && list.some(i => i.workspaceRoot === message.activeWorkspaceRoot)) {
+                        selected = message.activeWorkspaceRoot;
+                    } else if (list.length > 0) {
+                        selected = list[0].workspaceRoot;
+                    } else {
+                        selected = '';
+                    }
+                    wsSelect.value = selected;
+                    if (selected && selected !== memoWorkspaceRoot) {
+                        memoWorkspaceRoot = selected;
+                        if (currentAgentTab === 'memo') {
+                            const ta = document.getElementById('memo-textarea');
+                            if (ta) ta.value = '';
+                            vscode.postMessage({ type: 'memoLoad', workspaceRoot: getMemoWorkspaceRoot() });
+                        }
+                    }
+                    break;
+                }
                 case 'openMemoTab': {
                     // persist=true (default) is intentional: this is a user-initiated
                     // entry point (status-bar click / hub link), not a programmatic
@@ -2317,6 +2360,16 @@
 
                 case 'workspaceChanged': {
                     currentWorkspaceRoot = String(message.workspaceRoot || '').trim();
+                    if (!memoWorkspaceExplicit) {
+                        memoWorkspaceRoot = currentWorkspaceRoot;
+                        // Re-resolve the picker against the new active root.
+                        vscode.postMessage({ type: 'memoListWorkspaces' });
+                        if (currentAgentTab === 'memo') {
+                            const ta = document.getElementById('memo-textarea');
+                            if (ta) ta.value = '';
+                            vscode.postMessage({ type: 'memoLoad', workspaceRoot: getMemoWorkspaceRoot() });
+                        }
+                    }
                     break;
                 }
                 case 'recentActivity': {
@@ -2634,7 +2687,8 @@
                 btn.classList.toggle('is-active', btn.dataset.tab === tab);
             });
             if (tab === 'memo') {
-                vscode.postMessage({ type: 'memoLoad', workspaceRoot: currentWorkspaceRoot });
+                vscode.postMessage({ type: 'memoLoad', workspaceRoot: getMemoWorkspaceRoot() });
+                vscode.postMessage({ type: 'memoListWorkspaces' });
             }
             if (tab === 'terminals') {
                 vscode.postMessage({ type: 'getStartupCommands' });
@@ -2679,24 +2733,42 @@
 
         // === Memo (sidebar tab) ===
         let memoSaveTimer = null;
+        function switchSidebarMemoWorkspace(nextRoot) {
+            if (!nextRoot || nextRoot === memoWorkspaceRoot) { return; }
+            if (memoSaveTimer) {
+                clearTimeout(memoSaveTimer);
+                memoSaveTimer = null;
+                const content = document.getElementById('memo-textarea')?.value || '';
+                vscode.postMessage({ type: 'memoSave', content, workspaceRoot: getMemoWorkspaceRoot() });
+            }
+            memoDirty = false;
+            memoWorkspaceRoot = nextRoot;
+            memoWorkspaceExplicit = true;
+            const ta = document.getElementById('memo-textarea');
+            if (ta) ta.value = '';
+            vscode.postMessage({ type: 'memoLoad', workspaceRoot: getMemoWorkspaceRoot() });
+        }
         function debouncedMemoSave() {
             memoDirty = true;
             if (memoSaveTimer) clearTimeout(memoSaveTimer);
             memoSaveTimer = setTimeout(() => {
                 const content = document.getElementById('memo-textarea')?.value || '';
-                vscode.postMessage({ type: 'memoSave', content, workspaceRoot: currentWorkspaceRoot });
+                vscode.postMessage({ type: 'memoSave', content, workspaceRoot: getMemoWorkspaceRoot() });
                 memoDirty = false;
                 const statusEl = document.getElementById('memo-status');
                 if (statusEl) { statusEl.textContent = 'Saved'; setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 1500); }
             }, 800);
         }
         document.getElementById('memo-textarea')?.addEventListener('input', debouncedMemoSave);
+        document.getElementById('memo-workspace-select')?.addEventListener('change', (e) => {
+            switchSidebarMemoWorkspace(e.target.value);
+        });
         document.getElementById('memo-clear-btn')?.addEventListener('click', () => {
             const textarea = document.getElementById('memo-textarea');
             if (textarea) textarea.value = '';
             if (memoSaveTimer) clearTimeout(memoSaveTimer);
             memoDirty = false;
-            vscode.postMessage({ type: 'memoClear', workspaceRoot: currentWorkspaceRoot });
+            vscode.postMessage({ type: 'memoClear', workspaceRoot: getMemoWorkspaceRoot() });
             const statusEl = document.getElementById('memo-status');
             if (statusEl) statusEl.textContent = 'Cleared';
         });
@@ -2704,13 +2776,13 @@
             if (memoSaveTimer) clearTimeout(memoSaveTimer);
             memoDirty = false;
             const content = document.getElementById('memo-textarea')?.value || '';
-            vscode.postMessage({ type: 'memoGeneratePrompt', content, action: 'copy', workspaceRoot: currentWorkspaceRoot });
+            vscode.postMessage({ type: 'memoGeneratePrompt', content, action: 'copy', workspaceRoot: getMemoWorkspaceRoot() });
         });
         document.getElementById('memo-send-btn')?.addEventListener('click', () => {
             if (memoSaveTimer) clearTimeout(memoSaveTimer);
             memoDirty = false;
             const content = document.getElementById('memo-textarea')?.value || '';
-            vscode.postMessage({ type: 'memoGeneratePrompt', content, action: 'send', workspaceRoot: currentWorkspaceRoot });
+            vscode.postMessage({ type: 'memoGeneratePrompt', content, action: 'send', workspaceRoot: getMemoWorkspaceRoot() });
         });
 
 

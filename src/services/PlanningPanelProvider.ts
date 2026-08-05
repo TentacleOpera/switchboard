@@ -1,6 +1,6 @@
 
 import { HostSeams, HostWatchHandle, TerminalHandle, createVscodeHostSeams } from './hostSeams';
-import { composeExternalPrompt, LAUNCHER_REGISTRY } from './externalAgentPrompts';
+import { composeExternalPrompt, LauncherSpec } from './externalAgentPrompts';
 import {
     SharedUtilityVerbDeps,
     handleOpenExternalUrl,
@@ -112,7 +112,8 @@ export class PlanningPanelProvider {
         // planner dispatch), so delegate to it when a memo verb is posted. The
         // verbs are in TASKVIEWER_VERBS, not PLANNING_VERBS — without this
         // delegation the PLANNING_VERBS guard below would reject them.
-        if (verb === 'memoLoad' || verb === 'memoSave' || verb === 'memoClear' || verb === 'memoGeneratePrompt') {
+        if (verb === 'memoLoad' || verb === 'memoSave' || verb === 'memoClear'
+            || verb === 'memoGeneratePrompt' || verb === 'memoListWorkspaces') {
             if (this._taskViewerProvider) {
                 return this._taskViewerProvider.handleServiceVerb(verb, payload);
             }
@@ -4735,7 +4736,7 @@ Please format the updated output document strictly as follows:
             case 'improveFeature': {
                 try {
                     const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                    const { planId, planFile, title, subtaskCount } = msg;
+                    const { planFile, subtaskCount } = msg;
                     if (!workspaceRoot || !planFile) {
                         this._seams().ui.showErrorMessage('Missing workspace or feature file for improve prompt');
                         break;
@@ -4757,53 +4758,32 @@ Please format the updated output document strictly as follows:
                         : path.join('.agent', 'skills', 'refine_feature.md');
                     const fallbackContent = hasSubtasks
                         ? `Improve this feature: reconcile and restructure its subtasks — improve each subtask, then merge/delete/rewrite/split to make the set coherent. Preserve YAML frontmatter and the auto-generated <!-- BEGIN SUBTASKS --> block. Write the result back to the local file path provided.`
-                        : `Refine this feature into a complete specification with:
-- A clear ## Goal (outcome + problem it solves)
-- ## Success Criteria (checkboxed, testable)
-- ## Scope (in/out)
-- ## Proposed Subtasks (ordered, checkboxed breakdown into shippable units)
-- ## Risks / Open Questions
-Preserve YAML frontmatter and the auto-generated <!-- BEGIN SUBTASKS --> block. Do not create kanban cards. Write the result back to the local file path provided.`;
+                        : `Refine this feature into a complete specification with a clear ## Goal, ## Success Criteria, ## Scope, ## Proposed Subtasks, and ## Risks / Open Questions. Preserve YAML frontmatter and the auto-generated <!-- BEGIN SUBTASKS --> block. Do not create kanban cards. Write the result back to the local file path provided.`;
 
-                    const nfs = require('fs') as typeof import('fs');
-                    let skillContent = '';
-                    try {
-                        skillContent = nfs.readFileSync(path.join(workspaceRoot, skillRelPath), 'utf8');
-                    } catch {
-                        try {
-                            skillContent = nfs.readFileSync(path.join(workspaceRoot, skillRelPathLegacy), 'utf8');
-                        } catch {
-                            skillContent = fallbackContent;
-                        }
-                    }
-
-                    // Resolve the feature markdown file — use path.resolve to match existing codebase pattern.
                     const featureFilePath = path.isAbsolute(planFile) ? planFile : path.resolve(workspaceRoot, planFile);
                     let existingContent = '';
-                    try { existingContent = nfs.readFileSync(featureFilePath, 'utf8'); } catch { /* file may not exist yet */ }
+                    try { existingContent = (require('fs') as typeof import('fs')).readFileSync(featureFilePath, 'utf8'); } catch { /* file may not exist yet */ }
 
-                    const actionVerb = hasSubtasks ? 'improving' : 'refining';
-                    const prompt = `You are ${actionVerb} a Switchboard feature${hasSubtasks ? ' and reconciling its subtasks' : ' into a complete, decomposable specification'}.
+                    const spec: LauncherSpec = {
+                        id: hasSubtasks ? 'feature-improve' : 'feature-refine',
+                        label: hasSubtasks ? 'Improve a feature' : 'Refine a feature',
+                        description: hasSubtasks
+                            ? 'Reconcile and restructure a feature and its subtasks'
+                            : 'Flesh out a thin feature into a complete, decomposable specification',
+                        skillPaths: [skillRelPath, skillRelPathLegacy],
+                        fallbackPrompt: fallbackContent,
+                        targetKind: 'feature'
+                    };
 
-## Skill Instructions
-${skillContent}
-
-## Feature to Improve
-- **Title:** ${title || ''}
-- **Existing subtask cards:** ${subtaskCount || 0}
-- **Local file path (write the improved content here):** ${featureFilePath}
-
-## Current feature file content
-${existingContent ? existingContent : '(file is empty or does not exist yet — author a complete feature at the path above)'}
-
-Read the current content above. ${hasSubtasks
-    ? 'Reconcile and restructure the subtasks per the skill instructions — improve each, then merge/delete/rewrite/split to make the set coherent.'
-    : "Determine what's missing. Produce a complete feature following the skill instructions — pay special attention to a concrete ## Proposed Subtasks breakdown."}
-Write the resulting markdown directly to the local file path, preserving any YAML frontmatter and the auto-generated <!-- BEGIN SUBTASKS --> block. Do NOT create kanban cards or modify any database. Report back with a summary${hasSubtasks ? ' of the restructuring' : ' and the proposed subtask list'}.`;
-
-                    await this._seams().clipboard.writeText(prompt);
-                    this._seams().ui.showTemporaryNotification('Improve-feature prompt copied to clipboard. Paste it into your agent.');
-                    return { success: true, prompt };
+                    const res = composeExternalPrompt(spec, workspaceRoot, { absPath: featureFilePath, content: existingContent });
+                    if (res.prompt) {
+                        await this._seams().clipboard.writeText(res.prompt);
+                        this._seams().ui.showTemporaryNotification('Improve-feature prompt copied to clipboard. Paste it into your agent.');
+                    }
+                    if (!res.resolvedSkillPath) {
+                        console.warn(`[PlanningPanelProvider] improveFeature for '${planFile}': no skill file resolved from ${spec.skillPaths.join(', ')} — used the inline fallback prompt.`);
+                    }
+                    return { success: true, prompt: res.prompt, resolvedSkillPath: res.resolvedSkillPath };
                 } catch (err) {
                     this._seams().ui.showErrorMessage(`Failed to copy improve-feature prompt: ${String(err)}`);
                     return { success: false, error: String(err) };

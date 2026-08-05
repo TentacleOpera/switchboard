@@ -3647,18 +3647,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             to   { opacity: 1; transform: translateY(0); }
         }
 
-        /* ── Create Plans tab ─────────────────────────────────────────── */
-        .cp-wrap { max-width: 760px; margin: 0 auto; padding: 24px 20px 40px; overflow-y: auto; height: 100%; box-sizing: border-box; }
-        .cp-intro { font-size: 13px; color: var(--text-secondary); line-height: 1.6; margin-bottom: 20px; }
-        .cp-section { margin-bottom: 20px; padding: 14px 16px; background: var(--panel-bg2); border: 1px solid var(--border-color); border-radius: 4px; }
-        .cp-label { font-size: 10px; letter-spacing: 1px; color: var(--accent-teal); margin-bottom: 10px; }
-        .cp-radio { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; margin-bottom: 8px; cursor: pointer; line-height: 1.5; }
-        .cp-radio input { margin-top: 2px; flex: none; }
-        .cp-input { width: 100%; box-sizing: border-box; padding: 6px 8px; margin-bottom: 8px; background: var(--panel-bg); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 3px; font-size: 12px; }
-        .cp-textarea { width: 100%; box-sizing: border-box; min-height: 160px; padding: 8px; background: var(--panel-bg); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 3px; font-family: var(--font-code); font-size: 11px; resize: vertical; margin-bottom: 8px; }
-        .cp-row { display: flex; align-items: center; gap: 10px; }
-        .cp-hint { font-size: 11px; color: var(--text-secondary); }
-        .cp-optional { opacity: 0.85; }
+        /* Create Plans / Web Agents styles moved to connections.html */
     </style>
 </head>
 <body class="cyber-theme-enabled">
@@ -3858,67 +3847,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             </div>
         </div>
 
-        <!-- Create Plans Tab — point an agent at your docs, get a behaviour-level plan back.
-             Docs-first by design: no dev-docs toggle, no mode variants, no code-reading step. -->
+        <!-- Create Plans Tab — the full Web Agents UI now lives in the Connections panel. -->
         <div id="create-plans-content" class="shared-tab-content">
-            <div class="cp-wrap">
-                <div class="cp-intro">
-                    Point an agent at your docs and get back a <strong>high-level plan</strong> — user flows and
-                    logic, not code. Paste the plan below and it lands on the board, where Switchboard's own
-                    planner turns it into an implementation. How detailed the plan is tracks how good your docs are.
-                </div>
-
-                <div class="cp-section">
-                    <div class="cp-label">1 · WHERE ARE YOUR DOCS?</div>
-                    <label class="cp-radio"><input type="radio" name="cp-source" value="zip" checked>
-                        <span><strong>Zip a folder</strong> — pick a folder; the zip is built from the docs in it. Docs only, never code.</span></label>
-                    <label class="cp-radio"><input type="radio" name="cp-source" value="link">
-                        <span><strong>Public link</strong> — GitHub Pages, a public repo branch, any fetchable URL.</span></label>
-                    <label class="cp-radio"><input type="radio" name="cp-source" value="platform">
-                        <span><strong>Platform</strong> — docs live in Notion / ClickUp / Linear; the agent reads them via that platform's MCP.</span></label>
-                </div>
-
-                <div class="cp-section" id="cp-zip-row">
-                    <div class="cp-row">
-                        <button id="cp-btn-folder" class="strip-btn">Choose folder…</button>
-                        <span id="cp-folder-path" class="cp-hint">No folder chosen.</span>
-                    </div>
-                    <label class="cp-radio" style="margin-top:6px;"><input type="checkbox" id="cp-include-extras">
-                        <span>Also include the managed docs (constitution, PRDs, README) on top of the folder.</span></label>
-                    <div class="cp-row" style="margin-top:6px;">
-                        <button id="cp-btn-zip" class="strip-btn strip-btn--primary" disabled title="Choose a folder first">Download docs zip</button>
-                        <span id="cp-zip-hint" class="cp-hint">Bundles the folder's docs with a HOW-TO-PLAN.md the agent follows.</span>
-                    </div>
-                </div>
-
-                <div class="cp-section" id="cp-link-row" style="display:none;">
-                    <input type="text" id="cp-url" class="cp-input" placeholder="https://…  (where the docs are published)">
-                    <button id="cp-btn-copy-link" class="strip-btn strip-btn--primary" disabled title="Enter the public docs URL first">Copy planning prompt</button>
-                </div>
-
-                <div class="cp-section" id="cp-platform-row" style="display:none;">
-                    <select id="cp-platform" class="cp-input" style="max-width:140px;">
-                        <option value="Notion">Notion</option>
-                        <option value="ClickUp">ClickUp</option>
-                        <option value="Linear">Linear</option>
-                    </select>
-                    <input type="text" id="cp-ref" class="cp-input" placeholder="Page / doc / project reference the agent should read">
-                    <button id="cp-btn-copy-platform" class="strip-btn strip-btn--primary" disabled title="Enter the reference first">Copy planning prompt</button>
-                </div>
-
-                <div class="cp-section">
-                    <div class="cp-label">2 · PASTE THE PLAN BACK</div>
-                    <textarea id="cp-paste" class="cp-textarea" placeholder="Paste the returned markdown plan here — it becomes a card on the board."></textarea>
-                    <div class="cp-row">
-                        <button id="cp-btn-create" class="strip-btn strip-btn--primary" disabled title="Paste a markdown plan first">Create plan card</button>
-                        <span id="cp-status" class="cp-hint"></span>
-                    </div>
-                </div>
-
-                <div class="cp-section cp-optional">
-                    <button id="cp-btn-improve" class="strip-btn">Improve my docs with an agent</button>
-                    <span class="cp-hint">Optional — copies a doc-improvement prompt for a configured docs folder. Reads no code.</span>
-                </div>
+            <div style="max-width: 760px; margin: 0 auto; padding: 24px 20px; color: var(--text-secondary); line-height: 1.6;">
+                <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 12px;">Web Agents has moved</div>
+                The full <strong>Web Agents &amp; Paste-Back Plan Cards</strong> tool now lives in the <strong>Connections</strong> panel. Use the Web Agents tab there to zip docs, copy prompts, paste returned plans, and improve source docs.
             </div>
         </div>
 

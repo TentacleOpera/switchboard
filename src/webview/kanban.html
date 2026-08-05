@@ -4227,6 +4227,47 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // filtered board signature so a hidden-project card add (no visible change)
         // still refreshes column occupancy counts without a full DOM rebuild.
         let lastAllCardsSignature = '';
+
+        // Board-toolbar interaction guard. Deliberately NOT the autoban panel's
+        // isAutobanPanelInteracting: sharing that flag would let a user browsing the
+        // workspace dropdown also freeze the automation panel's refresh.
+        let isWorkspaceDropdownInteracting = false;
+        let workspaceDropdownInteractionTimer = null;
+        let pendingWorkspaceDropdownUpdate = null;   // { explicitRoot } | null
+        let lastWorkspaceDropdownSignature = null;
+
+        function armWorkspaceDropdownGuard() {
+            isWorkspaceDropdownInteracting = true;
+            if (workspaceDropdownInteractionTimer) { clearTimeout(workspaceDropdownInteractionTimer); }
+            workspaceDropdownInteractionTimer = setTimeout(releaseWorkspaceDropdownGuard, 4000);
+        }
+
+        function releaseWorkspaceDropdownGuard() {
+            isWorkspaceDropdownInteracting = false;
+            if (workspaceDropdownInteractionTimer) {
+                clearTimeout(workspaceDropdownInteractionTimer);
+                workspaceDropdownInteractionTimer = null;
+            }
+            // Replay, never discard: a poll that arrived mid-interaction may have carried
+            // a project the user just created elsewhere.
+            if (pendingWorkspaceDropdownUpdate) {
+                const { explicitRoot } = pendingWorkspaceDropdownUpdate;
+                pendingWorkspaceDropdownUpdate = null;
+                updateWorkspaceProjectDropdown(explicitRoot);
+            }
+        }
+
+        (() => {
+            const sel = document.getElementById('workspace-project-select');
+            if (!sel) return;
+            // mousedown too: a native popup opened by mouse does not reliably fire focus
+            // in every browser, and the popup is exactly what a rebuild destroys.
+            ['mousedown', 'focus', 'keydown', 'input'].forEach(ev => sel.addEventListener(ev, armWorkspaceDropdownGuard));
+            // Committing or leaving ends the interaction immediately — no need to wait out
+            // the timer before applying a deferred update.
+            ['change', 'blur'].forEach(ev => sel.addEventListener(ev, releaseWorkspaceDropdownGuard));
+        })();
+
         // Map of cardId -> true while the card was last seen with its activity light on.
         // Used to detect the working -> idle edge and fire completion feedback.
         let previousWorking = new Map(); // id -> boolean
@@ -4558,7 +4599,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const state = vscode.getState() || {};
                 state.collapseCodersEnabled = collapseCodersEnabled;
                 state.currentAutomationMode = currentAutomationMode;
-                state.lastAntigravityBatchSize = lastAntigravityBatchSize;
+
                 state.currentWorkspaceRoot = currentWorkspaceRoot;
                 vscode.setState(state);
             } catch (_) {}
@@ -4787,7 +4828,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             const found = lastCustomAgents.find(a => (a.role || ('custom_agent_' + a.id)) === selectedValue);
                             const agentId = found ? found.id : undefined;
                             if (!agentId) {
-                                vscode.postMessage({ type: 'exportAgentAsSkillResult', success: false, error: 'Could not resolve custom agent ID' });
+                                showStatusBarMessage('Could not resolve custom agent ID', { isError: true });
                                 return;
                             }
                             vscode.postMessage({ type: 'exportAgentAsSkill', agentId, workspaceRoot: getActiveWorkspaceRoot() });
@@ -4835,9 +4876,40 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             return baseLabel;
         }
 
+        function syncDeleteProjectButton(select) {
+            const delBtn = document.getElementById('btn-delete-project');
+            if (!delBtn) return;
+            const opt = select.selectedOptions?.[0];
+            const hasProject = !!(opt?.dataset?.project) && opt.dataset.project !== '__unassigned__';
+            delBtn.disabled = !hasProject;
+            delBtn.setAttribute('data-tooltip', hasProject ? 'Delete selected project' : 'Select a project to delete');
+        }
+
         function updateWorkspaceProjectDropdown(explicitRoot = null) {
             const select = document.getElementById('workspace-project-select');
             if (!select) return;
+
+            // An explicit root means the BACKEND changed workspace — the cards under the
+            // dropdown have already changed, so this always applies immediately.
+            if (!explicitRoot && isWorkspaceDropdownInteracting) {
+                pendingWorkspaceDropdownUpdate = { explicitRoot };
+                return;
+            }
+
+            // Change detection. The option list is derived from workspaceItems +
+            // allWorkspaceProjects; the SELECTION additionally depends on the filters, so
+            // both go in the signature — a project-filter change with an identical option
+            // list still has to move the selected option and re-enable the delete button.
+            const signature = JSON.stringify({
+                items: workspaceItems.map(i => [i.workspaceRoot, buildWorkspaceOptionLabel(i)]),
+                projects: workspaceItems.map(i => [i.workspaceRoot, allWorkspaceProjects[i.workspaceRoot] || []]),
+                explicitRoot,
+                currentWorkspaceRoot,
+                boardProjectFilter,
+                activeWorkspaceFilter,
+            });
+            if (signature === lastWorkspaceDropdownSignature) { return; }
+            lastWorkspaceDropdownSignature = signature;
 
             // Save the current selection BEFORE rebuilding options
             const savedValue = select.value;
@@ -4880,13 +4952,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 } else {
                     select.value = explicitRoot + '|__unassigned__';
                 }
-                const delBtn = document.getElementById('btn-delete-project');
-                if (delBtn) {
-                    const currentOption = select.selectedOptions?.[0];
-                    const hasProject = !!(currentOption?.dataset?.project) && currentOption.dataset.project !== '__unassigned__';
-                    delBtn.disabled = !hasProject;
-                    delBtn.setAttribute('data-tooltip', hasProject ? 'Delete selected project' : 'Select a project to delete');
-                }
+                syncDeleteProjectButton(select);
                 return;
             }
 
@@ -4898,14 +4964,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const filterValue = filterRoot + '|' + boardProjectFilter;
                 if ([...select.options].some(o => o.value === filterValue)) {
                     select.value = filterValue;
-                    // Sync delete button state
-                    const delBtn = document.getElementById('btn-delete-project');
-                    if (delBtn) {
-                        const currentOption = select.selectedOptions?.[0];
-                        const hasProject = !!(currentOption?.dataset?.project) && currentOption.dataset.project !== '__unassigned__';
-                        delBtn.disabled = !hasProject;
-                        delBtn.setAttribute('data-tooltip', hasProject ? 'Delete selected project' : 'Select a project to delete');
-                    }
+                    syncDeleteProjectButton(select);
                     return;
                 }
             }
@@ -4932,14 +4991,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
             }
 
-            // Sync delete button state after dropdown rebuild
-            const delBtn = document.getElementById('btn-delete-project');
-            if (delBtn) {
-                const currentOption = select.selectedOptions?.[0];
-                const hasProject = !!(currentOption?.dataset?.project) && currentOption.dataset.project !== '__unassigned__';
-                delBtn.disabled = !hasProject;
-                delBtn.setAttribute('data-tooltip', hasProject ? 'Delete selected project' : 'Select a project to delete');
-            }
+            syncDeleteProjectButton(select);
         }
 
         function updateWorkspaceFilterBadge() {
@@ -5980,14 +6032,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // The toolbar button is the single start control for every automation
             // mode. Its action and active state are mode-aware:
             //   single/multi-column  → toggles the autoban engine
-            //   antigravity-batch    → copies the one-shot batch prompt
             //   orchestration        → starts/stops the orchestrator
             let isActive = isEnabled;
             let tooltipText;
-            if (currentAutomationMode === 'antigravity-batch') {
-                isActive = false;
-                tooltipText = 'Copy the Antigravity batch prompt (configure agent/column in the Automation tab)';
-            } else if (currentAutomationMode === 'orchestration') {
+            if (currentAutomationMode === 'orchestration') {
                 isActive = !!(autobanConfig && autobanConfig.orchestrationConfig && autobanConfig.orchestrationConfig.enabled);
                 tooltipText = isActive ? 'Stop the orchestrator' : 'Start the orchestrator';
             } else {
@@ -6006,13 +6054,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             const resetBtn = document.getElementById('btn-reset-autoban-timer');
             if (resetBtn) {
-                const showReset = isEnabled && currentAutomationMode !== 'antigravity-batch' && currentAutomationMode !== 'orchestration' && currentAutomationMode !== 'scheduler';
+                const showReset = isEnabled && currentAutomationMode !== 'orchestration' && currentAutomationMode !== 'scheduler';
                 resetBtn.style.display = showReset ? '' : 'none';
             }
 
             const pauseBtn = document.getElementById('btn-pause-autoban-timer');
             if (pauseBtn) {
-                const showPause = isEnabled && currentAutomationMode !== 'antigravity-batch' && currentAutomationMode !== 'orchestration' && currentAutomationMode !== 'scheduler';
+                const showPause = isEnabled && currentAutomationMode !== 'orchestration' && currentAutomationMode !== 'scheduler';
                 pauseBtn.style.display = showPause ? '' : 'none';
                 const isPaused = !!(autobanConfig && autobanConfig.paused);
                 pauseBtn.classList.toggle('is-paused', isPaused);
@@ -7389,25 +7437,23 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let isCommsPanelInteracting = false;
         let commsPanelInteractionTimer = null;
         let commsPanelRenderPending = false;
-        let lastAntigravityAgent = '';
-        let lastAntigravityColumn = '';
+
         let lastSafetySession = null;
         let lastWorktreeConfig = null;
         let selectedWorktreeRepo = '';
         let currentAutomationMode = 'single-column';
-        // Remap persisted automation modes that no longer exist as standalone
-        // entries. `antigravity-batch` is kept as a legacy alias in the union
-        // (autobanState.ts) but the Scheduler UI supersedes it — remap to
-        // `scheduler` so a user whose last mode was antigravity-batch lands on
-        // the Scheduler panel without error. The comms tab is removed entirely
-        // (plan 4); a persisted `comms` tab value is handled by the tab-restore
-        // path (no longer matches a tab button → falls back to the default
-        // active tab, which is the board).
+        // Remap persisted automation modes that no longer exist as UI entries.
+        // `antigravity-batch` shipped in released versions, so it stays a valid member
+        // of the automationMode union (autobanState.ts) and a valid setAutomationMode
+        // input (TaskViewerProvider) — installs still hold it. What it no longer has is
+        // a dropdown entry: the Scheduler (source=board-batch, target=antigravity)
+        // subsumed it, and the option existed only to be remapped away on the next
+        // config push, i.e. selecting it did nothing. Do not re-add the option.
         function remapAutomationMode(mode) {
             if (mode === 'antigravity-batch') return 'scheduler';
             return mode;
         }
-        let lastAntigravityBatchSize = 5;
+
         let managedTerminalPools = {};
         let mcpMonitorConfig = { enabled: false, pollingEnabled: false, targetRole: 'scheduler', sources: ['slack'], customInstruction: '', sourceIntervals: { slack: 5, gmail: 5, gcal: 5, custom: 5 }, sourceLastCheckAt: {} };
         let isMcpMonitorTerminalRunning = false;
@@ -7944,6 +7990,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         columns = columnDefinitions.map(col => col.id);
                         autobanColumns = columnDefinitions.filter(col => col.autobanEnabled).map(col => col.id);
                         lastBoardSignature = '';
+                        lastWorkspaceDropdownSignature = null;
                         clearOptimisticGuard();  // a deliberate workspace switch ends any in-flight drag guard
                         renderColumns();
                         renderBoard(currentCards);
@@ -8458,7 +8505,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const sourceCol = (autobanConfig.singleColumnConfig || {}).sourceColumn;
                     const sourceIdx = autobanColumns.indexOf(sourceCol);
                     filteredBadgeData = sourceIdx >= 0 ? [badgeData[sourceIdx]] : [];
-                } else if (currentAutomationMode === 'antigravity-batch' || currentAutomationMode === 'orchestration' || currentAutomationMode === 'scheduler') {
+                } else if (currentAutomationMode === 'orchestration' || currentAutomationMode === 'scheduler') {
                     filteredBadgeData = [];
                 }
                 if (forceRebuild || container.children.length !== filteredBadgeData.length) {
@@ -8499,7 +8546,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const sourceCol = (autobanConfig.singleColumnConfig || {}).sourceColumn;
                 const sourceIdx = autobanColumns.indexOf(sourceCol);
                 filteredBadgeData = sourceIdx >= 0 ? [badgeData[sourceIdx]] : [];
-            } else if (currentAutomationMode === 'antigravity-batch' || currentAutomationMode === 'orchestration' || currentAutomationMode === 'scheduler') {
+            } else if (currentAutomationMode === 'orchestration' || currentAutomationMode === 'scheduler') {
                 filteredBadgeData = [];
             }
             // multi-column: show all badges (no filtering)
@@ -8633,6 +8680,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
                 const sourceWorkspaceRoot = Array.from(sourceWorkspaces)[0];
                 lastBoardSignature = '';  // Ensure the refresh triggered by selectWorkspace is not short-circuited
+                lastWorkspaceDropdownSignature = null;
                 clearOptimisticGuard();  // a deliberate workspace switch ends any in-flight drag guard
                 postKanbanMessage({
                     type: 'reassignPlansWorkspace',
@@ -8647,6 +8695,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 activeProjectFilter = targetProject === '__unassigned__' ? '__unassigned__' : targetProject;
                 setBoardProjectFilter(activeProjectFilter); // workspace switch → re-seed view filter
                 lastBoardSignature = '';  // Ensure the refresh triggered by selectWorkspace is not short-circuited
+                lastWorkspaceDropdownSignature = null;
                 postKanbanMessage({
                     type: 'selectWorkspace',
                     workspaceRoot: targetWorkspaceRoot,
@@ -8692,6 +8741,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (isDifferentWorkspace) {
                 // Switch workspace context (triggers full board refresh)
                 lastBoardSignature = '';
+                lastWorkspaceDropdownSignature = null;
                 clearOptimisticGuard();  // a deliberate workspace switch ends any in-flight drag guard
                 postKanbanMessage({
                     type: 'selectWorkspace',
@@ -8727,24 +8777,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
         });
         document.getElementById('btn-autoban')?.addEventListener('click', () => {
-            if (currentAutomationMode === 'antigravity-batch') {
-                // Mirror the in-tab COPY PROMPT button: one-shot batch prompt to clipboard
-                // using the agent/column/batch-size configured in the Automation tab.
-                if (!lastAntigravityAgent) {
-                    postKanbanMessage({ type: 'showWarning', message: 'Select an agent in the Automation tab first.' });
-                    return;
-                }
-                const inTabCopyBtn = document.getElementById('antigravity-copy-prompt-btn');
-                if (inTabCopyBtn) { inTabCopyBtn.textContent = 'LOADING...'; inTabCopyBtn.disabled = true; }
-                postKanbanMessage({
-                    type: 'generateAntigravityPrompt',
-                    agent: lastAntigravityAgent,
-                    column: lastAntigravityColumn,
-                    batchSize: lastAntigravityBatchSize,
-                    workspaceRoot: getActiveWorkspaceRoot()
-                });
-                return;
-            }
             if (currentAutomationMode === 'scheduler') {
                 // The Scheduler panel owns its own start/stop/copy-prompt controls
                 // per job. The toolbar button is a no-op in this mode (the panel
@@ -9292,7 +9324,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 { value: 'single-column', label: 'Switchboard Single Column' },
                 { value: 'multi-column', label: 'Switchboard Multi Column' },
                 { value: 'scheduler', label: 'Scheduler' },
-                { value: 'antigravity-batch', label: 'Antigravity Batch (legacy)' },
+
                 { value: 'orchestration', label: 'Orchestration' }
             ].forEach(m => {
                 const opt = document.createElement('option');
@@ -9301,6 +9333,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 if (m.value === currentAutomationMode) opt.selected = true;
                 modeSelect.appendChild(opt);
             });
+
+            modeSelect.value = currentAutomationMode;
+            if (modeSelect.value !== currentAutomationMode) {
+                // No option matched — the remap should make this impossible; log rather than
+                // silently presenting a different mode than the engine is configured for.
+                console.warn('[kanban] automation mode has no dropdown entry:', currentAutomationMode);
+            }
+
             modeRow.appendChild(modeLabel);
             modeRow.appendChild(modeSelect);
             container.appendChild(modeRow);
@@ -9309,7 +9349,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 'single-column': 'Automates a single workflow stage. For example, code all plans in the PLANNED column overnight, ready for review the next day.',
                 'multi-column': 'Automates multiple column transitions with per-role terminal pools. Best for full pipeline automation.',
                 'scheduler': 'Schedule any prompt on a recurring timer. Sources: board-batch, fetch cloud plans, reconcile cloud work, custom prompt, or comms (Slack/Gmail/Calendar). Targets: local terminal (sub-hourly), Antigravity, or cloud (laptop-off). The successor to the standalone COMMS tab.',
-                'antigravity-batch': 'Generates a one-shot batch prompt for Antigravity chat. No continuous automation — run manually as needed. (Legacy — use Scheduler with source=board-batch, target=antigravity instead.)',
+
                 'orchestration': 'A system-woken orchestrator agent batches plans into features, fans work out across per-feature worktrees, and merges results back feature by feature. Selecting this mode enables per-feature feature worktrees automatically (restored on switching away).'
             };
             const modeHelpText = document.createElement('div');
@@ -9347,11 +9387,31 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 
                 const drainBtn = document.createElement('button');
                 drainBtn.textContent = 'DRAIN';
-                drainBtn.title = 'Drain: process current cards, then stop.';
+                // data-tooltip, not title: this panel routes every other control through the
+                // #tooltip-overlay (delegated mouseover, max-width 320px, white-space:pre-line),
+                // so a native title here rendered late, unstyled, and inconsistently. Set once
+                // at construction — updateStyles() rewrites style.cssText wholesale.
+                drainBtn.setAttribute('data-tooltip',
+                    'DRAIN (default) — finite batch.\n'
+                    + 'Processes the cards that are in the source column now, then stops on its own '
+                    + 'when the column empties. Use this for an overnight run or any batch that '
+                    + 'should finish and stay finished.');
+                drainBtn.setAttribute('aria-label', 'Drain mode: process the current cards, then stop automatically');
                 
                 const watchBtn = document.createElement('button');
                 watchBtn.textContent = 'WATCH';
-                watchBtn.title = 'Watch: fire on arrival, never auto-stop.';
+                // Condensed from the Watch warning banner below (which only appears AFTER a
+                // column is already set to Watch). Same facts, shown while deciding.
+                watchBtn.setAttribute('data-tooltip',
+                    'WATCH — runs agents automatically, forever.\n'
+                    + 'Every plan that lands in this column is dispatched to its agent immediately '
+                    + 'and unattended: no batch delay, no review step. Each dispatch is a real agent '
+                    + 'run that spends that agent\'s tokens. While any column is on Watch the engine '
+                    + 'will not auto-stop when the board empties — you stop it manually.\n'
+                    + 'Use for entry columns (CREATED) or remote-control hand-offs. Idling is free; '
+                    + 'the cost is one agent run per arrival.');
+                watchBtn.setAttribute('aria-label',
+                    'Watch mode: dispatch each arriving plan immediately and never auto-stop');
                 
                 const updateStyles = (val) => {
                     if (val === 'watch') {
@@ -10257,142 +10317,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 resetRow.appendChild(resetButton);
                 multiColumnContainer.appendChild(resetRow);
 
-            } else if (currentAutomationMode === 'antigravity-batch') {
-                const antigravityContainer = document.createElement('div');
-                antigravityContainer.style.cssText = 'display: flex; flex-direction: column; gap: 12px;';
-                container.appendChild(antigravityContainer);
-
-                // --- Antigravity Batch UI ---
-                const antigravitySection = document.createElement('div');
-                antigravitySection.className = 'db-subsection';
-                antigravityContainer.appendChild(antigravitySection);
-
-                const antigravityHeader = document.createElement('div');
-                antigravityHeader.className = 'subsection-header';
-                const antigravitySpan = document.createElement('span');
-                antigravitySpan.textContent = 'ANTIGRAVITY BATCH AUTOMATION';
-                antigravityHeader.appendChild(antigravitySpan);
-                antigravitySection.appendChild(antigravityHeader);
-
-                const antigravityDesc = document.createElement('div');
-                antigravityDesc.style.cssText = 'padding:0 8px; font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
-                antigravityDesc.textContent = 'Select an agent and column, then copy a batch prompt. Paste it into Antigravity → Scheduled Tasks (the `schedule` tool) and set the recurrence there — Antigravity owns the timer, not Switchboard. The agent delegates each plan to a subagent in parallel, then moves completed plans forward. (Legacy mode — prefer Scheduler with source=board-batch, target=antigravity.)';
-                antigravitySection.appendChild(antigravityDesc);
-
-                const antigravityActions = document.createElement('div');
-                antigravityActions.style.cssText = 'padding:0 8px; display:flex; gap:8px; align-items:center;';
-                antigravitySection.appendChild(antigravityActions);
-
-                const agentSelect = document.createElement('select');
-                agentSelect.style.cssText = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:2px 4px; border-radius:3px; flex:1;';
-                guardInteraction(agentSelect);
-
-                // Populate sorted enabled agents
-                const enabledAgents = Object.keys(lastVisibleAgents || {}).filter(name => lastVisibleAgents[name] !== false);
-                enabledAgents.sort((a, b) => {
-                    const aColIndex = columnDefinitions.findIndex(col => col.role === a);
-                    const bColIndex = columnDefinitions.findIndex(col => col.role === b);
-                    if (aColIndex !== -1 && bColIndex !== -1) return aColIndex - bColIndex;
-                    if (aColIndex !== -1) return -1;
-                    if (bColIndex !== -1) return 1;
-                    const aLabelIndex = BUILT_IN_AGENT_LABELS.findIndex(l => l.key === a);
-                    const bLabelIndex = BUILT_IN_AGENT_LABELS.findIndex(l => l.key === b);
-                    if (aLabelIndex === -1 && bLabelIndex !== -1) return 1;
-                    if (bLabelIndex === -1 && aLabelIndex !== -1) return -1;
-                    return aLabelIndex - bLabelIndex;
-                });
-
-                enabledAgents.forEach(agentName => {
-                    const opt = document.createElement('option');
-                    opt.value = agentName;
-                    const labelInfo = BUILT_IN_AGENT_LABELS.find(l => l.key === agentName);
-                    if (labelInfo) {
-                        opt.textContent = labelInfo.label;
-                    } else {
-                        const customAgent = lastCustomAgents.find(a => a.role === agentName);
-                        opt.textContent = customAgent ? customAgent.name : agentName;
-                    }
-                    agentSelect.appendChild(opt);
-                });
-
-                if (lastAntigravityAgent && enabledAgents.includes(lastAntigravityAgent)) {
-                    agentSelect.value = lastAntigravityAgent;
-                } else if (enabledAgents.length > 0) {
-                    lastAntigravityAgent = enabledAgents[0];
-                }
-                agentSelect.addEventListener('change', () => { lastAntigravityAgent = agentSelect.value; });
-                antigravityActions.appendChild(agentSelect);
-
-                const columnSelect = document.createElement('select');
-                columnSelect.style.cssText = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:2px 4px; border-radius:3px; flex:1;';
-                guardInteraction(columnSelect);
-
-                columnDefinitions.forEach(col => {
-                    const opt = document.createElement('option');
-                    opt.value = col.id;
-                    opt.textContent = col.label;
-                    columnSelect.appendChild(opt);
-                });
-
-                const createdExists = columnDefinitions.some(col => col.id === 'CREATED');
-                const defaultCol = createdExists ? 'CREATED' : (columnDefinitions[0]?.id || '');
-                if (lastAntigravityColumn && columnDefinitions.some(col => col.id === lastAntigravityColumn)) {
-                    columnSelect.value = lastAntigravityColumn;
-                } else {
-                    columnSelect.value = defaultCol;
-                    lastAntigravityColumn = defaultCol;
-                }
-                columnSelect.addEventListener('change', () => { lastAntigravityColumn = columnSelect.value; });
-                antigravityActions.appendChild(columnSelect);
-
-                const copyPromptBtn = document.createElement('button');
-                copyPromptBtn.className = 'strip-btn';
-                copyPromptBtn.id = 'antigravity-copy-prompt-btn';
-                copyPromptBtn.textContent = 'COPY PROMPT';
-                copyPromptBtn.style.cssText = 'font-size:10px;';
-                copyPromptBtn.addEventListener('click', async () => {
-                    try {
-                        const selectedAgent = agentSelect.value;
-                        if (!selectedAgent) return;
-                        copyPromptBtn.textContent = 'LOADING...';
-                        copyPromptBtn.disabled = true;
-                        postKanbanMessage({
-                            type: 'generateAntigravityPrompt',
-                            agent: selectedAgent,
-                            column: columnSelect.value,
-                            batchSize: lastAntigravityBatchSize,
-                            workspaceRoot: getActiveWorkspaceRoot()
-                        });
-                    } catch (err) {
-                        console.error(err);
-                        copyPromptBtn.textContent = 'COPY PROMPT';
-                        copyPromptBtn.disabled = false;
-                    }
-                });
-                antigravityActions.appendChild(copyPromptBtn);
-
-                // Batch Size Selector Row
-                const batchSizeRow = document.createElement('div');
-                batchSizeRow.style.cssText = 'padding:0 8px; display:flex; gap:8px; align-items:center; font-size:10px; color:var(--text-secondary); margin-top:12px;';
-                const batchSizeLabel = document.createElement('span');
-                batchSizeLabel.textContent = 'BATCH SIZE:';
-                const batchSizeSelect = document.createElement('select');
-                batchSizeSelect.style.cssText = autobanSelectStyle;
-                guardInteraction(batchSizeSelect);
-                [3, 5, 10].forEach(val => {
-                    const opt = document.createElement('option');
-                    opt.value = String(val);
-                    opt.textContent = String(val) + ' plans';
-                    if (val === lastAntigravityBatchSize) opt.selected = true;
-                    batchSizeSelect.appendChild(opt);
-                });
-                batchSizeSelect.addEventListener('change', () => {
-                    lastAntigravityBatchSize = parseInt(batchSizeSelect.value, 10) || 5;
-                    saveWebviewState();
-                });
-                batchSizeRow.appendChild(batchSizeLabel);
-                batchSizeRow.appendChild(batchSizeSelect);
-                antigravitySection.appendChild(batchSizeRow);
             } else if (currentAutomationMode === 'scheduler') {
                 // ─── Scheduler panel (plan 4) ─────────────────────────────────
                 // Replaces the standalone COMMS tab. Surfaces the generic scheduler
@@ -10884,6 +10808,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             try {
                 const root = document.getElementById('automation-panel-root');
                 if (!root) return;
+                // A timer-driven re-render destroys the hovered element; without this the
+                // overlay stays visible with text for a node that no longer exists.
+                hideTooltip();
                 if (isAutobanPanelInteracting && !force) {
                     console.log('[kanban] Skipping autoban panel re-render: user interaction guard active');
                     return;

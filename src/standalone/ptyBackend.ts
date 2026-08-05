@@ -2,21 +2,37 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { TerminalHandle } from '../services/hostSeams';
 
+declare const __non_webpack_require__: NodeRequire | undefined;
+
 let ptyModule: typeof import('node-pty') | undefined;
+
+function resolveNodePtyDir(): string | undefined {
+    try {
+        const req: any = typeof __non_webpack_require__ !== 'undefined'
+            ? __non_webpack_require__
+            : require;
+        const resolved = req.resolve('node-pty/package.json');
+        return typeof resolved === 'string' ? path.dirname(resolved) : undefined;
+    } catch { return undefined; }
+}
 
 function getPtyModule(): typeof import('node-pty') {
     if (!ptyModule) {
         ptyModule = require('node-pty');
         if (process.platform === 'darwin') {
-            try {
-                const nodePtyDir = path.dirname(require.resolve('node-pty/package.json'));
-                const arch = process.arch;
+            const arch = process.arch;
+            const nodePtyDir = resolveNodePtyDir();
+            if (!nodePtyDir) {
+                console.warn(`[PtyBackend] could not locate node-pty on disk; skipping the darwin spawn-helper chmod — if terminals fail to spawn, check that node_modules/node-pty/prebuilds/darwin-${arch}/spawn-helper is executable`);
+            } else {
                 const helperPath = path.join(nodePtyDir, 'prebuilds', `darwin-${arch}`, 'spawn-helper');
                 if (fs.existsSync(helperPath)) {
-                    fs.chmodSync(helperPath, 0o755);
+                    try {
+                        fs.chmodSync(helperPath, 0o755);
+                    } catch (err) {
+                        console.warn('[PtyBackend] Failed to chmod darwin spawn-helper:', err);
+                    }
                 }
-            } catch (err) {
-                console.warn('[PtyBackend] Failed to chmod darwin spawn-helper:', err);
             }
         }
     }

@@ -1082,176 +1082,20 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         </div>
 
         <div class="shared-tab-content" id="remote-fields" data-tab-content="remote">
-            <div style="padding:12px; overflow-y:auto; height:100%; max-width:640px;">
+            <div style="padding:12px; max-width:640px;">
                 <div class="db-subsection" style="border-top:none;">
-                    <div class="section-label" style="margin-bottom: 6px;"><span id="remote-subsection-title">Remote Control</span></div>
+                    <div class="section-label" style="margin-bottom:6px;">Remote Control is now Connections</div>
                     <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:12px;">
-                        Drive your boards remotely. Moving a card between remote states moves it here and
-                        dispatches that column's agent; comments are routed to the current column's agent,
-                        which replies back through the remote. Polling only — no webhooks, nothing to expose.
-                        <br><strong>Notion</strong> has no active-issue cap — pick it when Linear's free-tier
-                        limit gets in the way. Notion is an <em>agent</em> control surface: connect Notion to
-                        claude.ai and let the remote Claude session drive it via the Notion MCP connector.
+                        Provider configuration (Notion / Linear / ClickUp), boards to sync, remote mode, polling,
+                        sync health and board&nbsp;state&nbsp;export have moved to the <strong>Connections</strong> panel,
+                        along with external-agent hand-offs and web-agent document ingestion.
+                        <br><br>
+                        Open it from the command palette &mdash; <code>Switchboard: Open Connections (Remote Control)</code>
+                        &mdash; or from the Connections icon in the browser cockpit's left rail.
+                        <br><br>
+                        This signpost stays for at least one release so the term &ldquo;Remote&rdquo; keeps finding the feature.
                     </div>
-
-                    <!-- Provider selector -->
-                    <label style="display:block; margin-bottom:10px;">
-                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Provider</span>
-                        <select id="remote-provider" class="workspace-project-select" style="width:100%; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; border-radius:4px;">
-                            <option value="linear">Linear</option>
-                            <option value="notion">Notion</option>
-                            <option value="clickup">ClickUp</option>
-                        </select>
-                    </label>
-
-                    <!-- Workspace selector -->
-                    <label style="display:block; margin-bottom:10px;">
-                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Workspace</span>
-                        <select id="remote-workspace" class="workspace-project-select" style="width:100%; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; border-radius:4px;"></select>
-                    </label>
-
-                    <!-- Boards to sync: themed checkbox list, includes "No Project" base board -->
-                    <div style="margin-bottom:10px;">
-                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Boards to sync</span>
-                        <div id="remote-boards-list" class="remote-checkbox-list" style="border:1px solid var(--border-color); background:var(--panel-bg2); border-radius:4px; padding:8px; max-height:160px; overflow-y:auto; display:flex; flex-direction:column; gap:6px;"></div>
-                    </div>
-
-                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
-                        <input type="checkbox" id="remote-silent-sync">
-                        <span>Silent syncing — keep selected boards mirrored with Linear even while pinging is off</span>
-                    </label>
-
-                    <!-- Remote mode: Ingest (pull only) vs Full (pull + mirror + dispatch) -->
-                    <div style="margin-bottom:10px;">
-                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Remote mode</span>
-                        <label style="display:inline-flex; align-items:center; gap:4px; margin-right:16px; cursor:pointer;">
-                            <input type="radio" name="remote-mode" value="ingest" id="remote-mode-ingest">
-                            <span>Ingest (pull only)</span>
-                        </label>
-                        <label style="display:inline-flex; align-items:center; gap:4px; cursor:pointer;">
-                            <input type="radio" name="remote-mode" value="full" id="remote-mode-full">
-                            <span>Full (pull + mirror + dispatch)</span>
-                        </label>
-                    </div>
-
-                    <!-- Comment polling toggle -->
-                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
-                        <input type="checkbox" id="remote-comments">
-                        <span>Poll comments from remote</span>
-                    </label>
-
-                    <!-- Content polling toggle — pulls remote body edits back into the local plan file -->
-                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
-                        <input type="checkbox" id="remote-content">
-                        <span>Poll content from remote</span>
-                    </label>
-
-                    <!-- Push toggle — grayed out if provider lacks push capability -->
-                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-bottom:10px;" id="remote-push-label">
-                        <input type="checkbox" id="remote-push">
-                        <span>Push status &amp; content to remote</span>
-                    </label>
-
-                    <label style="display:block; margin-bottom:12px;">
-                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">Ping frequency (seconds, 30–120)</span>
-                        <input type="number" id="remote-ping-frequency" class="remote-number-input" min="30" max="120" step="5" value="60" style="background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; border-radius:4px; width:80px;">
-                    </label>
-
-                    <!-- Start/stop pinging (the kanban board toolbar keeps its own toggle) -->
-                    <div style="margin-bottom:12px; display:flex; align-items:center; gap:10px;">
-                        <button id="btn-remote-control-toggle" class="action-btn">Start Remote Control</button>
-                        <span id="remote-control-state" style="font-size:10px; color:var(--text-secondary);"></span>
-                    </div>
-
-                    <!-- Sync health: last poll/push status, rate-limit/backoff, persistent-failure indicator -->
-                    <div id="remote-health-section" style="margin-bottom:12px; padding:8px 10px; border:1px solid var(--border-color, rgba(127,127,127,0.2)); border-radius:4px; font-size:11px; line-height:1.6; display:none; background:var(--panel-bg);">
-                        <div class="section-label" style="margin-bottom:6px; font-size:11px;">Sync Health</div>
-                        <div id="remote-health-poll" style="color:var(--text-secondary);"></div>
-                        <div id="remote-health-push" style="color:var(--text-secondary);"></div>
-                        <div id="remote-health-throttle" style="color:var(--text-secondary); display:none;"></div>
-                        <div id="remote-health-failure" style="color:var(--text-secondary); display:none; margin-top:4px; font-weight:bold;"></div>
-                    </div>
-
-                    <!-- Linear-only: one-time setup helper for Linear's native AI agent.
-                         Generates instructions tailored to the user's column mappings. -->
-                    <div id="remote-linear-agent-skill" style="margin-bottom:12px; display:none;">
-                        <button id="btn-copy-linear-agent-skill" class="action-btn"
-                                title="Copy tailored instructions for Linear's native AI agent">
-                            Copy Linear Agent Skill
-                        </button>
-                        <span id="copy-linear-agent-skill-status" style="font-size:11px; color:var(--text-secondary); margin-left:8px;"></span>
-                    </div>
-
-                    <!-- Notion-only one-time setup: creates the plans + comments databases,
-                         backs up the selected boards, and matches the column select to the board. -->
-                    <div id="remote-notion-setup" style="display:none; margin-top:6px; margin-bottom:10px; padding-top:10px; border-top:1px solid var(--border-color, rgba(127,127,127,0.2));">
-                        <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
-                            Run this once after selecting boards. It creates the Notion plans + "Switchboard
-                            Comments" databases, backs up the selected boards' cards, and matches the
-                            <code>Kanban Column</code> options to your board.
-                        </div>
-
-                        <div class="subsection-header" style="margin-bottom:6px; margin-top:10px;">
-                            <span>Notion Remote Sync Options</span>
-                        </div>
-                        <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:12px;">
-                            <div>
-                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                                    <input id="notion-option-realtime-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                                    <span>Enable realtime Notion push sync for mapped plans</span>
-                                </label>
-                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                                    Automatically push plan changes to Notion as you move cards between columns
-                                </div>
-                            </div>
-                            <div>
-                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                                    <input id="notion-option-delete-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                                    <span>Archive Notion pages when plans are deleted in Switchboard</span>
-                                </label>
-                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                                    When enabled, deleting a plan in Switchboard will archive the corresponding page in Notion
-                                </div>
-                            </div>
-                            <div>
-                                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                                    <input id="notion-option-inbound-delete" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                                    <span>Reconcile inbound deletes from Notion</span>
-                                </label>
-                                <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
-                                    When enabled, archiving a page in Notion will tombstone the mapped local plan
-                                </div>
-                            </div>
-                        </div>
-
-                        <button id="btn-notion-remote-setup" class="action-btn">Run Notion setup sync</button>
-                        <span id="remote-notion-setup-status" style="display:block; margin-top:6px; font-size:10px; color:var(--text-secondary);"></span>
-                    </div>
-
-                    <!-- Board state export: where the kanban board state gets mirrored for remote/web-agent visibility. -->
-                    <div style="margin-top: 20px; border-top: 1px solid var(--border-color); padding-top: 16px;">
-                        <div style="font-size: 10px; color: var(--text-secondary); margin: 0 0 8px; letter-spacing: 1px;">
-                            BOARD STATE EXPORT
-                        </div>
-                        <div style="font-size: 11px; color: var(--text-secondary); margin: 8px 0; line-height: 1.5;">
-                            Choose where the kanban board state gets mirrored for remote/web-agent visibility. <strong>Default: none</strong> — no git footprint. <code>read-only-snapshot</code> publishes a one-directional, read-only snapshot (<code>board.json</code> + <code>board.md</code>) to the orphan branch <code>switchboard/board</code> — read-only, not a control channel. Notion/Linear are governed by their existing provider config.
-                        </div>
-                        <label class="startup-row" style="display:block; margin-top:8px;">
-                            <span style="display:block; margin-bottom:4px;">Export destination</span>
-                            <select id="board-state-export-select" style="width:100%; padding:4px 8px; background:var(--panel-bg); color:var(--text-primary); border:1px solid var(--border-color); border-radius:3px;">
-                                <option value="none">none — no git footprint</option>
-                                <option value="read-only-snapshot">read-only-snapshot — publish to orphan branch switchboard/board (read-only)</option>
-                            </select>
-                        </label>
-                        <div id="board-state-export-remote-url-row" class="hidden" style="margin-top:8px;">
-                            <label class="startup-row" style="display:block;">
-                                <span style="display:block; margin-bottom:4px;">Git remote URL (reserved — currently unused)</span>
-                                <input id="board-state-export-remote-url" type="text" placeholder="reserved" style="width:100%;">
-                            </label>
-                        </div>
-                    </div>
-
-                    <span id="remote-config-status" style="font-size:10px; color:var(--text-secondary);"></span>
+                    <button id="btn-open-connections-from-setup" class="action-btn">Open Connections</button>
                 </div>
             </div>
         </div>
@@ -1765,12 +1609,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     vscode.postMessage({ type: 'getStatusShowProjectSetting' });
                     vscode.postMessage({ type: 'getStatusShowMemoSetting' });
                 },
-                'remote': () => {
-                    const wsSel = document.getElementById('remote-workspace');
-                    const remoteWs = (wsSel && wsSel.value) || undefined;
-                    vscode.postMessage({ type: 'getRemoteConfig', workspaceRoot: remoteWs });
-                    vscode.postMessage({ type: 'getRemoteHealth', workspaceRoot: remoteWs });
-                }
             };
 
             const callback = tabLoadCallbacks[tabId];
@@ -2602,6 +2440,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         });
 
         // Board state export handlers
+        // The Remote tab is a signpost now — the Remote form and BOARD STATE EXPORT
+        // live in the Connections panel. In the browser shell transport.js turns this
+        // verb into a client-side panel switch; in the extension host the Setup arm
+        // runs switchboard.openConnectionsPanel. Both hosts, one post.
+        document.getElementById('btn-open-connections-from-setup')?.addEventListener('click', () => {
+            vscode.postMessage({ type: 'openConnectionsPanel' });
+        });
+
         document.getElementById('board-state-export-select')?.addEventListener('change', (e) => {
             const value = e.target.value;
             const remoteUrlRow = document.getElementById('board-state-export-remote-url-row');
@@ -4047,44 +3893,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     break;
                 }
-                case 'remoteConfig':
-                    if (typeof message.active === 'boolean') { remoteControlActive = message.active; applyRemoteControlButtonState(); }
-                    renderRemoteConfig(message.config, message);
-                    break;
-                case 'remoteControlState':
-                    remoteControlActive = !!message.active;
-                    applyRemoteControlButtonState();
-                    break;
-                case 'remoteSyncHealth':
-                    renderRemoteSyncHealth(message.health);
-                    break;
-                case 'notionRemoteSetupResult': {
-                    const statusEl = document.getElementById('remote-notion-setup-status');
-                    if (statusEl) {
-                        statusEl.textContent = message.success
-                            ? `Setup complete — ${message.backedUp || 0} card(s) backed up. Connect Notion to claude.ai and drive it from there.`
-                            : `Setup failed: ${message.error || 'unknown error'}`;
-                    }
-                    break;
-                }
-                case 'linearAgentSkillText':
-                    if (message.text) {
-                        navigator.clipboard.writeText(message.text).then(() => {
-                            const btn = document.getElementById('btn-copy-linear-agent-skill');
-                            const status = document.getElementById('copy-linear-agent-skill-status');
-                            if (btn) { btn.textContent = 'Copied!'; }
-                            if (status) { status.textContent = ''; }
-                            setTimeout(() => { if (btn) { btn.textContent = 'Copy Linear Agent Skill'; } }, 2000);
-                        }).catch(err => {
-                            console.error('Failed to copy Linear agent skill:', err);
-                            const status = document.getElementById('copy-linear-agent-skill-status');
-                            if (status) { status.textContent = 'Copy failed — check console'; }
-                        });
-                    } else if (message.error) {
-                        const status = document.getElementById('copy-linear-agent-skill-status');
-                        if (status) { status.textContent = message.error; }
-                    }
-                    break;
                 default:
                     break;
             }
@@ -4093,240 +3901,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // =========================================================================
         // REMOTE CONTROL TAB SUPPORT
         // =========================================================================
-        let remoteControlActive = false;
-        let _remoteHealthTimer = null;
-        let _remoteCapabilities = { pull: true, push: true };
 
-        function applyRemoteControlButtonState() {
-            const btn = document.getElementById('btn-remote-control-toggle');
-            if (btn) btn.textContent = remoteControlActive ? 'Stop Remote Control' : 'Start Remote Control';
-            const stateEl = document.getElementById('remote-control-state');
-            if (stateEl) stateEl.textContent = remoteControlActive ? 'Pinging…' : '';
-            const healthSection = document.getElementById('remote-health-section');
-            if (healthSection) healthSection.style.display = remoteControlActive ? 'block' : 'none';
-            if (remoteControlActive && !_remoteHealthTimer) {
-                _remoteHealthTimer = setInterval(requestRemoteHealth, 15000);
-                requestRemoteHealth();
-            } else if (!remoteControlActive && _remoteHealthTimer) {
-                clearInterval(_remoteHealthTimer);
-                _remoteHealthTimer = null;
-            }
-        }
-
-        function requestRemoteHealth() {
-            const wsSel = document.getElementById('remote-workspace');
-            vscode.postMessage({ type: 'getRemoteHealth', workspaceRoot: wsSel ? wsSel.value : undefined });
-        }
-
-        const PERSISTENT_FAILURE_THRESHOLD = 3;
-        function renderRemoteSyncHealth(health) {
-            if (!health) return;
-            const pollEl = document.getElementById('remote-health-poll');
-            const pushEl = document.getElementById('remote-health-push');
-            const thrEl = document.getElementById('remote-health-throttle');
-            const failEl = document.getElementById('remote-health-failure');
-
-            if (pollEl) {
-                const ts = health.lastPollAt ? new Date(health.lastPollAt).toLocaleTimeString() : 'never';
-                const icon = health.lastPollOk ? '✓' : '✗';
-                const err = health.lastPollError ? ` — ${health.lastPollError.slice(0, 120)}` : '';
-                pollEl.textContent = `Last poll: ${icon} ${ts}${err}`;
-                pollEl.style.color = health.lastPollOk ? 'var(--text-secondary)' : '#e74c3c';
-            }
-            if (pushEl) {
-                const ts = health.lastPushAt ? new Date(health.lastPushAt).toLocaleTimeString() : 'never';
-                const icon = health.lastPushOk ? '✓' : '✗';
-                const err = health.lastPushError ? ` — ${health.lastPushError.slice(0, 120)}` : '';
-                pushEl.textContent = `Last push: ${icon} ${ts}${err}`;
-                pushEl.style.color = health.lastPushOk ? 'var(--text-secondary)' : '#e74c3c';
-            }
-            if (thrEl) {
-                if (health.throttled) {
-                    const until = health.throttleUntil ? new Date(health.throttleUntil).toLocaleTimeString() : '';
-                    thrEl.textContent = `⏳ Rate-limited — backing off until ${until}`;
-                    thrEl.style.display = 'block';
-                    thrEl.style.color = '#f39c12';
-                } else {
-                    thrEl.style.display = 'none';
-                }
-            }
-            if (failEl) {
-                if (health.consecutiveFailures >= PERSISTENT_FAILURE_THRESHOLD) {
-                    failEl.textContent = `⚠ ${health.consecutiveFailures} consecutive failures — check token/connection`;
-                    failEl.style.display = 'block';
-                    failEl.style.color = '#e74c3c';
-                } else {
-                    failEl.style.display = 'none';
-                }
-            }
-        }
-
-        function applyRemoteProviderUi() {
-            const providerEl = document.getElementById('remote-provider');
-            const provider = providerEl ? providerEl.value : 'linear';
-            const setup = document.getElementById('remote-notion-setup');
-            if (setup) setup.style.display = provider === 'notion' ? 'block' : 'none';
-            const title = document.getElementById('remote-subsection-title');
-            if (title) {
-                title.textContent = provider === 'notion' ? 'Remote Control (Notion)'
-                    : provider === 'clickup' ? 'Remote Control (ClickUp)'
-                    : 'Remote Control (Linear)';
-            }
-            const skillBlock = document.getElementById('remote-linear-agent-skill');
-            if (skillBlock) skillBlock.style.display = provider === 'linear' ? 'block' : 'none';
-
-            const caps = _remoteCapabilities || { pull: true, push: true };
-            const pushLabel = document.getElementById('remote-push-label');
-            const pushInput = document.getElementById('remote-push');
-            const modeFull = document.getElementById('remote-mode-full');
-            const modeFullLabel = modeFull ? modeFull.closest('label') : null;
-            if (pushInput && pushLabel) {
-                pushInput.disabled = !caps.push;
-                pushLabel.style.opacity = caps.push ? '1' : '0.5';
-                pushLabel.style.pointerEvents = caps.push ? 'auto' : 'none';
-            }
-            if (modeFull && modeFullLabel) {
-                modeFull.disabled = !caps.pull;
-                modeFullLabel.style.opacity = caps.pull ? '1' : '0.5';
-                modeFullLabel.style.pointerEvents = caps.pull ? 'auto' : 'none';
-            }
-        }
-
-        function renderRemoteConfig(config, payload) {
-            payload = payload || {};
-            if (payload.capabilities) {
-                _remoteCapabilities = payload.capabilities;
-            }
-            const wsSel = document.getElementById('remote-workspace');
-            if (wsSel && Array.isArray(payload.workspaces)) {
-                wsSel.innerHTML = '';
-                payload.workspaces.forEach(w => {
-                    const opt = document.createElement('option');
-                    opt.value = w.workspaceRoot;
-                    opt.textContent = w.label;
-                    if (w.active) opt.selected = true;
-                    wsSel.appendChild(opt);
-                });
-            }
-
-            const list = document.getElementById('remote-boards-list');
-            const boardKeys = Array.isArray(payload.boardKeys)
-                ? payload.boardKeys
-                : ['', ...((payload.projects) || [])];
-            if (list) {
-                const chosen = new Set((config && config.boards) || []);
-                list.innerHTML = '';
-                boardKeys.forEach(key => {
-                    const row = document.createElement('label');
-                    row.className = 'remote-checkbox-row';
-                    row.style.display = 'flex';
-                    row.style.alignItems = 'center';
-                    row.style.gap = '6px';
-                    const cb = document.createElement('input');
-                    cb.type = 'checkbox';
-                    cb.value = key;
-                    cb.checked = chosen.has(key);
-                    cb.dataset.role = 'remote-board';
-                    const span = document.createElement('span');
-                    span.textContent = key === '' ? 'No Project (base workspace board)' : key;
-                    row.appendChild(cb);
-                    row.appendChild(span);
-                    list.appendChild(row);
-                });
-            }
-
-            if (config) {
-                const providerEl = document.getElementById('remote-provider');
-                if (providerEl) providerEl.value = (config.provider === 'notion' || config.provider === 'clickup') ? config.provider : 'linear';
-                const silent = document.getElementById('remote-silent-sync');
-                if (silent) silent.checked = config.silentSync === true;
-                const freq = document.getElementById('remote-ping-frequency');
-                if (freq) freq.value = config.pingFrequencySeconds || 60;
-                const modeIngest = document.getElementById('remote-mode-ingest');
-                const modeFull = document.getElementById('remote-mode-full');
-                if (modeIngest && modeFull) {
-                    modeIngest.checked = config.mode !== 'full';
-                    modeFull.checked = config.mode === 'full';
-                }
-                const comments = document.getElementById('remote-comments');
-                if (comments) comments.checked = config.comments !== false;
-                const content = document.getElementById('remote-content');
-                if (content) content.checked = config.content !== false;
-                const push = document.getElementById('remote-push');
-                if (push) push.checked = config.push === true;
-            }
-            applyRemoteProviderUi();
-        }
-
-        function remoteCollectConfig() {
-            const boards = Array.from(
-                document.querySelectorAll('#remote-boards-list input[data-role="remote-board"]:checked')
-            ).map(cb => cb.value);
-            const providerEl = document.getElementById('remote-provider');
-            const providerVal = providerEl ? providerEl.value : 'linear';
-            const modeFull = document.getElementById('remote-mode-full');
-            return {
-                provider: (providerVal === 'notion' || providerVal === 'clickup') ? providerVal : 'linear',
-                boards,
-                silentSync: document.getElementById('remote-silent-sync')?.checked === true,
-                pingFrequencySeconds: Math.min(120, Math.max(30,
-                    parseInt(document.getElementById('remote-ping-frequency')?.value, 10) || 60)),
-                mode: modeFull && modeFull.checked ? 'full' : 'ingest',
-                push: document.getElementById('remote-push')?.checked === true,
-                comments: document.getElementById('remote-comments')?.checked !== false,
-                content: document.getElementById('remote-content')?.checked !== false,
-            };
-        }
-
-        function remoteAutosave() {
-            const wsSel = document.getElementById('remote-workspace');
-            const workspaceRoot = wsSel ? wsSel.value : undefined;
-            const config = remoteCollectConfig();
-            const statusEl = document.getElementById('remote-config-status');
-            if (statusEl) statusEl.textContent = 'Saved.';
-            vscode.postMessage({ type: 'setRemoteConfig', config, workspaceRoot });
-        }
-
-        document.getElementById('remote-fields')?.addEventListener('change', (e) => {
-            if (e.target.id === 'remote-workspace') {
-                vscode.postMessage({ type: 'getRemoteConfig', workspaceRoot: e.target.value });
-                return;
-            }
-            if (e.target.id === 'remote-provider') {
-                applyRemoteProviderUi();
-            }
-            remoteAutosave();
-        });
-
-        document.getElementById('btn-copy-linear-agent-skill')?.addEventListener('click', () => {
-            const wsSel = document.getElementById('remote-workspace');
-            vscode.postMessage({ type: 'copyLinearAgentSkill', workspaceRoot: (wsSel && wsSel.value) || undefined });
-        });
-
-        document.getElementById('btn-notion-remote-setup')?.addEventListener('click', () => {
-            const wsSel = document.getElementById('remote-workspace');
-            const statusEl = document.getElementById('remote-notion-setup-status');
-            if (statusEl) statusEl.textContent = 'Running setup sync…';
-            vscode.postMessage({
-                type: 'runNotionRemoteSetup',
-                workspaceRoot: wsSel ? wsSel.value : undefined,
-                options: collectNotionRemoteSetupOptions()
-            });
-        });
-
-        let _remoteFreqTimer;
-        document.getElementById('remote-ping-frequency')?.addEventListener('input', () => {
-            clearTimeout(_remoteFreqTimer);
-            _remoteFreqTimer = setTimeout(remoteAutosave, 400);
-        });
-
-        document.getElementById('btn-remote-control-toggle')?.addEventListener('click', () => {
-            const wsSel = document.getElementById('remote-workspace');
-            vscode.postMessage({
-                type: remoteControlActive ? 'stopRemoteControl' : 'startRemoteControl',
-                workspaceRoot: (wsSel && wsSel.value) || undefined
-            });
-        });
 
         setControlPlaneBusy(false);
         setMultiRepoBusy(false);

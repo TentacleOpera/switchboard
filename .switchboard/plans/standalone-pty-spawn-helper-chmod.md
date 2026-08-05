@@ -204,3 +204,7 @@ handled by reporting rather than failing.
 
 - Making `isPtyAvailable()` a real spawn probe.
 - Anything about the extension host's terminals.
+
+## Completion Report
+
+Replaced the webpack-rewritten `require.resolve('node-pty/package.json')` with a guarded `__non_webpack_require__` resolver in `src/standalone/ptyBackend.ts`, falling back to plain `require` when running unbundled. The darwin `spawn-helper` chmod now resolves correctly and warns clearly when the helper cannot be located. The warning text also flags the consequence (terminal spawning may fail) instead of dumping a bare TypeError. No compilation or tests were run per the dispatch directive.

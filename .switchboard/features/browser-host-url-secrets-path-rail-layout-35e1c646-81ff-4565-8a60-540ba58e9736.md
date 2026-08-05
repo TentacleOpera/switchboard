@@ -24,8 +24,11 @@ Cross-subtask audit found no overlap, contradiction, or supersession. Shared sur
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Browser Board URL Must Default to switchboard.localhost, Not 127.0.0.1](../plans/feature_plan_20260805105305_browser-board-url-defaults-to-switchboard-localhost.md) — **PLAN REVIEWED**
-- [ ] [Browser Setup/Tickets Panels: "Set This in the Editor" Hint Ignores the Encrypted Secrets Store](../plans/feature_plan_20260805105306_browser-setup-secrets-hint-names-cli-secrets-store.md) — **PLAN REVIEWED**
-- [ ] [Browser Shell: Move the Setup Icon to the Bottom of the Rail, Next to the Theme Toggle](../plans/feature_plan_20260805105312_browser-shell-setup-icon-moves-to-bottom-rail.md) — **PLAN REVIEWED**
+- [ ] [Browser Board URL Must Default to switchboard.localhost, Not 127.0.0.1](../plans/feature_plan_20260805105305_browser-board-url-defaults-to-switchboard-localhost.md) — **CODER CODED**
+- [ ] [Browser Setup/Tickets Panels: "Set This in the Editor" Hint Ignores the Encrypted Secrets Store](../plans/feature_plan_20260805105306_browser-setup-secrets-hint-names-cli-secrets-store.md) — **CODER CODED**
+- [ ] [Browser Shell: Move the Setup Icon to the Bottom of the Rail, Next to the Theme Toggle](../plans/feature_plan_20260805105312_browser-shell-setup-icon-moves-to-bottom-rail.md) — **CODER CODED**
 <!-- END SUBTASKS -->
 
+## Completion Report
+
+All three subtasks were implemented. `src/utils/loopbackHostname.ts` now exports `DEFAULT_DISPLAY_HOSTNAME` and `resolveDisplayHostname`, which the standalone CLI, bootstrap, and extension `openInBrowser` all use to default to `switchboard.localhost` with a 500 ms `/health` reachability probe and automatic `127.0.0.1` fallback. The editor-host secrets mirror in `src/extension.ts` gained the missing `importSecretFromGlobalStore` fill-only read direction before the existing write-only sweep, and `src/webview/transport.js` now shows the accurate CLI hint. The Setup panel icon was moved to the bottom rail cluster by adding `placement: 'bottom'` in `src/services/headlessPanelHtml.ts`, splitting `renderManifest` in `src/webview/shell.js`, and adding the `strip-placement-bottom` CSS rule in `src/webview/shell.html`. Contract tests were updated to cover the new defaults, import ordering, and placement. No compilation or test runs were performed per the dispatch directive.

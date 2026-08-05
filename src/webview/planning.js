@@ -1748,10 +1748,6 @@
             vscode.postMessage({ type: 'listPlanningHtmlFolders', workspaceRoot: root });
             vscode.postMessage({ type: 'refreshSource', sourceId: 'planning-html-folder' });
         }
-        if (tabName === 'create-plans') {
-            // Refresh the has-docs gate and restore the remembered URL/platform reference.
-            vscode.postMessage({ type: 'createPlansInit' });
-        }
     }
 
     tabButtons.forEach(btn => {
@@ -1892,113 +1888,7 @@
 
     // NotebookLM tab removed — Create Plans tab now occupies its slot.
 
-    // ── Create Plans tab — point an agent at your docs, get a plan back ──
-    // One real mechanism: the source picker (zip / public link / platform).
-    // Prompts and the zip are assembled backend-side.
-    (function initCreatePlansTab() {
-        const rows = {
-            zip: document.getElementById('cp-zip-row'),
-            link: document.getElementById('cp-link-row'),
-            platform: document.getElementById('cp-platform-row')
-        };
-        const urlInput = document.getElementById('cp-url');
-        const refInput = document.getElementById('cp-ref');
-        const platformSel = document.getElementById('cp-platform');
-        const pasteArea = document.getElementById('cp-paste');
-        const btnZip = document.getElementById('cp-btn-zip');
-        const btnFolder = document.getElementById('cp-btn-folder');
-        const folderPathEl = document.getElementById('cp-folder-path');
-        const includeExtras = document.getElementById('cp-include-extras');
-        const btnCopyLink = document.getElementById('cp-btn-copy-link');
-        const btnCopyPlatform = document.getElementById('cp-btn-copy-platform');
-        const btnCreate = document.getElementById('cp-btn-create');
-        const btnImprove = document.getElementById('cp-btn-improve');
-        const statusEl = document.getElementById('cp-status');
-        const zipHint = document.getElementById('cp-zip-hint');
-        if (!rows.zip || !btnZip) { return; } // pane absent — nothing to wire
-
-        // The chosen folder is the zip's source; the button stays disabled until one is picked.
-        let chosenFolder = '';
-
-        document.querySelectorAll('input[name="cp-source"]').forEach(radio => {
-            radio.addEventListener('change', () => {
-                Object.keys(rows).forEach(k => { if (rows[k]) rows[k].style.display = (k === radio.value) ? '' : 'none'; });
-            });
-        });
-
-        const gateLink = () => { btnCopyLink.disabled = !(urlInput && urlInput.value.trim()); };
-        const gatePlatform = () => { btnCopyPlatform.disabled = !(refInput && refInput.value.trim()); };
-        const gateCreate = () => { btnCreate.disabled = !(pasteArea && pasteArea.value.trim()); };
-        if (urlInput) urlInput.addEventListener('input', gateLink);
-        if (refInput) refInput.addEventListener('input', gatePlatform);
-        if (pasteArea) pasteArea.addEventListener('input', gateCreate);
-
-        if (btnFolder) btnFolder.addEventListener('click', () => {
-            vscode.postMessage({ type: 'createPlansPickFolder' });
-        });
-        btnZip.addEventListener('click', () => {
-            if (!chosenFolder) { return; }
-            vscode.postMessage({
-                type: 'createPlansDownloadZip',
-                folder: chosenFolder,
-                includeExtras: !!(includeExtras && includeExtras.checked)
-            });
-        });
-        btnCopyLink.addEventListener('click', () => {
-            vscode.postMessage({ type: 'createPlansCopyPrompt', source: 'link', url: urlInput.value.trim() });
-        });
-        btnCopyPlatform.addEventListener('click', () => {
-            vscode.postMessage({ type: 'createPlansCopyPrompt', source: 'platform', platform: platformSel.value, reference: refInput.value.trim() });
-        });
-        btnCreate.addEventListener('click', () => {
-            const markdown = pasteArea.value.trim();
-            if (!markdown) { return; }
-            btnCreate.disabled = true;
-            if (statusEl) statusEl.textContent = 'Creating…';
-            vscode.postMessage({ type: 'createPlansPasteBack', markdown });
-        });
-        btnImprove.addEventListener('click', () => {
-            vscode.postMessage({ type: 'createPlansImproveSource' });
-        });
-
-        window.__createPlansHandleMessage = (message) => {
-            if (message.type === 'createPlansState') {
-                // The zip is gated on a folder being chosen, not on managed docs existing.
-                // If no managed docs exist, the "include extras" checkbox has nothing to add.
-                if (includeExtras && !message.hasDocs) {
-                    includeExtras.checked = false;
-                    includeExtras.disabled = true;
-                    includeExtras.parentElement.title = 'No managed docs (constitution / PRDs / README) found in this workspace.';
-                }
-                if (urlInput && !urlInput.value && message.publicUrl) { urlInput.value = message.publicUrl; gateLink(); }
-                if (platformSel && message.platform) { platformSel.value = message.platform; }
-                if (refInput && !refInput.value && message.platformRef) { refInput.value = message.platformRef; gatePlatform(); }
-                return;
-            }
-            if (message.type === 'createPlansFolderPicked') {
-                chosenFolder = message.folder || '';
-                if (folderPathEl) folderPathEl.textContent = chosenFolder || 'No folder chosen.';
-                btnZip.disabled = !chosenFolder;
-                if (zipHint) {
-                    zipHint.textContent = chosenFolder
-                        ? "Bundles the folder's docs with a HOW-TO-PLAN.md the agent follows."
-                        : 'Choose a folder to bundle its docs.';
-                }
-                return;
-            }
-            if (message.type === 'createPlansPasteBackResult') {
-                if (message.ok) {
-                    if (pasteArea) pasteArea.value = '';
-                    if (statusEl) statusEl.textContent = message.projectName
-                        ? ('Plan card created (pinned to ' + message.projectName + ').')
-                        : 'Plan card created (unassigned — assign on the board).';
-                } else if (statusEl) {
-                    statusEl.textContent = message.error || 'Import failed.';
-                }
-                gateCreate();
-            }
-        };
-    })();
+    // Web Agents / Create Plans tab moved to connections.html.
 
     const SOURCE_DISPLAY_NAMES = {
         'clickup': 'ClickUp',
@@ -4560,12 +4450,7 @@
             case 'localDocsReady':
                 handleLocalDocsReady(msg);
                 break;
-            case 'createPlansState':
-            case 'createPlansFolderPicked':
-            case 'createPlansPasteBackResult': {
-                if (window.__createPlansHandleMessage) { window.__createPlansHandleMessage(msg); }
-                break;
-            }
+            // Web Agents / Create Plans messages handled by connections.js.
             case 'selectLocalDoc': {
                 const { docId, docName } = msg;
                 loadDocumentPreview('local-folder', docId, docName || docId);

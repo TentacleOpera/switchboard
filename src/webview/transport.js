@@ -236,6 +236,7 @@
         openSetupPanel: 'setup',
         openDesignPanel: 'design',
         openTicketsPanel: 'tickets',
+        openConnectionsPanel: 'connections',
     };
 
     const STATUS_MESSAGE_PANELS = { kanban: true };
@@ -527,12 +528,19 @@
                         const el = document.querySelector(sel);
                         if (el) {
                             el.disabled = true;
-                            el.placeholder = 'Set this in the editor...';
+                            el.placeholder = 'Set in VS Code, or via the switchboard CLI...';
                             if (el.parentNode && !el.parentNode.querySelector('.host-secrets-hint')) {
                                 const hint = document.createElement('div');
                                 hint.className = 'host-secrets-hint';
                                 hint.style.cssText = 'font-size: 11px; color: var(--text-secondary, #888); margin-top: 4px; font-style: italic;';
-                                hint.textContent = 'Keys are entered in the editor and used from there — open this workspace in VS Code to set it.';
+                                // Two real paths, not one dead end. This host (the VS Code extension) does
+                                // not accept secret writes over HTTP by design — its auth token is empty,
+                                // so every loopback caller would be trusted. Entering the key in the editor
+                                // or writing it to the machine-global encrypted store both work; the store
+                                // is imported into the keychain when the extension next activates.
+                                hint.textContent = 'Read-only here. Set this key in the VS Code Setup panel, '
+                                    + 'or run: npx switchboard secrets set <clickup|linear|notion|stitch> <token> '
+                                    + '— then reload the VS Code window to pick it up.';
                                 el.parentNode.appendChild(hint);
                             }
                         }

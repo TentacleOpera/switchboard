@@ -327,6 +327,29 @@ function run() {
             }
         }
 
+        // ── 10. The mirror reads as well as writes, and cannot resurrect a delete ──
+        {
+            const extSrc = fs.readFileSync(path.join(process.cwd(), 'src', 'extension.ts'), 'utf8');
+            assert.ok(/importSecretFromGlobalStore/.test(extSrc),
+                'the editor host must import from the machine-global store, or `secrets set` is invisible to it');
+            // Fill-only: an unconditional store() would clobber a freshly-entered token
+            // and, with delete-propagation, resurrect cleared ones.
+            assert.ok(/if \(existing && existing\.trim\(\)\.length > 0\) \{ return; \}/.test(extSrc),
+                'the import must skip keys the keychain already holds');
+            // Ordering: import must precede the write-only backfill sweep.
+            assert.ok(extSrc.indexOf('importSecretFromGlobalStore(key)') < extSrc.indexOf('syncSecretToGlobalStore(key, false)'),
+                'import must run before the backfill sweep');
+            // The gating itself must NOT be relaxed by this change.
+            assert.ok(!extSrc.includes('allowSecretWritesOverHttp'), 'the editor host must not open HTTP secret writes');
+        }
+
+        {
+            const t = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'transport.js'), 'utf8');
+            assert.ok(!/open this workspace in VS Code to set it/.test(t),
+                'the secrets hint must name the CLI store path, not only the editor');
+            assert.ok(/switchboard secrets set/.test(t), 'the hint must name the CLI command');
+        }
+
         console.log('standalone-secrets-bridge-contract: PASS');
     } finally {
         if (originalStateHome === undefined) { delete process.env.SWITCHBOARD_STATE_HOME; }

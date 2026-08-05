@@ -176,3 +176,7 @@ Record why the markup class exists, so it is not "cleaned up" later (at the `dat
 6. **UAT — settings failure.** Stop the API server (so `getSetting` fails) and open the panel: the picker highlights `1`, the grid renders one pane, and there is no mismatch or console error.
 7. **UAT — solo pop-out.** Pop a terminal out (`?solo=`): the toolbar stays hidden, the single pane renders, and `terminals.layoutMode` is unchanged in settings afterwards (confirming solo wrote nothing).
 8. **Static check:** the active-class toggle appears in exactly one place (`syncLayoutPickerUI`), and `syncLayoutPickerUI` is called from `setLayoutMode` and from `init()`'s post-load continuation — nowhere else.
+
+## Completion Report
+
+Implemented the picker sync in `src/webview/terminals.js` by extracting the active-class toggle into `syncLayoutPickerUI()` keyed on `currentLayout`, replacing the inline toggle in `setLayoutMode()`, and calling `syncLayoutPickerUI()` after `loadLayoutSettings()` resolves in the non-solo `init()` branch. Added the pre-JS default `active` comment to the `data-layout="1"` button in `src/webview/terminals.html`. The hardcoded markup default is preserved so the picker does not blank on first paint. `node --check src/webview/terminals.js` passed, and the helper is referenced from exactly the two intended call sites.

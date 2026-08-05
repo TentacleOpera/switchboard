@@ -22,9 +22,13 @@ Design panel opens on the wrong surface with nothing selected: PREVIEWS is a con
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Design Panel: Rename PREVIEWS to HTML and Promote Images to Its Own Top-Level Tab](../plans/feature_plan_20260805105301_design-previews-tab-becomes-html-images-own-tab.md) — **PLAN REVIEWED**
-- [ ] [Design Panel: Previews Tab Must Default Its Source Dropdown to "HTML Previews"](../plans/feature_plan_20260805105302_design-previews-default-source-html-previews.md) — **PLAN REVIEWED**
-- [ ] [Design Panel: Stitch HTML Source Must Default to the Project Showing in the Stitch Tab](../plans/feature_plan_20260805105303_stitch-html-source-inherits-stitch-tab-project.md) — **PLAN REVIEWED**
-- [ ] [Design Panel: Stitch Project Picker Must Restore the Last Active Project Instead of Opening Empty](../plans/feature_plan_20260805105304_stitch-project-picker-restores-last-active-project.md) — **PLAN REVIEWED**
+- [ ] [Design Panel: Rename PREVIEWS to HTML and Promote Images to Its Own Top-Level Tab](../plans/feature_plan_20260805105301_design-previews-tab-becomes-html-images-own-tab.md) — **INTERN CODED**
+- [ ] [Design Panel: Previews Tab Must Default Its Source Dropdown to "HTML Previews"](../plans/feature_plan_20260805105302_design-previews-default-source-html-previews.md) — **INTERN CODED**
+- [ ] [Design Panel: Stitch HTML Source Must Default to the Project Showing in the Stitch Tab](../plans/feature_plan_20260805105303_stitch-html-source-inherits-stitch-tab-project.md) — **INTERN CODED**
+- [ ] [Design Panel: Stitch Project Picker Must Restore the Last Active Project Instead of Opening Empty](../plans/feature_plan_20260805105304_stitch-project-picker-restores-last-active-project.md) — **INTERN CODED**
 <!-- END SUBTASKS -->
+
+## Completion Report
+
+All four subtasks were implemented in the recommended order. `src/webview/design.html` now has an HTML tab, a separate IMAGES tab, and only two Previews sources. `src/webview/design.js` remaps legacy persisted Images state, defaults Previews to `html-preview`, restores and validates the last active Stitch project, and seeds the Stitch HTML picker from the STITCH tab. `src/services/DesignPanelProvider.ts` now returns `stitch.projectId` and `stitchHtml.projectId` so the restored state is actually read back. No compilation or test suite was run per the dispatch directive; only static grep checks were performed, and the HTML move was verified to leave only two `previews-subpanel` divs.
 

@@ -376,6 +376,19 @@ test('the overlay hides on rail scroll, click, and terminal-section rebuild', ()
         'the section must hide the tooltip BEFORE wiping the buttons, or a mid-hover fleet update strands it');
 });
 
+test('the Setup icon is placed in the bottom rail cluster', () => {
+    const manifestSrc = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'headlessPanelHtml.ts'), 'utf8');
+    assert.ok(/id:\s*'setup'[^}]*placement:\s*'bottom'/.test(manifestSrc),
+        "the setup manifest entry must carry placement: 'bottom'");
+    const shellSrc = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'shell.js'), 'utf8');
+    // Ordering is the whole point: bottom icons must be appended after the top
+    // group and BEFORE the theme toggle, so the fleet container's margin-top:auto
+    // still anchors the cluster.
+    assert.ok(shellSrc.indexOf('bottomPanels.push(icon)') !== -1, 'placement must be honoured in renderManifest');
+    assert.ok(shellSrc.indexOf('for (const icon of bottomPanels)') < shellSrc.indexOf('const themeBtn = buildThemeToggle()'),
+        'bottom icons must be appended before the theme toggle');
+});
+
 console.log(`\nResults: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
     process.exit(1);

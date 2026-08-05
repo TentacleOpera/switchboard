@@ -69,3 +69,17 @@ export async function clearPty(handle: ExtendedTerminalHandle): Promise<void> {
     });
 }
 
+/**
+ * Send the `/model` slash command to a PTY — a 1:1 mirror of clearPty with
+ * `/model\r` in place of `/clear\r`. Stays in this module to reuse
+ * withTerminalLock so the command cannot splice into an in-flight chunked
+ * paste. Write errors are swallowed for the same reason as clearPty.
+ */
+export async function modelPty(handle: ExtendedTerminalHandle): Promise<void> {
+    return withTerminalLock(handle.name, async () => {
+        try {
+            handle.write('/model\r');
+        } catch { /* PTY died between check and write — nothing to model */ }
+    });
+}
+

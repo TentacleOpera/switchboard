@@ -203,3 +203,7 @@ verification must run from an installed/packed CLI, not only from the repo.
 
 - Regenerating or restructuring the catalog contents.
 - The orchestration write hooks, which correctly decline in standalone.
+
+## Completion Report
+
+Wired a `catalogProvider` in `src/standalone/bootstrap.ts` that tries `protocol-catalog.json` at the CLI install root first, then the served workspace, returning `null` when neither exists. `src/services/LocalApiServer.ts` now returns a 404 message that points to a missing build artifact rather than instructing the user to generate a catalog in their workspace. No skill doc update was needed because neither copy currently references `/catalog`. No compilation or tests were run per the dispatch directive.

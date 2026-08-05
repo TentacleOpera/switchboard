@@ -1,11 +1,12 @@
 
-import { HostSeams, createVscodeHostSeams } from './hostSeams';
+import { HostSeams, HostWatchHandle, createVscodeHostSeams } from './hostSeams';
 import { BroadcastHub } from './broadcastHub';
 import { TASKVIEWER_VERBS } from '../generated/verbAllowlist';
 import { validateVerbPayload } from './verbSchemas';
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { getConstitutionPath } from './constitutionUtils';
+import { buildWorkspaceItems } from './workspaceUtils';
 import { stateFs as fs, stateLockfile as lockfile, getWorkspaceRootFromStatePath } from './stateConfigBridge';
 import { loadNotionRemoteSetup } from './remote/notionRemoteConfig';
 import { applyThemeBodyClass, getEffectiveColourKanbanIcons, getThemeBodyClass } from './themeBodyClass';
@@ -514,7 +515,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _pendingPlanCreations = new Set<string>(); // suppress watcher for internally created plans
     private _planCreationInFlight = new Set<string>(); // same-file mutex for watcher/direct create races
     private _planFsDebounceTimers = new Map<string, NodeJS.Timeout>(); // debounce native plan watcher events
-    private _memoWatchers: vscode.FileSystemWatcher[] = [];
+    private _memoWatchers: HostWatchHandle[] = [];
     private _memoFsDebounce?: NodeJS.Timeout;
     private _lastServedMemoContent: string = '';
     private _clickUpConfigCache: Map<string, any> = new Map();
@@ -980,6 +981,26 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     public setTerminalAgentInfo(suffixedName: string, role: string, displayName: string): void {
         this._terminalAgentInfo.set(suffixedName, { role, displayName });
         this._notifyTerminalAgentNamesChanged();
+    }
+
+    private static CLI_BRAND_NAMES: Record<string, string> = {
+        agy: 'Antigravity CLI',
+        antigravity: 'Antigravity CLI',
+    };
+
+    /**
+     * Binary → brand display name. Falls back to basename().toUpperCase() + ' CLI'
+     * for any CLI not in the table (custom agents, jules, codex, …) so they are
+     * never misbranded. Returns the sentinel 'No agent assigned' unchanged.
+     */
+    public deriveAgentDisplayName(startupCommand: string): string {
+        const cmd = (startupCommand || '').trim();
+        if (!cmd) { return ''; }
+        if (cmd === 'No agent assigned') { return 'No agent assigned'; }
+        const binary = cmd.split(/\s+/)[0];
+        const base = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
+        if (TaskViewerProvider.CLI_BRAND_NAMES[base]) { return TaskViewerProvider.CLI_BRAND_NAMES[base]; }
+        return path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase() + ' CLI';
     }
 
     public clearTerminalAgentInfo(suffixedName: string): void {
@@ -1963,6 +1984,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // Verb forwards to the child. Same guard shape and same `PTY host unavailable`
         // error the in-process arms returned, so callers see no contract change.
         const handlePtyVerb = async (verb: string, payload: any, root?: string): Promise<any> => {
+            if (verb === 'ptyVisibleRoles') {
+                const roles = await GlobalIntegrationConfigService.getPtyVisibleRoles();
+                return { success: true, ...roles };
+            }
             if (!ptyHostReady()) {
                 return { success: false, error: 'PTY host unavailable on this platform/installation' };
             }
@@ -3625,9 +3650,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    public postMessage(message: any): void {
+    public postMessage(message: any, surface?: string): void {
         if (this._broadcaster) {
-            this._broadcaster.push(message);
+            this._broadcaster.push(message, surface);
         } else {
             this._view?.webview.postMessage(message);
         }
@@ -9035,9 +9060,8 @@ Each plan file must include:
                 }, 5000);
             });
 
-            // Cache the binary-derived agent display name
-            const binary = startupCommand.trim().split(/\s+/)[0];
-            const displayName = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase() + ' CLI';
+            // Cache the brand-aware agent display name
+            const displayName = this.deriveAgentDisplayName(startupCommand);
             this._terminalAgentInfo.set(suffixedUniqueName, { role: normalizedRole, displayName });
         }
 
@@ -9324,8 +9348,7 @@ Each plan file must include:
                     }, 5000);
                 });
 
-                const binary = startupCommand.trim().split(/\s+/)[0];
-                const displayName = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase() + ' CLI';
+                const displayName = this.deriveAgentDisplayName(startupCommand);
                 this._terminalAgentInfo.set(suffixedForState, { role: 'orchestrator', displayName });
             }
             this._refreshTerminalStatuses();
@@ -12502,6 +12525,16 @@ Each plan file must include:
                         this.postMessage({ type: 'defaultPromptPreviews', previews });
                         return { success: true, previews };
                     }
+                    case 'memoListWorkspaces': {
+                        // The memo surfaces let the user retarget the memo file independently of the
+                        // board. They need the root list to do that, and it must come from the
+                        // server's own known roots — a caller-supplied path is never echoed back,
+                        // so the picker cannot be used to point memo writes at an arbitrary folder.
+                        const items = buildWorkspaceItems(this._getWorkspaceRoots());
+                        const activeRoot = this._resolveWorkspaceRoot() || this._getWorkspaceRoots()[0] || '';
+                        this.postMessage({ type: 'memoWorkspaceItems', items, activeWorkspaceRoot: activeRoot }, 'memo');
+                        return { success: true, items };
+                    }
                     case 'setActiveTab': {
                         const activeTab = data.tab === 'activity' ? 'activity' : 'agents';
                         await this._context.workspaceState.update(TaskViewerProvider.ACTIVE_TAB_STATE_KEY, activeTab);
@@ -13188,12 +13221,7 @@ What would you like to find?`;
 
         for (const folder of foldersToWatch) {
             const memoPath = this._getMemoPath(folder);
-            const watcher = vscode.workspace.createFileSystemWatcher(
-                new vscode.RelativePattern(path.dirname(memoPath), path.basename(memoPath))
-            );
-            watcher.onDidChange(onMemoFsEvent);
-            watcher.onDidCreate(onMemoFsEvent);
-            watcher.onDidDelete(onMemoFsEvent);
+            const watcher = this._seams().watcher.watchFile(memoPath, () => onMemoFsEvent());
             this._memoWatchers.push(watcher);
         }
     }
@@ -13209,7 +13237,6 @@ What would you like to find?`;
             return;
         }
         this._lastServedMemoContent = content;
-        this.postMessage({ type: 'memoContent', content });
         this.postMessage({ type: 'memoUpdated', content });
     }
 
@@ -18385,8 +18412,7 @@ What would you like to find?`;
                         const startupCommands = await this.getStartupCommands();
                         const cmd = startupCommands[currentRole];
                         if (cmd && cmd.trim()) {
-                            const binary = cmd.trim().split(/\s+/)[0];
-                            const displayName = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase() + ' CLI';
+                            const displayName = this.deriveAgentDisplayName(cmd);
                             this._terminalAgentInfo.set(existingName, { role: currentRole, displayName });
                         }
                     }
@@ -18454,8 +18480,7 @@ What would you like to find?`;
                     const startupCommands = await this.getStartupCommands();
                     const cmd = startupCommands[autoRole];
                     if (cmd && cmd.trim()) {
-                        const binary = cmd.trim().split(/\s+/)[0];
-                        const displayName = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase() + ' CLI';
+                        const displayName = this.deriveAgentDisplayName(cmd);
                         this._terminalAgentInfo.set(suffixedKey, { role: autoRole, displayName });
                     }
                 }
@@ -22550,7 +22575,21 @@ What would you like to find?`;
                             // targetDir would be _unknown/_unknown, no valid authority).
                             const clickupCfg = await clickup.loadConfig();
                             const liveListId = String(clickupCfg?.selectedListId || '').trim();
-                            if (!liveListId) {
+                            // `segments` are the space/folder/list NAMES that actually built
+                            // targetDir above. getSelectedHierarchy substitutes '_unknown' for
+                            // any name it cannot resolve, and it reads the in-memory config —
+                            // so selectedListId can be set while the names are still unresolved.
+                            // Checking selectedListId alone therefore does NOT cover the
+                            // observed `_unknown/_unknown` directory. A sweep scoped to a
+                            // directory we cannot name has no authority over its contents.
+                            const unresolvedSegment = segments.some(s => s === '_unknown');
+                            if (unresolvedSegment) {
+                                fetchSucceeded = false;
+                                console.warn(
+                                    `[TaskViewerProvider] Deletion sweep (delta): ClickUp hierarchy names unresolved (segments=${JSON.stringify(segments)}) for list ${listId} ` +
+                                    `— skipping sweep (targetDir is not attributable to this list).`
+                                );
+                            } else if (!liveListId) {
                                 fetchSucceeded = false;
                                 console.warn(
                                     `[TaskViewerProvider] Deletion sweep (delta): ClickUp hierarchy unresolved (selectedListId empty) for list ${listId} ` +

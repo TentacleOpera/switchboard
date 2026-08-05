@@ -168,6 +168,10 @@
       {
         "command": "switchboard.openMemo",
         "title": "Switchboard: Open Memo"
+      },
+      {
+        "command": "switchboard.openConnectionsPanel",
+        "title": "Switchboard: Open Connections (Remote Control)"
       }
     ],
     "keybindings": [
@@ -796,6 +800,7 @@
     "test:contract:verb-engine-kanban": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/verb-engine-kanban-headless.test.js",
     "test:contract:verb-engine-planning": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/verb-engine-planning-headless.test.js",
     "test:contract:verb-engine-tickets": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/verb-engine-tickets-headless.test.js",
+    "test:contract:connections-routing": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/connections-routing-contract.test.js",
     "test:contract:design-asset": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/design-asset-route-traversal.test.js",
     "test:contract:design-reply-addressing": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/design-reply-addressing-regression.test.js",
     "test:contract:design-system": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/design-system-contract.test.js",
@@ -822,6 +827,8 @@
     "test:contract:render-guard": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-render-guard-contract.test.js",
     "test:contract:drag-confirm-order": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-drag-confirm-before-dispatch.test.js",
     "test:contract:tickets-sidebar-scoping": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/tickets-sidebar-list-scoping.test.js",
+    "test:contract:tickets-delta-sweep-gate": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/tickets-delta-sweep-gate-regression.test.js",
+    "test:contract:tickets-cross-panel-scope": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/tickets-cross-panel-reply-scope.test.js",
     "test:contract:tickets-subtasks": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/tickets-subtask-embedding.test.js",
     "test:contract:project-pin-fill": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/project-pin-apply-if-empty-contract.test.js",
     "test:contract:project-pin-resolve": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/project-pin-resolve-contract.test.js",
@@ -860,6 +867,7 @@
     "test:contract:terminal-operations-no-periodic-reopen": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-operations-no-periodic-reopen.test.js",
     "test:contract:multi-parent-terminals": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/multi-parent-terminals-contract.test.js",
     "test:contract:scheduled-jobs": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/scheduled-jobs-and-connections.test.js",
+    "test:contract:spark-context-exporter": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/spark-context-exporter-contract.test.js",
     "test:contract:kanban-column-labels": "mocha --ui tdd --require ./src/test/bootstrap/sandboxStateHome.js out/test/kanban-auto-export.test.js --grep \"Column label parity\""
   },
   "devDependencies": {

@@ -255,3 +255,7 @@ and ensure `.item-role` truncates and stops re-casing, since it now carries the 
 10. **UAT — exited terminal.** Kill a terminal's process: the pane header reads `CLAUDE CLI · planner-2 (exited)` — the suffix on the handle, not on the label — and the sidebar row's status dot goes to the exited state.
 11. **UAT — kanban-mode pane.** Set an empty pane to kanban mode: it renders the column viewer unchanged, with no agent-name text injected.
 12. **UAT — long rename truncates.** Rename a terminal to a 60-character string: the sidebar subline ellipsises, the pane header name ellipsises, and the pane-index/badge/input-state chips keep their full width.
+
+## Completion Report
+
+Implemented the agent CLI name surfacing in `src/webview/terminals.js` and `src/webview/terminals.html`. Added `agentLabelForRole()`, rewrote `renderTerminalRow()` to lead with the agent label while stamping the real `friendlyName` in `dataset.friendlyName`, and rewrote `updatePaneElement()` to show `AGENT · handle` in the pane header (agent-only in terse `2x3`/`3x3` layouts). Updated the sidebar dblclick rename binding to read `dataset.friendlyName`. In the HTML, added `.pane-title-name` shrink rules and removed `text-transform: capitalize` from `.item-role` so mixed-case handles survive. `node --check src/webview/terminals.js` passed.

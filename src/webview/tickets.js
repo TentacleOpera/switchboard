@@ -194,7 +194,17 @@
      */
     function _isForThisPanel(message) {
         if (message && message.unscopedPlaceholder) { return true; }
-        const provider = message.provider || lastIntegrationProvider;
+        // Most scope-bearing replies (clickupProjectLoaded, clickupListStatusesLoaded,
+        // clickupError, linearProjectLoaded, linearError) carry NO `provider` field, so
+        // a provider check that reads only message.provider is inert for exactly the
+        // arms that need it — a clickup* reply would fall through to the Linear
+        // early-accept below and be applied by a Linear-mode panel. The message type
+        // prefix is the provider for every one of those types.
+        const typeProvider = typeof message.type === 'string'
+            ? (message.type.startsWith('clickup') ? 'clickup'
+                : message.type.startsWith('linear') ? 'linear' : null)
+            : null;
+        const provider = message.provider || typeProvider || lastIntegrationProvider;
         if (provider && lastIntegrationProvider && provider !== lastIntegrationProvider) { return false; }
         // Workspace guard: if both sides carry a workspaceRoot, they must match.
         // This catches cross-workspace contamination where two panels show the
@@ -871,8 +881,10 @@
     // Status-filter change. Closed/done tickets are excluded from the default
     // import. Selecting a closed status used to auto-trigger a one-off import
     // that INCLUDED closed; that was a read action firing a destructive delta
-    // sweep, so it moved off the read path. To pull closed tickets in, click
-    // Refresh/Refetch (Refetch with a closed status selected imports closed).
+    // sweep, so it moved off the read path. The capability itself is preserved:
+    // Refresh/Refetch read this filter value and pass `includeClosed` when a
+    // closed status is selected (see _clickUpIncludeClosedForRefresh below).
+    // Selecting the status alone only re-filters what is already on screen.
     function _onClickUpStatusFilterChanged(value) {
         _resetSidebarDrillDown(); // filter targets the top-level list, not the subtask view
         clickUpProjectStatusFilterValue = value;
@@ -979,6 +991,18 @@
             return lastIntegrationProvider === 'linear'
                 ? `${files} don't carry a project name — Refetch this project to re-key them.`
                 : `${files} don't carry a list id — Refetch this list to re-key them.`;
+        }
+        // Reconciliation moved off the read path: selecting a list/project no longer
+        // pulls tickets (a read must never fire the destructive delta sweep). So a
+        // scoped-but-empty sidebar means "nothing imported yet", NOT "the remote is
+        // empty" — name the button that fills it, or the trade reads as a dead panel.
+        const hasScope = lastIntegrationProvider === 'linear'
+            ? !!linearProjectPickerValue
+            : !!clickUpSelectedListId;
+        if (hasScope) {
+            return lastIntegrationProvider === 'linear'
+                ? 'No tickets imported for this project yet — click Refresh to pull them from Linear.'
+                : 'No tickets imported for this list yet — click Refresh to pull them from ClickUp.';
         }
         return fallback || 'No tasks found.';
     }
@@ -4605,6 +4629,18 @@
             _onClickUpStatusFilterChanged(e.target.value);
         });
 
+        // Closed/done tickets are excluded from the default import. The status filter
+        // used to fire its own one-off `includeClosed` import, but that made a read
+        // action perform a destructive delta sweep. The capability now rides the
+        // explicit Refresh/Refetch actions instead: if the user has a closed status
+        // selected, the pull they asked for includes closed tickets. Without this the
+        // filter would offer a "(closed)" option that can never be populated.
+        // Note: the backend treats includeClosed as implying forceFull
+        // (TicketsPanelProvider `refreshTicketsDelta`), matching the old one-off.
+        function _clickUpIncludeClosedForRefresh() {
+            return _isClickUpClosedStatus(clickUpProjectStatusFilterValue) ? true : undefined;
+        }
+
         // Refresh button — delta pull (only changed tasks since last sync).
         // Falls back to full import if the per-list delta cursor is unset
         // (first refresh after initial load). The backend handler reads the
@@ -4630,7 +4666,8 @@
                         type: 'refreshTicketsDelta',
                         provider: 'clickup',
                         listId: clickUpSelectedListId,
-                        workspaceRoot: ticketsWorkspaceRoot
+                        workspaceRoot: ticketsWorkspaceRoot,
+                        includeClosed: _clickUpIncludeClosedForRefresh()
                     });
                 } else {
                     loadClickUpSpaces();
@@ -4661,7 +4698,8 @@
                         provider: 'clickup',
                         listId: clickUpSelectedListId,
                         workspaceRoot: ticketsWorkspaceRoot,
-                        forceFull: true
+                        forceFull: true,
+                        includeClosed: _clickUpIncludeClosedForRefresh()
                     });
                 } else {
                     loadClickUpSpaces();
@@ -7591,8 +7629,10 @@ Instructions:
             // dropped when the integration-setup markup merged into this panel:
             // tickets.js already owns a `ticketsFoldersListed` arm (the folder-list
             // modal) earlier in this same switch, so the alias was unreachable —
-            // and had it ever won the match it would have reset every
-            // `.tickets-auto-sync-toggle` to false on a plain folder-list load.
+            // and had it ever won the match it would have clobbered the integration
+            // setup fields on a plain folder-list load. (The auto-sync toggle this
+            // note originally named is gone: it drove a no-op stub, so it was removed
+            // along with the stub rather than left as a control over nothing.)
             // The integration-setup path is driven by `getIntegrationTicketSaveLocations`.
             case 'integrationTicketSaveLocations': {
                 if (message.provider === 'clickup') {

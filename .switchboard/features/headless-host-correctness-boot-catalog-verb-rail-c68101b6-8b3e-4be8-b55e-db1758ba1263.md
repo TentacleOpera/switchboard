@@ -21,9 +21,9 @@ Four first-boot and probe failures found against a booted standalone server: the
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Standalone verb rail: two verbs that are not verbs](../plans/standalone-verb-robustness-hardening.md) — **PLAN REVIEWED**
-- [ ] [KanbanDatabase: V20 migration fails on every fresh DB and dumps two stack traces](../plans/kanban-db-v20-migration-fresh-db-failure.md) — **PLAN REVIEWED**
-- [ ] [Standalone: `GET /catalog` 404s for every workspace except the switchboard repo](../plans/standalone-catalog-endpoint.md) — **PLAN REVIEWED**
-- [ ] [Standalone PTY: the darwin spawn-helper chmod never runs under the bundler](../plans/standalone-pty-spawn-helper-chmod.md) — **PLAN REVIEWED**
+- [ ] [Standalone verb rail: two verbs that are not verbs](../plans/standalone-verb-robustness-hardening.md) — **INTERN CODED**
+- [ ] [KanbanDatabase: V20 migration fails on every fresh DB and dumps two stack traces](../plans/kanban-db-v20-migration-fresh-db-failure.md) — **INTERN CODED**
+- [ ] [Standalone: `GET /catalog` 404s for every workspace except the switchboard repo](../plans/standalone-catalog-endpoint.md) — **INTERN CODED**
+- [ ] [Standalone PTY: the darwin spawn-helper chmod never runs under the bundler](../plans/standalone-pty-spawn-helper-chmod.md) — **INTERN CODED**
 <!-- END SUBTASKS -->
 

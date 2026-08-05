@@ -2,6 +2,7 @@
     const vscode = acquireVsCodeApi();
     const WS_ROOT = decodeURIComponent(document.body.dataset.initialWorkspaceRoot || '');
     let _wsRoot = WS_ROOT;
+    let _wsRootExplicit = false;
 
     // What we sent with the most recent memoGeneratePrompt — guards the clear so
     // text the user typed AFTER clicking is never discarded.
@@ -9,13 +10,7 @@
     // Which button to flash — 'copy' or 'send'.
     let _submittedAction = null;
 
-    // Split on BOTH separators: this extension ships on Windows, where an
-    // absolute root ("C:\Users\x\repo") contains no '/' and a '/'-only split
-    // would render the whole path instead of the folder name.
-    function _basename(p) { return String(p || '').split(/[\\/]/).filter(Boolean).pop() || p; }
-
-    const wsLabel = document.getElementById('memo-workspace');
-    if (wsLabel) { wsLabel.textContent = _basename(_wsRoot); }
+    const _wsSelect = document.getElementById('memo-workspace-select');
 
     function handleThemeChanged(theme) {
         document.body.classList.remove('theme-claudify', 'cyber-theme-enabled');
@@ -41,6 +36,57 @@
         }, 1600);
     }
 
+    function _populateWorkspaceSelect(items, activeWorkspaceRoot) {
+        if (!_wsSelect) return;
+        _wsSelect.innerHTML = '';
+        const list = Array.isArray(items) ? items : [];
+        for (const item of list) {
+            const opt = document.createElement('option');
+            opt.value = item.workspaceRoot || '';
+            opt.textContent = item.label || item.workspaceRoot || '';
+            _wsSelect.appendChild(opt);
+        }
+        let selected = _wsRoot;
+        const hasCurrent = list.some(i => i.workspaceRoot === _wsRoot);
+        if (_wsRootExplicit && hasCurrent) {
+            selected = _wsRoot;
+        } else if (activeWorkspaceRoot && list.some(i => i.workspaceRoot === activeWorkspaceRoot)) {
+            selected = activeWorkspaceRoot;
+        } else if (list.length > 0) {
+            selected = list[0].workspaceRoot;
+        } else {
+            selected = '';
+        }
+        _wsSelect.value = selected;
+        if (selected && selected !== _wsRoot) {
+            _wsRoot = selected;
+            _memoDirty = false;
+            _submittedContent = null;
+            const ta = document.getElementById('memo-textarea');
+            if (ta) { ta.value = ''; }
+            vscode.postMessage({ type: 'memoLoad', workspaceRoot: _wsRoot });
+        }
+    }
+
+    function switchMemoWorkspace(nextRoot) {
+        if (!nextRoot || nextRoot === _wsRoot) { return; }
+        // Flush against the OLD root before switching. A pending debounced save
+        // would otherwise write this workspace's text into the next one.
+        if (_memoSaveTimer) {
+            clearTimeout(_memoSaveTimer);
+            _memoSaveTimer = null;
+            const content = document.getElementById('memo-textarea')?.value || '';
+            vscode.postMessage({ type: 'memoSave', content, workspaceRoot: _wsRoot });
+        }
+        _memoDirty = false;              // else memoContent's dirty-guard drops the load
+        _submittedContent = null;
+        _wsRoot = nextRoot;
+        _wsRootExplicit = true;
+        const ta = document.getElementById('memo-textarea');
+        if (ta) { ta.value = ''; }
+        vscode.postMessage({ type: 'memoLoad', workspaceRoot: _wsRoot });
+    }
+
     window.addEventListener('message', (event) => {
         const msg = event.data;
         if (!msg) return;
@@ -54,16 +100,23 @@
                 break;
             }
             case 'workspaceChanged': {
+                // A board workspace switch must not undo an explicit memo target.
+                if (_wsRootExplicit) { break; }
                 if (msg.workspaceRoot && msg.workspaceRoot !== _wsRoot) {
                     if (_memoSaveTimer) { clearTimeout(_memoSaveTimer); _memoSaveTimer = null; }
                     _memoDirty = false;
                     _submittedContent = null;
                     _wsRoot = msg.workspaceRoot;
-                    if (wsLabel) { wsLabel.textContent = _basename(_wsRoot); }
                     const ta = document.getElementById('memo-textarea');
                     if (ta) { ta.value = ''; }
                     vscode.postMessage({ type: 'memoLoad', workspaceRoot: _wsRoot });
                 }
+                // Refresh the picker in case the set of roots changed.
+                vscode.postMessage({ type: 'memoListWorkspaces' });
+                break;
+            }
+            case 'memoWorkspaceItems': {
+                _populateWorkspaceSelect(msg.items, msg.activeWorkspaceRoot);
                 break;
             }
             case 'memoUpdated':
@@ -149,6 +202,13 @@
 
     // Initial load request
     vscode.postMessage({ type: 'memoLoad', workspaceRoot: _wsRoot });
+    vscode.postMessage({ type: 'memoListWorkspaces' });
+
+    if (_wsSelect) {
+        _wsSelect.addEventListener('change', (e) => {
+            switchMemoWorkspace(e.target.value);
+        });
+    }
 
     let _memoDirty = false;
     let _memoSaveTimer = null;

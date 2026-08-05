@@ -49,6 +49,14 @@
     const kanbanFetchInFlight = new Set();
     const collapsedGroups = new Set();
 
+    // Named, switchable seating snapshots. Each group is a (layout, assignments)
+    // captured at save time. assignments is a [name|null] array length-aligned with
+    // the group's layout slot count. Names are terminal friendlyNames — the fleet
+    // has no stable id, so renameTerminal must fixup group assignments the same way
+    // it fixes the live paneAssignments.
+    let terminalGroups = []; // [{ id, name, layout, assignments }]
+    let activeGroupId = null; // which group is currently seated, or null for "none/unsaved"
+
     let soloTerminalName = null;
     let hasFetchedList = false;
     try {
@@ -390,9 +398,10 @@
         if (listEl) {
             listEl.addEventListener('dblclick', (e) => {
                 const nameEl = e.target && e.target.closest ? e.target.closest('.item-name') : null;
-                if (nameEl && nameEl.textContent) {
-                    beginInlineRename(nameEl, nameEl.textContent);
-                }
+                // dataset, NOT textContent: .item-name now shows the agent CLI label, and
+                // renameTerminal(currentName, next) needs the real friendlyName key.
+                const current = nameEl && nameEl.dataset ? nameEl.dataset.friendlyName : '';
+                if (nameEl && current) { beginInlineRename(nameEl, current); }
             });
         }
 
@@ -429,6 +438,33 @@
                     btnOpenAll.disabled = false;
                     btnOpenAll.textContent = label;
                 }
+            });
+        }
+
+        const btnSaveGroup = document.getElementById('btn-save-group');
+        if (btnSaveGroup) {
+            btnSaveGroup.addEventListener('click', () => {
+                const input = document.createElement('input');
+                input.className = 'item-name-input';
+                input.placeholder = 'Group name';
+                input.style.width = '100%';
+                input.style.marginTop = '8px';
+                btnSaveGroup.replaceWith(input);
+                input.focus();
+
+                const finish = (save) => {
+                    const name = input.value.trim();
+                    input.replaceWith(btnSaveGroup);
+                    if (save && name) {
+                        saveCurrentAsGroup(name);
+                    }
+                };
+
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') { finish(true); }
+                    if (e.key === 'Escape') { finish(false); }
+                });
+                input.addEventListener('blur', () => finish(true));
             });
         }
 
@@ -499,6 +535,12 @@
             // Labels before the first paint, so rows do not visibly gain their CLI
             // name a beat after appearing.
             Promise.all([loadLayoutSettings(), fetchAgentNames()]).then(() => {
+                // The picker’s `active` class is hardcoded on the "1" button in the HTML
+                // as the pre-JS default (loadLayoutSettings is an async verb call). Nothing
+                // else moved it: only setLayoutMode does, and only a user click calls that.
+                // Without this the picker showed "1" while the grid rendered the stored
+                // layout — the control and the panel disagreed from the first frame.
+                syncLayoutPickerUI();
                 fetchTerminalList();
             });
         }
@@ -584,6 +626,16 @@
         const savedKanbanWs = await loadSetting('terminals.kanbanPaneWorkspace', []);
         const savedKanbanProj = await loadSetting('terminals.kanbanPaneProject', []);
 
+        const savedGroups = await loadSetting('terminals.groups', []);
+        if (Array.isArray(savedGroups)) {
+            terminalGroups = savedGroups.filter(g =>
+                g && typeof g.id === 'string' && typeof g.name === 'string' &&
+                LAYOUT_MODES.includes(g.layout) && Array.isArray(g.assignments)
+            );
+        }
+        const savedActive = await loadSetting('terminals.activeGroupId', null);
+        activeGroupId = (typeof savedActive === 'string' || savedActive === null) ? savedActive : null;
+
         if (LAYOUT_MODES.includes(savedMode)) {
             currentLayout = savedMode;
         }
@@ -620,6 +672,8 @@
         saveSetting('terminals.kanbanPaneColumn', kanbanPaneColumn);
         saveSetting('terminals.kanbanPaneWorkspace', kanbanPaneWorkspace);
         saveSetting('terminals.kanbanPaneProject', kanbanPaneProject);
+        saveSetting('terminals.groups', terminalGroups);
+        saveSetting('terminals.activeGroupId', activeGroupId);
     }
 
     async function fetchTerminalList() {
@@ -802,6 +856,35 @@
         }
     }
 
+    const CLI_BRAND_ICON_KEYS = {
+        claude: 'claude',
+        agy: 'antigravity',
+        antigravity: 'antigravity',
+        devin: 'devin',
+    };
+
+    function brandIconForCliLabel(cliLabel) {
+        if (!cliLabel || cliLabel === 'No agent assigned') { return null; }
+        // cliLabel is the display name, e.g. 'Antigravity CLI', 'CLAUDE CLI', 'DEVIN CLI'.
+        // Map by the known brand names; fall back to the default icon for any other CLI.
+        const key = cliLabel.toLowerCase();
+        if (key.startsWith('antigravity')) { return 'antigravity'; }
+        if (key.startsWith('claude')) { return 'claude'; }
+        if (key.startsWith('devin')) { return 'devin'; }
+        return 'default';
+    }
+
+    function brandIconUri(key) {
+        const ds = document.body.dataset || {};
+        const map = {
+            claude: ds.brandIconClaude,
+            antigravity: ds.brandIconAntigravity,
+            devin: ds.brandIconDevin,
+            default: ds.brandIconDefault,
+        };
+        return map[key] || '';
+    }
+
     function renderTerminalRow(item) {
         const itemDiv = document.createElement('div');
         const paneIndex = paneAssignments.indexOf(item.friendlyName);
@@ -813,19 +896,42 @@
         const info = document.createElement('div');
         info.className = 'item-info';
 
+        const agentLabel = agentLabelForRole(item.role);
+
         const termNameEl = document.createElement('div');
         termNameEl.className = 'item-name';
-        termNameEl.textContent = item.friendlyName;
+        // Lead with the agent CLI name. friendlyName is a uniquifier minted by
+        // ptyFleetService (`${role}-${n}`), not a name anyone chose, so it belongs on the
+        // subline. It stays VISIBLE because it is the only thing separating two terminals
+        // running the same agent — and it stays available to the rename path via the
+        // dataset stamp below, which the dblclick handler now reads instead of textContent.
+        termNameEl.textContent = agentLabel || item.friendlyName;
+        termNameEl.dataset.friendlyName = item.friendlyName;
+        termNameEl.title = `${agentLabel ? agentLabel + ' — ' : ''}${item.friendlyName} (${item.role})`;
+
+        const roleRow = document.createElement('div');
+        roleRow.className = 'item-role-row';
+
+        const iconKey = brandIconForCliLabel(agentLabel);
+        if (iconKey) {
+            const icon = document.createElement('img');
+            icon.className = 'item-role-icon';
+            icon.src = brandIconUri(iconKey);
+            icon.alt = '';
+            icon.dataset.brand = iconKey;
+            roleRow.appendChild(icon);
+        }
 
         const roleEl = document.createElement('div');
         roleEl.className = 'item-role';
-        const cliLabel = agentNames[item.role];
-        roleEl.textContent = (cliLabel && cliLabel !== 'No agent assigned')
-            ? `${item.role} · ${cliLabel}`
+        // Handle first on the subline: it is what the user needs to tell siblings apart.
+        roleEl.textContent = agentLabel
+            ? `${item.friendlyName} · ${item.role}`
             : item.role;
+        roleRow.appendChild(roleEl);
 
         info.appendChild(termNameEl);
-        info.appendChild(roleEl);
+        info.appendChild(roleRow);
 
         if (paneIndex !== -1) {
             const isPinned = Boolean(pinnedPanes[paneIndex]);
@@ -851,15 +957,10 @@
         const actions = document.createElement('div');
         actions.className = 'item-actions';
 
-        const locateBtn = document.createElement('button');
-        locateBtn.className = 'locate-btn';
-        locateBtn.textContent = 'locate';
-        locateBtn.title = 'Show this terminal in the focused pane and put the cursor in it';
-        locateBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            locateTerminal(item.friendlyName);
-        });
-        actions.appendChild(locateBtn);
+        // No "locate" button: clicking the row already seats the terminal in the
+        // focused pane and hands it the caret (itemDiv click handler below). The
+        // locate button duplicated that exactly, which is why it read as pointless.
+        // clear/rename/close remain because they do things the row click does not.
 
         const clearBtn = document.createElement('button');
         clearBtn.className = 'locate-btn';
@@ -907,6 +1008,97 @@
         return itemDiv;
     }
 
+    function saveCurrentAsGroup(name) {
+        const id = 'grp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+        const group = {
+            id,
+            name: (name || '').trim() || `Group ${terminalGroups.length + 1}`,
+            layout: currentLayout,
+            assignments: paneAssignments.slice(0, getSlotCount(effectiveLayout))
+        };
+        terminalGroups.push(group);
+        activeGroupId = id;
+        saveLayoutSettings();
+        renderSidebarList();
+    }
+
+    function deleteGroup(id) {
+        terminalGroups = terminalGroups.filter(g => g.id !== id);
+        if (activeGroupId === id) { activeGroupId = null; }
+        saveLayoutSettings();
+        renderSidebarList();
+    }
+
+    function switchToGroup(id) {
+        if (soloTerminalName) { return; }
+        const group = terminalGroups.find(g => g.id === id);
+        if (!group) { return; }
+        paneAssignments = group.assignments.slice();
+        activeGroupId = id;
+        setLayoutMode(group.layout);
+        saveLayoutSettings();
+    }
+
+    function renderGroupSidebar() {
+        for (const g of terminalGroups) {
+            const row = document.createElement('div');
+            row.className = 'worktree-group-header' + (g.id === activeGroupId ? ' active' : '');
+            row.title = g.name;
+
+            const titleArea = document.createElement('div');
+            titleArea.className = 'worktree-title-area';
+
+            const nameEl = document.createElement('span');
+            nameEl.className = 'worktree-name';
+            nameEl.textContent = g.name;
+
+            const activeCount = g.assignments.filter(Boolean).length;
+            const countEl = document.createElement('span');
+            countEl.className = 'worktree-count';
+            countEl.textContent = `${activeCount} terminal${activeCount === 1 ? '' : 's'}`;
+
+            titleArea.appendChild(nameEl);
+            titleArea.appendChild(countEl);
+
+            const switchBtn = document.createElement('button');
+            switchBtn.className = 'locate-btn';
+            switchBtn.textContent = 'switch';
+            switchBtn.title = 'Seat this group';
+            switchBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                switchToGroup(g.id);
+            });
+
+            const delBtn = document.createElement('button');
+            delBtn.className = 'locate-btn is-danger';
+            delBtn.textContent = 'delete';
+            delBtn.title = 'Delete this group';
+            delBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                deleteGroup(g.id);
+            });
+
+            row.appendChild(titleArea);
+            row.appendChild(switchBtn);
+            row.appendChild(delBtn);
+            row.addEventListener('click', () => switchToGroup(g.id));
+
+            listEl.appendChild(row);
+        }
+
+        const allRow = document.createElement('div');
+        allRow.className = 'worktree-group-header';
+        allRow.textContent = 'Show all terminals';
+        allRow.style.opacity = '0.75';
+        allRow.addEventListener('click', () => {
+            terminalGroups = [];
+            activeGroupId = null;
+            saveLayoutSettings();
+            renderSidebarList();
+        });
+        listEl.appendChild(allRow);
+    }
+
     function renderSidebarList() {
         listEl.innerHTML = '';
         // The empty state and the pane grid are in the MAIN area; the workspace groups
@@ -928,6 +1120,11 @@
         } else {
             emptyStateEl.style.display = 'none';
             paneGridEl.style.display = 'grid';
+        }
+
+        if (terminalGroups.length > 0 && !soloTerminalName) {
+            renderGroupSidebar();
+            return;
         }
 
         let parents = Array.isArray(parentsList) ? [...parentsList] : [];
@@ -1139,6 +1336,23 @@
         }
     }
 
+    /**
+     * Point the layout picker’s highlight at the layout the USER picked.
+     *
+     * Keys on currentLayout, never effectiveLayout: applyLayoutFloor deliberately
+     * demotes effectiveLayout when the window is too small and explains it with the
+     * fallback banner. Highlighting the floored value would make the picker jump on
+     * every resize and contradict the banner.
+     *
+     * Scoped to .layout-picker for the same reason the click binding is: an
+     * unscoped .btn-layout query used to catch #btn-clear-all.
+     */
+    function syncLayoutPickerUI() {
+        document.querySelectorAll('.layout-picker .btn-layout').forEach(btn => {
+            btn.classList.toggle('active', btn.getAttribute('data-layout') === currentLayout);
+        });
+    }
+
     function setLayoutMode(mode) {
         if (!LAYOUT_MODES.includes(mode)) return;
         currentLayout = mode;
@@ -1147,10 +1361,7 @@
         // layout actually trips the floor.
         effectiveLayout = mode;
 
-        document.querySelectorAll('.layout-picker .btn-layout').forEach(btn => {
-            btn.classList.toggle('active', btn.getAttribute('data-layout') === mode);
-        });
-
+        syncLayoutPickerUI();
         sanitizePaneAssignments();
         renderPaneGrid();
         applyLayoutFloor();
@@ -1622,6 +1833,18 @@
             withClearingFeedback(paneClearBtn, () => clearTerminal(targetName), 'clear');
         });
 
+        const paneModelBtn = document.createElement('button');
+        paneModelBtn.className = 'btn-unassign-pane';
+        paneModelBtn.title = 'Send /model to this terminal';
+        // Re-reads the slot, same rationale as paneClearBtn: the button is reused
+        // across renders and must target whatever terminal is in this pane NOW.
+        paneModelBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const targetName = paneAssignments[index];
+            if (!targetName) { return; }
+            withClearingFeedback(paneModelBtn, () => sendModelCommand(targetName), 'model');
+        });
+
         const unassignBtn = document.createElement('button');
         unassignBtn.className = 'btn-unassign-pane';
         unassignBtn.title = 'Remove from this pane (terminal keeps running)';
@@ -1657,6 +1880,7 @@
 
         actionsEl.appendChild(pinBtn);
         actionsEl.appendChild(paneClearBtn);
+        actionsEl.appendChild(paneModelBtn);
         actionsEl.appendChild(unassignBtn);
         actionsEl.appendChild(modeBtn);
         headerEl.appendChild(titleEl);
@@ -1755,14 +1979,34 @@
             idxEl.textContent = isPinned ? `📌P${index + 1}` : `P${index + 1}`;
             titleEl.appendChild(idxEl);
 
-            let displayTitle = assignedName;
             const fleetItem = fleetList.find(t => t.friendlyName === assignedName);
+            const agentLabel = agentLabelForRole(fleetItem && fleetItem.role);
+
+            // The agent name was absent from the pane header entirely. Terse layouts
+            // (2x3/3x3) get the label alone — those headers already abbreviate the action
+            // buttons to single letters, and the P<n> chip plus the sidebar row carry the
+            // handle. Status suffixes attach to the HANDLE: "planner-2 (exited)" is
+            // meaningful, "CLAUDE CLI (exited)" is not.
+            let handle = assignedName;
             if (fleetItem && fleetItem.status === 'exited') {
-                displayTitle += ' (exited)';
+                handle += ' (exited)';
             } else if (!fleetItem && hasFetchedList) {
-                displayTitle += ' (no longer listed)';
+                handle += ' (no longer listed)';
             }
-            titleEl.appendChild(document.createTextNode(displayTitle));
+
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'pane-title-name';
+            if (!agentLabel) {
+                nameSpan.textContent = handle;
+            } else if (isTerseLayout()) {
+                nameSpan.textContent = agentLabel;
+            } else {
+                nameSpan.textContent = `${agentLabel} · ${handle}`;
+            }
+            titleEl.appendChild(nameSpan);
+            // Full identity stays reachable even when the terse header shows only the agent.
+            titleEl.title = `${agentLabel ? agentLabel + ' — ' : ''}${handle}`;
+            paneEl.setAttribute('aria-label', `Pane ${index + 1}: ${titleEl.title}`);
 
             if (terminalBadges.has(assignedName)) {
                 const badgeSpan = document.createElement('span');
@@ -1786,13 +2030,15 @@
         // a stale word on a reused button. Indexed, not destructured: the buttons
         // share a class name, so there is no selector that tells them apart, and
         // children[] is the honest read.
-        // children[0] = pin, [1] = clear, [2] = hide, [3] = mode (order set in
+        // children[0] = pin, [1] = clear, [2] = model, [3] = hide, [4] = mode (order set in
         // createPaneElement).
         const pinBtn = actionsEl.children[0];
         const clearBtn = actionsEl.children[1];
-        const hideBtn = actionsEl.children[2];
-        const modeBtn = actionsEl.children[3];
+        const modelBtn = actionsEl.children[2];
+        const hideBtn = actionsEl.children[3];
+        const modeBtn = actionsEl.children[4];
         clearBtn.textContent = 'clear';
+        modelBtn.textContent = 'model';
         hideBtn.textContent = 'hide';
 
         // Restored explicitly, not left to the container's display. renderKanbanPane
@@ -1800,6 +2046,7 @@
         // without this, any pane that ever showed kanban mode loses clear and hide
         // for the life of the page.
         clearBtn.style.display = '';
+        modelBtn.style.display = '';
         hideBtn.style.display = '';
         modeBtn.style.display = 'none';
 
@@ -2071,7 +2318,7 @@
         // never className or onclick — so updatePaneElement can restore them when this
         // slot goes back to terminal mode.
         actionsEl.style.display = '';
-        const modeBtn = actionsEl.children[3];
+        const modeBtn = actionsEl.children[4];
         for (let i = 0; i < actionsEl.children.length; i++) {
             actionsEl.children[i].style.display = (actionsEl.children[i] === modeBtn) ? '' : 'none';
         }
@@ -2631,8 +2878,6 @@
         }
     }
 
-    const DEFAULT_ROLES = ['coder', 'planner', 'reviewer', 'lead', 'analyst', 'intern'];
-
     /**
      * Role sent by the "No role" picker button — a plain shell, no agent CLI.
      *
@@ -2672,24 +2917,42 @@
         } catch { /* labels are decoration — a failure must not blank the sidebar */ }
     }
 
-    async function fetchVisibleRoles() {
+    /**
+     * The agent CLI label for a role, or '' when there isn’t one.
+     *
+     * Handles the three no-label cases: the map is empty (fetchAgentNames swallows
+     * failures — labels must never blank the sidebar), the role has no startup
+     * command (KanbanProvider._getAgentNames returns the literal 'No agent
+     * assigned'), and the deliberate CLI-less `shell` role (NO_ROLE).
+     */
+    function agentLabelForRole(role) {
+        if (!role || role === NO_ROLE) { return ''; }
+        const label = agentNames[role];
+        if (!label || label === 'No agent assigned') { return ''; }
+        return label;
+    }
+
+    async function fetchPtyVisibleRoles() {
         try {
-            const res = await fetch('/kanban/verb/getSetting', {
+            const res = await fetch('/terminals/verb/ptyVisibleRoles', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key: 'agents.visibleAgents' })
+                body: JSON.stringify({})
             });
             if (res.ok) {
                 const data = await res.json();
-                const v = data && data.value;
-                if (Array.isArray(v) && v.length > 0) { return v.filter(r => typeof r === 'string'); }
-                if (v && typeof v === 'object') {
-                    const on = Object.keys(v).filter(k => v[k] !== false);
-                    if (on.length > 0) { return on; }
+                if (data && data.success && data.visibleAgents && typeof data.visibleAgents === 'object') {
+                    const hasCommand = data.hasCommand && typeof data.hasCommand === 'object' ? data.hasCommand : {};
+                    return { visibleAgents: data.visibleAgents, hasCommand };
                 }
             }
         } catch { /* fall through */ }
-        return DEFAULT_ROLES;
+        return { visibleAgents: { ...DEFAULT_VISIBLE_AGENTS }, hasCommand: {} };
+    }
+
+    async function fetchVisibleRoles() {
+        const data = await fetchPtyVisibleRoles();
+        return Object.keys(data.visibleAgents).filter(k => data.visibleAgents[k] !== false);
     }
 
     async function onNewTerminalClicked(targetSpec) {
@@ -2699,13 +2962,21 @@
 
         if (!picker.hidden) { picker.hidden = true; return; }
 
-        const roles = await fetchVisibleRoles();
+        const data = await fetchPtyVisibleRoles();
+        const visible = data.visibleAgents;
+        const hasCommand = data.hasCommand;
+        const roles = Object.keys(visible).filter(k => visible[k] !== false);
         optionsEl.innerHTML = '';
         for (const role of roles) {
             const btn = document.createElement('button');
             btn.type = 'button';
             btn.className = 'role-option';
-            btn.textContent = role;
+            const meta = BUILT_IN_AGENT_LABELS.find(r => r.key === role);
+            const label = meta ? meta.label : role;
+            btn.textContent = label;
+            btn.title = hasCommand[role]
+                ? `Open ${label} terminal`
+                : `${label} — no agent CLI configured (plain shell)`;
             btn.addEventListener('click', () => {
                 picker.hidden = true;
                 createTerminal(role, targetSpec);
@@ -2775,24 +3046,9 @@
         'analyst', 'ticket_updater', 'researcher', 'claude_artifacts', 'phone_a_friend'
     ];
 
-    /**
-     * Mirror of TaskViewerProvider._defaultVisibleAgents(). createAgentGrid tests
-     * `visibleAgents[role] !== false` against a map that has ALREADY been merged
-     * over these defaults, so reading the saved value raw is not equivalent: an
-     * absent key would read as visible and open the opt-in roles (tester,
-     * researcher, phone_a_friend and friends) that the extension leaves shut.
-     * Keep in step with that method.
-     */
-    const DEFAULT_VISIBLE_AGENTS = {
-        lead: true, coder: true, intern: true, reviewer: true,
-        tester: false, planner: true, analyst: true, jules: false,
-        ticket_updater: false, researcher: false,
-        claude_artifacts: false, phone_a_friend: false, project_manager: true
-    };
-
     async function resolveGridAgents() {
-        const [savedVisible, savedCustom, savedPlannerCount] = await Promise.all([
-            loadSetting('agents.visibleAgents', undefined),
+        const [savedVisibleData, savedCustom, savedPlannerCount] = await Promise.all([
+            fetchPtyVisibleRoles(),
             loadSetting('agents.customAgents', []),
             loadSetting('agents.plannerTerminalCount', 1)
         ]);
@@ -2801,16 +3057,9 @@
             ? savedCustom.filter(a => a && typeof a.role === 'string')
             : [];
 
-        const visible = { ...DEFAULT_VISIBLE_AGENTS };
+        const visible = { ...savedVisibleData.visibleAgents };
         // A custom agent defaults to visible, matching getVisibleAgents.
         for (const agent of custom) { visible[agent.role] = true; }
-        if (Array.isArray(savedVisible)) {
-            // Older array form: the listed roles are the visible ones.
-            for (const role of Object.keys(visible)) { visible[role] = savedVisible.includes(role); }
-            for (const role of savedVisible) { visible[role] = true; }
-        } else if (savedVisible && typeof savedVisible === 'object') {
-            Object.assign(visible, savedVisible);
-        }
 
         const plannerCount = Number(savedPlannerCount) > 1 ? Math.floor(Number(savedPlannerCount)) : 1;
 
@@ -2957,6 +3206,11 @@
                 for (let i = 0; i < paneAssignments.length; i++) {
                     if (paneAssignments[i] === name) { paneAssignments[i] = next; }
                 }
+                for (const g of terminalGroups) {
+                    for (let i = 0; i < g.assignments.length; i++) {
+                        if (g.assignments[i] === name) { g.assignments[i] = next; }
+                    }
+                }
                 if (activeTerminalName === name) { activeTerminalName = next; }
                 // The undo snapshot must follow the rename too. Left alone it holds the
                 // OLD name, which sanitizePaneAssignments cannot see (the live slots now
@@ -3032,6 +3286,18 @@
             if (terminalBadges.delete(name)) { renderSidebarList(); renderPaneGrid(); }
         } catch (err) {
             console.error('[Terminals] Failed to clear terminal:', err);
+        }
+    }
+
+    async function sendModelCommand(name) {
+        try {
+            await fetch('/terminals/verb/ptySendModel', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name })
+            });
+        } catch (err) {
+            console.error('[Terminals] Failed to send /model to terminal:', err);
         }
     }
 

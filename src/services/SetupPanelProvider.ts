@@ -194,6 +194,7 @@ export class SetupPanelProvider implements vscode.Disposable {
     private _kanbanProvider?: KanbanProvider;
     private _disposables: vscode.Disposable[] = [];
     private _pendingSection?: string;
+    public _headless = false;
 
     constructor(private readonly _extensionUri: vscode.Uri) { }
 
@@ -386,6 +387,14 @@ export class SetupPanelProvider implements vscode.Disposable {
                     const res = generateSparkContext(workspaceRoot, version);
                     this.postMessage({ type: 'sparkContextResult', success: true, path: res.path, skippedSections: res.skippedSections });
                     return { success: true, ...res };
+                }
+                case 'openConnectionsPanel': {
+                    // The Setup panel's Remote tab is a signpost now; its button posts
+                    // this. In the browser shell transport.js intercepts the verb as a
+                    // client-side panel switch and never reaches here — this arm is the
+                    // extension-host half, so the button works in both.
+                    await this._seams().commands.executeCommand('switchboard.openConnectionsPanel');
+                    return { success: true };
                 }
                 case 'getIntegrationSetupStates': {
                     const states = await this._taskViewerProvider.getIntegrationSetupStates();
@@ -583,7 +592,8 @@ export class SetupPanelProvider implements vscode.Disposable {
                                 parentDir: typeof message.parentDir === 'string' ? message.parentDir : '',
                                 workspaceName: typeof message.workspaceName === 'string' ? message.workspaceName : '',
                                 repoUrls: Array.isArray(message.repoUrls) ? message.repoUrls.map((value: unknown) => String(value)) : [],
-                                pat: typeof message.pat === 'string' ? message.pat : ''
+                                pat: typeof message.pat === 'string' ? message.pat : '',
+                                headlessDefaults: (this as any)._headless ? { subRepoDbAction: 'delete' as const } : undefined
                             },
                             this._extensionUri.fsPath
                         );

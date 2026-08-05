@@ -178,3 +178,7 @@ Keep the scope at exactly two call sites.
 - The provider→webview `exportAgentAsSkillResult` pushes and their (absent) inbound display.
 - Any `getSetting`/`saveSetting` work — already guarded at the schema boundary and in every
   arm (see the Superseded callout above).
+
+## Completion Report
+
+Implemented both call-site fixes. `src/webview/kanban.html` now shows the unresolved custom-agent error in the status bar instead of posting a non-verb result. `src/webview/project.js` no longer sends the dead `fetchFeatureDocuments` message on feature saves. Grep confirms `fetchFeatureDocuments` is gone from `src/` and `exportAgentAsSkillResult` only remains as provider-to-webview pushes. No compilation or tests were run per the dispatch directive.
