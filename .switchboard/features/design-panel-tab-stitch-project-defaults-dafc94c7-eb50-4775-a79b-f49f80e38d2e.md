@@ -22,10 +22,10 @@ Design panel opens on the wrong surface with nothing selected: PREVIEWS is a con
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Design Panel: Rename PREVIEWS to HTML and Promote Images to Its Own Top-Level Tab](../plans/feature_plan_20260805105301_design-previews-tab-becomes-html-images-own-tab.md) — **INTERN CODED**
-- [ ] [Design Panel: Previews Tab Must Default Its Source Dropdown to "HTML Previews"](../plans/feature_plan_20260805105302_design-previews-default-source-html-previews.md) — **INTERN CODED**
-- [ ] [Design Panel: Stitch HTML Source Must Default to the Project Showing in the Stitch Tab](../plans/feature_plan_20260805105303_stitch-html-source-inherits-stitch-tab-project.md) — **INTERN CODED**
-- [ ] [Design Panel: Stitch Project Picker Must Restore the Last Active Project Instead of Opening Empty](../plans/feature_plan_20260805105304_stitch-project-picker-restores-last-active-project.md) — **INTERN CODED**
+- [ ] [Design Panel: Rename PREVIEWS to HTML and Promote Images to Its Own Top-Level Tab](../plans/feature_plan_20260805105301_design-previews-tab-becomes-html-images-own-tab.md) — **CODE REVIEWED**
+- [ ] [Design Panel: Previews Tab Must Default Its Source Dropdown to "HTML Previews"](../plans/feature_plan_20260805105302_design-previews-default-source-html-previews.md) — **CODE REVIEWED**
+- [ ] [Design Panel: Stitch HTML Source Must Default to the Project Showing in the Stitch Tab](../plans/feature_plan_20260805105303_stitch-html-source-inherits-stitch-tab-project.md) — **CODE REVIEWED**
+- [ ] [Design Panel: Stitch Project Picker Must Restore the Last Active Project Instead of Opening Empty](../plans/feature_plan_20260805105304_stitch-project-picker-restores-last-active-project.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Completion Report

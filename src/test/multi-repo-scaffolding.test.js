@@ -75,7 +75,19 @@ function createRepoFiles(targetDir, options = {}) {
 
 async function cleanupWorkspace(KanbanDatabase, workspaceRoot) {
     await KanbanDatabase.invalidateWorkspace(workspaceRoot);
-    await fs.promises.rm(path.dirname(workspaceRoot), { recursive: true, force: true });
+    // KanbanDatabase persists through a serialized write queue, so a flush can still
+    // land a kanban.db.<hash>.tmp in the directory as we remove it — rmdir then fails
+    // ENOTEMPTY. Retry briefly instead of failing the suite during teardown.
+    const target = path.dirname(workspaceRoot);
+    for (let attempt = 0; ; attempt++) {
+        try {
+            await fs.promises.rm(target, { recursive: true, force: true });
+            return;
+        } catch (error) {
+            if (attempt >= 4) { throw error; }
+            await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+    }
 }
 
 async function testSuccessCase(MultiRepoScaffoldingService, KanbanDatabase, childProcess, mock) {
@@ -326,7 +338,12 @@ async function run() {
             /case 'scaffoldMultiRepo': \{[\s\S]*type: 'multiRepoScaffoldResult'/m,
             'Expected SetupPanelProvider to post multiRepoScaffoldResult from the scaffold case.'
         );
-        const scaffoldCaseMatch = setupProviderSource.match(/case 'scaffoldMultiRepo': \{[\s\S]*?break;/m);
+        // Anchor on the case block's own closing brace (16-space indent), NOT on `break;`.
+        // The verb-return contract converted these arms to `return { success: true }`
+        // (Setup's break ceiling is 0), so a `break;` terminator now matches some later
+        // arm's brace and drags unrelated cases — including postSetupPanelState calls —
+        // into the slice, failing the assertion below for the wrong reason.
+        const scaffoldCaseMatch = setupProviderSource.match(/case 'scaffoldMultiRepo': \{[\s\S]*?\n {16}\}/m);
         assert.ok(scaffoldCaseMatch, 'Expected SetupPanelProvider to define a dedicated scaffoldMultiRepo case.');
         assert.doesNotMatch(
             scaffoldCaseMatch[0],

@@ -383,11 +383,19 @@ async function main() {
         if (repoUrls.length === 0) { console.error('At least one --repo <url> is required'); process.exit(1); }
         if (!pat) { console.error('PAT is required. Pass --pat <token> or set SWITCHBOARD_PAT env var.'); process.exit(1); }
 
-        __setStandaloneWorkspaceRoot(workspaceRoot);
-        KanbanDatabase.setPathConfigProvider(new StandaloneHostPathConfigProvider(workspaceRoot));
+        // The scaffold target — not the cwd — is the workspace these services resolve
+        // config against. `bootstrapControlPlaneLayout` → `_getProtocolTargets` reads
+        // switchboard.protocol.target through the shim, which ignores the Uri scope it is
+        // handed and uses this root; `KanbanDatabase.forWorkspace` asks the path provider
+        // for kanban.dbPath. Rooted at the cwd, a stray protocol.target or kanban.dbPath
+        // belonging to the directory the command was launched from would silently govern
+        // the layout of — or relocate the DB of — the control plane being created.
+        const scaffoldRoot = path.resolve(expandHomePath(parentDir));
+        __setStandaloneWorkspaceRoot(scaffoldRoot);
+        KanbanDatabase.setPathConfigProvider(new StandaloneHostPathConfigProvider(scaffoldRoot));
         const repoRoot = path.resolve(__dirname, '..', '..');
 
-        console.log(`[switchboard] Scaffolding multi-repo control plane into ${parentDir}…`);
+        console.log(`[switchboard] Scaffolding multi-repo control plane into ${scaffoldRoot}…`);
         const result = await MultiRepoScaffoldingService.scaffold(
             { parentDir, workspaceName, repoUrls, pat, headlessDefaults: { subRepoDbAction } },
             repoRoot
@@ -407,10 +415,10 @@ async function main() {
         if (result.success) {
             console.log(`\n[switchboard] Workspace file: ${result.workspaceFilePath}`);
             console.log(`[switchboard] Open with: code "${result.workspaceFilePath}"`);
-            process.exit(anyFailed ? 1 : 0);
+            exitFlushed(anyFailed ? 1 : 0);
         } else {
             console.error(`\n[switchboard] Scaffold failed: ${result.error || 'unknown error'}`);
-            process.exit(1);
+            exitFlushed(1);
         }
     }
 
@@ -421,33 +429,44 @@ async function main() {
         const { StandaloneHostPathConfigProvider } = require('./hostServices');
         const { KanbanDatabase } = require('../services/KanbanDatabase');
 
-        __setStandaloneWorkspaceRoot(workspaceRoot);
-        KanbanDatabase.setPathConfigProvider(new StandaloneHostPathConfigProvider(workspaceRoot));
+        if (sub !== 'detect' && sub !== 'preview' && sub !== 'migrate') {
+            console.error('Usage: npx switchboard control-plane <detect|preview|migrate> [parent-dir] [--cleanup <repo>...] [--cleanup-all]');
+            process.exit(1);
+        }
+
+        // Parsed before the shim root is installed: preview/migrate operate on the named
+        // parent dir, and that dir — not the cwd — is the root the services must resolve
+        // config against (see the scaffold block for why).
+        const positional: string[] = [];
+        const cleanupRepos: string[] = [];
+        let cleanupAll = false;
+        for (let i = 4; i < process.argv.length; i++) {
+            const a = process.argv[i];
+            if (a === '--cleanup') { cleanupRepos.push(process.argv[++i]); }
+            else if (a === '--cleanup-all') { cleanupAll = true; }
+            else { positional.push(a); }
+        }
+
+        if (sub !== 'detect' && !positional[0]) {
+            console.error(`Usage: npx switchboard control-plane ${sub} <parent-dir>${sub === 'migrate' ? ' [--cleanup <repo>...] [--cleanup-all]' : ''}`);
+            process.exit(1);
+        }
+
+        // `detect` scans the parent of the current workspace, so it keeps the cwd root.
+        const parentDir = sub === 'detect' ? workspaceRoot : path.resolve(expandHomePath(positional[0]));
+        __setStandaloneWorkspaceRoot(parentDir);
+        KanbanDatabase.setPathConfigProvider(new StandaloneHostPathConfigProvider(parentDir));
         const repoRoot = path.resolve(__dirname, '..', '..');
 
         if (sub === 'detect') {
             const candidate = await ControlPlaneMigrationService.detectCandidateParent(workspaceRoot);
             console.log(JSON.stringify(candidate, null, 2));
-            process.exit(0);
+            exitFlushed(0);
         } else if (sub === 'preview') {
-            const parentDir = process.argv[4];
-            if (!parentDir) { console.error('Usage: npx switchboard control-plane preview <parent-dir>'); process.exit(1); }
             const preview = await ControlPlaneMigrationService.previewMigration(parentDir);
             console.log(JSON.stringify(preview, null, 2));
-            process.exit(0);
-        } else if (sub === 'migrate') {
-            const positional: string[] = [];
-            const cleanupRepos: string[] = [];
-            let cleanupAll = false;
-            for (let i = 4; i < process.argv.length; i++) {
-                const a = process.argv[i];
-                if (a === '--cleanup') { cleanupRepos.push(process.argv[++i]); }
-                else if (a === '--cleanup-all') { cleanupAll = true; }
-                else { positional.push(a); }
-            }
-            const parentDir = positional[0];
-            if (!parentDir) { console.error('Usage: npx switchboard control-plane migrate <parent-dir> [--cleanup <repo>...] [--cleanup-all]'); process.exit(1); }
-
+            exitFlushed(0);
+        } else {
             let cleanupConfirmed = cleanupRepos;
             if (cleanupAll) {
                 const preview = await ControlPlaneMigrationService.previewMigration(parentDir);
@@ -465,10 +484,7 @@ async function main() {
                     console.log(`[switchboard] Workspace file: ${result.workspaceFilePath}`);
                 }
             }
-            process.exit(result.success ? 0 : 1);
-        } else {
-            console.error('Usage: npx switchboard control-plane <detect|preview|migrate> [parent-dir] [--cleanup <repo>...] [--cleanup-all]');
-            process.exit(1);
+            exitFlushed(result.success ? 0 : 1);
         }
     }
 
