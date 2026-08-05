@@ -859,7 +859,8 @@
     "test:contract:terminal-dec-mode-restore": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-dec-mode-restore-contract.test.js",
     "test:contract:terminal-operations-no-periodic-reopen": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-operations-no-periodic-reopen.test.js",
     "test:contract:multi-parent-terminals": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/multi-parent-terminals-contract.test.js",
-    "test:contract:scheduled-jobs": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/scheduled-jobs-and-connections.test.js"
+    "test:contract:scheduled-jobs": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/scheduled-jobs-and-connections.test.js",
+    "test:contract:kanban-column-labels": "mocha --ui tdd --require ./src/test/bootstrap/sandboxStateHome.js out/test/kanban-auto-export.test.js --grep \"Column label parity\""
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",

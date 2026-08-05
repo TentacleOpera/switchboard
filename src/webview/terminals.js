@@ -48,7 +48,6 @@
     // Pane indices with a getBoardCards request in flight — see fetchBoardCardsForPane.
     const kanbanFetchInFlight = new Set();
     const collapsedGroups = new Set();
-    let osNotifyEnabled = false;
 
     let soloTerminalName = null;
     let hasFetchedList = false;
@@ -85,7 +84,6 @@
     const paneGridEl = document.getElementById('pane-grid');
     const toastContainerEl = document.getElementById('toast-container');
     const fallbackBannerEl = document.getElementById('layout-fallback-banner');
-    const notifyToggleEl = document.getElementById('notify-toggle');
 
     function encodeInputFrame(str) {
         const body = new TextEncoder().encode(str);
@@ -413,16 +411,6 @@
             });
         });
 
-        if (notifyToggleEl) {
-            notifyToggleEl.addEventListener('change', () => {
-                osNotifyEnabled = notifyToggleEl.checked;
-                if (osNotifyEnabled && typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
-                    Notification.requestPermission().catch(() => {});
-                }
-                saveSetting('terminals.osNotify', osNotifyEnabled);
-            });
-        }
-
         const btnClearAll = document.getElementById('btn-clear-all');
         if (btnClearAll) {
             btnClearAll.addEventListener('click', () => withClearingFeedback(btnClearAll, clearAllTerminals));
@@ -590,7 +578,6 @@
         const savedMode = await loadSetting('terminals.layoutMode', '1');
         const savedPanes = await loadSetting('terminals.paneAssignments', []);
         const savedCollapsed = await loadSetting('terminals.collapsedGroups', []);
-        const savedNotify = await loadSetting('terminals.osNotify', false);
         const savedPins = await loadSetting('terminals.pinnedPanes', []);
         const savedModes = await loadSetting('terminals.paneModes', []);
         const savedKanbanCols = await loadSetting('terminals.kanbanPaneColumn', []);
@@ -621,10 +608,6 @@
         }
         if (Array.isArray(savedCollapsed)) {
             savedCollapsed.forEach(c => collapsedGroups.add(c));
-        }
-        osNotifyEnabled = Boolean(savedNotify);
-        if (notifyToggleEl) {
-            notifyToggleEl.checked = osNotifyEnabled;
         }
     }
 
@@ -1439,21 +1422,22 @@
         chip.title = state.label;
     }
 
-    /** Tell the operator their keystroke went nowhere.
+    /* A dropped keystroke updates the header chip and NOTHING ELSE.
      *
-     *  ONE notice per disconnect episode, not one per interval: a 30-second
-     *  backoff window with a rolling timer still stacks ten identical lines into
-     *  a TUI's screen buffer, and the tenth says nothing the first did not. The
-     *  flag resets in ws.onopen, so the next outage reports again. The header chip
-     *  is the PERSISTENT signal — this line only catches the operator who is
-     *  looking at the terminal rather than the header. */
+     * There was a `[Not connected — keystroke discarded]` line written into
+     * entry.term here. Do not add it back, or any variant of it. Writing a
+     * notice into the terminal buffer makes it CONTENT, not chrome: it becomes
+     * permanent scrollback, it cannot be dismissed, it corrupts a TUI's screen
+     * buffer, and the running CLI already reports its own connection errors —
+     * so it was a second notification stacked on top of one the operator
+     * already had. Its "once per disconnect episode" guard did not hold either:
+     * ws.onopen cleared the flag, so a flapping socket wrote a fresh line every
+     * reconnect cycle.
+     *
+     * The header chip (refreshInputState) is the whole signal. It is chrome, it
+     * self-corrects when the socket returns, and it leaves no residue. */
     function notifyInputDropped(entry) {
         refreshInputState(entry.name);
-        if (entry.inputDropNoticed) { return; }
-        entry.inputDropNoticed = true;
-        try {
-            entry.term.write('\r\n\x1b[33m[Not connected — keystroke discarded]\x1b[0m\r\n');
-        } catch { /* ignore */ }
     }
 
     /**
@@ -3314,7 +3298,6 @@
             writeThrowCount: 0,
             largestInputDataLen: 0,
             totalInputChars: 0,
-            inputDropNoticed: false,
             reconnectTimer: null,
             reconnectDelay: 500,
             resizeObserver: null,
@@ -3753,9 +3736,6 @@
 
         ws.onopen = () => {
             entry.reconnectDelay = 500;
-            // A fresh socket earns a fresh drop notice. Paired with
-            // notifyInputDropped — see the note there.
-            entry.inputDropNoticed = false;
             refreshInputState(entry.name);
             // Unconditionally reporting term.cols/rows here is what pinned the shared
             // pty to 80x24: on a connection opened before the terminal had a box, that
@@ -4049,15 +4029,12 @@
             }
         }
 
+        // The in-panel toast is the ONLY completion notice. There was a native
+        // `new Notification(...)` here behind an "OS Notifications" checkbox,
+        // firing immediately after this toast with the same role and the same
+        // plan title — a duplicate of the notice the operator had already been
+        // given. Do not reintroduce it.
         showCompletionToast(planTitle || 'Agent Task', role || 'Agent', targetTerm);
-
-        if (osNotifyEnabled && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-            try {
-                new Notification(`Agent Completed: ${role || 'Agent'}`, {
-                    body: planTitle || 'Task completed'
-                });
-            } catch { /* ignore */ }
-        }
     }
 
     function showCompletionToast(title, role, termName) {

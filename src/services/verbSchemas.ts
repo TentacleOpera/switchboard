@@ -925,6 +925,11 @@ const TICKETS_VERB_SCHEMAS: Record<string, VerbSchema> = {
             workspaceRoot: { type: 'string' },
             provider: { type: 'string', required: true },
             ids: { type: 'array' },
+            // Scope id passed from the frontend so the backend can stamp it on the
+            // broadcast reply (cross-panel contamination fix). ClickUp uses listId;
+            // Linear uses projectId (a client-side filter name, not a server scope).
+            listId: { type: ['string', 'number'] },
+            projectId: { type: 'string' },
         },
     },
     ticketsRootChanged: {

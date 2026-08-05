@@ -22538,20 +22538,47 @@ What would you like to find?`;
                                 `[TaskViewerProvider] Deletion sweep (delta): non-authoritative ClickUp fetch for list ${listId} ` +
                                 `(complete=${complete}, ids=${fullRemoteIds.size}) — skipping sweep.`
                             );
+                        } else {
+                            // Selection-match scope guard: targetDir is derived from the
+                            // LIVE selection (getSelectedHierarchy → space/folder/list
+                            // NAMES), not from listId. If the selection moved between
+                            // queueing and executing this refresh, an authorised fetch of
+                            // list A would sweep list B's directory against A's remote IDs
+                            // and delete everything in it. Skip the sweep when the live
+                            // selectedListId no longer matches the refreshed listId, or
+                            // when the hierarchy is unresolved (selectedListId empty →
+                            // targetDir would be _unknown/_unknown, no valid authority).
+                            const clickupCfg = await clickup.loadConfig();
+                            const liveListId = String(clickupCfg?.selectedListId || '').trim();
+                            if (!liveListId) {
+                                fetchSucceeded = false;
+                                console.warn(
+                                    `[TaskViewerProvider] Deletion sweep (delta): ClickUp hierarchy unresolved (selectedListId empty) for list ${listId} ` +
+                                    `— skipping sweep (targetDir would be _unknown/_unknown).`
+                                );
+                            } else if (liveListId !== String(listId)) {
+                                fetchSucceeded = false;
+                                console.warn(
+                                    `[TaskViewerProvider] Deletion sweep (delta): selection moved (live selectedListId=${liveListId} != refreshed listId=${listId}) ` +
+                                    `— skipping sweep to avoid sweeping the wrong directory.`
+                                );
+                            }
                         }
                     } else if (provider === 'linear' && projectId) {
-                        // Use fetchAllIssueIds (uncapped) — NOT queryIssues (capped at 100).
-                        // It returns a bare Set with no completeness signal, so the only
-                        // check available here is non-emptiness. That still blocks the
-                        // catastrophic case (empty set → delete everything); a truncated
-                        // page-cap run remains possible and needs fetchAllIssueIds to
-                        // report completeness before it can be gated properly.
+                        // fetchAllIssueIds now reports completeness alongside the ID set.
+                        // `complete` is true only when pagination observed the end; a
+                        // truncated page-cap or missing-cursor run leaves it false, so a
+                        // short fetch can never authorise a destructive sweep. Combined
+                        // with non-emptiness, this matches the ClickUp gate and blocks
+                        // both the catastrophic empty-set case and the truncated case.
                         const linear = this._getLinearService(resolvedRoot);
-                        fullRemoteIds = await linear.fetchAllIssueIds(projectId);
-                        fetchSucceeded = fullRemoteIds.size > 0;
+                        const { ids: linearIds, complete: linearComplete } = await linear.fetchAllIssueIds(projectId);
+                        fullRemoteIds = linearIds;
+                        fetchSucceeded = linearComplete && linearIds.size > 0;
                         if (!fetchSucceeded) {
                             console.warn(
-                                `[TaskViewerProvider] Deletion sweep (delta): empty Linear ID set for project ${projectId} — skipping sweep.`
+                                `[TaskViewerProvider] Deletion sweep (delta): non-authoritative Linear ID fetch for project ${projectId} ` +
+                                `(complete=${linearComplete}, ids=${linearIds.size}) — skipping sweep.`
                             );
                         }
                     }

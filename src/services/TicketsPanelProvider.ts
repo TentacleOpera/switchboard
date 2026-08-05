@@ -48,7 +48,6 @@ export class TicketsPanelProvider {
     private _workspaceRoot?: string;
     private _adapterFactories: TicketsPanelAdapterFactories;
     private _activeTicketsProvider: 'clickup' | 'linear' | null = null;
-    private _ticketsAutoSyncWatchers: Map<string, HostWatchHandle> = new Map();
     // ── 2c: ticket file watcher + cache + delta-pull state ──
     private _ticketsViewWatcher: HostWatchHandle | undefined;
     private _ticketsViewWatcherDebounces: Map<string, NodeJS.Timeout> = new Map();
@@ -174,6 +173,24 @@ export class TicketsPanelProvider {
     // can post responses without a rewrite.
     private postMessageToWebview(message: any): void {
         this._pushTo(this._panel, 'tickets', message);
+    }
+
+    /**
+     * Stamp a reply with the identity of the request that produced it.
+     *
+     * Every push from this panel is BROADCAST (BroadcastHub → wsHub) to every
+     * connected Tickets surface — editor webview and all browser tabs. A reply
+     * that does not say which workspace + list/project it answers for is
+     * indistinguishable from the receiving panel's own reply, and tickets.js
+     * will render it over the top of the correct one. Verified 2026-08-05: a
+     * panel showing a 3-ticket list received a foreign 67-ticket payload.
+     *
+     * `workspaceRoot`/`scopeId` are forced to `undefined` (omitted from JSON)
+     * when absent so the frontend predicate can distinguish "reply names no
+     * scope" from "reply names a different scope".
+     */
+    private _scoped(res: any, workspaceRoot: string | null, scopeId?: string): any {
+        return { ...res, workspaceRoot: workspaceRoot ?? undefined, scopeId: scopeId ?? undefined };
     }
 
     /**
@@ -547,29 +564,6 @@ export class TicketsPanelProvider {
         return new LocalFolderService(workspaceRoot);
     }
 
-    private async _getTicketsAutoSync(root: string): Promise<boolean> {
-        const globalConfig = await GlobalIntegrationConfigService.loadGlobal();
-        if (globalConfig.ticketsAutoSync === undefined) {
-            const localService = this._getLocalFolderService(root);
-            const localValue = localService.getTicketsAutoSync();
-            if (localValue) {
-                await GlobalIntegrationConfigService.setTicketsAutoSync(true);
-                return true;
-            }
-            return false;
-        }
-        return globalConfig.ticketsAutoSync === true;
-    }
-
-    // 2b stub: the full auto-sync watcher + delta-pull timer system is ~70 lines
-    // and depends on _ticketsAutoSyncTimers, _ticketsAutoSyncFailures, etc. It
-    // moves in a later slice (2c+) with the ticket content rendering. For 2b
-    // the watcher is a no-op — provider switching works without it; only
-    // background push-on-file-change is deferred.
-    private _updateTicketsAutoSyncWatcher(_workspaceRoot: string, _enabled: boolean): void {
-        // no-op in 2b
-    }
-
     private _mapClickUpTaskToSidebar(task: any): any {
         return {
             id: task.id,
@@ -843,14 +837,11 @@ export class TicketsPanelProvider {
                         ]);
                         const clickupSetupComplete = clickUpConfig?.setupComplete === true;
                         const linearSetupComplete = linearConfig?.setupComplete === true;
-                        const ticketsAutoSync = await this._getTicketsAutoSync(workspaceRoot);
-                        if (provider) { this._updateTicketsAutoSyncWatcher(workspaceRoot, ticketsAutoSync); }
                         this._pushTo(targetPanel, 'tickets', {
                             type: 'integrationProviderStates',
                             clickupSetupComplete,
                             linearSetupComplete,
-                            provider,
-                            ticketsAutoSync
+                            provider
                         });
                     } catch (err) {
                         console.warn('[TicketsPanel] Failed to switch ticket provider:', err);
@@ -1183,13 +1174,12 @@ export class TicketsPanelProvider {
                 const loadSeq = msg.loadSeq;
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
-                    const res = {
+                    const res = this._scoped({
                         type: 'clickupProjectLoaded',
                         status: 'error',
                         message: 'No workspace open.',
-                        loadSeq,
-                        workspaceRoot: msg.workspaceRoot || undefined
-                    };
+                        loadSeq
+                    }, msg.workspaceRoot || null, undefined);
                     this._pushTo(targetPanel, 'tickets', res);
                     return { ...res, success: false };
                 }
@@ -1198,26 +1188,24 @@ export class TicketsPanelProvider {
                 const config = await clickUp.loadConfig();
 
                 if (!config?.setupComplete) {
-                    const res = {
+                    const res = this._scoped({
                         type: 'clickupProjectLoaded',
                         status: 'setup-required',
                         message: 'ClickUp setup is incomplete. Please complete setup in the Setup panel.',
-                        loadSeq,
-                        workspaceRoot
-                    };
+                        loadSeq
+                    }, workspaceRoot, undefined);
                     this._pushTo(targetPanel, 'tickets', res);
                     return { ...res, success: false };
                 }
 
                 const listId = msg.listId || config.selectedListId;
                 if (!listId) {
-                    const res = {
+                    const res = this._scoped({
                         type: 'clickupProjectLoaded',
                         status: 'setup-required',
                         message: 'No list selected. Please select a Space, Folder, and List to view tasks.',
-                        loadSeq,
-                        workspaceRoot
-                    };
+                        loadSeq
+                    }, workspaceRoot, undefined);
                     this._pushTo(targetPanel, 'tickets', res);
                     return { ...res, success: false };
                 }
@@ -1231,24 +1219,22 @@ export class TicketsPanelProvider {
                         archived: false
                     });
 
-                    const res = {
+                    const res = this._scoped({
                         type: 'clickupProjectLoaded',
                         status: 'loaded',
                         tasks: tasks.map((t: any) => this._mapClickUpTaskToSidebar(t)),
                         listName: config.selectedListName || 'Unknown List',
-                        loadSeq,
-                        workspaceRoot
-                    };
+                        loadSeq
+                    }, workspaceRoot, String(listId));
                     this._pushTo(targetPanel, 'tickets', res);
                     return { ...res, success: true };
                 } catch (error) {
-                    const res = {
+                    const res = this._scoped({
                         type: 'clickupError',
                         scope: 'project',
                         error: error instanceof Error ? error.message : 'Failed to load ClickUp project',
-                        loadSeq,
-                        workspaceRoot
-                    };
+                        loadSeq
+                    }, workspaceRoot, String(listId || ''));
                     this._pushTo(targetPanel, 'tickets', res);
                     return { ...res, success: false };
                 }
@@ -1444,15 +1430,12 @@ export class TicketsPanelProvider {
                             }
                         }
                         const provider = activeProvider || null;
-                        const ticketsAutoSync = await this._getTicketsAutoSync(root);
-                        if (provider) { this._updateTicketsAutoSyncWatcher(root, ticketsAutoSync); }
                         this._setupTicketsViewWatcher(root);
                         this.postMessageToWebview({
                             type: 'integrationProviderStates',
                             clickupSetupComplete,
                             linearSetupComplete,
-                            provider,
-                            ticketsAutoSync
+                            provider
                         });
                     } catch (err) {
                         console.warn('[TicketsPanel] Failed to determine integration preference for root:', root, err);
@@ -1592,7 +1575,10 @@ export class TicketsPanelProvider {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const provider = (msg.provider as 'clickup' | 'linear') || 'clickup';
                 if (!workspaceRoot) {
-                    const res = { type: 'localTicketFilesListed', provider, tickets: [] };
+                    const earlyScopeId = provider === 'clickup'
+                        ? String((msg.listId as string) || '').trim() || undefined
+                        : String((msg.projectId as string) || '').trim() || undefined;
+                    const res = this._scoped({ type: 'localTicketFilesListed', provider, tickets: [] }, msg.workspaceRoot || null, earlyScopeId);
                     this.postMessageToWebview(res);
                     return { ...res, success: false };
                 }
@@ -1746,7 +1732,7 @@ export class TicketsPanelProvider {
                     }
                 }
 
-                const res = { type: 'localTicketFilesListed', provider, tickets, ...(scopeCoverage ? { scopeCoverage } : {}) };
+                const res = this._scoped({ type: 'localTicketFilesListed', provider, tickets, ...(scopeCoverage ? { scopeCoverage } : {}) }, workspaceRoot, scopeId || undefined);
                 this.postMessageToWebview(res);
                 return { success: true, ...res };
             }
@@ -1754,14 +1740,17 @@ export class TicketsPanelProvider {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const provider = (msg.provider as 'clickup' | 'linear') || 'clickup';
                 const ids: string[] = msg.ids || [];
+                const syncScopeId = provider === 'clickup'
+                    ? String((msg.listId as string) || '').trim() || undefined
+                    : String((msg.projectId as string) || '').trim() || undefined;
                 if (!workspaceRoot || ids.length === 0) {
-                    return { success: false, error: 'Missing workspaceRoot or ids', type: 'ticketSyncStatusesLoaded', provider, statuses: {} };
+                    return { success: false, error: 'Missing workspaceRoot or ids', ...this._scoped({ type: 'ticketSyncStatusesLoaded', provider, statuses: {} }, workspaceRoot, syncScopeId) };
                 }
                 if (!this._cacheService && workspaceRoot) {
                     this._cacheService = this._adapterFactories.getCacheService(workspaceRoot);
                 }
                 if (!this._cacheService) {
-                    return { success: false, error: 'No cache service', type: 'ticketSyncStatusesLoaded', provider, statuses: {} };
+                    return { success: false, error: 'No cache service', ...this._scoped({ type: 'ticketSyncStatusesLoaded', provider, statuses: {} }, workspaceRoot, syncScopeId) };
                 }
                 const statuses: Record<string, 'synced' | 'modified' | 'local-only'> = {};
                 try {
@@ -1775,7 +1764,7 @@ export class TicketsPanelProvider {
                 } catch (err) {
                     console.error('[TicketsPanelProvider] getTicketSyncStatuses error:', err);
                 }
-                const res = { type: 'ticketSyncStatusesLoaded', provider, statuses };
+                const res = this._scoped({ type: 'ticketSyncStatusesLoaded', provider, statuses }, workspaceRoot, syncScopeId);
                 this.postMessageToWebview(res);
                 return { success: true, ...res };
             }
@@ -3390,10 +3379,6 @@ export class TicketsPanelProvider {
                 await this._seams().commands.executeCommand('switchboard.refreshUI');
                 return { success: true };
             }
-            case 'saveTicketsAutoSync': {
-                await GlobalIntegrationConfigService.setTicketsAutoSync(msg.enabled === true);
-                return { success: true };
-            }
             case 'browseIntegrationTicketSaveLocation': {
                 const provider = msg.provider;
                 const folderUri = await this._seams().ui.showOpenDialog({
@@ -3421,8 +3406,7 @@ export class TicketsPanelProvider {
                     this._pushTo(targetPanel, 'tickets', {
                         type: 'integrationTicketSaveLocations',
                         provider,
-                        path: folderPath,
-                        ticketsAutoSync: await GlobalIntegrationConfigService.getTicketsAutoSync()
+                        path: folderPath
                     });
                 }
                 return { success: true };
@@ -3430,18 +3414,15 @@ export class TicketsPanelProvider {
             case 'getIntegrationTicketSaveLocations': {
                 const clickupConfig = await GlobalIntegrationConfigService.loadConfig('clickup');
                 const linearConfig = await GlobalIntegrationConfigService.loadConfig('linear');
-                const ticketsAutoSync = await GlobalIntegrationConfigService.getTicketsAutoSync();
                 this._pushTo(targetPanel, 'tickets', {
                     type: 'integrationTicketSaveLocations',
                     provider: 'clickup',
-                    path: clickupConfig?.ticketSaveLocation || '',
-                    ticketsAutoSync
+                    path: clickupConfig?.ticketSaveLocation || ''
                 });
                 this._pushTo(targetPanel, 'tickets', {
                     type: 'integrationTicketSaveLocations',
                     provider: 'linear',
-                    path: linearConfig?.ticketSaveLocation || '',
-                    ticketsAutoSync
+                    path: linearConfig?.ticketSaveLocation || ''
                 });
                 return { success: true };
             }
@@ -3516,10 +3497,6 @@ export class TicketsPanelProvider {
     }
 
     public dispose(): void {
-        for (const watcher of this._ticketsAutoSyncWatchers.values()) {
-            try { watcher.dispose(); } catch { }
-        }
-        this._ticketsAutoSyncWatchers.clear();
         if (this._ticketsViewWatcher) {
             try { this._ticketsViewWatcher.dispose(); } catch { }
             this._ticketsViewWatcher = undefined;

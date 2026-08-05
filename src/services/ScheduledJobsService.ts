@@ -314,6 +314,17 @@ export async function ingestJobActivity(workspaceRoot: string, db: any): Promise
 async function seedDefaultStandingJobs(standingDir: string): Promise<void> {
     const jobs = [
         {
+            filename: 'notes-to-plans.md',
+            content: `---
+job: notes-to-plans
+schedule: daily
+reads: .switchboard/instructions/inbox/
+writes: .switchboard/plans/
+---
+
+Read uncollected note files in .switchboard/instructions/inbox/. Transform notes and raw briefs into complete plan files in .switchboard/plans/ following Switchboard authoring conventions.`
+        },
+        {
             filename: 'memo-to-plans.md',
             content: `---
 job: memo-to-plans

@@ -47,7 +47,11 @@ suite('Kanban Auto-Export (Markdown)', () => {
     teardown(async () => {
         db.dispose();
         await KanbanDatabase.invalidateWorkspace(tempDir);
-        await fs.promises.rm(tempDir, { recursive: true, force: true });
+        // The debounced local-board mirror can land a write between the dispose and
+        // the unlink, which surfaces as ENOTEMPTY and — because a failing teardown
+        // hook aborts the WHOLE suite in mocha — silently skips every remaining test.
+        // Retry rather than let a harness race decide how much of the suite runs.
+        await fs.promises.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     });
 
     test('Markdown file is created with header and all VALID_KANBAN_COLUMNS', async function() {

@@ -56,10 +56,11 @@ two commands.
 
    **Command B — board counts (local markdown, always current):**
    ```bash
-   awk 'FNR==1{col=FILENAME; sub(/.*kanban-state-/,"",col); sub(/\.md$/,"",col); plans[col]+=0; feats[col]+=0; agent[col]=""}
+   awk 'FNR==1{col=FILENAME; sub(/.*kanban-state-/,"",col); sub(/\.md$/,"",col); plans[col]+=0; feats[col]+=0; agent[col]=""; label[col]=""}
+        /^\*\*Label:\*\*/{ label[col]=$0; sub(/^\*\*Label:\*\* /,"",label[col]) }
         /^\*\*Agent:\*\*/{ agent[col]=$0; sub(/^\*\*Agent:\*\* /,"",agent[col]) }
         /planId:/{ if (/ feature -->/) feats[col]++; else plans[col]++ }
-        END{for (c in plans) printf "%s: %d plans, %d features, agent=%s\n", c, plans[c], feats[c], agent[c]}' \
+        END{for (c in plans) printf "%s: label=%s, %d plans, %d features, agent=%s\n", c, label[c], plans[c], feats[c], agent[c]}' \
      "$ROOT"/.switchboard/kanban-state-*.md
    ```
    - **Feature rows carry `planId:` too** — only the trailing ` feature -->` marker
@@ -67,6 +68,12 @@ two commands.
      The awk above already splits plans from features per column.
    - **Plans exist?** is answered by this awk output — if any column has `plans > 0`,
      plans exist. No separate `ls` of the plans directory.
+   - **Column display names** come from the `label=` field per column — the extension
+     writes a `**Label:** <label>` header line into each kanban-state file, and this awk
+     is the ONE read that surfaces it. Print `label=`, never the slug or the raw ID
+     (`created` / `CREATED` are both wrong; the user's column is called **New**). An
+     empty `label=` means an older export predating the line — fall back to
+     `GET /kanban/columns`, never to title-casing the slug.
    - **Agent names** come from the `agent=` field per column (the extension writes a
      `**Agent:** <NAME> CLI` header line into each kanban-state file). Columns with no
      configured/visible agent produce an empty `agent=` — render those as "no agent
@@ -88,10 +95,11 @@ two commands.
      columns appearing here IS the in-flight-work signal. **Omit `CODE REVIEWED` and
      every column after it** from the headline. If a custom column's position relative to
      CODE REVIEWED is unknown, show it by name.
-   - **Column labels come from the board, never from a hardcoded table** — each
-     kanban-state file carries a `**Label:** <label>` line directly under its
-     `## <ID>` header; print that label, never the raw column ID. If the line is
-     absent (older export, mid-rewrite), `GET /kanban/columns` is authoritative —
+   - **Column labels come from the board, never from a hardcoded table** — Command B's
+     `label=` field already carries each column's UI label (read from the
+     `**Label:** <label>` line under the file's `## <ID>` header); print that label,
+     never the raw column ID. If it is empty (older export, mid-rewrite),
+     `GET /kanban/columns` is authoritative —
      and always is on conflict. Never title-case an ID to produce a name:
      `CREATED` is **New**, not "Created"; `PLAN REVIEWED` is **Planned**;
      `CODE REVIEWED` is **Reviewed**. **Display-only for prose** — but the API

@@ -400,6 +400,23 @@ jobs:
       - name: Scheduled jobs + Connections contract (claims, declared moves, ingestion, spark)
         run: npm run test:contract:scheduled-jobs
 
+      # Column ID -> UI label. The bug this guards is invisible to every other gate:
+      # `CREATED` renders as "New", `PLAN REVIEWED` as "Planned", `CODE REVIEWED` as
+      # "Reviewed", and no string transform derives any of them — so an agent asked
+      # about "the New column" denies it exists while looking at the same board. Pins
+      # the resolver, the exported `**Label:**` line, ID-before-label precedence on the
+      # write path (a custom column named "New" must never capture CREATED's moves),
+      # the AUTOCODE many->one refusal, and the ten-entry DEFAULT_KANBAN_COLUMNS guard
+      # that stops BACKLOG/CODED being re-added and rendering as extra board columns.
+      # SCOPED to the parity test by --grep on purpose: the sibling "Dispose triggers a
+      # final export flush" test in the same file FAILS on main and fails STALE, not as
+      # a regression — _writeLocalBoardMirror early-returns on an unchanged content hash
+      # (KanbanDatabase.ts, `hash === this._localMirrorLastHash`), so deleting the file
+      # and re-flushing legitimately no-ops. Widening this step without repairing that
+      # test first would just paint CI red.
+      - name: Kanban column label parity (resolver, export, write-path precedence, definition guard)
+        run: npm run test:contract:kanban-column-labels
+
       # Every failure mode of surface scoping is a panel that silently stops updating.
       # Pins the three traps: untagged-means-everyone, parse-before-resync, and
       # every-panel-gets-`common`. Also pins the client/server panel-map mirror (a

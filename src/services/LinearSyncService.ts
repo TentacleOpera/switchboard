@@ -898,7 +898,7 @@ export class LinearSyncService {
    * payload size. Bypasses the cache (the sweep needs current live state,
    * not a potentially stale snapshot).
    */
-  public async fetchAllIssueIds(projectId: string): Promise<Set<string>> {
+  public async fetchAllIssueIds(projectId: string): Promise<{ ids: Set<string>; complete: boolean }> {
     const config = await this.loadConfig();
     if (!config?.setupComplete || !config.teamId) {
       throw new Error('Linear not configured');
@@ -911,6 +911,10 @@ export class LinearSyncService {
     const query = this._buildIssueListQuery();
     let pageCount = 0;
     const maxPages = 50; // Safety cap: 50 pages × 50/page = 2500 issues max
+    // `complete` is true ONLY when the loop observed the end of pagination
+    // (no next page). A missing cursor or the page-cap exit leaves it false —
+    // a truncated run must not authorise a destructive deletion sweep.
+    let complete = false;
 
     while (pageCount < maxPages) {
       const result = await this.graphqlRequest(query, {
@@ -923,16 +927,16 @@ export class LinearSyncService {
       for (const node of nodes) {
         if (node.id) ids.add(String(node.id));
       }
-      if (!page?.pageInfo?.hasNextPage) break;
+      if (!page?.pageInfo?.hasNextPage) { complete = true; break; }
       cursor = String(page.pageInfo.endCursor || '').trim() || null;
-      if (!cursor) break;
+      if (!cursor) break;   // ambiguous truncation — complete stays false
       pageCount++;
       await this.delay(200);
     }
-    if (pageCount >= maxPages) {
+    if (!complete && pageCount >= maxPages) {
       console.warn(`[LinearSync] fetchAllIssueIds reached page cap (${maxPages}). Some issues may be omitted.`);
     }
-    return ids;
+    return { ids, complete };
   }
 
   public async getIssue(issueIdOrIdentifier: string): Promise<LinearIssue | null> {

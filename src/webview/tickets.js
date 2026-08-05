@@ -111,7 +111,6 @@
     let ticketsEditMode = false;
     let _ticketsEditBackupHtml = null;
     let ticketsWorkspaceRoot = '';
-    let ticketsAutoSync = false;
 
     // Linear state
     let linearProjectIssues = [];
@@ -179,6 +178,45 @@
     let _restoringClickUpHierarchy = false;
     let _pendingTicketsRestore = false;
     let pendingClickUpDetailIssueId = '';
+
+    /**
+     * Is this push an answer to a request THIS panel made?
+     *
+     * Host replies are broadcast to every Tickets surface, so a reply for another
+     * panel's list arrives here looking exactly like our own. Accepting it
+     * overwrites clickUpProjectIssues with a foreign list — the "sidebar flashes
+     * with a lot of stuff and then disappears" bug. Reject anything that names a
+     * scope other than the one we are showing.
+     *
+     * Accepts when: the message is our locally-synthesised placeholder; the
+     * message names no scope AND we have none selected; the scopes match; or
+     * the workspaceRoot matches (for Linear, which has no per-project scope id).
+     */
+    function _isForThisPanel(message) {
+        if (message && message.unscopedPlaceholder) { return true; }
+        const provider = message.provider || lastIntegrationProvider;
+        if (provider && lastIntegrationProvider && provider !== lastIntegrationProvider) { return false; }
+        // Workspace guard: if both sides carry a workspaceRoot, they must match.
+        // This catches cross-workspace contamination where two panels show the
+        // same ClickUp list ID or the same Linear team in different workspaces.
+        if (message.workspaceRoot && ticketsWorkspaceRoot
+                && message.workspaceRoot !== ticketsWorkspaceRoot) {
+            return false;
+        }
+        // ClickUp: scope by listId. Linear: no server-side scope id — workspaceRoot
+        // guard above is the discriminator. linearProjectPickerValue is a client-
+        // side filter, not a server scope, so we do NOT compare it against the
+        // reply's scopeId.
+        if (lastIntegrationProvider === 'linear') {
+            return true;   // workspaceRoot already checked; same-workspace = same data
+        }
+        const mine = clickUpSelectedListId || '';
+        const theirs = String(
+            message.scopeId ?? message.listId ?? message.projectId ?? ''
+        );
+        if (!mine) { return true; }          // nothing selected — nothing to protect
+        return theirs === mine;
+    }
 
     let currentTicketTags = [];
     let availableLinearLabels = [];
@@ -830,21 +868,14 @@
     }
 
     // ── 2c: Status-filter change handler ──
-    // Status-filter change. Closed/done tickets are excluded from the default import,
-    // so selecting a closed status triggers a one-off import that INCLUDES closed
-    // (the "don't import closed until I switch the dropdown to closed" behavior).
+    // Status-filter change. Closed/done tickets are excluded from the default
+    // import. Selecting a closed status used to auto-trigger a one-off import
+    // that INCLUDED closed; that was a read action firing a destructive delta
+    // sweep, so it moved off the read path. To pull closed tickets in, click
+    // Refresh/Refetch (Refetch with a closed status selected imports closed).
     function _onClickUpStatusFilterChanged(value) {
         _resetSidebarDrillDown(); // filter targets the top-level list, not the subtask view
         clickUpProjectStatusFilterValue = value;
-        if (_isClickUpClosedStatus(value) && clickUpSelectedListId) {
-            vscode.postMessage({
-                type: 'refreshTicketsDelta',
-                workspaceRoot: ticketsWorkspaceRoot,
-                provider: 'clickup',
-                listId: clickUpSelectedListId,
-                includeClosed: true
-            });
-        }
         renderTicketsClickUpList();
         saveTicketsState();
     }
@@ -1262,7 +1293,12 @@
             type: 'getTicketSyncStatuses',
             provider: lastIntegrationProvider,
             ids: issues.map(t => t.id),
-            workspaceRoot: ticketsWorkspaceRoot || undefined
+            workspaceRoot: ticketsWorkspaceRoot || undefined,
+            // Pass the scope id so the backend can stamp it on the broadcast reply
+            // (cross-panel contamination fix). ClickUp scopes by listId; Linear has
+            // no server-side project scope but the picker value is sent for stamping.
+            listId: lastIntegrationProvider === 'clickup' ? (clickUpSelectedListId || undefined) : undefined,
+            projectId: lastIntegrationProvider === 'linear' ? (linearProjectPickerValue || undefined) : undefined
         });
     }
 
@@ -4537,14 +4573,9 @@
             renderTicketsLinearList();
             renderTicketsLinearTaskDetail();
             saveTicketsState();
-            if (linearProjectPickerValue) {
-                vscode.postMessage({
-                    type: 'refreshTicketsDelta',
-                    provider: 'linear',
-                    projectId: linearProjectPickerValue,
-                    workspaceRoot: ticketsWorkspaceRoot
-                });
-            }
+            // Reconciliation moved off the read path — selecting a project is a
+            // read/selection action and must not trigger a destructive delta
+            // sweep. Use Refresh/Refetch to pull remote deltas.
         });
 
         // State filter (Linear)
@@ -5520,17 +5551,6 @@ Instructions:
             const val = e.target.value.trim();
             vscode.postMessage({ type: 'saveIntegrationTicketSaveLocation', provider: 'linear', folderPath: val });
             updateApplyButtonsState();
-        });
-
-        // Auto-sync toggle
-        document.querySelectorAll('.tickets-auto-sync-toggle').forEach(el => {
-            el.addEventListener('change', (e) => {
-                const checked = e.target.checked === true;
-                document.querySelectorAll('.tickets-auto-sync-toggle').forEach(toggle => {
-                    toggle.checked = checked;
-                });
-                vscode.postMessage({ type: 'saveTicketsAutoSync', enabled: checked });
-            });
         });
 
         // Planning source checkboxes (Artifacts Panel Visibility)
@@ -6509,7 +6529,6 @@ Instructions:
                 if (providerSelector && lastIntegrationProvider) {
                     providerSelector.value = lastIntegrationProvider;
                 }
-                ticketsAutoSync = message.ticketsAutoSync === true;
                 if (isTicketsTabActive() && lastIntegrationProvider && !ticketsLoadedOnce) {
                     if (lastIntegrationProvider === 'clickup') {
                         loadClickUpSpaces();
@@ -6624,6 +6643,7 @@ Instructions:
                 break;
 
             case 'clickupProjectLoaded':
+                if (!_isForThisPanel(message)) { break; }
                 clickUpProjectIssues = message.tasks || [];
                 clickUpProjectStatus = 'loaded';
                 clickUpProjectMessage = '';
@@ -6636,16 +6656,11 @@ Instructions:
                     vscode.postMessage({ type: 'clickupLoadListStatuses', listId: clickUpSelectedListId, workspaceRoot: ticketsWorkspaceRoot });
                 }
                 renderTicketsTab();
-                if (clickUpSelectedListId) {
-                    vscode.postMessage({
-                        type: 'refreshTicketsDelta',
-                        workspaceRoot: ticketsWorkspaceRoot,
-                        provider: 'clickup',
-                        listId: clickUpSelectedListId
-                    });
-                } else {
-                    _requestTicketSyncStatuses();
-                }
+                // Reconciliation (delta sweep) moved off the read path — a list
+                // load is a read and must not trigger a destructive write. Sync
+                // badges still refresh (read); the sidebar still repaints from
+                // local files (read). Use Refresh/Refetch to pull remote deltas.
+                _requestTicketSyncStatuses();
                 loadLocalTicketFiles();
                 break;
 
@@ -6654,6 +6669,7 @@ Instructions:
                 break;
 
             case 'linearProjectLoaded':
+                if (!_isForThisPanel(message)) { break; }
                 linearProjectIssues = message.issues || [];
                 linearProjectStatus = 'loaded';
                 linearProjectMessage = '';
@@ -6669,11 +6685,16 @@ Instructions:
                 break;
 
             case 'clickupListStatusesLoaded':
+                if (!_isForThisPanel(message)) { break; }
                 availableClickUpStatuses = message.statuses || [];
                 if (lastIntegrationProvider === 'clickup') renderTicketsTab();
                 break;
 
             case 'clickupError': {
+                // A foreign panel's project-scope error must not clear this panel's
+                // spinner or stamp an error status over a healthy sidebar. Task /
+                // hierarchy scope errors are not project-scoped and pass through.
+                if (message.scope === 'project' && !_isForThisPanel(message)) { break; }
                 switch (message.scope) {
                     case 'hierarchy':
                         clickUpHierarchyLoading = false;
@@ -6691,6 +6712,7 @@ Instructions:
             }
 
             case 'linearError': {
+                if (message.scope === 'project' && !_isForThisPanel(message)) { break; }
                 switch (message.scope) {
                     case 'project':
                         linearProjectLoading = false;
@@ -7063,6 +7085,7 @@ Instructions:
             // ── 2c response arms: local file load, sync-status badges, file watcher ──
 
             case 'ticketSyncStatusesLoaded': {
+                if (!_isForThisPanel(message)) { break; }
                 const provider = message.provider;
                 const statuses = message.statuses || {};
                 if (provider === 'clickup') {
@@ -7078,6 +7101,7 @@ Instructions:
                 break;
             }
             case 'localTicketFilesListed': {
+                if (!_isForThisPanel(message)) { break; }
                 const localProvider = message.provider || lastIntegrationProvider;
                 const tickets = message.tickets || [];
                 if (!message.unscopedPlaceholder) {
@@ -7348,6 +7372,7 @@ Instructions:
             // (planning.js used `msg`, tickets.js uses `message`).
 
             case 'importAllTicketsComplete':
+                if (!_isForThisPanel(message)) { break; }
                 setTicketsLoadingState(false);
                 isImportingAll = false;
                 {
@@ -7577,9 +7602,6 @@ Instructions:
                     const input = document.getElementById('linear-ticket-import-folder');
                     if (input) input.value = message.path || '';
                 }
-                document.querySelectorAll('.tickets-auto-sync-toggle').forEach(toggle => {
-                    toggle.checked = message.ticketsAutoSync === true;
-                });
                 updateApplyButtonsState();
                 break;
             }

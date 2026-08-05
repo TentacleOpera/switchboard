@@ -100,6 +100,7 @@
         setup: ['setup', 'common'],
         memo: ['memo', 'common'],
         tickets: ['tickets', 'common'],
+        connections: ['connections', 'common'],
     };
 
     function wsUrl() {

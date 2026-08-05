@@ -1106,6 +1106,11 @@ export class LocalApiServer {
                 }
                 try {
                     customCols = parseCustomKanbanColumns(db.getConfigJsonSync?.('kanban.customColumns', []));
+                    // A configured custom column holding no cards is absent from the board
+                    // scan above. Append it AFTER the built-ins (precedence unchanged) so
+                    // its own ID resolves too — otherwise the label pass below would accept
+                    // 'My Column' while 'MY COLUMN' 400s, which is an incoherent surface.
+                    for (const c of customCols) { if (!ids.includes(c.id)) { ids.push(c.id); } }
                 } catch { /* labels fall back to IDs */ }
             }
         } catch { /* built-ins remain the floor */ }
@@ -1118,7 +1123,6 @@ export class LocalApiServer {
         // never silently pick one of its backing columns.
         const labelCandidates: string[] = [
             ...ids,
-            ...customCols.map(c => c.id).filter(id => !ids.includes(id)),
             ...Object.keys(LEGACY_COLUMN_LABELS).filter(id => !ids.includes(id))
         ];
         for (const id of labelCandidates) {
@@ -2548,7 +2552,7 @@ export class LocalApiServer {
     private async _handleGetColumns(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         await this._handleReadEndpoint(req, res, async () => {
             const builtIn = DEFAULT_KANBAN_COLUMNS;
-            let custom: { id: string; label: string; labelSource: string }[] = [];
+            let custom: { id: string; label: string; labelSource: string; displayModeOf?: string; legacyAliasOf?: string }[] = [];
             const db = await this._resolveDbFromQuery(req);
             if (db) {
                 try {
@@ -2563,7 +2567,22 @@ export class LocalApiServer {
                             .map((p: any) => p.kanbanColumn)
                             .filter((c: string) => c && !builtInIds.has(c))
                     ));
-                    custom = ids.map(id => ({ id, ...resolveColumnLabel(id, customCols) }));
+                    // Publish the RELATIONSHIP as well as the label: BACKLOG is a display
+                    // mode of CREATED and CODED a legacy alias of LEAD CODED, so a caller
+                    // that only sees `{id,label}` would read either as an independent peer
+                    // column — the exact misreading the labels exist to prevent. Sourced
+                    // from LEGACY_COLUMN_LABELS explicitly (never spread, so a custom column
+                    // that happens to share a legacy id keeps its own authored label).
+                    custom = ids.map(id => {
+                        const resolved = resolveColumnLabel(id, customCols);
+                        const legacy = LEGACY_COLUMN_LABELS[id];
+                        return {
+                            id,
+                            ...resolved,
+                            ...(legacy?.displayModeOf ? { displayModeOf: legacy.displayModeOf } : {}),
+                            ...(legacy?.legacyAliasOf ? { legacyAliasOf: legacy.legacyAliasOf } : {})
+                        };
+                    });
                 } catch { /* best-effort custom-column derivation */ }
             }
             const displayOnly = Object.entries(DISPLAY_ONLY_COLUMN_LABELS)
