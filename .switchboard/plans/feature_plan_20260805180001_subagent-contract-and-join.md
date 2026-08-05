@@ -83,13 +83,31 @@ Blocking read is the only shape that produces a real fan-in, keeps results in th
 **2b. The parent's own tool timeout bounds the block, so the join must be resumable.**
 *(Added during reconciliation — this is the largest unrecorded risk in the original plan.)*
 
-The blocking read is correct, but "the parent blocks until children finish" is not achievable as a single call, because the parent does not control how long its own shell invocation may run. A CLI agent issues the join through its shell/bash tool, and those tools impose their own ceilings — Claude Code's Bash tool defaults to 120 s with a 600 s maximum. A cheaper model implementing two files routinely exceeds ten minutes. Independently, the Node HTTP server sets **no** `requestTimeout` / `headersTimeout` / `keepAliveTimeout` (verified: no such assignment exists in `LocalApiServer.ts`), so Node's defaults govern a held request, and there is no existing long-poll anywhere in this server to inherit a proven pattern from.
+The blocking read is correct, but "the parent blocks until children finish" is not achievable as a single call, because the parent does not control how long its own shell invocation may run. A CLI agent issues the join through its shell/bash tool, and **that tool's timeout is the binding constraint** — not the network, and not the server.
+
+Measured ceilings per host CLI (external research, confirmed 2026-08-06):
+
+| CLI | Default | Max configurable | On timeout |
+|---|---|---|---|
+| GitHub Copilot CLI | **30 s** | ~1380 s | `TimeoutError` + partial output |
+| Claude Code | **120 s** | 600 s | `SIGINT`/`SIGTERM`, `[Command timed out after X seconds]` + partial output |
+| Cursor | **120 s** | 600 s+ | `^C`, "interrupted / timed out" + partial stdout |
+| Aider | 300 s | unlimited | `subprocess.TimeoutExpired` + partial output |
+| Devin | 600 s | 600 s (hard, not configurable) | `SIGKILL`/`SIGTERM` on the process group + partial logs |
+| Google Antigravity | 600 s | 1200 s | sandbox cancels + partial stream |
+
+The **defaults** are what matter, because an agent will not reconfigure its own harness mid-task. The floor across the CLIs this feature targets is 30–120 s — an order of magnitude below the 600 s a single blocking join would need for a real delegation. A cheaper model implementing two files routinely exceeds ten minutes.
+
+> **Superseded:** "Independently, the Node HTTP server sets **no** `requestTimeout` / `headersTimeout` / `keepAliveTimeout` (verified: no such assignment exists in `LocalApiServer.ts`), so Node's defaults govern a held request."
+> **Reason:** The verification (no assignment in `LocalApiServer.ts`) is correct, but the inference from it was wrong. Node's `requestTimeout` (default 300 s) bounds **only receipt of the incoming request** — headers plus body. Once the request stream ends and the `request` event fires, Node clears that timer and stops caring how long the handler takes to write the response. `headersTimeout` (60 s) is cleared as soon as headers parse; `keepAliveTimeout` (5 s) applies *between* requests; `server.timeout` has defaulted to `0` (disabled) since Node v13. These defaults are identical across Node 18/20/22/24, which covers every runtime in play (VS Code 1.101+ ships Node 22.15.x under `ELECTRON_RUN_AS_NODE=1`; older builds 20.x/18.x). **Node was never the constraint.** Presenting it as a co-equal reason weakened the argument by attaching it to a false claim.
+> **Replaced with:** The constraint is the **caller's tool timeout, alone**. Node still needs two defensive measures, but for socket hygiene rather than duration: set `req.setTimeout(0)` / `res.setTimeout(0)` on the join route so no inactivity timer can abort a deliberately-held response, and register `req.on('close', …)` to release the wait slot the instant the client disconnects.
 
 Therefore the join is specified as a **bounded, resumable long-poll**, not an unbounded block:
 
-- `timeoutMs` is capped server-side to a value comfortably below both the caller's likely tool ceiling and Node's request default. Default it low enough to be safe by construction rather than trusting callers.
-- **A repeat `await` on the same `batchId` is idempotent and resumes**: it returns current per-child state and keeps waiting for the rest. Re-joining is the normal path, not an error path.
+- **`timeoutMs` defaults to 60 s and is hard-capped server-side at 90 s.** That fits inside the 120 s default of Claude Code and Cursor with real margin, and inside every configurable ceiling above. It does *not* fit GitHub Copilot CLI's 30 s default — a Copilot-hosted parent must raise `timeoutSec`, and the skill should say so rather than leaving it to be discovered as a mystery failure. Cap server-side; do not trust a caller-supplied value.
+- **A repeat `await` on the same `batchId` is idempotent and resumes**: it returns current per-child state and keeps waiting for the rest. Re-joining is the normal path, not an error path. A 15-minute delegation is ~10–15 cheap iterations.
 - The child-side and parent-side skills teach the loop explicitly: *join → if `complete:false` and no per-child terminal status, join again.* Each iteration is one cheap tool call returning promptly; the parent stays idle-but-cheap across many of them.
+- **The taught curl MUST carry `--max-time`** — see the orphaned-client hazard in Side Effects. This is a correctness requirement, not a nicety.
 
 This preserves every property the blocking read was chosen for — results land in the parent's turn, fan-in is real, ordering is kept — while surviving a bounded tool timeout. A single unbounded block would appear to work in a fast test and fail exactly when delegation pays off, on the long jobs.
 

@@ -263,12 +263,14 @@ async function main() {
         const { ensureWorkspaceIdentity } = require('../services/WorkspaceIdentityService');
 
         let target: string = 'both';
+        let targetExplicit = false;
         for (let i = 3; i < process.argv.length; i++) {
             if (process.argv[i] === '--target' && process.argv[i + 1]) {
                 target = process.argv[++i];
+                targetExplicit = true;
             }
         }
-        if (!['agents', 'claude', 'both'].includes(target)) {
+        if (targetExplicit && !['agents', 'claude', 'both'].includes(target)) {
             console.error(`[switchboard] --target must be 'agents', 'claude', or 'both' (got '${target}')`);
             process.exit(1);
         }
@@ -277,7 +279,24 @@ async function main() {
 
         const configProvider = new StandaloneHostPathConfigProvider(workspaceRoot);
         KanbanDatabase.setPathConfigProvider(configProvider);
-        await configProvider.updateConfigWorkspace('protocol.target', target);
+        if (targetExplicit) {
+            // Persist via the EXISTING provider write path so _getProtocolTargets honours
+            // --target (the shim reads switchboard.protocol.target from
+            // .switchboard/config.json). Do NOT use getConfiguration().update() — the
+            // shim's update() is a deliberate no-op (vscodeShim.ts:178).
+            await configProvider.updateConfigWorkspace('protocol.target', target);
+        } else {
+            // No --target: adopt whatever the workspace already declares. Writing the
+            // 'both' default unconditionally would silently clobber an existing
+            // 'agents'/'claude' pin on every re-init and then seed the very protocol
+            // layer the user excluded — init is required to be re-runnable safely.
+            target = configProvider.getConfigStringWithDefault('protocol.target', 'both');
+        }
+        // Mirror _getProtocolTargets' exact derivation (ControlPlaneMigrationService.ts:752)
+        // so the report cannot claim a layer the bootstrap did not scaffold — including
+        // the case where a config value is neither 'agents', 'claude', nor 'both'.
+        const reportAgents = target === 'agents' || target === 'both';
+        const reportClaude = target === 'claude' || target === 'both';
 
         const repoRoot = path.resolve(__dirname, '..', '..');
 
@@ -299,25 +318,37 @@ async function main() {
 
             await ensureWorkspaceIdentity(workspaceRoot);
 
-            if (!fs.existsSync(path.join(repoRoot, '.agents'))) {
-                console.warn(`[switchboard] Warning: bundled .agents/ not found at ${repoRoot}. Directory structure created but protocol files were not copied.`);
+            // bootstrapControlPlaneLayout silently skips the bundled-file copy when the
+            // package root lacks .agents/ (ControlPlaneMigrationService.ts:693); AGENTS.md
+            // and the CLAUDE.md seed are gated on <repoRoot>/AGENTS.md separately (:703,
+            // :729), so both have to be checked or init reports files it never wrote.
+            const missingBundled: string[] = [];
+            if (!fs.existsSync(path.join(repoRoot, '.agents'))) { missingBundled.push('.agents/'); }
+            if (!fs.existsSync(path.join(repoRoot, 'AGENTS.md'))) { missingBundled.push('AGENTS.md'); }
+            if (missingBundled.length > 0) {
+                console.warn(`[switchboard] Warning: bundled ${missingBundled.join(' and ')} not found at ${repoRoot}. Directory structure created, but those protocol files were not copied.`);
             }
+
+            // Report what is actually on disk rather than what was requested.
+            const reportLine = (relativePath: string, label: string): void => {
+                if (fs.existsSync(path.join(workspaceRoot, relativePath))) {
+                    console.log(`[switchboard]   ${label}`);
+                }
+            };
 
             console.log('[switchboard] Scaffolding complete.');
             console.log('[switchboard]   .switchboard/  (plans, inbox, archive, kanban.db)');
-            console.log('[switchboard]   .agents/       (workflows, skills)');
-            if (target === 'agents' || target === 'both') {
-                console.log('[switchboard]   AGENTS.md      (protocol file)');
+            reportLine('.agents', '.agents/       (workflows, skills)');
+            if (reportAgents) { reportLine('AGENTS.md', 'AGENTS.md      (protocol file)'); }
+            if (reportClaude) {
+                reportLine('CLAUDE.md', 'CLAUDE.md      (Claude Code managed block)');
+                reportLine(path.join('.claude', 'skills'), '.claude/skills (mirror)');
             }
-            if (target === 'claude' || target === 'both') {
-                console.log('[switchboard]   CLAUDE.md      (Claude Code managed block)');
-                console.log('[switchboard]   .claude/skills (mirror)');
-            }
-            console.log('[switchboard]   worktrees/');
+            reportLine('worktrees', 'worktrees/');
             if (!fs.existsSync(path.join(workspaceRoot, '.git'))) {
                 console.log(`[switchboard] Note: no git repository detected in ${workspaceRoot}.`);
             }
-            process.exit(0);
+            exitFlushed(0);
         } catch (err) {
             console.error(`[switchboard] Init failed: ${err instanceof Error ? err.message : String(err)}`);
             process.exit(1);
