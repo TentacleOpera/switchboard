@@ -1,4 +1,5 @@
 import { URL } from 'url';
+import { isLoopbackHostHeader, isLoopbackHostname } from '../utils/loopbackHostname';
 
 export function parseCookies(req: any): Record<string, string> {
     const raw = req.headers?.cookie || '';
@@ -12,23 +13,37 @@ export function parseCookies(req: any): Record<string, string> {
     return result;
 }
 
+/**
+ * Both guards below delegate to `utils/loopbackHostname` — the SAME predicate
+ * `LocalApiServer._isAllowedHost` / `_isLocalhostOrigin` and the standalone CLI's
+ * `--hostname` validation use. They used to carry their own copies, and the copies
+ * did not learn about the reserved `.localhost` TLD when `--hostname
+ * switchboard.localhost` shipped. The result: a board served at
+ * `switchboard.localhost` passed the HTTP guard and then had every WebSocket
+ * upgrade 403'd here — `Forbidden Host` in standalone (the socket is on
+ * `location.host`) and `Forbidden Origin` under the extension host (the socket is
+ * on the pty host's 127.0.0.1 port but the page's Origin is the `.localhost` name).
+ * Terminals rendered and never streamed; the board rendered and never took a push.
+ *
+ * The `loopback-hostname-contract` test asserts "no second predicate", but only
+ * over LocalApiServer.ts — this file was the second predicate it did not look at.
+ * It now covers both. Do not re-inline either check.
+ */
 export function isLocalhostOrigin(origin: string): boolean {
     try {
         const u = new URL(origin);
+        // The editor webview's origin is `vscode-webview://<uuid>`: not a network
+        // name at all, so the loopback predicate cannot speak to it. Kept here
+        // rather than pushed into the shared module, which guards HTTP hosts.
         if (u.protocol === 'vscode-webview:') { return true; }
-        const h = u.hostname;
-        return h === '127.0.0.1' || h === 'localhost' || h === '::1' || h === '[::1]';
+        return isLoopbackHostname(u.hostname);
     } catch {
         return false;
     }
 }
 
 export function isAllowedHost(host: string): boolean {
-    const lower = host.toLowerCase();
-    if (lower.startsWith('127.0.0.1:') || lower.startsWith('localhost:')) { return true; }
-    if (lower === '127.0.0.1' || lower === 'localhost' || lower === '[::1]') { return true; }
-    if (lower.startsWith('[::1]:')) { return true; }
-    return false;
+    return isLoopbackHostHeader(host);
 }
 
 export function constantTimeEqual(a: string, b: string): boolean {

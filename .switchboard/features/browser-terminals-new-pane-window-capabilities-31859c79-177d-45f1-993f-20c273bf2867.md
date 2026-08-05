@@ -20,8 +20,8 @@ Three additive capabilities for the browser Terminals panel: repurpose an unused
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Add "New Window" Button to Pop Out the Full Terminals Panel](../plans/feature_plan_20260804110138_terminals-new-window-popout.md) — **PLAN REVIEWED**
-- [ ] [Paste Images into Browser Terminals](../plans/feature_plan_20260804132725_paste_images_into_browser_terminals.md) — **PLAN REVIEWED**
-- [ ] [Kanban-Mode Pane in the Terminals Grid](../plans/feature_plan_20260804135951_kanban-mode-pane-in-terminals-grid.md) — **PLAN REVIEWED**
+- [ ] [Add "New Window" Button to Pop Out the Full Terminals Panel](../plans/feature_plan_20260804110138_terminals-new-window-popout.md) — **LEAD CODED**
+- [ ] [Paste Images into Browser Terminals](../plans/feature_plan_20260804132725_paste_images_into_browser_terminals.md) — **LEAD CODED**
+- [ ] [Kanban-Mode Pane in the Terminals Grid](../plans/feature_plan_20260804135951_kanban-mode-pane-in-terminals-grid.md) — **LEAD CODED**
 <!-- END SUBTASKS -->
 

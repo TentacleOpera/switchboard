@@ -366,6 +366,34 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const http = require('http');
         const port = this._ptyHostPort;
         try {
+            // ptyPasteImage carries a raw Buffer that does not survive
+            // JSON.stringify/parse — forward it as application/octet-stream with
+            // name + mimeType in the query string, matching ptyHost's raw-binary
+            // branch. The standalone host (bootstrap.ts) receives the same verb
+            // via LocalApiServer's own raw-binary branch, so both hosts share the
+            // transport contract.
+            if (verb === 'ptyPasteImage' && payload && Buffer.isBuffer(payload.imageBuffer)) {
+                const qs = new URLSearchParams({
+                    name: payload.name || '',
+                    mimeType: payload.mimeType || 'image/png'
+                });
+                const result = await new Promise<string>((resolve, reject) => {
+                    const req = http.request({
+                        hostname: '127.0.0.1',
+                        port,
+                        path: `/api/pty/${encodeURIComponent(verb)}?${qs.toString()}`,
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/octet-stream' }
+                    }, (res: any) => {
+                        let body = '';
+                        res.on('data', (c: any) => { body += c; });
+                        res.on('end', () => resolve(body));
+                    });
+                    req.on('error', reject);
+                    req.end(payload.imageBuffer);
+                });
+                return JSON.parse(result);
+            }
             const resData = await new Promise<string>((resolve, reject) => {
                 const req = http.request({
                     hostname: '127.0.0.1',

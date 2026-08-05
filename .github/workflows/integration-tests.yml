@@ -105,6 +105,14 @@ jobs:
       - name: Loopback hostname contract (rebinding guard, one predicate, CSP parity)
         run: npm run test:contract:loopback-hostname
 
+      # Cross-file mismatches that are invisible file-by-file, and each one shipped:
+      # terminals.js called term.onFocus (an INTERNAL xterm emitter) and the throw took
+      # the WebSocket with it — panes read "connecting" forever; tickets.html shipped a
+      # CSP with no connect-src, so default-src blocked every fetch and the browser
+      # Tickets panel reached no source at all.
+      - name: Browser panel runtime surface (xterm API subset, connect-src reachability)
+        run: npm run test:contract:panel-runtime-surface
+
       # .vscodeignore negations override ignores UNCONDITIONALLY, so a blanket
       # un-ignore of node-pty silently re-includes 28 MB of .pdb debug symbols past
       # the Marketplace upload cap. This runs vsce's real filter over the real tree.

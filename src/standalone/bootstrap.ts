@@ -1,6 +1,7 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as http from 'http';
+import * as os from 'os';
 import * as path from 'path';
 import { URL } from 'url';
 import { KanbanDatabase } from '../services/KanbanDatabase';
@@ -1152,6 +1153,50 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     return { success: true, cleared: active.length };
                 }
 
+                case 'ptyPasteImage': {
+                    const handle = ptyFleetService.get(payload.name);
+                    if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
+                    if (handle.status !== 'active') { return { success: false, error: `Terminal ${payload.name} is not active` }; }
+
+                    const imageBuffer: Buffer = payload.imageBuffer;
+                    const mimeType: string = payload.mimeType || 'image/png';
+                    if (!imageBuffer || !Buffer.isBuffer(imageBuffer)) {
+                        return { success: false, error: 'Missing imageBuffer payload' };
+                    }
+
+                    // 4 MB ceiling — comfortably under the Anthropic API's hard 5 MB
+                    // per-image limit. An oversize image that reaches the CLI triggers
+                    // "session poisoning" (the rejected payload stays in history and
+                    // bricks every later turn), so rejecting HERE, before the path is
+                    // injected, is the safety boundary.
+                    const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+                    if (imageBuffer.length > MAX_IMAGE_BYTES) {
+                        return { success: false, error: `Image exceeds max size (${MAX_IMAGE_BYTES} bytes)` };
+                    }
+
+                    const ext = mimeType === 'image/jpeg' ? '.jpg'
+                        : mimeType === 'image/gif' ? '.gif'
+                        : mimeType === 'image/webp' ? '.webp'
+                        : '.png';
+
+                    const tempDir = path.join(os.tmpdir(), 'switchboard-paste');
+                    try { await fs.promises.mkdir(tempDir, { recursive: true }); } catch { /* may already exist */ }
+
+                    const fileName = `paste-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
+                    const filePath = path.join(tempDir, fileName);
+                    await fs.promises.writeFile(filePath, imageBuffer);
+
+                    // Inject the file path into the PTY (no trailing newline — let the
+                    // user press Enter). '@' prefix is Claude Code's explicit file-load
+                    // signal; quote when the path contains whitespace (Windows temp dirs
+                    // can include spaces); bracketed-paste wrap keeps it as one paste
+                    // block — no premature execution, user can append descriptive text.
+                    const atPath = /\s/.test(filePath) ? `@"${filePath}"` : `@${filePath}`;
+                    handle.write(`\x1b[200~${atPath}\x1b[201~`);
+
+                    return { success: true, filePath };
+                }
+
                 case 'triggerAction': {
                     const sourceColumn: string | undefined = payload.column;
                     const explicitTarget: string | undefined = payload.targetColumn;
@@ -1405,6 +1450,26 @@ Each plan file must include:
     // entry from a previous run would otherwise satisfy /kanban/dispatch's
     // no-live-terminal pre-flight and route work at a dead pid.
     await PtyFleetService.purgePtyTerminals(db);
+
+    // Sweep pasted-image temp files older than 1 hour every 10 minutes. The
+    // ptyPasteImage verb writes screenshots to os.tmpdir()/switchboard-paste/;
+    // without this, long sessions accumulate files unbounded. .unref() so the
+    // timer never holds the process open.
+    const PASTE_TEMP_DIR = path.join(os.tmpdir(), 'switchboard-paste');
+    const PASTE_TTL_MS = 60 * 60 * 1000; // 1 hour
+    setInterval(async () => {
+        try {
+            const files = await fs.promises.readdir(PASTE_TEMP_DIR);
+            const now = Date.now();
+            for (const f of files) {
+                const fp = path.join(PASTE_TEMP_DIR, f);
+                const stat = await fs.promises.stat(fp);
+                if (now - stat.mtimeMs > PASTE_TTL_MS) {
+                    await fs.promises.unlink(fp).catch(() => {});
+                }
+            }
+        } catch { /* dir may not exist yet */ }
+    }, 10 * 60 * 1000).unref();
 
     // Only wired when PTYs actually work. Left undefined, LocalApiServer's upgrade
     // router destroys `/ws/terminal` outright — the same posture the extension host

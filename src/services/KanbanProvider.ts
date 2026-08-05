@@ -10315,6 +10315,36 @@ ${FOCUS_DIRECTIVE}`;
                 this.postMessage({ type: 'kanbanStructure', structure, customColumns });
                 return { success: true, structure, customColumns };
             }
+            case 'getBoardCards': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    return { success: false, error: 'No workspace root resolved' };
+                }
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !(await db.ensureReady())) {
+                    return { success: false, error: 'Kanban DB unavailable' };
+                }
+                // Canonical wsId resolution — mirrors getFullStateMessages (line 1076):
+                // getWorkspaceId takes NO argument and has a getDominantWorkspaceId fallback.
+                const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+                if (!wsId) {
+                    return { success: false, error: 'Workspace not registered' };
+                }
+                const repoScope = this.getRepoScopeFilter() ?? null;
+                const activeRows = repoScope
+                    ? await db.getBoardFilteredByProject(wsId, null, repoScope)
+                    : await db.getBoard(wsId);
+                const completedRows = repoScope
+                    ? await db.getCompletedPlansFilteredByProject(wsId, null, repoScope)
+                    : await db.getCompletedPlans(wsId);
+                const timeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
+                // Canonical pipeline — same as getFullStateMessages (line 1094).
+                const cards = await this._buildBoardCards(db, wsId, workspaceRoot, activeRows, completedRows, timeoutMs);
+                // Optional column filter (narrow to one column for the kanban-mode pane).
+                const column = typeof msg.column === 'string' ? msg.column : null;
+                const filtered = column ? cards.filter(c => c.column === column) : cards;
+                return { success: true, cards: filtered };
+            }
             case 'getAutoArchiveConfig': {
                 const payload = await this.autoArchiveGetConfigPayload(msg.workspaceRoot);
                 this.postMessage(payload);

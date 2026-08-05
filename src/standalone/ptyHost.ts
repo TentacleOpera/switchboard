@@ -1,5 +1,7 @@
 import * as crypto from 'crypto';
+import * as fs from 'fs';
 import * as http from 'http';
+import * as os from 'os';
 import * as path from 'path';
 import { parse as parseUrl } from 'url';
 import { isPtyAvailable } from './ptyBackend';
@@ -41,6 +43,26 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
     const fleet = new PtyFleetService(workspaceRoot);
     const token = crypto.randomBytes(32).toString('hex');
     const gateway = new TerminalWsGateway(fleet, async () => token);
+
+    // Sweep pasted-image temp files older than 1 hour every 10 minutes. The
+    // ptyPasteImage verb writes screenshots to os.tmpdir()/switchboard-paste/;
+    // without this, long sessions accumulate files unbounded. .unref() so the
+    // timer never holds the process open.
+    const PASTE_TEMP_DIR = path.join(os.tmpdir(), 'switchboard-paste');
+    const PASTE_TTL_MS = 60 * 60 * 1000; // 1 hour
+    setInterval(async () => {
+        try {
+            const files = await fs.promises.readdir(PASTE_TEMP_DIR);
+            const now = Date.now();
+            for (const f of files) {
+                const fp = path.join(PASTE_TEMP_DIR, f);
+                const stat = await fs.promises.stat(fp);
+                if (now - stat.mtimeMs > PASTE_TTL_MS) {
+                    await fs.promises.unlink(fp).catch(() => {});
+                }
+            }
+        } catch { /* dir may not exist yet */ }
+    }, 10 * 60 * 1000).unref();
 
     const handlePtyVerb = async (verb: string, payload: any): Promise<any> => {
         switch (verb) {
@@ -102,6 +124,49 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                 }
                 return { success: false, error: `Terminal ${payload.name} is not active` };
             }
+            case 'ptyPasteImage': {
+                const handle = fleet.get(payload.name);
+                if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
+                if (handle.status !== 'active') { return { success: false, error: `Terminal ${payload.name} is not active` }; }
+
+                const imageBuffer: Buffer = payload.imageBuffer;
+                const mimeType: string = payload.mimeType || 'image/png';
+                if (!imageBuffer || !Buffer.isBuffer(imageBuffer)) {
+                    return { success: false, error: 'Missing imageBuffer payload' };
+                }
+
+                // 4 MB ceiling — comfortably under the Anthropic API's hard 5 MB
+                // per-image limit. An oversize image that reaches the CLI triggers
+                // "session poisoning" (the rejected payload stays in history and
+                // bricks every later turn), so rejecting HERE, before the path is
+                // injected, is the safety boundary.
+                const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+                if (imageBuffer.length > MAX_IMAGE_BYTES) {
+                    return { success: false, error: `Image exceeds max size (${MAX_IMAGE_BYTES} bytes)` };
+                }
+
+                const ext = mimeType === 'image/jpeg' ? '.jpg'
+                    : mimeType === 'image/gif' ? '.gif'
+                    : mimeType === 'image/webp' ? '.webp'
+                    : '.png';
+
+                const tempDir = path.join(os.tmpdir(), 'switchboard-paste');
+                try { await fs.promises.mkdir(tempDir, { recursive: true }); } catch { /* may already exist */ }
+
+                const fileName = `paste-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
+                const filePath = path.join(tempDir, fileName);
+                await fs.promises.writeFile(filePath, imageBuffer);
+
+                // Inject the file path into the PTY (no trailing newline — let the
+                // user press Enter). '@' prefix is Claude Code's explicit file-load
+                // signal; quote when the path contains whitespace (Windows temp dirs
+                // can include spaces); bracketed-paste wrap keeps it as one paste
+                // block — no premature execution, user can append descriptive text.
+                const atPath = /\s/.test(filePath) ? `@"${filePath}"` : `@${filePath}`;
+                handle.write(`\x1b[200~${atPath}\x1b[201~`);
+
+                return { success: true, filePath };
+            }
             case 'ptySendPrompt': {
                 // Dispatch delivery, not a raw write. sendPromptToPty owns bracketed-paste
                 // framing, chunked writes and the confirm CR — a raw write submits a
@@ -134,6 +199,32 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
         const parsed = parseUrl(req.url || '', true);
         if (req.method === 'POST' && parsed.pathname?.startsWith('/api/pty/')) {
             const verb = parsed.pathname.replace('/api/pty/', '');
+
+            // Raw binary body for ptyPasteImage — the extension host forwards the
+            // image as application/octet-stream (a Buffer does not survive
+            // JSON.stringify/parse). name + mimeType travel in the query string.
+            if (verb === 'ptyPasteImage' && req.headers['content-type'] === 'application/octet-stream') {
+                const chunks: Buffer[] = [];
+                req.on('data', (chunk: Buffer) => { chunks.push(chunk); });
+                req.on('end', async () => {
+                    const imageBuffer = Buffer.concat(chunks);
+                    const payload = {
+                        name: parsed.query.name || '',
+                        mimeType: parsed.query.mimeType || 'image/png',
+                        imageBuffer
+                    };
+                    try {
+                        const result = await handlePtyVerb(verb, payload);
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify(result));
+                    } catch (err) {
+                        res.writeHead(500, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : String(err) }));
+                    }
+                });
+                return;
+            }
+
             let body = '';
             req.on('data', chunk => { body += chunk; });
             req.on('end', async () => {

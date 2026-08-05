@@ -171,6 +171,16 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             workspaceRoot: { type: 'string' },
         },
     },
+    // Read-only board-cards verb for the terminals kanban-mode pane. Both fields
+    // optional: column narrows to one column; workspaceRoot defaults to the
+    // server's workspace root. Permissive per PRD contract #5 — the arm
+    // dereferences neither as required.
+    getBoardCards: {
+        fields: {
+            column: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
     // `initiatorProject` (optional, never required — a required field would reject
     // valid payloads from shipped webview builds) is the initiating client's own
     // view filter; the arm prefers it over the last-writer-wins DB row. The

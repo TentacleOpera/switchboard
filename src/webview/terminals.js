@@ -17,6 +17,20 @@
     // empty seat reserves a slot nothing can fill, and it is persisted, so the soft-lock
     // survives reload. sanitizePaneAssignments enforces this on every list refresh.
     let pinnedPanes = [];
+    // Per-slot pane content mode, index-aligned with paneAssignments. 'terminal'
+    // renders a terminal viewport (the existing behavior); 'kanban' renders a
+    // live kanban column viewer in an otherwise-empty slot. Padded to
+    // getMaxSlotCount() and NEVER trimmed on layout shrink — mirrors
+    // paneAssignments' documented no-trim design so a kanban-mode slot's mode
+    // and chosen column survive a shrink-grow round trip.
+    let paneModes = [];
+    // Per-slot chosen kanban column id (only meaningful when paneModes[i]==='kanban').
+    let kanbanPaneColumn = [];
+    // index -> cards[] cache populated by the poll loop.
+    let kanbanPaneCards = {};
+    // Cached flat ordered column list from getKanbanStructure.
+    let kanbanColumnsCache = [];
+    let kanbanPollTimer = null;
     const collapsedGroups = new Set();
     let osNotifyEnabled = false;
 
@@ -317,12 +331,39 @@
             initialAssignmentDone = true;
         }
 
+        // Mark standalone (top-level window, not inside the shell iframe) so CSS
+        // can hide the New Window button — popping out an already-popped-out panel
+        // is redundant. Solo mode hides the whole toolbar, so this is additive.
+        if (window.parent === window) {
+            document.body.classList.add('is-standalone');
+        }
+
         // Before any terminal is constructed — buildTerminalTheme() reads the CSS
         // variables this class selects.
         resolveInitialTheme();
 
         if (btnNew) {
             btnNew.addEventListener('click', () => onNewTerminalClicked());
+        }
+
+        const btnNewWindow = document.getElementById('btn-new-window');
+        if (btnNewWindow) {
+            btnNewWindow.addEventListener('click', () => {
+                const url = '/terminals';
+                const features = 'width=1200,height=800';
+                let popout = null;
+                try {
+                    popout = window.open(url, 'sb-terminals-panel', features);
+                } catch { /* ignore */ }
+                if (!popout || popout.closed) {
+                    // Popup blocked — no in-cockpit fallback sheds the shell sidebar,
+                    // so tell the user instead of silently doing nothing. A console
+                    // warning is invisible to users who never open devtools.
+                    showPaneToast('Popup blocked — allow popups for this site to pop out the terminals panel.');
+                    btnNewWindow.disabled = true;
+                    setTimeout(() => { btnNewWindow.disabled = false; }, 2000);
+                }
+            });
         }
         const pickerCancel = document.getElementById('role-picker-cancel');
         if (pickerCancel) {
@@ -526,6 +567,8 @@
         const savedCollapsed = await loadSetting('terminals.collapsedGroups', []);
         const savedNotify = await loadSetting('terminals.osNotify', false);
         const savedPins = await loadSetting('terminals.pinnedPanes', []);
+        const savedModes = await loadSetting('terminals.paneModes', []);
+        const savedKanbanCols = await loadSetting('terminals.kanbanPaneColumn', []);
 
         if (LAYOUT_MODES.includes(savedMode)) {
             currentLayout = savedMode;
@@ -536,6 +579,12 @@
         }
         if (Array.isArray(savedPins)) {
             pinnedPanes = savedPins.map(Boolean);
+        }
+        if (Array.isArray(savedModes)) {
+            paneModes = savedModes.map(m => m === 'kanban' ? 'kanban' : 'terminal');
+        }
+        if (Array.isArray(savedKanbanCols)) {
+            kanbanPaneColumn = savedKanbanCols;
         }
         if (Array.isArray(savedCollapsed)) {
             savedCollapsed.forEach(c => collapsedGroups.add(c));
@@ -551,6 +600,8 @@
         saveSetting('terminals.paneAssignments', paneAssignments);
         saveSetting('terminals.pinnedPanes', pinnedPanes);
         saveSetting('terminals.collapsedGroups', Array.from(collapsedGroups));
+        saveSetting('terminals.paneModes', paneModes);
+        saveSetting('terminals.kanbanPaneColumn', kanbanPaneColumn);
     }
 
     async function fetchTerminalList() {
@@ -1393,6 +1444,12 @@
         const slotCount = getSlotCount(effectiveLayout);
         paneGridEl.className = `pane-grid layout-${effectiveLayout}`;
 
+        // Pad paneModes to getMaxSlotCount() — never trim. Mirrors paneAssignments'
+        // documented no-trim design (see comment below at the assignments loop): a
+        // kanban-mode slot's mode + chosen column survive a shrink-grow round trip.
+        while (paneModes.length < getMaxSlotCount()) { paneModes.push('terminal'); }
+        while (kanbanPaneColumn.length < getMaxSlotCount()) { kanbanPaneColumn.push(undefined); }
+
         // Sampled BEFORE any mutation. Both the surplus-pane removal below and the
         // per-pane update can drop the caret (removing or re-parenting the focused
         // element sends focus to <body>), so a flag computed after either one would
@@ -1456,6 +1513,14 @@
         // inside the grid and this is a no-op. Idempotent and O(panes).
         if (!paneGridEl.contains(document.activeElement)) {
             clearCaretRing();
+        }
+
+        // Start the kanban poll if any rendered slot is in kanban mode. The poll
+        // is self-correcting: it stops itself when no kanban slots remain.
+        if (paneModes.slice(0, slotCount).some(m => m === 'kanban')) {
+            startKanbanPoll();
+        } else {
+            stopKanbanPoll();
         }
     }
 
@@ -1574,6 +1639,20 @@
         const terse = isTerseLayout();
         const slotCount = getSlotCount(effectiveLayout);
 
+        // Solo mode pins one terminal and never offers grid choices — kanban mode
+        // is meaningless there. Force terminal mode so no toggle renders.
+        if (document.body.classList.contains('is-solo')) {
+            paneModes[index] = 'terminal';
+        }
+
+        // Kanban-mode pane: render a live kanban column viewer in this slot
+        // instead of a terminal viewport. Only on empty slots — a kanban pane
+        // must NOT displace an assigned terminal (paneAssignments is untouched).
+        if (paneModes[index] === 'kanban' && !assignedName && !document.body.classList.contains('is-solo')) {
+            renderKanbanPane(paneEl, index);
+            return;
+        }
+
         titleEl.textContent = '';
         if (assignedName) {
             const idxEl = document.createElement('span');
@@ -1658,8 +1737,204 @@
             const emptySlot = document.createElement('div');
             emptySlot.className = 'pane-empty-slot';
             emptySlot.textContent = 'Click terminal in sidebar to assign';
+            // Kanban-mode toggle: repurpose this dead slot as a live kanban column
+            // viewer. Suppressed in solo mode (one pinned terminal, no grid) and in
+            // a single-slot grid (no surplus slot to repurpose).
+            if (slotCount > 1 && !document.body.classList.contains('is-solo')) {
+                const kanbanToggle = document.createElement('button');
+                kanbanToggle.className = 'pane-mode-toggle';
+                kanbanToggle.textContent = 'kanban mode';
+                kanbanToggle.title = 'Show a kanban column here instead';
+                kanbanToggle.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    paneModes[index] = 'kanban';
+                    if (!kanbanPaneColumn[index]) { kanbanPaneColumn[index] = 'CREATED'; }
+                    saveLayoutSettings();
+                    renderPaneGrid();
+                    fetchBoardCardsForPane(index);
+                });
+                emptySlot.appendChild(kanbanToggle);
+            }
             contentEl.appendChild(emptySlot);
         }
+    }
+
+    /** Merge getKanbanStructure's `structure` (built-in + custom, ordered) into a
+     *  flat {id,label} list for the column picker. `customColumns` is the
+     *  user-editable subset already folded into `structure`, so it is not
+     *  re-merged here — re-merging would duplicate custom rows. */
+    function buildColumnList(structure, customColumns) {
+        const list = [];
+        if (Array.isArray(structure)) {
+            for (const item of structure) {
+                if (item && item.id) {
+                    list.push({ id: item.id, label: item.label || item.id, order: Number(item.order) || 0 });
+                }
+            }
+        }
+        list.sort((a, b) => (a.order - b.order) || String(a.label).localeCompare(String(b.label)));
+        return list;
+    }
+
+    /** Render a kanban column viewer into a pane slot (replaces the terminal
+     *  viewport). The pane header carries a column picker + a "term" toggle to
+     *  switch back to terminal mode; the body lists plan rows with "Copy &
+     *  Advance" buttons that hit the existing promptSelected verb. */
+    function renderKanbanPane(paneEl, index) {
+        paneEl.classList.remove('is-input-live', 'is-input-connecting', 'is-input-readonly');
+        const titleEl = paneEl.querySelector('.pane-title');
+        const actionsEl = paneEl.querySelector('.pane-actions');
+        const contentEl = paneEl.querySelector('.pane-content');
+
+        titleEl.textContent = '';
+        const idxEl = document.createElement('span');
+        idxEl.className = 'pane-index-chip';
+        idxEl.textContent = `P${index + 1}`;
+        titleEl.appendChild(idxEl);
+
+        const picker = document.createElement('select');
+        picker.className = 'kanban-pane-column-picker';
+        picker.title = 'Kanban column to display';
+        for (const col of kanbanColumnsCache) {
+            const opt = document.createElement('option');
+            opt.value = col.id;
+            opt.textContent = col.label;
+            if (col.id === kanbanPaneColumn[index]) { opt.selected = true; }
+            picker.appendChild(opt);
+        }
+        picker.addEventListener('change', () => {
+            kanbanPaneColumn[index] = picker.value;
+            saveLayoutSettings();
+            fetchBoardCardsForPane(index);
+        });
+        titleEl.appendChild(picker);
+
+        // Reuse the actions slot: hide pin/clear/hide (they are terminal-only)
+        // and repurpose the block for a single "term" toggle back to terminal mode.
+        actionsEl.style.display = '';
+        for (let i = 0; i < actionsEl.children.length; i++) {
+            actionsEl.children[i].style.display = 'none';
+        }
+        const termBtn = actionsEl.children[0]; // reuse first btn slot
+        termBtn.style.display = '';
+        termBtn.textContent = 'term';
+        termBtn.title = 'Switch this pane to terminal mode';
+        termBtn.className = 'btn-unassign-pane';
+        termBtn.onclick = (e) => {
+            e.stopPropagation();
+            paneModes[index] = 'terminal';
+            saveLayoutSettings();
+            renderPaneGrid();
+        };
+
+        // Body: plan list
+        contentEl.textContent = '';
+        const cards = kanbanPaneCards[index] || [];
+        if (cards.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'pane-empty-slot';
+            empty.textContent = `No plans in ${kanbanPaneColumn[index] || '—'}`;
+            contentEl.appendChild(empty);
+            return;
+        }
+        const list = document.createElement('div');
+        list.className = 'kanban-pane-list';
+        for (const card of cards) {
+            const row = document.createElement('div');
+            row.className = 'kanban-pane-row';
+            const label = document.createElement('span');
+            label.className = 'kanban-pane-row-title';
+            label.textContent = card.topic || card.title || card.planId || '(untitled)';
+            label.title = label.textContent;
+            row.appendChild(label);
+
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'kanban-pane-copy-btn';
+            copyBtn.textContent = 'Copy & Advance';
+            copyBtn.title = 'Copy prompt to clipboard and advance to next column';
+            copyBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                copyBtn.disabled = true;
+                copyBtn.textContent = 'Copying…';
+                try {
+                    const res = await fetch('/kanban/verb/promptSelected', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            column: card.column,
+                            sessionIds: [card.planId || card.sessionId],
+                            workspaceRoot: card.workspaceRoot
+                        })
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                        copyBtn.textContent = 'Copied!';
+                        // Refresh this pane's list (the card advanced out).
+                        fetchBoardCardsForPane(index);
+                    } else {
+                        copyBtn.textContent = 'Failed';
+                    }
+                } catch {
+                    copyBtn.textContent = 'Error';
+                }
+                setTimeout(() => { copyBtn.disabled = false; copyBtn.textContent = 'Copy & Advance'; }, 2000);
+            });
+            row.appendChild(copyBtn);
+            list.appendChild(row);
+        }
+        contentEl.appendChild(list);
+    }
+
+    function startKanbanPoll() {
+        if (kanbanPollTimer) { return; }
+        kanbanPollTimer = setInterval(pollKanbanPanes, 5000);
+        pollKanbanPanes(); // immediate first fetch
+    }
+
+    function stopKanbanPoll() {
+        if (kanbanPollTimer) { clearInterval(kanbanPollTimer); kanbanPollTimer = null; }
+    }
+
+    async function pollKanbanPanes() {
+        const slotCount = getSlotCount(effectiveLayout);
+        const kanbanSlots = [];
+        for (let i = 0; i < slotCount; i++) {
+            if (paneModes[i] === 'kanban' && !paneAssignments[i]) { kanbanSlots.push(i); }
+        }
+        if (kanbanSlots.length === 0) { stopKanbanPoll(); return; }
+        // Refresh column structure once per poll (cheap, cached server-side).
+        try {
+            const structRes = await fetch('/kanban/verb/getKanbanStructure', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+            });
+            const structData = await structRes.json();
+            if (structData.success) {
+                kanbanColumnsCache = buildColumnList(structData.structure, structData.customColumns);
+            }
+        } catch { /* ignore — keep stale cache */ }
+        for (const idx of kanbanSlots) {
+            await fetchBoardCardsForPane(idx);
+        }
+    }
+
+    async function fetchBoardCardsForPane(index) {
+        const col = kanbanPaneColumn[index];
+        if (!col) { return; }
+        try {
+            const res = await fetch('/kanban/verb/getBoardCards', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ column: col })
+            });
+            const data = await res.json();
+            if (data.success) {
+                kanbanPaneCards[index] = data.cards;
+                // Re-render just this pane if it still exists and is still kanban mode.
+                const paneEl = paneGridEl.children[index];
+                if (paneEl && paneModes[index] === 'kanban' && !paneAssignments[index]) {
+                    renderKanbanPane(paneEl, index);
+                }
+            }
+        } catch { /* ignore — keep stale list */ }
     }
 
     /**
@@ -2657,6 +2932,63 @@
         entry.fitAddon = fitAddon;
 
         term.open(container);
+        // Intercept image paste: if the clipboard has an image, upload it to the
+        // server as raw binary, which writes it to a temp file and injects the
+        // file path into the PTY. Text paste falls through to xterm's native
+        // handler. capture: true — intercept before xterm's own paste handler.
+        // Only the four formats the Anthropic API accepts — intercepting
+        // image/bmp or image/svg+xml would inject a file the API rejects, and a
+        // rejected image poisons the Claude Code session.
+        const SUPPORTED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+        container.addEventListener('paste', async (e) => {
+            const items = e.clipboardData && e.clipboardData.items;
+            if (!items) { return; }
+            let imageItem = null;
+            for (let i = 0; i < items.length; i++) {
+                if (items[i].type && SUPPORTED_IMAGE_TYPES.includes(items[i].type)) {
+                    imageItem = items[i];
+                    break;
+                }
+            }
+            if (!imageItem) { return; } // no supported image — let xterm handle text paste
+
+            e.preventDefault();
+            e.stopPropagation();
+
+            const file = imageItem.getAsFile();
+            if (!file) { return; }
+
+            // Size guard (4 MB raw — server enforces the same ceiling; the
+            // Anthropic API hard-rejects images over 5 MB and Claude Code does
+            // not strip the failed payload, bricking the session until /clear).
+            if (file.size > 4 * 1024 * 1024) {
+                showPaneToast('Image too large (max 4 MB)');
+                return;
+            }
+
+            showPaneToast('Pasting image...');
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                const params = new URLSearchParams({
+                    name: entry.name,
+                    mimeType: file.type || 'image/png'
+                });
+                const res = await fetch('/terminals/verb/ptyPasteImage?' + params.toString(), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/octet-stream' },
+                    body: arrayBuffer
+                });
+                const data = await res.json();
+                if (!data.success) {
+                    showPaneToast('Image paste failed: ' + (data.error || 'unknown error'));
+                }
+                // On success, the file path is already injected into the PTY by
+                // the server. The path appears on the terminal input line; user
+                // presses Enter to submit.
+            } catch (err) {
+                showPaneToast('Image paste failed: ' + (err.message || String(err)));
+            }
+        }, true);
         entry.rendererAddon = attachRenderer(term, entry);
         attachJumpToLatest(entry, term, container);
         if (fitAddon) {

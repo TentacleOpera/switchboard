@@ -135,6 +135,32 @@ check('the server Host guard delegates to this module (no second predicate)', ()
     );
 });
 
+check('the WebSocket upgrade guard delegates too (it was the second predicate)', () => {
+    // wsUpgradeAuth is what BOTH the board's state hub (wsHub) and the terminal
+    // gateway call. It carried its own hand-rolled copies of these two checks, and
+    // the copies never learned about `.localhost` — so a board served at
+    // switchboard.localhost passed the HTTP guard above and then had every upgrade
+    // 403'd: `Forbidden Host` in standalone, `Forbidden Origin` under the extension
+    // host. Terminals rendered and never streamed. The check above only ever looked
+    // at LocalApiServer.ts, which is exactly why this drift survived.
+    const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'wsUpgradeAuth.ts'), 'utf8');
+    assert.ok(src.includes("from '../utils/loopbackHostname'"), 'wsUpgradeAuth must import the shared policy');
+    assert.ok(
+        /export function isAllowedHost\([^)]*\)\s*:\s*boolean\s*\{\s*return isLoopbackHostHeader\(/.test(src),
+        'isAllowedHost must delegate to isLoopbackHostHeader, not re-implement a prefix test'
+    );
+    assert.ok(
+        /return isLoopbackHostname\(u\.hostname\)/.test(src),
+        'isLocalhostOrigin must delegate the hostname decision to isLoopbackHostname'
+    );
+    // The one thing the shared module deliberately cannot answer: the editor
+    // webview's origin is `vscode-webview://<uuid>`, not a network name.
+    assert.ok(
+        src.includes("u.protocol === 'vscode-webview:'"),
+        'the vscode-webview: origin allowance must survive the delegation — the editor webview uses this gateway'
+    );
+});
+
 check('the CLI validates --hostname with the same predicate', () => {
     const src = fs.readFileSync(path.join(process.cwd(), 'src', 'standalone', 'cli.ts'), 'utf8');
     assert.ok(src.includes("from '../utils/loopbackHostname'"), 'cli.ts must import the shared policy');

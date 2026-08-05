@@ -1650,6 +1650,38 @@ export class LocalApiServer {
         }
 
         try {
+            // Raw binary body for image paste — bypass JSON parsing to avoid
+            // base64 inflation hitting the _MAX_FILE_SIZE_BYTES cap.
+            if (verb === 'ptyPasteImage' && req.headers['content-type'] === 'application/octet-stream') {
+                const chunks: Buffer[] = [];
+                let totalBytes = 0;
+                const MAX = this._MAX_FILE_SIZE_BYTES;
+                for await (const chunk of req) {
+                    totalBytes += chunk.length;
+                    if (totalBytes > MAX) {
+                        req.destroy();
+                        res.writeHead(413, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: false, error: 'Image exceeds max size' }));
+                        return;
+                    }
+                    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+                }
+                const imageBuffer = Buffer.concat(chunks);
+                // Parse name + mimeType from query string (already on req.url)
+                const parsed = new URL(req.url || '', 'http://localhost');
+                const body = {
+                    name: parsed.searchParams.get('name') || '',
+                    mimeType: parsed.searchParams.get('mimeType') || 'image/png',
+                    imageBuffer
+                };
+                const workspaceRoot = String(this._options.workspaceRoot || '').trim() || undefined;
+                const result = await terminalVerb(verb, body, workspaceRoot);
+                const ok = !result || result.success !== false;
+                res.writeHead(ok ? 200 : 502, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result ?? { success: true }));
+                return;
+            }
+
             const rawBody = await this._parseJsonBody(req);
             const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
             delete body.type;

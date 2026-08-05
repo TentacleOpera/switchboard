@@ -192,3 +192,7 @@ Key risks: named-window target reloads the existing popout on a second click (do
 
 8. **Manual — popup blocked:**
    - Temporarily block popups for the site, click "NEW WINDOW", confirm the button briefly disables and a pane toast appears telling the user to allow popups (no crash, no silent failure).
+
+## Completion Summary
+
+Implemented the "New Window" pop-out button. Added a `#btn-new-window` teal button to the `.toolbar-actions` row in `src/webview/terminals.html` (left of the OS Notifications toggle) plus a `body.is-standalone #btn-new-window { display: none !important; }` CSS rule. In `src/webview/terminals.js` `init()`, set `body.is-standalone` when `window.parent === window` and wired the click handler to `window.open('/terminals', 'sb-terminals-panel', 'width=1200,height=800')` with a `showPaneToast` + momentary disable fallback when the popup is blocked. No server or route changes — `/terminals` is already served standalone. Solo mode is unaffected (its existing `body.is-solo .layout-toolbar { display: none !important; }` hides the whole toolbar). No issues encountered.

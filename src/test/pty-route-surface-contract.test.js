@@ -25,7 +25,7 @@ const path = require('path');
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const PTY_VERBS = [
     'ptyCreateTerminal', 'ptyCloseTerminal', 'ptyListTerminals', 'ptyRenameTerminal',
-    'ptyClearTerminal', 'ptyClearAllTerminals',
+    'ptyClearTerminal', 'ptyClearAllTerminals', 'ptyPasteImage',
 ];
 
 let failures = 0;

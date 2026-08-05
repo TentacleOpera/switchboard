@@ -20,7 +20,6 @@ Two live rendering defects in the browser Terminals pane grid: per-pane action b
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Fix the `terminals.js` parse error that is keeping CI lint red](../plans/terminals-fix-parse-error-blocking-ci-lint.md) — **PLAN REVIEWED**
 - [ ] [Terminal vertical scrollbar goes missing, especially in single/solo view mode](../plans/feature_plan_20260804092233_terminal-vertical-scrollbar-missing-single-view.md) — **PLAN REVIEWED**
 - [ ] [Terminal pane buttons condensed to single letters by layout name, not by actual width](../plans/feature_plan_20260804092302_terminal-pane-buttons-condensed-by-layout-name.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
