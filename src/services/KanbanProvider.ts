@@ -4368,12 +4368,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 commands: state.startupCommands || {},
                 visibleAgents: state.visibleAgents || {},
                 julesAutoSyncEnabled: state.julesAutoSyncEnabled ?? false,
-                autoCommitOnCodeReview: state.autoCommitOnCodeReview ?? true,
+                autoCommitOnCodeReview: state.autoCommitOnCodeReview ?? false,
                 plannerTerminalCount: state.plannerTerminalCount ?? 1,
                 plannerLimitDispatchToTerminals: state.plannerLimitDispatchToTerminals ?? false
             };
         } catch {
-            return { commands: {}, visibleAgents: {}, julesAutoSyncEnabled: false, autoCommitOnCodeReview: true, plannerTerminalCount: 1, plannerLimitDispatchToTerminals: false };
+            return { commands: {}, visibleAgents: {}, julesAutoSyncEnabled: false, autoCommitOnCodeReview: false, plannerTerminalCount: 1, plannerLimitDispatchToTerminals: false };
         }
     }
 
@@ -4382,7 +4382,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             return this._taskViewerProvider.handleGetAutoCommitOnCodeReviewSetting(workspaceRoot);
         }
         const state = await this._getStartupCommands(workspaceRoot);
-        return state.autoCommitOnCodeReview ?? true;
+        return state.autoCommitOnCodeReview ?? false;
     }
 
     private async _saveStartupCommands(workspaceRoot: string, msg: any): Promise<void> {
@@ -4922,7 +4922,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 coder: coderConfig?.addons?.pairProgramming ?? false,
                 intern: internConfig?.addons?.pairProgramming ?? false,
             },
-            advancedReviewerEnabled: reviewerConfig?.addons?.advancedRegression ?? config.get<boolean>('reviewer.advancedMode', false),
+            advancedReviewerEnabled: reviewerConfig?.addons?.advancedRegression ?? config.get<boolean>('reviewer.advancedMode', true),
             reviewerConciseModeEnabled: reviewerConfig?.addons?.reviewerConciseMode ?? false,
             reviewerCompactPlanUpdateEnabled: reviewerConfig?.addons?.reviewerCompactPlanUpdate ?? false,
             noSeparateReviewArtifactsEnabled: reviewerConfig?.addons?.noSeparateReviewArtifacts ?? true,

@@ -304,8 +304,8 @@
         },
         "switchboard.reviewer.advancedMode": {
           "type": "boolean",
-          "default": false,
-          "description": "When enabled, reviewer prompts include deep regression analysis instructions (caller tracing, race condition checks, orphaned reference detection). Token-intensive — off by default."
+          "default": true,
+          "description": "When enabled, reviewer prompts include deep regression analysis instructions (caller tracing, race condition checks, orphaned reference detection). Token-intensive — on by default; disable to save tokens."
         },
         "switchboard.pairProgramming.aggressive": {
           "type": "boolean",

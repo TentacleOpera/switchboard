@@ -5835,13 +5835,14 @@ Each plan file must include:
         }
 
         const statePath = this._resolveStateFilePath(workspaceRoot);
-        if (!statePath) return true;
+        if (!statePath) return false;
         try {
             const content = await fs.promises.readFile(statePath, 'utf8');
             const state = JSON.parse(content);
-            return state.autoCommitOnCodeReview !== false;
+            // Off by default: only an explicit `true` enables auto-commit.
+            return state.autoCommitOnCodeReview === true;
         } catch {
-            return true;
+            return false;
         }
     }
 
@@ -18711,7 +18712,7 @@ What would you like to find?`;
         const reviewerConfig: any = this._readRoleConfigScoped('reviewer');
         if (reviewerConfig?.addons?.advancedRegression !== undefined) return reviewerConfig.addons.advancedRegression;
         return vscode.workspace.getConfiguration('switchboard')
-            .get<boolean>('reviewer.advancedMode', false);
+            .get<boolean>('reviewer.advancedMode', true);
     }
 
     private _isLeadInlineChallengeEnabled(): boolean {

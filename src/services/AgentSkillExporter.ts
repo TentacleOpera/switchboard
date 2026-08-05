@@ -88,7 +88,7 @@ export class AgentSkillExporter {
         if (!builtinAddons) return undefined;
         const out: CustomAgentAddons = {};
         // Fields with DIFFERENT names between built-in and CustomAgentAddons schemas
-        if (builtinAddons.advancedRegression !== undefined) out.advancedReviewerEnabled = !!builtinAddons.advancedRegression;
+        out.advancedReviewerEnabled = builtinAddons.advancedRegression ?? true;
         if (builtinAddons.reviewerConciseMode !== undefined) out.reviewerConciseModeEnabled = !!builtinAddons.reviewerConciseMode;
         if (builtinAddons.reviewerCompactPlanUpdate !== undefined) out.reviewerCompactPlanUpdateEnabled = !!builtinAddons.reviewerCompactPlanUpdate;
         out.noSeparateReviewArtifactsEnabled = builtinAddons.noSeparateReviewArtifacts ?? true;

@@ -1030,7 +1030,7 @@ export function buildKanbanBatchPrompt(
     const accurateCodingEnabled = options?.accurateCodingEnabled ?? false;
     const pairProgrammingEnabled = options?.pairProgrammingEnabled ?? false;
     const aggressivePairProgramming = options?.aggressivePairProgramming ?? false;
-    const advancedReviewerEnabled = options?.advancedReviewerEnabled ?? false;
+    const advancedReviewerEnabled = options?.advancedReviewerEnabled ?? true;
     const reviewerConciseModeEnabled = options?.reviewerConciseModeEnabled ?? false;
     const reviewerCompactPlanUpdateEnabled = options?.reviewerCompactPlanUpdateEnabled ?? false;
     const noSeparateReviewArtifactsEnabled = options?.noSeparateReviewArtifactsEnabled ?? true;

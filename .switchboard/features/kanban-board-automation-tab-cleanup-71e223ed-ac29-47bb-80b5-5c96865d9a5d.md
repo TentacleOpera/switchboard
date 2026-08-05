@@ -20,9 +20,9 @@ Three board-surface defects: the DRAIN/WATCH trigger toggle explains itself only
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Kanban Automation Tab: DRAIN/WATCH Toggle Needs Real Tooltips](../plans/feature_plan_20260805105307_kanban-automation-drain-watch-tooltips.md) — **INTERN CODED**
-- [ ] [Kanban Automation Tab: Remove the Unselectable "Antigravity Batch (legacy)" Mode](../plans/feature_plan_20260805105308_remove-antigravity-batch-legacy-automation-mode.md) — **INTERN CODED**
-- [ ] [Kanban Board: Workspace/Project Dropdown Is Torn Down and Rebuilt on Every Board Poll](../plans/feature_plan_20260805105309_kanban-workspace-project-dropdown-rebuilt-on-every-poll.md) — **INTERN CODED**
+- [ ] [Kanban Automation Tab: DRAIN/WATCH Toggle Needs Real Tooltips](../plans/feature_plan_20260805105307_kanban-automation-drain-watch-tooltips.md) — **CODE REVIEWED**
+- [ ] [Kanban Automation Tab: Remove the Unselectable "Antigravity Batch (legacy)" Mode](../plans/feature_plan_20260805105308_remove-antigravity-batch-legacy-automation-mode.md) — **CODE REVIEWED**
+- [ ] [Kanban Board: Workspace/Project Dropdown Is Torn Down and Rebuilt on Every Board Poll](../plans/feature_plan_20260805105309_kanban-workspace-project-dropdown-rebuilt-on-every-poll.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Completion Report

@@ -24,7 +24,49 @@ Because `_getNextColumnId` is order-derived, re-weighting the column **automatic
 
 Only the standalone hardcoded map needs an explicit edit.
 
-## Implementation
+## Metadata
+
+**Tags:** backend, ui, bugfix
+**Complexity:** 4
+**Project:** Browser Switchboard
+
+> **Superseded:** Complexity 3 (original).
+> **Reason:** Each edit is a one-liner, but the change spans three files across two hosts (`agentConfig.ts`, `bootstrap.ts`, `KanbanProvider.test.ts`) and alters kanban forward-flow behaviour — not the "single-file, localized" descriptor for Routine 1-4. The cross-host coordination and test-rewriting undersell a score of 3.
+> **Replaced with:** Complexity 4 — multi-file, low-risk, reuses existing patterns, but a cross-host behaviour change with test updates. Send to Coder.
+
+## User Review Required
+
+Yes — confirm the intended board layout (Researcher between Planned and Lead Coder) is the desired default. ~4,000 installs with no column override will see the Researcher column visibly move right of Planned on next update. Installs that drag-reordered columns keep their chosen position (override wins), so only default-layout installs are affected visually.
+
+## Complexity Audit
+
+### Routine
+- One numeric edit: `RESEARCHER` `order` `90` → `110` in `src/services/agentConfig.ts:134`.
+- One string edit: `'RESEARCHER': 'PLAN REVIEWED'` → `'RESEARCHER': 'LEAD CODED'` in `src/standalone/bootstrap.ts:131`.
+- Updating three test cases in `src/services/__tests__/KanbanProvider.test.ts` to encode the new target/position.
+
+### Complex / Risky
+- Verifying the extension host's `_getNextColumnId` forward walk lands on `LEAD CODED` after the re-weight **without** adding a hardcoded `RESEARCHER` arm — the plan's thesis is that position now carries the meaning. If the walk does not land there, find out why before any special case.
+- Cross-host agreement: the standalone `getNextKanbanColumn` is a static map (not position-derived), so it ignores `kanbanOrderOverrides`. For installs that drag-reordered columns, the extension host follows their ordering while standalone forces `LEAD CODED` — a pre-existing divergence this plan does not introduce but does not fix either.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** None. The change is to static config and a static map; no concurrent state.
+- **Security:** No input handling, no new verbs. No surface.
+- **Side Effects:** Re-weighting `RESEARCHER` shifts the column's default position for every install with no override — intended. `buildKanbanColumns` sorts by `order` (`agentConfig.ts:446`), so the board re-renders with Researcher between Planned and Lead Coder. The standalone forward-map change affects `moveAll` (`bootstrap.ts:824`) and dispatch (`bootstrap.ts:1241`) advancement out of Researcher.
+- **Dependencies & Conflicts:** The companion plan "Order Terminal Sidebar Rows…" (`e3e14fa8-ce4a-45b1-9bad-67eb770bec6e`) depends on THIS plan landing `RESEARCHER` at `110` so its sidebar fallback constant mirrors correctly — land this plan first. No migration needed: `kanbanOrderOverrides` is only written on explicit drag-reorder (`TaskViewerProvider.handleUpdateKanbanStructure`, lines 10162-10166), so installs that never reordered pick up `110` automatically; installs that reordered keep their chosen position (override wins, `agentConfig.ts:427-431`). Do **not** stamp `110` over existing overrides — that discards a deliberate operator choice.
+
+## Dependencies
+
+- Required by `feature_plan_20260806074849_terminal-sidebar-role-ordering` (`e3e14fa8-ce4a-45b1-9bad-67eb770bec6e`) — the terminal sidebar plan's fallback constant mirrors `DEFAULT_KANBAN_COLUMNS`, so this re-weight must land first for the sidebar to place researcher after planner at first paint.
+
+## Adversarial Synthesis
+
+Key risks: (1) the extension host derivation could fail to land on `LEAD CODED` if an unseen `shouldSkip` condition rejects it — mitigated by reading `_getNextColumnId` (confirmed: `LEAD CODED` is not `featureOnly`, `dragDropMode` is `'cli'`, role `lead` skipped only if the operator hid Lead) and by Verification steps 3 and 5; (2) the standalone static map ignores operator overrides, so reordered installs diverge between hosts — pre-existing, not a regression, flagged for awareness; (3) the test at `KanbanProvider.test.ts:164` ("CREATED → skips hidden RESEARCHER") loses its premise after the re-weight and must be repointed or deleted, not left asserting a now-accidental pass. Mitigations in place; the plan is sound.
+
+## Proposed Changes
+
+**Context:** Two defects cause the Researcher→Planned loop: `RESEARCHER` sits at `order: 90` (ahead of `PLAN REVIEWED` at 100), and the standalone `getNextKanbanColumn` hardcodes `'RESEARCHER': 'PLAN REVIEWED'`. Re-weighting the column to 110 auto-corrects the extension host's position-derived `_getNextColumnId`; only the standalone hardcoded map needs an explicit edit. No migration — overrides win and are preserved.
 
 ### 1. Re-weight the column
 
@@ -70,8 +112,6 @@ Baseline `npm test` first and record the already-red set, so new breakage is att
 7. **Drag-reorder still works.** Drag Researcher to a new position in Setup and confirm both the board and its forward target follow — the re-weight must not have introduced a fixed position.
 8. **Planner hand-off intact.** Trigger a planner run that flags an uncertain assumption and confirm the `advise_research` hand-off to `/research/dispatch` still fires. This plan does not touch that path; the check is to prove it.
 
-## Metadata
+## Recommendation
 
-**Complexity:** 3
-**Tags:** backend, bugfix, ui
-**Project:** Browser Switchboard
+Complexity 4 — **Send to Coder.** Three one-liner edits across two hosts plus test updates; low-risk and pattern-reusing, but a cross-host forward-flow behaviour change. Land this BEFORE the companion terminal-sidebar plan so the sidebar's fallback constant mirrors `RESEARCHER` at `110`.

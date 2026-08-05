@@ -3229,7 +3229,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             input.value = lastPlanIngestionFolder;
                         }
                         const autoCommitToggle = document.getElementById('auto-commit-code-review-toggle');
-                        if (autoCommitToggle) autoCommitToggle.checked = message.autoCommitOnCodeReview !== false;
+                        if (autoCommitToggle) autoCommitToggle.checked = message.autoCommitOnCodeReview === true;
                     });
                     break;
                 }
@@ -3481,7 +3481,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 case 'autoCommitOnCodeReviewSetting': {
                     runSetupHydration(() => {
                         const toggle = document.getElementById('auto-commit-code-review-toggle');
-                        if (toggle) toggle.checked = message.enabled !== false;
+                        if (toggle) toggle.checked = message.enabled === true;
                     });
                     break;
                 }
