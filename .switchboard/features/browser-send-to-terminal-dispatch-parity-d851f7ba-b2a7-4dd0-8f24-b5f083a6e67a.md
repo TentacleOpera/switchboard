@@ -38,9 +38,13 @@ Every browser-originated prompt dispatch reaches the terminal the calling surfac
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Browser "Send to Planner" Fails Because the Dispatch Path Drops the Surface Flag](../plans/feature_plan_20260805210001_browser-send-to-planner-drops-surface-flag.md) — **PLAN REVIEWED**
-- [ ] [Four Dispatch Sites Hardcode the VS Code Fleet, So Orchestrator / Pair-Program / Airlock Sends Die in the Browser](../plans/feature_plan_20260806090000_browser-stray-dispatch-sites-hardcode-vscode-fleet.md) — **PLAN REVIEWED**
-- [ ] [Four Direct-to-`vscode.Terminal` Helpers Bypass the Dispatcher, So Browser Sends Land in Invisible Terminals and Still Report Success](../plans/feature_plan_20260806090001_browser-direct-terminal-helpers-not-fleet-aware.md) — **PLAN REVIEWED**
-- [ ] [Project Panel Posts Two Verbs the Planning Allowlist Rejects, So the Browser Shows an Error Banner on Every Open](../plans/feature_plan_20260806090002_browser-project-panel-verbs-rejected-by-planning-allowlist.md) — **PLAN REVIEWED**
+- [ ] [Browser "Send to Planner" Fails Because the Dispatch Path Drops the Surface Flag](../plans/feature_plan_20260805210001_browser-send-to-planner-drops-surface-flag.md) — **CODE REVIEWED**
+- [ ] [Four Dispatch Sites Hardcode the VS Code Fleet, So Orchestrator / Pair-Program / Airlock Sends Die in the Browser](../plans/feature_plan_20260806090000_browser-stray-dispatch-sites-hardcode-vscode-fleet.md) — **CODE REVIEWED**
+- [ ] [Four Direct-to-`vscode.Terminal` Helpers Bypass the Dispatcher, So Browser Sends Land in Invisible Terminals and Still Report Success](../plans/feature_plan_20260806090001_browser-direct-terminal-helpers-not-fleet-aware.md) — **CODE REVIEWED**
+- [ ] [Project Panel Posts Two Verbs the Planning Allowlist Rejects, So the Browser Shows an Error Banner on Every Open](../plans/feature_plan_20260806090002_browser-project-panel-verbs-rejected-by-planning-allowlist.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+
+## Completion Report
+
+Implemented all four subtasks across the dispatch parity surface. Subtask 1 threaded `apiOriginated` through `TaskViewerProvider.dispatchCustomPromptToRole` and its callers in `PlanningPanelProvider`, `KanbanProvider`, `TicketsPanelProvider`, and `extension.ts`. Subtask 2 fixed the four stray `_dispatchExecuteMessage` sites for orchestrator kickoff/wake, pair-programming coder dispatch, and Airlock send-to-coder, including `_orchestratorApiOriginated` run-state persistence. Subtask 3 added the shared `_tryFleetDeliveryForRole` / `tryFleetDeliveryForRole` fleet-first helper, converted `_sendPromptToTerminal`, `sendPromptToAgentTerminal`, `_deliverPromptToPmTerminal`, and `_handleSendAnalystMessage` to use it, stamped `_handleDesignVerb` and `_handleSetupVerb` with `_stampHttpSurface`, updated the Planning and Design arms to return honest `success` / `error` / `prompt` bodies, and lowered `scripts/verb-return-contract-baseline.json` to the new `Planning` residual of 154. Subtask 4 catalogued `webviewReady` in `protocol-catalog.json` and `src/generated/verbAllowlist.ts` and added an early `PlanningPanelProvider.handleServiceVerb` delegation for `improvePlan` to `KanbanProvider` before the `PLANNING_VERBS` guard. Verification was limited to `node scripts/analyze-verb-migration2.js` and `npm run catalog:generate`; no build or automated test suite was run per the user's instruction.
 

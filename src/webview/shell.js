@@ -315,7 +315,7 @@
 
         for (const t of terminals) {
             const btn = document.createElement('button');
-            btn.className = 'strip-icon strip-term-btn';
+            btn.className = 'strip-icon strip-term-btn strip-term-' + t.light;
             btn.type = 'button';
 
             const roleChar = (t.role || 'T').charAt(0).toUpperCase();
@@ -332,13 +332,27 @@
             // btn.title used to show, minus the double-tooltip asymmetry.
             btn.dataset.tooltip = t.worktreePath ? `${labelText}\n${t.worktreePath}` : labelText;
 
-            const glyph = document.createElement('span');
-            glyph.textContent = roleChar;
-            btn.appendChild(glyph);
-
-            const dot = document.createElement('span');
-            dot.className = `strip-term-dot dot-${t.light}`;
-            btn.appendChild(dot);
+            // Coloured brand icon replaces the old role-letter glyph + status dot. The
+            // URI is resolved panel-side (terminals.js postFleetStateToShell) from the
+            // same brandIconForCliLabel/brandIconUri helpers the Terminals sidebar uses,
+            // so the two surfaces show the same icon for the same terminal. An <img> (not
+            // the strip's CSS-mask/currentColor path) is deliberate: these are multi-hue
+            // brand marks whose baked-in fill IS the identity. Fall back to the role
+            // letter only if the relay sent no URI (defensive — the relay always sends at
+            // least the default icon unless the dataset attrs are missing entirely).
+            if (t.iconUri) {
+                const icon = document.createElement('img');
+                icon.className = 'strip-term-icon';
+                icon.src = t.iconUri;
+                // alt='' is correct: the button's aria-label already carries name, role,
+                // worktree and light state. A brand name here would double-announce.
+                icon.alt = '';
+                btn.appendChild(icon);
+            } else {
+                const glyph = document.createElement('span');
+                glyph.textContent = roleChar;
+                btn.appendChild(glyph);
+            }
 
             btn.addEventListener('click', () => {
                 const slug = t.name.replace(/[^A-Za-z0-9_-]/g, '_');

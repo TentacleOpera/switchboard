@@ -142,8 +142,8 @@ suite('KanbanProvider', () => {
     suite('_getNextColumnId', () => {
         const defaultColumns: KanbanColumnDefinition[] = [
             { id: 'CREATED', label: 'New', order: 0, kind: 'created', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
-            { id: 'RESEARCHER', label: 'Researcher', role: 'researcher', order: 90, kind: 'review', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt' },
             { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', order: 100, kind: 'review', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
+            { id: 'RESEARCHER', label: 'Researcher', role: 'researcher', order: 110, kind: 'review', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt' },
             { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
             { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
             { id: 'INTERN CODED', label: 'Intern', role: 'intern', order: 200, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
@@ -161,16 +161,16 @@ suite('KanbanProvider', () => {
             sandbox.stub(provider as any, '_isAcceptanceTesterDesignDocConfigured').returns(designDocConfigured);
         };
 
-        test('CREATED -> next skips hidden RESEARCHER when researcher not visible', async () => {
-            stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
-            const next = await (provider as any)._getNextColumnId('CREATED', workspaceRoot);
-            assert.strictEqual(next, 'PLAN REVIEWED');
-        });
-
-        test('PLAN REVIEWED -> next goes to LEAD CODED directly', async () => {
+        test('PLAN REVIEWED -> next skips hidden RESEARCHER to LEAD CODED', async () => {
             stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
             const next = await (provider as any)._getNextColumnId('PLAN REVIEWED', workspaceRoot);
             assert.strictEqual(next, 'LEAD CODED');
+        });
+
+        test('PLAN REVIEWED -> next goes to RESEARCHER when researcher visible', async () => {
+            stubDeps({ researcher: true, tester: false, ticket_updater: false }, false);
+            const next = await (provider as any)._getNextColumnId('PLAN REVIEWED', workspaceRoot);
+            assert.strictEqual(next, 'RESEARCHER');
         });
 
         test('CODE REVIEWED -> next returns null when tester inactive (skips ACCEPTANCE TESTED and COMPLETED bypass)', async () => {
@@ -203,10 +203,10 @@ suite('KanbanProvider', () => {
             assert.strictEqual(next, 'CODE REVIEWED');
         });
 
-        test('Recovery: RESEARCHER -> next advances to PLAN REVIEWED even when researcher invisible', async () => {
+        test('RESEARCHER -> next advances to LEAD CODED when researcher invisible', async () => {
             stubDeps({ researcher: false, tester: false, ticket_updater: false }, false);
             const next = await (provider as any)._getNextColumnId('RESEARCHER', workspaceRoot);
-            assert.strictEqual(next, 'PLAN REVIEWED');
+            assert.strictEqual(next, 'LEAD CODED');
         });
 
         test('Last column returns null', async () => {

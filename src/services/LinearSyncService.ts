@@ -939,6 +939,39 @@ export class LinearSyncService {
     return { ids, complete };
   }
 
+  /**
+   * Does this issue still exist remotely? Answers for ONE issue, by id, so the
+   * caller never has to infer deletion from absence in a paginated list.
+   *
+   * Two things count as 'deleted': a null `issue` node (or an Entity-not-found
+   * GraphQL error), and `trashed: true`. The second matters — Linear's delete is
+   * a 30-day trash, and a trashed issue is still fetchable by id, so without the
+   * flag a deleted issue reads as alive for a month.
+   *
+   * Anything else — auth failure, timeout, rate limit, an unrecognised GraphQL
+   * error — is 'unknown'. Callers must keep the local file on 'unknown': this
+   * probe authorises deletion, so ambiguity has to mean no. Note `getIssue`
+   * cannot serve this purpose: it also returns null when an issue exists but
+   * falls outside the configured team/project filters.
+   */
+  public async probeIssueExistence(issueId: string): Promise<'deleted' | 'exists' | 'unknown'> {
+    const normalizedId = String(issueId || '').trim();
+    if (!normalizedId) { return 'unknown'; }
+    try {
+      const result = await this.graphqlRequest(
+        'query($issueId: String!) { issue(id: $issueId) { id trashed } }',
+        { issueId: normalizedId }
+      );
+      const node = result.data?.issue;
+      if (!node) { return 'deleted'; }
+      return node.trashed === true ? 'deleted' : 'exists';
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/entity not found|could not find|does not exist/i.test(message)) { return 'deleted'; }
+      return 'unknown';
+    }
+  }
+
   public async getIssue(issueIdOrIdentifier: string): Promise<LinearIssue | null> {
     const config = await this.loadConfig();
     if (!config?.setupComplete || !config.teamId) {

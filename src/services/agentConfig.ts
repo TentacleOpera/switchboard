@@ -131,7 +131,7 @@ export const BUILT_IN_AGENT_LABELS: Record<BuiltInAgentRole, string> = {
 
 export const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
     { id: 'CREATED', label: 'New', order: 0, kind: 'created', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
-    { id: 'RESEARCHER', label: 'Researcher', role: 'researcher', order: 90, kind: 'review', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt' },
+    { id: 'RESEARCHER', label: 'Researcher', role: 'researcher', order: 110, kind: 'review', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt' },
     { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', order: 100, kind: 'review', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
@@ -142,12 +142,22 @@ export const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
     { id: 'COMPLETED', label: 'Completed', order: 9999, kind: 'completed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli' },
 ];
 
-/** Display labels for stored column IDs that are NOT peer columns and MUST NOT
+/** Display-mode columns: stored column IDs that are NOT peer columns and MUST NOT
  *  appear in DEFAULT_KANBAN_COLUMNS (the webview renders one column per entry).
- *  - BACKLOG: rendered as a display mode of CREATED (kanban.html backlog toggle).
- *  - CODED:   legacy alias normalized to LEAD CODED (KanbanProvider et al). */
+ *  Each renders inside another column's slot, toggled by a header button:
+ *  - BACKLOG:  display mode of CREATED (kanban.html backlog toggle).
+ *  - DISPATCH: display mode of PLAN REVIEWED (kanban.html dispatch toggle). */
+export const DISPLAY_MODE_COLUMNS: Record<string, { label: string; displayModeOf: string }> = {
+    'BACKLOG':  { label: 'Backlog',  displayModeOf: 'CREATED' },
+    'DISPATCH': { label: 'Dispatch', displayModeOf: 'PLAN REVIEWED' },
+};
+
+/** Display labels for legacy stored column IDs that are NOT peer columns and MUST NOT
+ *  appear in DEFAULT_KANBAN_COLUMNS (the webview renders one column per entry).
+ *  - CODED: legacy alias normalized to LEAD CODED (KanbanProvider et al).
+ *  BACKLOG formerly lived here; it is a display mode and has moved to
+ *  DISPLAY_MODE_COLUMNS. */
 export const LEGACY_COLUMN_LABELS: Record<string, { label: string; displayModeOf?: string; legacyAliasOf?: string }> = {
-    'BACKLOG': { label: 'Backlog', displayModeOf: 'CREATED' },
     'CODED':   { label: 'Coded',   legacyAliasOf: 'LEAD CODED' },
 };
 
@@ -160,7 +170,7 @@ export const DISPLAY_ONLY_COLUMN_LABELS: Record<string, { aliasOf: string[] }> =
 
 export interface ResolvedColumnLabel {
     label: string;
-    labelSource: 'built-in' | 'custom' | 'legacy' | 'fallback';
+    labelSource: 'built-in' | 'custom' | 'legacy' | 'display-mode' | 'fallback';
 }
 
 /**
@@ -178,6 +188,8 @@ export function resolveColumnLabel(
     if (builtIn) { return { label: builtIn.label, labelSource: 'built-in' }; }
     const custom = customKanbanColumns.find(c => c.id === id);
     if (custom) { return { label: custom.label, labelSource: 'custom' }; }
+    const displayMode = DISPLAY_MODE_COLUMNS[id];
+    if (displayMode) { return { label: displayMode.label, labelSource: 'display-mode' }; }
     const legacy = LEGACY_COLUMN_LABELS[id];
     if (legacy) { return { label: legacy.label, labelSource: 'legacy' }; }
     return { label: id, labelSource: 'fallback' };

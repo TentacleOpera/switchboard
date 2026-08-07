@@ -2187,6 +2187,31 @@ export class ClickUpSyncService {
   }
 
   /**
+   * Does this task still exist remotely? Answers for ONE task, from that task's
+   * own endpoint — never by absence from a list fetch, which is only as complete
+   * as the pagination behind it.
+   *
+   * 'deleted' requires a 404, which is what ClickUp returns for a task that has
+   * been deleted or moved to the Trash. Everything else — 401/403 (token or
+   * permissions), 429 (rate limited), 5xx, a transport failure — is 'unknown',
+   * because none of those are evidence about the task. Callers must treat
+   * 'unknown' as "keep the local file": this probe exists to authorise deletion,
+   * so an ambiguous answer has to mean no.
+   */
+  public async probeTaskExistence(taskId: string): Promise<'deleted' | 'exists' | 'unknown'> {
+    const normalizedTaskId = String(taskId || '').trim();
+    if (!normalizedTaskId) { return 'unknown'; }
+    try {
+      const result = await this.httpRequest('GET', `/task/${normalizedTaskId}`);
+      if (result.status === 200) { return 'exists'; }
+      if (result.status === 404) { return 'deleted'; }
+      return 'unknown';
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  /**
    * Delete a ClickUp task via the native DELETE endpoint.
    * Used when a Switchboard plan is deleted and deleteSyncEnabled is true.
    * ClickUp DELETE /api/v2/task/{task_id} returns HTTP 204 on success.

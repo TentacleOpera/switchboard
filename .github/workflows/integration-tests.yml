@@ -76,6 +76,24 @@ jobs:
       - name: PTY dispatch focus contract (no spurious VS Code toast on a PTY dispatch)
         run: npm run test:contract:pty-dispatch-focus
 
+      # Browser send-to-terminal dispatch parity: every browser-originated prompt
+      # dispatch must thread the apiOriginated surface flag end-to-end so a browser
+      # PTY terminal is reachable, the four stray _dispatchExecuteMessage sites
+      # (orchestrator/pair/airlock) must be surface-aware, the four direct-to-
+      # vscode.Terminal helpers must be fleet-aware and must NOT conjure a VS Code
+      # terminal for a browser caller, and every verb a browser panel posts must be
+      # reachable on that panel's HTTP route (improvePlan / webviewReady were the
+      # original offenders). These are source-text contracts — the failure modes are
+      # silent wrong-fleet dispatches and invisible VS Code toasts, not thrown errors.
+      - name: Browser planner dispatch surface contract (apiOriginated threading + clipboard fallback)
+        run: npm run test:contract:browser-planner-dispatch-surface
+      - name: Browser stray dispatch surface contract (orchestrator/pair/airlock surface-aware)
+        run: npm run test:contract:browser-stray-dispatch-surface
+      - name: Browser direct terminal helpers contract (fleet-aware, no conjured terminals)
+        run: npm run test:contract:browser-direct-terminal-helpers
+      - name: Browser panel verb routing contract (every posted verb reachable on its route)
+        run: npm run test:contract:browser-panel-verb-routing
+
       # /ws/terminal is an RCE-grade channel. This pins the gateway's empty-token
       # rejection, the untouched HTTP loopback-trust path the skill ecosystem rides
       # on, and the CSP-legal token transport (a nonce-less inline <script> is
@@ -251,6 +269,14 @@ jobs:
       - name: Tickets subtask embedding contract
         run: npm run test:contract:tickets-subtasks
 
+      # Four independent faults each produced "agent edits a ticket file, the sidebar
+      # shows nothing until you click Refresh" — so a partial regression is invisible:
+      # it looks exactly like the original bug. Also holds the two hazards the fix
+      # introduces: a rename is delete+create (must not drop the card), and the
+      # standalone watcher seam must stay real or the browser host silently loses this.
+      - name: Tickets auto-refresh on local file change contract
+        run: npm run test:contract:tickets-auto-refresh
+
       - name: Project pin apply-if-empty contract (fill, no-move, subtask-skip)
         run: npm run test:contract:project-pin-fill
 
@@ -268,6 +294,15 @@ jobs:
 
       - name: Browser panel scrollbar contract (@supports gating, no ungated scrollbar-width)
         run: npm run test:contract:panel-scrollbars
+
+      # The browser kanban pane inherited raw SQL order (ORDER BY updated_at DESC
+      # over a TEXT column with mixed ISO-8601, SQLite datetime, and one non-timestamp
+      # value), so cards appeared in a different order than the extension board —
+      # including a card permanently pinned to the top by a 'reviewer-pass' string.
+      # Pins the client-side sort comparator, the sort-before-signature ordering
+      # (an infinite re-render loop otherwise), and board/pane comparator parity.
+      - name: Browser kanban pane card order contract (sort-before-signature, board parity)
+        run: npm run test:contract:browser-kanban-pane-order
 
       # _INSPECTOR_SCRIPT is a template literal inside a .ts file, so TypeScript pasted
       # into it compiles clean and only fails when a browser parses the injected
@@ -376,6 +411,9 @@ jobs:
 
       - name: Terminal sidebar groupings contract
         run: npm run test:contract:terminal-sidebar-groupings
+
+      - name: Terminal sidebar role ordering contract
+        run: npm run test:contract:terminal-sidebar-role-ordering
 
       # Terminal scroll affordance. Both halves of this one fail SILENTLY, which is
       # why it needs a gate rather than a manual pass. CSS: the terminal rules are
@@ -494,6 +532,14 @@ jobs:
       # .js needs its own plan (it would surface an unmeasured warning backlog).
       - name: Lint (TypeScript only — see limitation above)
         run: npm run lint
+
+      # Paste attribution + clipboard copy contract: verifies the extractPastedDispatchIdentity
+      # scanner, the arm/commit state machine in term.onData, the attributePasteDispatch DB
+      # writer, the attributePastedPrompt verb surface (catalog + allowlist + schema), and the
+      # kanban-pane Copy Prompt handler's client-side clipboard write. Wired during review
+      # because the plan defined it in package.json but no CI step invoked it.
+      - name: Paste attribution + clipboard copy contract
+        run: npm run test:contract:paste-attribution
 
       - name: Run integration suite
         run: npm run test:integration:all

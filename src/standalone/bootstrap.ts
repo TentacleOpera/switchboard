@@ -128,7 +128,7 @@ function htmlEscapeJson(json: string): string {
 function getNextKanbanColumn(sourceColumn: string): string | null {
     const map: Record<string, string> = {
         'CREATED': 'PLAN REVIEWED',
-        'RESEARCHER': 'PLAN REVIEWED',
+        'RESEARCHER': 'LEAD CODED',
         'PLAN REVIEWED': 'LEAD CODED',
         'LEAD CODED': 'CODE REVIEWED',
         'CODER CODED': 'CODE REVIEWED',
@@ -226,6 +226,31 @@ async function buildPromptForCards(role: string, records: any[], root: string): 
         blocks.push(`\n--- ${rec.planFile} (topic: ${rec.topic || 'Untitled'}) ---\n${content.slice(0, 20000)}`);
     }
     return blocks.join('\n\n');
+}
+
+/**
+ * The `dispatch-analysis` planner prompt, byte-for-byte the shape
+ * KanbanProvider.generateUnifiedPrompt emits for the extension host. Deliberately
+ * does NOT inline plan bodies: this pass is read-only and the skill re-queries the
+ * board itself, so the plan list is a starting point, not the payload.
+ */
+function buildDispatchAnalysisPrompt(records: any[], root: string, apiPort: number): string {
+    const planList = records.map(rec => {
+        const planFile = rec.planFile || '';
+        let planPath = planFile;
+        if (planPath.startsWith('file://')) {
+            try { planPath = new URL(planPath).pathname; } catch { planPath = planPath.replace(/^file:\/\/\/?/, ''); }
+            if (process.platform !== 'win32' && !planPath.startsWith('/')) { planPath = '/' + planPath; }
+        }
+        const absolutePath = planPath ? (path.isAbsolute(planPath) ? planPath : path.resolve(root, planPath)) : '';
+        const planIdLine = rec.planId ? `\nPLAN_ID=${rec.planId}` : '';
+        return `- [${rec.topic || 'Untitled'}] Plan File: ${absolutePath}${planIdLine}`;
+    }).join('\n');
+    return `Read and follow .agents/skills/dispatch-analysis/SKILL.md now.\n` +
+        `This is a read-only analysis pass — do not modify any plan file.\n` +
+        `WORKSPACE_ROOT=${root}\n` +
+        `API_PORT=${apiPort}\n\n` +
+        `PLANS TO PROCESS:\n${planList}`;
 }
 
 export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions): Promise<HeadlessSwitchboardInstance> {
@@ -342,7 +367,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                 { type: 'updateWorkspaceSelection', workspaceRoot, workspaces: workspaceItems, activeFilter: null, projectFilter, projects, allWorkspaceProjects, controlPlaneMode: 'none', controlPlaneRoot: null, effectiveControlPlaneRoot: workspaceRoot, explicitControlPlaneRoot: workspaceRoot, pendingCandidate: null, repoScopeFilter: null, projectContextEnabled: false, surface: SURFACES.kanban },
                 { type: 'cliTriggersState', enabled: false, surface: SURFACES.kanban },
                 { type: 'switchboardThemeNameSetting', theme: 'afterburner', surface: SURFACES.common },
-                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: false, routingConfig: {}, featureWorktrees, surface: SURFACES.kanban },
+                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: kanbanProvider.showingBacklog, showingDispatch: kanbanProvider.showingDispatch, dispatchAnalyzeAvailable: ptyReady, routingConfig: {}, featureWorktrees, surface: SURFACES.kanban },
             ];
             for (const msg of state) {
                 server.broadcastWs(msg.type, msg, msg.surface);
@@ -371,7 +396,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
             { type: 'updateWorkspaceSelection', workspaceRoot, workspaces: workspaceItems, activeFilter: null, projectFilter, projects, allWorkspaceProjects, controlPlaneMode: 'none', controlPlaneRoot: null, effectiveControlPlaneRoot: workspaceRoot, explicitControlPlaneRoot: workspaceRoot, pendingCandidate: null, repoScopeFilter: null, projectContextEnabled: false, surface: SURFACES.kanban },
             { type: 'cliTriggersState', enabled: false, surface: SURFACES.kanban },
             { type: 'switchboardThemeNameSetting', theme: 'afterburner', surface: SURFACES.common },
-            { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: false, routingConfig: {}, featureWorktrees, surface: SURFACES.kanban },
+            { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: kanbanProvider.showingBacklog, showingDispatch: kanbanProvider.showingDispatch, dispatchAnalyzeAvailable: ptyReady, routingConfig: {}, featureWorktrees, surface: SURFACES.kanban },
         ];
     };
 
@@ -1161,6 +1186,24 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     return { success: true };
                 }
 
+                case 'ptySendPrompt': {
+                    // Same pipeline as ptyHost.ts's ptySendPrompt: sendPromptToPty
+                    // owns bracketed-paste framing, chunked writes, /clear before
+                    // prompt, and the confirm CR for CLI agents. Use
+                    // getPromptDeliveryOptions() (reads config, default true/2000ms)
+                    // for parity with triggerAction — the ptyHost.ts version defaults
+                    // clearBeforePrompt to false, which is wrong for this surface.
+                    const handle = ptyFleetService.get(payload.name);
+                    if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
+                    if (handle.status !== 'active') { return { success: false, error: `Terminal ${payload.name} is not active` }; }
+                    try {
+                        await sendPromptToPty(handle, payload.data || '', getPromptDeliveryOptions());
+                        return { success: true };
+                    } catch (err) {
+                        return { success: false, error: err instanceof Error ? err.message : String(err) };
+                    }
+                }
+
                 case 'ptyClearAllTerminals': {
                     const active = ptyFleetService.listActive();
                     await Promise.all(active.map(t => clearPty(t)));
@@ -1240,7 +1283,15 @@ Read the current content above. Deepen the problem analysis, verify every file p
 
                     const targetColumn = explicitTarget || (sourceColumn ? getNextKanbanColumn(sourceColumn) : null);
                     const targetRole = payload.role || (targetColumn ? getRoleForTargetColumn(targetColumn) : 'coder');
-                    const prompt = await buildPromptForCards(targetRole, records, root);
+                    // Instruction parity with the extension host. buildPromptForCards has no
+                    // notion of `instruction`, so without this arm the Analyze button in the
+                    // browser silently delivers a normal planner prompt (plan bodies inlined,
+                    // "process the following plans") — the planner then REWRITES the plan
+                    // files, which is the exact opposite of a read-only analysis pass.
+                    // Mirrors KanbanProvider.generateUnifiedPrompt's dispatch-analysis arm.
+                    const prompt = payload.instruction === 'dispatch-analysis'
+                        ? buildDispatchAnalysisPrompt(records, root, server?.getPort() ?? 0)
+                        : await buildPromptForCards(targetRole, records, root);
                     if (!prompt) { return { success: false, error: 'Failed to build dispatch prompt' }; }
 
                     // getWorktrees() takes no arguments — it already filters status='active'

@@ -845,6 +845,13 @@
             transition: all 0.15s;
         }
 
+        .column-icon-btn.is-disabled,
+        .column-icon-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
         .column-icon-btn img {
             width: 22px;
             height: 22px;
@@ -5157,6 +5164,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             } else if (col === 'BACKLOG') {
                 return null;
             }
+            if (showingDispatch) {
+                if (col === 'PLAN REVIEWED') return null;
+                if (col === 'DISPATCH') col = 'PLAN REVIEWED';
+            } else if (col === 'DISPATCH') {
+                return null;
+            }
             const domCol = resolveDomColumn(col);
             if (domCol === 'CODED_AUTO') return domCol;
             return (columns.includes(domCol) || CODED_IDS.includes(domCol)) ? domCol : null;
@@ -5528,6 +5541,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     ? `<button class="backlog-toggle-btn${showingBacklog ? ' is-active' : ''}" id="btn-toggle-backlog" style="${draggedSessionId !== null ? 'pointer-events:none;opacity:0.5;' : ''}" data-tooltip="${showingBacklog ? 'Switch to New view' : 'Switch to Backlog view'}">${showingBacklog ? 'NEW' : 'BACKLOG'}</button>`
                     : '';
 
+                // Dispatch toggle on the Planned column (display mode of PLAN REVIEWED,
+                // mirroring the backlog toggle on New). When the view is active the button
+                // reads PLANNED (click returns to the Planned view); otherwise DISPATCH.
+                const dispatchToggleBtn = isPlanReviewed
+                    ? `<button class="backlog-toggle-btn${showingDispatch ? ' is-active' : ''}" id="btn-toggle-dispatch" style="${draggedSessionId !== null ? 'pointer-events:none;opacity:0.5;' : ''}" data-tooltip="${showingDispatch ? 'Switch to Planned view' : 'Switch to Dispatch view'}">${showingDispatch ? 'PLANNED' : 'DISPATCH'}</button>`
+                    : '';
+
 
                 const rightSide = isCreated
                     ? `<div style="display: flex; align-items: center; gap: 4px; line-height: 1;">
@@ -5591,8 +5611,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         : '';
                     // In backlog view, the CREATED column shows BACKLOG cards — a holding
                     // pen, not a pipeline stage. Suppress the four advance/prompt buttons
-                    // so only the feature-group button remains.
-                    const pipelineButtons = (isCreated && showingBacklog) ? '' : `
+                    // so only the feature-group button remains. The same suppression applies
+                    // to the Planned column in Dispatch view: it shows DISPATCH cards (a
+                    // parallel-safe staging set), so the normal advance/prompt buttons are
+                    // replaced by a Send-selected-to-coder button.
+                    const suppressPipeline = (isCreated && showingBacklog) || (isPlanReviewed && showingDispatch);
+                    const pipelineButtons = suppressPipeline ? '' : `
                         <button class="column-icon-btn" data-action="moveSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Move selected plans to next stage (triggers CLI if enabled)">
                             <img src="${ICON_MOVE_SELECTED}" alt="Move Selected">
                         </button>
@@ -5605,8 +5629,25 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         <button class="column-icon-btn" data-action="promptAll" data-column="${escapeAttr(def.id)}" data-tooltip="Copy prompt for all plans in this column and advance">
                             <img src="${ICON_PROMPT_ALL}" alt="Prompt All">
                         </button>`;
+                    // Analyze button: visible on the Planned column when NOT in Dispatch view.
+                    // Disabled when the host reports no terminal capability (standalone without
+                    // node-pty) — no dead click (PRD contract #6).
+                    const analyzeBtn = (isPlanReviewed && !showingDispatch)
+                        ? `<button class="column-icon-btn${dispatchAnalyzeAvailable ? '' : ' is-disabled'}" data-action="dispatchAnalyze" data-column="${escapeAttr(def.id)}"${dispatchAnalyzeAvailable ? '' : ' disabled'} data-tooltip="${dispatchAnalyzeAvailable ? 'Analyze Planned plans for parallel dispatch' : 'Analyze requires a terminal (unavailable in this host)'}">
+                               <img src="${ICON_DYNAMIC_ROUTING}" alt="Analyze">
+                           </button>`
+                        : '';
+                    // Send selected Dispatch cards to a coder (forward move with complexity
+                    // routing). Visible only in Dispatch view.
+                    const sendDispatchBtn = (isPlanReviewed && showingDispatch)
+                        ? `<button class="column-icon-btn" data-action="sendDispatchToCoder" data-column="${escapeAttr(def.id)}" data-tooltip="Send selected plans to a coder (routes by complexity)">
+                               <img src="${ICON_MOVE_SELECTED}" alt="Send to Coder">
+                           </button>`
+                        : '';
                     buttonArea = `<div class="column-button-area">
                         ${pipelineButtons}
+                        ${analyzeBtn}
+                        ${sendDispatchBtn}
                         ${julesBtn}
                         ${rePlanBtn}
                         ${featureAddBtn}
@@ -5614,13 +5655,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     </div>`;
                 }
 
-                const columnDisplayLabel = (isCreated && showingBacklog) ? 'BACKLOG' : def.label;
+                const columnDisplayLabel = (isCreated && showingBacklog) ? 'BACKLOG'
+                    : (isPlanReviewed && showingDispatch) ? 'DISPATCH' : def.label;
                 return `<div class="kanban-column" data-column="${escapeAttr(def.id)}">
                     <div class="column-header">
                         <div style="display:flex; flex-direction:column;">
                             <div style="display:flex; align-items:center; gap:8px;">
                                 <span class="column-name">${escapeHtml(columnDisplayLabel)}</span>
                                 ${backlogToggleBtn}
+                                ${dispatchToggleBtn}
                             </div>
                             ${subline}
                         </div>
@@ -5633,6 +5676,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             document.getElementById('btn-toggle-backlog')?.addEventListener('click', () => {
                 postKanbanMessage({ type: 'toggleBacklogView' });
+            });
+
+            document.getElementById('btn-toggle-dispatch')?.addEventListener('click', () => {
+                postKanbanMessage({ type: 'toggleDispatchView' });
             });
 
             document.getElementById('btn-add-plan')?.addEventListener('click', () => {
@@ -5714,7 +5761,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         nextColSource = visibleCodedIds[visibleCodedIds.length - 1] || 'CODER CODED';
                     }
                     const nextCol = getNextColumn(nextColSource);
-                    if (!nextCol && action !== 'julesSelected' && action !== 'rePlanSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed' && action !== 'addBlankFeature') return;
+                    if (!nextCol && action !== 'julesSelected' && action !== 'rePlanSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed' && action !== 'addBlankFeature' && action !== 'dispatchAnalyze' && action !== 'sendDispatchToCoder') return;
 
                     switch (action) {
                         case 'moveSelected': {
@@ -5817,6 +5864,22 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                 return;
                             }
                             postKanbanMessage({ type: 'rePlanSelected', sessionIds: ids, workspaceRoot: getActiveWorkspaceRoot() });
+                            ids.forEach(id => selectedCards.delete(id));
+                            break;
+                        }
+                        case 'dispatchAnalyze': {
+                            // Analyze collects ALL Planned plans (not just selected) — the
+                            // analysis selects the parallelizable set. No selection needed.
+                            postKanbanMessage({ type: 'dispatchAnalyze', workspaceRoot: getActiveWorkspaceRoot() });
+                            break;
+                        }
+                        case 'sendDispatchToCoder': {
+                            const ids = getSelectedInColumn(column);
+                            if (ids.length === 0) {
+                                postKanbanMessage({ type: 'showWarning', message: 'Please select at least one plan in Dispatch to send to a coder.' });
+                                return;
+                            }
+                            postKanbanMessage({ type: 'sendDispatchToCoder', sessionIds: ids, workspaceRoot: getActiveWorkspaceRoot() });
                             ids.forEach(id => selectedCards.delete(id));
                             break;
                         }
@@ -6264,9 +6327,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             } else {
                 displayCards = cards.filter(card => card.column !== 'CREATED');
             }
+            if (!showingDispatch) {
+                displayCards = displayCards.filter(card => card.column !== 'DISPATCH');
+            } else {
+                displayCards = displayCards.filter(card => card.column !== 'PLAN REVIEWED');
+            }
             displayCards = displayCards.filter(card => !card.featureId);
             displayCards.forEach(card => {
-                const effectiveCol = (showingBacklog && card.column === 'BACKLOG') ? 'CREATED' : card.column;
+                let effectiveCol = card.column;
+                if (showingBacklog && card.column === 'BACKLOG') effectiveCol = 'CREATED';
+                if (showingDispatch && card.column === 'DISPATCH') effectiveCol = 'PLAN REVIEWED';
                 const col = columns.includes(effectiveCol) ? effectiveCol : (CODED_IDS.includes(effectiveCol) ? effectiveCol : null);
                 if (!col) return;
                 counts[col] = (counts[col] || 0) + 1;
@@ -6337,14 +6407,21 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 if (!buckets[c]) buckets[c] = [];
             });
 
-            // Filter/remap cards based on backlog view state
+            // Filter/remap cards based on backlog + dispatch view state
             let displayCards = cards;
             if (!showingBacklog) {
-                displayCards = cards.filter(card => card.column !== 'BACKLOG');
+                displayCards = displayCards.filter(card => card.column !== 'BACKLOG');
             } else {
-                displayCards = cards
+                displayCards = displayCards
                     .filter(card => card.column !== 'CREATED')
                     .map(card => card.column === 'BACKLOG' ? { ...card, _effectiveColumn: 'CREATED' } : card);
+            }
+            if (!showingDispatch) {
+                displayCards = displayCards.filter(card => card.column !== 'DISPATCH');
+            } else {
+                displayCards = displayCards
+                    .filter(card => card.column !== 'PLAN REVIEWED')
+                    .map(card => card.column === 'DISPATCH' ? { ...card, _effectiveColumn: 'PLAN REVIEWED' } : card);
             }
 
             // Subtasks roll up into their feature card. Hide them from the main board.
@@ -6663,6 +6740,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 });
             });
 
+            document.querySelectorAll('.send-to-dispatch-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    postKanbanMessage({ type: 'sendToDispatch', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
+                });
+            });
+
+            document.querySelectorAll('.send-to-planned-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    postKanbanMessage({ type: 'sendToPlanned', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
+                });
+            });
+
             requestAnimationFrame(() => restoreBoardViewState(viewState));
             updateReassignButtonVisibility();
             updateFeatureActionButton();
@@ -6797,7 +6886,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                    </button>`
                 : (!isCompleted && showingBacklog && card.column === 'BACKLOG')
                     ? `<button class="card-btn send-to-new-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move back to New">→ New</button>`
-                    : '';
+                    : (!isCompleted && card.column === 'PLAN REVIEWED' && !showingDispatch)
+                        ? `<button class="card-btn icon-btn send-to-dispatch-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move to Dispatch">
+                               <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v9M4.5 8.5L8 12l3.5-3.5"/></svg>
+                           </button>`
+                        : (!isCompleted && showingDispatch && card.column === 'DISPATCH')
+                            ? `<button class="card-btn send-to-planned-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move back to Planned">→ Planned</button>`
+                            : '';
 
             const featureClass = card.isFeature ? ' feature-card' : '';
             const featureBadge = ''; // Badge removed; feature identity shown via purple border + meta line
@@ -6985,6 +7080,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         // Backlog toggle state
         let showingBacklog = false;
+        // Dispatch toggle state (display mode of PLAN REVIEWED, mirrors BACKLOG/CREATED).
+        let showingDispatch = false;
+        // Host terminal-capability flag for the Analyze button (false in standalone
+        // without node-pty). Defaults true so the extension host (which always has a
+        // terminal) enables the button before the first board push arrives.
+        let dispatchAnalyzeAvailable = true;
 
         // Drag & Drop handlers
         let draggedSessionId = null;
@@ -7157,7 +7258,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (cardEl && targetBody) {
                         // Source DOM column: cards in coder cols are already in CODED_AUTO dom container when collapsed
                         const sourceDomCol = CODED_IDS.includes(card.column) ? 'CODED_AUTO' :
-                                             (card.column === 'BACKLOG' && showingBacklog ? 'CREATED' : card.column);
+                                             (card.column === 'BACKLOG' && showingBacklog ? 'CREATED' :
+                                             (card.column === 'DISPATCH' && showingDispatch ? 'PLAN REVIEWED' : card.column));
                         const emptyState = targetBody.querySelector('.empty-state');
                         if (emptyState) emptyState.remove();
                         if (sourceDomCol !== 'CODED_AUTO') {
@@ -7247,15 +7349,21 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const forwardIds = [];
             const backwardIds = [];
 
-            // When backlog view is active, dropping to the CREATED slot means BACKLOG
-            const effectiveTargetColumn = (showingBacklog && targetColumn === 'CREATED') ? 'BACKLOG' : targetColumn;
+            // When a display-mode view is active, dropping to the parent slot means the
+            // display-mode column (BACKLOG for CREATED, DISPATCH for PLAN REVIEWED).
+            const effectiveTargetColumn = (showingBacklog && targetColumn === 'CREATED') ? 'BACKLOG'
+                : (showingDispatch && targetColumn === 'PLAN REVIEWED') ? 'DISPATCH' : targetColumn;
 
             sessionIds.forEach(id => {
                 const card = currentCards.find(c => (c.planId || c.sessionId) === id);
                 if (!card || card.column === effectiveTargetColumn) return;
 
-                // BACKLOG cards are treated as index 0 (same as CREATED) for forward/backward calculation
-                const sourceIndex = card.column === 'BACKLOG' ? 0 : columns.indexOf(card.column);
+                // BACKLOG cards are treated as index 0 (same as CREATED); DISPATCH cards
+                // as the PLAN REVIEWED index (the column DISPATCH is a display mode of),
+                // for forward/backward calculation.
+                const sourceColForIndex = card.column === 'BACKLOG' ? 'CREATED'
+                    : (card.column === 'DISPATCH' ? 'PLAN REVIEWED' : card.column);
+                const sourceIndex = columns.indexOf(sourceColForIndex);
                 const targetIndex = columns.indexOf(effectiveTargetColumn);
 
                 if (targetIndex < sourceIndex) {
@@ -7284,8 +7392,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         targetBody.appendChild(cardEl);
                         // Update source column empty state
                         if (card) {
-                            // Source DOM column: BACKLOG cards display in CREATED slot when showingBacklog
-                            const srcDomCol = (card.column === 'BACKLOG' && showingBacklog) ? 'CREATED' : card.column;
+                            // Source DOM column: BACKLOG/DISPATCH cards display in their
+                            // parent slot when the corresponding view is active.
+                            const srcDomCol = (card.column === 'BACKLOG' && showingBacklog) ? 'CREATED'
+                                : (card.column === 'DISPATCH' && showingDispatch) ? 'PLAN REVIEWED' : card.column;
                             const sourceBody = document.getElementById('col-' + srcDomCol);
                             if (sourceBody && sourceBody.querySelectorAll('.kanban-card').length === 0) {
                                 sourceBody.innerHTML = '<div class="empty-state">No plans</div>';
@@ -7357,8 +7467,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             validIds.forEach(id => {
                 const card = currentCards.find(c => (c.planId || c.sessionId) === id);
                 const cardEl = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
-                // Source DOM column: BACKLOG cards display in CREATED slot when showingBacklog
-                const sourceDomColumn = (card && card.column === 'BACKLOG' && showingBacklog) ? 'CREATED' : (card?.column || targetColumn);
+                // Source DOM column: BACKLOG/DISPATCH cards display in their parent slot
+                // when the corresponding view is active.
+                const sourceDomColumn = (card && card.column === 'BACKLOG' && showingBacklog) ? 'CREATED'
+                    : (card && card.column === 'DISPATCH' && showingDispatch) ? 'PLAN REVIEWED' : (card?.column || targetColumn);
                 if (cardEl && targetBody) {
                     // Remove empty-state placeholder if present
                     const emptyState = targetBody.querySelector('.empty-state');
@@ -7737,6 +7849,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (typeof msg.showingBacklog !== 'undefined') {
                         showingBacklog = msg.showingBacklog;
                     }
+                    if (typeof msg.showingDispatch !== 'undefined') {
+                        showingDispatch = msg.showingDispatch;
+                    }
+                    if (typeof msg.dispatchAnalyzeAvailable !== 'undefined') {
+                        dispatchAnalyzeAvailable = msg.dispatchAnalyzeAvailable === true;
+                    }
                     if (msg.routingConfig) {
                         routingMapConfig = msg.routingConfig;
                         updateRoutingMapButtonIndicator();
@@ -7980,6 +8098,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 }
                 case 'backlogViewState':
                     showingBacklog = event.data.showing;
+                    renderColumns();
+                    renderBoard(currentCards);
+                    updateAllColumnAgents();
+                    break;
+                case 'dispatchViewState':
+                    showingDispatch = event.data.showing;
                     renderColumns();
                     renderBoard(currentCards);
                     updateAllColumnAgents();

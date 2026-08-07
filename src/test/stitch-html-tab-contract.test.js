@@ -375,6 +375,84 @@ async function main() {
             'loading-state ids belong in `loading`, not `hide`');
     });
 
+    console.log('\n── markdown files in the stitch cache dir are listable AND previewable ──');
+
+    // The sidebar is this tab's ONLY way to open a file, so a listing filter that
+    // drops .md makes the preview pane's markdown branch unreachable dead code —
+    // exactly the state the markdown-rendering change originally shipped in.
+    await test('12. a .md note in the cache dir IS listed, and its paired .png is NOT', async () => {
+        const mdCacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stitch-md-'));
+        fs.writeFileSync(path.join(mdCacheDir, 'aaaa1111.html'), '<html><body>A</body></html>');
+        fs.writeFileSync(path.join(mdCacheDir, 'aaaa1111.png'), 'not-a-png');
+        fs.writeFileSync(path.join(mdCacheDir, 'design-notes.md'), '# Notes\n');
+        const { provider } = buildHarness(tmpDir);
+        await withStubbedDb(dbStub, async () => {
+            provider._getImageCacheDir = () => mdCacheDir;
+            const res = await provider.handleServiceVerb('stitchHtmlListDocs', {
+                projectId: PROJECT_ID, workspaceRoot: tmpDir
+            });
+            const files = res.docs.map(d => d.file).sort();
+            assert.ok(files.includes('design-notes.md'),
+                `markdown must be listed or the preview pane can never receive it; got ${JSON.stringify(files)}`);
+            assert.ok(files.includes('aaaa1111.html'), 'html screens must still be listed');
+            assert.ok(!files.includes('aaaa1111.png'),
+                'images must stay out — every screen caches an .html AND a .png, so listing images doubles every row');
+            // A note has no `screens` row; it must not inherit a same-stem screen name.
+            assert.strictEqual(res.docs.find(d => d.file === 'design-notes.md').name, 'design-notes.md');
+            assert.strictEqual(res.docs.find(d => d.file === 'aaaa1111.html').name, 'Screen A');
+        });
+        fs.rmSync(mdCacheDir, { recursive: true, force: true });
+    });
+
+    await test('13. previewing a .md returns fileType "markdown" + content, and no iframe payload', async () => {
+        const mdCacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stitch-md-'));
+        fs.writeFileSync(path.join(mdCacheDir, 'design-notes.md'), '# Notes\n\nSome **bold** text.\n');
+        const { provider } = buildHarness(tmpDir);
+        await withStubbedDb(dbStub, async () => {
+            provider._getImageCacheDir = () => mdCacheDir;
+            const res = await provider.handleServiceVerb('fetchPreview', {
+                sourceId: 'stitch-html-folder', docId: 'design-notes.md',
+                projectId: PROJECT_ID, workspaceRoot: tmpDir, requestId: 91
+            });
+            assert.strictEqual(res.success, true);
+            assert.strictEqual(res.fileType, 'markdown', 'design.js dispatches the markdown branch off fileType');
+            assert.ok(res.content.includes('**bold**'), 'the body must carry the markdown source (PRD contract #4)');
+            assert.ok(!res.iframeSrc && !res.htmlContent,
+                'a markdown payload must not carry iframe fields, or the HTML branch would win the dispatch');
+        });
+        fs.rmSync(mdCacheDir, { recursive: true, force: true });
+    });
+
+    await test('14. the "Rebuild Cache" hint is html-only — a missing .md note does not get it', async () => {
+        const mdCacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stitch-md-'));
+        const { provider } = buildHarness(tmpDir);
+        await withStubbedDb(dbStub, async () => {
+            provider._getImageCacheDir = () => mdCacheDir;
+            const note = await provider.handleServiceVerb('fetchPreview', {
+                sourceId: 'stitch-html-folder', docId: 'missing-note.md',
+                projectId: PROJECT_ID, workspaceRoot: tmpDir, requestId: 92
+            });
+            assert.ok(!/Rebuild Cache/.test(note.error),
+                `Rebuild Cache re-downloads screens; a user-authored note is not restorable that way. Got: ${note.error}`);
+            const screen = await provider.handleServiceVerb('fetchPreview', {
+                sourceId: 'stitch-html-folder', docId: 'missing-screen.html',
+                projectId: PROJECT_ID, workspaceRoot: tmpDir, requestId: 93
+            });
+            assert.ok(/Rebuild Cache/.test(screen.error), `got: ${screen.error}`);
+        });
+        fs.rmSync(mdCacheDir, { recursive: true, force: true });
+    });
+
+    await test('15. the stitch sidebar classifies its badge off the FILENAME, not the screen display name', () => {
+        // A stitch doc's `name` is the DB display name ("Screen A") — extensionless, so
+        // getDocType(doc) returns 'other' and every card badges "File". The subtitle must
+        // be derived from doc.file.
+        const renderFn = blockAt(DESIGN_JS, 'function renderStitchHtmlDocs(');
+        assert.ok(/getDocType\(\s*\{\s*name:\s*doc\.file\s*\}\s*\)/.test(renderFn),
+            'renderStitchHtmlDocs must call getDocType({ name: doc.file }) — passing the raw doc '
+            + 'classifies the DB screen display name and badges every HTML screen as "File"');
+    });
+
     for (const p of builtProviders) {
         try { p.dispose(); } catch {}
     }

@@ -114,7 +114,14 @@ subtask changes, so they only need to be written once.
 
 ## Notes
 
-- Feature creation does NOT sync to Linear/ClickUp.
+- Feature creation syncs to Linear/ClickUp: the feature is pushed as a parent
+  issue/task and subtasks are linked as children. Gated per tracker on BOTH
+  `setupComplete` and `realTimeSyncEnabled` being true — with either off, that
+  tracker is skipped silently, so do not report a sync that may not have
+  happened. A subtask is only linked if its own issue/task already exists;
+  ones that don't are skipped and get linked on a later feature-sync trigger.
+  To confirm what actually synced, check `linear_issue_id` / `clickup_task_id`
+  on the feature and subtask rows.
 - To add more plans to an existing feature later, use
   `node .agents/skills/kanban_operations/assign-to-feature.js "{featurePlanId}" '["newPlanId"]' "{workspaceRoot}"`
 - The `<!-- BEGIN SUBTASKS -->` block is auto-managed by the extension —

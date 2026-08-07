@@ -246,3 +246,11 @@ if (failed > 0) { process.exit(1); }
 6. **Column/workspace/project switch:** change the pane's column picker, then its project picker, and confirm each new list is also newest-first (the sort runs on every render, not once at fetch).
 
 7. **Editor untouched:** open the extension kanban board and confirm column ordering is unchanged (this change cannot reach it — `terminals.js` is browser-only — but confirm once).
+
+## Implementation Summary
+
+Implemented the browser kanban pane card sort in `src/webview/terminals.js`. Added `cardTimestamp` and `compareCardsByRecency` beside the existing local helpers and updated `renderKanbanPane` to sort `cards` newest-first before the body signature is built, matching the extension board's `kanban.html` comparator. Added the source contract test `src/test/browser-kanban-pane-order.test.js` to guard the comparator, sort-before-signature ordering, and board parity. The inline comment was rephrased to avoid the literal `bodySig` identifier so the contract test's first-occurrence assertion keys on the declaration. Compilation and test execution were skipped per the session directives.
+
+## Review Findings
+
+**Reviewer pass completed.** The implementation matches the plan: `cardTimestamp` and `compareCardsByRecency` are semantically identical to `kanban.html:6366-6417`, the sort is applied to a copy before `bodySig` (line 2565 < 2567), and the contract test passes (5/5). Regression analysis traced all callers (`renderKanbanPane` only), confirmed no cache mutation, no double-trigger, no race, and no orphaned references. **One MAJOR finding fixed:** the contract test had no `test:contract:*` script in `package.json` and no CI workflow step — the exact "green while incomplete" hole. Added `test:contract:browser-kanban-pane-order` to `package.json` and a workflow step to `integration-tests.yml`. Files changed: `package.json`, `.github/workflows/integration-tests.yml`. Verification: `npm run test:contract:browser-kanban-pane-order` passes (5/5). Remaining risk: the two comparators (board and pane) can still silently diverge — the parity test guards presence and key fields but not full semantic equivalence.

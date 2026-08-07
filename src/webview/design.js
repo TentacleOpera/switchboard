@@ -1189,9 +1189,14 @@
         }
 
         filtered.forEach(doc => {
+            // getDocType() classifies off doc.name, but a stitch doc's `name` is the
+            // DB screen DISPLAY name ("Login Page") — no extension, so every card
+            // would badge "File". doc.file is the on-disk entry; classify off that.
+            const docType = getDocType({ name: doc.file });
+            const subtitle = TYPE_LABELS[docType] || 'File';
             const card = renderDocCard({
                 title: doc.name || doc.file,
-                subtitle: 'HTML',
+                subtitle,
                 sourceId: 'stitch-html-folder',
                 nodeId: doc.file,
                 nodeMetadata: { sourceFolder: doc.sourceFolder, absolutePath: doc.absolutePath },
@@ -1445,9 +1450,13 @@
             const initialState = document.getElementById('stitch-html-initial-state');
             const loadingState = document.getElementById('stitch-html-loading-state');
             const iframeWrapper = document.getElementById('stitch-html-preview-wrapper');
+            const mdPreview = document.getElementById('stitch-html-markdown-preview');
+            const imgPreview = document.getElementById('stitch-html-image-preview');
             if (initialState) initialState.style.display = 'none';
             if (loadingState) loadingState.style.display = 'flex';
             if (iframeWrapper) iframeWrapper.style.display = 'none';
+            if (mdPreview) mdPreview.style.display = 'none';
+            if (imgPreview) imgPreview.style.display = 'none';
 
             vscode.postMessage({
                 type: 'fetchPreview',
@@ -1590,11 +1599,6 @@
             const tweakPopup = document.getElementById('stitch-tweak-popup');
             if (tweakPopup) tweakPopup.style.display = 'none';
             state.stitchSelectedElement = null;
-
-            if (!isAutoRefreshed) {
-                resetZoom('stitchHtml');
-                _fitPending.stitchHtml = true;
-            }
             _stitchHtmlContentDims = null;
 
             const initialState = document.getElementById('stitch-html-initial-state');
@@ -1602,48 +1606,97 @@
             if (initialState) initialState.style.display = 'none';
             if (loadingState) loadingState.style.display = 'none';
 
+            // Grab all preview containers
+            const mdPreview = document.getElementById('stitch-html-markdown-preview');
+            const imgPreview = document.getElementById('stitch-html-image-preview');
+            const imgImg = document.getElementById('stitch-html-image-img');
             const iframe = document.getElementById('stitch-html-preview-frame');
             const iframeWrapper = document.getElementById('stitch-html-preview-wrapper');
-            const stitchViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
-            // See the HTML-preview reset above: fill until natural dims arrive.
-            if (stitchViewport) { stitchViewport.style.width = '100%'; stitchViewport.style.height = '100%'; }
 
-            if (msg.iframeSrc) {
+            // Helper: hide all preview containers so only one is visible at a time
+            const hideAllStitch = () => {
+                if (iframeWrapper) iframeWrapper.style.display = 'none';
+                if (mdPreview) mdPreview.style.display = 'none';
+                if (imgPreview) imgPreview.style.display = 'none';
+            };
+
+            // Inspect Mode posts into the preview iframe. On a non-HTML preview that
+            // iframe is hidden and still holds the PREVIOUS file, so the button would
+            // dead-click. It lives in the controls strip, not the edit bar, so hiding
+            // the edit bar does not cover it — gate it per branch.
+            const setInspectEnabled = (on) => { if (inspectBtn) inspectBtn.disabled = !on; };
+
+            if (msg.isImage && msg.webviewUri) {
+                // Image file — render in the image container
+                hideAllStitch();
+                setInspectEnabled(false);
+                if (imgPreview) imgPreview.style.display = 'flex';
+                if (imgImg) imgImg.src = withCacheBust(msg.webviewUri);
+                // Hide the edit bar — AI refine targets HTML elements, not images
+                const shEditBar = document.getElementById('stitch-html-edit-bar');
+                if (shEditBar) shEditBar.style.display = 'none';
+            } else if (msg.fileType === 'markdown' || msg.fileType === 'text' ||
+                       (!msg.iframeSrc && !htmlContent && msg.content && msg.fileType !== 'html' && msg.fileType !== 'json' && msg.fileType !== 'yaml')) {
+                // Markdown / text file — render as formatted markdown
+                hideAllStitch();
+                setInspectEnabled(false);
+                if (mdPreview) {
+                    mdPreview.style.display = 'block';
+                    mdPreview.innerHTML = renderMarkdown(msg.content) || '';
+                }
+                // Hide the edit bar — AI refine targets HTML elements, not markdown
+                const shEditBar = document.getElementById('stitch-html-edit-bar');
+                if (shEditBar) shEditBar.style.display = 'none';
+            } else if (msg.fileType === 'json' || msg.fileType === 'yaml') {
+                // JSON/YAML — render as plain text (MVP: no tree viewer in this tab)
+                hideAllStitch();
+                setInspectEnabled(false);
+                if (mdPreview) {
+                    mdPreview.style.display = 'block';
+                    mdPreview.innerHTML = '<pre style="white-space: pre-wrap; word-wrap: break-word; font-family: var(--font-mono, monospace); font-size: 13px;">' +
+                        (msg.content || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</pre>';
+                }
+                const shEditBar = document.getElementById('stitch-html-edit-bar');
+                if (shEditBar) shEditBar.style.display = 'none';
+            } else {
+                // HTML file — existing iframe logic (unchanged)
+                hideAllStitch();
+                setInspectEnabled(true);
+                if (!isAutoRefreshed) {
+                    resetZoom('stitchHtml');
+                    _fitPending.stitchHtml = true;
+                }
                 if (iframeWrapper) iframeWrapper.style.display = 'flex';
+                const stitchViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
+                // See the HTML-preview reset above: fill until natural dims arrive.
+                if (stitchViewport) { stitchViewport.style.width = '100%'; stitchViewport.style.height = '100%'; }
                 if (iframe) {
                     iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
-                    iframe.removeAttribute('srcdoc');
-                    iframe.src = isAutoRefreshed ? withCacheBust(msg.iframeSrc) : msg.iframeSrc;
+                    if (msg.iframeSrc) {
+                        iframe.removeAttribute('srcdoc');
+                        iframe.src = isAutoRefreshed ? withCacheBust(msg.iframeSrc) : msg.iframeSrc;
+                    } else if (htmlContent) {
+                        iframe.removeAttribute('src');
+                        iframe.removeAttribute('srcdoc');
+                        iframe.srcdoc = injectBaseTag(htmlContent, webviewUri);
+                    }
                 }
-                const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
-                if (iframeViewport) applyZoom('stitchHtml', iframeViewport);
+                if (stitchViewport) applyZoom('stitchHtml', stitchViewport);
                 notifyIframeResize(iframe, iframeWrapper);
                 if (iframe) iframe.addEventListener('load', () => notifyIframeResize(iframe, iframeWrapper), { once: true });
-            } else if (htmlContent) {
-                if (iframeWrapper) iframeWrapper.style.display = 'flex';
-                if (iframe) {
-                    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
-                    iframe.removeAttribute('src');
-                    iframe.removeAttribute('srcdoc');
-                    iframe.srcdoc = injectBaseTag(htmlContent, webviewUri);
-                    const iframeViewport = iframeWrapper ? iframeWrapper.querySelector('.zoomable-viewport') : null;
-                    if (iframeViewport) applyZoom('stitchHtml', iframeViewport);
-                }
-                notifyIframeResize(iframe, iframeWrapper);
-                if (iframe) iframe.addEventListener('load', () => notifyIframeResize(iframe, iframeWrapper), { once: true });
+                // Show the edit bar for HTML files only
+                const shEditBar = document.getElementById('stitch-html-edit-bar');
+                if (shEditBar) shEditBar.style.display = 'block';
+                const shRange = document.getElementById('stitch-html-creative-range-select');
+                if (shRange) shRange.value = state.stitchCreativeRange;
+                state.stitchHtmlActiveScreenProjectId = state.selectedStitchHtmlProjectId;
             }
+
             const statusEl = document.getElementById('status-stitch-html');
             if (statusEl) {
                 statusEl.textContent = isAutoRefreshed ? 'Auto-refreshed' : '';
                 statusEl.style.color = 'var(--accent-teal)';
             }
-            // A previewed screen is editable — surface the edit toolbar and pin the
-            // project it belongs to (the dropdown may change while previewing).
-            const shEditBar = document.getElementById('stitch-html-edit-bar');
-            if (shEditBar) shEditBar.style.display = 'block';
-            const shRange = document.getElementById('stitch-html-creative-range-select');
-            if (shRange) shRange.value = state.stitchCreativeRange;
-            state.stitchHtmlActiveScreenProjectId = state.selectedStitchHtmlProjectId;
         } else if (sourceId === 'images-folder') {
             if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) {
                 const loading = document.getElementById('images-loading-state');
@@ -3421,7 +3474,7 @@
                     'stitch-html-folder': {
                         status: 'status-stitch-html',
                         loading: 'stitch-html-loading-state',
-                        hide: ['stitch-html-preview-wrapper', 'stitch-html-edit-bar'],
+                        hide: ['stitch-html-preview-wrapper', 'stitch-html-edit-bar', 'stitch-html-markdown-preview', 'stitch-html-image-preview'],
                         show: ['stitch-html-initial-state']
                     },
                     'html-folder': {

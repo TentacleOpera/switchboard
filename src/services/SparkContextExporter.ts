@@ -224,7 +224,8 @@ export function generateSparkContext(workspaceRoot: string, extensionVersion: st
     content += `  \`\`\`\n  ---\n  kind: board-moves\n  job: <job-name>\n  created: <ISO-8601>\n  ---\n  \`\`\`\n`;
     content += `- One line per move: \`- planId: <plan-id> to: <column-id>\`\n`;
     content += `- \`<column-id>\` must be an actual column ID currently on the board. Do not use a label or slug. Do not use \`CODED\` as a column id; it is not a built-in id (it is a legacy alias normalised to \`LEAD CODED\`). The built-in column ids are: ${builtInColumns}. Custom columns are also valid if they exist on this board.\n`;
-    content += `- A single malformed line rejects the **entire file**; Switchboard validates and applies the rest.\n\n`;
+    content += `- A single malformed line rejects the **entire file**; Switchboard validates and applies the rest.\n`;
+    content += `- Board-advancing jobs are **user-authored, not shipped by Switchboard**. A job that moves cards must name its column IDs explicitly from the board's real vocabulary (listed above) rather than inferring them.\n\n`;
     content += `### Run Log\n`;
     content += `- Append one line per completed run to \`.switchboard/instructions/run-log.md\`.\n`;
     content += `- Format: \`<timestamp> | <job-name> | <summary>\`\n`;

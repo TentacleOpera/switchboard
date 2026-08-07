@@ -361,3 +361,45 @@ Source-level contract test, matching the suite's existing style:
 ## Recommendation
 
 Complexity 6 → **Send to Coder.**
+
+## Review Findings
+
+**Reviewer:** Direct reviewer pass (GLM-5.2 High)
+**Date:** 2026-08-07
+**Verdict:** PASS — all material requirements verified in source; one MAJOR finding (missing contract test) now fixed.
+
+### Verified
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| `dispatchToCoderTerminal` declares `options?: { apiOriginated?: boolean }`, returns `Promise<boolean>` | ✅ | Signature confirmed; passes `allowPtyFleet` as 4th arg to `_resolveAgentTerminalForPlan`; returns `false` on miss |
+| `extension.ts` forwards `apiOriginated` across command boundary | ✅ | `dispatchToCoderTerminal` registration accepts and forwards options |
+| `_orchestratorApiOriginated` field declared, initialised false | ✅ | `private _orchestratorApiOriginated = false` (fail-closed default) |
+| Set at both start entry points | ✅ | `startOrchestratorFromKanban` sets `!!options?.apiOriginated`; `orchestrationStart` callback passes `{ apiOriginated: true }` (HTTP-only sanctioned exception) |
+| Reset on stop | ✅ | `stopOrchestratorFromKanban` sets `= false` |
+| Read at both dispatch sites (kickoff + wake) | ✅ | Both pass `this._orchestratorApiOriginated` as 6th arg to `_dispatchExecuteMessage` |
+| Kickoff reports failed delivery | ✅ | `if (!kickoffSent)` posts `orchestratorStartResult { success: false }` |
+| Airlock arm passes `workspaceRoot` + `allowPtyFleet` to `_getAgentNameForRole` | ✅ | Confirmed in `_handleAirlockSendToCoder` body |
+| Airlock gates `airlock_coderSent` on delivery | ✅ | `if (!sent)` posts `airlock_coderError` |
+| Airlock arm call site forwards flag | ✅ | `airlock_sendToCoder` arm forwards `{ apiOriginated: !!data.apiOriginated }` |
+| `_dispatchWithPairProgrammingIfNeeded` declares options param | ✅ | Signature confirmed |
+| `_dispatchWithPairProgrammingIfNeeded` forwards flag to `dispatchToCoderTerminal` | ✅ | Passes `{ apiOriginated: !!options?.apiOriginated }` as 3rd command arg |
+| All `_dispatchWithPairProgrammingIfNeeded` call sites pass `apiOriginated` | ✅ | ≥9 call sites verified — none uses 2-arg form |
+| KanbanProvider `startOrchestrator` verb arm forwards flag | ✅ | Passes `{ apiOriginated: !!msg?.apiOriginated }` to `startOrchestratorFromKanban` |
+| Every `_dispatchExecuteMessage` call site passes explicit 6th arg | ✅ | ≥7 sites verified — all pass `allowPtyFleet`, `_orchestratorApiOriginated`, or `true` (fleet helper) |
+| Fail-closed: only `orchestrationStart` may use literal `true` | ✅ | Only 1 occurrence of `apiOriginated: true` in TaskViewerProvider, inside the orchestrationStart callback |
+
+### MAJOR Finding (Fixed)
+
+**Missing contract test.** The plan's verification section specified a new contract test file (`browser-stray-dispatch-surface`), but it was never created. **Fixed:** Created `src/test/browser-stray-dispatch-surface.test.js` (7 assertions), wired into `package.json` as `test:contract:browser-stray-dispatch-surface` and CI workflow `integration-tests.yml`. All 7 assertions pass.
+
+### Gate Wiring Audit
+
+| Gate | Status |
+|---|---|
+| `npx tsc --noEmit` | ✅ No new errors (5 pre-existing TS2835 in unrelated modules) |
+| `npm run parity:check` | ✅ Pass |
+| `npm run push-routing:check` | ✅ Pass |
+| `npm run verb-returns:check` | ⚠️ Kanban break regression — from unrelated `attributePastedPrompt` feature, not this plan |
+| `test:contract:browser-stray-dispatch-surface` | ✅ 7/7 pass (NEW) |
+| `test:contract:pty-dispatch-focus` | ✅ 11/11 pass |

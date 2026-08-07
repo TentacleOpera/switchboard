@@ -3743,6 +3743,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             max-width: 320px;
         }
 
+        /* Compact chevron buttons flanking the source summary. Inherits .strip-btn's
+           border/hover/disabled treatment; only the text metrics need overriding —
+           .strip-btn's uppercase + 1px letter-spacing decentres a single glyph. */
+        .tickets-source-nav-btn {
+            padding: 2px 6px;
+            min-width: 20px;
+            font-size: 14px;
+            line-height: 1;
+            letter-spacing: 0;
+            text-transform: none;
+        }
+
         /* planning.html styles .overflow-menu-item but never its hover state. */
         .overflow-menu-item:hover {
             background: var(--card-bg-hover);
@@ -3957,7 +3969,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                          `test:contract:panel-runtime-surface` fails the build if it
                          comes back. -->
                     <button id="tickets-source-btn" class="strip-btn" title="Choose provider and navigate the source hierarchy">Source</button>
+                    <button id="tickets-source-prev" class="strip-btn tickets-source-nav-btn" title="Previous list" aria-label="Previous list" style="display:none">‹</button>
                     <span id="tickets-source-summary" class="workspace-static-label"></span>
+                    <button id="tickets-source-next" class="strip-btn tickets-source-nav-btn" title="Next list" aria-label="Next list" style="display:none">›</button>
                     <select id="tickets-project-picker" class="planning-select" style="display:none" title="Filter by Linear project"></select>
                     <select id="tickets-state-filter" class="planning-select" style="display:none" title="Filter by Linear state"></select>
                     <select id="tickets-status-filter" class="planning-select" style="display:none" title="Filter by ClickUp status"></select>
@@ -4681,6 +4695,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         </div>
     </div>
     <script nonce="{{NONCE}}" src="{{SHARED_UTILS_URI}}"></script>
+    <!-- Defines window.SwitchboardMarkdownEditor, which the ticket description
+         editor attaches to (tickets.js). Both hosts already substitute this URI
+         (TicketsPanelProvider / headlessPanelHtml); the tag was missed in the
+         panel extraction, so the substitutions were no-ops and the editor
+         degraded silently to a bare textarea via the `&& window.Switchboard-
+         MarkdownEditor` guard. Load order matches planning.html. -->
+    <script nonce="{{NONCE}}" src="{{MARKDOWN_EDITOR_URI}}"></script>
     <script nonce="{{NONCE}}" src="{{TICKETS_JS_URI}}"></script>
 </body>
 </html>

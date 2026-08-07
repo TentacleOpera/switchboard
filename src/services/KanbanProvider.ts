@@ -209,6 +209,9 @@ export class KanbanProvider implements vscode.Disposable {
     private _currentWorkspaceRoot: string | null = null;
     private _columnDragDropModes: Record<string, 'cli' | 'prompt' | 'disabled'>;
     private _showingBacklog: boolean = false;
+    // Dispatch is a display mode of PLAN REVIEWED (mirrors BACKLOG/CREATED). When true,
+    // DISPATCH cards render in the Planned slot and PLAN REVIEWED cards are hidden.
+    private _showingDispatch: boolean = false;
     private _allowUnknownComplexityAutoMove: boolean;
     private _clearTerminalBeforePrompt: boolean;
     private _clearTerminalBeforePromptDelay: number;
@@ -1168,7 +1171,7 @@ export class KanbanProvider implements vscode.Disposable {
                     projectContextEnabled,
                 },
                 { type: 'cliTriggersState', enabled: cliEnabled, surface: SURFACES.kanban },
-                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig, featureWorktrees, surface: SURFACES.kanban },
+                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, showingDispatch: this._showingDispatch, dispatchAnalyzeAvailable: true, routingConfig, featureWorktrees, surface: SURFACES.kanban },
                 // Automation tab state rides the connect-time resync too, so the tab is
                 // populated even before its on-open getAutobanConfig verb returns.
                 // Omitted entirely when the sidebar hasn't relayed a state yet — pushing
@@ -2024,6 +2027,8 @@ export class KanbanProvider implements vscode.Disposable {
                     cards,
                     dbUnavailable: false,
                     showingBacklog: this._showingBacklog,
+                    showingDispatch: this._showingDispatch,
+                    dispatchAnalyzeAvailable: true,
                     routingConfig: this._routingMapForScope(scope),
                     featureWorktrees
                 }));
@@ -2098,6 +2103,15 @@ export class KanbanProvider implements vscode.Disposable {
             console.error('[KanbanProvider] refreshWithData FAILED:', e);
         }
     }
+
+    /** Live backlog-view flag. Standalone reads this for the board payload so the flag
+     *  is never a hardcoded literal that clobbers the toggle. */
+    public get showingBacklog(): boolean { return this._showingBacklog; }
+
+    /** Live dispatch-view flag (display mode of PLAN REVIEWED). Standalone reads this
+     *  for the board payload so the flag is never a hardcoded literal that clobbers
+     *  the toggle (the defect the backlog-view plan documents for showingBacklog). */
+    public get showingDispatch(): boolean { return this._showingDispatch; }
 
     /**
      * Post message to webview (used by ContinuousSyncService).
@@ -3547,6 +3561,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 cards,
                 dbUnavailable,
                 showingBacklog: this._showingBacklog,
+                showingDispatch: this._showingDispatch,
+                dispatchAnalyzeAvailable: true,
                 routingConfig: this._routingMapForScope(scope),
                 featureWorktrees
             }));
@@ -3727,6 +3743,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 cards,
                 dbUnavailable: false,
                 showingBacklog: this._showingBacklog,
+                showingDispatch: this._showingDispatch,
+                dispatchAnalyzeAvailable: true,
                 routingConfig: this._routingMapForScope(scope)
             }));
             this.postMessage((scope: string | null | undefined) => ({
@@ -4653,6 +4671,26 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             return `${customBuilt}${customPhoneSuffix}`;
         }
 
+        // Dispatch-analysis: a read-only parallelism analysis pass dispatched on the
+        // existing planner terminal with a 'dispatch-analysis' instruction. It does NOT
+        // run improve-plan — it reads the dispatch-analysis skill, queries the API for
+        // the Planned column, selects the largest non-overlapping set, and moves that
+        // set to DISPATCH. Built here (before the normal planner path) so the improve-plan
+        // workflow body is never emitted for this instruction. The plan list is included
+        // so the agent sees the candidate plan IDs/files directly; the skill re-queries
+        // the API for freshness (late additions are never stale).
+        if (role === 'planner' && overrides?.instruction === 'dispatch-analysis') {
+            const dispatchContext = buildPromptDispatchContext(plans);
+            const apiPort = this._taskViewerProvider?.getLocalApiServerPort() ?? 0;
+            const dispatchPrompt =
+                `Read and follow .agents/skills/dispatch-analysis/SKILL.md now.\n` +
+                `This is a read-only analysis pass — do not modify any plan file.\n` +
+                `WORKSPACE_ROOT=${workspaceRoot}\n` +
+                `API_PORT=${apiPort}\n\n` +
+                `PLANS TO PROCESS:\n${dispatchContext.planList}`;
+            return dispatchPrompt;
+        }
+
         const promptsConfig = await this._getPromptsConfig(workspaceRoot);
         // Same initiator the routingMapConfig below resolves with — prompt overrides
         // baked into a generated prompt must follow the INITIATING client's project,
@@ -5520,7 +5558,8 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
 
     private async _dispatchWithPairProgrammingIfNeeded(
         cards: KanbanCard[],
-        workspaceRoot: string
+        workspaceRoot: string,
+        options?: { apiOriginated?: boolean }
     ): Promise<void> {
         const mode = this._autobanState?.pairProgrammingMode ?? 'off';
         if (mode === 'off') { return; }
@@ -5546,7 +5585,13 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             const commonWorktree = plans[0]?.worktreePath;
             const allSameWorktree = plans.every(p => p.worktreePath === commonWorktree);
             const worktreePath = allSameWorktree ? commonWorktree : undefined;
-            await this._seams().commands.executeCommand('switchboard.dispatchToCoderTerminal', coderPrompt, worktreePath);
+            // Third arg is the fix: without it the pair-programming coder send is
+            // VS Code-only even when the board click came from the browser cockpit.
+            // The value is already in scope at every call site (see :8101).
+            await this._seams().commands.executeCommand(
+                'switchboard.dispatchToCoderTerminal', coderPrompt, worktreePath,
+                { apiOriginated: !!options?.apiOriginated }
+            );
         }
     }
 
@@ -6138,9 +6183,20 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             for (const role of roles) {
                 const cmd = (mergedCommands[role] || '').trim();
                 if (cmd) {
-                    const binary = cmd.split(/\s+/)[0];
-                    const name = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase();
-                    configuredNames[role] = `${name} CLI`;
+                    // Brand-name overrides must stay in step with
+                    // TaskViewerProvider.CLI_BRAND_NAMES and
+                    // KanbanDatabase._resolveAgentForColumn.
+                    if (this._taskViewerProvider) {
+                        configuredNames[role] = this._taskViewerProvider.deriveAgentDisplayName(cmd);
+                    } else {
+                        const binary = cmd.split(/\s+/)[0];
+                        const base = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
+                        const CLI_BRAND_NAMES: Record<string, string> = {
+                            agy: 'Antigravity CLI',
+                        };
+                        configuredNames[role] = CLI_BRAND_NAMES[base]
+                            || (path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase() + ' CLI');
+                    }
                 } else {
                     configuredNames[role] = 'No agent assigned';
                 }
@@ -7878,7 +7934,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             case 'startOrchestrator': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (workspaceRoot && this._taskViewerProvider) {
-                    await this._taskViewerProvider.startOrchestratorFromKanban(workspaceRoot);
+                    await this._taskViewerProvider.startOrchestratorFromKanban(workspaceRoot, undefined, { apiOriginated: !!msg?.apiOriginated });
                     return { success: true };
                 }
                 return { success: false, error: 'No workspace root or task viewer available' };
@@ -8107,7 +8163,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                         if (dispatched && role === 'lead') {
                             const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
                             if (card && !this._isLowComplexity(card) && card.complexity !== 'Unknown') {
-                                await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot);
+                                await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot, { apiOriginated: !!msg?.apiOriginated });
                             }
                         }
                         if (!dispatched) {
@@ -8162,7 +8218,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                             await this.moveCardToColumn(workspaceRoot, sessionId, targetColumn);
                             await this._recordDispatchIdentity(workspaceRoot, sessionId, targetColumn, undefined, true);
                             if (!this._isLowComplexity(card) && card.complexity !== 'Unknown') {
-                                await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot);
+                                await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot, { apiOriginated: !!msg?.apiOriginated });
                             }
                         }
                     } else {
@@ -8200,7 +8256,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                             if (role === 'lead' && targetColumn === 'LEAD CODED') {
                                 const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
                                 if (card && !this._isLowComplexity(card) && card.complexity !== 'Unknown') {
-                                    await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot);
+                                    await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot, { apiOriginated: !!msg?.apiOriginated });
                                 }
                             }
                         }
@@ -8799,7 +8855,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                     if (dispatched && dispatchSpec.role === 'lead') {
                         const highComplexityCards = sourceCards.filter(c => !this._isLowComplexity(c) && c.complexity !== 'Unknown');
                         if (highComplexityCards.length > 0) {
-                            await this._dispatchWithPairProgrammingIfNeeded(highComplexityCards, workspaceRoot);
+                            await this._dispatchWithPairProgrammingIfNeeded(highComplexityCards, workspaceRoot, { apiOriginated: !!msg?.apiOriginated });
                         }
                     }
                     this.postMessage({ type: 'promptOnDropResult', sessionIds, success: dispatched });
@@ -8883,7 +8939,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 if (sourceColumn === 'PLAN REVIEWED') {
                     const highComplexityCards = sourceCards.filter(c => !this._isLowComplexity(c) && c.complexity !== 'Unknown');
                     if (highComplexityCards.length > 0) {
-                        await this._dispatchWithPairProgrammingIfNeeded(highComplexityCards, workspaceRoot);
+                        await this._dispatchWithPairProgrammingIfNeeded(highComplexityCards, workspaceRoot, { apiOriginated: !!msg?.apiOriginated });
                     }
                 }
 
@@ -9052,7 +9108,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                                     card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
                                 ).filter(card => !this._isLowComplexity(card) && card.complexity !== 'Unknown');
                                 if (leadCards.length > 0) {
-                                    await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot);
+                                    await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot, { apiOriginated: !!msg?.apiOriginated });
                                 }
                             }
                         } else {
@@ -9195,7 +9251,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                                 const leadCards = sourceCards
                                     .filter(card => !this._isLowComplexity(card) && card.complexity !== 'Unknown');
                                 if (leadCards.length > 0) {
-                                    await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot);
+                                    await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot, { apiOriginated: !!msg?.apiOriginated });
                                 }
                             }
                         } else {
@@ -9342,7 +9398,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                         const leadCards = sourceCards
                             .filter(card => !this._isLowComplexity(card) && card.complexity !== 'Unknown');
                         if (leadCards.length > 0) {
-                            await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot);
+                            await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot, { apiOriginated: !!msg?.apiOriginated });
                         }
                     }
                     const allMovedIds: string[] = [];
@@ -9451,7 +9507,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                         const leadCards = sourceCards
                             .filter(card => !this._isLowComplexity(card) && card.complexity !== 'Unknown');
                         if (leadCards.length > 0) {
-                            await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot);
+                            await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot, { apiOriginated: !!msg?.apiOriginated });
                         }
                     }
                     const allMovedIds: string[] = [];
@@ -9523,6 +9579,81 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                     this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`, isError: false });
                 }
                 return { success: true, prompt, targetColumn: nextCol };
+            }
+            case 'attributePastedPrompt': {
+                const terminalName: string = msg.terminalName || '';
+                const dispatchedAgent: string = msg.role || '';
+                const planIds: string[] = Array.isArray(msg.planIds) ? msg.planIds : [];
+                const planFiles: string[] = Array.isArray(msg.planFiles) ? msg.planFiles : [];
+
+                const preferredRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const rootsToSearch = preferredRoot
+                    ? [preferredRoot, ...[...this._getAllowedRoots()].filter(r => r !== preferredRoot)]
+                    : [...this._getAllowedRoots()];
+
+                // Resolve plans by PLAN_ID first; this path is workspace-agnostic within a DB.
+                const resolved = new Map<string, { record: any; root: string }>();
+                const dbsByRoot = new Map<string, KanbanDatabase>();
+                for (const root of rootsToSearch) {
+                    if (!root) continue;
+                    const db = this._getKanbanDb(root);
+                    if (!(await db.ensureReady())) continue;
+                    dbsByRoot.set(root, db);
+                    for (const planId of planIds) {
+                        if (resolved.has(planId)) continue;
+                        const rec = await db.getPlanByPlanId(planId);
+                        if (rec) { resolved.set(planId, { record: rec, root }); }
+                    }
+                }
+
+                // Fallback to Plan File: for prompts built without a planId.
+                // In a single-workspace host this resolves; in multi-root it degrades.
+                for (const planFile of planFiles) {
+                    let matched = false;
+                    for (const [root, db] of dbsByRoot) {
+                        const workspaceId = await db.getWorkspaceId();
+                        if (!workspaceId) continue;
+                        const rec = await db.getPlanByPlanFile(planFile, workspaceId);
+                        if (rec) {
+                            resolved.set(rec.planId || rec.sessionId, { record: rec, root });
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if (!matched) {
+                        console.warn(`[KanbanProvider] attributePastedPrompt: cannot resolve Plan File: ${planFile}`);
+                    }
+                }
+
+                if (resolved.size === 0) {
+                    return { success: true, attributed: 0, skipped: planIds.length + planFiles.length };
+                }
+
+                const attributed: string[] = [];
+                for (const { record, root } of resolved.values()) {
+                    if (!record.planFile) continue;
+                    const db = dbsByRoot.get(root);
+                    if (!db) continue;
+                    const workspaceId = record.workspaceId;
+                    if (!workspaceId) continue;
+                    try {
+                        const ok = await db.attributePasteDispatch(record.planFile, workspaceId, {
+                            dispatchedAgent,
+                            dispatchedTerminal: terminalName,
+                        });
+                        if (ok) { attributed.push(record.planId || record.sessionId); }
+                    } catch (err) {
+                        console.warn('[KanbanProvider] attributePasteDispatch failed:', err);
+                    }
+                }
+
+                // Refresh whichever workspace the first resolved plan lives in.
+                const first = resolved.values().next().value;
+                if (first && first.root) {
+                    this._scheduleBoardRefresh(first.root);
+                }
+
+                return { success: true, attributed: attributed.length, skipped: (planIds.length + planFiles.length) - attributed.length };
             }
             case 'julesSelected': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
@@ -9852,6 +9983,10 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     this._showingBacklog = false;
                     this.postMessage({ type: 'backlogViewState', showing: false });
                 }
+                if (this._showingDispatch) {
+                    this._showingDispatch = false;
+                    this.postMessage({ type: 'dispatchViewState', showing: false });
+                }
 
                 // LAZY CHANGE: Ensure DB exists before plan creation
                 try {
@@ -9890,6 +10025,142 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 await this.moveCardToColumn(resolvedRoot, resolvedSessionId, 'CREATED');
                 this.refresh();
                 return { success: true, sessionId: resolvedSessionId };
+            }
+            case 'sendToDispatch': {
+                const resolvedRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!resolvedRoot) return { success: false, error: 'No workspace root resolved' };
+                const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
+                if (!resolvedSessionId) return { success: false, error: 'Could not resolve session id' };
+                await this.moveCardToColumn(resolvedRoot, resolvedSessionId, 'DISPATCH');
+                this.refresh();
+                return { success: true, sessionId: resolvedSessionId };
+            }
+            case 'sendToPlanned': {
+                const resolvedRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!resolvedRoot) return { success: false, error: 'No workspace root resolved' };
+                const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
+                if (!resolvedSessionId) return { success: false, error: 'Could not resolve session id' };
+                await this.moveCardToColumn(resolvedRoot, resolvedSessionId, 'PLAN REVIEWED');
+                this.refresh();
+                return { success: true, sessionId: resolvedSessionId };
+            }
+            case 'toggleDispatchView':
+                this._showingDispatch = !this._showingDispatch;
+                this.postMessage({ type: 'dispatchViewState', showing: this._showingDispatch });
+                this.refresh();
+                return { success: true, showing: this._showingDispatch };
+            case 'dispatchAnalyze': {
+                // Analyze collects every card currently in PLAN REVIEWED and fires the
+                // existing planner batch-dispatch command with a 'dispatch-analysis'
+                // instruction. The planner prompt arm routes that instruction to the
+                // dispatch-analysis skill, which selects the parallelizable set and
+                // moves it to DISPATCH. No new launch path — triggerBatchAgentFromKanban
+                // is registered in both hosts (extension.ts / standalone bootstrap.ts).
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
+                if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
+                const sourceCards = this._visibleColumnCards(workspaceRoot, 'PLAN REVIEWED');
+                if (sourceCards.length === 0) {
+                    void this._seams().ui.showInformationMessage('No Planned plans available to analyze for parallel dispatch.');
+                    return { success: false, error: 'No Planned plans available to analyze for parallel dispatch.' };
+                }
+                const plannedIds = sourceCards.map(card => this._cardId(card));
+                await this._seams().commands.executeCommand(
+                    'switchboard.triggerBatchAgentFromKanban',
+                    'planner',
+                    plannedIds,
+                    'dispatch-analysis',
+                    workspaceRoot
+                );
+                void this._seams().ui.showInformationMessage(`Analyzing ${plannedIds.length} plan(s) for parallel dispatch.`);
+                return { success: true, sent: plannedIds.length };
+            }
+            case 'sendDispatchToCoder': {
+                // Send selected DISPATCH cards forward to a coder column. DISPATCH is not
+                // in DEFAULT_KANBAN_COLUMNS, so _getNextColumnId's ordered walk cannot
+                // resolve it (it hits the null-return guard). Resolve the target
+                // explicitly from PLAN REVIEWED — the column DISPATCH is a display mode
+                // of — respecting complexity routing where enabled (same per-card role
+                // resolution moveSelected uses for PLAN REVIEWED).
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
+                if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
+                if (!Array.isArray(msg.sessionIds) || msg.sessionIds.length === 0) {
+                    void this._seams().ui.showWarningMessage('Please select at least one plan in Dispatch to send to a coder.');
+                    return { success: false, error: 'Please select at least one plan in Dispatch to send to a coder.' };
+                }
+                const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                if (['lead', 'coder', 'intern'].every(r => visibleAgents[r] === false)) {
+                    void this._seams().ui.showErrorMessage('No coding agent is currently enabled. Enable a coding agent in Setup or move manually.');
+                    return { success: false, error: 'No coding agent is currently enabled.' };
+                }
+                // Unknown-complexity plans are excluded from auto-routing exactly as they
+                // are on the PLAN REVIEWED forward move — routing them would pick a coder
+                // column from a score that does not exist.
+                const { filtered: knownDispatchIds, skippedCount: dispatchSkipped } =
+                    this._filterUnknownComplexitySessions(msg.sessionIds);
+                if (knownDispatchIds.length === 0) {
+                    this._notifySkippedUnknownComplexity(dispatchSkipped, 0);
+                    return { success: false, error: 'All selected plans have unknown complexity' };
+                }
+                // Group by resolved target column BEFORE moving: the webview's `moveCards`
+                // delta carries ONE targetColumn and writes it onto every id it names, so a
+                // mixed-target batch must post one delta per column. (A placeholder like
+                // 'forward' would be written verbatim into card.column and the cards would
+                // vanish from the board until the next full push.)
+                const dispatchGroups = await this._partitionByComplexityRoute(workspaceRoot, knownDispatchIds);
+                const dispatchFailures: { id: string; sourceColumn: string; reason: string }[] = [];
+                const dispatchMovedParts: string[] = [];
+                let dispatchMovedCount = 0;
+                for (const [role, sids] of dispatchGroups) {
+                    if (sids.length === 0) { continue; }
+                    let targetCol: string;
+                    try {
+                        targetCol = this._targetColumnForDispatchRole(role, visibleAgents);
+                    } catch (e) {
+                        // sourceColumn is required by the webview's moveCardsFailed revert —
+                        // without it every failed card's column is set to undefined.
+                        for (const sid of sids) { dispatchFailures.push({ id: sid, sourceColumn: 'DISPATCH', reason: (e as Error).message }); }
+                        continue;
+                    }
+                    const dispatchRole = this._columnToRole(targetCol) || role;
+                    const movedSids: string[] = [];
+                    const dispatchSids: string[] = [];
+                    for (const sid of sids) {
+                        const ok = await this.moveCardToColumn(workspaceRoot, sid, targetCol);
+                        if (ok) {
+                            await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
+                            const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                            movedSids.push(...cascadeIds);
+                            dispatchSids.push(sid);
+                        } else {
+                            dispatchFailures.push({ id: sid, sourceColumn: 'DISPATCH', reason: "couldn't save — board may be out of sync" });
+                        }
+                    }
+                    if (movedSids.length > 0) {
+                        this.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
+                    }
+                    // Send-to-coder must actually reach the coder, not just repaint the board.
+                    // Same gate and same commands the PLAN REVIEWED forward move uses.
+                    if (this._cliTriggersEnabled && dispatchSids.length > 0) {
+                        if (dispatchSids.length === 1) {
+                            await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot);
+                        } else {
+                            await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot);
+                        }
+                    }
+                    dispatchMovedCount += dispatchSids.length;
+                    dispatchMovedParts.push(`${dispatchSids.length} → ${targetCol}`);
+                }
+                if (dispatchFailures.length > 0) {
+                    this.postMessage({ type: 'moveCardsFailed', failures: dispatchFailures });
+                }
+                // No full refresh — each group posted its own targeted moveCards delta above
+                // (mirrors the PLAN REVIEWED forward move, where a trailing refresh raced the
+                // optimistic advance and bounced cards back to their source column).
+                const dispatchSkippedSuffix = dispatchSkipped > 0 ? ` (${dispatchSkipped} skipped — unknown complexity)` : '';
+                void this._seams().ui.showInformationMessage(
+                    `Sent ${dispatchMovedCount} plan(s) from Dispatch to coder: ${dispatchMovedParts.join(', ')}.${dispatchSkippedSuffix}`
+                );
+                return { success: true, sent: dispatchMovedCount, skipped: dispatchSkipped, failures: dispatchFailures };
             }
             case 'importFromClipboard':
                 await this._seams().commands.executeCommand('switchboard.importPlanFromClipboard', msg.markdownText);
@@ -10030,7 +10301,9 @@ ${FOCUS_DIRECTIVE}`;
                     // This bypasses cliTriggersEnabled intentionally — testing failure reports
                     // should always be deliverable to the lead coder.
                     if (msg.action === 'sendToLead' && this._taskViewerProvider) {
-                        const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole('lead', prompt, workspaceRoot);
+                        const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole(
+                            'lead', prompt, workspaceRoot, { apiOriginated: !!msg?.apiOriginated }
+                        );
                         if (!dispatched) {
                             void this._seams().ui.showWarningMessage('Prompt copied to clipboard but could not dispatch to lead coder. Paste manually.');
                         }
@@ -10395,6 +10668,16 @@ ${FOCUS_DIRECTIVE}`;
                 // Optional column filter (narrow to one column for the kanban-mode pane).
                 const column = typeof msg.column === 'string' ? msg.column : null;
                 let filtered = column ? cards.filter(c => c.column === column) : cards;
+                // Roll feature subtasks up under their feature card — they are NOT standalone
+                // column cards. This verb returns the board DISPLAY set (not the raw full card
+                // set), so it mirrors the board's display contract (kanban.html:
+                // displayCards.filter(card => !card.featureId)) and the backend's own
+                // _visibleColumnCards (line 468). Without this, the terminals kanban pane
+                // renders a feature's subtasks as loose rows alongside the feature card.
+                // Order-independent with the project filter below given the current card shape
+                // (a subtask carries featureId regardless of its own project); placed before
+                // the project filter so a subtask is never even considered.
+                filtered = filtered.filter(c => !c.featureId);
                 // Optional project filter (narrow to one project for the kanban-mode pane).
                 // An empty-string project matches plans with no project assigned (the
                 // board's UNASSIGNED_PROJECT_FILTER convention).
@@ -10826,7 +11109,9 @@ ${FOCUS_DIRECTIVE}`;
                 }
 
                 if (this._taskViewerProvider) {
-                    await this._taskViewerProvider.handleDispatchManagerForSelected(plans, workspaceRoot);
+                    await this._taskViewerProvider.handleDispatchManagerForSelected(
+                        plans, workspaceRoot, { apiOriginated: !!msg?.apiOriginated }
+                    );
                 }
                 return { success: true, dispatched: plans.length, dropped: dropped.length };
             }

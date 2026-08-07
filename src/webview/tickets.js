@@ -139,9 +139,6 @@
     let _drillDownParentTitle = '';            // parent title for the drill-down header
     let _drillDownProvider = null;             // 'clickup' | 'linear' — isolates drill-down to the active provider
     let _pendingDrillDownParentId = null;      // parent id awaiting subtask data before drill-down can activate
-    // Tracks parents whose subtasks were already embedded this session (progressive
-    // subtask import), so opening a ticket repeatedly doesn't re-import each time.
-    let _subtasksEnrichedFor = new Set();
     let _subtaskParent = null;
     let _convertSelectedParentId = null;
     let _convertCurrentTicketId = null;
@@ -315,6 +312,8 @@
             btnPostCommentCancel: document.getElementById('btn-post-comment-cancel'),
             btnPostCommentSubmit: document.getElementById('btn-post-comment-submit'),
             ticketsSourceBtn: document.getElementById('tickets-source-btn'),
+            ticketsSourcePrev: document.getElementById('tickets-source-prev'),
+            ticketsSourceNext: document.getElementById('tickets-source-next'),
             ticketsSourceSummary: document.getElementById('tickets-source-summary'),
             ticketsSourceModal: document.getElementById('tickets-source-modal'),
             btnCloseTicketsSourceModal: document.getElementById('btn-close-tickets-source-modal'),
@@ -419,6 +418,7 @@
         if (ticketsWorkspaceRoot || _workspaceItems.length === 0) { return; }
         ticketsWorkspaceRoot = _workspaceItems[0].workspaceRoot;
         persistTicketsRoot();
+        ensureTicketsWatcherArmed();
     }
 
     // ── Slice 2b additions: Source modal, provider hierarchy, ticket folders ──
@@ -581,15 +581,32 @@
         return `<span class="ticket-sync-badge ticket-sync-local">local</span>`;
     }
 
-    // ── 2c: closePriorityPopover (simplified — full priority popover system
-    //    moves in a later slice with the card-click handler). The list renderers
-    //    call this at the top to dismiss any open popover before re-rendering. ──
+    // ── 2c: Priority popover dismiss + outside-click/ESC handlers ──
+    function outsideClickPriorityClose(e) {
+        const popover = document.getElementById('ticket-priority-popover');
+        if (popover && !popover.contains(e.target) && !_openPriorityPopoverFor?.dotEl.contains(e.target)) {
+            closePriorityPopover();
+        }
+    }
+
+    function escPriorityClose(e) {
+        if (e.key === 'Escape') {
+            closePriorityPopover();
+        }
+    }
+
     function closePriorityPopover() {
         const popover = document.getElementById('ticket-priority-popover');
         if (popover) {
             popover.style.display = 'none';
         }
         _openPriorityPopoverFor = null;
+        document.removeEventListener('click', outsideClickPriorityClose);
+        document.removeEventListener('keydown', escPriorityClose);
+        const container = document.getElementById('tickets-issues-container');
+        if (container) {
+            container.removeEventListener('scroll', closePriorityPopover);
+        }
     }
 
     // ── 2c: Card renderers ──
@@ -623,6 +640,7 @@
                     <button type="button" class="card-icon-btn overflow-menu-trigger" data-overflow-trigger title="More actions"><span class="sb-icon sb-icon-sm sb-icon-overflow" aria-hidden="true"></span></button>
                     <div class="overflow-menu-popover" data-overflow-popover>
                         <button type="button" class="card-icon-btn overflow-menu-item" data-move-ticket-id="${escapeAttr(task.id)}" data-provider="clickup" title="Move to another list">Move</button>
+                        <button type="button" class="card-icon-btn overflow-menu-item" data-add-subtask-ticket-id="${escapeAttr(task.id)}" data-provider="clickup" title="Create a subtask under this ticket">+ Subtask</button>
                     </div>
                 </div>
             </div>
@@ -657,6 +675,7 @@
                     <button type="button" class="card-icon-btn overflow-menu-trigger" data-overflow-trigger title="More actions"><span class="sb-icon sb-icon-sm sb-icon-overflow" aria-hidden="true"></span></button>
                     <div class="overflow-menu-popover" data-overflow-popover>
                         <button type="button" class="card-icon-btn overflow-menu-item" data-move-ticket-id="${escapeAttr(issue.id)}" data-provider="linear" title="Move to another project">Move</button>
+                        <button type="button" class="card-icon-btn overflow-menu-item" data-add-subtask-ticket-id="${escapeAttr(issue.id)}" data-provider="linear" title="Create a subtask under this ticket">+ Subtask</button>
                     </div>
                 </div>
             </div>
@@ -1009,6 +1028,22 @@
 
     // ── 2c: List renderers ──
 
+    // Setting issuesContainer.innerHTML resets scrollTop to 0 on the scroll
+    // container (#tree-pane-tickets, its parent). Auto-refresh would otherwise
+    // snap the user back to the top of the list on every external file change.
+    // Save/restore scrollTop across the innerHTML swap; setting scrollTop on a
+    // non-scrolling element is a no-op, so this is safe regardless of which
+    // ancestor actually scrolls. The DOM-guard above this still skips the swap
+    // entirely when nothing changed, so a no-op refresh leaves scroll untouched.
+    function _applyTicketsListHtml(container, html) {
+        const scrollParent = container.parentElement;
+        const savedScroll = scrollParent ? scrollParent.scrollTop : 0;
+        const savedSelf = container.scrollTop;
+        container.innerHTML = html;
+        if (scrollParent) { scrollParent.scrollTop = savedScroll; }
+        container.scrollTop = savedSelf;
+    }
+
     function renderTicketsLinearList() {
         closePriorityPopover();
         if (!isTicketsTabActive()) return;
@@ -1092,7 +1127,7 @@
         newHtml += `<!-- collapsed:${Array.from(_collapsedTicketStatuses).sort().join(',')} -->`;
 
         if (_lastTicketsIssuesContainerHtml !== newHtml) {
-            issuesContainer.innerHTML = newHtml;
+            _applyTicketsListHtml(issuesContainer, newHtml);
             _lastTicketsIssuesContainerHtml = newHtml;
         }
     }
@@ -1147,7 +1182,7 @@
         }
 
         if (_lastTicketsClickUpIssuesContainerHtml !== html) {
-            issuesContainer.innerHTML = html;
+            _applyTicketsListHtml(issuesContainer, html);
             _lastTicketsClickUpIssuesContainerHtml = html;
         }
 
@@ -1324,6 +1359,22 @@
             listId: lastIntegrationProvider === 'clickup' ? (clickUpSelectedListId || undefined) : undefined,
             projectId: lastIntegrationProvider === 'linear' ? (linearProjectPickerValue || undefined) : undefined
         });
+    }
+
+    // One sidebar reload per burst of ticket-file changes. An agent rewriting 30
+    // ticket files fires 30 watcher events; without this the sidebar reloads 30
+    // times and visibly thrashes. 300ms matches the backend watcher's own per-file
+    // debounce (TicketsPanelProvider._setupTicketsViewWatcher), so the two stages
+    // compose to roughly one reload per burst rather than one per file. Trailing-
+    // edge: a reload already in flight is not cancelled by a later event, and two
+    // bursts within the window collapse to one reload.
+    let _ticketFileChangedDebounce = null;
+    function _scheduleSidebarRefreshFromFiles() {
+        clearTimeout(_ticketFileChangedDebounce);
+        _ticketFileChangedDebounce = setTimeout(() => {
+            _ticketFileChangedDebounce = null;
+            loadLocalTicketFiles();
+        }, 300);
     }
 
     // ── 2d: detail renderers + meta-bar helpers + comment helpers ──
@@ -3385,12 +3436,39 @@
         }
     }
 
-    // ── Remaining stubs: file poll + drill-down entry + load-more ──
-    // These move in later slices. Kept as no-ops so the panel renders above can
-    // call them without ReferenceError.
-    function _stopTicketsFilePoll() { /* 2c stub — replaced when file poll moves */ }
-    function _maybeEnterDrillDown(_provider, _id) { /* 2c stub — card-click handler moves later */ }
-    function loadMoreClickUpTasks() { /* 2c stub — full impl stays in planning.js for now */ }
+    // ── Drill-down entry + load-more (ported from planning.js) ──
+    // The dead 4-second file poll (_startTicketsFilePoll / _stopTicketsFilePoll)
+    // was removed: it had zero callers, refreshed only the selected ticket, and
+    // the backend file watcher (armed via ensureTicketsWatcherArmed) is now the
+    // single refresh mechanism — keeping both would mean two refresh paths racing
+    // on the same state.
+    function _maybeEnterDrillDown(provider, id) {
+        if (!id || _pendingDrillDownParentId !== id) return;
+        const detail = provider === 'linear' ? linearIssueDetailCache.get(id) : clickUpTaskDetailCache.get(id);
+        if (!detail || !detail.detailsFetched) return; // not loaded yet — decide when details arrive
+        _pendingDrillDownParentId = null;
+        const subs = detail.subtasks;
+        if (subs && subs.length > 0) {
+            _sidebarDrillDownParentId = id;
+            _drillDownSubtasks = subs;
+            _drillDownProvider = provider;
+            _drillDownParentTitle = provider === 'linear'
+                ? ((detail.issue && (detail.issue.title || detail.issue.identifier)) || '')
+                : ((detail.task && (detail.task.title || detail.task.name)) || '');
+        }
+    }
+    function loadMoreClickUpTasks() {
+        if (!clickUpProjectHasMore) return;
+        vscode.postMessage({
+            type: 'clickupLoadProject',
+            workspaceRoot: ticketsWorkspaceRoot || undefined,
+            page: clickUpCurrentPage + 1,
+            statusFilter: clickUpProjectStatusFilterValue || undefined,
+            searchQuery: clickUpProjectSearchValue || undefined,
+            isLoadMore: true,
+            listId: clickUpSelectedListId || undefined
+        });
+    }
 
     // ── Path helpers (copied from planning.js — shared with DOCS tab, do not ──
     // delete Planning's copies). Used by the ticket-folder list modal.
@@ -3532,6 +3610,100 @@
         vscode.postMessage({ type: 'listTicketsFolders', workspaceRoot: ticketsWorkspaceRoot || undefined });
     }
 
+    // Shared by the hierarchy <select> change handler and the source nav arrows.
+    // Both paths MUST run the same resets — a divergence here is how the arrow
+    // path would leave a stale status/assignee filter over a different list.
+    function selectClickUpList(listId) {
+        _restoringClickUpHierarchy = false;
+        clickUpSelectedListId = listId;
+        clickUpProjectLoading = false;
+        clickUpProjectIssues = [];
+        selectedClickUpIssue = null;
+        _resetSidebarDrillDown();
+        clickUpProjectStatusFilterValue = '';
+        clickUpProjectAssigneeFilterValue = '';
+        availableClickUpStatuses = [];
+        _lastTicketsClickUpStateFilterHtml = '';
+        _lastTicketsAssigneeFilterHtml = '';
+        saveTicketsState();
+        if (listId) {
+            const spaceName = clickUpAvailableSpaces.find(s => s.id === clickUpSelectedSpaceId)?.name || '';
+            const folderName = clickUpAvailableFolders.find(f => f.id === clickUpSelectedFolderId)?.name || '';
+            const availableLists = clickUpSelectedFolderId ? clickUpAvailableListsInFolder : clickUpAvailableDirectLists;
+            const listName = availableLists.find(l => l.id === listId)?.name || '';
+            vscode.postMessage({
+                type: 'clickupSaveListSelection',
+                spaceId: clickUpSelectedSpaceId,
+                spaceName,
+                folderId: clickUpSelectedFolderId,
+                folderName,
+                listId,
+                listName,
+                workspaceRoot: ticketsWorkspaceRoot || undefined
+            });
+            loadClickUpProject(false, listId);
+        } else {
+            renderTicketsClickUpPanel();
+        }
+    }
+
+    // Shared by the project-picker change handler and the source nav arrows.
+    // `syncPicker` is true only for the arrow path: the change handler runs AFTER
+    // the browser has already committed <select>.value, so re-writing it there is
+    // redundant; the arrow path mutates only the JS variable and must push the
+    // value back into the DOM or the visible dropdown will lie about the filter.
+    function selectLinearProject(projectName, syncPicker = false) {
+        linearProjectPickerValue = projectName;
+        if (syncPicker) {
+            const { projectPicker } = getTicketsTabElements();
+            if (projectPicker) { projectPicker.value = projectName; }
+        }
+        // Context switch: the previously-selected ticket belongs to the old project.
+        selectedLinearIssue = null;
+        _resetSidebarDrillDown();
+        renderTicketsLinearList();
+        renderTicketsLinearTaskDetail();
+        updateTicketsSourceSummary();   // re-derive arrow enabled/disabled state
+        saveTicketsState();
+    }
+
+    // Single source of truth for the Linear navigation order: the rendered picker
+    // options, minus the "All projects" sentinel. Both navigateTicketsSource and
+    // updateTicketsSourceSummary read it so they can never disagree about bounds.
+    function ticketsLinearProjectOptions() {
+        const { projectPicker } = getTicketsTabElements();
+        if (!projectPicker) { return []; }
+        return Array.from(projectPicker.options).filter(o => o.value).map(o => o.value);
+    }
+
+    // Computes the adjacent sibling and routes through the SAME selection helper
+    // the dropdown uses. Guards are duplicated with updateTicketsSourceSummary's
+    // disabled-state logic on purpose: the render can be missed, the guard cannot.
+    function navigateTicketsSource(direction) {
+        if (_moveMode) { return; }
+        if (lastIntegrationProvider === 'clickup') {
+            if (!clickUpSelectedListId || clickUpHierarchyLoading) { return; }
+            const lists = clickUpSelectedFolderId
+                ? clickUpAvailableListsInFolder
+                : clickUpAvailableDirectLists;
+            const idx = lists.findIndex(l => l.id === clickUpSelectedListId);
+            if (idx < 0) { return; }
+            const nextIdx = direction === 'next' ? idx + 1 : idx - 1;
+            if (nextIdx < 0 || nextIdx >= lists.length) { return; }
+            selectClickUpList(lists[nextIdx].id);
+        } else if (lastIntegrationProvider === 'linear') {
+            if (linearProjectLoading) { return; }
+            const options = ticketsLinearProjectOptions();
+            if (options.length === 0) { return; }
+            const idx = options.indexOf(linearProjectPickerValue);
+            // "All projects" (empty value) is index -1: `next` selects the first
+            // project, `prev` has nowhere to go.
+            const nextIdx = direction === 'next' ? idx + 1 : idx - 1;
+            if (nextIdx < 0 || nextIdx >= options.length) { return; }
+            selectLinearProject(options[nextIdx], true);
+        }
+    }
+
     // ── Source summary ──
     // Verbatim from planning.js. Reads the ClickUp hierarchy state to build the
     // "ClickUp ▸ Space ▸ Folder ▸ List" breadcrumb in the controls strip.
@@ -3543,6 +3715,7 @@
         const provider = lastIntegrationProvider;
         if (!provider) {
             ticketsSourceSummary.textContent = '';
+            _applyTicketsSourceArrowState();   // hides the arrows; previously unreachable
             return;
         }
 
@@ -3574,6 +3747,55 @@
             ticketsSourceSummary.textContent = 'Linear';
         } else {
             ticketsSourceSummary.textContent = '';
+        }
+
+        _applyTicketsSourceArrowState();
+    }
+
+    // Sole writer of source-arrow visibility and enabled state. Every path that can
+    // change provider, list, project, move-mode, or loading state must funnel here
+    // (directly or via updateTicketsSourceSummary) — an unrefreshed arrow is either a
+    // dead button or a lie about what the next click will do.
+    function _applyTicketsSourceArrowState() {
+        const { ticketsSourcePrev, ticketsSourceNext } = getTicketsTabElements();
+        if (!ticketsSourcePrev && !ticketsSourceNext) { return; }
+
+        const provider = lastIntegrationProvider;
+        const showArrows = !_moveMode && !!provider;
+        let prevDisabled = true;
+        let nextDisabled = true;
+
+        if (showArrows && provider === 'clickup' && clickUpSelectedListId && !clickUpHierarchyLoading) {
+            const lists = clickUpSelectedFolderId ? clickUpAvailableListsInFolder : clickUpAvailableDirectLists;
+            const idx = lists.findIndex(l => l.id === clickUpSelectedListId);
+            if (idx >= 0) {
+                prevDisabled = idx === 0;
+                nextDisabled = idx === lists.length - 1;
+            }
+        } else if (showArrows && provider === 'linear' && !linearProjectLoading) {
+            const options = ticketsLinearProjectOptions();
+            const idx = options.indexOf(linearProjectPickerValue);   // -1 = "All projects"
+            prevDisabled = idx <= 0;
+            nextDisabled = options.length === 0 || idx === options.length - 1;
+        }
+
+        // The arrows walk LISTS under ClickUp but PROJECTS under Linear, so the label
+        // is provider-derived, not static markup. In the VS Code webview `title=` never
+        // renders as a tooltip, but this panel's other host is a plain browser tab
+        // where it does — a "Next list" tooltip that moves you to the next project is
+        // the same lie as an enabled arrow that does nothing.
+        const unit = provider === 'linear' ? 'project' : 'list';
+        if (ticketsSourcePrev) {
+            ticketsSourcePrev.style.display = showArrows ? '' : 'none';
+            ticketsSourcePrev.disabled = prevDisabled;
+            ticketsSourcePrev.title = `Previous ${unit}`;
+            ticketsSourcePrev.setAttribute('aria-label', `Previous ${unit}`);
+        }
+        if (ticketsSourceNext) {
+            ticketsSourceNext.style.display = showArrows ? '' : 'none';
+            ticketsSourceNext.disabled = nextDisabled;
+            ticketsSourceNext.title = `Next ${unit}`;
+            ticketsSourceNext.setAttribute('aria-label', `Next ${unit}`);
         }
     }
 
@@ -3791,42 +4013,15 @@
             _restoringClickUpHierarchy = false;
             const listId = e.target.value;
             if (_moveMode) {
+                // Move-mode branch — records a target, does not load. Must NOT
+                // route through selectClickUpList.
                 clickUpSelectedListId = listId;
                 _moveSelectedTargetId = listId || null;
                 const btn = document.getElementById('btn-apply-move-ticket');
                 if (btn) btn.disabled = !_moveSelectedTargetId;
                 return;
             }
-            clickUpSelectedListId = listId;
-            clickUpProjectLoading = false;
-            clickUpProjectIssues = [];
-            selectedClickUpIssue = null;
-            _resetSidebarDrillDown();
-            clickUpProjectStatusFilterValue = '';
-            clickUpProjectAssigneeFilterValue = '';
-            availableClickUpStatuses = [];
-            _lastTicketsClickUpStateFilterHtml = '';
-            _lastTicketsAssigneeFilterHtml = '';
-            saveTicketsState();
-            if (listId) {
-                const spaceName = clickUpAvailableSpaces.find(s => s.id === clickUpSelectedSpaceId)?.name || '';
-                const folderName = clickUpAvailableFolders.find(f => f.id === clickUpSelectedFolderId)?.name || '';
-                const availableLists = clickUpSelectedFolderId ? clickUpAvailableListsInFolder : clickUpAvailableDirectLists;
-                const listName = availableLists.find(l => l.id === listId)?.name || '';
-                vscode.postMessage({
-                    type: 'clickupSaveListSelection',
-                    spaceId: clickUpSelectedSpaceId,
-                    spaceName,
-                    folderId: clickUpSelectedFolderId,
-                    folderName,
-                    listId,
-                    listName,
-                    workspaceRoot: ticketsWorkspaceRoot || undefined
-                });
-                loadClickUpProject(false, listId);
-            } else {
-                renderTicketsClickUpPanel();
-            }
+            selectClickUpList(listId);
         });
     }
 
@@ -4014,6 +4209,8 @@
 
             _fetchMoveTargets(false);
         }
+
+        _applyTicketsSourceArrowState();
     }
 
     function _fetchMoveTargets(refresh) {
@@ -4083,6 +4280,8 @@
             renderTicketsClickUpPanel();
             saveTicketsState();
         }
+
+        _applyTicketsSourceArrowState();
     }
 
     // ── Ticket state save / reset / restore ──
@@ -4090,10 +4289,7 @@
     // because the provider selector and hierarchy nav call saveTicketsState
     // and resetTicketsInMemoryState.
 
-    function _stopTicketsFilePoll() { /* 2c stub — replaced when file poll moves */ }
-
     function resetTicketsInMemoryState() {
-        _stopTicketsFilePoll();
         ticketsEditMode = false;
         _ticketsEditBackupHtml = null;
         linearIssueDetailCache.clear();
@@ -4216,6 +4412,17 @@
             _ticketsListedUnscoped = false;
             loadLocalTicketFiles();
         }
+
+        // This function writes three of the four source-arrow inputs
+        // (lastIntegrationProvider, clickUpSelectedListId, linearProjectPickerValue)
+        // and its callers do not all render afterwards — `restoredTabState` does not.
+        // Without this, a root switch leaves the PREVIOUS root's arrows on screen: if
+        // the restored provider is Linear while the picker DOM still holds the old
+        // root's options, `next` shows enabled and navigateTicketsSource early-returns
+        // — a dead click. Arrow state only, not the summary text: the hierarchy arrays
+        // have not been refetched yet, so rewriting the breadcrumb here would show a
+        // stale list name mid-restore.
+        _applyTicketsSourceArrowState();
     }
 
     /**
@@ -4254,10 +4461,41 @@
         loadLocalTicketFiles();
     }
 
+    /**
+     * Catch-up load for the source picker: has the hierarchy never arrived?
+     *
+     * Callers that recover a missed load (returning to the TICKETS tab, opening the
+     * Source modal) must NOT re-fetch a hierarchy they already hold.
+     * `loadClickUpSpaces` sets `clickUpHierarchyLoading`, which renders all three
+     * dropdowns `disabled` until the reply lands — so a reflexive re-fetch would gray
+     * the picker out on every open, and would leave it permanently unusable if the
+     * reply never came. `ticketsLoadedOnce` does not cover this: it only flips once a
+     * project/list has loaded, so it is still false in exactly the state where the
+     * spaces are present but no list has been chosen yet.
+     */
+    function ticketsSourceHierarchyMissing() {
+        if (!lastIntegrationProvider) { return false; }
+        if (lastIntegrationProvider === 'clickup') { return clickUpAvailableSpaces.length === 0; }
+        return linearProjectIssues.length === 0 && linearProjectStatus !== 'loading';
+    }
+
+    // The backend file watcher is armed per-root. restoreTicketsState alone runs
+    // before the root exists (it reads webview-local persisted state, which is
+    // empty on a first open), which left the watcher unarmed for the whole session.
+    // Every path that resolves or changes ticketsWorkspaceRoot must (re-)arm it;
+    // the _armedTicketsWatcherRoot guard makes calling from many sites safe —
+    // _setupTicketsViewWatcher disposes and rebuilds unconditionally, so without
+    // the guard a single startup would tear down and rebuild the watcher repeatedly.
+    let _armedTicketsWatcherRoot = '';
+    function ensureTicketsWatcherArmed() {
+        if (!ticketsWorkspaceRoot) { return; }
+        if (_armedTicketsWatcherRoot === ticketsWorkspaceRoot) { return; }
+        _armedTicketsWatcherRoot = ticketsWorkspaceRoot;
+        vscode.postMessage({ type: 'setupTicketsWatcher', workspaceRoot: ticketsWorkspaceRoot });
+    }
+
     function restoreTicketsState() {
-        if (ticketsWorkspaceRoot) {
-            vscode.postMessage({ type: 'setupTicketsWatcher', workspaceRoot: ticketsWorkspaceRoot });
-        }
+        ensureTicketsWatcherArmed();
         // Gated on the PROVIDER, not the root. Cheap and idempotent — the arm below
         // keeps whichever root is already chosen.
         if (!lastIntegrationProvider) {
@@ -4433,6 +4671,23 @@
             initOverflowMenus();
         }
 
+        // Card "Move" lives in a card's overflow popover. initOverflowMenus moves an
+        // open popover to <body> (it is position:fixed, so it must escape the
+        // sidebar's overflow:auto) — which takes it out of #tickets-issues-container
+        // and past that container's delegated card-click handler. Anything inside a
+        // popover therefore has to be caught at the document level or the click is
+        // swallowed and the control looks dead.
+        document.addEventListener('click', (e) => {
+            const moveTicketBtn = e.target.closest('[data-move-ticket-id]');
+            if (!moveTicketBtn) return;
+            e.stopPropagation();
+            const popover = moveTicketBtn.closest('[data-overflow-popover]');
+            if (popover && typeof _closeOneOverflowPopover === 'function') {
+                _closeOneOverflowPopover(popover);
+            }
+            showMoveTicketModal(moveTicketBtn.dataset.provider, moveTicketBtn.dataset.moveTicketId);
+        });
+
         ensureTicketsRootDefault();
 
         // Ask the host for the workspace roots. TicketsPanelProvider answers
@@ -4453,6 +4708,14 @@
             if (ticketsSourceModal) {
                 ticketsSourceModal.style.display = 'block';
             }
+            // The hierarchy dropdowns are only built when a host reply arrives, and
+            // that build is gated on the TICKETS tab being active — so state can be
+            // ahead of the DOM by the time the user asks for the picker. Opening the
+            // modal is the moment the dropdowns have to be right: repaint from current
+            // state (memoised — a no-op when the markup already matches), and re-issue
+            // the source load only if it never ran.
+            if (ticketsSourceHierarchyMissing()) { loadActiveTicketSource(); }
+            renderTicketsTab();
         });
 
         btnCloseTicketsSourceModal?.addEventListener('click', () => {
@@ -4588,15 +4851,7 @@
 
         // Project picker (Linear)
         projectPicker?.addEventListener('change', (e) => {
-            linearProjectPickerValue = e.target.value;
-            // Context switch: the previously-selected ticket belongs to the old project.
-            // Drop it so the doc preview resets to the empty state instead of showing a
-            // ticket that is no longer in the visible list.
-            selectedLinearIssue = null;
-            _resetSidebarDrillDown();
-            renderTicketsLinearList();
-            renderTicketsLinearTaskDetail();
-            saveTicketsState();
+            selectLinearProject(e.target.value);
             // Reconciliation moved off the read path — selecting a project is a
             // read/selection action and must not trigger a destructive delta
             // sweep. Use Refresh/Refetch to pull remote deltas.
@@ -4640,6 +4895,12 @@
         function _clickUpIncludeClosedForRefresh() {
             return _isClickUpClosedStatus(clickUpProjectStatusFilterValue) ? true : undefined;
         }
+
+        // Source nav arrows — prev/next list (ClickUp) or project (Linear).
+        // Static markup in tickets.html, so listeners attach once here.
+        const { ticketsSourcePrev, ticketsSourceNext } = getTicketsTabElements();
+        ticketsSourcePrev?.addEventListener('click', () => navigateTicketsSource('prev'));
+        ticketsSourceNext?.addEventListener('click', () => navigateTicketsSource('next'));
 
         // Refresh button — delta pull (only changed tasks since last sync).
         // Falls back to full import if the per-list delta cursor is unset
@@ -4865,18 +5126,16 @@
             if (!issue) return;
             const id = isLinear ? issue.issue.id : issue.task.id;
             const title = isLinear ? (issue.issue.title || issue.issue.identifier || id) : (issue.task.name || issue.task.title || id);
-            const ticketUrl = _ticketExternalUrl(provider, isLinear ? (issue.issue.identifier || id) : id, isLinear ? issue.issue.url : issue.task.url);
             const workspaceRoot = ticketsWorkspaceRoot;
             const providerName = isLinear ? 'Linear' : 'ClickUp';
             const prompt = `Generate an architectural diagram for this ticket and attach it inline.
 
 Ticket: ${title}
-URL: ${ticketUrl}
-ID: ${id}
 Provider: ${provider}
 Workspace: ${workspaceRoot}
 
 Instructions:
+0. Work entirely on local files. Do not call the ClickUp or Linear API — the ticket id below is for locating the local markdown file only.
 1. Ask me what kind of diagram I want (flowchart, sequence, component, etc.) and what it should represent.
 2. Generate Mermaid syntax for the diagram.
 3. Render the Mermaid to a PNG file. You can use mermaid-cli (\`npx @mermaid-js/mermaid-cli -i input.mmd -o output.png\`) or any other method.
@@ -5127,14 +5386,10 @@ Instructions:
                 handleLinkToTicket(provider, id, linkTicketBtn);
                 return;
             }
-            const moveTicketBtn = e.target.closest('[data-move-ticket-id]');
-            if (moveTicketBtn) {
-                const id = moveTicketBtn.dataset.moveTicketId;
-                const provider = moveTicketBtn.dataset.provider;
-                e.stopPropagation();
-                showMoveTicketModal(provider, id);
-                return;
-            }
+            // NOTE: Move is NOT handled here — it lives inside a card's overflow
+            // popover, which initOverflowMenus reparents to <body> on open, so its
+            // clicks never bubble through this container. See the document-level
+            // listener in initTicketsTab.
             const openTicketBtn = e.target.closest('[data-open-ticket-url]');
             if (openTicketBtn) {
                 // The Open control is now an <a href>, so the VS Code webview's
@@ -5187,19 +5442,7 @@ Instructions:
                         vscode.postMessage({ type: 'clickupLoadTaskDetails', taskId: clickUpId, workspaceRoot: ticketsWorkspaceRoot || undefined });
                     }
                 }
-                // Progressive subtask import: opening a parent embeds its subtasks into
-                // the parent's local file (once per session). Subtasks are not imported
-                // up front, so this is how they become locally persisted on demand.
-                const _enrichId = linearId ? `linear_${linearId}` : (clickUpId ? `clickup_${clickUpId}` : '');
-                if (_enrichId && !_subtasksEnrichedFor.has(_enrichId)) {
-                    _subtasksEnrichedFor.add(_enrichId);
-                    vscode.postMessage({
-                        type: 'importTicketSubtasks',
-                        provider: linearId ? 'linear' : 'clickup',
-                        id: linearId || clickUpId,
-                        workspaceRoot: ticketsWorkspaceRoot
-                    });
-                }
+
             }
         });
         // Create ticket button click
@@ -5355,14 +5598,7 @@ Instructions:
             });
         });
 
-        // Add Subtask button
-        document.getElementById('btn-add-subtask')?.addEventListener('click', () => {
-            const provider = lastIntegrationProvider;
-            const issue = provider === 'linear' ? selectedLinearIssue : selectedClickUpIssue;
-            if (!issue) return;
-            const task = provider === 'linear' ? issue.issue : issue.task;
-            const ticketId = task?.id;
-            const ticketTitle = task?.title || task?.name || '';
+        function openCreateSubtaskModal(provider, ticketId, ticketTitle) {
             if (!ticketId) return;
             _subtaskParent = { id: ticketId, title: ticketTitle, provider };
             const modal = document.getElementById('create-ticket-modal');
@@ -5379,6 +5615,44 @@ Instructions:
                 _populateCreateModalPriority();
                 _loadCreateModalMembers();
             }
+        }
+
+        // Add Subtask button
+        document.getElementById('btn-add-subtask')?.addEventListener('click', () => {
+            const provider = lastIntegrationProvider;
+            const issue = provider === 'linear' ? selectedLinearIssue : selectedClickUpIssue;
+            if (!issue) return;
+            const task = provider === 'linear' ? issue.issue : issue.task;
+            const ticketId = task?.id;
+            const ticketTitle = task?.title || task?.name || '';
+            openCreateSubtaskModal(provider, ticketId, ticketTitle);
+        });
+
+        // + Subtask overflow menu item on sidebar cards. Wired at document level because
+        // initOverflowMenus re-parents the open popover to <body>, so container-scoped
+        // delegation (like the card click handler) cannot catch the menu click.
+        document.addEventListener('click', (e) => {
+            const subtaskBtn = e.target.closest('[data-add-subtask-ticket-id]');
+            if (!subtaskBtn) return;
+            e.stopPropagation();
+            _closeAllOverflowPopovers(null); // dismiss the … More menu
+            const provider = subtaskBtn.dataset.provider;
+            const ticketId = subtaskBtn.dataset.addSubtaskTicketId;
+            // Resolve the title from the in-memory lists / drill-down subtasks / detail cache
+            // (mirrors the lookup in _selectTicketFromCard).
+            let ticketTitle = '';
+            if (provider === 'linear') {
+                const issue = linearProjectIssues.find(i => i.id === ticketId)
+                    || (_drillDownSubtasks && _drillDownSubtasks.find(s => s.id === ticketId))
+                    || (linearIssueDetailCache.get(ticketId) && linearIssueDetailCache.get(ticketId).issue);
+                ticketTitle = (issue && (issue.title || issue.identifier)) || '';
+            } else {
+                const task = clickUpProjectIssues.find(t => t.id === ticketId)
+                    || (_drillDownSubtasks && _drillDownSubtasks.find(s => s.id === ticketId))
+                    || (clickUpTaskDetailCache.get(ticketId) && clickUpTaskDetailCache.get(ticketId).task);
+                ticketTitle = (task && (task.title || task.name)) || '';
+            }
+            openCreateSubtaskModal(provider, ticketId, ticketTitle);
         });
 
         // Convert to Subtask button
@@ -5477,6 +5751,20 @@ Instructions:
                 if (tabId === 'clickup' || tabId === 'linear') {
                     requestIntegrationSetupStates();
                     vscode.postMessage({ type: 'getPlanningSources' });
+                } else if (tabId === 'tickets') {
+                    // Every Tickets paint path is gated on this tab being active
+                    // (renderTicketsTab and renderTicketsClickUpPanel both early-return
+                    // on !isTicketsTabActive), and so is loadActiveTicketSource. So any
+                    // host reply that lands while CLICKUP/LINEAR is showing updates
+                    // state and never repaints — clickUpAvailableSpaces fills, the
+                    // hierarchy nav keeps its empty HTML, and the Source modal opens
+                    // with a Space dropdown holding nothing but "Select Space...".
+                    // Nothing else re-renders on tab return, so the source stays
+                    // unselectable until the panel is reloaded. Catch up here: re-issue
+                    // the load only when the hierarchy genuinely never arrived, then
+                    // repaint so a hierarchy we already hold reaches the DOM.
+                    if (ticketsSourceHierarchyMissing()) { loadActiveTicketSource(); }
+                    renderTicketsTab();
                 }
             });
         });
@@ -6480,6 +6768,7 @@ Instructions:
                     const restoredRoot = _restoredPanelState.panel['tickets.root'];
                     if (restoredRoot && _workspaceItems.some(item => item.workspaceRoot === restoredRoot)) {
                         ticketsWorkspaceRoot = restoredRoot;
+                        ensureTicketsWatcherArmed();
                         const restoredState = getRestoredState('tickets', restoredRoot);
                         if (restoredState) {
                             restoreTicketsStateForRoot(restoredState);
@@ -6502,6 +6791,7 @@ Instructions:
                 if (newRoot && newRoot !== ticketsWorkspaceRoot) {
                     ticketsWorkspaceRoot = newRoot;
                     persistTicketsRoot();
+                    ensureTicketsWatcherArmed();
                 }
                 break;
             }
@@ -6526,6 +6816,7 @@ Instructions:
                 }
                 ticketsWorkspaceRoot = message.workspaceRoot || '';
                 if (ticketsWorkspaceRoot) {
+                    ensureTicketsWatcherArmed();
                     const restoredState = getRestoredState('tickets', ticketsWorkspaceRoot);
                     if (restoredState) {
                         restoreTicketsStateForRoot(restoredState);
@@ -6744,6 +7035,16 @@ Instructions:
                         break;
                 }
                 setTicketsLoadingState(false);
+                // When the ticket was deleted on ClickUp (404), the provider already
+                // unlinked the local file + DB entry. Remove it from the sidebar list
+                // and clear the selection so the user doesn't see a ghost.
+                if (message.kind === 'deleted' && message.taskId) {
+                    clickUpProjectIssues = clickUpProjectIssues.filter(t => t.id !== message.taskId);
+                    if (selectedClickUpIssue && selectedClickUpIssue.task && selectedClickUpIssue.task.id === message.taskId) {
+                        selectedClickUpIssue = null;
+                    }
+                    loadLocalTicketFiles();
+                }
                 showTicketsError(message.error || 'ClickUp request failed');
                 renderTicketsTab();
                 break;
@@ -6759,6 +7060,13 @@ Instructions:
                         break;
                 }
                 setTicketsLoadingState(false);
+                if (message.kind === 'deleted' && message.issueId) {
+                    linearProjectIssues = linearProjectIssues.filter(i => i.id !== message.issueId);
+                    if (selectedLinearIssue && selectedLinearIssue.issue && selectedLinearIssue.issue.id === message.issueId) {
+                        selectedLinearIssue = null;
+                    }
+                    loadLocalTicketFiles();
+                }
                 showTicketsError(message.error || 'Linear request failed');
                 renderTicketsTab();
                 break;
@@ -7280,6 +7588,28 @@ Instructions:
                         });
                     }
                 }
+                // Re-render the sidebar list so a non-selected ticket's card title
+                // updates without a manual Refresh. Debounced: a burst of N file
+                // changes collapses to one list reload. Also covers the selected
+                // ticket — its sidebar card title can change too.
+                _scheduleSidebarRefreshFromFiles();
+                break;
+            }
+            case 'ticketFileDeleted': {
+                const deletedId = message.id;
+                const deletedProvider = message.provider;
+                clickUpTaskDetailCache.delete(deletedId);
+                linearIssueDetailCache.delete(deletedId);
+                // Clear the detail pane rather than leave it showing a file that no
+                // longer exists.
+                if (deletedProvider === 'clickup' && selectedClickUpIssue?.task?.id === deletedId) {
+                    selectedClickUpIssue = null;
+                    renderTicketsTab();
+                } else if (deletedProvider === 'linear' && selectedLinearIssue?.issue?.id === deletedId) {
+                    selectedLinearIssue = null;
+                    renderTicketsTab();
+                }
+                _scheduleSidebarRefreshFromFiles();
                 break;
             }
 
@@ -7700,6 +8030,11 @@ Instructions:
     if (persistedState && persistedState.ticketsWorkspaceRoot) {
         ticketsWorkspaceRoot = persistedState.ticketsWorkspaceRoot;
     }
+
+    // Clean up the debounced sidebar-refresh timer on page hide / unload so a
+    // pending reload does not fire after the panel is gone.
+    window.addEventListener('pagehide', () => clearTimeout(_ticketFileChangedDebounce));
+    window.addEventListener('beforeunload', () => clearTimeout(_ticketFileChangedDebounce));
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initTicketsTab);

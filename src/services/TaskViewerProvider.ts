@@ -128,6 +128,20 @@ const { syncMirrorToBrain } = require('./mirrorSync') as {
     }) => Promise<{ updatedBase: boolean; sidecarWrites: number; changed: boolean }>;
 };
 
+/**
+ * One local ticket nominated for deletion. `paths` holds EVERY on-disk copy known
+ * for the id — a ticket that changed list leaves a stale copy in the old directory
+ * while its imported_docs row follows the new one, so the row's file_path alone is
+ * not the set to delete. `dbT` is null when the file has no row at all, which is
+ * the common case for the ghosts this path exists to clear.
+ */
+type TicketDeletionCandidate = {
+    remoteId: string;
+    slugPrefix: string;
+    paths: string[];
+    dbT: any | null;
+};
+
 type DispatchReadinessState = 'ready' | 'recoverable' | 'not_ready';
 type DispatchReadinessEntry = {
     state: DispatchReadinessState;
@@ -619,6 +633,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _orchestrationSkippedWakes = 0;
     private _orchestrationFailedWakes = 0;
     private _orchestrationWakeSentAt = 0; // epoch ms of the last successfully injected wake (single-flight ref)
+    /**
+     * Which surface started the current orchestrator run. The kickoff arrives on an
+     * HTTP click (apiOriginated stamped by LocalApiServer._stampHttpSurface), but the
+     * WAKE fires from a timer with no request in scope — so the surface has to be
+     * remembered for the life of the run rather than read from a body. Reset on stop.
+     * false = started from the VS Code sidebar (fail-closed default).
+     */
+    private _orchestratorApiOriginated = false;
 
     /** Get the primary identifier for a dispatch card (planId-first, sessionId-legacy). */
     private _dispatchCardId(card: KanbanDispatchCard): string {
@@ -2013,6 +2035,18 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     }
                 }
             }
+            // Inject config defaults for ptySendPrompt when the caller didn't pass
+            // them. The ptyHost.ts child defaults clearBeforePrompt to false, but an
+            // HTTP caller (e.g. the terminal kanban drag-drop) that omits the field
+            // should get the config default (true) — matching _tryFleetDeliveryForRole's
+            // explicit config read and the standalone host's getPromptDeliveryOptions().
+            if (verb === 'ptySendPrompt' && payload && payload.clearBeforePrompt === undefined) {
+                payload = {
+                    ...payload,
+                    clearBeforePrompt: vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true),
+                    clearBeforePromptDelayMs: payload.clearBeforePromptDelayMs ?? vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 2000)
+                };
+            }
             const result = await this._ptyHostVerb(verb, payload);
             if (['ptyCreateTerminal', 'ptyCloseTerminal', 'ptyRenameTerminal'].includes(verb)) {
                 const db = await this._getKanbanDb(root || effectiveRoot);
@@ -2387,7 +2421,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return await this._orchestrationDispatchFeature(wsRoot, featurePlanId);
             },
             orchestrationStart: async (wsRoot) => {
-                await this.startOrchestratorFromKanban(wsRoot);
+                // POST /kanban/orchestration/start — an HTTP caller by definition, so the
+                // surface is known statically here. There is no body to stamp.
+                await this.startOrchestratorFromKanban(wsRoot, undefined, { apiOriginated: true });
             },
             orchestrationStop: async () => {
                 await this.stopOrchestratorFromKanban();
@@ -4439,12 +4475,22 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return { dispatched: true, researcher: researcherName, savePath };
     }
 
-    public async sendPromptToAgentTerminal(role: string, text: string, workspaceRoot?: string): Promise<void> {
+    public async sendPromptToAgentTerminal(
+        role: string,
+        text: string,
+        workspaceRoot?: string,
+        options?: { apiOriginated?: boolean }
+    ): Promise<boolean> {
         const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot || '');
-        if (!resolvedWorkspaceRoot) return;
+        if (!resolvedWorkspaceRoot) { return false; }
+        const apiOriginated = !!options?.apiOriginated;
+        if (await this._tryFleetDeliveryForRole(role, text, resolvedWorkspaceRoot, apiOriginated, { source: 'designPanel' })) {
+            return true;
+        }
 
         // Resolve the agent name for the role
-        const agentName = await this._getAgentNameForRole(role, resolvedWorkspaceRoot) || (role === 'claude_artifacts' ? 'Claude Artifacts' : role);
+        const agentName = await this._getAgentNameForRole(role, resolvedWorkspaceRoot, apiOriginated)
+            || (role === 'claude_artifacts' ? 'Claude Artifacts' : role);
         const suffixedKey = this._suffixedName(agentName);
 
         let terminal: vscode.Terminal | undefined;
@@ -4459,6 +4505,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         if (!terminal) {
+            // A browser caller must not have a VS Code terminal spawned on its behalf.
+            if (apiOriginated) { return false; }
             // Spawn the terminal
             const startupCmd = await this.getAgentStartupCommand(role, resolvedWorkspaceRoot);
             terminal = vscode.window.createTerminal({
@@ -4494,6 +4542,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         await withTerminalSendLock(sendLockKey, async () => {
             await sendRobustText(terminal!, text, true);
         });
+        return true;
     }
 
     /**
@@ -4638,10 +4687,23 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return this._handleTriggerAgentAction(role, sessionId, instruction, workspaceRoot, options);
     }
 
-    /** Dispatch a custom prompt string to the agent assigned to the given role. */
-    public async dispatchCustomPromptToRole(role: string, prompt: string, workspaceRoot: string): Promise<boolean> {
+    /**
+     * @param options.apiOriginated True when the caller is a verb rail (browser cockpit,
+     * CLI, orchestrator) rather than the in-process VS Code sidebar. Set from the payload's
+     * `apiOriginated` flag, which LocalApiServer._stampHttpSurface stamps on every HTTP
+     * body. It becomes `allowPtyFleet` for resolution AND delivery, so a browser click can
+     * reach the browser's own PTY terminal. Defaults false — every sidebar caller keeps
+     * today's VS Code-only routing and can never dispatch into a terminal VS Code cannot show.
+     */
+    public async dispatchCustomPromptToRole(
+        role: string,
+        prompt: string,
+        workspaceRoot: string,
+        options?: { apiOriginated?: boolean }
+    ): Promise<boolean> {
         const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedWorkspaceRoot) { return false; }
+        const allowPtyFleet = !!options?.apiOriginated;
 
         // For planner role: pick the next terminal from the rotation cursor
         // (mirrors the kanban single-card path). For other roles: use default resolution.
@@ -4660,7 +4722,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
         // Fallback: default resolution (also covers non-planner roles and empty/single-terminal pools)
         if (!targetAgent) {
-            targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot);
+            // Fourth arg is the fix: without it the PTY branch at :8276 is skipped and a
+            // browser-only planner is unreachable. Third arg stays undefined (no worktree).
+            targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, undefined, allowPtyFleet);
         }
 
         if (!targetAgent) {
@@ -4668,11 +4732,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             return false;
         }
         if (!this._isValidAgentName(targetAgent)) { return false; }
-        // silent: this path reports its own delivery failure via _dispatchExecuteMessage.
-        // No PTY predicate — dispatchCustomPromptToRole resolves and delivers with
-        // allowPtyFleet=false, so its target is always a vscode.Terminal.
-        this._seams().commands.executeCommand('switchboard.focusTerminalByName', targetAgent, { silent: true });
-        const success = await this._dispatchExecuteMessage(resolvedWorkspaceRoot, targetAgent, prompt, {});
+        // A PTY has no VS Code terminal to reveal — mirrors the board path at :19198.
+        if (!this._isLikelyPtyDispatchTarget(targetAgent, allowPtyFleet)) {
+            this._seams().commands.executeCommand('switchboard.focusTerminalByName', targetAgent, { silent: true });
+        }
+        const success = await this._dispatchExecuteMessage(
+            resolvedWorkspaceRoot, targetAgent, prompt, {}, 'sidebar', allowPtyFleet
+        );
 
         // Advance the rotation cursor ONLY after successful dispatch
         // (consistent with the kanban single-card path — a failed dispatch doesn't skip a terminal)
@@ -5456,7 +5522,7 @@ Each plan file must include:
                         await this._seams().clipboard.writeText(coderPrompt);
                     }
                 } else {
-                    await this.dispatchToCoderTerminal(coderPrompt, group.worktreePath);
+                    await this.dispatchToCoderTerminal(coderPrompt, group.worktreePath, { apiOriginated: allowPtyFleet });
                 }
             }
 
@@ -7397,16 +7463,21 @@ Each plan file must include:
     }
 
 
-    public async askAgentTask(workspaceRoot: string, data: { id: string; title: string; description: string; provider: 'linear' | 'clickup' }): Promise<void> {
+    public async askAgentTask(
+        workspaceRoot: string,
+        data: { id: string; title: string; description: string; provider: 'linear' | 'clickup'; apiOriginated?: boolean }
+    ): Promise<void> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) return;
-        const agentName = await this._getAgentNameForRole('planner', resolvedRoot);
-        if (!agentName) {
-            this._seams().ui.showWarningMessage('No planner agent found. Set one up in the Setup panel.');
-            throw new Error('No planner agent configured');
-        }
+        // The pre-check duplicated resolution and, at allowPtyFleet=false, reported "no
+        // planner" for a browser user whose planner is a PTY. dispatchCustomPromptToRole
+        // owns resolution (fleet-aware) and reports its own failure; throw on ITS result so
+        // the tickets panel still surfaces an error to the caller.
         const prompt = `Please review the following ${data.provider} ticket and action it. Assess the request, investigate the relevant code, and either implement the change or report back with findings:\n\nTitle: ${data.title}\nDescription: ${data.description}\n\nTicket ID: ${data.id}`;
-        await this.dispatchCustomPromptToRole('planner', prompt, resolvedRoot);
+        const dispatched = await this.dispatchCustomPromptToRole(
+            'planner', prompt, resolvedRoot, { apiOriginated: !!data.apiOriginated }
+        );
+        if (!dispatched) { throw new Error('No planner agent could be reached for this ticket'); }
     }
 
     private _buildClickUpImportPlanContent(
@@ -9229,7 +9300,14 @@ Each plan file must include:
      * kickoff prompt, and arms the session. The wake tick (subtask 5) reuses
      * the terminal-launch portion for delivery-failure recovery.
      */
-    public async startOrchestratorFromKanban(workspaceRoot?: string, initiatorProject?: string | null): Promise<void> {
+    public async startOrchestratorFromKanban(
+        workspaceRoot?: string,
+        initiatorProject?: string | null,
+        options?: { apiOriginated?: boolean }
+    ): Promise<void> {
+        // Remember the starting surface for the life of the run — the WAKE dispatch
+        // has no request in scope. Fail-closed default: a sidebar start stays VS Code-only.
+        this._orchestratorApiOriginated = !!options?.apiOriginated;
         const root = this._resolveWorkspaceRoot(workspaceRoot);
         if (!root) {
             this._seams().ui.showErrorMessage('No workspace folder found. Cannot start the orchestrator.');
@@ -9385,7 +9463,19 @@ Each plan file must include:
         }
         // Small delay so a freshly-created terminal's CLI is ready to receive.
         if (createdNew) { await new Promise(r => setTimeout(r, 1500)); }
-        await this._dispatchExecuteMessage(root, ORCHESTRATOR_TERMINAL_NAME, kickoffPrompt, { orchestrationKickoff: true });
+        const kickoffSent = await this._dispatchExecuteMessage(
+            root, ORCHESTRATOR_TERMINAL_NAME, kickoffPrompt,
+            { orchestrationKickoff: true }, 'sidebar', this._orchestratorApiOriginated
+        );
+        if (!kickoffSent) {
+            // Silent failure here means the orchestrator terminal sits idle forever and the
+            // board reports a run that never started. Surface it instead.
+            this._seams().ui.showErrorMessage(
+                `Orchestrator kickoff could not be delivered to '${ORCHESTRATOR_TERMINAL_NAME}'. The run did not start.`
+            );
+            this.postMessage({ type: 'orchestratorStartResult', success: false, error: 'kickoff prompt not delivered' });
+            return;
+        }
 
         // Clear stale run markers so a NEW batch starts clean. A leftover
         // batch-complete from a prior run would otherwise stop the engine on the
@@ -9422,6 +9512,7 @@ Each plan file must include:
             orchestrationConfig: { ...DEFAULT_ORCHESTRATION_CONFIG, ...this._autobanState.orchestrationConfig, enabled: false }
         });
         this._stopAutobanEngine();
+        this._orchestratorApiOriginated = false;
         await this._persistAutobanState();
         this._postAutobanStateNow();
     }
@@ -9961,22 +10052,33 @@ Each plan file must include:
 
 
 
-    /** Dispatch a prompt to the Coder terminal for Routine pair programming. */
-    public async dispatchToCoderTerminal(prompt: string, worktreePath?: string): Promise<void> {
+    /**
+     * @param options.apiOriginated True when the caller is a verb rail (browser cockpit /
+     * CLI). Becomes allowPtyFleet for BOTH resolution and delivery so a browser-side coder
+     * PTY is reachable. Defaults false — sidebar/autoban callers keep VS Code-only routing.
+     */
+    public async dispatchToCoderTerminal(
+        prompt: string,
+        worktreePath?: string,
+        options?: { apiOriginated?: boolean }
+    ): Promise<boolean> {
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) {
             this._seams().ui.showWarningMessage('Pair Program: no workspace root found.');
-            return;
+            return false;
         }
-        const coderAgent = await this._resolveAgentTerminalForPlan('coder', workspaceRoot, worktreePath);
+        const allowPtyFleet = !!options?.apiOriginated;
+        // Fourth arg is the fix — without it the PTY branch at :8276 is skipped and a
+        // browser-only coder is invisible. worktreePath stays the third arg.
+        const coderAgent = await this._resolveAgentTerminalForPlan('coder', workspaceRoot, worktreePath, allowPtyFleet);
         if (!coderAgent) {
             this._seams().ui.showWarningMessage('Pair Program: no Coder terminal found. Please register a Coder terminal first.');
-            return;
+            return false;
         }
-        await this._dispatchExecuteMessage(workspaceRoot, coderAgent, prompt, {
+        return await this._dispatchExecuteMessage(workspaceRoot, coderAgent, prompt, {
             batch: true,
             pairProgramming: true
-        });
+        }, 'sidebar', allowPtyFleet);
     }
 
     /** Public accessor for role resolution (used by command handlers) */
@@ -10921,7 +11023,10 @@ Each plan file must include:
             const wakePrompt = `${recoveryPreamble}You are the Switchboard orchestrator. The system woke you. Read and follow .agents/skills/switchboard-orchestrator/SKILL.md — begin with the Wake Protocol. When done, report "wake complete, sleeping" and STOP.`;
             let ok = false;
             try {
-                ok = await this._dispatchExecuteMessage(root, ORCHESTRATOR_TERMINAL_NAME, wakePrompt, { orchestrationWake: true });
+                ok = await this._dispatchExecuteMessage(
+                    root, ORCHESTRATOR_TERMINAL_NAME, wakePrompt,
+                    { orchestrationWake: true }, 'sidebar', this._orchestratorApiOriginated
+                );
             } catch (err) {
                 console.error('[Autoban] Orchestration wake dispatch failed:', err);
                 ok = false;
@@ -11443,9 +11548,10 @@ Each plan file must include:
                     case 'runSetupIDEs':
                         this._seams().commands.executeCommand('switchboard.setupIDEs');
                         return { success: true };
-                    case 'dispatchProjectManager':
-                        await this._handleDispatchProjectManager();
-                        return { success: true };
+                    case 'dispatchProjectManager': {
+                        const sent = await this._handleDispatchProjectManager({ apiOriginated: !!data.apiOriginated });
+                        return { success: sent, ...(sent ? {} : { error: 'No Project Manager terminal could be reached.' }) };
+                    }
                     case 'openKanban':
                         this._seams().commands.executeCommand('switchboard.openKanban', data.tab);
                         return { success: true };
@@ -12319,7 +12425,12 @@ Each plan file must include:
                         return { success: true };
                     case 'sendAnalystMessage':
                         if (data.instruction) {
-                            await this._handleSendAnalystMessage(data.instruction);
+                            await this._handleSendAnalystMessage(
+                                data.instruction,
+                                'analyst',
+                                data.workspaceRoot,
+                                { apiOriginated: !!data.apiOriginated }
+                            );
                         }
                         return { success: true };
                     case 'generateContextMap':
@@ -12629,7 +12740,9 @@ Each plan file must include:
                         if (action === 'send') {
                             // Send to Planner dispatches only — it must NOT copy to clipboard
                             // on success, matching every other dispatch action in the extension.
-                            sendSucceeded = await this.dispatchCustomPromptToRole('planner', prompt, workspaceRoot);
+                            sendSucceeded = await this.dispatchCustomPromptToRole(
+                                'planner', prompt, workspaceRoot, { apiOriginated: !!data.apiOriginated }
+                            );
                             if (!sendSucceeded) {
                                 // Failure fallback: copy so the user can paste manually
                                 // (the failure message below promises this).
@@ -12665,7 +12778,10 @@ Each plan file must include:
                             memoCleared: sendSucceeded,
                             isError: !sendSucceeded,
                             action,
-                            ...(sendSucceeded ? {} : { error: msg }),
+                            // `prompt` ONLY on failure: transport.js:292 copies any body-level
+                            // `prompt` to the BROWSER clipboard, which is the only clipboard a
+                            // cockpit user has. On success that would clobber it silently.
+                            ...(sendSucceeded ? {} : { error: msg, prompt }),
                         };
                     }
                     case 'getRecentActivity': {
@@ -12735,7 +12851,7 @@ Each plan file must include:
                         return { success: true };
                     case 'airlock_sendToCoder':
                         if (data.text) {
-                            this._handleAirlockSendToCoder(data.text);
+                            this._handleAirlockSendToCoder(data.text, { apiOriginated: !!data.apiOriginated });
                         }
                         return { success: true };
                     case 'airlock_syncRepo':
@@ -12854,7 +12970,12 @@ ${duckdbInstalled ? 'DuckDB CLI is installed and ready' : 'DuckDB CLI needs to b
 
 What would you like to find?`;
 
-                        await this._handleSendAnalystMessage(instruction);
+                        await this._handleSendAnalystMessage(
+                            instruction,
+                            'analyst',
+                            data.workspaceRoot,
+                            { apiOriginated: !!data.apiOriginated }
+                        );
                         return { success: true };
                     }
 
@@ -18782,6 +18903,53 @@ What would you like to find?`;
             this._normalizeAgentKey(this._stripIdeSuffix(name)) === normalized);
     }
 
+    /**
+     * Fleet-first delivery for helpers that otherwise drive vscode.Terminal directly
+     * (_sendPromptToTerminal, sendPromptToAgentTerminal, _deliverPromptToPmTerminal,
+     * _handleSendAnalystMessage). PTYs live in the pty host child — not in
+     * _registeredTerminals, not in vscode.window.terminals, not in the HostTerminal
+     * seam — so a browser-originated send cannot reach one without this step. Mirrors
+     * sendToTerminal (:12887) and _attemptDirectTerminalPush (:18883).
+     *
+     * Delivery goes through _dispatchExecuteMessage so ptySendPrompt owns bracketed-paste
+     * framing, chunking, the per-terminal send lock and the confirm CR. Do NOT hand-roll
+     * a ptyWrite here — a multi-line prompt written raw runs one fragment per line.
+     *
+     * Returns false when not applicable (not api-originated, no fleet, no match) so the
+     * caller falls through to its existing VS Code path unchanged.
+     */
+    private async _tryFleetDeliveryForRole(
+        role: string,
+        prompt: string,
+        workspaceRoot: string,
+        apiOriginated: boolean,
+        metadata: Record<string, any> = {}
+    ): Promise<boolean> {
+        if (!apiOriginated || !this._ptyHostPort) { return false; }
+        // Authoritative single lookup: ask the fleet for an ACTIVE terminal of this role.
+        // A miss means "no fleet terminal for this role" — return false and let the caller
+        // run its unchanged VS Code path (roles like claude_artifacts may exist only there).
+        const res = await this._ptyHostVerb('ptyListTerminals', {});
+        if (!res?.success || !Array.isArray(res.terminals)) { return false; }
+        const normalizedRole = this._normalizeAgentKey(role);
+        const match = res.terminals
+            .filter((t: any) => t.status === 'active')
+            .find((t: any) => this._normalizeAgentKey(t.role) === normalizedRole);
+        const target = match?.friendlyName;
+        if (!target || !this._isValidAgentName(target)) { return false; }
+        return await this._dispatchExecuteMessage(workspaceRoot, target, prompt, metadata, 'sidebar', true);
+    }
+
+    public async tryFleetDeliveryForRole(
+        role: string,
+        prompt: string,
+        workspaceRoot: string,
+        apiOriginated: boolean,
+        metadata: Record<string, any> = {}
+    ): Promise<boolean> {
+        return this._tryFleetDeliveryForRole(role, prompt, workspaceRoot, apiOriginated, metadata);
+    }
+
     private async _dispatchExecuteMessage(
         workspaceRoot: string,
         targetAgent: string,
@@ -19242,7 +19410,7 @@ What would you like to find?`;
         }
 
         if (role === 'planner') {
-            const plannerInstruction = (baseInstruction === 'improve-plan' || baseInstruction === 'enhance') ? baseInstruction : undefined;
+            const plannerInstruction = (baseInstruction === 'improve-plan' || baseInstruction === 'enhance' || baseInstruction === 'dispatch-analysis') ? baseInstruction : undefined;
             messagePayload = await this._kanbanProvider.generateUnifiedPrompt('planner', dispatchPlans, effectiveWorkspaceRoot, {
                 instruction: plannerInstruction,
                 gitProhibitionEnabled
@@ -19376,7 +19544,9 @@ What would you like to find?`;
 
     private async _handleSendAnalystMessage(
         instruction: string,
-        resultRole: 'analyst' | 'analystMap' = 'analyst'
+        resultRole: 'analyst' | 'analystMap' = 'analyst',
+        workspaceRoot?: string,
+        options?: { apiOriginated?: boolean }
     ): Promise<boolean> {
         const postAnalystResult = (success: boolean) => {
             this.postMessage({ type: 'actionTriggered', role: resultRole, success });
@@ -19387,11 +19557,31 @@ What would you like to find?`;
             return false;
         }
 
+        const apiOriginated = !!options?.apiOriginated;
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot || '') || this._getWorkspaceRoot();
+        if (!resolvedRoot) {
+            this._seams().ui.showErrorMessage('No workspace root open.');
+            postAnalystResult(false);
+            return false;
+        }
+
         const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         let targetAgent: string | undefined;
 
         try {
-            targetAgent = await this._getAgentNameForRole('analyst');
+            // PTY fleet first: browser / CLI callers can display a PTY, the editor cannot.
+            if (await this._tryFleetDeliveryForRole('analyst', messageText, resolvedRoot, apiOriginated, { source: 'analyst' })) {
+                postAnalystResult(true);
+                await this._logEvent('dispatch', {
+                    event: 'analyst_dispatch_sent',
+                    role: 'analyst',
+                    targetAgent: '(fleet)',
+                    messageId
+                });
+                return true;
+            }
+
+            targetAgent = await this._getAgentNameForRole('analyst', resolvedRoot, apiOriginated);
             if (!targetAgent) {
                 this._seams().ui.showErrorMessage("No agent assigned to role 'analyst'. Please assign a terminal first.");
                 postAnalystResult(false);
@@ -21378,7 +21568,7 @@ What would you like to find?`;
         }
     }
 
-    private async _handleAirlockSendToCoder(text: string): Promise<void> {
+    private async _handleAirlockSendToCoder(text: string, options?: { apiOriginated?: boolean }): Promise<void> {
         if (Buffer.byteLength(text, 'utf8') > TaskViewerProvider.MAX_AIRLOCK_TEXT_BYTES) {
             this.postMessage({ type: 'airlock_coderError', message: 'Text exceeds 2MB limit. Please reduce the size.' });
             return;
@@ -21400,8 +21590,11 @@ What would you like to find?`;
 
             await fs.promises.writeFile(patchPath, text, 'utf8');
 
-            // Find the coder agent terminal
-            const targetAgent = await this._getAgentNameForRole('coder');
+            // Pass the root explicitly (it is already in scope and used on the dispatch
+            // line below) so resolution and delivery agree on one workspace, and pass the
+            // surface flag so a browser coder PTY is eligible.
+            const allowPtyFleet = !!options?.apiOriginated;
+            const targetAgent = await this._getAgentNameForRole('coder', workspaceRoot, allowPtyFleet);
 
             if (!targetAgent) {
                 this.postMessage({ type: 'airlock_coderError', message: 'No Coder agent assigned. Assign a terminal role first.' });
@@ -21409,11 +21602,20 @@ What would you like to find?`;
             }
 
             const payload = `This is a patch from the Airlock. Please manually apply the patch file:\n\n${patchPath}\n\nUse the \`apply_patch\` skill or read the file and apply changes manually.`;
-            await this._dispatchExecuteMessage(workspaceRoot, targetAgent, payload, {
+            const sent = await this._dispatchExecuteMessage(workspaceRoot, targetAgent, payload, {
                 source: 'airlock',
                 patchFile: patchPath,
-            }, 'airlock');
+            }, 'airlock', allowPtyFleet);
 
+            // Reporting 'sent' on a failed delivery is what made this read as a silent
+            // no-op in the browser: the patch file was written, nothing was dispatched.
+            if (!sent) {
+                this.postMessage({
+                    type: 'airlock_coderError',
+                    message: `Patch written to ${patchPath}, but the prompt could not be delivered to '${targetAgent}'.`
+                });
+                return;
+            }
             this.postMessage({ type: 'airlock_coderSent' });
         } catch (err: any) {
             const msg = err?.message || String(err);
@@ -22197,6 +22399,234 @@ What would you like to find?`;
         }
     }
 
+    /**
+     * How many per-ticket deletion probes one import may spend. Each is a single
+     * API call, so a complete list fetch normally lands well under this (only the
+     * genuinely-absent ids get probed). The cap matters on a SHORT fetch, where
+     * every local file can look absent — there we verify a bounded prefix and
+     * report the remainder via `deletionChecksSkipped` rather than either
+     * hammering the API or silently reconciling nothing.
+     */
+    private static readonly _DELETION_PROBE_CAP = 25;
+
+    /**
+     * Nominate every local ticket in `targetDir` whose remote id is absent from
+     * `remoteIds` — from BOTH the filesystem and imported_docs, unioned by id.
+     *
+     * Reading only imported_docs (the original shape of this sweep) cannot see the
+     * files the sidebar actually renders, and the two disagree constantly. On this
+     * install 254 ticket files sit under 204 rows, and both of the tickets that
+     * survived a remote delete were in that gap. Two ways a file ends up unbacked:
+     *
+     *   - It was never registered, so nothing in the DB mentions it. The sidebar
+     *     still shows it — `listLocalTicketFiles` backfills unregistered files on
+     *     its heal pass and falls back to a raw directory scan — so a DB-driven
+     *     sweep leaves a permanently undeletable card.
+     *   - The ticket MOVED list. The row's file_path follows the new directory
+     *     while the old file stays behind: row at `q4-2026/sprint-4-1611-2911/…`,
+     *     file at `q3-2026/sprint-4-108-238/…`. Scoping rows by targetDir drops the
+     *     row when browsing the old list, and unlinking `dbT.filePath` when
+     *     browsing the new one misses the copy that is actually on disk.
+     *
+     * So the filesystem nominates and the DB augments, and a candidate carries
+     * EVERY path known for its id. Nomination is not deletion — each id is still
+     * proved gone against its own endpoint before anything is unlinked.
+     */
+    private _collectDeletionCandidates(
+        provider: 'clickup' | 'linear',
+        targetDir: string | undefined,
+        dbTickets: any[],
+        remoteIds: Set<string>
+    ): TicketDeletionCandidate[] {
+        const byId = new Map<string, TicketDeletionCandidate>();
+        const add = (remoteId: string, filePath: string | undefined, dbT: any) => {
+            if (!remoteId || remoteIds.has(remoteId)) { return; }
+            let entry = byId.get(remoteId);
+            if (!entry) {
+                entry = { remoteId, slugPrefix: `${provider}_${remoteId}`, paths: [], dbT: null };
+                byId.set(remoteId, entry);
+            }
+            if (filePath && !entry.paths.includes(filePath)) { entry.paths.push(filePath); }
+            if (dbT && !entry.dbT) { entry.dbT = dbT; }
+        };
+
+        // Filesystem first — this is the set the sidebar draws from.
+        if (targetDir) {
+            try {
+                const filePrefix = `${provider}_`;
+                const entries = fs.existsSync(targetDir) ? fs.readdirSync(targetDir) : [];
+                for (const fname of entries) {
+                    if (!fname.endsWith('.md') || !fname.startsWith(filePrefix)) { continue; }
+                    const fullPath = path.join(targetDir, fname);
+                    // Progressive import embeds subtasks in the parent file; a separate
+                    // file with parentId is not a sidebar entry and must not be nominated.
+                    try {
+                        const head = fs.readFileSync(fullPath, 'utf8').slice(0, 2048);
+                        if (/^parentId:\s*\S+/m.test(head)) { continue; }
+                    } catch { /* ignore unreadable files */ }
+                    // Filename shape: <provider>_<id>_<slug>.md → extract <id>.
+                    const remoteId = fname.slice(filePrefix.length, -3).split('_')[0];
+                    add(remoteId, fullPath, null);
+                }
+            } catch (e) {
+                console.warn('[TaskViewerProvider] Deletion candidates: could not scan', targetDir, e);
+            }
+        }
+
+        // Then the DB rows scoped to this directory, which contribute their own
+        // file_path (identical in the common case) and the row to clean up.
+        for (const dbT of dbTickets) {
+            if (!dbT?.filePath) { continue; }
+            if (targetDir && path.dirname(dbT.filePath) !== targetDir) { continue; }
+            add(String(dbT.remoteDocId || ''), dbT.filePath, dbT);
+        }
+
+        // Finally, attach rows whose file_path points elsewhere but whose id was
+        // nominated from this directory — the moved-list case. Without this the
+        // stale copy would be unlinked while its row lived on and the next heal
+        // scan re-registered the ticket from whatever file remained.
+        for (const dbT of dbTickets) {
+            const remoteId = String(dbT?.remoteDocId || '');
+            const entry = remoteId ? byId.get(remoteId) : undefined;
+            if (!entry) { continue; }
+            if (!entry.dbT) { entry.dbT = dbT; }
+            if (dbT.filePath && !entry.paths.includes(dbT.filePath)) { entry.paths.push(dbT.filePath); }
+        }
+
+        return Array.from(byId.values());
+    }
+
+    /**
+     * Decide which local ticket files are safe to delete, by asking the remote
+     * about each candidate individually.
+     *
+     * This replaces set-difference reasoning ("absent from the list fetch,
+     * therefore deleted"), which is only sound when the fetch is authoritative —
+     * and on 2026-08-05 was not: a short 200 response produced an id set missing
+     * five live tickets and the sweep unlinked all five plus their imported_docs
+     * rows. Absence is evidence about the *fetch*; only the ticket's own endpoint
+     * is evidence about the ticket.
+     *
+     * Because each candidate carries its own proof, this is safe to run when the
+     * list fetch was NOT authoritative — which is the point. The old gates made
+     * every ambiguous refresh a silent no-op, so a ticket deleted in ClickUp or
+     * Linear stayed in the sidebar forever (the sidebar's steady state is the
+     * local files, not the fetch). Ambiguity now costs one extra call per
+     * candidate instead of costing reconciliation entirely.
+     *
+     * Anything not positively confirmed deleted is counted in `unresolved` and
+     * kept. Callers surface that count — a partial reconciliation the user cannot
+     * see is the failure mode this whole path exists to end.
+     */
+    private async _confirmRemotelyDeleted(
+        provider: 'clickup' | 'linear',
+        resolvedRoot: string,
+        candidates: TicketDeletionCandidate[]
+    ): Promise<{ confirmed: TicketDeletionCandidate[]; unresolved: number; skipped: number }> {
+        const confirmed: TicketDeletionCandidate[] = [];
+        let unresolved = 0;
+        const cap = TaskViewerProvider._DELETION_PROBE_CAP;
+        const toCheck = candidates.slice(0, cap);
+        const skipped = Math.max(0, candidates.length - toCheck.length);
+
+        if (candidates.length === 0) { return { confirmed, unresolved, skipped }; }
+
+        let probe: (id: string) => Promise<'deleted' | 'exists' | 'unknown'>;
+        try {
+            if (provider === 'clickup') {
+                const clickup = this._getClickUpService(resolvedRoot);
+                probe = (id: string) => clickup.probeTaskExistence(id);
+            } else {
+                const linear = this._getLinearService(resolvedRoot);
+                probe = (id: string) => linear.probeIssueExistence(id);
+            }
+        } catch (e) {
+            // No usable service — every candidate is unverifiable, so nothing goes.
+            console.warn('[TaskViewerProvider] Deletion verification: service unavailable, keeping all candidates:', e);
+            return { confirmed, unresolved: candidates.length, skipped: 0 };
+        }
+
+        // Sequential on purpose: these run behind the same rate limiter as the
+        // rest of the sync, and a refresh that reconciles a little slower is
+        // strictly better than one that trips a 429 and resolves nothing.
+        for (const candidate of toCheck) {
+            let verdict: 'deleted' | 'exists' | 'unknown';
+            try {
+                verdict = await probe(candidate.remoteId);
+            } catch (e) {
+                console.warn(`[TaskViewerProvider] Deletion verification threw for ${provider} ${candidate.remoteId}:`, e);
+                verdict = 'unknown';
+            }
+            if (verdict === 'deleted') {
+                confirmed.push(candidate);
+            } else if (verdict === 'unknown') {
+                unresolved++;
+            }
+        }
+
+        if (skipped > 0) {
+            console.warn(
+                `[TaskViewerProvider] Deletion verification: ${candidates.length} candidates exceeded the ` +
+                `${cap}-probe cap — verified ${toCheck.length}, deferred ${skipped} to the next refresh.`
+            );
+        }
+        return { confirmed, unresolved, skipped };
+    }
+
+    /**
+     * Unlink the files whose remote deletion `_confirmRemotelyDeleted` proved, and
+     * drop their imported_docs rows.
+     *
+     * EVERY path known for the id is unlinked, not just the row's file_path — a
+     * ticket that changed list leaves a copy behind in the old directory, and
+     * deleting only the row's path leaves that copy to be re-registered by the
+     * next heal scan and redrawn in the sidebar. Deleting the row is likewise
+     * keyed on the id's slugPrefix, so an unbacked file still clears any row that
+     * turns up for it.
+     *
+     * Locally-modified files are NOT spared: the ticket is gone remotely, so an
+     * unpushed edit has nowhere to go and the file is a ghost. (The prune above,
+     * which reconciles *filtering* rather than deletion, does still spare them.)
+     */
+    private async _applyConfirmedDeletions(
+        resolvedRoot: string,
+        ticketsRoot: string | undefined,
+        confirmed: TicketDeletionCandidate[],
+        logLabel: string
+    ): Promise<number> {
+        if (confirmed.length === 0) { return 0; }
+        let removed = 0;
+        const cacheService = this._getCacheService(resolvedRoot);
+        for (const candidate of confirmed) {
+            let unlinkedAny = false;
+            for (const filePath of candidate.paths) {
+                if (!path.isAbsolute(filePath)) {
+                    console.error(`[TaskViewerProvider] ${logLabel}: refusing to unlink non-absolute path`, filePath);
+                    continue;
+                }
+                if (!ticketsRoot) {
+                    console.error(`[TaskViewerProvider] ${logLabel}: refusing to unlink without a tickets root`, filePath);
+                    continue;
+                }
+                const rel = path.relative(ticketsRoot, filePath);
+                if (rel.startsWith('..') || path.isAbsolute(rel) || rel === '') {
+                    console.error(`[TaskViewerProvider] ${logLabel}: refusing to unlink outside the tickets root`, filePath);
+                    continue;
+                }
+                try { await fs.promises.unlink(filePath); unlinkedAny = true; } catch (e: any) {
+                    if (e.code !== 'ENOENT') { console.warn(`[TaskViewerProvider] ${logLabel}: could not unlink`, filePath, e); }
+                }
+            }
+            if (!unlinkedAny) { continue; }
+            const slugPrefix = candidate.dbT?.slugPrefix || candidate.slugPrefix;
+            try { await cacheService.deleteImportedTicket(slugPrefix); } catch (e) {
+                console.warn(`[TaskViewerProvider] ${logLabel}: could not delete cache entry`, slugPrefix, e);
+            }
+            removed++;
+        }
+        return removed;
+    }
+
     public async importAllTasks(
         workspaceRoot: string,
         data: {
@@ -22212,7 +22642,7 @@ What would you like to find?`;
             deltaSinceIso?: string;    // Linear: ISO 8601 for updatedAt gt filter
             includeClosed?: boolean;   // when true, also import done/closed (Linear: completed/canceled) tickets
         }
-    ): Promise<{ success: boolean; successCount: number; failCount: number; errors: { id: string; error: string }[]; skippedModified?: number; pruned?: number; deletedCount?: number }> {
+    ): Promise<{ success: boolean; successCount: number; failCount: number; errors: { id: string; error: string }[]; skippedModified?: number; pruned?: number; deletedCount?: number; deletionChecksUnresolved?: number; deletionChecksSkipped?: number }> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) {
             return { success: false, successCount: 0, failCount: 0, errors: [{ id: 'all', error: 'No workspace open.' }] };
@@ -22224,6 +22654,8 @@ What would you like to find?`;
         let failCount = 0;
         let skippedModified = 0;
         let deletedCount = 0;
+        let deletionChecksUnresolved = 0;
+        let deletionChecksSkipped = 0;
         const errors: { id: string; error: string }[] = [];
 
         let fetchComplete = false;
@@ -22232,6 +22664,7 @@ What would you like to find?`;
         if (importMode === 'document' && !ids) {
             let items: any[] = [];
             let targetDir: string | undefined;
+            let ticketsRoot: string | undefined;
             let segments: string[] = [];
 
             if (provider === 'clickup' && listId) {
@@ -22255,12 +22688,13 @@ What would you like to find?`;
 
                 const clickupConfig = GlobalIntegrationConfigService.loadConfigSync('clickup');
                 if (clickupConfig && clickupConfig.ticketSaveLocation) {
-                    const parts = [clickupConfig.ticketSaveLocation, 'clickup', this._slugify(h.spaceName).slice(0, 60)];
+                    ticketsRoot = path.join(clickupConfig.ticketSaveLocation, 'clickup');
+                    const parts = [this._slugify(h.spaceName).slice(0, 60)];
                     if (h.folderName) {
                         parts.push(this._slugify(h.folderName).slice(0, 60));
                     }
                     parts.push(this._slugify(h.listName).slice(0, 60));
-                    targetDir = path.join(...parts);
+                    targetDir = path.join(ticketsRoot, ...parts);
                 }
             } else if (provider === 'linear' && projectId) {
                 const linear = this._getLinearService(resolvedRoot);
@@ -22280,18 +22714,21 @@ What would you like to find?`;
 
                 const linearConfig = GlobalIntegrationConfigService.loadConfigSync('linear');
                 if (linearConfig && linearConfig.ticketSaveLocation) {
+                    ticketsRoot = path.join(linearConfig.ticketSaveLocation, 'linear');
                     targetDir = path.join(
-                        linearConfig.ticketSaveLocation,
-                        'linear',
+                        ticketsRoot,
                         this._slugify(teamName).slice(0, 60),
                         this._slugify(projectName).slice(0, 60)
                     );
                 }
             }
 
-            if (!targetDir) {
+            if (!ticketsRoot) {
                 const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
-                targetDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir, ...segments.map(s => this._slugify(s).slice(0, 60)));
+                ticketsRoot = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir);
+            }
+            if (!targetDir) {
+                targetDir = path.join(ticketsRoot, ...segments.map(s => this._slugify(s).slice(0, 60)));
             }
 
             const resolutionFailed = provider === 'linear' && (items as any).resolutionFailed;
@@ -22495,31 +22932,27 @@ What would you like to find?`;
             // (which stores the provider name 'linear'/'clickup', not the task ID).
             // Gated on rawItemCount > 0 to match the prune's guard — a transient
             // empty fetch must not wipe all local files.
-            if (!isDelta && fetchIsAuthoritative) {
+            //
+            // No longer gated on fetchIsAuthoritative: absence from rawRemoteIds
+            // now only NOMINATES a file, and _confirmRemotelyDeleted proves each
+            // nomination against the ticket's own endpoint before anything is
+            // unlinked. A short fetch therefore costs extra probes, not five
+            // destroyed files — and, just as importantly, no longer causes the
+            // reconciliation to be silently skipped.
+            if (!isDelta) {
                 try {
                     const cacheService = this._getCacheService(resolvedRoot);
                     const dbTicketsSweep = await cacheService.getImportedTickets();
                     // Scope to the current list/project directory only — don't
                     // touch files belonging to other lists/projects. Use exact
                     // path.dirname match (loose includes() can match coincidentally).
-                    const scopedDbTickets = targetDir
-                        ? dbTicketsSweep.filter(t => t.filePath && path.dirname(t.filePath) === targetDir)
-                        : dbTicketsSweep;
-                    for (const dbT of scopedDbTickets) {
-                        // Use remoteDocId (the clean remote task ID) for comparison.
-                        // sourceId stores the provider name ('linear'/'clickup'), not
-                        // the task ID — using it would match nothing and delete everything.
-                        const remoteId = String(dbT.remoteDocId || '');
-                        if (remoteId && !rawRemoteIds.has(remoteId)) {
-                            try { await fs.promises.unlink(dbT.filePath); } catch (e: any) {
-                                if (e.code !== 'ENOENT') console.warn('[TaskViewerProvider] Deletion sweep: could not unlink', dbT.filePath, e);
-                            }
-                            try { await cacheService.deleteImportedTicket(dbT.slugPrefix); } catch (e) {
-                                console.warn('[TaskViewerProvider] Deletion sweep: could not delete cache entry', dbT.slugPrefix, e);
-                            }
-                            deletedCount++;
-                        }
-                    }
+                    // Nominates from the filesystem AND imported_docs — the sidebar
+                    // renders files, and files without rows are exactly where ghosts live.
+                    const candidates = this._collectDeletionCandidates(provider, targetDir, dbTicketsSweep, rawRemoteIds);
+                    const { confirmed, unresolved, skipped } = await this._confirmRemotelyDeleted(provider, resolvedRoot, candidates);
+                    deletedCount += await this._applyConfirmedDeletions(resolvedRoot, ticketsRoot, confirmed, 'Deletion sweep');
+                    deletionChecksUnresolved += unresolved;
+                    deletionChecksSkipped += skipped;
                 } catch (e) {
                     console.warn('[TaskViewerProvider] Deletion sweep failed:', e);
                 }
@@ -22527,28 +22960,34 @@ What would you like to find?`;
 
             // ── Deletion sweep (delta pulls) ───────────────────────────────
             // For delta pulls, the items array only contains *changed* tasks —
-            // it's not the full remote set. To detect deletions, fetch the full
-            // ID set separately. One extra paginated API call per Refresh/tick
-            // — acceptable for a manual action or a 45s auto-sync interval.
-            // Critically, the ClickUp task cache must be invalidated first so
-            // we get live data, not a stale 5-min snapshot that would miss
-            // recently-deleted tasks. Never delete based on a failed/partial
-            // fetch — the fetchSucceeded flag gates the sweep.
+            // it's not the full remote set. To find deletion CANDIDATES we fetch
+            // the full ID set separately. One extra paginated API call per
+            // Refresh/tick — acceptable for a manual action or a 45s auto-sync
+            // interval. Critically, the ClickUp task cache must be invalidated
+            // first so we get live data, not a stale 5-min snapshot that would
+            // miss recently-deleted tasks.
             //
-            // "Succeeded" MUST mean authoritative, not merely "did not throw".
-            // _fetchListTasksInternal exits its pagination loop with complete=false
-            // on an empty page or a run that never observes last_page:true, and
-            // returns those short results normally — no exception. Trusting the
-            // absence of a throw deleted five real tickets on 2026-08-05: a short
-            // 200 response produced a fullRemoteIds set missing every local file,
-            // and the sweep unlinked them all plus their imported_docs rows.
-            // This mirrors the non-delta gate (fetchIsAuthoritative, ~line 22320):
-            // complete AND non-empty. A genuinely-emptied list is therefore no
-            // longer swept here — which matches the full-import path, whose
-            // rawItemCount > 0 term already declines to sweep that case.
+            // This fetch NOMINATES; it does not convict. Every candidate is then
+            // checked against its own endpoint by _confirmRemotelyDeleted, and only
+            // a confirmed-gone ticket is unlinked.
+            //
+            // That inversion is what makes the old authorisation gates unnecessary
+            // — and they were doing real harm. `complete && size > 0`, plus the
+            // selection-match and resolved-hierarchy checks, existed because a
+            // short 200 response once produced an ID set missing every local file
+            // and the sweep deleted all of them (2026-08-05). But a `false` on any
+            // of those gates skipped reconciliation entirely, with nothing but a
+            // console.warn, so a ticket deleted in ClickUp or Linear never left the
+            // sidebar no matter how many times the user hit Refresh or Full
+            // re-fetch. Per-ticket proof is immune to all of those failure modes: a
+            // short fetch, an emptied list, a moved selection, an unnameable
+            // directory — none of them can make a live ticket's endpoint 404. So
+            // the sweep now always runs, and ambiguity costs an extra call per
+            // candidate rather than costing correctness in one direction or the
+            // other.
             if (isDelta) {
-                let fetchSucceeded = false;
                 let fullRemoteIds = new Set<string>();
+                let nominationFetchFailed = false;
                 try {
                     if (provider === 'clickup' && listId) {
                         this._getCacheService(resolvedRoot).invalidateTaskCache('clickup', listId);
@@ -22558,103 +22997,53 @@ What would you like to find?`;
                         // returns the `complete` flag instead of discarding it.
                         const { tasks: allTasks, complete } = await clickup.getListTasksLive(listId);
                         fullRemoteIds = new Set(allTasks.map((t: any) => String(t.id)));
-                        fetchSucceeded = complete && fullRemoteIds.size > 0;
-                        if (!fetchSucceeded) {
+                        if (!complete) {
                             console.warn(
-                                `[TaskViewerProvider] Deletion sweep (delta): non-authoritative ClickUp fetch for list ${listId} ` +
-                                `(complete=${complete}, ids=${fullRemoteIds.size}) — skipping sweep.`
+                                `[TaskViewerProvider] Deletion sweep (delta): short ClickUp fetch for list ${listId} ` +
+                                `(ids=${fullRemoteIds.size}) — nominations may be over-broad; each is verified individually.`
                             );
-                        } else {
-                            // Selection-match scope guard: targetDir is derived from the
-                            // LIVE selection (getSelectedHierarchy → space/folder/list
-                            // NAMES), not from listId. If the selection moved between
-                            // queueing and executing this refresh, an authorised fetch of
-                            // list A would sweep list B's directory against A's remote IDs
-                            // and delete everything in it. Skip the sweep when the live
-                            // selectedListId no longer matches the refreshed listId, or
-                            // when the hierarchy is unresolved (selectedListId empty →
-                            // targetDir would be _unknown/_unknown, no valid authority).
-                            const clickupCfg = await clickup.loadConfig();
-                            const liveListId = String(clickupCfg?.selectedListId || '').trim();
-                            // `segments` are the space/folder/list NAMES that actually built
-                            // targetDir above. getSelectedHierarchy substitutes '_unknown' for
-                            // any name it cannot resolve, and it reads the in-memory config —
-                            // so selectedListId can be set while the names are still unresolved.
-                            // Checking selectedListId alone therefore does NOT cover the
-                            // observed `_unknown/_unknown` directory. A sweep scoped to a
-                            // directory we cannot name has no authority over its contents.
-                            const unresolvedSegment = segments.some(s => s === '_unknown');
-                            if (unresolvedSegment) {
-                                fetchSucceeded = false;
-                                console.warn(
-                                    `[TaskViewerProvider] Deletion sweep (delta): ClickUp hierarchy names unresolved (segments=${JSON.stringify(segments)}) for list ${listId} ` +
-                                    `— skipping sweep (targetDir is not attributable to this list).`
-                                );
-                            } else if (!liveListId) {
-                                fetchSucceeded = false;
-                                console.warn(
-                                    `[TaskViewerProvider] Deletion sweep (delta): ClickUp hierarchy unresolved (selectedListId empty) for list ${listId} ` +
-                                    `— skipping sweep (targetDir would be _unknown/_unknown).`
-                                );
-                            } else if (liveListId !== String(listId)) {
-                                fetchSucceeded = false;
-                                console.warn(
-                                    `[TaskViewerProvider] Deletion sweep (delta): selection moved (live selectedListId=${liveListId} != refreshed listId=${listId}) ` +
-                                    `— skipping sweep to avoid sweeping the wrong directory.`
-                                );
-                            }
                         }
                     } else if (provider === 'linear' && projectId) {
-                        // fetchAllIssueIds now reports completeness alongside the ID set.
-                        // `complete` is true only when pagination observed the end; a
-                        // truncated page-cap or missing-cursor run leaves it false, so a
-                        // short fetch can never authorise a destructive sweep. Combined
-                        // with non-emptiness, this matches the ClickUp gate and blocks
-                        // both the catastrophic empty-set case and the truncated case.
                         const linear = this._getLinearService(resolvedRoot);
                         const { ids: linearIds, complete: linearComplete } = await linear.fetchAllIssueIds(projectId);
                         fullRemoteIds = linearIds;
-                        fetchSucceeded = linearComplete && linearIds.size > 0;
-                        if (!fetchSucceeded) {
+                        if (!linearComplete) {
                             console.warn(
-                                `[TaskViewerProvider] Deletion sweep (delta): non-authoritative Linear ID fetch for project ${projectId} ` +
-                                `(complete=${linearComplete}, ids=${linearIds.size}) — skipping sweep.`
+                                `[TaskViewerProvider] Deletion sweep (delta): truncated Linear ID fetch for project ${projectId} ` +
+                                `(ids=${linearIds.size}) — nominations may be over-broad; each is verified individually.`
                             );
                         }
                     }
                 } catch (e) {
-                    console.warn('[TaskViewerProvider] Deletion sweep (delta): full ID-set fetch failed, skipping sweep:', e);
-                    fetchSucceeded = false;
+                    // The nomination fetch is an optimisation: without it every local
+                    // file would be a candidate, which would burn the probe cap on a
+                    // list that is probably intact. Skip this round and let the next
+                    // refresh nominate properly.
+                    console.warn('[TaskViewerProvider] Deletion sweep (delta): nomination fetch failed, deferring reconciliation:', e);
+                    nominationFetchFailed = true;
                 }
-                if (fetchSucceeded) {
+                if (!nominationFetchFailed) {
                     try {
                         const cacheService = this._getCacheService(resolvedRoot);
                         const dbTicketsSweep = await cacheService.getImportedTickets();
-                        const scopedDbTickets = targetDir
-                            ? dbTicketsSweep.filter(t => t.filePath && path.dirname(t.filePath) === targetDir)
-                            : dbTicketsSweep;
-                        for (const dbT of scopedDbTickets) {
-                            // Use remoteDocId (the clean remote task ID) for comparison.
-                            // sourceId stores the provider name ('linear'/'clickup'), not
-                            // the task ID — using it would match nothing and delete everything.
-                            const remoteId = String(dbT.remoteDocId || '');
-                            if (remoteId && !fullRemoteIds.has(remoteId)) {
-                                try { await fs.promises.unlink(dbT.filePath); } catch (e: any) {
-                                    if (e.code !== 'ENOENT') console.warn('[TaskViewerProvider] Deletion sweep (delta): could not unlink', dbT.filePath, e);
-                                }
-                                try { await cacheService.deleteImportedTicket(dbT.slugPrefix); } catch (e) {
-                                    console.warn('[TaskViewerProvider] Deletion sweep (delta): could not delete cache entry', dbT.slugPrefix, e);
-                                }
-                                deletedCount++;
-                            }
-                        }
+                        const candidates = this._collectDeletionCandidates(provider, targetDir, dbTicketsSweep, fullRemoteIds);
+                        const { confirmed, unresolved, skipped } = await this._confirmRemotelyDeleted(provider, resolvedRoot, candidates);
+                        deletedCount += await this._applyConfirmedDeletions(resolvedRoot, ticketsRoot, confirmed, 'Deletion sweep (delta)');
+                        deletionChecksUnresolved += unresolved;
+                        deletionChecksSkipped += skipped;
                     } catch (e) {
                         console.warn('[TaskViewerProvider] Deletion sweep (delta) failed:', e);
                     }
                 }
             }
 
-            return { success: true, successCount, failCount, errors, deletedCount, ...(skippedModified > 0 ? { skippedModified } : {}), ...(pruned > 0 ? { pruned } : {}) };
+            return {
+                success: true, successCount, failCount, errors, deletedCount,
+                ...(skippedModified > 0 ? { skippedModified } : {}),
+                ...(pruned > 0 ? { pruned } : {}),
+                ...(deletionChecksUnresolved > 0 ? { deletionChecksUnresolved } : {}),
+                ...(deletionChecksSkipped > 0 ? { deletionChecksSkipped } : {})
+            };
         }
 
         // Slow path: explicit IDs or plan mode (per-item API calls)
@@ -22794,6 +23183,45 @@ What would you like to find?`;
         } catch (error) {
             return { success: false, error: error instanceof Error ? error.message : String(error) };
         }
+    }
+
+    /**
+     * Remove the local ticket file + DB entry WITHOUT touching the remote.
+     * Used when the remote already returned 404 (ticket deleted on ClickUp/Linear)
+     * and we just need to clean up the local ghost.
+     */
+    public async removeLocalTicket(
+        workspaceRoot: string,
+        data: { provider: 'linear' | 'clickup'; id: string }
+    ): Promise<{ success: boolean; error?: string }> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return { success: false, error: 'No workspace open.' };
+        }
+        const { provider, id } = data;
+
+        let localFilePath: string | null = null;
+        try {
+            localFilePath = await this._findTicketDocument(resolvedRoot, provider, id);
+        } catch { /* ignore */ }
+
+        if (localFilePath) {
+            try {
+                await fs.promises.unlink(localFilePath);
+            } catch (unlinkErr: any) {
+                if (unlinkErr.code !== 'ENOENT') {
+                    console.error('[TaskViewerProvider] removeLocalTicket: failed to delete local ticket file:', unlinkErr);
+                }
+            }
+        }
+        try {
+            const cacheService = this._getCacheService(resolvedRoot);
+            await cacheService.deleteImportedTicket(`${provider}_${id}`);
+        } catch (cacheErr) {
+            console.error('[TaskViewerProvider] removeLocalTicket: failed to remove ticket from registry:', cacheErr);
+        }
+
+        return { success: true };
     }
 
     public async changeTicketStatus(
@@ -23936,11 +24364,11 @@ What would you like to find?`;
      * (unlike sendPromptToAgentTerminal) so the clipboard escape hatch stays
      * available when no PM terminal is configured.
      */
-    private async _handleDispatchProjectManager(): Promise<void> {
+    private async _handleDispatchProjectManager(options?: { apiOriginated?: boolean }): Promise<boolean> {
         const workspaceRoot = this._getWorkspaceRoot();
         if (!workspaceRoot) {
             this._seams().ui.showErrorMessage('No workspace root open.');
-            return;
+            return false;
         }
 
         // 1. Pre-flight: API server liveness — the manage skill needs it.
@@ -23950,14 +24378,14 @@ What would you like to find?`;
             this._seams().ui.showErrorMessage(
                 'Switchboard API server is not running. Open the Switchboard panel and try again.'
             );
-            return;
+            return false;
         }
 
         // 2. Build the manage prompt (static string + port interpolation only).
         const prompt = `Read ${workspaceRoot}/.agents/workflows/switchboard.md and follow its entry protocol exactly: concise one-line board snapshot, then present the skill's two-tier entry menu (Plan / Code / Board / Automate, plus a one-line More: design & artifacts, external PM, setup & tour), then wait for my direction. The workspace root is ${workspaceRoot} — use it as $ROOT directly (this is the board's selected workspace; do not derive the root from your terminal's working directory). The API server is running on port ${port}.`;
 
         // 3. Deliver via the shared PM-terminal-else-clipboard path.
-        await this._deliverPromptToPmTerminal(prompt, workspaceRoot);
+        return await this._deliverPromptToPmTerminal(prompt, workspaceRoot, options);
     }
 
     /**
@@ -23966,13 +24394,25 @@ What would you like to find?`;
      * robust send. Extracted from _handleDispatchProjectManager so the targeted-pass
      * handler reuses the identical delivery path without duplication.
      */
-    private async _deliverPromptToPmTerminal(prompt: string, workspaceRoot: string): Promise<void> {
+    private async _deliverPromptToPmTerminal(
+        prompt: string,
+        workspaceRoot: string,
+        options?: { apiOriginated?: boolean }
+    ): Promise<boolean> {
+        const apiOriginated = !!options?.apiOriginated;
+        if (await this._tryFleetDeliveryForRole('project_manager', prompt, workspaceRoot, apiOriginated, { source: 'pmTerminal' })) {
+            this._seams().ui.showInformationMessage(
+                'Manage prompt sent to Project Manager terminal.'
+            );
+            return true;
+        }
+
         // Resolve the PM terminal — two-stage lookup matching sendPromptToAgentTerminal
         // and the Phone-a-Friend dispatch: registered terminals first, then open
         // terminals by normalized name. Falls back to the literal 'Project Manager'
         // so the open-terminals scan has a stable name to match against even when
         // no agent name is configured.
-        const agentName = await this._getAgentNameForRole('project_manager', workspaceRoot)
+        const agentName = await this._getAgentNameForRole('project_manager', workspaceRoot, apiOriginated)
             || 'Project Manager';
         const suffixedKey = this._suffixedName(agentName);
         let terminal: vscode.Terminal | undefined;
@@ -23998,21 +24438,23 @@ What would you like to find?`;
             this._seams().ui.showInformationMessage(
                 'Manage prompt sent to Project Manager terminal.'
             );
-        } else {
-            // Fallback path: copy to clipboard (same pattern as Guided Setup).
-            try {
-                await this._seams().clipboard.writeText(prompt);
-                this._seams().ui.showInformationMessage(
-                    'No Project Manager terminal registered — manage prompt copied. ' +
-                    'Paste it into your agent chat (Cmd/Ctrl+V), or register a PM terminal ' +
-                    'in the Kanban agents tab.'
-                );
-            } catch (err: any) {
-                this._seams().ui.showErrorMessage(
-                    `Couldn't copy to clipboard: ${err?.message || err}`
-                );
-            }
+            return true;
         }
+
+        // Fallback path: copy to clipboard (same pattern as Guided Setup).
+        try {
+            await this._seams().clipboard.writeText(prompt);
+            this._seams().ui.showInformationMessage(
+                'No Project Manager terminal registered — manage prompt copied. ' +
+                'Paste it into your agent chat (Cmd/Ctrl+V), or register a PM terminal ' +
+                'in the Kanban agents tab.'
+            );
+        } catch (err: any) {
+            this._seams().ui.showErrorMessage(
+                `Couldn't copy to clipboard: ${err?.message || err}`
+            );
+        }
+        return false;
     }
 
     /**
@@ -24058,11 +24500,12 @@ Execution rules (from SKILL.md §6 Targeted pass):
      */
     public async handleDispatchManagerForSelected(
         plans: { planId: string; topic: string; planFile: string; kanbanColumn: string; complexity: string }[],
-        workspaceRoot: string
-    ): Promise<void> {
+        workspaceRoot: string,
+        options?: { apiOriginated?: boolean }
+    ): Promise<boolean> {
         if (plans.length === 0) {
             this._seams().ui.showWarningMessage('No dispatchable plans in the selection.');
-            return;
+            return false;
         }
 
         // 1. Pre-flight: API server liveness — the manage skill needs it.
@@ -24072,13 +24515,13 @@ Execution rules (from SKILL.md §6 Targeted pass):
             this._seams().ui.showErrorMessage(
                 'Switchboard API server is not running. Open the Switchboard panel and try again.'
             );
-            return;
+            return false;
         }
 
         // 2. Build the targeted-pass prompt with the frozen plan list.
         const prompt = this._buildTargetedPassPrompt(plans, workspaceRoot, port);
 
         // 3. Deliver via the shared PM-terminal-else-clipboard path.
-        await this._deliverPromptToPmTerminal(prompt, workspaceRoot);
+        return await this._deliverPromptToPmTerminal(prompt, workspaceRoot, options);
     }
 }

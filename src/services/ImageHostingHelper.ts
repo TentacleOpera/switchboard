@@ -89,29 +89,11 @@ export async function hostInlineImages(
     description: string,
     sourceFilePath?: string
 ): Promise<{ rewritten: string; warnings: string[] }> {
-    const { rewritten, replacements, warnings } = await uploadInlineImagesAndRewrite(
+    const { rewritten, warnings } = await uploadInlineImagesAndRewrite(
         description,
         sourceFilePath,
         upload
     );
-
-    if (sourceFilePath && fs.existsSync(sourceFilePath) && replacements.length > 0) {
-        try {
-            const content = fs.readFileSync(sourceFilePath, 'utf8');
-            let updatedContent = content;
-            for (const { from, to } of replacements) {
-                updatedContent = updatedContent.replace(
-                    new RegExp(`(!\\[[^\\]]*\\]\\()${escapeRegExp(from)}(\\))`, 'g'),
-                    `$1${to}$2`
-                );
-            }
-            if (updatedContent !== content) {
-                fs.writeFileSync(sourceFilePath, updatedContent, 'utf8');
-            }
-        } catch (wbErr) {
-            warnings.push(`Pushed, but failed to update local file with hosted image URLs: ${wbErr instanceof Error ? wbErr.message : String(wbErr)}`);
-        }
-    }
 
     return { rewritten, warnings };
 }

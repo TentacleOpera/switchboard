@@ -21,6 +21,13 @@ import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveW
 
 import { STARTER_DESIGN_SYSTEM_HTML } from './designSystemStarterTemplate';
 
+// Extensions the Stitch HTML sidebar lists out of a project's stitch cache dir.
+// Images are deliberately absent: every screen caches an .html AND a .png side by
+// side, so admitting images would list each screen twice and duplicate the Images
+// tab. Markdown/text are present so notes in the folder are openable — the preview
+// pane renders them (design.js handlePreviewReady, stitch-html-folder arm).
+const STITCH_HTML_LISTABLE_EXTS = new Set(['.html', '.htm', '.md', '.markdown', '.txt']);
+
 // @google/stitch-sdk is ESM-only (its exports map has no "require" condition), so a
 // static import fails resolution in this CJS bundle. A dynamic import() resolves it via
 // the "import" condition at build time. Webpack emits it as a lazy chunk in dist/ (like
@@ -1299,12 +1306,24 @@ setTimeout(reportDims, 0);
                     const screens = await db.getStitchScreensForProject(projectId);
                     nameById = new Map(screens.map(s => [s.id, s.name] as const));
                 } catch {}
+                // The cache dir holds each screen's .html NEXT TO its .png screenshot, so
+                // images stay excluded here — admitting them would double every row (one
+                // per screen) and duplicate what the Images tab already shows. Markdown /
+                // text notes dropped in the folder ARE listed: the preview pane renders
+                // them (the markdown branch of handlePreviewReady's stitch-html-folder
+                // arm). Without this the markdown path is unreachable — the sidebar is
+                // the tab's only way to open a file.
                 for (const entry of entries) {
-                    if (path.extname(entry) !== '.html') continue;
-                    const screenId = path.basename(entry, '.html');
+                    const ext = path.extname(entry).toLowerCase();
+                    if (!STITCH_HTML_LISTABLE_EXTS.has(ext)) continue;
+                    const isHtml = ext === '.html' || ext === '.htm';
+                    const screenId = path.basename(entry, ext);
                     docs.push({
                         screenId,
-                        name: nameById.get(screenId) || screenId,
+                        // Only HTML entries are screens with a `screens` row. A note keeps
+                        // its filename so it never inherits the display name of a
+                        // same-stem .html screen (notes.md vs notes.html).
+                        name: isHtml ? (nameById.get(screenId) || screenId) : entry,
                         file: entry,
                         sourceFolder: cacheDir,
                         absolutePath: path.join(cacheDir, entry)
@@ -2954,13 +2973,23 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const prompt = String(message.prompt || '');
                 if (!prompt) return { success: false, error: 'prompt is required' };
                 if (this._taskViewerProvider) {
-                    await this._taskViewerProvider.sendPromptToAgentTerminal('coder', prompt, message.workspaceRoot || undefined);
-                    showTemporaryNotification('Sent element tweak prompt to agent terminal.');
+                    const sent = await this._taskViewerProvider.sendPromptToAgentTerminal(
+                        'coder', prompt, message.workspaceRoot || undefined,
+                        { apiOriginated: !!message.apiOriginated }
+                    );
+                    if (sent) {
+                        showTemporaryNotification('Sent element tweak prompt to agent terminal.');
+                        return { success: true };
+                    }
+                    // Host clipboard for the editor; `prompt` in the body for the browser.
+                    await this._seams().clipboard.writeText(prompt);
+                    showTemporaryNotification('Agent terminal unreachable — copied tweak prompt to clipboard instead.');
+                    return { success: false, error: 'No coder terminal could be reached — prompt copied to clipboard instead.', prompt };
                 } else {
                     await this._seams().clipboard.writeText(prompt);
                     showTemporaryNotification('Agent terminal unavailable — copied tweak prompt to clipboard instead.');
+                    return { success: false, error: 'Agent terminal unavailable — prompt copied to clipboard instead.', prompt };
                 }
-                return { success: true };
             }
 
             case 'copyHtmlTweakPrompt': {
@@ -2975,13 +3004,23 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const prompt = String(message.prompt || '');
                 if (!prompt) return { success: false, error: 'prompt is required' };
                 if (this._taskViewerProvider) {
-                    await this._taskViewerProvider.sendPromptToAgentTerminal('coder', prompt, message.workspaceRoot || undefined);
-                    showTemporaryNotification('Sent element tweak prompt to agent terminal.');
+                    const sent = await this._taskViewerProvider.sendPromptToAgentTerminal(
+                        'coder', prompt, message.workspaceRoot || undefined,
+                        { apiOriginated: !!message.apiOriginated }
+                    );
+                    if (sent) {
+                        showTemporaryNotification('Sent element tweak prompt to agent terminal.');
+                        return { success: true };
+                    }
+                    // Host clipboard for the editor; `prompt` in the body for the browser.
+                    await this._seams().clipboard.writeText(prompt);
+                    showTemporaryNotification('Agent terminal unreachable — copied tweak prompt to clipboard instead.');
+                    return { success: false, error: 'No coder terminal could be reached — prompt copied to clipboard instead.', prompt };
                 } else {
                     await this._seams().clipboard.writeText(prompt);
                     showTemporaryNotification('Agent terminal unavailable — copied tweak prompt to clipboard instead.');
+                    return { success: false, error: 'Agent terminal unavailable — prompt copied to clipboard instead.', prompt };
                 }
-                return { success: true };
             }
 
             case 'copyClaudeImportPrompt': {
@@ -2996,13 +3035,22 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const prompt = String(message.prompt || '');
                 if (!prompt) return { success: false, error: 'prompt is required' };
                 if (this._taskViewerProvider) {
-                    await this._taskViewerProvider.sendPromptToAgentTerminal('claude_import', prompt, message.workspaceRoot || undefined);
-                    showTemporaryNotification('Sent Claude import prompt to agent terminal.');
+                    const sent = await this._taskViewerProvider.sendPromptToAgentTerminal(
+                        'claude_import', prompt, message.workspaceRoot || undefined,
+                        { apiOriginated: !!message.apiOriginated }
+                    );
+                    if (sent) {
+                        showTemporaryNotification('Sent Claude import prompt to agent terminal.');
+                        return { success: true };
+                    }
+                    await this._seams().clipboard.writeText(prompt);
+                    showTemporaryNotification('Agent terminal unreachable — copied Claude import prompt to clipboard instead.');
+                    return { success: false, error: 'No claude_import terminal could be reached — prompt copied to clipboard instead.', prompt };
                 } else {
                     await this._seams().clipboard.writeText(prompt);
                     showTemporaryNotification('Agent terminal unavailable — copied Claude import prompt to clipboard instead.');
+                    return { success: false, error: 'Agent terminal unavailable — prompt copied to clipboard instead.', prompt };
                 }
-                return { success: true };
             }
 
             case 'copyClaudeArtifactPrompt': {
@@ -3019,14 +3067,24 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 const prompt = String(message.prompt || '');
                 if (!prompt) return { success: false, error: 'prompt is required' };
                 if (this._taskViewerProvider) {
-                    await this._taskViewerProvider.sendPromptToAgentTerminal('claude_artifacts', prompt, message.workspaceRoot || undefined);
-                    showTemporaryNotification('Sent artifact upload prompt to Claude.');
+                    const sent = await this._taskViewerProvider.sendPromptToAgentTerminal(
+                        'claude_artifacts', prompt, message.workspaceRoot || undefined,
+                        { apiOriginated: !!message.apiOriginated }
+                    );
+                    if (sent) {
+                        showTemporaryNotification('Sent artifact upload prompt to Claude.');
+                        return { success: true };
+                    }
+                    // Host clipboard for the editor; `prompt` in the body for the browser.
+                    await this._seams().clipboard.writeText(prompt);
+                    showTemporaryNotification('Agent terminal unreachable — copied artifact upload prompt to clipboard instead.');
+                    return { success: false, error: 'No claude_artifacts terminal could be reached — prompt copied to clipboard instead.', prompt };
                 } else {
                     // No agent terminal wired up — fall back to clipboard so the button still does something.
                     await this._seams().clipboard.writeText(prompt);
                     showTemporaryNotification('Agent terminal unavailable — copied artifact upload prompt to clipboard instead.');
+                    return { success: false, error: 'Agent terminal unavailable — prompt copied to clipboard instead.', prompt };
                 }
-                return { success: true };
             }
 
             case 'linkToDocument': {
@@ -4567,7 +4625,11 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
             try {
                 await fs.promises.stat(absPath);
             } catch {
-                throw new Error(sourceId === 'stitch-html-folder'
+                // Rebuild Cache re-downloads SCREENS, so the hint only helps for an
+                // .html entry. A markdown note in the same folder is user-authored —
+                // telling them to rebuild the cache would be confidently wrong.
+                const missingIsHtml = /\.html?$/i.test(relativePath);
+                throw new Error(sourceId === 'stitch-html-folder' && missingIsHtml
                     ? 'HTML file not found on disk — try Rebuild Cache'
                     : `File not found on disk: ${path.basename(relativePath)}`);
             }

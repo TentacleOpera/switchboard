@@ -119,3 +119,13 @@ Note the `data-layout="2h"` button (columns) now comes first and reads `2V`, sat
 ## Completion Report
 
 Implemented the two-pane label fix in `src/webview/terminals.html`: the `data-layout="2h"` button now reads `2V` with a side-by-side tooltip, the `data-layout="2v"` button reads `2H` with a stacked tooltip, and the side-by-side option is listed first. Added the inverted-key comment explaining that the `data-layout` keys name the split axis while the labels name the pane orientation. No persisted identifiers, CSS rules, or JS selectors were changed. Static review confirms the JS still keys on `data-layout`, and `node --check src/webview/terminals.js` passed.
+
+## Review Findings
+
+**Stage 1 (Grumpy):** Welcome, mortal. I came here expecting lies and I found... competence. The `data-layout="2h"` button reads `2V` and sits first — correct. The `data-layout="2v"` button reads `2H` — correct. CSS confirms `layout-2h` = two columns (side by side), `layout-2v` = two rows (stacked). The labels now match the geometry. The inverted-key comment is present and accurate. No JS reads label text — everything keys on `data-layout`. No orphaned references to old `2h`/`2v` label strings. `LAYOUT_FLOOR_ORDER` is over identifiers, not display order — unaffected. The tooltips are present and descriptive. I found zero findings. Disappointing.
+
+**Stage 2 (Balanced):** No CRITICAL, MAJOR, or NIT findings. The implementation exactly matches the plan: two label strings swapped, side-by-side option first, tooltips added, comment added, `data-layout` keys untouched. Regression analysis confirms no JS or CSS selector reads the old label text. No code fixes needed.
+
+**Validation:** `node --check src/webview/terminals.js` passed. Terminal contract tests (6 files) all passed. No plan-defined automated checks to gate-wiring audit (manual UAT only). No SKIP TESTS/SKIP COMPILATION directive in dispatch — tests run independently per anti-leakage rule.
+
+**Remaining risks:** None. The change is two strings, a DOM reorder, tooltips, and a comment — no behavioural change.

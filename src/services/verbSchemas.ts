@@ -302,6 +302,15 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             workspaceRoot: { type: 'string' },
         },
     },
+    attributePastedPrompt: {
+        fields: {
+            terminalName: { type: 'string' },
+            role: { type: 'string' },
+            planIds: { type: 'array' },
+            planFiles: { type: 'array' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
     // Plan lifecycle
     selectPlan: {
         fields: {
@@ -339,6 +348,22 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             planId: { type: 'string' },
             planFile: { type: 'string', required: true },
             topic: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    // Dispatch view (display mode of PLAN REVIEWED). toggleDispatchView dereferences
+    // no payload field (mirrors toggleBacklogView, which has no schema), so it needs
+    // none. dispatchAnalyze reads only workspaceRoot (optional — the arm falls back to
+    // the provider's current root). sendDispatchToCoder reads sessionIds + workspaceRoot.
+    // Permissive per PRD contract #5 — require only what each arm dereferences.
+    dispatchAnalyze: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    sendDispatchToCoder: {
+        fields: {
+            sessionIds: { type: 'array', required: true },
             workspaceRoot: { type: 'string' },
         },
     },
@@ -941,11 +966,18 @@ const TICKETS_VERB_SCHEMAS: Record<string, VerbSchema> = {
         fields: {},
     },
     // ── 2d: ticket detail + mutation schemas moved from PLANNING_VERB_SCHEMAS ──
+    // Re-parents one REMOTE ticket under another (ClickUp `parent` / Linear
+    // `parentId`). Not to be confused with the kanban feature/subtask verbs
+    // (addSubtaskToFeature, removeSubtaskFromFeature), which are the ones keyed
+    // by session ids — this verb never sees a plan. The session-id shape landed
+    // here by mistake when the schema moved out of PLANNING_VERB_SCHEMAS, which
+    // failed every call before it reached the handler.
     convertToSubtask: {
         fields: {
-            subtaskSessionId: { type: 'string', required: true },
-            featureSessionId: { type: 'string', required: true },
             workspaceRoot: { type: 'string' },
+            provider: { type: 'string', required: true },
+            taskId: { type: ['string', 'number'], required: true },
+            parentId: { type: ['string', 'number'], required: true },
         },
     },
     clickupUpdateTaskAssignees: {

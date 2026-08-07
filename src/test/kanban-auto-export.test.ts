@@ -5,6 +5,7 @@ import * as path from 'path';
 import { KanbanDatabase, VALID_KANBAN_COLUMNS } from '../services/KanbanDatabase';
 import {
     DEFAULT_KANBAN_COLUMNS,
+    DISPLAY_MODE_COLUMNS,
     DISPLAY_ONLY_COLUMN_LABELS,
     LEGACY_COLUMN_LABELS,
     resolveColumnLabel
@@ -387,9 +388,16 @@ suite('Kanban Auto-Export (Markdown)', () => {
         assert.strictEqual(DEFAULT_KANBAN_COLUMNS.length, 10, 'DEFAULT_KANBAN_COLUMNS must stay at exactly ten entries');
         assert.ok(!DEFAULT_KANBAN_COLUMNS.some(c => c.id === 'BACKLOG' || c.id === 'CODED'),
             'BACKLOG/CODED must not appear in DEFAULT_KANBAN_COLUMNS');
+        // Display-mode columns render inside another column's slot. Adding one to
+        // DEFAULT_KANBAN_COLUMNS would both render a spurious peer column AND insert it
+        // into _getNextColumnId's ordered walk — silently rerouting the pipeline.
+        for (const id of Object.keys(DISPLAY_MODE_COLUMNS)) {
+            assert.ok(!DEFAULT_KANBAN_COLUMNS.some(c => c.id === id),
+                `${id} is a display mode and must not appear in DEFAULT_KANBAN_COLUMNS`);
+        }
 
         // Every column ID the board can hold resolves to a real (non-fallback) label.
-        const boardColumns = [...DEFAULT_KANBAN_COLUMNS.map(c => c.id), ...Object.keys(LEGACY_COLUMN_LABELS)];
+        const boardColumns = [...DEFAULT_KANBAN_COLUMNS.map(c => c.id), ...Object.keys(LEGACY_COLUMN_LABELS), ...Object.keys(DISPLAY_MODE_COLUMNS)];
         for (const id of boardColumns) {
             const resolved = resolveColumnLabel(id);
             assert.notStrictEqual(resolved.labelSource, 'fallback', `${id} should resolve to a real label`);
@@ -402,6 +410,12 @@ suite('Kanban Auto-Export (Markdown)', () => {
         assert.strictEqual(resolveColumnLabel('CODE REVIEWED').label, 'Reviewed');
         assert.strictEqual(resolveColumnLabel('BACKLOG').label, 'Backlog');
         assert.strictEqual(resolveColumnLabel('CODED').label, 'Coded');
+        // Display-mode IDs must NOT report labelSource 'legacy' — that source is consumed
+        // by state export, GET /kanban/columns and write-path canonicalisation, and would
+        // mislabel a current feature as a deprecated alias to every agent-facing surface.
+        assert.deepStrictEqual(resolveColumnLabel('DISPATCH'), { label: 'Dispatch', labelSource: 'display-mode' });
+        assert.deepStrictEqual(resolveColumnLabel('BACKLOG'), { label: 'Backlog', labelSource: 'display-mode' });
+        assert.strictEqual(resolveColumnLabel('CODED').labelSource, 'legacy');
         // Unknown ID falls back to the ID itself, tagged so callers can tell a stand-in.
         assert.deepStrictEqual(resolveColumnLabel('NO SUCH COLUMN'), { label: 'NO SUCH COLUMN', labelSource: 'fallback' });
 

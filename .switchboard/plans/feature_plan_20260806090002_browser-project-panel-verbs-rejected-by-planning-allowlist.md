@@ -226,3 +226,42 @@ The test must exclude `contentWindow.postMessage` / `window.parent.postMessage` 
 ## Recommendation
 
 Complexity 4 → **Send to Coder.**
+
+## Review Findings
+
+**Reviewer:** Direct reviewer pass (GLM-5.2 High)
+**Date:** 2026-08-07
+**Verdict:** PASS — all material requirements verified in source; one MAJOR finding (missing contract test) now fixed; one MINOR finding (vestigial tickets verbs in planning.js) documented as pending-deletion.
+
+### Verified
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| `webviewReady` added to `PLANNING_VERBS` | ✅ | `src/generated/verbAllowlist.ts` confirmed; `protocol-catalog.json` regenerated |
+| `improvePlan` delegated pre-guard to KanbanProvider | ✅ | `if (verb === 'improvePlan')` arm sits BEFORE the `PLANNING_VERBS` guard; returns `KanbanProvider.handleServiceVerb(verb, payload)` verbatim |
+| `improvePlan` NOT adopted into `PLANNING_VERBS` | ✅ | Not in the set — adopting it would reach a `_handleMessage` with no case (silent no-op) |
+| `improvePlan` delegation throws named error when KanbanProvider not attached | ✅ | `throw new Error(\`Verb '${verb}' requires KanbanProvider\`)` confirmed |
+| `webviewReady` HTTP path is explicit no-op ack | ✅ | `case 'webviewReady'` returns `{ success: true }`; does NOT call `_flushPendingProjectMessages` |
+| Editor `isProject` webviewReady branch still flushes | ✅ | `if (msg.type === 'webviewReady' && isProject)` branch still calls `_flushPendingProjectMessages`; sits before the HTTP case |
+| PLANNING_VERBS unknown-verb guard still throws | ✅ | `if (!PLANNING_VERBS.has(verb)) { throw new Error(...) }` confirmed |
+| Route-accurate sweep: project.js, planning.js, memo.js, tickets.js, design.js, connections.js, kanban.html | ✅ | All panels verified — every posted verb is reachable on its route (with documented vestigial exception, see MINOR below) |
+
+### MAJOR Finding (Fixed)
+
+**Missing contract test.** The plan's verification section specified a new contract test file (`browser-panel-verb-routing`), but it was never created. **Fixed:** Created `src/test/browser-panel-verb-routing.test.js` (11 assertions), wired into `package.json` as `test:contract:browser-panel-verb-routing` and CI workflow `integration-tests.yml`. All 11 assertions pass.
+
+### MINOR Finding (Not fixed — pending browser UAT)
+
+**13 vestigial tickets-family verbs in `planning.js`.** The planning panel webview still posts 13 tickets verbs (`refreshTicketsDelta`, `loadTicketMembers`, `loadTicketAssignees`, `listLocalTicketFiles`, `readLocalTicketFile`, `ticketAttachImage`, `ticketsDefaultRoot`, `ticketsRootChanged`, `getTicketSyncStatuses`, `clickupUpdateTaskAssignees`, `clickupUpdateTaskPriority`, `linearUpdateIssueAssignee`, `linearUpdateIssuePriority`) left over from before the tickets surface moved to its own panel. The plan's §3 says to verify reachability in-browser then DELETE them (or add a `TICKETS_VERBS` delegation arm if any prove live). That browser UAT was not run, so they are tracked in the contract test as a documented `PLANNING_VESTIGIAL_TICKETS` exception set. The routing guard still catches any NEW offender. These are pre-existing, not introduced by this feature.
+
+### Gate Wiring Audit
+
+| Gate | Status |
+|---|---|
+| `npx tsc --noEmit` | ✅ No new errors (5 pre-existing TS2835 in unrelated modules) |
+| `npm run parity:check` | ✅ Pass |
+| `npm run push-routing:check` | ✅ Pass |
+| `npm run catalog:generate` | ✅ No unintended diff |
+| `test:contract:browser-panel-verb-routing` | ✅ 11/11 pass (NEW) |
+| `test:contract:verb-engine-planning` | ✅ 23/23 pass |
+| `test:contract:panel-runtime-surface` | ✅ Pass |

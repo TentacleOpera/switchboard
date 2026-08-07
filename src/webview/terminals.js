@@ -32,6 +32,7 @@
     // tab last selected) or auto-selects the first allowed root — which is the
     // wrong workspace when multiple parent projects are open.
     let kanbanPaneWorkspace = [];
+    let buttonPressRowEl = null; // drag-disarm: set when a button inside a kanban-pane-row is pressed
     // Per-slot chosen project filter for the kanban pane. Empty string = all
     // projects (no filter). Only meaningful when paneModes[i]==='kanban'.
     let kanbanPaneProject = [];
@@ -41,13 +42,22 @@
     let kanbanPaneCards = {};
     // Cached flat ordered column list from getKanbanStructure.
     let kanbanColumnsCache = [];
+    // role -> column order for sidebar terminal sorting. Empty cache means first
+    // paint: fall back to a static mirror of DEFAULT_KANBAN_COLUMNS. The live
+    // structure replaces this wholesale when it lands (never merged).
+    let roleOrderMap = {};
     let kanbanPollTimer = null;
+    let fleetPollTimer = null;
     // Timestamp of the last getKanbanStructure fetch. Column structure changes
     // rarely, so it is refreshed on a 30s cadence rather than every 5s poll tick.
     let kanbanStructureTimer = 0;
     // Pane indices with a getBoardCards request in flight — see fetchBoardCardsForPane.
     const kanbanFetchInFlight = new Set();
     const collapsedGroups = new Set();
+    // Workspace the kanban board had selected when this panel was built. The
+    // host injects it via data-initial-workspace-root and it matches what
+    // kanban.html reads at startup.
+    let initialWorkspaceRoot = undefined;
 
     // Named, switchable seating snapshots. Each group is a (layout, assignments)
     // captured at save time. assignments is a [name|null] array length-aligned with
@@ -163,8 +173,12 @@
     function fitAndReportSize(entry) {
         if (!entry || entry.disposed || !entry.term || !entry.fitAddon) { return; }
         if (!isRendered(entry.container)) { return; }
+        let resized = false;
         try {
+            const colsBefore = entry.term.cols;
+            const rowsBefore = entry.term.rows;
             entry.fitAddon.fit();
+            resized = entry.term.cols !== colsBefore || entry.term.rows !== rowsBefore;
             if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
                 entry.ws.send(JSON.stringify({
                     t: 'resize',
@@ -174,9 +188,32 @@
                 }));
             }
         } catch { /* ignore */ }
+        // A grid resize invalidates the WebGL glyph model, and xterm does not
+        // repair it. GlyphRenderer sizes and indexes its vertex array by
+        // cols*rows (see GlyphRenderer.clear in vendor/xterm/addon-webgl.js),
+        // but WebglRenderer.handleResize only forwards the new dimensions —
+        // GlyphRenderer.setDimensions is a bare `this._dimensions = e`, with no
+        // reallocation and no re-index. So every row the terminal does not go on
+        // to mark dirty keeps glyph quads positioned for the OLD column stride:
+        // on a shrink they bunch up and overprint, word shapes intact and
+        // characters overlapping.
+        //
+        // Rows the pty app rewrites re-rasterise and self-heal, which is why the
+        // damage is only ever visible on a region nothing rewrites — a CLI's
+        // static status strip — and why scrolling does not repair it: a repaint
+        // reads the same stale model. clearTextureAtlas() is the only call that
+        // reaches _clearModel(true) -> GlyphRenderer.clear() and rebuilds the
+        // vertex array at the new size, and resyncPaneRenderer's 'stale-canvas'
+        // arm is what pairs it with the full refresh that repopulates it.
+        //
+        // AFTER the send, not before: the resize frame is what sizes the shared
+        // pty, and no renderer repair is worth delaying or risking it.
+        if (resized) { resyncPaneRenderer(entry, 'stale-canvas'); }
     }
 
-    const DETACH_GRACE_MS = 15000;
+    const DETACH_GRACE_MS = 300000; // 5 min — exited-terminal cleanup grace
+                                      // (live terminals are retained by the isExited
+                                      // guard in armDetachTimer, not by this timer)
     const detachTimers = new Map();
     const MAX_WEBGL_CONTEXTS = 12;
     let liveWebglContexts = 0;
@@ -186,7 +223,22 @@
         const timerId = setTimeout(() => {
             detachTimers.delete(name);
             if (!paneAssignments.includes(name)) {
-                destroyTerminalView(name);
+                // Keep the view alive for running terminals — destroying it loses
+                // the xterm scrollback, which is the whole point of a view switcher.
+                // Only tear down terminals that are actually dead. Consult BOTH
+                // death signals the codebase maintains (see resolveInputState, line
+                // 1683): fleetList.status (refreshed on `terminals` messages) AND
+                // entry.exited (set immediately on exit/error frames, before the
+                // next fleet refresh). Gate `!fleetItem` on hasFetchedList so a
+                // stale/empty fleet poll never destroys a live terminal.
+                const entry = terminalsMap.get(name);
+                const fleetItem = fleetList.find(t => t.friendlyName === name);
+                const isExited = (fleetItem && fleetItem.status === 'exited')
+                    || (entry && entry.exited)
+                    || (!fleetItem && hasFetchedList);
+                if (isExited) {
+                    destroyTerminalView(name);
+                }
             }
         }, DETACH_GRACE_MS);
         detachTimers.set(name, timerId);
@@ -229,6 +281,21 @@
                     liveWebglContexts = Math.max(0, liveWebglContexts - 1);
                     try { webgl.dispose(); } catch { /* ignore */ }
                     holder.current = attachCanvasRenderer(term);
+                    // A renderer swap does NOT repaint what is already on screen. The
+                    // incoming canvas renderer starts with an empty surface and then
+                    // paints only rows the terminal subsequently marks dirty, so every
+                    // row nothing rewrites keeps whatever the dead WebGL canvas left
+                    // behind. On an idle CLI that is the entire visible screen.
+                    //
+                    // This fires on terminals that did nothing wrong. The browser caps
+                    // live WebGL contexts per PROCESS and force-loses the OLDEST ones
+                    // when a new context pushes it over — so materialising one new
+                    // terminal view can strand every long-lived pane at once, which is
+                    // why the damage arrives in a batch and never on the pane that was
+                    // actually touched. MAX_WEBGL_CONTEXTS is our own ceiling and does
+                    // not see the rest of the process's contexts, so it cannot prevent
+                    // this; the repair has to be here.
+                    if (entry) { resyncPaneRenderer(entry, 'stale-canvas'); }
                 });
                 term.loadAddon(webgl);
                 holder.current = webgl;
@@ -365,6 +432,33 @@
         // variables this class selects.
         resolveInitialTheme();
 
+        // Capture the workspace the kanban board had selected. This mirrors
+        // kanban.html's startup read of data-initial-workspace-root.
+        try {
+            const attr = document.body?.dataset?.initialWorkspaceRoot;
+            if (attr) { initialWorkspaceRoot = decodeURIComponent(attr); }
+        } catch { /* ignore */ }
+
+        // Drag-disarm: pressing a button inside a kanban-pane-row must not start a drag.
+        document.addEventListener('pointerdown', (e) => {
+            const btn = e.target instanceof Element ? e.target.closest('button') : null;
+            if (!btn) return;
+            const row = btn.closest('.kanban-pane-row');
+            if (!row) return;
+            row.draggable = false;
+            buttonPressRowEl = row;
+            const rearm = () => {
+                row.draggable = true;
+                buttonPressRowEl = null;
+                document.removeEventListener('pointerup', rearm, true);
+                document.removeEventListener('pointercancel', rearm, true);
+                document.removeEventListener('dragend', rearm, true);
+            };
+            document.addEventListener('pointerup', rearm, true);
+            document.addEventListener('pointercancel', rearm, true);
+            document.addEventListener('dragend', rearm, true);
+        }, true);
+
         if (btnNew) {
             btnNew.addEventListener('click', () => onNewTerminalClicked());
         }
@@ -473,10 +567,6 @@
         if (btnKanbanToolbar) {
             btnKanbanToolbar.addEventListener('click', () => toggleFocusedPaneKanban());
         }
-        const btnKanbanSidebar = document.getElementById('btn-kanban-sidebar');
-        if (btnKanbanSidebar) {
-            btnKanbanSidebar.addEventListener('click', () => toggleFocusedPaneKanban());
-        }
 
         window.addEventListener('message', (event) => {
             const message = event.data;
@@ -526,6 +616,12 @@
             applyLayoutFloor({ fit: false });
         }, 150));
 
+        // Reordering columns in Setup never reaches this panel directly. Focus is the
+        // moment the operator comes back, so refetch the structure then (throttle bypassed).
+        window.addEventListener('focus', () => fetchKanbanColumnStructure(true));
+
+        fetchKanbanColumnStructure(true);
+
         if (soloTerminalName) {
             // Paint the transient state BEFORE the first fetch. checkSoloNotFound is
             // otherwise only reached from a fetch that SUCCEEDED, so a slow or failed
@@ -545,6 +641,8 @@
                 fetchTerminalList();
             });
         }
+
+        startFleetPoll();
     }
 
     function postFleetStateToShell() {
@@ -556,11 +654,20 @@
             } else if (terminalBadges.has(t.friendlyName)) {
                 light = 'done';
             }
+            // Resolve the coloured brand icon URI panel-side so the shell needs no
+            // brand-icon table or data-brand-icon-* body attributes of its own.
+            // agentLabelForRole returns '' for NO_ROLE / 'No agent assigned';
+            // brandIconForCliLabel('') returns null, so fall back to the default icon
+            // rather than sending an empty src (a broken-image glyph in the rail).
+            const agentLabel = agentLabelForRole(t.role);
+            const iconKey = brandIconForCliLabel(agentLabel) || 'default';
+            const iconUri = brandIconUri(iconKey) || brandIconUri('default');
             return {
                 name: t.friendlyName,
                 role: t.role,
                 worktreePath: t.worktreePath,
-                light
+                light,
+                iconUri
             };
         });
         window.parent.postMessage({
@@ -573,12 +680,18 @@
         '1':   { slots: 1, minW: 0,   minH: 0   },
         '2h':  { slots: 2, minW: 400, minH: 0   },
         '2v':  { slots: 2, minW: 0,   minH: 250 },
+        // ROWS x COLUMNS, like 2x3/3x3: one row of three columns. Three columns need the
+        // same width as 2x3 (750); one row needs no height floor, same as 2h.
+        '1x3': { slots: 3, minW: 750, minH: 0   },
         '2x2': { slots: 4, minW: 500, minH: 300 },
         '2x3': { slots: 6, minW: 750, minH: 300 },
         '3x3': { slots: 9, minW: 750, minH: 450 },
     };
 
-    const LAYOUT_FLOOR_ORDER = ['3x3', '2x3', '2x2', '2h', '2v', '1'];
+    // Descent chain for resolveFlooredLayout(): ordered by demand, not by slot count, so
+    // every rung can actually be reached. 1x3 sits under 2x3 (same width, no height
+    // floor) — a wide-but-short window lands there instead of skipping to 2h.
+    const LAYOUT_FLOOR_ORDER = ['3x3', '2x3', '1x3', '2x2', '2h', '2v', '1'];
     const LAYOUT_MODES = Object.keys(LAYOUTS);
 
     function getSlotCount(layout) {
@@ -681,6 +794,7 @@
     }
 
     async function fetchTerminalList() {
+        await fetchKanbanColumnStructure();
         try {
             const res = await fetch('/terminals/verb/ptyListTerminals', {
                 method: 'POST',
@@ -860,21 +974,55 @@
         }
     }
 
+    // Binary name → icon key. Maps the CLI binary basename to a brand icon.
+    // The display label (e.g. 'CLAUDE CLI', 'Antigravity CLI') is matched
+    // case-insensitively against these keys.
     const CLI_BRAND_ICON_KEYS = {
         claude: 'claude',
         agy: 'antigravity',
         antigravity: 'antigravity',
         devin: 'devin',
+        jules: 'jules',
+        gemini: 'gemini',
+        codex: 'openai',
+        openai: 'openai',
+        cursor: 'cursor',
+        copilot: 'copilot',
+        windsurf: 'windsurf',
+        qwen: 'qwen',
+        amp: 'amp',
+        cline: 'cline',
+        kiro: 'kiro',
+        kilo: 'kilo',
+        trae: 'trae',
+        opencode: 'opencode',
+        zed: 'zed',
     };
 
     function brandIconForCliLabel(cliLabel) {
         if (!cliLabel || cliLabel === 'No agent assigned') { return null; }
-        // cliLabel is the display name, e.g. 'Antigravity CLI', 'CLAUDE CLI', 'DEVIN CLI'.
-        // Map by the known brand names; fall back to the default icon for any other CLI.
+        // cliLabel is the display name, e.g. 'Antigravity CLI', 'CLAUDE CLI',
+        // 'DEVIN CLI', 'JULES CLI', 'GEMINI CLI', etc. Match case-insensitively
+        // against the known brand prefixes; fall back to the default icon.
         const key = cliLabel.toLowerCase();
         if (key.startsWith('antigravity')) { return 'antigravity'; }
         if (key.startsWith('claude')) { return 'claude'; }
         if (key.startsWith('devin')) { return 'devin'; }
+        if (key.startsWith('jules')) { return 'jules'; }
+        if (key.startsWith('gemini')) { return 'gemini'; }
+        if (key.startsWith('codex')) { return 'openai'; }
+        if (key.startsWith('openai')) { return 'openai'; }
+        if (key.startsWith('cursor')) { return 'cursor'; }
+        if (key.startsWith('copilot')) { return 'copilot'; }
+        if (key.startsWith('windsurf')) { return 'windsurf'; }
+        if (key.startsWith('qwen')) { return 'qwen'; }
+        if (key.startsWith('amp')) { return 'amp'; }
+        if (key.startsWith('cline')) { return 'cline'; }
+        if (key.startsWith('kiro')) { return 'kiro'; }
+        if (key.startsWith('kilo')) { return 'kilo'; }
+        if (key.startsWith('trae')) { return 'trae'; }
+        if (key.startsWith('opencode')) { return 'opencode'; }
+        if (key.startsWith('zed')) { return 'zed'; }
         return 'default';
     }
 
@@ -884,6 +1032,20 @@
             claude: ds.brandIconClaude,
             antigravity: ds.brandIconAntigravity,
             devin: ds.brandIconDevin,
+            jules: ds.brandIconJules,
+            gemini: ds.brandIconGemini,
+            openai: ds.brandIconOpenai,
+            cursor: ds.brandIconCursor,
+            copilot: ds.brandIconCopilot,
+            windsurf: ds.brandIconWindsurf,
+            qwen: ds.brandIconQwen,
+            amp: ds.brandIconAmp,
+            cline: ds.brandIconCline,
+            kiro: ds.brandIconKiro,
+            kilo: ds.brandIconKilo,
+            trae: ds.brandIconTrae,
+            opencode: ds.brandIconOpencode,
+            zed: ds.brandIconZed,
             default: ds.brandIconDefault,
         };
         return map[key] || '';
@@ -918,12 +1080,16 @@
 
         const iconKey = brandIconForCliLabel(agentLabel);
         if (iconKey) {
-            const icon = document.createElement('img');
-            icon.className = 'item-role-icon';
-            icon.src = brandIconUri(iconKey);
-            icon.alt = '';
-            icon.dataset.brand = iconKey;
-            roleRow.appendChild(icon);
+            const uri = brandIconUri(iconKey);
+            if (uri) {
+                // <img> renders the SVG with its embedded brand colours.
+                const icon = document.createElement('img');
+                icon.className = 'item-role-icon';
+                icon.src = uri;
+                icon.alt = '';
+                icon.dataset.brand = iconKey;
+                roleRow.appendChild(icon);
+            }
         }
 
         const roleEl = document.createElement('div');
@@ -1104,6 +1270,47 @@
         listEl.appendChild(allRow);
     }
 
+    /** Extract a trailing -N from a terminal name for numeric ordering. Renamed
+     *  terminals with no numeric suffix sort after the numbered run. */
+    function terminalNameSuffix(name) {
+        const match = String(name || '').match(/-(\d+)$/);
+        return match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
+    }
+
+    /** Total-order comparator for the sidebar, grouped by agent role. */
+    function compareTerminals(a, b) {
+        // 1. Exited last.
+        const aExited = a.status === 'exited' ? 1 : 0;
+        const bExited = b.status === 'exited' ? 1 : 0;
+        if (aExited !== bExited) { return aExited - bExited; }
+
+        // 2–4. Role tier (mapped by column order before unmapped alphabetical).
+        const aMapped = roleOrderMap[a.role] !== undefined ? 0 : 1;
+        const bMapped = roleOrderMap[b.role] !== undefined ? 0 : 1;
+        if (aMapped !== bMapped) { return aMapped - bMapped; }
+
+        if (aMapped === 0) {
+            const aOrder = roleOrderMap[a.role];
+            const bOrder = roleOrderMap[b.role];
+            if (aOrder !== bOrder) { return aOrder - bOrder; }
+        } else {
+            const aRole = a.role || '\uFFFF';
+            const bRole = b.role || '\uFFFF';
+            if (aRole !== bRole) { return aRole.localeCompare(bRole); }
+        }
+
+        // 5. Numeric suffix on friendlyName.
+        const aSuffix = terminalNameSuffix(a.friendlyName);
+        const bSuffix = terminalNameSuffix(b.friendlyName);
+        if (aSuffix !== bSuffix) { return aSuffix - bSuffix; }
+
+        // 6. startTime, then final tiebreak on name.
+        const aStart = a.startTime || '';
+        const bStart = b.startTime || '';
+        if (aStart !== bStart) { return aStart.localeCompare(bStart); }
+        return String(a.friendlyName || '').localeCompare(String(b.friendlyName || ''));
+    }
+
     function renderSidebarList() {
         listEl.innerHTML = '';
         // The empty state and the pane grid are in the MAIN area; the workspace groups
@@ -1194,6 +1401,14 @@
             ...parentGroups,
             ...(unmappedGroup.direct.length > 0 || unmappedGroup.worktreesMap.size > 0 ? [unmappedGroup] : [])
         ];
+
+        // Sort each bucket by role before rendering. Workspace/worktree hierarchy stays.
+        for (const group of activeGroupsToRender) {
+            group.direct.sort(compareTerminals);
+            for (const wtGroup of group.worktreesMap.values()) {
+                wtGroup.items.sort(compareTerminals);
+            }
+        }
 
         for (const parentGroup of activeGroupsToRender) {
             const parentKey = 'parent:' + parentGroup.id;
@@ -1796,6 +2011,104 @@
         }
     }
 
+    function wireTerminalDropTarget(paneEl, paneIndex) {
+        paneEl.addEventListener('dragover', (e) => {
+            if (!Array.from(e.dataTransfer.types || []).includes('application/json')) return;
+            if (paneModes[paneIndex] === 'kanban' || !paneAssignments[paneIndex]) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            paneEl.classList.add('drag-drop-target');
+        });
+
+        paneEl.addEventListener('dragleave', (e) => {
+            if (e.relatedTarget && paneEl.contains(e.relatedTarget)) return;
+            paneEl.classList.remove('drag-drop-target');
+        });
+
+        paneEl.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            paneEl.classList.remove('drag-drop-target');
+
+            const raw = e.dataTransfer.getData('application/json');
+            if (!raw) return;
+            let dragData;
+            try { dragData = JSON.parse(raw); } catch { return; }
+
+            const { planId, sessionId, column, workspaceRoot, sourcePaneIndex } = dragData;
+
+            const targetName = paneAssignments[paneIndex];
+            if (!targetName || paneModes[paneIndex] === 'kanban') {
+                showPaneToast('Target pane has no terminal');
+                return;
+            }
+            const entry = terminalsMap.get(targetName);
+            if (!entry) {
+                showPaneToast('Terminal not found');
+                return;
+            }
+            // For Shift-drop (raw WebSocket paste), the WebSocket must be open.
+            // For normal drop (ptySendPrompt verb), the server checks terminal status.
+            if (e.shiftKey && (!entry.ws || entry.ws.readyState !== WebSocket.OPEN)) {
+                showPaneToast('Terminal not connected');
+                return;
+            }
+
+            try {
+                const res = await fetch('/kanban/verb/promptSelected', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        column,
+                        sessionIds: [planId || sessionId],
+                        workspaceRoot
+                    })
+                });
+                const data = await res.json();
+                if (!data.success) {
+                    showPaneToast('Failed to fetch prompt: ' + (data.error || 'unknown'));
+                    return;
+                }
+
+                const promptText = data.prompt || '';
+                if (!promptText) {
+                    showPaneToast('Prompt was empty');
+                    return;
+                }
+
+                if (e.shiftKey) {
+                    // Shift-drop: paste the prompt without submitting (bracketed-paste
+                    // framing prevents line-by-line execution). The operator can review
+                    // and press Enter manually.
+                    entry.ws.send(encodeInputFrame('\x1b[200~' + promptText + '\x1b[201~'));
+                } else {
+                    // Normal drop: use the server-side ptySendPrompt verb, which handles
+                    // /clear before prompt, bracketed-paste framing, chunked writes, and
+                    // the confirm Enter key for CLI agents — the same pipeline the kanban
+                    // board's drag-drop uses via triggerAction → sendPromptToPty.
+                    const promptRes = await fetch('/terminals/verb/ptySendPrompt', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            name: targetName,
+                            data: promptText
+                        })
+                    });
+                    const promptResult = await promptRes.json();
+                    if (!promptResult.success) {
+                        showPaneToast('Failed to send prompt: ' + (promptResult.error || 'unknown'));
+                        return;
+                    }
+                }
+
+                if (sourcePaneIndex !== undefined && sourcePaneIndex !== paneIndex) {
+                    fetchBoardCardsForPane(sourcePaneIndex);
+                }
+            } catch (err) {
+                showPaneToast('Drag-to-terminal failed: ' + (err.message || String(err)));
+            }
+        });
+    }
+
     /**
      * Build a pane shell once. Listeners are attached here and here only, and each
      * one re-reads mutable state (paneAssignments, effectiveLayout) at call time —
@@ -1888,7 +2201,7 @@
         // reused rather than rebuilt, so that damage outlived every later render.
         const modeBtn = document.createElement('button');
         modeBtn.className = 'btn-unassign-pane';
-        modeBtn.textContent = 'term';
+        modeBtn.textContent = 'Terminal';
         modeBtn.title = 'Switch this pane to terminal mode';
         modeBtn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -1924,6 +2237,7 @@
             fetchBoardCardsForPane(index);
         });
         paneEl.appendChild(contentEl);
+        wireTerminalDropTarget(paneEl, index);
         return paneEl;
     }
 
@@ -1980,11 +2294,13 @@
         if (paneModes[index] === 'kanban' && assignedName) {
             paneModes[index] = 'terminal';
         }
-        // Both kanban bodies: the plan list AND the "No plans in …" empty state. The
-        // empty state also carries .pane-empty-slot, which the placeholder branch below
-        // treats as "already correct" — leaving it would strand the pane on a board
-        // message with no kanban-mode toggle to get back.
-        const staleKanban = contentEl.querySelectorAll('.kanban-pane-list, .kanban-pane-empty');
+        // Both kanban bodies: the plan list (inside its .kanban-pane-body wrapper —
+        // remove the wrapper, or the hint strip strands in a terminal-mode pane) AND
+        // the "No plans in …" empty state. The empty state also carries
+        // .pane-empty-slot, which the placeholder branch below treats as "already
+        // correct" — leaving it would strand the pane on a board message with no
+        // kanban-mode toggle to get back.
+        const staleKanban = contentEl.querySelectorAll('.kanban-pane-body, .kanban-pane-list, .kanban-pane-empty');
         staleKanban.forEach(el => el.remove());
         // renderKanbanPane's skip-if-unchanged guard is keyed on this; a stale value
         // surviving a mode round trip would make it skip rendering into empty content.
@@ -2150,20 +2466,32 @@
     }
 
     /** Merge getKanbanStructure's `structure` (built-in + custom, ordered) into a
-     *  flat {id,label} list for the column picker. `customColumns` is the
-     *  user-editable subset already folded into `structure`, so it is not
-     *  re-merged here — re-merging would duplicate custom rows. */
+     *  flat {id,label,role} list for the column picker and the sidebar ordering
+     *  key. `customColumns` is the user-editable subset already folded into
+     *  `structure`, so it is not re-merged here — re-merging would duplicate custom rows. */
     function buildColumnList(structure, customColumns) {
         const list = [];
         if (Array.isArray(structure)) {
             for (const item of structure) {
                 if (item && item.id) {
-                    list.push({ id: item.id, label: item.label || item.id, order: Number(item.order) || 0 });
+                    list.push({ id: item.id, label: item.label || item.id, role: item.role || null, order: Number(item.order) || 0 });
                 }
             }
         }
         list.sort((a, b) => (a.order - b.order) || String(a.label).localeCompare(String(b.label)));
         return list;
+    }
+
+    /** Rebuild the sidebar role order map from the current `kanbanColumnsCache`.
+     *  The live structure replaces, not merges with, the fallback; a hidden role
+     *  loses its weight and falls to the alphabetical tail. */
+    function recomputeRoleOrderMap() {
+        const next = {};
+        for (const col of kanbanColumnsCache) {
+            if (col.role) { next[col.role] = col.order; }
+        }
+        // Empty cache = first paint or a failed fetch; keep the fallback.
+        roleOrderMap = Object.keys(next).length > 0 ? next : { ...KANBAN_ROLE_ORDER_FALLBACK };
     }
 
     /** Build a flat [{root, label}] list of available workspace roots from
@@ -2204,10 +2532,38 @@
         return category.toLowerCase().replace(' ', '-');
     }
 
+    /**
+     * Newest-first ordering for kanban-pane cards.
+     *
+     * Must match the board's column comparator (kanban.html:6408-6417): parsed
+     * `lastActivity` descending, `createdAt` descending as the tiebreaker,
+     * unparseable/absent timestamps floored to 0 so they sink rather than
+     * jumping to the top.
+     *
+     * Sorting here is load-bearing, not cosmetic: the pane's cards arrive in
+     * `ORDER BY updated_at DESC` order over a TEXT column that holds ISO-8601,
+     * SQLite `YYYY-MM-DD HH:MM:SS`, and (in at least one shipped row) a
+     * non-timestamp string. That lexicographic order is not chronological, so
+     * the raw response order does NOT match the board.
+     */
+    function cardTimestamp(value) {
+        if (!value) { return 0; }
+        const t = new Date(value).getTime();
+        return isNaN(t) ? 0 : t;
+    }
+
+    function compareCardsByRecency(a, b) {
+        const tsDiff = cardTimestamp(b.lastActivity) - cardTimestamp(a.lastActivity);
+        if (tsDiff !== 0) { return tsDiff; }
+        return cardTimestamp(b.createdAt) - cardTimestamp(a.createdAt);
+    }
+
     /** Resolve the default workspace root for a new kanban pane. Prefers the
+     *  kanban board's selected workspace (injected by the host), then the
      *  focused pane's terminal's parentRoot, then the first parent, then
      *  undefined (the backend will fall back to its own resolution). */
     function defaultKanbanWorkspace() {
+        if (initialWorkspaceRoot) { return initialWorkspaceRoot; }
         const focusedName = paneAssignments[focusedPaneIndex];
         if (focusedName) {
             const term = fleetList.find(t => t.friendlyName === focusedName);
@@ -2218,9 +2574,9 @@
     }
 
     /** Render a kanban column viewer into a pane slot (replaces the terminal
-     *  viewport). The pane header carries a workspace picker + a column picker
-     *  + a "term" toggle to switch back to terminal mode; the body lists plan
-     *  rows with "Copy Prompt" (advance is implied) and "Link" buttons. */
+     *  viewport). The pane header carries a combined workspace/project picker + a
+     *  column picker + a "Terminal" toggle to switch back to terminal mode; the
+     *  body lists plan rows with "Copy Prompt" (advance is implied) and "Link" buttons. */
     function renderKanbanPane(paneEl, index) {
         paneEl.classList.remove('is-input-live', 'is-input-connecting', 'is-input-readonly');
         const titleEl = paneEl.querySelector('.pane-title');
@@ -2246,66 +2602,65 @@
         // re-renders this pane on every tick, and recreating the <select> each time
         // slammed an open dropdown shut and dropped keyboard focus mid-selection.
         let picker = titleEl.querySelector('.kanban-pane-column-picker');
-        let wsPicker = titleEl.querySelector('.kanban-pane-workspace-picker');
-        let projPicker = titleEl.querySelector('.kanban-pane-project-picker');
-        if (!picker || picker.dataset.sig !== pickerSig || !wsPicker || wsPicker.dataset.sig !== wsSig || !projPicker || projPicker.dataset.sig !== projSig) {
+        let combinedPicker = titleEl.querySelector('.kanban-pane-ws-project-picker');
+        const combinedSig = `${wsSig}|${projSig}`;
+        if (!picker || picker.dataset.sig !== pickerSig || !combinedPicker || combinedPicker.dataset.sig !== combinedSig) {
             titleEl.textContent = '';
             const idxEl = document.createElement('span');
             idxEl.className = 'pane-index-chip';
             idxEl.textContent = `P${index + 1}`;
             titleEl.appendChild(idxEl);
 
-            // Workspace picker — only when more than one workspace is available.
-            // With a single workspace the backend resolves correctly and the extra
-            // control is noise.
-            if (workspaces.length > 1) {
-                wsPicker = document.createElement('select');
-                wsPicker.className = 'kanban-pane-workspace-picker';
-                wsPicker.title = 'Workspace to show cards from';
-                wsPicker.dataset.sig = wsSig;
-                for (const ws of workspaces) {
-                    const opt = document.createElement('option');
-                    opt.value = ws.root;
-                    opt.textContent = ws.label;
-                    wsPicker.appendChild(opt);
-                }
-                const wsPickerEl = wsPicker;
-                wsPickerEl.addEventListener('change', () => {
-                    kanbanPaneWorkspace[index] = wsPickerEl.value;
-                    // Reset project filter — projects are workspace-specific.
-                    kanbanPaneProject[index] = '';
-                    kanbanPaneProjectsCache[index] = [];
-                    kanbanPaneCards[index] = [];
-                    saveLayoutSettings();
-                    fetchBoardCardsForPane(index);
-                });
-                titleEl.appendChild(wsPickerEl);
-            }
+            // Combined workspace+project picker. The selected workspace's projects
+            // are shown as "workspace > project" options. Other workspaces appear
+            // as "All projects" entries; selecting one switches workspace and
+            // refetches, then the dropdown is rebuilt with that workspace's projects.
+            if (workspaces.length > 0 && chosenWs) {
+                combinedPicker = document.createElement('select');
+                combinedPicker.className = 'kanban-pane-ws-project-picker';
+                combinedPicker.title = 'Workspace and project filter';
+                combinedPicker.dataset.sig = combinedSig;
 
-            // Project picker — only when the workspace has projects defined.
-            if (projects.length > 0) {
-                projPicker = document.createElement('select');
-                projPicker.className = 'kanban-pane-project-picker';
-                projPicker.title = 'Filter by project';
-                projPicker.dataset.sig = projSig;
+                const wsLabel = workspaces.find(w => w.root === chosenWs)?.label || chosenWs;
+
                 const allOpt = document.createElement('option');
-                allOpt.value = '';
-                allOpt.textContent = 'All projects';
-                projPicker.appendChild(allOpt);
+                allOpt.value = chosenWs + '|';
+                allOpt.textContent = workspaces.length > 1
+                    ? `${wsLabel} — All projects`
+                    : 'All projects';
+                combinedPicker.appendChild(allOpt);
+
                 for (const proj of projects) {
                     const opt = document.createElement('option');
-                    opt.value = proj;
-                    opt.textContent = proj;
-                    projPicker.appendChild(opt);
+                    opt.value = chosenWs + '|' + proj;
+                    opt.textContent = (workspaces.length > 1 ? `${wsLabel} > ` : '') + proj;
+                    combinedPicker.appendChild(opt);
                 }
-                const projPickerEl = projPicker;
-                projPickerEl.addEventListener('change', () => {
-                    kanbanPaneProject[index] = projPickerEl.value;
+
+                if (workspaces.length > 1) {
+                    for (const ws of workspaces) {
+                        if (ws.root === chosenWs) continue;
+                        const otherOpt = document.createElement('option');
+                        otherOpt.value = ws.root + '|';
+                        otherOpt.textContent = `${ws.label} — All projects`;
+                        combinedPicker.appendChild(otherOpt);
+                    }
+                }
+
+                const combinedPickerEl = combinedPicker;
+                combinedPickerEl.addEventListener('change', () => {
+                    const [ws, proj] = combinedPickerEl.value.split('|');
+                    const wsChanged = ws !== chosenWs;
+                    kanbanPaneWorkspace[index] = ws;
+                    kanbanPaneProject[index] = proj || '';
                     kanbanPaneCards[index] = [];
+                    if (wsChanged) {
+                        kanbanPaneProjectsCache[index] = [];
+                    }
                     saveLayoutSettings();
                     fetchBoardCardsForPane(index);
                 });
-                titleEl.appendChild(projPickerEl);
+                titleEl.appendChild(combinedPickerEl);
             }
 
             picker = document.createElement('select');
@@ -2330,8 +2685,9 @@
             titleEl.appendChild(pickerEl);
         }
         if (chosen && picker.value !== chosen) { picker.value = chosen; }
-        if (wsPicker && chosenWs && wsPicker.value !== chosenWs) { wsPicker.value = chosenWs; }
-        if (projPicker && projPicker.value !== chosenProj) { projPicker.value = chosenProj; }
+        if (combinedPicker && combinedPicker.value !== `${chosenWs || ''}|${chosenProj}`) {
+            combinedPicker.value = `${chosenWs || ''}|${chosenProj}`;
+        }
 
         // Terminal-only actions off, mode toggle on. ONLY style.display is touched —
         // never className or onclick — so updatePaneElement can restore them when this
@@ -2345,10 +2701,13 @@
         // Body: plan list. Signature-gated — the 5s poll calls this on every tick, and
         // an unconditional rebuild reset the list's scroll position and wiped the
         // "Copied!" state off a button mid-timeout.
-        const cards = kanbanPaneCards[index] || [];
+        // Sorted BEFORE the signature is built: the body signature is derived by mapping over
+        // `cards` in order, so signing the unsorted array and rendering the sorted
+        // one would mismatch on every poll tick and re-render forever.
+        const cards = [...(kanbanPaneCards[index] || [])].sort(compareCardsByRecency);
         const hasFetched = index in kanbanPaneCards;
         const bodySig = `${chosenWs || ''} ${chosenProj || ''} ${chosen || ''} ${hasFetched ? '1' : '0'}`
-            + cards.map(c => `${c.planId || c.sessionId || ''} ${c.topic || c.title || ''} ${c.complexity || ''} ${c.working ? 'w' : ''} ${c.project || ''} ${c.isFeature ? 'f' : ''}`).join('');
+            + cards.map(c => `${c.planId || c.sessionId || ''} ${c.topic || c.title || ''} ${c.complexity || ''} ${c.working ? 'w' : ''} ${c.project || ''} ${c.isFeature ? 'f' : ''} ${c.subtaskCount || 0}`).join('');
         if (contentEl.dataset.kanbanSig === bodySig) { return; }
         contentEl.dataset.kanbanSig = bodySig;
 
@@ -2371,6 +2730,22 @@
             contentEl.appendChild(empty);
             return;
         }
+        // Body wrapper: an always-visible hint strip above a scrolling plan list.
+        // The strip is NOT a hover affordance — the previous attempt hung a native
+        // `title` off an 11px ⤿ glyph in .pane-title, and ⤿ (U+293F) is absent from
+        // every face in this panel's stack ('Hanken Grotesk', Menlo, Consolas), so it
+        // rendered as tofu with a `?` help cursor and no tooltip anywhere.
+        // The wrapper exists because .kanban-pane-list is the scroll container: a
+        // sibling strip plus a height:100% list would overflow .pane-content, and
+        // .terminal-pane's overflow:hidden would eat the last row.
+        const body = document.createElement('div');
+        body.className = 'kanban-pane-body';
+
+        const hint = document.createElement('div');
+        hint.className = 'kanban-pane-hint';
+        hint.textContent = 'Drag a card onto a terminal pane to dispatch it';
+        body.appendChild(hint);
+
         const list = document.createElement('div');
         list.className = 'kanban-pane-list';
         for (const card of cards) {
@@ -2378,6 +2753,26 @@
             row.className = 'kanban-pane-row';
             if (card.working) { row.classList.add('is-working'); }
             if (card.isFeature) { row.classList.add('is-feature'); }
+
+            // Make the row draggable so it can be dropped into a terminal pane.
+            row.draggable = true;
+            row.addEventListener('dragstart', (e) => {
+                if (buttonPressRowEl) { e.preventDefault(); return; }
+                if (document.body.classList.contains('is-solo')) {
+                    e.preventDefault();
+                    return;
+                }
+                const dragData = {
+                    planId: card.planId || '',
+                    sessionId: card.sessionId || '',
+                    column: card.column || '',
+                    workspaceRoot: card.workspaceRoot || kanbanPaneWorkspace[index],
+                    sourcePaneIndex: index
+                };
+                e.dataTransfer.effectAllowed = 'copy';
+                e.dataTransfer.setData('application/json', JSON.stringify(dragData));
+                e.dataTransfer.setData('text/plain', card.topic || card.title || card.planId || '');
+            });
 
             const rowText = document.createElement('div');
             rowText.className = 'kanban-pane-row-text';
@@ -2394,17 +2789,28 @@
             meta.className = 'kanban-pane-row-meta';
             const complexityVal = card.complexity || 'Unknown';
             const complexityCat = scoreToCategory(complexityVal);
-            const complexityBadge = document.createElement('span');
-            complexityBadge.className = `kanban-pane-complexity ${categoryToCssClass(complexityCat)}`;
-            complexityBadge.textContent = complexityCat;
-            meta.appendChild(complexityBadge);
+            const complexityLabel = document.createElement('span');
+            complexityLabel.className = 'kanban-pane-complexity-label';
+            complexityLabel.textContent = 'Complexity: ';
+            meta.appendChild(complexityLabel);
+            const complexityValue = document.createElement('span');
+            complexityValue.className = `kanban-pane-complexity ${categoryToCssClass(complexityCat)}`;
+            complexityValue.textContent = complexityCat;
+            meta.appendChild(complexityValue);
+            if (card.isFeature) {
+                const featureLabel = document.createElement('span');
+                featureLabel.className = 'kanban-pane-feature-label';
+                const count = card.subtaskCount || 0;
+                featureLabel.textContent = `FEATURE: ${count} SUBTASK${count !== 1 ? 'S' : ''}`;
+                meta.insertBefore(featureLabel, meta.firstChild);
+            }
             if (card.working) {
                 const working = document.createElement('span');
                 working.className = 'kanban-pane-working';
                 working.textContent = '● working';
                 meta.appendChild(working);
             }
-            if (card.project) {
+            if (card.project && !kanbanPaneProject[index]) {
                 const proj = document.createElement('span');
                 proj.className = 'kanban-pane-project';
                 proj.textContent = card.project;
@@ -2457,7 +2863,16 @@
                     });
                     const data = await res.json();
                     if (data.success) {
-                        copyBtn.textContent = 'Copied!';
+                        if (typeof data.prompt === 'string') {
+                            try {
+                                await navigator.clipboard.writeText(data.prompt);
+                                copyBtn.textContent = 'Copied!';
+                            } catch {
+                                copyBtn.textContent = 'Copy failed';
+                            }
+                        } else {
+                            copyBtn.textContent = 'Copy failed';
+                        }
                         // Refresh this pane's list (the card advanced out).
                         fetchBoardCardsForPane(index);
                     } else {
@@ -2472,7 +2887,8 @@
             row.appendChild(btnGroup);
             list.appendChild(row);
         }
-        contentEl.appendChild(list);
+        body.appendChild(list);
+        contentEl.appendChild(body);
     }
 
     /** Toggle the focused pane to kanban mode (or back to terminal mode if
@@ -2520,6 +2936,45 @@
         if (kanbanPollTimer) { clearInterval(kanbanPollTimer); kanbanPollTimer = null; }
     }
 
+    function startFleetPoll() {
+        if (fleetPollTimer) { return; }
+        fleetPollTimer = setInterval(() => {
+            // Skip when the tab is hidden — the WebSocket push will catch up on
+            // regain, and a background tab hammering ptyListTerminals wastes a
+            // server slot per hidden panel. The poll is a fallback for when the
+            // WebSocket is dead, not a replacement for it.
+            if (document.visibilityState === 'hidden') { return; }
+            fetchTerminalList();
+        }, 5000);
+    }
+
+    function stopFleetPoll() {
+        if (fleetPollTimer) {
+            clearInterval(fleetPollTimer);
+            fleetPollTimer = null;
+        }
+    }
+
+    /** Fetch the Kanban column structure and rebuild the role order map. Shared by
+     *  the kanban pane poll, the terminal list refresh, panel init, and the window
+     *  focus hook. A `force` arg bypasses the 30s throttle so reordering in Setup
+     *  is picked up the moment the operator returns to the panel. */
+    async function fetchKanbanColumnStructure(force = false) {
+        if (!force && kanbanStructureTimer && Date.now() - kanbanStructureTimer < 30000) { return; }
+        kanbanStructureTimer = Date.now();
+        try {
+            const structRes = await fetch('/kanban/verb/getKanbanStructure', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+            });
+            const structData = await structRes.json();
+            if (structData && structData.success) {
+                kanbanColumnsCache = buildColumnList(structData.structure, structData.customColumns);
+                recomputeRoleOrderMap();
+                renderSidebarList();
+            }
+        } catch { /* ignore — keep stale cache */ }
+    }
+
     async function pollKanbanPanes() {
         const slotCount = getSlotCount(effectiveLayout);
         const kanbanSlots = [];
@@ -2527,21 +2982,8 @@
             if (paneModes[i] === 'kanban' && !paneAssignments[i]) { kanbanSlots.push(i); }
         }
         if (kanbanSlots.length === 0) { stopKanbanPoll(); return; }
-        // Column structure changes rarely (agent config, custom columns). Refresh
-        // it on a 30s cadence, not every 5s tick — the per-pane card fetches are
-        // the hot path, and hammering getKanbanStructure every poll is waste.
-        if (!kanbanStructureTimer || Date.now() - kanbanStructureTimer > 30000) {
-            kanbanStructureTimer = Date.now();
-            try {
-                const structRes = await fetch('/kanban/verb/getKanbanStructure', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
-                });
-                const structData = await structRes.json();
-                if (structData.success) {
-                    kanbanColumnsCache = buildColumnList(structData.structure, structData.customColumns);
-                }
-            } catch { /* ignore — keep stale cache */ }
-        }
+        // Column structure changes rarely — refresh on a 30s cadence.
+        await fetchKanbanColumnStructure();
         // Fire all pane fetches in parallel. The previous for…of await made the
         // Nth pane wait for all prior fetches, so a slow board stretched the poll
         // cycle linearly with pane count.
@@ -2984,7 +3426,20 @@
         const data = await fetchPtyVisibleRoles();
         const visible = data.visibleAgents;
         const hasCommand = data.hasCommand;
-        const roles = Object.keys(visible).filter(k => visible[k] !== false);
+        const SYSTEM_ROLES = new Set(['orchestrator', 'mcp_monitor']);
+        const roles = Object.keys(visible)
+            .filter(k => visible[k] !== false && !SYSTEM_ROLES.has(k))
+            .sort((a, b) => {
+                const aOrder = roleOrderMap[a];
+                const bOrder = roleOrderMap[b];
+                // Mapped roles sort by column order ascending
+                if (aOrder !== undefined && bOrder !== undefined) { return aOrder - bOrder; }
+                // Mapped before unmapped
+                if (aOrder !== undefined) { return -1; }
+                if (bOrder !== undefined) { return 1; }
+                // Both unmapped: alphabetical by role
+                return (a || '\uFFFF').localeCompare(b || '\uFFFF');
+            });
         optionsEl.innerHTML = '';
         for (const role of roles) {
             const btn = document.createElement('button');
@@ -3064,6 +3519,23 @@
         'planner', 'lead', 'coder', 'intern', 'reviewer', 'tester',
         'analyst', 'ticket_updater', 'researcher', 'claude_designer', 'phone_a_friend'
     ];
+
+    /**
+     * Fallback role -> column order for the sidebar's first paint. Mirrors
+     * DEFAULT_KANBAN_COLUMNS in src/services/agentConfig.ts and must be kept in
+     * lockstep with it (the new contract test enforces the match).
+     */
+    const KANBAN_ROLE_ORDER_FALLBACK = {
+        researcher: 110,
+        planner: 100,
+        lead: 180,
+        coder: 190,
+        intern: 200,
+        reviewer: 300,
+        tester: 350,
+        ticket_updater: 9000
+    };
+    roleOrderMap = { ...KANBAN_ROLE_ORDER_FALLBACK };
 
     async function resolveGridAgents() {
         const [savedVisibleData, savedCustom, savedPlannerCount] = await Promise.all([
@@ -3491,6 +3963,31 @@
         return ANSWERBACK_RE.test(data);
     }
 
+    const PASTE_SCAN_MIN_CHARS = 200;
+    const PASTE_CARRY_MAX_CHARS = 2048;
+
+    function extractPastedDispatchIdentity(text) {
+        if (text.length < PASTE_SCAN_MIN_CHARS) { return null; }
+        // Strip bracketed-paste wrappers so the pasted body can be scanned cleanly.
+        const stripped = text
+            .replace(/\x1b\[200~|\x1b\[201~/g, '')
+            .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+        if (!stripped.includes('PLANS TO PROCESS:')) { return null; }
+        if (stripped.includes('PLANS TO DISCUSS:')) { return null; } // consultation prompt, not dispatch
+
+        const planIds = [];
+        let m;
+        const idRe = /\bPLAN_ID=(\d+)/g;
+        while ((m = idRe.exec(stripped)) !== null) { planIds.push(m[1]); }
+
+        const planFiles = [];
+        const fileRe = /Plan File:\s+(\S+)/g;
+        while ((m = fileRe.exec(stripped)) !== null) { planFiles.push(m[1]); }
+
+        if (planIds.length === 0 && planFiles.length === 0) { return null; }
+        return { planIds, planFiles };
+    }
+
     const pendingBatchEntries = new Set();
     let sharedBatchRafId = null;
     let sharedBatchFallbackTimer = null;
@@ -3504,6 +4001,7 @@
         if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
         pendingBatchEntries.delete(entry);
         entry.exited = true;
+        entry.pendingAttribution = null;
         if (entry.ws) {
             try { entry.ws.close(); } catch { /* ignore */ }
             entry.ws = null;
@@ -3855,6 +4353,50 @@
             if (entry.suppressAnswerback && isAnswerback(data)) {
                 return;
             }
+
+            // Paste attribution: a copied dispatch prompt carries its own identity.
+            // Arm on the paste body, then commit on a later chunk that contains the
+            // submit Enter (the arming chunk's own newlines are never the commit).
+            let armingThisChunk = false;
+            if (data.length >= PASTE_SCAN_MIN_CHARS) {
+                const identity = extractPastedDispatchIdentity(data);
+                if (identity) {
+                    const role = fleetList.find(t => t.friendlyName === entry.name)?.role || '';
+                    entry.pendingAttribution = { ...identity, terminalName: entry.name, role, skipCommit: true };
+                    armingThisChunk = true;
+                }
+            }
+
+            if (entry.pendingAttribution) {
+                if (!entry.pendingAttribution.skipCommit && /[\r\n]/.test(data)) {
+                    const { terminalName, role, planIds, planFiles } = entry.pendingAttribution;
+                    entry.pendingAttribution = null;
+                    fetch('/kanban/verb/attributePastedPrompt', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ terminalName, role, planIds, planFiles })
+                    }).catch(err => {
+                        console.warn('[Terminals] attributePastedPrompt failed:', err);
+                    });
+                } else {
+                    entry.pendingAttribution.skipCommit = false;
+                    if (!armingThisChunk) {
+                        entry.pendingAttribution.carry = (entry.pendingAttribution.carry || '') + data;
+                        if (entry.pendingAttribution.carry.length > PASTE_CARRY_MAX_CHARS) {
+                            entry.pendingAttribution.carry = entry.pendingAttribution.carry.slice(-PASTE_CARRY_MAX_CHARS);
+                        }
+                        if (entry.pendingAttribution.carry.length >= PASTE_SCAN_MIN_CHARS) {
+                            const carried = entry.pendingAttribution.carry;
+                            const identity = extractPastedDispatchIdentity(carried);
+                            if (identity) {
+                                const role = fleetList.find(t => t.friendlyName === entry.name)?.role || '';
+                                entry.pendingAttribution = { ...identity, terminalName: entry.name, role, carry: '', skipCommit: true };
+                            }
+                        }
+                    }
+                }
+            }
+
             if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
                 if (!entry.largestInputDataLen) entry.largestInputDataLen = 0;
                 if (data.length > entry.largestInputDataLen) entry.largestInputDataLen = data.length;
@@ -3978,6 +4520,7 @@
             // handler would arm a reconnect timer that tears down the socket this
             // call is about to open. Callers that WANT the reconnect are the ones
             // whose socket closed on its own, and their handler has already run.
+            entry.pendingAttribution = null;
             try { entry.ws.onclose = null; } catch { /* ignore */ }
             try { entry.ws.close(); } catch { /* ignore */ }
             entry.ws = null;
@@ -4137,6 +4680,7 @@
         };
 
         ws.onclose = () => {
+            entry.pendingAttribution = null;
             if (entry.exited) { return; }
             refreshInputState(entry.name);
             const item = fleetList.find(i => i.friendlyName === entry.name);
@@ -4273,6 +4817,16 @@
         const stats = {};
         for (const [name, entry] of terminalsMap.entries()) {
             stats[name] = {
+                // Renderer identity, not decoration: a pane that silently dropped to
+                // canvas has lost a WebGL context, and the browser's context cap is
+                // per PROCESS while our MAX_WEBGL_CONTEXTS ceiling is per DOCUMENT —
+                // so a popped-out second panel cannot see the main window's usage and
+                // both believe they are well under the limit. Reading this in each
+                // window is how that gets diagnosed without catching a console warning
+                // at the exact moment it fires.
+                isWebgl: entry.isWebgl === true,
+                cols: entry.term ? entry.term.cols : null,
+                rows: entry.term ? entry.term.rows : null,
                 lastSeq: entry.lastSeq,
                 batchQueueLength: entry.batchQueue ? entry.batchQueue.length : 0,
                 pendingAckChars: entry.pendingAckChars || 0,

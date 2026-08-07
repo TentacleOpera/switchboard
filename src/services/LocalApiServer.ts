@@ -9,6 +9,7 @@ import type { NotionFetchService } from './NotionFetchService';
 import { importPlanFiles } from './PlanFileImporter';
 import {
     DEFAULT_KANBAN_COLUMNS,
+    DISPLAY_MODE_COLUMNS,
     DISPLAY_ONLY_COLUMN_LABELS,
     LEGACY_COLUMN_LABELS,
     parseCustomKanbanColumns,
@@ -53,7 +54,9 @@ interface LocalApiServerOptions {
      * Create a feature from a set of subtask plan IDs through the running extension so
      * the create inherits the DB upsert, subtask linking, feature-file write, and board
      * refresh. Used by the kanban_operations create-feature.js script. Optional — absent
-     * in headless/test harnesses. Note: feature creation does NOT sync to Linear/ClickUp.
+     * in headless/test harnesses. Note: feature creation DOES sync outbound to
+     * Linear/ClickUp (the feature as a parent issue/task, subtasks linked as children),
+     * gated per tracker on both `setupComplete` and `realTimeSyncEnabled`.
      */
     createFeature?: (
         workspaceRoot: string,
@@ -420,8 +423,8 @@ export class LocalApiServer {
                 this._wsHub.attach(false);
 
                 if (this._options.terminalWsGateway) {
-                    (this._options.terminalWsGateway as any).setBroadcastWs?.((verb: string, payload: any) => {
-                        this.broadcastWs(verb, payload);
+                    (this._options.terminalWsGateway as any).setBroadcastWs?.((verb: string, payload: any, surface?: string) => {
+                        this.broadcastWs(verb, payload, surface);
                     });
                 }
 
@@ -1123,7 +1126,8 @@ export class LocalApiServer {
         // never silently pick one of its backing columns.
         const labelCandidates: string[] = [
             ...ids,
-            ...Object.keys(LEGACY_COLUMN_LABELS).filter(id => !ids.includes(id))
+            ...Object.keys(LEGACY_COLUMN_LABELS).filter(id => !ids.includes(id)),
+            ...Object.keys(DISPLAY_MODE_COLUMNS).filter(id => !ids.includes(id))
         ];
         for (const id of labelCandidates) {
             const { label } = resolveColumnLabel(id, customCols);
@@ -1886,6 +1890,11 @@ export class LocalApiServer {
             const rawBody = await this._parseJsonBody(req);
             const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
             delete body.type;
+            // Every body on a verb rail arrived over HTTP, so it is by definition not the
+            // in-process sidebar. Without this stamp the four design send arms read
+            // apiOriginated:undefined and their fleet branch is dead code — a browser Stitch
+            // or artifact send lands in (or creates) an invisible VS Code terminal.
+            this._stampHttpSurface(body);
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
             const result = await designVerb(verb, body, workspaceRoot);
             const ok = !result || result.success !== false;
@@ -1930,6 +1939,10 @@ export class LocalApiServer {
             const rawBody = await this._parseJsonBody(req);
             const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
             delete body.type;
+            // Stamp for consistency with the other verb rails — the apiOriginated
+            // discriminator is meant to be impossible to forget, even for verbs that
+            // have no prompt-dispatch arm today. See _handleDesignVerb above.
+            this._stampHttpSurface(body);
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
             const result = await setupVerb(verb, body, workspaceRoot);
             const ok = !result || result.success !== false;
@@ -2567,19 +2580,21 @@ export class LocalApiServer {
                             .map((p: any) => p.kanbanColumn)
                             .filter((c: string) => c && !builtInIds.has(c))
                     ));
-                    // Publish the RELATIONSHIP as well as the label: BACKLOG is a display
-                    // mode of CREATED and CODED a legacy alias of LEAD CODED, so a caller
-                    // that only sees `{id,label}` would read either as an independent peer
-                    // column — the exact misreading the labels exist to prevent. Sourced
-                    // from LEGACY_COLUMN_LABELS explicitly (never spread, so a custom column
-                    // that happens to share a legacy id keeps its own authored label).
+                    // Publish the RELATIONSHIP as well as the label: BACKLOG/DISPATCH are
+                    // display modes of their parent column and CODED a legacy alias of
+                    // LEAD CODED, so a caller that only sees `{id,label}` would read any as
+                    // an independent peer column — the exact misreading the labels exist to
+                    // prevent. Sourced from DISPLAY_MODE_COLUMNS / LEGACY_COLUMN_LABELS
+                    // explicitly (never spread, so a custom column that happens to share a
+                    // legacy/display id keeps its own authored label).
                     custom = ids.map(id => {
                         const resolved = resolveColumnLabel(id, customCols);
+                        const displayMode = DISPLAY_MODE_COLUMNS[id];
                         const legacy = LEGACY_COLUMN_LABELS[id];
                         return {
                             id,
                             ...resolved,
-                            ...(legacy?.displayModeOf ? { displayModeOf: legacy.displayModeOf } : {}),
+                            ...(displayMode?.displayModeOf ? { displayModeOf: displayMode.displayModeOf } : {}),
                             ...(legacy?.legacyAliasOf ? { legacyAliasOf: legacy.legacyAliasOf } : {})
                         };
                     });

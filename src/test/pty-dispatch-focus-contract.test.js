@@ -173,10 +173,20 @@ function run() {
             /executeCommand\('switchboard\.focusTerminalByName',\s*targetAgent,\s*\{\s*silent:\s*true\s*\}\)/.test(body),
             'dispatchCustomPromptToRole must pass { silent: true } to focusTerminalByName.'
         );
-        assert.doesNotMatch(
+        assert.match(
             body,
-            /_isLikelyPtyDispatchTarget/,
-            'dispatchCustomPromptToRole must NOT use the PTY predicate — it resolves and delivers with allowPtyFleet=false, so its target is always a vscode.Terminal.'
+            /_isLikelyPtyDispatchTarget\(\s*targetAgent,\s*allowPtyFleet\s*\)/,
+            'dispatchCustomPromptToRole must guard its focus call with _isLikelyPtyDispatchTarget(targetAgent, allowPtyFleet) because its target can now be a PTY.'
+        );
+        assert.match(
+            body,
+            /_resolveAgentTerminalForPlan\(\s*role,\s*resolvedWorkspaceRoot,\s*undefined,\s*allowPtyFleet\s*\)/,
+            'dispatchCustomPromptToRole must pass allowPtyFleet as the fourth argument to _resolveAgentTerminalForPlan.'
+        );
+        assert.match(
+            body,
+            /_dispatchExecuteMessage\(\s*resolvedWorkspaceRoot,\s*targetAgent,\s*prompt,\s*\{\},\s*'sidebar',\s*allowPtyFleet\s*\)/,
+            'dispatchCustomPromptToRole must pass allowPtyFleet as the sixth argument to _dispatchExecuteMessage.'
         );
     });
 

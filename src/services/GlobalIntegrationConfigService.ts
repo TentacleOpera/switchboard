@@ -427,6 +427,14 @@ export class GlobalIntegrationConfigService {
         project_manager: true
     };
 
+    // System-managed terminal roles that are launched by automation (Kanban
+    // AUTOMATION tab / scheduler / Jules monitor), NOT user-selectable agent
+    // roles. They must never appear in the terminals.html role picker. They can
+    // leak into the machine-global visibleAgents file via stale config and are
+    // preserved by mergeVisibleAgentsToGlobalFile (which never removes un-patched
+    // keys), so they must be stripped at the read layer.
+    private static SYSTEM_ONLY_ROLES = new Set(['orchestrator', 'mcp_monitor', 'jules_monitor', 'scheduler']);
+
     /**
      * Read the machine-global visible-agents store and merge it over the built-in
      * defaults. Custom agents default to visible. Also returns a `hasCommand` map
@@ -443,6 +451,13 @@ export class GlobalIntegrationConfigService {
             visible[agent.role] = true;
         }
         Object.assign(visible, fileValue);
+
+        // Strip system-managed terminal roles that leaked into the file. They are
+        // launched by automation, not selectable by users, and must not appear in
+        // the role picker or the OPEN AGENT TERMINALS path.
+        for (const sysRole of this.SYSTEM_ONLY_ROLES) {
+            delete visible[sysRole];
+        }
 
         const hasCommand: Record<string, boolean> = {};
         for (const role of Object.keys(visible)) {

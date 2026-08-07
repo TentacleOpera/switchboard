@@ -836,6 +836,7 @@ export const VALID_KANBAN_COLUMNS = new Set([
     ...DEFAULT_KANBAN_COLUMNS.map(c => c.id),
     'BACKLOG',
     'CODED',
+    'DISPATCH',
 ]);
 // VALID_COMPLEXITIES is now handled by isValidComplexityValue() in complexityScale.ts
 const VALID_STATUSES = new Set(['active', 'archived', 'completed', 'deleted', 'missing']);
@@ -8876,6 +8877,7 @@ FROM plans
             }
             columns.set('BACKLOG', []);
             columns.set('CODED', []);
+            columns.set('DISPATCH', []);
             for (const plan of allPlans) {
                 const list = columns.get(plan.kanbanColumn);
                 if (list) list.push(plan);
@@ -9554,6 +9556,26 @@ FROM plans
         const plan = await this.getPlanBySessionId(sessionId);
         if (!plan) { return false; }
         return this.updateDispatchInfoByPlanFile(plan.planFile, plan.workspaceId, info);
+    }
+
+    /**
+     * Paste-attribution writer for the activity light. Mirrors
+     * updateDispatchInfoByPlanFile but deliberately omits `routed_to` and
+     * `dispatched_ide` — the paste knows the pane and role, not the routing
+     * decision, so leaving those analytics untouched is preferable to guessing.
+     * The off-switches (`clearWorkingState`, `clearStaleWorkingState`) are unchanged
+     * and already cover this writer.
+     */
+    public async attributePasteDispatch(planFile: string, workspaceId: string, info: {
+        dispatchedAgent: string;
+        dispatchedTerminal?: string;
+    }): Promise<boolean> {
+        const normalized = this._ensureRelativePlanFile(planFile);
+        const terminalName = info.dispatchedTerminal || '';
+        return this._persistedUpdate(
+            'UPDATE plans SET dispatched_agent = ?, dispatched_terminal = ?, dispatched_at = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [info.dispatchedAgent, terminalName, new Date().toISOString(), new Date().toISOString(), normalized, workspaceId]
+        );
     }
 
     /**

@@ -195,33 +195,44 @@
             font-weight: 600;
             font-size: 13px;
         }
-        /* The three states differ by SHAPE, not only hue: a ring, a filled disc and
-           a filled square. Colour alone would not survive a monochrome screenshot or
-           a deuteranopic viewer — and green-vs-accent is the exact pair that fails.
-           The state is also spelled out in each button's aria-label (shell.js). */
-        .strip-term-dot {
-            position: absolute;
-            bottom: 3px;
-            right: 3px;
-            width: 7px;
-            height: 7px;
+        /* Coloured brand icon replaces the old role-letter glyph + status dot. The
+           icon's baked-in fill IS the identity (multi-hue brand marks), so an <img>
+           is correct here — not the strip's CSS-mask/currentColor path used by the
+           single-color nav glyphs. */
+        .strip-term-icon {
+            width: 22px;
+            height: 22px;
+            object-fit: contain;
             pointer-events: none;
-            box-sizing: border-box;
         }
-        .strip-term-dot.dot-active {
-            border-radius: 50%;
-            background: transparent;
-            border: 1.5px solid var(--accent);
+        /* exited: desaturated, lifted toward mid grey, then faded. grayscale() ALONE
+           sinks the dark-fill brands (zed #084CCF, jules #715CD7, qwen #6950EF) into
+           the near-black rail — the button reads EMPTY rather than "faded", which is
+           a worse message than the dot ever sent. brightness() sets a contrast floor
+           so every brand lands on a legible grey first; the opacity is then what says
+           "gone". Readable in a monochrome screenshot, which is the accessibility
+           contract the old shape coding carried. */
+        .strip-term-btn.strip-term-exited .strip-term-icon {
+            opacity: 0.5;
+            filter: grayscale(1) brightness(1.7);
         }
-        .strip-term-dot.dot-done {
-            border-radius: 50%;
-            background-color: #22c55e;
-            box-shadow: 0 0 4px #22c55e;
+        /* done: the completion ring. Same #22c55e + glow the shipped 7px dot used,
+           scaled up to the whole 36px button — strictly MORE salient than the dot it
+           replaces, which is the entire point of this change. Hardcoded green, NOT
+           var(--accent)/var(--accent-dim): the accent is this rail's panel-SELECTION
+           colour (.strip-icon.is-active), so an accent ring would read as "selected",
+           and --accent-dim under theme-claudify is a 40%-alpha terracotta that is
+           nearly invisible on #060609. The ring is a SHAPE (present/absent), so hue
+           is a bonus channel, not the signal — monochrome and deuteranopic viewers
+           read the ring itself. .strip-icon already declares `border: 1px solid
+           transparent`, so this is a colour swap with zero layout shift. */
+        .strip-term-btn.strip-term-done {
+            border-color: #22c55e;
+            box-shadow: 0 0 0 1px #22c55e inset, 0 0 6px rgba(34, 197, 94, 0.55);
         }
-        .strip-term-dot.dot-exited {
-            border-radius: 1px;
-            background-color: var(--text-dim);
-        }
+        /* active: DELIBERATELY no rule. The unmodified full-colour icon in an unringed
+           button IS the live state. Never add a fade or a ring here — that absence is
+           precisely what makes active distinguishable from done and exited. */
 
         /* Browser-only shell: dark native palette + a 6px strip scrollbar to
            match the panels it frames. #strip is the document's only scroller

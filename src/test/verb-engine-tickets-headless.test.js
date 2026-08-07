@@ -307,11 +307,24 @@ async function main() {
         );
     });
 
-    await test('Tickets: schema validation rejects malformed payload (convertToSubtask missing subtaskSessionId)', async () => {
+    await test('Tickets: schema validation rejects malformed payload (convertToSubtask missing parentId)', async () => {
         const { provider } = buildHeadlessTicketsProvider(tmpRoot);
         await assert.rejects(
-            () => provider.handleServiceVerb('convertToSubtask', { featureSessionId: 'f1' }),
-            /Invalid payload for Tickets verb 'convertToSubtask'.*subtaskSessionId/
+            () => provider.handleServiceVerb('convertToSubtask', { provider: 'clickup', taskId: 't1' }),
+            /Invalid payload for Tickets verb 'convertToSubtask'.*parentId/
+        );
+    });
+
+    // The schema must match what the webview posts and the handler reads
+    // (provider/taskId/parentId). It previously demanded the kanban feature
+    // verbs' session ids, so every "To subtask" click failed validation with an
+    // error naming subtaskSessionId and never reached the arm.
+    await test('Tickets: convertToSubtask accepts the provider/taskId/parentId payload the panel sends', async () => {
+        const { provider } = buildHeadlessTicketsProvider(tmpRoot);
+        await assert.doesNotReject(
+            () => provider.handleServiceVerb('convertToSubtask', {
+                provider: 'clickup', taskId: 't1', parentId: 'p1', workspaceRoot: tmpRoot
+            })
         );
     });
 

@@ -1,7 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import type { HostSeams, HostPathConfigProvider, HostSecrets } from '../services/hostSeams';
+import type {
+    HostSeams, HostPathConfigProvider, HostSecrets, HostWatchEvent, HostWatchHandle
+} from '../services/hostSeams';
 import { switchboardCommandRegistry } from '../services/commandRegistry';
 
 /**
@@ -11,6 +13,47 @@ import { switchboardCommandRegistry } from '../services/commandRegistry';
  * vscode module.  The extension path is unchanged because it never imports
  * this file.
  */
+
+// ─── File watcher ──────────────────────────────────────────────────────────
+
+/**
+ * fs.watch-backed folder watcher for the headless seams.
+ *
+ * This was a no-op stub, which silently disabled every seam-driven folder watcher in
+ * `npx switchboard` — including the Tickets panel's display watcher, so external edits to
+ * local ticket `.md` files never reached the browser sidebar even though the identical
+ * provider code works in the editor host.
+ *
+ * fs.watch reports 'rename' | 'change'; the seam contract is 'create' | 'change' |
+ * 'delete', so existence at delivery time decides which one this was. Recursive watching
+ * is unavailable on some platforms — fall back to a flat watch, which covers the flat
+ * ticket folders this seam is used for.
+ */
+function createStandaloneFolderWatcher(
+    folderPath: string,
+    listener: (event: HostWatchEvent, filePath: string) => void
+): HostWatchHandle {
+    const emit = (eventType: string, filename: string | Buffer | null) => {
+        if (!filename) { return; }
+        const fullPath = path.resolve(folderPath, filename.toString());
+        if (!fs.existsSync(fullPath)) { listener('delete', fullPath); return; }
+        listener(eventType === 'rename' ? 'create' : 'change', fullPath);
+    };
+
+    let watcher: fs.FSWatcher;
+    try {
+        watcher = fs.watch(folderPath, { persistent: false, recursive: true }, emit);
+    } catch {
+        try {
+            watcher = fs.watch(folderPath, { persistent: false }, emit);
+        } catch (e) {
+            console.warn(`[headless watcher] cannot watch ${folderPath}:`, e);
+            return { dispose: () => {} };
+        }
+    }
+    watcher.on('error', err => console.warn(`[headless watcher] ${folderPath}:`, err));
+    return { dispose: () => { try { watcher.close(); } catch {} } };
+}
 
 // ─── Config provider ───────────────────────────────────────────────────────
 
@@ -402,7 +445,11 @@ export function createHeadlessHostSeams(workspaceRoot: string): HostSeams {
             getWorkspaceRoots: () => [workspaceRoot],
         },
         watcher: {
-            watchFolder: () => ({ dispose: () => {} }),
+            watchFolder: createStandaloneFolderWatcher,
+            // Still stubs. watchFolder is implemented because the Tickets display watcher
+            // (and the browser sidebar's auto-refresh) depends on it; the other two have no
+            // standalone consumer today and turning them on would change unrelated
+            // subsystems' behaviour without a test to hold the line.
             watchPattern: () => ({ dispose: () => {} }),
             watchFile: () => ({ dispose: () => {} }),
         },

@@ -191,3 +191,34 @@ Implemented the new `ConnectionsPanelProvider` (`src/services/ConnectionsPanelPr
 **CRITICAL (fixed): the push redirection corrupted `SetupPanelProvider` permanently.** The forwarder went beyond the plan and intercepted the target providers' push methods so side-pushes reach the Connections webview — a good idea implemented unsafely. It captured the "original" method *inside* each call and restored it in `finally`, while `_handleMessage` was not serialised. Under overlap, a second forward captures the first call's **patch** as its original and reinstalls it on completion, so `SetupPanelProvider.postMessage` stays redirected to the Connections webview forever; once that panel closes, the `postMessage` rejection is swallowed and Setup pushes vanish silently. Reproduced in isolation before fixing. Overlap is guaranteed, not hypothetical: `connections.js` polls `getRemoteHealth` on a 15 s interval whenever Remote Control is active. Fixed by serialising forwards on a promise chain (`_forwardChain`) and capturing the pristine methods once (`_pristineSetupPostMessage` / `_pristinePlanningPostMessage`) so restore can never reinstall a patch. Two assertions added to `connections-routing-contract.test.js`, including one that fails on the per-call-local shape that caused it.
 
 **Remaining risk:** none identified. The de-fork stays out of scope as this plan specifies — `setup.html` is untouched, verified. Validation: tsc, lint, all six gates, and nine contract suites including `connections-routing` (7/7) all green.
+
+### Independent Review Pass (2026-08-06)
+
+**Stage 1 — Grumpy Principal Engineer:**
+
+Welcome back. I tore this apart looking for blood and found... competence. Annoying.
+
+- **NIT — `openConnectionsSection` is a dead message.** `ConnectionsPanelProvider.open()` posts `{type:'openConnectionsSection', section}` on open and reveal, but `connections.js` has no `case 'openConnectionsSection'` — the sub-tab parameter silently does nothing. The plan calls this "cheap now, forward-looking," so it's not a regression, but it's a dead post today.
+- **NIT — patched push methods don't handle factory messages.** `BroadcastHub.push()` supports `typeof msg === 'function'` for per-connection rendering; the patched `postMessage`/`postMessageToWebview` would `postMessage` a raw function (silently fails). No arm passes a factory through these wrapper methods — factories are only used in direct `_broadcaster.push(fn)` calls, which the patch doesn't intercept — so this is theoretical only.
+- **NIT — external callers during the patch window.** During the `await handleServiceVerb` call, the event loop can fire `onDidChangeConfiguration` or other listeners that call `setupProvider.postMessage(...)`. Those pushes redirect to the Connections webview for the duration of the forward. Bounded by `finally` restore; window is one verb handler; transient and self-correcting.
+- **NIT — `integrationsConfigured: {}` in hardcoded capabilities.** May render integration buttons as unconfigured on first paint; the panel queries real state via verbs on `ready`, so it self-corrects.
+- **No CRITICAL or MAJOR findings.** The forwarding table derives from the same generated allowlists in the same Setup-first precedence as `/connections/verb/`. Pristine capture is once-only. Forward serialisation is sound. Reply delivery is explicit. Unknown verbs return typed failure. No arms added (`verb-returns:check` unchanged). The drift test is wired into both `package.json` and CI. `verbSchemas.ts` and `protocol-catalog.json` have no Connections entry.
+
+**Stage 2 — Balanced synthesis:**
+
+All four findings are NITs — no code fixes applied. The `openConnectionsSection` dead message is the most notable but is explicitly forward-looking per the plan. The push-method patching is the design described in the plan's adversarial synthesis and is safe given the serialisation chain and pristine-once capture. The factory-message gap is unreachable through the wrapper methods. No changes required.
+
+**Verification results (all green):**
+- `npx tsc -p tsconfig.test.json --noEmit` — 0 errors
+- `npm run lint` — 0 errors (2491 pre-existing warnings)
+- `npm run catalog:check` — OK (617 arms, 522 verbs)
+- `npm run parity:check` — passed
+- `npm run push-routing:check` — passed
+- `npm run verb-returns:check` — all providers within ceilings (Setup: 0, unchanged)
+- `npm run mirror:check` — passed (46 files)
+- `npm run icons:parity` — passed (37 rules, 7 panels)
+- `test:contract:connections-routing` — 12/12 passed
+
+**Gate-wiring audit:** every automated check in the plan's `### Automated` section is invoked by `.github/workflows/integration-tests.yml`: `catalog:check` (L26), `compile-tests`/tsc (L29), `compile` (L32), `parity:check` (L35), `push-routing:check` (L38), `verb-returns:check` (L41), `mirror:check` (L44), `icons:parity` (L52), `lint` (L496), `test:contract:connections-routing` (L186). No check is defined-but-unwired.
+
+**Files reviewed:** `src/services/ConnectionsPanelProvider.ts`, `src/test/connections-routing-contract.test.js`, `src/extension.ts` (L1311-1395), `package.json` (L173-174, L803), `src/webview/transport.js` (L239), `src/services/LocalApiServer.ts` (L3552-3582), `src/services/SetupPanelProvider.ts` (L62-88, L269-275, L391-398), `src/services/PlanningPanelProvider.ts` (L925-931), `src/services/broadcastHub.ts` (L80-120), `src/services/headlessPanelHtml.ts` (L445-468), `src/generated/verbAllowlist.ts`, `src/webview/connections.js`, `src/webview/setup.html`, `.github/workflows/integration-tests.yml`.

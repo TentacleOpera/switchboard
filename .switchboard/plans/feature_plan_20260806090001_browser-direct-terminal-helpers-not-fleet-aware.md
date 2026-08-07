@@ -383,3 +383,54 @@ Source-level contract test:
 ## Recommendation
 
 Complexity 8 → **Send to Lead Coder.** Land Proposed Changes §0 first — the rest of the design-panel work is unverifiable without it.
+
+## Review Findings
+
+**Reviewer:** Direct reviewer pass (GLM-5.2 High)
+**Date:** 2026-08-07
+**Verdict:** PASS — all material requirements verified in source; one MAJOR finding (missing contract test) now fixed; one NIT (pre-existing test breakage) fixed.
+
+### Verified
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| `_tryFleetDeliveryForRole` guards on `!apiOriginated \|\| !this._ptyHostPort` | ✅ | Short-circuit `return false` confirmed |
+| `_tryFleetDeliveryForRole` delivers via `_dispatchExecuteMessage` (not raw `ptyWrite`) | ✅ | Confirmed; `ptyWrite` does NOT appear in method body |
+| Public `tryFleetDeliveryForRole` wrapper exists | ✅ | `public async tryFleetDeliveryForRole` confirmed |
+| `sendPromptToAgentTerminal` returns `Promise<boolean>`, guards terminal creation for browser callers | ✅ | Signature confirmed; `if (apiOriginated) { return false; }` before terminal creation; tries fleet first |
+| `sendPromptToAgentTerminal` keeps 2000ms/3000ms editor settle waits | ✅ | Both `setTimeout(r, 2000)` and `setTimeout(r, 3000)` confirmed in body |
+| `_deliverPromptToPmTerminal` returns `Promise<boolean>`, tries fleet first | ✅ | Signature confirmed; `_tryFleetDeliveryForRole('project_manager')` confirmed |
+| `_handleSendAnalystMessage` tries fleet first, threads root + flag | ✅ | `_tryFleetDeliveryForRole('analyst')` confirmed; `_getAgentNameForRole('analyst', resolvedRoot, apiOriginated)` confirmed |
+| `_handleSendAnalystMessage` does not introduce "inbox" | ✅ | `doesNotMatch(/inbox/i)` passes |
+| All 4 DesignPanelProvider send arms pass `{ apiOriginated: !!message.apiOriginated }` | ✅ | All 4 case blocks confirmed: `sendStitchTweakPrompt`, `sendHtmlTweakPrompt`, `sendClaudeImportPrompt`, `sendClaudeArtifactPrompt` |
+| All 4 DesignPanelProvider arms branch on delivery result | ✅ | All 4 have `if (!sent)` / `if (sent)` branch |
+| All 4 DesignPanelProvider failure bodies carry `error` + `prompt` | ✅ | All 4 confirmed |
+| `_sendPromptToTerminal` returns `Promise<boolean>`, guards terminal creation | ✅ | Signature confirmed; `if (apiOriginated) { return false; }` confirmed; tries fleet first |
+| PlanningPanelProvider builder arms carry `prompt` only on failure | ✅ | `invokePrdBuilder` confirmed: failure returns `{ success: false, error, prompt: promptText }`, success returns `{ success: true }` |
+| `_handleDesignVerb` stamps `_stampHttpSurface(body)` | ✅ | Confirmed |
+| `_handleSetupVerb` stamps `_stampHttpSurface(body)` | ✅ | Confirmed |
+| Every verb-rail handler stamps (or is in exclusion list) | ✅ | All `_handle*Verb` handlers checked; `_handleTerminalVerb` excluded (pty control plane) |
+| Fail-closed: no helper defaults `apiOriginated` to literal `true` | ✅ | All 5 helper bodies checked |
+| Verb-return baseline Planning 165→154 | ✅ | `scripts/verb-return-contract-baseline.json` confirmed |
+
+### MAJOR Finding (Fixed)
+
+**Missing contract test.** The plan's verification section specified a new contract test file (`browser-direct-terminal-helpers`), but it was never created. **Fixed:** Created `src/test/browser-direct-terminal-helpers.test.js` (12 assertions), wired into `package.json` as `test:contract:browser-direct-terminal-helpers` and CI workflow `integration-tests.yml`. All 12 assertions pass.
+
+### NIT (Fixed)
+
+**`analyst-direct-dispatch-regression.test.js` was broken by the new `options?: { apiOriginated?: boolean }` parameter.** The test's naive `extractMethodBody` helper found the first `{` after the method marker — which was the parameter type brace, not the method body. **Fixed:** Updated the extractor to walk paren depth past the parameter list (matching the robust version in `pty-dispatch-focus-contract.test.js`). Also updated the focus-fallback assertion to match the `_seams().commands` convention (the test expected `vscode.commands` but the code uses `this._seams().commands` per PRD contract #3 — this was a pre-existing stale assertion, not introduced by this feature, but the test guards the feature's modified method so it must stay green). 4/4 pass.
+
+### Gate Wiring Audit
+
+| Gate | Status |
+|---|---|
+| `npx tsc --noEmit` | ✅ No new errors (5 pre-existing TS2835 in unrelated modules) |
+| `npm run parity:check` | ✅ Pass |
+| `npm run push-routing:check` | ✅ Pass |
+| `npm run verb-returns:check` | ⚠️ Kanban break regression — from unrelated `attributePastedPrompt` feature, not this plan |
+| `npm run catalog:generate` | ✅ No unintended diff |
+| `test:contract:browser-direct-terminal-helpers` | ✅ 12/12 pass (NEW) |
+| `test:contract:analyst-direct-dispatch-regression` | ✅ 4/4 pass (fixed) |
+| `test:contract:pty-route-surface` | ✅ Pass |
+| `test:contract:pty-host-gating` | ✅ Pass |

@@ -31,18 +31,35 @@ function extractMethodBody(tsSource, methodName) {
         throw new Error(`Method '${methodName}' not found`);
     }
 
-    const bodyStart = tsSource.indexOf('{', start);
+    // Walk paren depth from the opening `(` to skip the parameter list (which may
+    // contain `{ ... }` type literals, e.g. `options?: { apiOriginated?: boolean }`)
+    // before taking the next `{` as the body start.
+    let parenDepth = 0;
+    let i = start + marker.length - 1; // position of the opening `(`
+    for (; i < tsSource.length; i++) {
+        const ch = tsSource[i];
+        if (ch === '(') parenDepth++;
+        else if (ch === ')') {
+            parenDepth--;
+            if (parenDepth === 0) { i++; break; }
+        }
+    }
+    if (parenDepth !== 0) {
+        throw new Error(`Method '${methodName}' parameter list not closed`);
+    }
+
+    const bodyStart = tsSource.indexOf('{', i);
     if (bodyStart < 0) {
         throw new Error(`Method '${methodName}' body not found`);
     }
 
     let depth = 0;
-    for (let i = bodyStart; i < tsSource.length; i++) {
-        const ch = tsSource[i];
+    for (let j = bodyStart; j < tsSource.length; j++) {
+        const ch = tsSource[j];
         if (ch === '{') depth++;
         if (ch === '}') depth--;
         if (depth === 0) {
-            return tsSource.slice(bodyStart, i + 1);
+            return tsSource.slice(bodyStart, j + 1);
         }
     }
 
@@ -68,7 +85,7 @@ function run() {
     test('preserves terminal focus fallback behavior with awaited command', () => {
         assert.match(
             methodSource,
-            /const\s+focused\s*=\s*await\s+this\._focusTerminalByName\(targetAgent\);[\s\S]*if\s*\(!focused\)\s*\{[\s\S]*await\s+vscode\.commands\.executeCommand\('switchboard\.focusTerminalByName',\s*targetAgent\);[\s\S]*\}/s,
+            /const\s+focused\s*=\s*await\s+this\._focusTerminalByName\(targetAgent\);[\s\S]*if\s*\(!focused\)\s*\{[\s\S]*await\s+this\._seams\(\)\.commands\.executeCommand\('switchboard\.focusTerminalByName',\s*targetAgent\);[\s\S]*\}/s,
             'Expected awaited fallback focus command after local focus miss.'
         );
     });

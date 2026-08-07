@@ -57,6 +57,7 @@ export async function bootstrapInstructionsDirectory(workspaceRoot: string): Pro
     await fs.promises.mkdir(appliedMovesDir, { recursive: true });
 
     await seedDefaultStandingJobs(standingDir);
+    await retireLegacyPipelineManager(standingDir);
     return baseDir;
 }
 
@@ -358,6 +359,18 @@ export async function ingestJobActivity(workspaceRoot: string, db: any): Promise
     } catch { /* non-fatal */ }
 }
 
+// Default seeded standing jobs produce markdown artifacts. Jobs whose work
+// product is board-advancing moves are left for the user to author explicitly;
+// Switchboard does not ship a default that declares column transitions.
+const LEGACY_PIPELINE_MANAGER_BODY = `---
+job: pipeline-manager
+schedule: daily
+reads: all active columns
+writes: .switchboard/instructions/moves/
+---
+
+Advance plans through workflow stages using subagents. Produce declared moves in .switchboard/instructions/moves/ specifying planId -> target column for Switchboard to validate and apply.`;
+
 async function seedDefaultStandingJobs(standingDir: string): Promise<void> {
     const jobs = [
         {
@@ -403,17 +416,6 @@ writes: .switchboard/plans/
 ---
 
 Scan new plans in CREATED. Identify ## Uncertain Assumptions. Dispatch your own research sub-agents to resolve each unknown, then rewrite ## Uncertain Assumptions in place with findings.`
-        },
-        {
-            filename: 'pipeline-manager.md',
-            content: `---
-job: pipeline-manager
-schedule: daily
-reads: all active columns
-writes: .switchboard/instructions/moves/
----
-
-Advance plans through workflow stages using subagents. Produce declared moves in .switchboard/instructions/moves/ specifying planId -> target column for Switchboard to validate and apply.`
         }
     ];
 
@@ -422,5 +424,20 @@ Advance plans through workflow stages using subagents. Produce declared moves in
         if (!fs.existsSync(p)) {
             await fs.promises.writeFile(p, j.content, 'utf8');
         }
+    }
+}
+
+async function retireLegacyPipelineManager(standingDir: string): Promise<void> {
+    const p = path.join(standingDir, 'pipeline-manager.md');
+    if (!fs.existsSync(p)) return;
+
+    try {
+        const current = await fs.promises.readFile(p, 'utf8');
+        if (current !== LEGACY_PIPELINE_MANAGER_BODY) return;
+
+        const retired = path.join(standingDir, 'pipeline-manager.md.retired');
+        await fs.promises.rename(p, retired);
+    } catch (err) {
+        console.warn(`[ScheduledJobsService] Failed to retire legacy pipeline-manager.md: ${err instanceof Error ? err.message : String(err)}`);
     }
 }

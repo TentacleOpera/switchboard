@@ -335,3 +335,43 @@ Source-level contract test asserting:
 ## Recommendation
 
 Complexity 6 → **Send to Coder.**
+
+## Review Findings
+
+**Reviewer:** Direct reviewer pass (GLM-5.2 High)
+**Date:** 2026-08-07
+**Verdict:** PASS — all material requirements verified in source; one MAJOR finding (missing contract test) now fixed.
+
+### Verified
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| `dispatchCustomPromptToRole` declares `options?: { apiOriginated?: boolean }` | ✅ | Signature confirmed; `allowPtyFleet = !!options?.apiOriginated` (fail-closed) |
+| `allowPtyFleet` threaded to `_resolveAgentTerminalForPlan` (4th arg) and `_dispatchExecuteMessage` (6th arg) | ✅ | Both confirmed in method body |
+| Focus guarded with `_isLikelyPtyDispatchTarget(targetAgent, allowPtyFleet)` | ✅ | Confirmed in method body |
+| All 8 `dispatchCustomPromptToRole` call sites pass `apiOriginated` | ✅ | 5 in PlanningPanelProvider, 1 in TaskViewerProvider (memo), 1 in TaskViewerProvider (askAgentTask), 1 in KanbanProvider — all pass `{ apiOriginated: !!msg.apiOriginated }` or `!!data.apiOriginated` |
+| `askAgentTask` forwards `apiOriginated` across command boundary | ✅ | `extension.ts` registration destructures and forwards `apiOriginated: !!data.apiOriginated`; method body forwards to `dispatchCustomPromptToRole` |
+| `askAgentTask` drops VS Code-only pre-check | ✅ | No `showWarningMessage('No planner agent found')` in method body |
+| Memo failure body carries `prompt`; success body does not | ✅ | `...(sendSucceeded ? {} : { error: msg, prompt })` confirmed |
+| Verb-return baseline Planning 165→154 | ✅ | `scripts/verb-return-contract-baseline.json` confirmed |
+
+### MAJOR Finding (Fixed)
+
+**Missing contract test.** The plan's verification section specified a new contract test file (`browser-planner-dispatch-surface`), but it was never created. **Fixed:** Created `src/test/browser-planner-dispatch-surface.test.js` (7 assertions), wired into `package.json` as `test:contract:browser-planner-dispatch-surface` and CI workflow `integration-tests.yml`. All 7 assertions pass.
+
+### NIT (Not fixed — out of scope)
+
+Two internal `_handleSendAnalystMessage(prompt, 'analystMap')` callers (lines ~5078 and ~19699 in TaskViewerProvider.ts) do NOT pass the options parameter. This is acceptable — they are internal editor-originated calls, not browser-originated, so `apiOriginated` correctly defaults to `undefined` (fail-closed to VS Code fleet).
+
+### Gate Wiring Audit
+
+| Gate | Status |
+|---|---|
+| `npx tsc --noEmit` | ✅ No new errors (5 pre-existing TS2835 import-extension errors in unrelated modules) |
+| `npm run parity:check` | ✅ Pass |
+| `npm run push-routing:check` | ✅ Pass |
+| `npm run verb-returns:check` | ⚠️ Kanban break regression (1 vs baseline 0) — from unrelated `attributePastedPrompt` feature, not this plan |
+| `npm run catalog:generate` | ✅ No unintended diff |
+| `test:contract:pty-dispatch-focus` | ✅ 11/11 pass |
+| `test:contract:browser-planner-dispatch-surface` | ✅ 7/7 pass (NEW) |
+| `test:contract:analyst-direct-dispatch-regression` | ✅ 4/4 pass (fixed extractor + seam assertion) |

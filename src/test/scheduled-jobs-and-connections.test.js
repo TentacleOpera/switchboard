@@ -84,6 +84,15 @@ async function main() {
             'bootstrap must never scaffold .switchboard/ — that is the documented litter failure');
     });
 
+    const LEGACY_PIPELINE_MANAGER_BODY = `---
+job: pipeline-manager
+schedule: daily
+reads: all active columns
+writes: .switchboard/instructions/moves/
+---
+
+Advance plans through workflow stages using subagents. Produce declared moves in .switchboard/instructions/moves/ specifying planId -> target column for Switchboard to validate and apply.`;
+
     await test('bootstrap creates the instruction tree when .switchboard exists', async () => {
         const tmp = mkTmp();
         fs.mkdirSync(path.join(tmp, '.switchboard'), { recursive: true });
@@ -92,6 +101,44 @@ async function main() {
         for (const sub of ['inbox', 'standing', 'moves']) {
             assert.ok(fs.existsSync(path.join(tmp, '.switchboard', 'instructions', sub)), `missing ${sub}/`);
         }
+    });
+
+    await test('fresh bootstrap seeds four markdown standing jobs and no pipeline-manager', async () => {
+        const tmp = mkTmp();
+        fs.mkdirSync(path.join(tmp, '.switchboard'), { recursive: true });
+        await bootstrapInstructionsDirectory(tmp);
+        const standingDir = path.join(tmp, '.switchboard', 'instructions', 'standing');
+        const files = fs.readdirSync(standingDir).filter(f => f.endsWith('.md')).sort();
+        assert.deepStrictEqual(files, ['memo-to-plans.md', 'nightly-code-review.md', 'notes-to-plans.md', 'research-unknowns.md'],
+            'only markdown-producing jobs are seeded by default');
+        assert.strictEqual(fs.existsSync(path.join(standingDir, 'pipeline-manager.md')), false,
+            'pipeline-manager.md must not be seeded by default');
+    });
+
+    await test('a byte-identical legacy pipeline-manager.md is retired on bootstrap', async () => {
+        const tmp = mkTmp();
+        const standingDir = path.join(tmp, '.switchboard', 'instructions', 'standing');
+        fs.mkdirSync(standingDir, { recursive: true });
+        fs.writeFileSync(path.join(standingDir, 'pipeline-manager.md'), LEGACY_PIPELINE_MANAGER_BODY, 'utf8');
+        await bootstrapInstructionsDirectory(tmp);
+        assert.strictEqual(fs.existsSync(path.join(standingDir, 'pipeline-manager.md')), false,
+            'legacy default file must be removed from standing/');
+        assert.strictEqual(fs.existsSync(path.join(standingDir, 'pipeline-manager.md.retired')), true,
+            'legacy default file must be renamed to .retired');
+    });
+
+    await test('a modified pipeline-manager.md is left untouched on bootstrap', async () => {
+        const tmp = mkTmp();
+        const standingDir = path.join(tmp, '.switchboard', 'instructions', 'standing');
+        fs.mkdirSync(standingDir, { recursive: true });
+        fs.writeFileSync(path.join(standingDir, 'pipeline-manager.md'), LEGACY_PIPELINE_MANAGER_BODY + '\n\nUser edit', 'utf8');
+        await bootstrapInstructionsDirectory(tmp);
+        assert.strictEqual(fs.existsSync(path.join(standingDir, 'pipeline-manager.md')), true,
+            'user-edited pipeline-manager.md must not be retired');
+        assert.strictEqual(fs.existsSync(path.join(standingDir, 'pipeline-manager.md.retired')), false,
+            'user-edited pipeline-manager.md must not produce .retired');
+        assert.ok(fs.readFileSync(path.join(standingDir, 'pipeline-manager.md'), 'utf8').includes('User edit'),
+            'user-edited pipeline-manager.md content must be preserved');
     });
 
     await test('claim marker is absent, then active after claiming', async () => {

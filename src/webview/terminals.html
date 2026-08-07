@@ -62,6 +62,7 @@
                The whole family has to be redeclared here, not just the source. */
             --accent-primary: #D97757;
             --accent-teal:    #D97757;
+            --feature-accent: #D4A017;   /* gold: matches kanban.html Claudify feature accent */
             --term-grid:      rgba(255, 255, 255, 0.03);  /* claudify: neutral grey grid */
             --term-selection: rgba(217, 119, 87, 0.3);
         }
@@ -354,15 +355,17 @@
             display: flex;
             align-items: center;
             gap: 0;
+            color: var(--text-secondary);
         }
         .item-role-icon {
-            width: 12px;
-            height: 12px;
+            width: 14px;
+            height: 14px;
             flex-shrink: 0;
             align-self: center;
             margin-right: 4px;
-            opacity: 0.85;
-            /* Monochrome SVGs use currentColor; inherit the role text colour. */
+            opacity: 0.9;
+            object-fit: contain;
+            pointer-events: none;
         }
         .status-dot {
             width: 7px;
@@ -585,21 +588,29 @@
             position: relative;
             background: var(--bg-color);
             width: 100%;
-            height: 100%;
+            min-height: 0;
             box-sizing: border-box;
         }
         .pane-grid.layout-1 { grid-template-columns: 1fr; grid-template-rows: 1fr; }
         .pane-grid.layout-2h { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
-        .pane-grid.layout-2v { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
-        .pane-grid.layout-2x2 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
-        .pane-grid.layout-2x3 { grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr); }
-        .pane-grid.layout-3x3 { grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); }
+        .pane-grid.layout-2v { grid-template-columns: 1fr; grid-template-rows: repeat(2, minmax(0, 1fr)); }
+        /* Layout keys are ROWS x COLUMNS, matching 2x3/3x3: `1x3` is ONE row of THREE
+           columns. Do not flip these axes back — a single column of three stacked panes
+           would be `3x1`, which is not what this key means. */
+        .pane-grid.layout-1x3 { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: minmax(0, 1fr); }
+        .pane-grid.layout-2x2 { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
+        .pane-grid.layout-2x3 { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
+        .pane-grid.layout-3x3 { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(3, minmax(0, 1fr)); }
 
         .pane-grid.layout-2x3 .pane-header,
         .pane-grid.layout-3x3 .pane-header {
             padding: 2px 4px;
             font-size: 10px;
         }
+        /* 1x3 is included here but NOT in the 10px-header rule above: its columns are as
+           narrow as 2x3's, so the title must ellipsise, but with a single row each pane
+           has full height and keeps the standard header. */
+        .pane-grid.layout-1x3 .pane-title,
         .pane-grid.layout-2x3 .pane-title,
         .pane-grid.layout-3x3 .pane-title {
             overflow: hidden;
@@ -854,6 +865,15 @@
                surface colour into the gutter. */
             background: var(--term-surface);
         }
+        /* Drag-and-drop: highlight a terminal pane when a kanban card is dragged over it */
+        .terminal-pane.drag-drop-target {
+            outline: 2px dashed var(--accent-teal);
+            outline-offset: -4px;
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+        }
+        .terminal-pane.drag-drop-target .pane-content {
+            pointer-events: none; /* let the drop land on the pane, not xterm */
+        }
         .pane-empty-slot {
             display: flex;
             align-items: center;
@@ -869,9 +889,34 @@
         /* Kanban-mode pane — a live kanban column viewer in an empty grid slot.
            Styling mirrors the board's .kanban-card design language: gradient
            background, border-color hover, compact action buttons. */
+        /* Column: fixed hint strip on top, scrolling plan list below. min-height:0
+           is load-bearing — without it the flex item refuses to shrink below its
+           content height and the list scrolls the whole pane instead of itself. */
+        .kanban-pane-body {
+            height: 100%;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+        }
+        /* The drag-to-dispatch affordance is invisible without this line: rows are
+           draggable but nothing on screen says so. Stated outright rather than
+           hidden behind a hover — see the note in renderKanbanPane. Ellipsizes
+           rather than wrapping, so a 2x3/3x3 pane loses width, never a second row. */
+        .kanban-pane-hint {
+            flex-shrink: 0;
+            padding: 4px 6px;
+            font-size: 10px;
+            line-height: 1.3;
+            color: var(--text-secondary);
+            border-bottom: 1px solid var(--border-color);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
         .kanban-pane-list {
             overflow-y: auto;
-            height: 100%;
+            flex: 1;
+            min-height: 0;
             padding: 4px;
             display: flex;
             flex-direction: column;
@@ -919,21 +964,29 @@
             font-size: 9px;
             color: var(--text-secondary);
         }
-        .kanban-pane-complexity {
-            padding: 1px 4px;
-            border-radius: 2px;
-            font-size: 8px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.3px;
-            color: #fff;
+        .kanban-pane-complexity-label {
+            font-weight: 400;
         }
-        .kanban-pane-complexity.very-low { background: #2980b9; }
-        .kanban-pane-complexity.low { background: #16a085; }
-        .kanban-pane-complexity.medium { background: #8e7355; }
-        .kanban-pane-complexity.high { background: #c0392b; }
-        .kanban-pane-complexity.very-high { background: #9b2d20; }
-        .kanban-pane-complexity.unknown { background: var(--border-bright); color: var(--text-secondary); }
+        .kanban-pane-complexity {
+            font-weight: 600;
+            letter-spacing: 0.3px;
+        }
+        .kanban-pane-complexity.very-low { color: #00e5ff; }
+        .kanban-pane-complexity.low { color: #98c379; }
+        .kanban-pane-complexity.medium { color: #d29922; }
+        .kanban-pane-complexity.high { color: #da3633; }
+        .kanban-pane-complexity.very-high { color: #ff00ff; }
+        .kanban-pane-complexity.unknown { color: #7f848e; }
+        .kanban-pane-feature-label {
+            color: #7c3aed;
+            font-size: 9px;
+            font-weight: 700;
+            white-space: nowrap;
+            letter-spacing: 0.3px;
+        }
+        body.theme-claudify .kanban-pane-feature-label {
+            color: var(--feature-accent);
+        }
         .kanban-pane-working {
             color: var(--accent-teal);
             font-size: 9px;
@@ -977,8 +1030,7 @@
         }
         .kanban-pane-link-btn:hover { border-color: var(--border-bright); color: var(--text-primary); }
         .kanban-pane-column-picker,
-        .kanban-pane-workspace-picker,
-        .kanban-pane-project-picker {
+        .kanban-pane-ws-project-picker {
             background: var(--panel-bg);
             color: var(--text-primary);
             border: 1px solid var(--border-bright);
@@ -989,8 +1041,7 @@
             max-width: 120px;
             cursor: pointer;
         }
-        .kanban-pane-workspace-picker { max-width: 100px; }
-        .kanban-pane-project-picker { max-width: 90px; }
+        .kanban-pane-ws-project-picker { max-width: 170px; }
         .kanban-pane-loading {
             display: flex;
             align-items: center;
@@ -1189,8 +1240,6 @@
         <div class="sidebar-ops">
             <button type="button" id="btn-open-all" class="secondary-btn is-teal w-full"
                     title="Open a terminal for every visible agent role">OPEN AGENT TERMINALS</button>
-            <button type="button" id="btn-kanban-sidebar" class="secondary-btn w-full"
-                    title="Toggle the focused pane between kanban board view and terminal">KANBAN MODE</button>
             <button type="button" id="btn-clear-all" class="secondary-btn w-full"
                     title="Send /clear to every active terminal">CLEAR ALL TERMINALS</button>
             <button type="button" id="btn-save-group" class="secondary-btn w-full"
@@ -1213,6 +1262,7 @@
                 <button type="button" class="btn-layout active" data-layout="1">1</button>
                 <button type="button" class="btn-layout" data-layout="2h" title="Two vertical terminals, side by side">2V</button>
                 <button type="button" class="btn-layout" data-layout="2v" title="Two horizontal terminals, stacked">2H</button>
+                <button type="button" class="btn-layout" data-layout="1x3" title="Three terminals side by side, one row">1x3</button>
                 <button type="button" class="btn-layout" data-layout="2x2">2x2</button>
                 <button type="button" class="btn-layout" data-layout="2x3">2x3</button>
                 <button type="button" class="btn-layout" data-layout="3x3">3x3</button>

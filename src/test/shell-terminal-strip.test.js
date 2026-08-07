@@ -101,15 +101,26 @@ test('relay carries only fleet metadata — no terminal bytes', () => {
         .filter(Boolean);
     assert.deepStrictEqual(
         names.slice().sort(),
-        ['light', 'name', 'role', 'worktreePath'],
-        'the relay payload must be exactly the four metadata fields the plan allows'
+        ['iconUri', 'light', 'name', 'role', 'worktreePath'],
+        'the relay payload must be the five metadata fields; iconUri is a resolved same-origin SVG path, not terminal bytes'
     );
     for (const n of names) {
         assert.ok(
-            ['name', 'role', 'worktreePath', 'light'].includes(n),
+            ['name', 'role', 'worktreePath', 'light', 'iconUri'].includes(n),
             `relay payload field "${n}" is outside the metadata set the plan allows`
         );
     }
+    // iconUri is one of 18 server-stamped same-origin SVG paths, not PTY output —
+    // but it must never be an empty src (a broken-image glyph in the rail). The
+    // relay must fall back to the default icon when there is no agent label.
+    assert.ok(
+        /const iconKey = brandIconForCliLabel\(agentLabel\) \|\| 'default'/.test(relay),
+        'the relay must fall back to the default icon key when there is no agent label'
+    );
+    assert.ok(
+        /brandIconUri\(iconKey\) \|\| brandIconUri\('default'\)/.test(relay),
+        'an unresolvable key must still yield the default URI — never an empty src'
+    );
 });
 
 test('an agentCompleted for a name absent from fleetList triggers a refetch', () => {
@@ -282,22 +293,44 @@ test('the light state is in the accessible name, not only the dot', () => {
     );
 });
 
-test('the three lights differ by shape, not by colour alone', () => {
-    const rule = cls => {
-        const m = shellHtml.match(new RegExp(`\\.strip-term-dot\\.${cls}\\s*\\{([^}]*)\\}`));
-        assert.ok(m, `.strip-term-dot.${cls} rule is missing`);
-        return m[1];
-    };
-    const active = rule('dot-active');
-    const done = rule('dot-done');
-    const exited = rule('dot-exited');
+test('terminal state is encoded without a separate dot — exited fades, done rings, active is bare', () => {
+    const exited = shellHtml.match(/\.strip-term-btn\.strip-term-exited\s+\.strip-term-icon\s*\{([^}]*)\}/);
+    assert.ok(exited, '.strip-term-exited .strip-term-icon rule is missing');
+    assert.ok(/grayscale\(1\)/.test(exited[1]), 'exited must desaturate the icon — the monochrome-survivable signal');
+    assert.ok(/brightness\(/.test(exited[1]), 'exited must lift brightness — grayscale alone sinks the dark-fill brands into the rail');
+    assert.ok(/opacity:\s*0\./.test(exited[1]), 'exited must fade the icon');
 
-    // Ring vs filled disc vs square: readable in a monochrome screenshot and to a
-    // deuteranopic viewer, which green-vs-accent is not.
-    assert.ok(/background:\s*transparent/.test(active) && /border:/.test(active), 'active must be a ring (unfilled)');
-    assert.ok(/background-color:/.test(done) && !/background:\s*transparent/.test(done), 'done must be a filled disc');
-    assert.ok(/border-radius:\s*50%/.test(done), 'done must stay circular');
-    assert.ok(!/border-radius:\s*50%/.test(exited), 'exited must not be another circle — shape is the signal');
+    const done = shellHtml.match(/\.strip-term-btn\.strip-term-done\s*\{([^}]*)\}/);
+    assert.ok(done, '.strip-term-done rule is missing');
+    assert.ok(/border-color:/.test(done[1]) && /box-shadow:/.test(done[1]),
+        'done must add a ring AND a glow — a shape plus salience, not a hairline');
+    assert.ok(!/var\(--accent/.test(done[1]),
+        'done must not borrow the accent — that is the panel-SELECTION colour in this rail, and --accent-dim is near-invisible under theme-claudify');
+
+    // active is the null state: no rule may fade or ring it, or it collapses into exited/done.
+    assert.ok(!/\.strip-term-btn\.strip-term-active\b/.test(shellHtml),
+        'active must stay unmodified — the absence of a ring/fade IS the live signal');
+
+    // The old dot rules must be fully removed.
+    assert.ok(!/\.strip-term-dot/.test(shellHtml), 'no .strip-term-dot CSS may survive — the dot is replaced by the brand icon');
+    assert.ok(!/dot-active|dot-done|dot-exited/.test(shellHtml), 'no dot-* state classes may survive in shell.html');
+});
+
+test('the strip renders a coloured brand-icon img from the relayed iconUri', () => {
+    const fn = block(shellJs, 'function renderTerminalSection(terminals) {', 'function renderManifest(manifest) {');
+    assert.ok(
+        /createElement\('img'\)[\s\S]*strip-term-icon[\s\S]*icon\.src = t\.iconUri/.test(fn),
+        'the strip must render an <img class="strip-term-icon"> whose src is the relayed t.iconUri'
+    );
+    assert.ok(
+        /strip-term-' \+ t\.light/.test(fn),
+        'the button must carry a strip-term-<light> state class so CSS can encode exited/done'
+    );
+    assert.ok(!/strip-term-dot/.test(fn), 'the strip must no longer create a .strip-term-dot element');
+    assert.ok(
+        /icon\.alt = ''/.test(fn),
+        "alt must be empty — the button's aria-label already carries the identity; a brand name here double-announces"
+    );
 });
 
 test('the section scrolls inside itself and adds no second scrollbar block', () => {

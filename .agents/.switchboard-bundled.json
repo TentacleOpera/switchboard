@@ -1,7 +1,7 @@
 {
   "generator": "SwitchboardControlPlane",
   "version": "1.7.13",
-  "generatedAt": "2026-08-05T01:24:30.045Z",
+  "generatedAt": "2026-08-07T03:25:40.328Z",
   "files": [
     "skills/_lib/sb_api_call.sh",
     "skills/accuracy/SKILL.md",
@@ -32,6 +32,7 @@
     "skills/deep-planning/SKILL.md",
     "skills/deep_planning.md",
     "skills/design-system-builder/SKILL.md",
+    "skills/dispatch-analysis/SKILL.md",
     "skills/generate-diagram/SKILL.md",
     "skills/generate_diagram.md",
     "skills/get-tickets/SKILL.md",

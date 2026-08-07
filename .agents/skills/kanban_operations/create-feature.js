@@ -6,9 +6,13 @@
 // (POST /kanban/feature). The extension performs the create via KanbanProvider, so it
 // inherits the DB upsert, subtask linking, feature-file write, and board refresh.
 //
-// NOTE on sync: feature creation does NOT fan out to Linear/ClickUp. The webview
-// createFeature flow has never synced to external trackers, and the new feature file is
-// deliberately skipped by the plan watcher. This script preserves that behavior.
+// NOTE on sync: feature creation DOES fan out to Linear/ClickUp. createFeatureFromPlanIds
+// ends in _syncFeatureOutbound (KanbanProvider.ts), which pushes the feature as a parent
+// issue/task and links each subtask as a child. It is gated per tracker on BOTH
+// `setupComplete` and `realTimeSyncEnabled` being true — with either off, that tracker is
+// skipped silently. A subtask is only linked if its own issue/task already exists; ones
+// that don't are skipped and get linked on a later feature-sync trigger. Sync is
+// best-effort and never blocks creation. This script inherits all of that via the API.
 //
 // NOTE on fallback: unlike move-card.js, there is no direct-DB fallback. Feature creation
 // spans project inheritance, column resolution, a YAML-safe file write, and per-subtask

@@ -135,3 +135,9 @@ Key risks: (1) the original container-listener wiring is defeated by popover re-
 
 ## Recommendation
 Complexity 3 → **Send to Intern** (single-file, reuses existing patterns; the one non-trivial bit — document-level delegation instead of container delegation — is fully specified above).
+
+## Completion Report
+Implemented the +Subtask sidebar overflow action in `src/webview/tickets.js`. Added the menu item to both ClickUp and Linear card templates, extracted the existing preview-strip subtask open logic into a reusable `openCreateSubtaskModal` helper, and wired the new item via a document-level delegated click listener so it works despite the popover being re-parented to `<body>`. No compilation or automated tests were run per session directives. The only file changed was `src/webview/tickets.js`.
+
+## Review Findings
+Reviewed the +Subtask implementation against the plan. The feature is correct and plan-compliant: card templates, helper extraction, and document-level delegation all match the spec. No CRITICAL or MAJOR code issues found. The diff also contains concurrent changes from other plans (Move dead-click fix per audit plan defect #2, `_subtasksEnrichedFor` removal per subtask-block-leaks plan defect #4, and an ad-hoc `ticketsSourceHierarchyMissing` source-picker catch-up) — these are valid fixes from other plans, not scope creep from this one. Tests run independently: `tickets-subtask-embedding.test.js` PASSED, `verb-engine-tickets-headless.test.js` PASSED (31/31), ESLint clean. `tickets-delta-sweep-gate-regression.test.js` FAILED but from another plan's `TicketsPanelProvider.ts` changes, not this plan. Remaining risk: the `e.stopPropagation()` call in the subtask document listener is a harmless no-op (same-element listeners aren't gated by `stopPropagation`), but causes no regression.

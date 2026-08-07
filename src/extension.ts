@@ -1774,9 +1774,10 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(resetAutobanPoolsDisposable);
 
-    const dispatchToCoderTerminalDisposable = registerSwitchboardCommand('switchboard.dispatchToCoderTerminal', async (prompt: string, worktreePath?: string) => {
-        await taskViewerProvider.dispatchToCoderTerminal(prompt, worktreePath);
-    });
+    const dispatchToCoderTerminalDisposable = registerSwitchboardCommand('switchboard.dispatchToCoderTerminal',
+        async (prompt: string, worktreePath?: string, options?: { apiOriginated?: boolean }) => {
+            await taskViewerProvider.dispatchToCoderTerminal(prompt, worktreePath, options);
+        });
     context.subscriptions.push(dispatchToCoderTerminalDisposable);
 
     const setClickUpTokenDisposable = vscode.commands.registerCommand('switchboard.setClickUpToken', async () => {
@@ -2056,6 +2057,11 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(deleteTicketDisposable);
 
+    const removeLocalTicketDisposable = vscode.commands.registerCommand('switchboard.removeLocalTicket', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; id: string }) => {
+        return taskViewerProvider.removeLocalTicket(data.workspaceRoot, data);
+    });
+    context.subscriptions.push(removeLocalTicketDisposable);
+
     const changeTicketStatusDisposable = vscode.commands.registerCommand('switchboard.changeTicketStatus', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; id: string; statusId: string }) => {
         return taskViewerProvider.changeTicketStatus(data.workspaceRoot, data);
     });
@@ -2086,8 +2092,12 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(getAttachmentListDisposable);
 
-    const askAgentTaskDisposable = vscode.commands.registerCommand('switchboard.askAgentTask', async (data: { workspaceRoot: string; id: string; title: string; description: string; provider: 'linear' | 'clickup' }) => {
-        return taskViewerProvider.askAgentTask(data.workspaceRoot, { id: data.id, title: data.title, description: data.description, provider: data.provider });
+    const askAgentTaskDisposable = vscode.commands.registerCommand('switchboard.askAgentTask', async (data: { workspaceRoot: string; id: string; title: string; description: string; provider: 'linear' | 'clickup'; apiOriginated?: boolean }) => {
+        // apiOriginated MUST be forwarded explicitly: this registration destructures the
+        // payload field-by-field, so any field not named here is dropped at the command
+        // boundary. Without it the browser tickets 'Ask agent' button keeps failing even
+        // though TicketsPanelProvider set the flag one call earlier.
+        return taskViewerProvider.askAgentTask(data.workspaceRoot, { id: data.id, title: data.title, description: data.description, provider: data.provider, apiOriginated: !!data.apiOriginated });
     });
     context.subscriptions.push(askAgentTaskDisposable);
 
