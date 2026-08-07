@@ -138,7 +138,13 @@ export class KanbanService {
     async focusTerminal(payload: { terminalName?: string }): Promise<{ success: boolean }> {
         const terminalName = String(payload.terminalName || '');
         if (!terminalName) return { success: false };
-        await this._ctx.seams.commands.executeCommand('switchboard.focusTerminalByName', terminalName);
+        // `silent: true` — a PTY fleet terminal exists in neither `registeredTerminals`
+        // nor `vscode.window.terminals`, so focusing one by name always misses and used
+        // to raise "Terminal 'X' not found. It may have been closed." That toast fires in
+        // VS Code, is invisible to the browser caller that triggered it, and reads as a
+        // failed dispatch next to a dispatch that in fact succeeded. Matches the guarded
+        // call in TaskViewerProvider._handleTriggerAgentAction.
+        await this._ctx.seams.commands.executeCommand('switchboard.focusTerminalByName', terminalName, { silent: true });
         return { success: true };
     }
 

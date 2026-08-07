@@ -1661,8 +1661,12 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(triggerPlanScanDisposable);
 
-    const batchTriggerFromKanbanDisposable = registerSwitchboardCommand('switchboard.triggerBatchAgentFromKanban', async (role: string, sessionIds: string[], instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string) => {
-        return taskViewerProvider.handleKanbanBatchTrigger(role, sessionIds, instruction, workspaceRoot, targetTerminalOverride);
+    // `apiOriginated` mirrors switchboard.triggerAgentFromKanban's 6th arg. Without it
+    // a browser-originated BATCH advance could never reach the PTY fleet — the command
+    // had no parameter to carry the surface, so allowPtyFleet was always false and the
+    // batch resolved a vscode.Terminal the browser cannot display.
+    const batchTriggerFromKanbanDisposable = registerSwitchboardCommand('switchboard.triggerBatchAgentFromKanban', async (role: string, sessionIds: string[], instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string, apiOriginated?: boolean) => {
+        return taskViewerProvider.handleKanbanBatchTrigger(role, sessionIds, instruction, workspaceRoot, targetTerminalOverride, { apiOriginated: !!apiOriginated });
     });
     context.subscriptions.push(batchTriggerFromKanbanDisposable);
 

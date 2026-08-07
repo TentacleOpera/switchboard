@@ -5599,7 +5599,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
         workspaceRoot: string,
         sourceCards: KanbanCard[],
         nextCol: string,
-        options?: { skipLimit?: boolean }
+        options?: { skipLimit?: boolean; apiOriginated?: boolean }
     ): Promise<void> {
         const tvp = this._taskViewerProvider;
         if (!tvp) return;
@@ -5631,7 +5631,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             if (failures.length > 0) {
                 this.postMessage({ type: 'moveCardsFailed', failures });
             }
-            await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', 'planner', dispatchIds, 'improve-plan', workspaceRoot);
+            await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', 'planner', dispatchIds, 'improve-plan', workspaceRoot, undefined, !!options?.apiOriginated);
             return;
         }
 
@@ -5704,7 +5704,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             bucketEntries.map(([terminalName, ids]) =>
                 this._seams().commands.executeCommand(
                     'switchboard.triggerBatchAgentFromKanban',
-                    'planner', ids, 'improve-plan', workspaceRoot, terminalName
+                    'planner', ids, 'improve-plan', workspaceRoot, terminalName, !!options?.apiOriginated
                 )
             )
         );
@@ -8358,7 +8358,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                             workspaceRoot: workspaceRoot || undefined
                         });
                     } else if (role) {
-                        await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, undefined, workspaceRoot);
+                        await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, undefined, workspaceRoot, undefined, !!msg?.apiOriginated);
                     }
                 }
                 this._scheduleBoardRefresh(workspaceRoot ?? undefined);
@@ -9016,7 +9016,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 const eligibleSessionIds = await this._getEligibleSessionIds(sourceCards.map(card => this._cardId(card)), 'PLAN REVIEWED', workspaceRoot);
                 let dispatchedCount = 0;
                 for (const sessionId of eligibleSessionIds) {
-                    const dispatched = await this._seams().commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', 'jules', sessionId, undefined, workspaceRoot);
+                    const dispatched = await this._seams().commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', 'jules', sessionId, undefined, workspaceRoot, undefined, !!msg?.apiOriginated);
                     if (dispatched) {
                         dispatchedCount++;
                     }
@@ -9072,9 +9072,9 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                         }
                         if (this._cliTriggersEnabled) {
                             if (dispatchSids.length === 1) {
-                                await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot);
+                                await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot, undefined, !!msg?.apiOriginated);
                             } else {
-                                await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot);
+                                await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot, undefined, !!msg?.apiOriginated);
                             }
                         }
                         movedParts.push(`${sids.length} → ${targetCol}`);
@@ -9120,7 +9120,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                             const selectedCards = this._lastCards.filter(card =>
                                 card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
                             );
-                            await this._distributePlannerDispatch(workspaceRoot, selectedCards, nextCol, { skipLimit: true });
+                            await this._distributePlannerDispatch(workspaceRoot, selectedCards, nextCol, { skipLimit: true, apiOriginated: !!msg?.apiOriginated });
                         } else {
                             const movedIds: string[] = [];
                             const dispatchIds: string[] = [];
@@ -9145,9 +9145,9 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                             if (this._cliTriggersEnabled && role) {
                                 const instruction = role === 'planner' ? 'improve-plan' : undefined;
                                 if (dispatchIds.length === 1) {
-                                    await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', role, dispatchIds[0], instruction, workspaceRoot);
+                                    await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', role, dispatchIds[0], instruction, workspaceRoot, undefined, !!msg?.apiOriginated);
                                 } else {
-                                    await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, instruction, workspaceRoot);
+                                    await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, instruction, workspaceRoot, undefined, !!msg?.apiOriginated);
                                 }
                             } else if (!role) {
                                 console.log(`[Kanban] Column '${nextCol}' has no role mapping, using visual move only`);
@@ -9216,9 +9216,9 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                         }
                         if (this._cliTriggersEnabled) {
                             if (dispatchSids.length === 1) {
-                                await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot);
+                                await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot, undefined, !!msg?.apiOriginated);
                             } else {
-                                await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot);
+                                await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot, undefined, !!msg?.apiOriginated);
                             }
                         }
                         movedParts.push(`${sids.length} → ${targetCol}`);
@@ -9260,7 +9260,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                     } else {
                         const role = this._columnToRole(nextCol);
                         if (role === 'planner' && this._cliTriggersEnabled) {
-                            await this._distributePlannerDispatch(workspaceRoot, sourceCards, nextCol);
+                            await this._distributePlannerDispatch(workspaceRoot, sourceCards, nextCol, { apiOriginated: !!msg?.apiOriginated });
                             // _distributePlannerDispatch persists + posts its own targeted
                             // moveCards echo (and moveCardsFailed for any failed write) BEFORE
                             // the slow /clear+send chain, and posts its own accurate status
@@ -9289,7 +9289,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                                 this.postMessage({ type: 'moveCardsFailed', failures });
                             }
                             if (this._cliTriggersEnabled && role) {
-                                await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, undefined, workspaceRoot);
+                                await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, undefined, workspaceRoot, undefined, !!msg?.apiOriginated);
                             } else if (!role) {
                                 console.log(`[Kanban] Column '${nextCol}' has no role mapping, using visual move only`);
                             }
@@ -9668,7 +9668,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 const eligibleSessionIds = await this._getEligibleSessionIds(msg.sessionIds, 'PLAN REVIEWED', workspaceRoot);
                 let dispatchedCount = 0;
                 for (const sessionId of eligibleSessionIds) {
-                    const dispatched = await this._seams().commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', 'jules', sessionId, undefined, workspaceRoot);
+                    const dispatched = await this._seams().commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', 'jules', sessionId, undefined, workspaceRoot, undefined, !!msg?.apiOriginated);
                     if (dispatched) {
                         dispatchedCount++;
                     }
@@ -10069,7 +10069,9 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     'planner',
                     plannedIds,
                     'dispatch-analysis',
-                    workspaceRoot
+                    workspaceRoot,
+                    undefined,
+                    !!msg?.apiOriginated
                 );
                 void this._seams().ui.showInformationMessage(`Analyzing ${plannedIds.length} plan(s) for parallel dispatch.`);
                 return { success: true, sent: plannedIds.length };
@@ -10142,9 +10144,9 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // Same gate and same commands the PLAN REVIEWED forward move uses.
                     if (this._cliTriggersEnabled && dispatchSids.length > 0) {
                         if (dispatchSids.length === 1) {
-                            await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot);
+                            await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot, undefined, !!msg?.apiOriginated);
                         } else {
-                            await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot);
+                            await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot, undefined, !!msg?.apiOriginated);
                         }
                     }
                     dispatchMovedCount += dispatchSids.length;
@@ -10182,7 +10184,9 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     'planner',
                     msg.sessionIds,
                     'improve-plan',
-                    workspaceRoot
+                    workspaceRoot,
+                    undefined,
+                    !!msg?.apiOriginated
                 );
                 void this._seams().ui.showInformationMessage(`Sent ${msg.sessionIds.length} plan(s) to planner for re-plan (improve-plan).`);
                 return { success: true, sent: msg.sessionIds.length };
