@@ -386,9 +386,10 @@ export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
             targetProject: { type: 'string' },
         },
     },
-    rePlanSelected: {
+    copyDispatchPromptSelected: {
         fields: {
             sessionIds: { type: 'array', required: true },
+            column: { type: 'string' },
             workspaceRoot: { type: 'string' },
         },
     },

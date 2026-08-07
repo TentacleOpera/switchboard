@@ -1040,6 +1040,59 @@
             box-shadow: 0 0 0 2px #D97757;
         }
 
+        /* Agent blocked / waiting-on-you highlight (V59) — distinct from the
+           working ring. A dashed amber/orange ring signals "the agent stopped
+           and is waiting for you", the operator's actionable signal. No
+           animation (a pulse read as too busy), no confirm dialogs. */
+        .kanban-card.is-blocked::after {
+            content: "";
+            position: absolute;
+            inset: -2px;
+            border-radius: 5px;
+            pointer-events: none;
+            z-index: 1;
+            box-shadow: 0 0 0 2px #e0a800;
+            outline: 2px dashed #e0a800;
+            outline-offset: -4px;
+        }
+
+        body.cyber-theme-enabled .kanban-card.is-blocked::after {
+            box-shadow: 0 0 0 2px #ffb000;
+            outline-color: #ffb000;
+        }
+
+        body.theme-claudify .kanban-card.is-blocked::after {
+            box-shadow: 0 0 0 2px #e0975a;
+            outline-color: #e0975a;
+        }
+
+        /* Blocked badge — a small "Waiting on you" label on blocked cards.
+           Inline-block so it sits in the card-meta line; muted so it does not
+           overpower the complexity indicator. */
+        .kanban-card.is-blocked .blocked-badge {
+            display: inline-block;
+            margin-left: 6px;
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+            background: rgba(224, 168, 0, 0.15);
+            color: #e0a800;
+            border: 1px solid rgba(224, 168, 0, 0.4);
+        }
+
+        body.cyber-theme-enabled .kanban-card.is-blocked .blocked-badge {
+            background: rgba(255, 176, 0, 0.15);
+            color: #ffb000;
+            border-color: rgba(255, 176, 0, 0.4);
+        }
+
+        body.theme-claudify .kanban-card.is-blocked .blocked-badge {
+            background: rgba(224, 151, 90, 0.15);
+            color: #e0975a;
+            border-color: rgba(224, 151, 90, 0.4);
+        }
+
         /* One-shot feedback when a card's operation completes (status light goes out
            or card enters the COMPLETED column). Distinct from the static green
            .completed bar — this is a brief highlight that fades. */
@@ -5448,11 +5501,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             });
         }
 
-        // Full board signature including presentational fields and working state.
+        // Full board signature including presentational fields and working/blocked state.
         function buildBoardSignature(cards) {
             if (!Array.isArray(cards) || cards.length === 0) return '';
             return cards
-                .map(card => `${card.workspaceRoot || ''}|${card.planId || card.sessionId || ''}|${card.column}|${card.topic || ''}|${card.planFile || ''}|${card.complexity || 'Unknown'}|${card.lastActivity || ''}|${card.isFeature ? '1' : '0'}|${card.subtaskCount || 0}|${card.featureId || ''}|${card.working ? '1' : '0'}`)
+                .map(card => `${card.workspaceRoot || ''}|${card.planId || card.sessionId || ''}|${card.column}|${card.topic || ''}|${card.planFile || ''}|${card.complexity || 'Unknown'}|${card.lastActivity || ''}|${card.isFeature ? '1' : '0'}|${card.subtaskCount || 0}|${card.featureId || ''}|${card.working ? '1' : '0'}|${card.blocked ? '1' : '0'}`)
                 .sort()
                 .join('||');
         }
@@ -5594,9 +5647,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                <img src="${ICON_JULES}" alt="Jules">
                            </button>`
                         : '';
-                    const rePlanBtn = (isPlanReviewed && lastVisibleAgents.planner !== false)
-                        ? `<button class="column-icon-btn" data-action="rePlanSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Re-plan selected plans (trigger high-reasoning refinement)">
-                               <img src="${ICON_ANALYST_MAP}" alt="Re-plan">
+                    const copyDispatchPromptBtn = (isPlanReviewed && !showingDispatch)
+                        ? `<button class="column-icon-btn" data-action="copyDispatchPromptSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Copy dispatch prompt for selected plans to clipboard (no advance)">
+                               <img src="${ICON_PROMPT_SELECTED}" alt="Copy Dispatch Prompt">
                            </button>`
                         : '';
                     const featureAddBtn = isCreated
@@ -5649,7 +5702,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         ${analyzeBtn}
                         ${sendDispatchBtn}
                         ${julesBtn}
-                        ${rePlanBtn}
+                        ${copyDispatchPromptBtn}
                         ${featureAddBtn}
                         ${testingFailBtn}
                     </div>`;
@@ -5761,7 +5814,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         nextColSource = visibleCodedIds[visibleCodedIds.length - 1] || 'CODER CODED';
                     }
                     const nextCol = getNextColumn(nextColSource);
-                    if (!nextCol && action !== 'julesSelected' && action !== 'rePlanSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed' && action !== 'addBlankFeature' && action !== 'dispatchAnalyze' && action !== 'sendDispatchToCoder') return;
+                    if (!nextCol && action !== 'julesSelected' && action !== 'copyDispatchPromptSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed' && action !== 'addBlankFeature' && action !== 'dispatchAnalyze' && action !== 'sendDispatchToCoder') return;
 
                     switch (action) {
                         case 'moveSelected': {
@@ -5857,14 +5910,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             ids.forEach(id => selectedCards.delete(id));
                             break;
                         }
-                        case 'rePlanSelected': {
+                        case 'copyDispatchPromptSelected': {
                             const ids = getSelectedInColumn(column);
                             if (ids.length === 0) {
-                                postKanbanMessage({ type: 'showWarning', message: 'Please select at least one plan to re-plan.' });
+                                postKanbanMessage({ type: 'showWarning', message: 'Please select at least one plan to copy the dispatch prompt.' });
                                 return;
                             }
-                            postKanbanMessage({ type: 'rePlanSelected', sessionIds: ids, workspaceRoot: getActiveWorkspaceRoot() });
-                            ids.forEach(id => selectedCards.delete(id));
+                            postKanbanMessage({ type: 'copyDispatchPromptSelected', column: backendColumn, sessionIds: ids, workspaceRoot: getActiveWorkspaceRoot() });
                             break;
                         }
                         case 'dispatchAnalyze': {
@@ -6806,14 +6858,31 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             return category.toLowerCase().replace(' ', '-');
         }
 
-        function applyWorkingClass(cardEl, isWorking) {
+        function applyWorkingClass(cardEl, isWorking, isBlocked) {
             if (!cardEl) return;
+            // V59: blocked is a distinct state from working. A blocked card
+            // keeps the working ring (the agent IS still dispatched) but adds
+            // a dashed blocked overlay + badge. When blocked flips off but
+            // working stays on, only the blocked decoration is removed.
             if (isWorking) {
                 cardEl.classList.add('is-working');
-                cardEl.setAttribute('title', 'Agent working…');
+                if (!isBlocked) {
+                    cardEl.setAttribute('title', 'Agent working…');
+                }
             } else {
                 cardEl.classList.remove('is-working');
-                cardEl.removeAttribute('title');
+                if (!isBlocked) {
+                    cardEl.removeAttribute('title');
+                }
+            }
+            if (isBlocked) {
+                cardEl.classList.add('is-blocked');
+                cardEl.setAttribute('title', 'Agent waiting on you…');
+            } else {
+                cardEl.classList.remove('is-blocked');
+                if (!isWorking) {
+                    cardEl.removeAttribute('title');
+                }
             }
         }
 
@@ -6898,13 +6967,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const featureBadge = ''; // Badge removed; feature identity shown via purple border + meta line
             // Activity light border glow: lit while an agent is dispatched to this card (and within the
             // timeout window). Suppressed for completed cards (backend never sets working there).
+            // V59: blocked is a distinct overlay (dashed amber ring + badge) — a blocked
+            // card is still working (dispatched_at live), so both classes can apply.
             const isWorking = !isCompleted && card.working;
+            const isBlocked = !isCompleted && card.blocked;
             const workingClass = isWorking ? ' is-working' : '';
-            const workingTitle = isWorking ? ' title="Agent working…"' : '';
-            
+            const blockedClass = isBlocked ? ' is-blocked' : '';
+            const stateTitle = isBlocked ? ' title="Agent waiting on you…"' : isWorking ? ' title="Agent working…"' : '';
+
+            const blockedBadge = isBlocked ? '<span class="blocked-badge">Waiting on you</span>' : '';
             const cardMetaContent = card.isFeature
-                ? `<span class="feature-subtask-label">FEATURE: ${card.subtaskCount || 0} SUBTASK${(card.subtaskCount || 0) !== 1 ? 'S' : ''}</span> · <span class="complexity-indicator ${complexityClass}">${category}</span>`
-                : `Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span>`;
+                ? `<span class="feature-subtask-label">FEATURE: ${card.subtaskCount || 0} SUBTASK${(card.subtaskCount || 0) !== 1 ? 'S' : ''}</span> · <span class="complexity-indicator ${complexityClass}">${category}</span>${blockedBadge}`
+                : `Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span>${blockedBadge}`;
             const completeOrDoneBtn = isCompleted
                 ? `<span class="card-done-badge">✓ Done</span>`
                 : `<button class="card-btn icon-btn complete" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Complete and archive">
@@ -6918,7 +6992,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const t = card.lastActivity ? new Date(card.lastActivity).getTime() : 0;
             const tsVal = isNaN(t) ? 0 : t;
             return `
-                <div class="kanban-card${completedClass}${featureClass}${workingClass}${droppedClass}" draggable="true"${workingTitle} data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}" data-ts="${tsVal}">
+                <div class="kanban-card${completedClass}${featureClass}${workingClass}${blockedClass}${droppedClass}" draggable="true"${stateTitle} data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}" data-ts="${tsVal}">
                     <div class="card-topic">${featureBadge}${escapeHtml(shortTopic)}</div>
                     <div class="card-meta">${cardMetaContent}</div>
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
@@ -7830,6 +7904,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         const nowWorking = !isCompleted && !!card.working;
                         nextWorking.set(id, nowWorking);
                         // Fire only on a true edge: was working, now not — OR just entered COMPLETED.
+                        // V59: a card transitioning from blocked to not-working still counts as
+                        // finished (the agent was waiting, then the turn/session ended).
                         if (wasWorking && !nowWorking) {
                             justFinished.push({ id, topic: card.topic || '', completed: isCompleted });
                         } else if (isCompleted && wasWorking) {
@@ -7869,13 +7945,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                     const id = nc.planId || nc.sessionId;
                                     const cur = currentCards.find(cc => (cc.planId || cc.sessionId) === id);
                                     if (!cur) return;
-                                    if (!!nc.working !== !!cur.working) {
+                                    if (!!nc.working !== !!cur.working || !!nc.blocked !== !!cur.blocked) {
                                         const cardEl = document.querySelector(`.kanban-card[data-plan-id="${CSS.escape(id)}"]`) || document.querySelector(`.kanban-card[data-session="${CSS.escape(id)}"]`);
-                                        applyWorkingClass(cardEl, !!nc.working);
+                                        applyWorkingClass(cardEl, !!nc.working, !!nc.blocked);
                                         // Merge forward ONLY what was just applied to the DOM;
                                         // every other field stays at its rendered value so the
                                         // signature keeps describing the screen.
                                         cur.working = nc.working;
+                                        cur.blocked = nc.blocked;
                                         cur.lastActivity = nc.lastActivity;
                                     }
                                 });

@@ -389,7 +389,6 @@
 .host-automation-false #btn-pause-autoban-timer,
 .host-automation-false #btn-reset-autoban-timer,
 .host-automation-false button[data-action="julesSelected"],
-.host-automation-false button[data-action="rePlanSelected"],
 .host-automation-false #btn-build-via-planner,
 .host-automation-false #btn-update-via-planner,
 .host-automation-false #btn-build-system,

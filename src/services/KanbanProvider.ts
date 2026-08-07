@@ -130,6 +130,7 @@ export interface KanbanCard {
     featureId?: string;
     subtaskCount?: number;
     working?: boolean; // true while an agent is dispatched to this card and the 20-min window hasn't elapsed
+    blocked?: boolean; // V59: true while the agent reported itself blocked / waiting on the operator (hook-emitted)
 }
 
 // Activity-light window default. A card is `working` while dispatched_at is set and
@@ -139,12 +140,48 @@ export interface KanbanCard {
 // setting so the read-time check and the sweep stay in sync when the user changes it.
 const DEFAULT_WORKING_STATE_TIMEOUT_MS = 10 * 60 * 1000;
 
-function isWorkingState(dispatchedAt: string | null | undefined): boolean {
-    if (!dispatchedAt) return false;
+/**
+ * Read-time activity-light derive (V58-widened, V59-extended to return
+ * `{working, blocked}`). A card is `working` while its widened age basis —
+ * `MAX(dispatchedAt, lastLivenessAt ?? dispatchedAt)` — is younger than
+ * `timeoutMs`, with a `3 × timeoutMs`-from-`dispatchedAt` hard cap so a
+ * wedged agent whose terminal keeps repainting cannot stay lit forever.
+ *
+ * `blocked` (V59) is true when `blockedAt` is non-NULL AND the card is still
+ * within its working window (dispatchedAt live and within the age basis) — a
+ * cleared card is not blocked, just done. The two states share one age
+ * basis and one hard cap so they never disagree at the boundary; the
+ * triggers are separate (working from dispatch, blocked from the agent's
+ * own hook event). When `blockedAt` is absent (pre-V59 row, fleet-less host,
+ * or no hook ever fired), `blocked` is false and the function is
+ * byte-identical to its pre-V59 self for the working half.
+ *
+ * `timeoutMs` is passed in by the caller rather than read from
+ * `vscode.workspace.getConfiguration` inline, matching the standalone host's
+ * `bootstrap.isWorkingState` — PRD contract #3 (host-agnostic via seams).
+ */
+function isWorkingState(
+    dispatchedAt: string | null | undefined,
+    timeoutMs: number,
+    lastLivenessAt?: string | null,
+    blockedAt?: string | null
+): { working: boolean; blocked: boolean } {
+    if (!dispatchedAt) return { working: false, blocked: false };
     const ts = Date.parse(dispatchedAt);
-    if (!Number.isFinite(ts)) return false;
-    const timeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
-    return (Date.now() - ts) < timeoutMs;
+    if (!Number.isFinite(ts)) return { working: false, blocked: false };
+    const now = Date.now();
+    // Hard cap: a turn older than 3× timeout from its own dispatched_at clears
+    // regardless of how live the heartbeat looks — the backstop that keeps a
+    // stuck light falsifiable.
+    const withinHardCap = now - ts <= 3 * timeoutMs;
+    // Widened basis: take the more recent of dispatched_at and the heartbeat.
+    const livenessTs = lastLivenessAt ? Date.parse(lastLivenessAt) : NaN;
+    const basis = Number.isFinite(livenessTs) && (livenessTs as number) > ts ? (livenessTs as number) : ts;
+    const working = withinHardCap && (now - basis) < timeoutMs;
+    // Blocked: the agent reported itself blocked AND the card is still in its
+    // working window (otherwise it's just done — a cleared card is not blocked).
+    const blocked = working && !!blockedAt;
+    return { working, blocked };
 }
 
 /**
@@ -1824,10 +1861,14 @@ export class KanbanProvider implements vscode.Disposable {
         // any assigned project while the board shows "__unassigned__") are excluded and
         // every feature renders "0 SUBTASKS". See getSubtaskCountsByFeature.
         const subtaskCountMap = typeof db.getSubtaskCountsByFeature === 'function' ? await db.getSubtaskCountsByFeature(workspaceId) : new Map();
-        const featureWorkingMap = typeof db.getFeatureWorkingStates === 'function' ? await db.getFeatureWorkingStates(workspaceId, timeoutMs) : new Map();
+        const featureWorkingMap = typeof db.getFeatureWorkingStates === 'function' ? await db.getFeatureWorkingStates(workspaceId, timeoutMs) : new Map<string, { working: boolean; blocked: boolean }>();
 
         // Build cards directly from DB rows — no _resolveWorkspaceRoot that could return null
         const cards: KanbanCard[] = activeRowsFiltered.map(row => {
+            const featureState = row.isFeature ? featureWorkingMap.get(row.planId) : undefined;
+            const cardState = row.isFeature
+                ? { working: featureState?.working ?? false, blocked: featureState?.blocked ?? false }
+                : isWorkingState(row.dispatchedAt, timeoutMs, row.lastLivenessAt, row.blockedAt);
             return {
                 planId: row.planId,
                 sessionId: row.sessionId,
@@ -1842,7 +1883,8 @@ export class KanbanProvider implements vscode.Disposable {
                 isFeature: !!row.isFeature,
                 featureId: row.featureId || undefined,
                 subtaskCount: row.isFeature ? (subtaskCountMap.get(row.planId) || 0) : undefined,
-                working: row.isFeature ? (featureWorkingMap.get(row.planId) ?? false) : isWorkingState(row.dispatchedAt)
+                working: cardState.working,
+                blocked: cardState.blocked,
             };
         });
 
@@ -3450,12 +3492,17 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 // and must not shrink to 0 when its subtasks fall outside the board's
                 // project/repo filter. See getSubtaskCountsByFeature.
                 const subtaskCountMap2 = await db.getSubtaskCountsByFeature(workspaceId);
+                const timeoutMs2 = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
                 const featureWorkingMap2 = await db.getFeatureWorkingStates(
                     workspaceId,
-                    vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS)
+                    timeoutMs2
                 );
 
                 cards = activeRows.map(row => {
+                    const featureState2 = row.isFeature ? featureWorkingMap2.get(row.planId) : undefined;
+                    const cardState2 = row.isFeature
+                        ? { working: featureState2?.working ?? false, blocked: featureState2?.blocked ?? false }
+                        : isWorkingState(row.dispatchedAt, timeoutMs2, row.lastLivenessAt, row.blockedAt);
                     return {
                         planId: row.planId,
                         sessionId: row.sessionId,
@@ -3471,7 +3518,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                         isFeature: !!row.isFeature,
                         featureId: row.featureId || undefined,
                         subtaskCount: row.isFeature ? (subtaskCountMap2.get(row.planId) || 0) : undefined,
-                        working: row.isFeature ? (featureWorkingMap2.get(row.planId) ?? false) : isWorkingState(row.dispatchedAt)
+                        working: cardState2.working,
+                        blocked: cardState2.blocked,
                     };
                 });
 
@@ -3649,7 +3697,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             // Completed plans intentionally bypass file-existence check — DB is source of truth for completed state
             const completedRowsFiltered = completedRows.filter(row => !!row.planFile);
 
-            let featureWorkingMap3 = new Map<string, boolean>();
+            let featureWorkingMap3 = new Map<string, { working: boolean; blocked: boolean }>();
+            const timeoutMs3 = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
             try {
                 const db = KanbanDatabase.forWorkspace(resolvedWorkspaceRoot);
                 await db.ensureReady();
@@ -3657,7 +3706,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 if (wsId) {
                     featureWorkingMap3 = await db.getFeatureWorkingStates(
                         wsId,
-                        vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS)
+                        timeoutMs3
                     );
                 }
             } catch (err) {
@@ -3665,6 +3714,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             }
 
             const cards: KanbanCard[] = activeRowsFiltered.map(row => {
+                const featureState3 = row.isFeature ? featureWorkingMap3.get(row.planId) : undefined;
+                const cardState3 = row.isFeature
+                    ? { working: featureState3?.working ?? false, blocked: featureState3?.blocked ?? false }
+                    : isWorkingState(row.dispatchedAt, timeoutMs3, row.lastLivenessAt, row.blockedAt);
                 return {
                     planId: row.planId,
                     sessionId: row.sessionId,
@@ -3676,7 +3729,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     complexity: row.complexity || 'Unknown',
                     workspaceRoot: resolvedWorkspaceRoot,
                     project: row.project || '',
-                    working: row.isFeature ? (featureWorkingMap3.get(row.planId) ?? false) : isWorkingState(row.dispatchedAt)
+                    working: cardState3.working,
+                    blocked: cardState3.blocked,
                 };
             });
 
@@ -7346,6 +7400,14 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
         if (!db || !(await db.ensureReady())) {
             return [];
         }
+        // V58: this fifth builder previously hardcoded `working: false`, silently
+        // disagreeing with the four board builders. It is reachable as a fallback
+        // for chat-prompt / promptSelected generation when _lastCards misses the
+        // sessionIds. Wire it to the same widened derive so a long-running card
+        // reached via this path does not read as abandoned. timeoutMs is read
+        // through vscode config here (matching the four board builders' callers);
+        // this builder is extension-host-only (KanbanProvider is the VS Code host).
+        const timeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
         const cards: KanbanCard[] = [];
         for (const sid of sessionIds) {
             let plan = await db.getPlanBySessionId(sid);
@@ -7366,7 +7428,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                     project: plan.project || '',
                     isFeature: !!plan.isFeature,
                     featureId: plan.featureId || undefined,
-                    working: false
+                    ...isWorkingState(plan.dispatchedAt, timeoutMs, plan.lastLivenessAt, plan.blockedAt)
                 });
             }
         }
@@ -10167,29 +10229,35 @@ Read the current content above. Deepen the problem analysis, verify every file p
             case 'importFromClipboard':
                 await this._seams().commands.executeCommand('switchboard.importPlanFromClipboard', msg.markdownText);
                 return { success: true };
-            case 'rePlanSelected': {
+            case 'copyDispatchPromptSelected': {
+                // Copy the coder dispatch prompt for selected Planned plans to the
+                // clipboard WITHOUT advancing the column or sending to a terminal —
+                // the "copy prompt" counterpart to moveSelected's "send to terminal".
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
                 if (!Array.isArray(msg.sessionIds) || msg.sessionIds.length === 0) {
-                    void this._seams().ui.showWarningMessage('Please select at least one plan to re-plan.');
-                    return { success: false, error: 'Please select at least one plan to re-plan.' };
+                    void this._seams().ui.showWarningMessage('Please select at least one plan to copy the dispatch prompt.');
+                    return { success: false, error: 'Please select at least one plan to copy the dispatch prompt.' };
                 }
-                const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-                if (visibleAgents.planner === false) {
-                    void this._seams().ui.showWarningMessage('Planner agent is currently disabled in setup.');
-                    return { success: false, error: 'Planner agent is currently disabled in setup.' };
+                const column: string = msg.column || 'PLAN REVIEWED';
+                let sourceCards = this._lastCards.filter(card => card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds));
+                if (sourceCards.length === 0) {
+                    const dbCards = await this._buildCardsFromDbSessionIds(workspaceRoot, msg.sessionIds);
+                    if (dbCards.length === 0) {
+                        void this._seams().ui.showInformationMessage('No matching plans found for prompt generation.');
+                        return { success: false, error: 'No matching plans found for prompt generation.' };
+                    }
+                    sourceCards = dbCards;
                 }
-                await this._seams().commands.executeCommand(
-                    'switchboard.triggerBatchAgentFromKanban',
-                    'planner',
-                    msg.sessionIds,
-                    'improve-plan',
-                    workspaceRoot,
-                    undefined,
-                    !!msg?.apiOriginated
-                );
-                void this._seams().ui.showInformationMessage(`Sent ${msg.sessionIds.length} plan(s) to planner for re-plan (improve-plan).`);
-                return { success: true, sent: msg.sessionIds.length };
+                const nextCol = await this._getNextColumnId(column, workspaceRoot);
+                const prompt = await this._generatePromptForColumn(sourceCards, column, workspaceRoot, nextCol ?? undefined);
+                await this._seams().clipboard.writeText(prompt);
+                for (const card of sourceCards) {
+                    const sid = this._cardId(card);
+                    this.postMessage({ type: 'copyPlanLinkResult', planId: sid, sessionId: sid, success: true });
+                }
+                this.postMessage({ type: 'showStatusMessage', message: `Copied dispatch prompt for ${sourceCards.length} plan(s) to clipboard.`, isError: false });
+                return { success: true, prompt };
             }
             case 'codeMapConfirm': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
