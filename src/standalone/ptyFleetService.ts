@@ -34,6 +34,21 @@ export interface ExtendedTerminalHandle extends TerminalHandle {
     worktreePath?: string;
     cwd: string;
     exitCode?: number;
+    /**
+     * Heartbeat timestamp (ms epoch) of the most recent PTY output byte. Stamped
+     * from a fleet-owned `onData` subscription created in `create()` — independent
+     * of the gateway's tap, so it survives `ptyReady === false` for the WS path.
+     * Consumers key on `status` for the live/exited distinction and read this for
+     * "how recently did we hear from it". See `getLiveness()`.
+     */
+    lastDataAt: number;
+}
+
+/** Liveness snapshot entry returned by {@link PtyFleetService.getLiveness}. */
+export interface FleetLivenessEntry {
+    friendlyName: string;
+    lastDataAt: number;
+    status: 'active' | 'exited';
 }
 
 export type FleetChangeEvent = 
@@ -50,13 +65,63 @@ export class PtyFleetService {
     private emitter = new EventEmitter();
     private db?: KanbanDatabase;
     private workspaceRoot: string;
+    private apiToken?: string;
     /** Serializes async registry read-modify-write cycles. See updateRegistryState. */
     private _registryWrite: Promise<void> = Promise.resolve();
 
-    constructor(workspaceRoot: string, db?: KanbanDatabase) {
+    /**
+     * Bounded tombstone map (terminal name → closedAt ms) covering terminals no
+     * longer in {@link terminals}. Populated from the fleet's own `{type:'closed'}`
+     * change event, which fires on BOTH death paths — the `onExit` self-exit
+     * (handle stays in the map with `status:'exited'`) AND `kill()` (which deletes
+     * the handle before killing, so `status:'exited'` is otherwise unobservable
+     * for an operator kill). Without this the exited-terminal force-clear in the
+     * activity-light sweep is structurally unreachable for the most common way a
+     * terminal dies. Oldest-first eviction at the cap.
+     */
+    private recentlyClosed = new Map<string, number>();
+    private static readonly RECENTLY_CLOSED_CAP = 64;
+
+    constructor(workspaceRoot: string, db?: KanbanDatabase, apiToken?: string) {
         this.workspaceRoot = workspaceRoot;
         this.db = db;
+        this.apiToken = apiToken;
         this.setupShutdownHandlers();
+        // Populate the recentlyClosed tombstone from the fleet's own {type:'closed'}
+        // change event, which fires on both death paths (onExit self-exit AND kill()).
+        // Subscribing here (once, on the singleton) covers every terminal created
+        // afterwards; the alternative — stamping at each emit site — is the
+        // duplicated-builder trap this plan avoids.
+        this.onDidChange((event) => {
+            if (event.type === 'closed') {
+                this._recordRecentlyClosed(event.name);
+            } else if (event.type === 'renamed') {
+                // Migrate any tombstone under the old key so a renamed seat that
+                // later dies still produces an exited force-clear.
+                const closedAt = this.recentlyClosed.get(event.oldName);
+                if (closedAt !== undefined) {
+                    this.recentlyClosed.delete(event.oldName);
+                    this.recentlyClosed.set(event.newName, closedAt);
+                }
+            }
+        });
+    }
+
+    /**
+     * Record a closed-terminal tombstone, evicting the oldest entry when the cap
+     * is reached. Map insertion order = age order, so the first entry is oldest.
+     */
+    private _recordRecentlyClosed(name: string): void {
+        if (this.recentlyClosed.has(name)) {
+            // Refresh position so a re-close of a re-created name lands at the end.
+            this.recentlyClosed.delete(name);
+        }
+        this.recentlyClosed.set(name, Date.now());
+        while (this.recentlyClosed.size > PtyFleetService.RECENTLY_CLOSED_CAP) {
+            const oldest = this.recentlyClosed.keys().next().value;
+            if (oldest === undefined) break;
+            this.recentlyClosed.delete(oldest);
+        }
     }
 
     public setDatabase(db: KanbanDatabase): void {
@@ -81,9 +146,24 @@ export class PtyFleetService {
         }
 
         const effectiveCwd = cwd || worktreePath || this.workspaceRoot;
+        // Expose the seat's own identity AND the API credential to whatever runs
+        // in it. The token is an ENV VAR, never prompt text: a token pasted into a
+        // terminal lands in the agent's scrollback and its conversation history.
+        // Omitted when empty so the extension host (whose getAuthToken is
+        // effectively always empty) leaves the variable unset; the relay recipe's
+        // unconditional Authorization header then carries an empty value, which
+        // _checkAuth never reads because it short-circuits on the empty expected
+        // token. The spread is MANDATORY — ptyBackend.ts:89 does
+        // `options.env || process.env`, so a partial map replaces the whole
+        // environment and the shell launches with no PATH/HOME/SHELL.
+        const switchboardEnv: Record<string, string> = {
+            SWITCHBOARD_TERMINAL: name,
+            ...(this.apiToken ? { SWITCHBOARD_API_TOKEN: this.apiToken } : {}),
+        };
         const rawHandle = this.backend.create({
             name,
             cwd: effectiveCwd,
+            env: { ...process.env, ...switchboardEnv } as Record<string, string>,
         });
 
         const startTime = new Date().toISOString();
@@ -96,9 +176,22 @@ export class PtyFleetService {
             status: 'active',
             worktreePath: worktreePath || undefined,
             cwd: effectiveCwd,
+            // Initialise the heartbeat to creation time so a freshly-spawned shell
+            // that has not yet emitted its banner still reads as "just heard from".
+            lastDataAt: Date.now(),
         };
 
         this.terminals.set(name, handle);
+
+        // Subscribe the fleet's own onData tap IMMEDIATELY after the handle is
+        // constructed and BEFORE `await this.injectStartupCommand(handle, role)`.
+        // That call awaits SHELL_READINESS_DELAY_MS before typing, so subscribing
+        // after it would blind the heartbeat for the whole delay window AND lose
+        // the shell's own banner output. Assignment only — no allocation, no timer,
+        // no I/O — so this survives ~166 emits/sec without per-flush cost. This
+        // subscription is independent of the gateway's; it stays live even when
+        // ptyReady === false and the WS gateway is never constructed.
+        handle.onData(() => { handle.lastDataAt = Date.now(); });
 
         handle.onExit((code) => {
             handle.status = 'exited';
@@ -118,6 +211,17 @@ export class PtyFleetService {
         return handle;
     }
 
+    /**
+     * Send the role's configured startup command verbatim after the shell has
+     * had time to come up. The command is NOT rewritten: completion detection
+     * is derived host-side from the PTY stream (see the `lastDataAt` heartbeat
+     * in `create()`), which requires nothing from the agent and therefore
+     * behaves identically for every CLI. An earlier revision appended
+     * `--settings <generated hook file>` here to register Claude Code
+     * lifecycle hooks; that was removed because hooks are a Claude-Code-only
+     * mechanism, so it lit the board for one CLI and silently left every other
+     * agent on the timeout path.
+     */
     private async injectStartupCommand(handle: ExtendedTerminalHandle, role: string): Promise<void> {
         try {
             const commands = await GlobalIntegrationConfigService.getAgentStartupCommands() || {};
@@ -138,6 +242,37 @@ export class PtyFleetService {
 
     public listActive(): ExtendedTerminalHandle[] {
         return Array.from(this.terminals.values()).filter(t => t.status === 'active');
+    }
+
+    /**
+     * Liveness snapshot for the activity-light timeout sweep. Returns every
+     * terminal in {@link terminals} (active AND self-exited, the latter still
+     * present in the map with `status:'exited'`) PLUS every {@link recentlyClosed}
+     * tombstone (operator-killed terminals, which `kill()` deletes from the map
+     * before the process dies, so their `status:'exited'` is otherwise unobservable).
+     * Tombstones are reported as `status:'exited'`. The join key is `friendlyName`,
+     * which `rename()` keeps in sync with `name` — never divergent.
+     */
+    public getLiveness(): FleetLivenessEntry[] {
+        const entries: FleetLivenessEntry[] = [];
+        for (const t of this.terminals.values()) {
+            entries.push({
+                friendlyName: t.friendlyName,
+                lastDataAt: t.lastDataAt,
+                status: t.status,
+            });
+        }
+        // Tombstones for terminals no longer in the map (operator kill path).
+        // Skip any name still present in terminals — the live handle is authoritative.
+        for (const [name, closedAt] of this.recentlyClosed.entries()) {
+            if (this.terminals.has(name)) continue;
+            entries.push({
+                friendlyName: name,
+                lastDataAt: closedAt,
+                status: 'exited',
+            });
+        }
+        return entries;
     }
 
     public get(name: string): ExtendedTerminalHandle | undefined {

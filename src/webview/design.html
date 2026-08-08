@@ -3428,6 +3428,15 @@
             outline: 1px solid var(--accent-teal);
             border-color: var(--accent-teal);
         }
+        /* Obscures a type="text" token field so Chrome's credential classifier — which
+           reads DOM attributes and never CSS — does not treat it as a password input.
+           `-webkit-text-security` is the only shipping property that does this; CSS UI 4's
+           `input-security` is NOT its successor (`none` means *reveal*, the opposite), so
+           it must not be added here. Firefox implements neither — transport.js feature-
+           detects and restores type="password" there so the value is never left in clear. */
+        .masked-token-input {
+            -webkit-text-security: disc;
+        }
         .stitch-btn-primary {
             background: var(--accent-teal-dim);
             border-color: var(--accent-teal);
@@ -4018,14 +4027,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <h3 style="margin: 0; font-size: 13px;">Stitch Authentication Configuration</h3>
                     <span id="stitch-auth-status-indicator" style="font-size: 10px; padding: 2px 6px; border-radius: 3px; font-weight: bold; background: #333; color: #ccc;">Checking...</span>
                 </div>
-                <p style="margin: 0; font-size: 11px; color: var(--text-secondary);">Your API key is stored in VS Code's encrypted secret storage (your OS keychain) and is used only to call Google Stitch directly — it's never sent to any Switchboard server or logged.</p>
+                <p style="margin: 0; font-size: 11px; color: var(--text-secondary);">Your API key is stored in encrypted secret storage (your OS keychain) and is used only to call Google Stitch directly. It is never logged and never leaves this machine — in the browser cockpit it is sent once, on save, over the loopback-only local connection that reaches that storage, and it is never read back out to this panel.</p>
                 <div id="stitch-api-key-group" style="display: flex; flex-direction: column; gap: 4px;">
                     <label for="stitch-api-key-input" style="font-size: 10px; color: var(--text-secondary);">API Key</label>
-                    <input type="password" id="stitch-api-key-input" class="stitch-input" style="max-width: 100%;" placeholder="AIzaSy..." />
+                    <input type="text" id="stitch-api-key-input" class="stitch-input masked-token-input" style="max-width: 100%;" placeholder="AIzaSy..." />
                 </div>
                 <div style="display: flex; gap: 8px;">
                     <button id="btn-save-stitch-auth" class="strip-btn stitch-btn-primary">Save Settings</button>
                     <button id="btn-validate-stitch-auth" class="strip-btn">Validate Connection</button>
+                    <button id="btn-clear-stitch-auth" class="strip-btn" style="color: var(--vscode-errorForeground, #ff6b6b);">Clear</button>
                     <button id="btn-close-stitch-auth" class="strip-btn">Close</button>
                 </div>
                 <div id="stitch-auth-error-msg" style="font-size: 10px; color: #ff6b6b; display: none;"></div>

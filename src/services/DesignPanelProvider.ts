@@ -2539,8 +2539,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 this.postMessage({
                     type: 'stitchAuthStatus',
                     configured: hasKey,
-                    valid: hasKey,
-                    apiKey: authInfo.apiKey
+                    valid: hasKey
                 });
                 const pathConfig = this._seams().pathConfig;
                 this.postMessage({ type: 'switchboardThemeChanged', theme: pathConfig.getConfigStringWithDefault('theme.name', 'afterburner') });
@@ -3129,12 +3128,19 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
 
             case 'stitchSaveApiKey':
                 try {
-                    if (message.apiKey) {
+                    const hasField = typeof message.apiKey === 'string';
+                    if (!hasField && message.clearKey !== true) {
+                        // Field untouched in the webview — the browser no longer holds the key,
+                        // so "no field" means "leave the stored value alone". Without this branch
+                        // a Save with an untouched masked field falls into delete() and destroys
+                        // the credential (and, on the VS Code host, the mirrored copy too).
+                    } else if (message.apiKey) {
                         await this._seams().secrets.store('switchboard.stitch.apiKey', message.apiKey);
+                        process.env.STITCH_API_KEY = message.apiKey;
                     } else {
                         await this._seams().secrets.delete('switchboard.stitch.apiKey');
+                        process.env.STITCH_API_KEY = '';
                     }
-                    process.env.STITCH_API_KEY = message.apiKey || '';
                     invalidateStitchSdkCache();
                     const auth = await this._setupStitchAuth();
                     this.postMessage({ type: 'stitchApiKeyStatus', configured: auth.valid });
@@ -3148,21 +3154,28 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
 
             case 'stitchSaveAuthConfig':
                 try {
-                    if (message.apiKey) {
-                        await this._context.secrets.store('switchboard.stitch.apiKey', message.apiKey);
+                    const hasField = typeof message.apiKey === 'string';
+                    if (!hasField && message.clearKey !== true) {
+                        // Field untouched in the webview — the browser no longer holds the key,
+                        // so "no field" means "leave the stored value alone". Without this branch
+                        // a Save with an untouched masked field falls into delete() and destroys
+                        // the credential (and, on the VS Code host, the mirrored copy too).
+                    } else if (message.apiKey) {
+                        await this._seams().secrets.store('switchboard.stitch.apiKey', message.apiKey);
+                        process.env.STITCH_API_KEY = message.apiKey;
                     } else {
-                        await this._context.secrets.delete('switchboard.stitch.apiKey');
+                        await this._seams().secrets.delete('switchboard.stitch.apiKey');
+                        process.env.STITCH_API_KEY = '';
                     }
-                    
+
                     invalidateStitchSdkCache();
                     const auth = await this._setupStitchAuth();
-                    
+
                     this.postMessage({ type: 'stitchApiKeyStatus', configured: auth.valid });
-                    this.postMessage({ 
-                        type: 'stitchAuthStatus', 
-                        configured: auth.valid, 
-                        valid: auth.valid,
-                        apiKey: auth.apiKey
+                    this.postMessage({
+                        type: 'stitchAuthStatus',
+                        configured: auth.valid,
+                        valid: auth.valid
                     });
                     showTemporaryNotification('Stitch Authentication settings saved successfully.');
                     return { success: true, configured: auth.valid };
@@ -3175,33 +3188,30 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 try {
                     const auth = await this._setupStitchAuth();
                     if (!auth.valid) {
-                        this.postMessage({ 
-                            type: 'stitchAuthStatus', 
-                            configured: false, 
+                        this.postMessage({
+                            type: 'stitchAuthStatus',
+                            configured: false,
                             valid: false,
-                            error: 'Credentials not configured',
-                            apiKey: auth.apiKey
+                            error: 'Credentials not configured'
                         });
                         return { success: false, configured: false, valid: false, error: 'Credentials not configured' };
                     }
                     invalidateStitchSdkCache();
                     const stitch = await loadStitch('');
                     await stitch.projects();
-                    this.postMessage({ 
-                        type: 'stitchAuthStatus', 
-                        configured: true, 
-                        valid: true,
-                        apiKey: auth.apiKey
+                    this.postMessage({
+                        type: 'stitchAuthStatus',
+                        configured: true,
+                        valid: true
                     });
                     return { success: true, configured: true, valid: true };
                 } catch (err: any) {
                     const auth = await this._setupStitchAuth();
-                    this.postMessage({ 
-                        type: 'stitchAuthStatus', 
-                        configured: true, 
+                    this.postMessage({
+                        type: 'stitchAuthStatus',
+                        configured: true,
                         valid: false,
-                        error: err.message || String(err),
-                        apiKey: auth.apiKey
+                        error: err.message || String(err)
                     });
                     return { success: false, configured: true, valid: false, error: err.message || String(err) };
                 }

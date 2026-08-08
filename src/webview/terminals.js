@@ -87,6 +87,14 @@
     let agentNames = {};
 
     const terminalBadges = new Map(); // terminalName -> string label / count
+    // name -> { quietTimer, noOutputTimer, hardTimer, sawLiveOutput }. Module-level,
+    // NOT on the terminalsMap entry: a curtain is armed at ptyCreateTerminal time, and
+    // the entry does not exist until the pane has a rendered box (see whenRendered).
+    const startupCurtains = new Map();
+    const CURTAIN_QUIET_MS = 1200;      // LIVE output stopped this long => CLI has settled
+    const CURTAIN_NO_OUTPUT_MS = 4000;  // no live output at all => nothing to cover (late-seated
+                                        // pane got its whole boot as replay, or no CLI booted)
+    const CURTAIN_MAX_MS = 15000;       // hard cap: never strand a pane behind it
     // name -> { container, term, fitAddon, rendererAddon, isWebgl, ws, lastSeq, batchQueue,
     //           pendingAckChars, ackSuppressChars, reconnectTimer, reconnectDelay,
     //           resizeObserver, exited, disposed }
@@ -563,6 +571,9 @@
             });
         }
 
+        const btnLinkUp = document.getElementById('btn-link-up');
+        if (btnLinkUp) { btnLinkUp.addEventListener('click', openLinkModal); }
+
         const btnKanbanToolbar = document.getElementById('btn-kanban-toolbar');
         if (btnKanbanToolbar) {
             btnKanbanToolbar.addEventListener('click', () => toggleFocusedPaneKanban());
@@ -898,6 +909,127 @@
     }
 
     /**
+     * Arm the startup curtain for a terminal THIS TAB just created.
+     *
+     * Deliberately not armed on "output arrived": a reattach replays up to 256 KB of
+     * ring buffer (see the awaitingReplayFrame branch in the socket handler), which is
+     * indistinguishable from a boot burst — arming on output would curtain every pane
+     * on every reload.
+     *
+     * `hasStartupCommand` gates it: a plain shell has no banner to hide, so a curtain
+     * there is pure added latency with nothing behind it.
+     */
+    function armStartupCurtain(name, hasStartupCommand) {
+        if (!name || !hasStartupCommand || startupCurtains.has(name)) { return; }
+        const state = { quietTimer: null, noOutputTimer: null, hardTimer: null, sawLiveOutput: false };
+        // Two independent caps, not one. The hard cap covers a CLI that never stops
+        // talking; the no-output cap covers the opposite failure — a pane seated so
+        // late (open-all creates sequentially, ~750ms each) that its entire boot
+        // arrived as replay and no live frame is ever coming.
+        state.hardTimer = setTimeout(() => dismissStartupCurtain(name), CURTAIN_MAX_MS);
+        state.noOutputTimer = setTimeout(() => {
+            const s = startupCurtains.get(name);
+            if (s && !s.sawLiveOutput) { dismissStartupCurtain(name); }
+        }, CURTAIN_NO_OUTPUT_MS);
+        startupCurtains.set(name, state);
+    }
+
+    /**
+     * LIVE output arrived — restart the quiescence countdown.
+     *
+     * Called from scheduleBatchFlush, which every live path funnels through (binary
+     * frames and the legacy t:'out' framing). Replay is deliberately EXCLUDED: the
+     * awaitingReplayFrame branch returns before scheduleBatchFlush and writes via
+     * writeReplay instead. That exclusion is the point — replay is output the operator
+     * already missed, so treating it as "the CLI is talking" would hold the
+     * curtain over a terminal that settled minutes ago.
+     *
+     * The quiet timer is armed HERE and nowhere else, so it can never fire during the
+     * 1-4s silent gap between the command echo and the CLI's first paint.
+     */
+    function bumpStartupCurtain(name) {
+        const state = startupCurtains.get(name);
+        if (!state) { return; }
+        state.sawLiveOutput = true;
+        if (state.quietTimer) { clearTimeout(state.quietTimer); }
+        state.quietTimer = setTimeout(() => dismissStartupCurtain(name), CURTAIN_QUIET_MS);
+    }
+
+    /** Remove the curtain and its timers. Idempotent — every dismissal path
+     *  (quiescence, no-output cap, hard cap, click, exit, error, unassign, close)
+     *  lands here. */
+    function dismissStartupCurtain(name) {
+        const state = startupCurtains.get(name);
+        if (!state) { return; }
+        if (state.quietTimer) { clearTimeout(state.quietTimer); }
+        if (state.noOutputTimer) { clearTimeout(state.noOutputTimer); }
+        if (state.hardTimer) { clearTimeout(state.hardTimer); }
+        startupCurtains.delete(name);
+        // Address the node directly rather than re-rendering. A renderPaneGrid() here
+        // would risk moving terminal DOM for a purely visual change, which is exactly
+        // what updatePaneElement's invariant forbids; and the curtain is addressed by
+        // its own data-terminal stamp rather than via paneAssignments, so a curtain
+        // left in a pane that has since been reassigned is still found and removed.
+        if (paneGridEl) {
+            const sel = `.startup-curtain[data-terminal="${cssAttrEscape(name)}"]`;
+            paneGridEl.querySelectorAll(sel).forEach(el => el.remove());
+        }
+        // Class strip, NOT renderSidebarList(): see the callout below.
+        if (listEl) {
+            const sel = `.item-role-icon[data-terminal="${cssAttrEscape(name)}"]`;
+            listEl.querySelectorAll(sel).forEach(el => el.classList.remove('is-starting'));
+        }
+    }
+
+    /** Escape a terminal name for use inside a CSS attribute selector. friendlyName
+     *  is normally `${role}-${n}`, but rename accepts arbitrary operator text, and an
+     *  unescaped quote would throw out of querySelectorAll and abort the dismissal. */
+    function cssAttrEscape(value) {
+        return String(value).replace(/["\\]/g, '\\$&');
+    }
+
+    /** Create (once) the curtain inside a pane's content. Called from
+     *  updatePaneElement's assigned branch; no listeners attached here — the
+     *  dismiss click is delegated from createPaneElement. */
+    function renderStartupCurtain(contentEl, name) {
+        if (contentEl.querySelector('.startup-curtain')) { return; }
+        const fleetItem = fleetList.find(t => t.friendlyName === name);
+        const agentLabel = agentLabelForRole(fleetItem && fleetItem.role);
+        const curtain = document.createElement('div');
+        curtain.className = 'startup-curtain';
+        // The handle dismissStartupCurtain addresses this node by. Not derived from
+        // paneAssignments at teardown time, which can have moved on.
+        curtain.dataset.terminal = name;
+
+        const iconKey = brandIconForCliLabel(agentLabel) || 'default';
+        const uri = brandIconUri(iconKey) || brandIconUri('default');
+        if (uri) {
+            const badge = document.createElement('div');
+            badge.className = 'startup-curtain-badge';
+            const icon = document.createElement('img');
+            icon.className = 'startup-curtain-icon';
+            icon.src = uri;
+            icon.alt = '';
+            icon.dataset.brand = iconKey;
+            badge.appendChild(icon);
+            curtain.appendChild(badge);
+        }
+
+        const label = document.createElement('div');
+        label.className = 'startup-curtain-label';
+        label.textContent = agentLabel ? `Starting ${agentLabel}…` : 'Starting…';
+        curtain.appendChild(label);
+
+        const dismiss = document.createElement('button');
+        dismiss.className = 'startup-curtain-dismiss';
+        dismiss.type = 'button';
+        dismiss.textContent = 'show output';
+        curtain.appendChild(dismiss);
+
+        contentEl.appendChild(curtain);
+    }
+
+    /**
      * The toast's Undo button reads the CURRENT undoSnapshot, not the one that was live
      * when the toast was shown. So any mutation that replaces or clears the snapshot
      * without announcing itself must also retract the toast — otherwise the visible
@@ -1088,6 +1220,10 @@
                 icon.src = uri;
                 icon.alt = '';
                 icon.dataset.brand = iconKey;
+                // The handle dismissStartupCurtain strips .is-starting by. Without it, teardown
+                // would have to re-render the whole sidebar to clear one class.
+                icon.dataset.terminal = item.friendlyName;
+                if (startupCurtains.has(item.friendlyName)) { icon.classList.add('is-starting'); }
                 roleRow.appendChild(icon);
             }
         }
@@ -1312,6 +1448,7 @@
     }
 
     function renderSidebarList() {
+        syncLinkUpEnabled();
         listEl.innerHTML = '';
         // The empty state and the pane grid are in the MAIN area; the workspace groups
         // below are in the sidebar. So an empty fleet toggles those two and then keeps
@@ -1714,6 +1851,14 @@
             paneAssignments[existingIndex] = null;
             pinnedPanes[existingIndex] = false;
         }
+
+        // A displacing click takes the pane away from whatever was in it, which is the
+        // same event as `hide` for the outgoing terminal: its boot presentation is
+        // over. Without this its curtain state stays armed for up to CURTAIN_MAX_MS —
+        // the sidebar keeps pulsing for a terminal with no pane, and re-seating it
+        // repaints a curtain over a prompt that settled long ago.
+        const displacedName = paneAssignments[target];
+        if (displacedName && displacedName !== terminalName) { dismissStartupCurtain(displacedName); }
 
         paneAssignments[target] = terminalName;
         focusedPaneIndex = target;
@@ -2188,6 +2333,7 @@
             showPaneToast(`Pane ${index + 1} cleared (${targetName} still running)`, undoLastAssignment);
             paneAssignments[index] = null;
             pinnedPanes[index] = false; // an empty pinned seat reserves a slot nothing can fill
+            dismissStartupCurtain(targetName);
             saveLayoutSettings();
             renderPaneGrid();
             renderSidebarList();
@@ -2227,7 +2373,21 @@
         // call time, like every other handler on this element.
         contentEl.addEventListener('click', (e) => {
             const target = e.target;
-            if (!target || !target.classList || !target.classList.contains('pane-mode-toggle')) { return; }
+            if (!target || !target.classList) { return; }
+            if (target.classList.contains('startup-curtain-dismiss')) {
+                e.stopPropagation();
+                // The node's OWN stamp, not paneAssignments[index]: the two can
+                // disagree for one reconcile after a displacing click, and dismissing
+                // by slot there would clear an unrelated terminal's state while
+                // leaving the overlay the operator just clicked on screen. The
+                // explicit remove() makes the escape hatch work even when the state
+                // entry is already gone — this is the one path that must never no-op.
+                const curtainEl = target.closest('.startup-curtain');
+                dismissStartupCurtain((curtainEl && curtainEl.dataset.terminal) || paneAssignments[index]);
+                if (curtainEl) { curtainEl.remove(); }
+                return;
+            }
+            if (!target.classList.contains('pane-mode-toggle')) { return; }
             e.stopPropagation();
             paneModes[index] = 'kanban';
             if (!kanbanPaneColumn[index]) { kanbanPaneColumn[index] = 'CREATED'; }
@@ -2417,6 +2577,25 @@
                                                       // leaves the scroll area stale
                 }
                 entry.container.classList.add('active');
+            }
+
+            // A curtain left behind by a PREVIOUS occupant of this slot. Panes are
+            // reused, and this branch only removes .pane-empty-slot — so any path that
+            // swaps the assignment without emptying the pane first (a displacing
+            // sidebar click, a group apply, an undo restore) would otherwise leave an
+            // opaque overlay for a terminal that is no longer here sitting on top of
+            // the one that is. Keyed on the stamp, so the current terminal's own
+            // curtain survives every reconcile.
+            contentEl.querySelectorAll('.startup-curtain').forEach(el => {
+                if (el.dataset.terminal !== assignedName) { el.remove(); }
+            });
+
+            // Curtain LAST, so it is the final child of .pane-content regardless of which
+            // branch above ran. Paint order does not actually depend on that (z-index: 4 beats
+            // .terminal-view-host's z-index: auto), but keeping it last means a re-parent
+            // cannot visually reorder anything either.
+            if (startupCurtains.has(assignedName)) {
+                renderStartupCurtain(contentEl, assignedName);
             }
         } else if (!contentEl.querySelector('.pane-empty-slot')) {
             // Clears a container still parented here from a previous assignment. The
@@ -3453,7 +3632,7 @@
                 : `${label} — no agent CLI configured (plain shell)`;
             btn.addEventListener('click', () => {
                 picker.hidden = true;
-                createTerminal(role, targetSpec);
+                createTerminal(role, targetSpec, hasCommand[role] === true);
             });
             optionsEl.appendChild(btn);
         }
@@ -3467,14 +3646,14 @@
         noRoleBtn.title = 'Plain shell in the workspace directory — no agent CLI started';
         noRoleBtn.addEventListener('click', () => {
             picker.hidden = true;
-            createTerminal(NO_ROLE, targetSpec);
+            createTerminal(NO_ROLE, targetSpec, false);
         });
         optionsEl.appendChild(noRoleBtn);
 
         picker.hidden = false;
     }
 
-    async function createTerminal(role, targetSpec) {
+    async function createTerminal(role, targetSpec, hasStartupCommand) {
         try {
             const payload = { role };
             if (typeof targetSpec === 'string') {
@@ -3497,6 +3676,11 @@
             if (res.ok) {
                 const data = await res.json();
                 if (data.success && data.terminal) {
+                    // BEFORE fetchTerminalList/assign: those are what build the pane and
+                    // its xterm, and updatePaneElement reads startupCurtains to decide
+                    // whether to paint the overlay. Arming after them would paint one
+                    // reconcile late — a visible flash of the raw prompt.
+                    armStartupCurtain(data.terminal.friendlyName, hasStartupCommand);
                     await fetchTerminalList();
                     assignToFocusedPane(data.terminal.friendlyName);
                 } else if (data && data.error) {
@@ -3549,6 +3733,11 @@
             : [];
 
         const visible = { ...savedVisibleData.visibleAgents };
+        // Read off the SAME response as `visible`. fetchPtyVisibleRoles always
+        // returns the pair (`{}` on its fallback path), so no per-role lookup can
+        // throw — but the default must still be an object, because openAllTerminals
+        // indexes it directly.
+        const hasCommand = savedVisibleData.hasCommand || {};
         // A custom agent defaults to visible, matching getVisibleAgents.
         for (const agent of custom) { visible[agent.role] = true; }
 
@@ -3565,7 +3754,7 @@
             wanted.set(agent.role, 1);
         }
         if (visible.jules !== false) { wanted.set('jules_monitor', 1); }
-        return wanted;
+        return { wanted, hasCommand };
     }
 
     /**
@@ -3577,7 +3766,7 @@
      * command itself, and duplicating that would launch each agent CLI twice.
      */
     async function openAllTerminals() {
-        const wanted = await resolveGridAgents();
+        const { wanted, hasCommand } = await resolveGridAgents();
         if (wanted.size === 0) {
             console.warn('[Terminals] Open all: no visible agent roles configured');
             return;
@@ -3604,7 +3793,10 @@
                     });
                     if (res.ok) {
                         const data = await res.json();
-                        if (data && data.success) { created++; }
+                        if (data && data.success) {
+                            created++;
+                            if (data.terminal) { armStartupCurtain(data.terminal.friendlyName, hasCommand[role] === true); }
+                        }
                         else if (data && data.error) { console.warn(`[Terminals] Open all: ${role} rejected:`, data.error); }
                     }
                 } catch (err) {
@@ -3715,6 +3907,20 @@
                     terminalBadges.set(next, terminalBadges.get(name));
                     terminalBadges.delete(name);
                 }
+                // The curtain map is keyed by friendlyName like terminalsMap; without this a
+                // rename mid-boot strands the overlay with no timer able to find its node. The
+                // dataset stamps are re-pointed in the same block: the sidebar row is rebuilt by
+                // the fetchTerminalList() below and picks up the new name, but the curtain node
+                // in the pane is not re-created, so its stamp has to be moved by hand.
+                const curtain = startupCurtains.get(name);
+                if (curtain) {
+                    startupCurtains.delete(name);
+                    startupCurtains.set(next, curtain);
+                    if (paneGridEl) {
+                        const sel = `.startup-curtain[data-terminal="${cssAttrEscape(name)}"]`;
+                        paneGridEl.querySelectorAll(sel).forEach(el => { el.dataset.terminal = next; });
+                    }
+                }
                 saveLayoutSettings();
             }
             await fetchTerminalList();
@@ -3759,6 +3965,7 @@
                 if (paneAssignments[i] === name) { paneAssignments[i] = null; }
             }
             if (activeTerminalName === name) { activeTerminalName = null; }
+            dismissStartupCurtain(name);
             terminalBadges.delete(name);
             saveLayoutSettings();
             await fetchTerminalList();
@@ -4659,6 +4866,7 @@
                         entry.term.write(`\r\n\x1b[2m[Pasting — input queued: ${frame.queued || 0} bytes…]\x1b[0m\r\n`);
                     }
                 } else if (frame.t === 'error') {
+                    dismissStartupCurtain(entry.name);
                     entry.exited = true;
                     entry.term.write(`\r\n\x1b[31m[${frame.message || 'Terminal unavailable'}]\x1b[0m\r\n`);
                     entry.term.options.disableStdin = true;
@@ -4667,6 +4875,7 @@
                     if (frame.reason === 'Lagging client evicted') {
                         entry.term.write(`\r\n\x1b[33m[Disconnected — reconnecting…]\x1b[0m\r\n`);
                     } else {
+                        dismissStartupCurtain(entry.name);
                         const exitCode = typeof frame.code === 'number' ? frame.code : 0;
                         entry.exited = true;
                         entry.term.write(`\r\n\x1b[31m[Process Exited with code ${exitCode}]\x1b[0m\r\n`);
@@ -4699,6 +4908,7 @@
 
     function scheduleBatchFlush(entry) {
         if (!entry) return;
+        bumpStartupCurtain(entry.name);
         pendingBatchEntries.add(entry);
         if (!sharedBatchRafId) {
             sharedBatchRafId = requestAnimationFrame(() => {
@@ -4932,6 +5142,260 @@
             }, ms);
         };
     }
+
+    // ─── Link-up modal ────────────────────────────────────────────────────
+    // A sidebar-only surface that instructs one agent terminal to message
+    // another. The operator is NOT messaging the child directly — they are
+    // instructing the parent agent to do it, because the parent holds the
+    // context worth handing over. See the plan file for the full rationale.
+
+    /**
+     * Resolve the parent the modal should open on. The focused pane is the
+     * operator's notion of "the selected terminal", but setFocusedPane only writes
+     * activeTerminalName when the focused pane actually HOLDS a terminal
+     * (terminals.js setFocusedPane) — so a focused-but-empty pane has to fall
+     * through to the last terminal that was selected, and only then to the fleet
+     * head. Every candidate is re-checked against the live fleet: a default that
+     * quietly targets a dead terminal is worse than no default at all.
+     */
+    function defaultLinkParent() {
+        const isLive = (n) => n && fleetList.some(t => t.friendlyName === n && t.status === 'active');
+        const focused = paneAssignments[focusedPaneIndex];
+        if (isLive(focused)) { return focused; }
+        if (isLive(activeTerminalName)) { return activeTerminalName; }
+        const first = fleetList.find(t => t.status === 'active');
+        return first ? first.friendlyName : null;
+    }
+
+    /**
+     * Populate a <select> with the live fleet. The selected value is set AFTER
+     * the options exist so the browser honours it; setting .value on an empty
+     * select is a silent no-op.
+     */
+    function fillTerminalSelect(sel, live, selectedName) {
+        sel.innerHTML = '';
+        for (const t of live) {
+            const opt = document.createElement('option');
+            opt.value = t.friendlyName;
+            opt.textContent = `${t.friendlyName} (${t.role})`;
+            sel.appendChild(opt);
+        }
+        if (selectedName && live.some(t => t.friendlyName === selectedName)) {
+            sel.value = selectedName;
+        }
+    }
+
+    /**
+     * The child list must never contain the parent — an agent instructed to
+     * message itself is a no-op at best and a loop at worst. Re-run on every
+     * parent change, preserving the current child selection when it is still
+     * valid.
+     */
+    function syncChildOptions() {
+        const parentSel = document.getElementById('link-parent');
+        const childSel = document.getElementById('link-child');
+        if (!parentSel || !childSel) { return; }
+        const parentName = parentSel.value;
+        const prevChild = childSel.value;
+        const live = fleetList.filter(t => t.status === 'active' && t.friendlyName !== parentName);
+        fillTerminalSelect(childSel, live, prevChild);
+    }
+
+    function setLinkError(msg) {
+        const el = document.getElementById('link-error');
+        if (!el) { return; }
+        if (msg) { el.textContent = msg; el.hidden = false; }
+        else { el.hidden = true; el.textContent = ''; }
+    }
+
+    function syncSendEnabled() {
+        const msg = document.getElementById('link-message');
+        const sendBtn = document.getElementById('link-send');
+        if (!msg || !sendBtn) { return; }
+        sendBtn.disabled = !msg.value.trim();
+    }
+
+    function openLinkModal() {
+        const live = fleetList.filter(t => t.status === 'active');
+        if (live.length < 2) { showPaneToast('Need at least two live terminals to link'); return; }
+
+        const modal = document.getElementById('link-modal');
+        const parentSel = document.getElementById('link-parent');
+        const messageEl = document.getElementById('link-message');
+        if (!modal || !parentSel || !messageEl) { return; }
+
+        fillTerminalSelect(parentSel, live, defaultLinkParent());
+        syncChildOptions();          // excludes whatever parent resolved to
+        messageEl.value = '';
+        setLinkError(null);
+        syncSendEnabled();
+
+        modal.hidden = false;
+        messageEl.focus();           // the instruction is the only thing left to supply
+    }
+
+    /**
+     * The fleet is repolled by fetchTerminalList, so the two-live-terminals
+     * precondition is NOT a boot-time constant. Recompute here;
+     * renderSidebarList() is already called on every successful poll.
+     */
+    function syncLinkUpEnabled() {
+        const btn = document.getElementById('btn-link-up');
+        if (!btn) { return; }
+        const liveCount = fleetList.filter(t => t.status === 'active').length;
+        btn.disabled = liveCount < 2;
+        btn.title = btn.disabled
+            ? 'Needs at least two live terminals'
+            : 'Instruct one agent terminal to send a message to another';
+    }
+
+    /**
+     * Build the relay prompt. Two parts, in this order:
+     *   1. the operator's instruction verbatim, delimited;
+     *   2. a concrete recipe for reaching childName over the Switchboard API.
+     *
+     * The API base is taken from location.origin — this page IS served by the
+     * LocalApiServer that owns /terminals/verb/, so it is guaranteed correct
+     * without a port-file read. PTY_HOST_ORIGIN is a DIFFERENT server (the pty
+     * host child) and must not be used here.
+     *
+     * The auth token is NOT interpolated: it reaches the shell as
+     * $SWITCHBOARD_API_TOKEN (see the ptyFleetService change) so the secret
+     * never enters the agent's scrollback or conversation history. The header is
+     * emitted unconditionally — under the extension host getAuthToken() is empty
+     * and _checkAuth short-circuits to loopback trust before reading it, so an
+     * empty value is harmless there and correct under standalone.
+     *
+     * Every line of the shell block starts at column 0: an indented heredoc
+     * terminator is not recognised and the shell hangs waiting for input.
+     */
+    function buildLinkPrompt(parentName, childName, message) {
+        const api = location.origin;
+        return [
+            `You have been asked to relay something to another Switchboard terminal.`,
+            ``,
+            `TARGET TERMINAL: ${childName}`,
+            `YOUR TERMINAL:   ${parentName}`,
+            ``,
+            `OPERATOR INSTRUCTION:`,
+            `---`,
+            message,
+            `---`,
+            ``,
+            `To deliver a message to ${childName}, POST it to the Switchboard API.`,
+            `Write the message to a file and let python3 build the JSON — never`,
+            `hand-escape quotes or newlines into a shell string:`,
+            ``,
+            `cat > /tmp/sb-relay-msg.txt <<'SBMSG'`,
+            `<the message you want ${childName} to receive — say who you are and what`,
+            `you are handing over, since the recipient has no idea this came from you>`,
+            `SBMSG`,
+            ``,
+            `python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1], "data": open(sys.argv[2]).read(), "clearBeforePrompt": False}))' ${JSON.stringify(childName)} /tmp/sb-relay-msg.txt > /tmp/sb-relay.json`,
+            ``,
+            `curl -s -X POST "${api}/terminals/verb/ptySendPrompt" \\`,
+            `  -H "Content-Type: application/json" \\`,
+            `  -H "Authorization: Bearer $SWITCHBOARD_API_TOKEN" \\`,
+            `  --data @/tmp/sb-relay.json`,
+            ``,
+            `A successful call returns {"success":true}. Keep "clearBeforePrompt" false`,
+            `unless you deliberately want to reset ${childName}'s context first — true`,
+            `sends /clear and destroys whatever that agent was holding.`,
+            `If you get 401, this terminal predates the API-token injection; tell the`,
+            `operator to restart it.`,
+            ``,
+            `Carry out the operator instruction now.`,
+        ].join('\n');
+    }
+
+    async function sendLinkMessage() {
+        const parentName = document.getElementById('link-parent').value;
+        const childName = document.getElementById('link-child').value;
+        const message = document.getElementById('link-message').value.trim();
+        if (!parentName || !childName || !message) { return; }
+
+        // Clear any error left over from a previous attempt — a stale "<name> is no
+        // longer live" sitting above a fresh send reads as the new send's verdict.
+        setLinkError(null);
+
+        // Re-validate BOTH ends: the modal may have sat open while the fleet changed.
+        // ptySendPrompt checks the parent handle, but the child is only a name inside
+        // the prompt text — nothing downstream would catch a dead one.
+        const live = (n) => fleetList.some(t => t.friendlyName === n && t.status === 'active');
+        if (!live(parentName)) { setLinkError(`${parentName} is no longer live`); return; }
+        if (!live(childName)) { setLinkError(`${childName} is no longer live`); return; }
+
+        // Hold SEND down for the duration of the post. withTerminalLock serialises
+        // concurrent deliveries so a double-click cannot INTERLEAVE two pastes — but
+        // it does not dedupe them: both land, and the parent agent relays twice.
+        const sendBtn = document.getElementById('link-send');
+        if (sendBtn) { sendBtn.disabled = true; }
+        try {
+            // Relative URL + default credentials:'same-origin' — this is the idiom every
+            // other verb call in this file uses. It is what carries the HttpOnly
+            // sb_session cookie that _checkAuth accepts under standalone.
+            const res = await fetch('/terminals/verb/ptySendPrompt', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: parentName,
+                    data: buildLinkPrompt(parentName, childName, message),
+                    // EXPLICIT false. Omitting this applies the config default (true)
+                    // in BOTH hosts — TaskViewerProvider and bootstrap — which writes
+                    // /clear to the PARENT and destroys the very context it is being
+                    // asked to hand over.
+                    clearBeforePrompt: false
+                })
+            });
+            const data = await res.json();
+            if (!data.success) { setLinkError('Link failed: ' + (data.error || 'unknown')); return; }
+            // Close first, THEN toast: the modal out-stacks .toast-container (z 200 vs
+            // 100), so a toast raised while it is open would be painted behind it.
+            document.getElementById('link-modal').hidden = true;
+            showPaneToast(`Instructed ${parentName} to message ${childName}`);
+        } catch (err) {
+            setLinkError('Link failed: ' + (err.message || String(err)));
+        } finally {
+            // Re-derive rather than blanket-enable: an empty instruction must stay
+            // disabled. On success the modal is already closed, so this is a no-op.
+            syncSendEnabled();
+        }
+    }
+
+    // Wire modal controls. Bound once at init; the elements are static in the HTML.
+    // Escape is bound at document level in the CAPTURE phase: a listener on
+    // #link-modal only fires while focus is inside it, and clicking the backdrop
+    // (which deliberately does NOT close the modal) moves focus to <body>, after
+    // which an element-scoped Escape is dead. Capture runs before any handler
+    // inside xterm's own subtree, so stopPropagation() there reliably prevents the
+    // terminal from claiming the key.
+    (function wireLinkModal() {
+        const closeBtn = document.getElementById('link-modal-close');
+        const cancelBtn = document.getElementById('link-cancel');
+        const sendBtn = document.getElementById('link-send');
+        const parentSel = document.getElementById('link-parent');
+        const messageEl = document.getElementById('link-message');
+        const closeModal = () => {
+            const modal = document.getElementById('link-modal');
+            if (modal) { modal.hidden = true; }
+        };
+        if (closeBtn) { closeBtn.addEventListener('click', closeModal); }
+        if (cancelBtn) { cancelBtn.addEventListener('click', closeModal); }
+        if (sendBtn) { sendBtn.addEventListener('click', sendLinkMessage); }
+        if (parentSel) { parentSel.addEventListener('change', syncChildOptions); }
+        if (messageEl) {
+            messageEl.addEventListener('input', syncSendEnabled);
+            // xterm eats keystrokes — every text input in this panel calls
+            // stopPropagation() on keydown so the terminal viewport does not claim
+            // the event. Same treatment as beginInlineRename's input.
+            messageEl.addEventListener('keydown', (e) => { e.stopPropagation(); });
+        }
+        document.addEventListener('keydown', (e) => {
+            const modal = document.getElementById('link-modal');
+            if (!modal || modal.hidden) { return; }
+            if (e.key === 'Escape') { e.stopPropagation(); closeModal(); }
+        }, true);
+    })();
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);

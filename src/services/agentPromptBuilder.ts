@@ -317,6 +317,46 @@ export interface PromptBuilderOptions {
     manifestProject?: string;
     /** The destination kanban column the card is being dispatched to. Vestigial: it formerly drove the `**Stage Complete: <COLUMN>**` directive, but the activity-light OFF-switch is now mtime-based (see GlobalPlanWatcherService), so no directive consumes this field. Retained for caller compatibility. */
     destinationColumn?: string;
+    /** Resolved project scope for the dispatch-analysis pass: `undefined` = never threaded (no `PROJECT=` line at all), `null`/`''` = all projects, `'__unassigned__'` = unpinned only, else a specific project name. See {@link buildAnalysisScopeLine}. */
+    analysisScope?: string | null;
+}
+
+/**
+ * The board's "cards with no project" sentinel, mirrored here so this module
+ * stays free of the KanbanDatabase dependency edge. Pinned to
+ * `KanbanDatabase.UNASSIGNED_PROJECT_FILTER` by the dispatch-analysis scope
+ * contract test — if that constant ever moves, the test fails rather than the
+ * prompt silently emitting `PROJECT=__unassigned__` as if it were a name.
+ */
+export const UNASSIGNED_PROJECT_SENTINEL = '__unassigned__';
+
+/**
+ * THE single resolver for the dispatch-analysis prompt's `PROJECT=` line, shared
+ * verbatim by both hosts (KanbanProvider.generateUnifiedPrompt's arm and
+ * standalone bootstrap's buildDispatchAnalysisPrompt) so the two cannot drift.
+ *
+ * Returns the line INCLUDING its trailing newline, or `''` when no line should
+ * be emitted. The four cases map onto the skill's table
+ * (`.agents/skills/dispatch-analysis/SKILL.md`, step 1):
+ *
+ *  - `undefined` → `''`. The scope was never threaded (e.g. the single-plan
+ *    planner dispatch at TaskViewerProvider's `dispatch-analysis` allowlist,
+ *    which has no board filter to pass). Omitting the line is the skill's
+ *    "use `PLANS TO PROCESS` verbatim, do not widen" fallback. Emitting
+ *    `PROJECT=<all>` here would be strictly WORSE than the pre-scoping
+ *    behaviour: it actively instructs the agent to widen to every project.
+ *  - `null` / `''` → `PROJECT=<all>`. The board genuinely has no filter, so the
+ *    whole workspace IS the scope the user pressed Analyze on.
+ *  - the unassigned sentinel → `PROJECT=<unassigned>`.
+ *  - anything else → `PROJECT=<that name>`, with `\r`/`\n` stripped (project
+ *    names are user-authored and a newline would corrupt the prompt block).
+ */
+export function buildAnalysisScopeLine(scope: string | null | undefined): string {
+    if (scope === undefined) { return ''; }
+    const cleaned = scope === null ? '' : String(scope).replace(/[\r\n]/g, '').trim();
+    if (cleaned === '') { return 'PROJECT=<all>\n'; }
+    if (cleaned === UNASSIGNED_PROJECT_SENTINEL) { return 'PROJECT=<unassigned>\n'; }
+    return `PROJECT=${cleaned}\n`;
 }
 
 export function resolveBaseInstructions(

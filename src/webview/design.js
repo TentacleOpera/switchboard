@@ -2000,9 +2000,6 @@
     const btnGenerateStitch = document.getElementById('btn-generate-stitch');
     const stitchGallery = document.getElementById('stitch-gallery');
     const stitchGalleryEmpty = document.getElementById('stitch-gallery-empty');
-    const stitchApiBanner = document.getElementById('stitch-api-banner');
-    const stitchApiKeyInput = document.getElementById('stitch-api-key-input');
-    const btnSaveStitchApiKey = document.getElementById('btn-save-stitch-api-key');
     const statusStitch = document.getElementById('status-stitch');
     const btnNewStitchProject = document.getElementById('btn-new-stitch-project');
     const btnRefreshStitchProjects = document.getElementById('btn-refresh-stitch-projects');
@@ -2749,16 +2746,6 @@
                 destination,
                 workspaceRoot: state.stitchWorkspaceRoot
             });
-        });
-    }
-
-    if (btnSaveStitchApiKey && stitchApiKeyInput) {
-        btnSaveStitchApiKey.addEventListener('click', () => {
-            const apiKey = stitchApiKeyInput.value.trim();
-            if (apiKey) {
-                vscode.postMessage({ type: 'stitchSaveApiKey', apiKey });
-                stitchApiBanner.style.display = 'none';
-            }
         });
     }
 
@@ -3813,17 +3800,11 @@
 
             case 'stitchApiKeyStatus':
                 state.stitchApiKeyConfigured = msg.configured;
-                if (stitchApiBanner) {
-                    stitchApiBanner.style.display = msg.configured ? 'none' : 'flex';
-                }
                 break;
 
             case 'stitchAuthStatus':
                 state.stitchApiKeyConfigured = msg.configured;
                 state.stitchAuthValid = msg.valid;
-                if (stitchApiBanner) {
-                    stitchApiBanner.style.display = msg.configured ? 'none' : 'flex';
-                }
                 updateStitchAuthUI(msg);
                 break;
 
@@ -4964,15 +4945,40 @@
             if (panel) panel.style.display = 'none';
         });
 
-        // Save auth config
+        // Save auth config — tri-state: typed key → store, untouched mask → no-op, clear → delete
         document.getElementById('btn-save-stitch-auth')?.addEventListener('click', () => {
-            const apiKey = document.getElementById('stitch-api-key-input')?.value.trim() || '';
-            
-            vscode.postMessage({
-                type: 'stitchSaveAuthConfig',
-                apiKey
-            });
+            const el = document.getElementById('stitch-api-key-input');
+            const raw = el?.value.trim() || '';
+            const msg = { type: 'stitchSaveAuthConfig' };
+            if (raw && raw !== '**********') { msg.apiKey = raw; }   // typed a new key → store
+            // untouched mask, or empty-and-remasked → send no apiKey at all → backend no-ops
+            vscode.postMessage(msg);
         });
+
+        // Clear auth — deletes immediately, no confirmation (per project rules)
+        document.getElementById('btn-clear-stitch-auth')?.addEventListener('click', () => {
+            vscode.postMessage({ type: 'stitchSaveAuthConfig', clearKey: true });
+        });
+
+        // Token input masking: clear mask on focus, restore on blur if unchanged.
+        // Ported from setup.html:2508-2530 (setupTokenMasking).
+        const _stitchKeyInput = document.getElementById('stitch-api-key-input');
+        if (_stitchKeyInput) {
+            _stitchKeyInput.addEventListener('focus', () => {
+                if (_stitchKeyInput.dataset.hasToken === 'true' && _stitchKeyInput.value === '**********') {
+                    _stitchKeyInput.value = '';
+                    _stitchKeyInput.dataset.hasToken = 'false';
+                    _stitchKeyInput.style.borderLeft = '';
+                }
+            });
+            _stitchKeyInput.addEventListener('blur', () => {
+                if (_stitchKeyInput.value.trim() === '' && _stitchKeyInput.dataset.originalHasToken === 'true') {
+                    _stitchKeyInput.value = '**********';
+                    _stitchKeyInput.dataset.hasToken = 'true';
+                    _stitchKeyInput.style.borderLeft = '3px solid var(--accent-green)';
+                }
+            });
+        }
 
         // Validate auth
         document.getElementById('btn-validate-stitch-auth')?.addEventListener('click', () => {
@@ -5164,16 +5170,27 @@
     }
 
     function updateStitchAuthUI(msg) {
-        const apiKey = msg.apiKey || '';
-        
-        // Update inputs
+        // Mask on hydration — never write the real key into the field.
+        // Mirrors tickets.js:7883-7898 (ClickUp/Linear) masking pattern.
         const keyInput = document.getElementById('stitch-api-key-input');
-        if (keyInput) keyInput.value = apiKey;
+        if (keyInput) {
+            if (msg.configured) {
+                keyInput.value = '**********';
+                keyInput.dataset.hasToken = 'true';
+                keyInput.dataset.originalHasToken = 'true';
+                keyInput.style.borderLeft = '3px solid var(--accent-green)';
+            } else {
+                keyInput.value = '';
+                keyInput.dataset.hasToken = 'false';
+                keyInput.dataset.originalHasToken = 'false';
+                keyInput.style.borderLeft = '';
+            }
+        }
 
         // Update status indicator
         const indicator = document.getElementById('stitch-auth-status-indicator');
         const errMsg = document.getElementById('stitch-auth-error-msg');
-        
+
         if (indicator) {
             if (msg.configured) {
                 if (msg.valid) {

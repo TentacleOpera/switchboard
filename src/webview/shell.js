@@ -300,7 +300,21 @@
             container.setAttribute('aria-label', 'Fleet terminals');
 
             if (themeBtn) {
-                strip.insertBefore(container, themeBtn);
+                // Insert BEFORE the first bottom-placement icon (settings) when
+                // one exists, so the DOM order is: top group → terminals →
+                // settings → theme toggle. applyBottomAnchor then hands
+                // margin-top:auto to the settings icon, pinning settings +
+                // theme toggle together at the foot of the rail with the
+                // fleet list above them. Inserting before themeBtn instead
+                // would sandwich the fleet list between settings and the
+                // toggle, separating the two controls the user asked to keep
+                // adjacent.
+                const firstBottom = strip.querySelector('.strip-placement-bottom');
+                if (firstBottom) {
+                    strip.insertBefore(container, firstBottom);
+                } else {
+                    strip.insertBefore(container, themeBtn);
+                }
                 themeBtn.style.marginTop = '';
             } else {
                 strip.appendChild(container);
@@ -442,11 +456,14 @@
             if (panel.placement === 'bottom') { bottomPanels.push(icon); } else { strip.appendChild(icon); }
         }
 
-        // Bottom cluster, in reading order: settings icons, then the fleet list, then
-        // the theme toggle. The fleet container carries `margin-top: auto`, so anything
-        // appended BEFORE it and AFTER the top group lands at the top of the bottom
-        // cluster — which is what keeps Setup adjacent to the theme toggle even as the
-        // fleet list grows toward its 40vh cap.
+        // Bottom cluster: settings icons are appended here, then the theme
+        // toggle. renderTerminalSection (called next) inserts the fleet
+        // container BEFORE the settings icons, yielding the DOM order:
+        // top group → terminals → settings → theme toggle. applyBottomAnchor
+        // hands margin-top:auto to the settings icon, pinning settings +
+        // theme toggle together at the foot of the rail with the fleet list
+        // above them — keeping the two controls adjacent even as the fleet
+        // list grows toward its 40vh cap.
         for (const icon of bottomPanels) { strip.appendChild(icon); }
 
         const themeBtn = buildThemeToggle();

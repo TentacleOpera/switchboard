@@ -293,6 +293,61 @@ function post(port, pathname, body) {
         );
     });
 
+    await test('all three ptySendPrompt delivery paths honour an EXPLICIT clearBeforePrompt', () => {
+        // The link-up relay's single most destructive failure mode. sendPromptToPty
+        // writes `/clear` before the prompt when clearBeforePrompt is truthy, and the
+        // config default is true — so a caller that hands its own context over must be
+        // able to turn it off, on BOTH hosts. bootstrap.ts used to pass
+        // getPromptDeliveryOptions() straight through, which DISCARDED the caller's
+        // flag: the request visibly carried `clearBeforePrompt: false`, the call
+        // returned {"success":true}, and the parent agent was /clear-ed anyway.
+        // Green-while-wrong, on the one host with no other symptom.
+        //
+        // Pinned as a source assertion because the defect is an omission, not a
+        // behaviour: a "simplify to the shared options helper" refactor re-arms it
+        // and nothing else in the suite notices.
+        const bootstrap = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'bootstrap.ts'), 'utf8');
+        const armStart = bootstrap.indexOf(`case 'ptySendPrompt'`);
+        assert.ok(armStart !== -1, "bootstrap.ts must serve a 'ptySendPrompt' arm");
+        const arm = bootstrap.slice(armStart, armStart + 2000);
+        assert.ok(
+            /payload\.clearBeforePrompt/.test(arm),
+            'the standalone ptySendPrompt arm must READ payload.clearBeforePrompt — passing '
+            + 'getPromptDeliveryOptions() straight through discards the caller\'s explicit false '
+            + 'and /clear-s the very terminal being asked to hand its context over.'
+        );
+        assert.ok(
+            /typeof payload\.clearBeforePrompt === 'boolean'/.test(arm),
+            'the standalone arm must fall back to the config default only when the field is ABSENT '
+            + '(typeof === boolean), so an explicit false wins and an omitted field is unchanged.'
+        );
+
+        // The pty host child (extension-host fleet) resolves the same field itself.
+        const child = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'ptyHost.ts'), 'utf8');
+        assert.ok(
+            /clearBeforePrompt:\s*payload\.clearBeforePrompt === true/.test(child),
+            'ptyHost.ts must resolve clearBeforePrompt from the payload, defaulting to false.'
+        );
+
+        // The extension host injects the config default ONLY when the caller omitted it.
+        const provider = fs.readFileSync(path.join(REPO_ROOT, 'src', 'services', 'TaskViewerProvider.ts'), 'utf8');
+        assert.ok(
+            /payload\.clearBeforePrompt === undefined/.test(provider),
+            'TaskViewerProvider must inject the config default only when clearBeforePrompt is undefined — '
+            + 'an unconditional injection overwrites an explicit false.'
+        );
+
+        // …and the link-up sender is the caller that depends on all of the above.
+        const js = fs.readFileSync(path.join(REPO_ROOT, 'src', 'webview', 'terminals.js'), 'utf8');
+        const sendStart = js.indexOf('async function sendLinkMessage');
+        assert.ok(sendStart !== -1, 'terminals.js must define sendLinkMessage (the link-up sender)');
+        assert.ok(
+            /clearBeforePrompt:\s*false/.test(js.slice(sendStart, sendStart + 4000)),
+            'sendLinkMessage must post an explicit clearBeforePrompt: false — omitting it applies the '
+            + 'config default (true) and wipes the parent agent before it is asked to relay.'
+        );
+    });
+
     if (failures > 0) {
         console.error(`\n${failures} contract check(s) failed.\n`);
         process.exit(1);

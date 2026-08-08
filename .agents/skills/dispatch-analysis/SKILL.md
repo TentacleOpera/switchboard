@@ -16,11 +16,12 @@ routes to this skill. It is NOT invoked ad hoc by the user.
 The prompt provides:
 - `WORKSPACE_ROOT` — the workspace root path
 - `API_PORT` — the LocalApiServer port
+- `PROJECT` — the board's active project filter (optional; see step 1)
 - `PLANS TO PROCESS` — a list of candidate plan IDs/files
 
 ## Steps
 
-### 1. Fetch the current Planned column
+### 1. Fetch the current Planned column — scoped to the board the user is looking at
 
 Query the API for the latest board state (the plan list in the prompt may be stale by the
 time analysis runs — always re-query for freshness):
@@ -29,9 +30,44 @@ time analysis runs — always re-query for freshness):
 GET http://localhost:{API_PORT}/kanban/board?workspaceRoot={WORKSPACE_ROOT}
 ```
 
-Filter for cards where `kanbanColumn === 'PLAN REVIEWED'`. These are the candidates.
+Filter for cards where `kanbanColumn === 'PLAN REVIEWED'`.
 
-If no Planned cards exist, report "No Planned plans to analyze" and stop.
+**Then scope the result — the board endpoint returns every project, the board the user
+pressed Analyze on does not.** Analysing cards from another project stages work the user
+cannot see in the column they clicked, which is never what they asked for.
+
+| Prompt carries | Scope the re-queried Planned column to |
+| :--- | :--- |
+| `PROJECT=<name>` | cards where `project === <name>` |
+| `PROJECT=<unassigned>` | cards with an empty `project` |
+| `PROJECT=<all>` | every card — the user is viewing the unfiltered board |
+| no `PROJECT` line | **exactly the plans listed in `PLANS TO PROCESS`** — do not widen |
+
+The re-query is for *freshness* (a card may have moved, a plan may have been edited) and to
+catch late additions **inside that scope**. It is never a licence to analyse a wider set
+than the prompt described.
+
+The surviving cards are the candidates. If none exist, report "No Planned plans to analyze"
+and stop.
+
+### 1a. Features are one unit — never split them
+
+A feature card and its subtasks are a **single indivisible candidate**. You are not
+authorised to promote, hold back, or reorder a feature's subtasks individually.
+
+- **Analyse at the feature level.** A feature's file set is the union of its own file set
+  and every subtask's. Its dependencies are the union of theirs. It conflicts with another
+  candidate if *any* of those files or dependencies overlap.
+- **Move the feature card only.** `POST /kanban/move` on a feature cascades to all its
+  subtasks atomically. Moving a subtask directly does the opposite and worse: it triggers a
+  re-derivation of the parent feature's column from its subtasks, silently dragging the
+  feature somewhere the user did not put it.
+- **All in, or none in.** If any part of a feature makes it unsafe to parallelise, the
+  whole feature stays in Planned. Never stage "the safe half" of a feature.
+- **A subtask is never a standalone candidate.** If a subtask appears in the re-queried
+  board with `kanbanColumn === 'PLAN REVIEWED'` but its parent feature is in another
+  column, it is not a candidate at all — the user sees it rolled up under the feature, not
+  in Planned. Skip it and name it in the report.
 
 ### 2. Read each plan file
 
@@ -79,9 +115,18 @@ This is a maximum independent set problem on the conflict graph. Use a greedy ap
 
 The result is the **dispatch set** — the largest parallelizable subset.
 
-### 5. Move the dispatch set to DISPATCH
+### 5. Announce the set, then move it — reporting as you go
 
-For each plan in the dispatch set, move its card to DISPATCH:
+Card moves write to the board database. A silent run that only reports once every write has
+landed gives the user no chance to see what is happening and no way to tell a correct run
+from a wrong one until it is already done.
+
+**5a. Print the intended set before the first move.** One line per plan: plan ID, topic, and
+the file set that made it safe. Print the held-back plans and their conflict reasons in the
+same breath, so the whole decision is visible before anything is written.
+
+**5b. Move one card at a time, and print the outcome of each move as it returns.** Never
+batch the moves into a single loop that reports only at the end.
 
 ```
 POST http://localhost:{API_PORT}/kanban/move
@@ -92,23 +137,37 @@ POST http://localhost:{API_PORT}/kanban/move
 }
 ```
 
+After each call, print `moved <planId> — <topic> → DISPATCH` on success, or the error on
+failure. **A failed move does not abort the run** — carry on with the rest and list the
+failures in the report.
+
 Use the `switchboard-linear` skill's API call pattern if available, or call the endpoint
 directly via `curl` / the API proxy.
 
 ### 6. Report
 
 Output a summary:
+- Scope analysed: the project (or `PLANS TO PROCESS` list) the candidates came from
 - Total Planned plans analyzed: N
 - Plans moved to Dispatch (parallel-safe): list with plan IDs and brief descriptions
 - Plans remaining in Planned (conflicts): list with plan IDs and the conflict reason
+- Moves that failed, if any, with the error
 - Recommended next step: "Send Dispatch plans to coder" or "Resolve conflicts and re-analyze"
 
 ## Rules
 
 - **Never modify plan files.** This is a read-only analysis pass — the only writes are
   card moves via the API.
-- **Always re-query the board.** The plan list in the prompt is a snapshot; late additions
-  to Planned must be included.
+- **Stay inside the board's scope.** The `/kanban/board` endpoint returns every project;
+  the column the user pressed Analyze on does not. Scope per step 1 before analysing
+  anything, and name the scope in the report.
+- **Re-query the board, but only within scope.** The plan list in the prompt is a snapshot;
+  late additions must be included — late additions *to the same project*, not to the
+  workspace at large.
+- **A feature is one unit.** Analyse it as the union of its subtasks, move the feature card
+  and let the cascade carry them, and never promote a subtask on its own. See step 1a.
+- **Report before you write, and after every write.** Card moves hit the database; the user
+  must be able to watch them land, not just read about them afterwards. See step 5.
 - **Prefer larger sets.** The goal is maximum parallelism — if removing one plan would
   allow two others to join, and the two are larger in scope, prefer the swap.
 - **Conservative on conflicts.** When uncertain about file overlap (e.g. a plan says

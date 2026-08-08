@@ -1,0 +1,29 @@
+# Terminals kanban-pane drag-to-terminal dispatch
+
+**Complexity:** 5
+
+## Goal
+
+Drag-and-drop from a Terminals-panel kanban pane onto a terminal pane is missing two behaviours the Kanban board already has: it never stamps active-agent tracking (dispatched_at / dispatched_agent / dispatched_terminal), and it cannot carry a multi-selection. Both subtasks modify wireTerminalDropTarget and the kanban-pane row renderer in src/webview/terminals.js.
+
+## How the Subtasks Achieve This
+
+- **Kanban-pane drag-to-terminal never marks the plan as dispatched — no active-agent tracking**: Adds an `attributeDropDispatch(terminalName, planIds, workspaceRoot)` helper inside `wireTerminalDropTarget` (`src/webview/terminals.js:2159`) and calls it from both delivery branches — the Shift raw-WebSocket paste and the normal `ptySendPrompt` verb — on a confirmed successful send. It POSTs the already-shipped `attributePastedPrompt` verb, whose narrow writer `attributePasteDispatch` (`KanbanDatabase.ts:9671`) stamps `dispatched_agent` / `dispatched_terminal` / `dispatched_at` without touching `routed_to` / `dispatched_ide`. That closes the one gap that keeps the pane's dispatches invisible to the derived `working` flag every board-card builder reads. It touches no provider, verb, schema, catalog or DB code.
+- **Kanban-pane rows have no multi-select — drag-to-terminal can only ever dispatch one plan**: Adds per-pane selection state (`kanbanPaneSelection`, keyed by pane index, re-applied during row construction so it survives the 5s poll's signature-gated rebuild), a row-body click handler with the board's cross-workspace guard and button-click exclusion, a `dragstart` that widens the payload to `planIds: string[]`, a drop handler that consumes N ids and posts them straight through to the already-batch-capable `promptSelected` verb, and `.selected` / `.dragging` CSS in `terminals.html`. It makes the pane a true miniature of the board rather than a one-card-per-drag affordance.
+
+## Dependencies & sequencing
+
+- **Cross-feature dependencies:** none. Both subtasks are confined to `src/webview/terminals.js` and `src/webview/terminals.html` (plus two contract-test files, `paste-attribution-contract.test.js` and `browser-kanban-pane-order.test.js`, which do not overlap). Every backend surface they rely on — the `attributePastedPrompt` verb, its `verbSchemas.ts` entry, the `KANBAN_VERBS` allowlist row, the batch-capable `promptSelected` arm in both hosts, and the `attributePasteDispatch` writer — already exists at HEAD. No provider, DB, schema, verb-allowlist, catalog or migration change is required by either subtask.
+- **Shipping order — strictly serial, dispatch-attribution first.** Both subtasks edit the same function (`wireTerminalDropTarget`, `terminals.js:2159`) and the same drop listener body, so per the project PRD's "one agent stream per provider file; the same file serialises" they must not run in parallel worktrees.
+  1. **Kanban-pane drag-to-terminal never marks the plan as dispatched** — lands first. It is the smaller change (complexity 4), it is a pure bugfix that is independently shippable and valuable on its own, and it introduces the `attributeDropDispatch` helper the second subtask then feeds.
+  2. **Kanban-pane rows have no multi-select** — lands second, on top. It rewrites the drop handler's payload parsing (`planIds` array + bare-array rejection) and swaps both `attributeDropDispatch` call sites from `[planId || sessionId]` to the reconciled `ids`.
+- **Reconciled contract between them (load-bearing — implement to this, not to either plan in isolation):** `attributeDropDispatch` takes an **array** of plan ids from the very first commit, even though the first subtask only ever passes a one-element array. A single-id signature would compile, pass its tests, and then silently light exactly one of N activity pips the moment multi-select lands. `attributePastedPrompt` already loops over `planIds` and attributes each id independently (`KanbanProvider.ts:9707-9723`), so the array shape is free.
+- **Prerequisites and guards already in place:** the `buttonPressRowEl` drag-disarm (`terminals.js:450-467`) must keep holding once the row gains a click handler — the new handler mirrors the board's `if (e.target.closest('button')) return;` exclusion. Neither subtask may add selection state to `saveLayoutSettings()` or to the pane's `bodySig`: the former would need a migration for the ~4,000-install base, the latter would force a full list rebuild on every click.
+- **External questions: closed.** Both browser-platform uncertainties the multi-select subtask raised were settled by web research and are recorded in its `## Resolved Assumptions` section — treat that section as authoritative and do not re-open it. In short: (a) Chromium fires **no** `click` on a drag source after a drag, drop or cancel, so selection must toggle on `click` (never `pointerdown`) and a `dragstart` suppression flag must **not** be added — it would deadlock against the handler's own `preventDefault` branches; (b) a cross-origin `vscode-webview://` boundary does **not** block custom-MIME payload reads on `drop`, so a Kanban-board card dragged onto a terminal pane genuinely reaches this drop handler carrying a bare id array — the `Array.isArray(dragData)` rejection defends a real path. Nothing here blocks either subtask.
+
+<!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
+## Subtasks
+- [ ] [Kanban-pane drag-to-terminal never marks the plan as dispatched — no active-agent tracking](../plans/feature_plan_20260807161805_kanban-pane-drop-does-not-mark-agent-working.md) — **PLAN REVIEWED**
+- [ ] [Kanban-pane rows have no multi-select — drag-to-terminal can only ever dispatch one plan](../plans/feature_plan_20260807161806_kanban-pane-multi-select-drag-to-terminal.md) — **PLAN REVIEWED**
+<!-- END SUBTASKS -->
+

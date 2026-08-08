@@ -501,7 +501,8 @@
 .host-secrets-entry-false #btn-apply-clickup-config,
 .host-secrets-entry-false #btn-apply-linear-config,
 .host-secrets-entry-false #btn-apply-notion-config,
-.host-secrets-entry-false #btn-save-stitch-auth {
+.host-secrets-entry-false #btn-save-stitch-auth,
+.host-secrets-entry-false #btn-clear-stitch-auth {
     display: none !important;
 }
 .host-secrets-entry-false #clickup-token-input,
@@ -599,9 +600,38 @@
     }
 
 
+    /*
+     * Token fields carry `type="text"` + `.masked-token-input` so Chrome's credential
+     * classifier — which reads DOM attributes, never CSS — never treats them as password
+     * inputs and never offers to save an API key to the browser's password manager.
+     * The masking comes entirely from `-webkit-text-security: disc`, which Firefox has
+     * never implemented (and CSS UI 4 offers no replacement: `input-security` only
+     * *removes* obscuring). Without this fallback, a Firefox cockpit renders the token
+     * the user types in the clear.
+     *
+     * So: where the property is unsupported, put `type="password"` back. Chromium and
+     * WebKit support it and keep `type="text"`, which is where the reported save-password
+     * prompt came from. Detect direction is fail-safe — an unknown engine masks.
+     */
+    function restoreTokenMaskingFallback() {
+        try {
+            const supportsTextSecurity = typeof CSS !== 'undefined'
+                && typeof CSS.supports === 'function'
+                && CSS.supports('-webkit-text-security', 'disc');
+            if (supportsTextSecurity) { return; }
+            document.querySelectorAll('input.masked-token-input').forEach(el => {
+                if (el.type !== 'password') { el.type = 'password'; }
+            });
+        } catch (err) {
+            console.warn('[transport] Token masking fallback failed:', err);
+        }
+    }
+
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', applyCapabilityGating);
+        document.addEventListener('DOMContentLoaded', restoreTokenMaskingFallback);
     } else {
         applyCapabilityGating();
+        restoreTokenMaskingFallback();
     }
 })();

@@ -562,6 +562,14 @@
           "description": "How long (ms) a card's agent-activity light stays lit after dispatch before the timeout sweep clears it. Default 10 minutes. Lowering it trades false-off for stuck-on.",
           "scope": "resource"
         },
+        "switchboard.activityLight.livenessWindowMs": {
+          "type": "integer",
+          "default": 90000,
+          "minimum": 10000,
+          "maximum": 600000,
+          "description": "How recently (ms) a dispatched PTY terminal must have produced output for the activity-light sweep to spare its card past the timeout. Default 90s. Deliberately a separate knob from timeoutMs — one is 'how long we believe a silent agent', the other is 'how recently we must have heard from it'. Only applies to PTY-fleet seats; native vscode.Terminal seats degrade to the blind timeout. A hard cap of 3x timeoutMs (measured from dispatch) still clears a wedged agent whose terminal keeps repainting.",
+          "scope": "resource"
+        },
         "switchboard.boardStateExport": {
           "type": "string",
           "enum": [
@@ -877,7 +885,8 @@
     "test:contract:scheduled-jobs": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/scheduled-jobs-and-connections.test.js",
     "test:contract:spark-context-exporter": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/spark-context-exporter-contract.test.js",
     "test:contract:kanban-column-labels": "mocha --ui tdd --require ./src/test/bootstrap/sandboxStateHome.js out/test/kanban-auto-export.test.js --grep \"Column label parity\"",
-    "test:contract:paste-attribution": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/paste-attribution-contract.test.js"
+    "test:contract:paste-attribution": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/paste-attribution-contract.test.js",
+    "test:contract:dispatch-analysis-scope": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/dispatch-analysis-scope-contract.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",

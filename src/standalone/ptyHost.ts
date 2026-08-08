@@ -87,6 +87,16 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                 return { success: ok };
             }
             case 'ptyListTerminals': {
+                // `terminals` stays EXACTLY the live-handle projection it has always
+                // been (plus V58's `lastDataAt`). Tombstones ride a SIBLING
+                // `liveness` key instead of being appended to `terminals`:
+                // terminals.js assigns `fleetList = data.terminals` unfiltered and
+                // renders every entry, so a tombstone in that array makes an
+                // operator-closed terminal reappear as a permanent ghost row in the
+                // sidebar, keeps its pane slot alive through
+                // `sanitizePaneAssignments`, and reads as live in
+                // `checkSoloNotFound`. The extension host reads `liveness` for the
+                // activity-light force-clear; every existing consumer is untouched.
                 return {
                     success: true,
                     terminals: fleet.list().map(t => ({
@@ -97,7 +107,9 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                         startTime: t.startTime,
                         worktreePath: t.worktreePath,
                         cwd: t.cwd,
-                    }))
+                        lastDataAt: t.lastDataAt,
+                    })),
+                    liveness: fleet.getLiveness(),
                 };
             }
             case 'ptyRenameTerminal': {

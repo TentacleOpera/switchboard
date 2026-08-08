@@ -21,7 +21,7 @@ import {
 } from './agentConfig';
 import { AgentSkillExporter } from './AgentSkillExporter';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
-import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath } from './agentPromptBuilder';
+import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine } from './agentPromptBuilder';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow } from './KanbanDatabase';
 import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (is_feature clobber) — remove with the probes
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
@@ -4734,14 +4734,26 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         // so the agent sees the candidate plan IDs/files directly; the skill re-queries
         // the API for freshness (late additions are never stale).
         if (role === 'planner' && overrides?.instruction === 'dispatch-analysis') {
-            const dispatchContext = buildPromptDispatchContext(plans);
+            // The analysis unit is the feature. Keep buildDispatchPlans as the single
+            // builder and filter its output at this arm — subtask expansion is correct
+            // for a coder dispatch but wrong for analysis, where the unit of the
+            // decision is the feature (promoting a subtask individually is destructive:
+            // it silently relocates the parent feature card the user never touched).
+            const analysisPlans = plans.filter(p => !p.isSubtask);
+            const effectivePlans = analysisPlans.length > 0 ? analysisPlans : plans;
+            if (analysisPlans.length === 0 && plans.length > 0) {
+                console.warn('[KanbanProvider] dispatch-analysis: every candidate plan was a subtask; falling back to the unfiltered list rather than emitting an empty PLANS TO PROCESS block.');
+            }
+            const dispatchContext = buildPromptDispatchContext(effectivePlans);
             const apiPort = this._taskViewerProvider?.getLocalApiServerPort() ?? 0;
+            const scopeLine = buildAnalysisScopeLine(overrides?.analysisScope);
             const dispatchPrompt =
                 `Read and follow .agents/skills/dispatch-analysis/SKILL.md now.\n` +
                 `This is a read-only analysis pass — do not modify any plan file.\n` +
                 `WORKSPACE_ROOT=${workspaceRoot}\n` +
-                `API_PORT=${apiPort}\n\n` +
-                `PLANS TO PROCESS:\n${dispatchContext.planList}`;
+                `API_PORT=${apiPort}\n` +
+                `${scopeLine}` +
+                `\nPLANS TO PROCESS:\n${dispatchContext.planList}`;
             return dispatchPrompt;
         }
 
@@ -10120,9 +10132,22 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 // is registered in both hosts (extension.ts / standalone bootstrap.ts).
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
                 if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
-                const sourceCards = this._visibleColumnCards(workspaceRoot, 'PLAN REVIEWED');
+                // The initiating client's own view filter, stamped on every board verb by
+                // postKanbanMessage (kanban.html:4668-4680). `undefined` (a raw API caller
+                // that sent no filter) means "no scope" → all cards, preserving prior
+                // behaviour. null and '__unassigned__' are meaningful sentinels — pass
+                // them through to _cardMatchesProjectFilter which owns the three-way map.
+                const analysisScope: string | null =
+                    msg.initiatorProject === undefined ? null : msg.initiatorProject;
+                const sourceCards = this._visibleColumnCards(workspaceRoot, 'PLAN REVIEWED')
+                    .filter(card => this._cardMatchesProjectFilter(card, analysisScope));
                 if (sourceCards.length === 0) {
-                    void this._seams().ui.showInformationMessage('No Planned plans available to analyze for parallel dispatch.');
+                    const scopeLabel = analysisScope === null || analysisScope === ''
+                        ? 'the workspace'
+                        : analysisScope === KanbanDatabase.UNASSIGNED_PROJECT_FILTER
+                            ? 'the Unassigned board'
+                            : analysisScope;
+                    void this._seams().ui.showInformationMessage(`No Planned plans in ${scopeLabel} to analyze for parallel dispatch.`);
                     return { success: false, error: 'No Planned plans available to analyze for parallel dispatch.' };
                 }
                 const plannedIds = sourceCards.map(card => this._cardId(card));
@@ -10133,7 +10158,8 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     'dispatch-analysis',
                     workspaceRoot,
                     undefined,
-                    !!msg?.apiOriginated
+                    !!msg?.apiOriginated,
+                    analysisScope
                 );
                 void this._seams().ui.showInformationMessage(`Analyzing ${plannedIds.length} plan(s) for parallel dispatch.`);
                 return { success: true, sent: plannedIds.length };

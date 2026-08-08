@@ -455,7 +455,7 @@ Manual verification steps:
                 getWorktrees: sandbox.stub().resolves([]),
                 getConfig: sandbox.stub().resolves(null),
                 getSubtaskCountsByFeature: sandbox.stub().resolves(new Map()),
-                getFeatureWorkingStates: sandbox.stub().resolves(new Map())
+                getFeatureWorkingStates: sandbox.stub().resolves(new Map<string, { working: boolean; blocked: boolean }>())
             };
             sandbox.stub(provider as any, '_getKanbanDb').returns(mockDb);
 

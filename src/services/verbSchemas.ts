@@ -133,11 +133,13 @@ const DESIGN_VERB_SCHEMAS: Record<string, VerbSchema> = {
     stitchSaveApiKey: {
         fields: {
             apiKey: { type: 'string' },
+            clearKey: { type: 'boolean' },
         },
     },
     stitchSaveAuthConfig: {
         fields: {
             apiKey: { type: 'string' },
+            clearKey: { type: 'boolean' },
         },
     },
     saveFileContent: {
@@ -353,12 +355,16 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
     },
     // Dispatch view (display mode of PLAN REVIEWED). toggleDispatchView dereferences
     // no payload field (mirrors toggleBacklogView, which has no schema), so it needs
-    // none. dispatchAnalyze reads only workspaceRoot (optional — the arm falls back to
-    // the provider's current root). sendDispatchToCoder reads sessionIds + workspaceRoot.
-    // Permissive per PRD contract #5 — require only what each arm dereferences.
+    // none. dispatchAnalyze reads workspaceRoot (optional — the arm falls back to the
+    // provider's current root) and initiatorProject (optional, never required — the
+    // validator accepts an explicit null, which is the "no scope" sentinel; see the
+    // createFeature comment at :186 for the same reasoning). sendDispatchToCoder reads
+    // sessionIds + workspaceRoot. Permissive per PRD contract #5 — require only what
+    // each arm dereferences.
     dispatchAnalyze: {
         fields: {
             workspaceRoot: { type: 'string' },
+            initiatorProject: { type: 'string' },
         },
     },
     sendDispatchToCoder: {

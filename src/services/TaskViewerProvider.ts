@@ -235,6 +235,8 @@ type ConfiguredKanbanDispatchOptions = {
      * (it may use the PTY fleet) but is NOT an explicit command (the gate still binds).
      */
     bypassTriggerGate?: boolean;
+    /** Resolved project scope for the dispatch-analysis pass (null = all, '__unassigned__' = unpinned, else project name). Threaded from the dispatchAnalyze arm through to generateUnifiedPrompt's overrides. */
+    analysisScope?: string | null;
 };
 
 type ClickUpSetupColumnState = {
@@ -429,6 +431,23 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 this._ptyTerminalNames = result.terminals
                     .filter((t: any) => t.status === 'active')
                     .map((t: any) => t.friendlyName);
+                // All-statuses liveness cache for the activity-light sweep. Read
+                // from the SIBLING `liveness` key, which carries the fleet's
+                // recentlyClosed tombstones (operator-killed terminals — the
+                // force-clear's only evidence for the most common death path).
+                // Tombstones deliberately do NOT appear in `terminals`: that array
+                // is rendered unfiltered by terminals.js, so a corpse in it becomes
+                // a permanent ghost row in the sidebar. Falls back to `terminals`
+                // for a ptyHost child that predates the `liveness` key — that loses
+                // only the operator-kill tombstones, degrading to the blind timeout
+                // rather than throwing. `lastDataAt` absent ⇒ 0 ("no evidence")
+                // rather than NaN.
+                const livenessSource: any[] = Array.isArray(result.liveness) ? result.liveness : result.terminals;
+                this._ptyLiveness = livenessSource.map((t: any) => ({
+                    friendlyName: String(t.friendlyName ?? ''),
+                    lastDataAt: Number(t.lastDataAt ?? 0) || 0,
+                    status: String(t.status ?? 'active'),
+                }));
             }
             return result;
         } catch (err) {
@@ -583,6 +602,31 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * ptyListTerminals, so this stays fresh exactly when browser terminals matter.
      */
     private _ptyTerminalNames: string[] = [];
+
+    /**
+     * Liveness snapshot cache (all statuses), refreshed from the same
+     * `ptyListTerminals` forward that refreshes {@link _ptyTerminalNames}. Kept
+     * SEPARATE from `_ptyTerminalNames` because that cache filters
+     * `status === 'active'` for the `/kanban/dispatch` 409 guard
+     * (`getRegisteredTerminals`), and reusing it would silently drop every
+     * exited terminal — the exact rows the activity-light force-clear depends on.
+     * Read by {@link getFleetLiveness}, which the PlanIngestionEngine sweep
+     * consults synchronously so the cross-process sweep loop never blocks on an
+     * HTTP call. A stale entry biases toward "still live" (delays a clear),
+     * which is the safe direction.
+     */
+    private _ptyLiveness: Array<{ friendlyName: string; lastDataAt: number; status: string }> = [];
+
+    /**
+     * Synchronous reader for the cached fleet liveness snapshot. Returns the
+     * last forward result (all statuses, keyed on `friendlyName`); empty when the
+     * fleet is unavailable (`isPtyAvailable()` false, ptyHost boot failed) — in
+     * which case the sweep degrades to today's blind timeout (the compatibility
+     * contract for fleet-less hosts).
+     */
+    public getFleetLiveness(): Array<{ friendlyName: string; lastDataAt: number; status: string }> {
+        return this._ptyLiveness;
+    }
 
     // --- Single-flight coalescing guards (refresh-storm circuit-breaker) ---
     // Coalesce overlapping _refreshRunSheets / _syncFilesAndRefreshRunSheets calls
@@ -1905,7 +1949,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // spawn opens a second IDE window instead of running the script.
                 // The child deletes it from its own env before spawning any shell,
                 // so operator terminals do not inherit it.
-                const child = cp.spawn(process.execPath, [ptyHostScript, '--workspace', effectiveRoot], {
+                const child = cp.spawn(process.execPath, [
+                    ptyHostScript, '--workspace', effectiveRoot
+                ], {
                     stdio: ['pipe', 'pipe', 'pipe'],
                     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
                 });
@@ -5434,7 +5480,7 @@ Each plan file must include:
         const allSameTarget = groups.every(g => g.targetAgent === groups[0].targetAgent);
 
         const dispatchToGroup = async (group: typeof groups[0], unsentLabels?: string[]): Promise<boolean> => {
-            const prompt = await this._kanbanProvider!.generateUnifiedPrompt(role, group.plans, resolvedWorkspaceRoot, { instruction });
+            const prompt = await this._kanbanProvider!.generateUnifiedPrompt(role, group.plans, resolvedWorkspaceRoot, { instruction, analysisScope: options?.analysisScope });
             const finalPrompt = this._appendAdditionalInstructions(prompt, undefined, options?.additionalInstructions);
 
             // Persist this group's cards before dispatch (immediate UI feedback)

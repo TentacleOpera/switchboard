@@ -145,6 +145,23 @@ export class PlanIngestionEngine {
         this._onWorkingStateCleared = cb;
     }
 
+    /**
+     * Injected liveness provider (host-agnostic seam). Returns the PTY fleet's
+     * current `{ friendlyName, lastDataAt, status }` snapshot — empty on the
+     * fleet-less host, so the sweep degrades to today's blind timeout. The engine
+     * must NOT import the fleet directly (it would couple this host-agnostic
+     * module to node-pty and break the standalone/extension seam split). Read
+     * synchronously inside the sweep loop — the extension host supplies a cached
+     * snapshot (`TaskViewerProvider.getFleetLiveness`) to avoid a cross-process
+     * HTTP call per tick; the standalone host supplies the in-process fleet's
+     * `getLiveness()` directly via a lazy closure.
+     */
+    private _terminalLivenessProvider?: () => Array<{ friendlyName: string; lastDataAt: number; status: string }>;
+
+    public setTerminalLivenessProvider(fn: () => Array<{ friendlyName: string; lastDataAt: number; status: string }>): void {
+        this._terminalLivenessProvider = fn;
+    }
+
     public setFeatureFileRegenerator(cb: (workspaceRoot: string, featureId: string) => Promise<void>): void {
         this._regenerateFeatureFile = cb;
     }
@@ -241,16 +258,79 @@ export class PlanIngestionEngine {
                 }
                 const activityCfg = this._host.getConfig('activityLight');
                 const timeoutMs = activityCfg.getNumber('timeoutMs', 10 * 60 * 1000);
+                // Liveness window: how recently a dispatched terminal must have
+                // produced output for the sweep to spare its card. Deliberately a
+                // separate knob from timeoutMs — one is "how long we believe a
+                // silent agent", the other is "how recently we must have heard".
+                // Default 90s; a silent-but-live terminal falls through to the
+                // blind timeout once its heartbeat is older than this.
+                const livenessWindowMs = activityCfg.getNumber('livenessWindowMs', 90000);
+                // Partition the fleet ONCE per tick (not per folder) — the fleet
+                // is process-global and the snapshot is cheap. A miss on the
+                // provider (fleet-less host) yields empty arrays and the sweep
+                // degenerates to the blind timeout (today's behaviour).
+                // The provider is host-supplied and reads a binding this module does
+                // not own. The enclosing try has only a `finally`, so an exception
+                // here escapes the async interval callback as an unhandled
+                // rejection — fatal to the standalone process under Node's default
+                // rejection mode. A failed liveness read must degrade to the blind
+                // timeout, never take the plan watcher down with it.
+                let liveness: Array<{ friendlyName: string; lastDataAt: number; status: string }> = [];
+                if (this._terminalLivenessProvider) {
+                    try {
+                        liveness = this._terminalLivenessProvider() ?? [];
+                    } catch (livenessProviderErr) {
+                        this._host.logger.appendLine(
+                            `[GlobalPlanWatcher] terminal liveness provider threw; falling back to the blind timeout: ${livenessProviderErr}`
+                        );
+                    }
+                }
+                const nowMs = Date.now();
+                const liveNames: string[] = [];
+                const forceTerminals: string[] = [];
+                for (const entry of liveness) {
+                    if (!entry.friendlyName) continue;
+                    if (entry.status === 'exited') {
+                        // Exited terminal = positive evidence of NOT working — the
+                        // one case where liveness shortens the window. Force-clear
+                        // on the next tick regardless of age.
+                        forceTerminals.push(entry.friendlyName);
+                    } else if (nowMs - entry.lastDataAt < livenessWindowMs) {
+                        // Active AND recently produced output → stamp its heartbeat
+                        // so the widened age basis keeps its card lit past timeout.
+                        liveNames.push(entry.friendlyName);
+                    }
+                    // Active but silent longer than livenessWindowMs → no evidence;
+                    // falls through to the blind timer (do nothing here).
+                }
+                let recordedLiveness = 0;
+                const livenessIso = new Date(nowMs).toISOString();
                 for (const folder of folders) {
                     try {
                         const db = KanbanDatabase.forWorkspace(folder);
                         await db.ensureReady();
                         const wsId = await db.getWorkspaceId();
                         if (!wsId) continue;
-                        const cleared = await db.clearStaleWorkingState(wsId, timeoutMs);
+                        // Persist heartbeats for live active terminals BEFORE the
+                        // sweep so the widened basis is in the row the sweep reads.
+                        // ~1 write per live card per 10s — well within the sql.js
+                        // WASM-heap budget (NOT per output flush).
+                        if (liveNames.length > 0) {
+                            try {
+                                recordedLiveness += await db.recordLiveness(wsId, liveNames, livenessIso);
+                            } catch (livenessErr) {
+                                this._host.logger.appendLine(
+                                    `[GlobalPlanWatcher] recordLiveness failed for ${folder}: ${livenessErr}`
+                                );
+                            }
+                        }
+                        const cleared = await db.clearStaleWorkingState(wsId, timeoutMs, { forceTerminals });
                         if (cleared > 0) {
                             this._host.logger.appendLine(
-                                `[GlobalPlanWatcher] Activity-light timeout sweep cleared ${cleared} stale working card(s) in ${folder}`
+                                `[GlobalPlanWatcher] Activity-light timeout sweep cleared ${cleared} stale working card(s) in ${folder}` +
+                                (recordedLiveness > 0 || forceTerminals.length > 0
+                                    ? ` (liveness: recorded=${recordedLiveness}, forced=${forceTerminals.length})`
+                                    : '')
                             );
                             this._firePlanDiscovered(folder);
                         }
@@ -850,13 +930,20 @@ export class PlanIngestionEngine {
                 }
                 if (updatedRecord.dispatchedAt) {
                     try {
-                        await db.clearWorkingState(relativePath, workspaceId);
+                        // `clearWorkingState` returns TRUE only on a real
+                        // non-NULL→NULL transition. Gate the broadcast on it rather
+                        // than on `updatedRecord.dispatchedAt`, which was read
+                        // earlier and can be stale: any second concurrent clearer
+                        // for the same turn would otherwise fire the completion
+                        // toast twice.
+                        const transitioned = await db.clearWorkingState(relativePath, workspaceId);
                         const clearedRecord = { ...updatedRecord };
                         updatedRecord.dispatchedAt = null;
                         this._host.logger.appendLine(
-                            `[GlobalPlanWatcher] Plan file edit cleared working state for: ${relativePath}`
+                            `[GlobalPlanWatcher] Plan file edit cleared working state for: ${relativePath}` +
+                            (transitioned ? '' : ' (already cleared — broadcast suppressed)')
                         );
-                        if (this._onWorkingStateCleared) {
+                        if (transitioned && this._onWorkingStateCleared) {
                             try { this._onWorkingStateCleared(clearedRecord, workspaceRoot); } catch (cbErr) {
                                 this._host.logger.appendLine(`[GlobalPlanWatcher] onWorkingStateCleared callback failed: ${cbErr}`);
                             }

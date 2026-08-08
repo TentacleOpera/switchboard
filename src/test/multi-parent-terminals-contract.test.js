@@ -240,7 +240,10 @@ test('the standalone host translates parentRoot itself — it has no proxy', () 
 console.log('\n--- sidebar hierarchy ---');
 
 test('the per-parent + posts parentRoot and never a cwd', () => {
-    const create = block(terminalsJs, 'async function createTerminal(role, targetSpec) {', "const res = await fetch('/terminals/verb/ptyCreateTerminal'");
+    // Marker stops at `targetSpec` on purpose: the parameter list grows (the startup
+    // curtain added a third arg), and pinning the full signature made this contract
+    // fail on an unrelated edit rather than on the payload shape it actually guards.
+    const create = block(terminalsJs, 'async function createTerminal(role, targetSpec', "const res = await fetch('/terminals/verb/ptyCreateTerminal'");
     assert.ok(/targetSpec\.parentRoot/.test(create), 'the parent path needs its own branch');
     const parentBranch = block(create, 'if (targetSpec.parentRoot) {', '}');
     assert.ok(!/payload\.cwd/.test(parentBranch), 'setting cwd alongside parentRoot bypasses the proxy translation');

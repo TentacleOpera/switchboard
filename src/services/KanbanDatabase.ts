@@ -68,6 +68,34 @@ export interface KanbanPlanRecord {
      *  and fall back to a role+worktree fleet match, never assume a name is present. */
     dispatchedTerminal?: string;
     dispatchedAt?: string | null; // ISO timestamp the card was dispatched; NULL = not working. Activity-light source.
+    /**
+     * ISO timestamp of the most recent PTY-fleet output heartbeat persisted by the
+     * activity-light sweep (V58). Widens the working-state age basis to
+     * `MAX(dispatchedAt, lastLivenessAt ?? dispatchedAt)` with a 3× hard cap from
+     * `dispatchedAt`. NULL on fleet-less hosts and on re-dispatch → the basis
+     * degenerates to `dispatchedAt` (today's behaviour). Never rewritten except
+     * by the sweep's `recordLiveness` and the `clearWorkingState` null.
+     */
+    lastLivenessAt?: string | null;
+    /**
+     * ISO timestamp the agent is blocked / waiting on the operator (V59).
+     *
+     * NO WRITER CURRENTLY EXISTS. The original writer was a Claude-Code-only
+     * hook bridge (`POST /agent/event`), removed because hooks lit the board
+     * for one CLI and left every other agent on the timeout path. The column,
+     * `setBlockedState` and the board's blocked ring are retained as
+     * scaffolding for a CLI-agnostic writer — see the
+     * `pty-turn-end-from-output-silence` plan, where an ambiguous idle (PTY
+     * silence with no plan-file advance) is what sets it.
+     *
+     * Cleared alongside `dispatched_at` by `clearWorkingState` /
+     * `clearStaleWorkingState` so a re-dispatch and the timeout sweep both
+     * reset it. Read-time derive: a card is `blocked` while `blocked_at` is
+     * non-NULL AND `dispatched_at` is still live (a cleared card is not
+     * blocked, just done). NULL everywhere until a writer lands — the basis
+     * degenerates to the working-only derive (today's behaviour).
+     */
+    blockedAt?: string | null;
     clickupTaskId?: string;
     linearIssueId?: string;
     notionPageId?: string;
@@ -154,6 +182,8 @@ CREATE TABLE IF NOT EXISTS plans (
     dispatched_ide    TEXT DEFAULT '',
     dispatched_terminal TEXT DEFAULT '',
     dispatched_at     TEXT DEFAULT NULL,
+    last_liveness_at  TEXT DEFAULT NULL,
+    blocked_at        TEXT DEFAULT NULL,
     clickup_task_id   TEXT DEFAULT '',
     linear_issue_id   TEXT DEFAULT '',
     notion_page_id    TEXT DEFAULT '',
@@ -412,6 +442,35 @@ const MIGRATION_V56_SQL = [
 // version was stamped past 57 without the ALTER actually landing.
 const MIGRATION_V57_SQL = [
     `ALTER TABLE plans ADD COLUMN dispatched_terminal TEXT DEFAULT ''`,
+];
+
+// V58: plans.last_liveness_at — the activity-light liveness heartbeat stamp.
+// Persisted once per sweep tick (NOT per output flush) by
+// PlanIngestionEngine's stale-state sweep from the PTY fleet's `lastDataAt`.
+// Widens the activity-light age basis from `dispatched_at` to
+// `MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at))` so a card
+// whose agent is demonstrably still producing output stops being force-cleared
+// at the timeout, with a 3× hard cap from `dispatched_at`. NULL everywhere on
+// fleet-less hosts → the basis degenerates to `dispatched_at` (today's behaviour).
+// The column is also present in SCHEMA_TABLES_SQL, so fresh DBs get it from
+// creation and the migration ALTER is a no-op there.
+const MIGRATION_V58_SQL = [
+    `ALTER TABLE plans ADD COLUMN last_liveness_at TEXT DEFAULT NULL`,
+];
+
+// V59: plans.blocked_at — the "blocked / waiting on you" stamp.
+// NO WRITER CURRENTLY EXISTS: the original one was the Claude-Code-only
+// `POST /agent/event` hook bridge, removed as CLI-specific. Retained as
+// scaffolding for a CLI-agnostic writer (PTY output silence with no plan-file
+// advance ⇒ ambiguous ⇒ blocked). Cleared alongside `dispatched_at` by
+// `clearWorkingState` and `clearStaleWorkingState` so a re-dispatch and the
+// timeout sweep both reset it. The column is also present in
+// SCHEMA_TABLES_SQL, so fresh DBs get it from creation and the migration ALTER
+// is a no-op there. Idempotent under the version gate (try/catch covers a
+// stale restore where the column already exists but the version wasn't
+// stamped). Never edit a shipped V51–V58 body.
+const MIGRATION_V59_SQL = [
+    `ALTER TABLE plans ADD COLUMN blocked_at TEXT DEFAULT NULL`,
 ];
 
 
@@ -786,7 +845,7 @@ const ORPHAN_PURGE_CONFIRMATION_DELAY_MS = 350;
 const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
                        repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
                        brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-                       dispatched_terminal, dispatched_at,
+                       dispatched_terminal, dispatched_at, last_liveness_at, blocked_at,
                        clickup_task_id, linear_issue_id, notion_page_id, worktree_id, worktree_status, is_feature, feature_id,
                        workspace_name, project_id`;
 
@@ -6174,27 +6233,50 @@ export class KanbanDatabase {
     }
 
     /**
-     * Map of feature ID to active subtask working status.
-     * A feature is working if any of its active subtasks has a live dispatched_at.
+     * Map of feature ID to its active subtasks' working/blocked rollup (V59
+     * widened from `Map<string, boolean>` to `Map<string, {working,blocked}>`).
+     * A feature is `working` if any active subtask has a live `dispatched_at`
+     * inside the widened age basis; `blocked` if any active subtask has a
+     * non-NULL `blocked_at` AND a live `dispatched_at` (a cleared card is not
+     * blocked, just done). Both share the same age basis as the per-card
+     * derive so a feature light and its children never disagree at the
+     * boundary.
      */
-    public async getFeatureWorkingStates(workspaceId: string, timeoutMs: number): Promise<Map<string, boolean>> {
-        const workingStates = new Map<string, boolean>();
+    public async getFeatureWorkingStates(
+        workspaceId: string,
+        timeoutMs: number
+    ): Promise<Map<string, { working: boolean; blocked: boolean }>> {
+        const workingStates = new Map<string, { working: boolean; blocked: boolean }>();
         if (!(await this.ensureReady()) || !this._db || !workspaceId) return workingStates;
         const cutoff = new Date(Date.now() - timeoutMs).toISOString();
+        // V58: widen the age basis to MAX(dispatched_at, COALESCE(last_liveness_at,
+        // dispatched_at)) so the feature rollup agrees with its own subtask cards —
+        // a subtask spared by liveness at the card level must also read as working
+        // here, or the feature light goes dark while its children stay lit.
+        const hardCapCutoff = new Date(Date.now() - 3 * timeoutMs).toISOString();
         const stmt = this._db.prepare(
             `SELECT feature_id AS featureId,
-                    MAX(dispatched_at IS NOT NULL AND dispatched_at >= ?) AS anyWorking
+                    MAX(dispatched_at IS NOT NULL
+                         AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) >= ?
+                         AND dispatched_at >= ?) AS anyWorking,
+                    MAX(blocked_at IS NOT NULL
+                         AND dispatched_at IS NOT NULL
+                         AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) >= ?
+                         AND dispatched_at >= ?) AS anyBlocked
              FROM plans
              WHERE workspace_id = ? AND feature_id IS NOT NULL AND feature_id != ''
                AND status = 'active' AND is_feature = 0
              GROUP BY feature_id`,
-            [cutoff, workspaceId]
+            [cutoff, hardCapCutoff, cutoff, hardCapCutoff, workspaceId]
         );
         try {
             while (stmt.step()) {
                 const row = stmt.getAsObject();
                 const featureId = String(row.featureId ?? '');
-                if (featureId) workingStates.set(featureId, Boolean(row.anyWorking));
+                if (featureId) workingStates.set(featureId, {
+                    working: Boolean(row.anyWorking),
+                    blocked: Boolean(row.anyBlocked),
+                });
             }
         } finally {
             stmt.free();
@@ -8168,6 +8250,26 @@ export class KanbanDatabase {
             await this.setMigrationVersion(57);
             console.log('[KanbanDatabase] V57 migration completed: dispatched_terminal column added to plans');
         }
+
+        // V58: plans.last_liveness_at (activity-light liveness heartbeat stamp).
+        const v58 = await this.getMigrationVersion();
+        if (v58 < 58) {
+            for (const sql of MIGRATION_V58_SQL) {
+                try { this._db.exec(sql); } catch { /* column already exists */ }
+            }
+            await this.setMigrationVersion(58);
+            console.log('[KanbanDatabase] V58 migration completed: last_liveness_at column added to plans');
+        }
+
+        // V59: plans.blocked_at (agent-emitted "blocked / waiting on you" stamp).
+        const v59 = await this.getMigrationVersion();
+        if (v59 < 59) {
+            for (const sql of MIGRATION_V59_SQL) {
+                try { this._db.exec(sql); } catch { /* column already exists */ }
+            }
+            await this.setMigrationVersion(59);
+            console.log('[KanbanDatabase] V59 migration completed: blocked_at column added to plans');
+        }
     }
 
     /**
@@ -9584,38 +9686,227 @@ FROM plans
      * when a `**Stage Complete:**` marker is parsed from the plan file. No-op when
      * already NULL. Scoped by workspace_id so a same-named file in another workspace
      * is untouched.
+     *
+     * Returns TRUE only on a real non-NULL→NULL transition — the WHERE carries
+     * `dispatched_at IS NOT NULL` and the result is `getRowsModified()`, not a
+     * persist ack. That makes it the transition gate the completion broadcast
+     * needs the moment a SECOND concurrent clearer exists: without it, two
+     * clearers racing the same turn both fire `broadcastAgentCompleted`,
+     * because the plan watcher's `setOnWorkingStateCleared` gates on an
+     * in-memory `dispatchedAt` read that a concurrent clear can invalidate.
+     * Exactly one caller wins the UPDATE; only that caller broadcasts. Keep
+     * this contract — any future completion signal depends on it.
      */
     public async clearWorkingState(planFile: string, workspaceId: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        const normalized = this._ensureRelativePlanFile(planFile);
+        // Null last_liveness_at and blocked_at alongside dispatched_at so a
+        // re-dispatch starts from a clean widened basis (no stale heartbeat or
+        // blocked stamp from a prior run).
+        try {
+            this._db.run(
+                'UPDATE plans SET dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL ' +
+                'WHERE plan_file = ? AND workspace_id = ? AND dispatched_at IS NOT NULL',
+                [normalized, workspaceId]
+            );
+            const transitioned = this._db.getRowsModified() > 0;
+            if (transitioned) { await this._persist(); }
+            return transitioned;
+        } catch (error) {
+            console.error('[KanbanDatabase] clearWorkingState failed:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Blocked-state writer (V59). Sets `blocked_at` to the given ISO timestamp
+     * (or NULL to clear) WITHOUT touching `dispatched_at` — the card stays lit
+     * as working/blocked; only the blocked overlay flips. The derive layer
+     * reads `blocked_at` independently of the working age basis, so the two
+     * states share one clock but separate triggers. Scoped by workspace_id.
+     *
+     * CURRENTLY UNCALLED. Its only caller was the Claude-Code-only
+     * `POST /agent/event` hook route, removed as CLI-specific; this writer is
+     * retained as the seam a CLI-agnostic signal plugs into (see the
+     * `pty-turn-end-from-output-silence` plan).
+     *
+     * Deliberately does NOT touch `updated_at`. `updated_at` is the secondary
+     * discriminator a turn-end decision uses to ask "did the plan file advance
+     * during this turn"; bumping it here would make a blocked →
+     * user-answers → turn-end sequence read its own side effect as evidence of
+     * work and fire a false completion. `blocked_at` is the only field this
+     * writer owns — preserve that when wiring a new caller.
+     */
+    public async setBlockedState(planFile: string, workspaceId: string, blockedAt: string | null): Promise<boolean> {
         const normalized = this._ensureRelativePlanFile(planFile);
         return this._persistedUpdate(
-            'UPDATE plans SET dispatched_at = NULL WHERE plan_file = ? AND workspace_id = ?',
-            [normalized, workspaceId]
+            'UPDATE plans SET blocked_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [blockedAt, normalized, workspaceId]
         );
     }
 
     /**
-     * Activity-light timeout backstop. Nulls `dispatched_at` on every row in the
-     * workspace whose timestamp is older than `maxAgeMs` (compared as ISO-8601 UTC
-     * strings, which sort chronologically). Returns the count of rows cleared so the
-     * caller can gate a board refresh on `> 0` (avoids needless 10-second re-renders).
-     * A just-dispatched card is never in scope. Scoped by workspace_id.
+     * Resolve the live dispatched plan row for a terminal name (V59). Returns
+     * the most-recently-dispatched active row whose `dispatched_terminal`
+     * matches AND whose `dispatched_at` is still live, or null. This is the
+     * primary terminal→plan attribution for any completion signal that
+     * identifies itself by terminal name — mechanism-agnostic, so it outlives
+     * the removed hook route that first introduced it. Empty
+     * `dispatched_terminal` never matches (it is written as `''` when the
+     * dispatcher had no terminal name — unresolvable, by design).
      */
-    public async clearStaleWorkingState(workspaceId: string, maxAgeMs: number): Promise<number> {
+    public async getActiveDispatchedByTerminal(workspaceId: string, terminalName: string): Promise<KanbanPlanRecord | null> {
+        if (!(await this.ensureReady()) || !this._db || !workspaceId || !terminalName) return null;
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE workspace_id = ? AND status = 'active' AND is_feature = 0
+               AND dispatched_terminal = ? AND dispatched_at IS NOT NULL
+             ORDER BY dispatched_at DESC LIMIT 1`,
+            [workspaceId, terminalName]
+        );
+        try {
+            const rows = this._readRows(stmt);
+            return rows[0] ?? null;
+        } finally {
+            stmt.free();
+        }
+    }
+
+    /**
+     * Fallback terminal→plan attribution by `cwd` (V59). Used when the
+     * reporting terminal's name resolves no live row — worktree seats have a
+     * unique cwd per seat, so the working directory identifies the seat.
+     * Mechanism-agnostic: it outlives the removed hook route that introduced
+     * it. Joins `plans` to `worktrees` on `worktree_id` and matches
+     * `worktrees.path = ?`. Returns the most-recently-dispatched live row, or
+     * null.
+     *
+     * Restricted to rows with an EMPTY `dispatched_terminal`. A row that names
+     * its terminal is already resolvable by name, so matching it here could let
+     * a signal from terminal A clear a card dispatched to terminal B that
+     * happens to share a worktree. Only genuinely unattributed dispatches are
+     * in scope — preserve this restriction when wiring a new caller.
+     */
+    public async getActiveDispatchedByCwd(workspaceId: string, cwd: string): Promise<KanbanPlanRecord | null> {
+        if (!(await this.ensureReady()) || !this._db || !workspaceId || !cwd) return null;
+        // Subquery, NOT a JOIN. `PLAN_COLUMNS` is an unqualified column list and
+        // `worktrees` shares `status`, `created_at`, `project` and `feature_id` with
+        // `plans` — joining the two tables makes every one of those ambiguous and
+        // SQLite rejects the statement at prepare time ("ambiguous column name:
+        // status"). A subquery on `worktree_id` keeps the shared column list usable.
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE workspace_id = ? AND status = 'active' AND is_feature = 0
+               AND dispatched_at IS NOT NULL
+               AND (dispatched_terminal IS NULL OR dispatched_terminal = '')
+               AND worktree_id IN (SELECT id FROM worktrees WHERE path = ?)
+             ORDER BY dispatched_at DESC LIMIT 1`,
+            [workspaceId, cwd]
+        );
+        try {
+            const rows = this._readRows(stmt);
+            return rows[0] ?? null;
+        } finally {
+            stmt.free();
+        }
+    }
+
+    /**
+     * Activity-light timeout backstop. Widened (V58) to consult `last_liveness_at`
+     * so a card whose agent is demonstrably still producing output is spared at the
+     * timeout, with a `3 × maxAgeMs`-from-`dispatched_at` hard cap so a wedged
+     * agent cannot stay lit forever. The age basis is
+     * `MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at))`: a row clears
+     * when its basis is older than `cutoff` OR when `dispatched_at` itself is past
+     * the hard cap (the force-clear branch — written as a second OR condition so a
+     * capped row is CLEARED by the sweep rather than excluded from it).
+     *
+     * `opts.forceTerminals` — names of terminals the fleet reports as exited —
+     * triggers a second UPDATE that clears rows whose `dispatched_terminal` is in
+     * the set regardless of age (the dead-agent fast-clear). This is the one case
+     * where liveness shortens rather than extends the window.
+     *
+     * With `opts` omitted and `last_liveness_at` NULL everywhere,
+     * `MAX(dispatched_at, COALESCE(NULL, dispatched_at))` is `dispatched_at` and the
+     * statement is semantically identical to today's — the fleet-less compatibility
+     * contract. Also nulls `last_liveness_at` wherever `dispatched_at` is nulled so
+     * a re-dispatch starts from a clean basis. Returns the count of rows cleared so
+     * the caller can gate a board refresh on `> 0`.
+     */
+    public async clearStaleWorkingState(
+        workspaceId: string,
+        maxAgeMs: number,
+        opts?: { forceTerminals?: string[] }
+    ): Promise<number> {
         if (!(await this.ensureReady()) || !this._db) return 0;
         const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+        const hardCapCutoff = new Date(Date.now() - 3 * maxAgeMs).toISOString();
+        const forceTerminals = opts?.forceTerminals?.filter(n => !!n) ?? [];
         try {
             this._db.run('BEGIN');
+            // Basis = MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)).
+            // Clear when basis < cutoff (age) OR dispatched_at < hardCapCutoff (cap).
+            // The cap is a force-clear condition, not an exclusion — a capped row is
+            // cleared here, not skipped. SQLite's MAX over TEXT ISO timestamps sorts
+            // chronologically, matching the existing dispatched_at comparison.
             this._db.run(
-                'UPDATE plans SET dispatched_at = NULL WHERE workspace_id = ? AND dispatched_at IS NOT NULL AND dispatched_at < ?',
-                [workspaceId, cutoff]
+                'UPDATE plans SET dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL ' +
+                'WHERE workspace_id = ? AND dispatched_at IS NOT NULL ' +
+                'AND (MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) < ? ' +
+                'OR dispatched_at < ?)',
+                [workspaceId, cutoff, hardCapCutoff]
             );
-            const modified = this._db.getRowsModified();
+            let modified = this._db.getRowsModified();
+            // Exited-terminal force-clear: dead agents clear immediately rather than
+            // waiting out the window. Only rows still carrying dispatched_at are in
+            // scope (a row already cleared above is not double-counted).
+            if (forceTerminals.length > 0) {
+                const placeholders = forceTerminals.map(() => '?').join(', ');
+                this._db.run(
+                    `UPDATE plans SET dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL ` +
+                    `WHERE workspace_id = ? AND dispatched_at IS NOT NULL ` +
+                    `AND dispatched_terminal IN (${placeholders})`,
+                    [workspaceId, ...forceTerminals]
+                );
+                modified += this._db.getRowsModified();
+            }
             this._db.run('COMMIT');
             await this._persist();
             return modified;
         } catch (e) {
             try { this._db.run('ROLLBACK'); } catch { /* ignore */ }
             console.error('[KanbanDatabase] clearStaleWorkingState failed:', e);
+            return 0;
+        }
+    }
+
+    /**
+     * Persist the fleet's liveness heartbeat for the named terminals (V58). One
+     * UPDATE setting `last_liveness_at = ?` for rows whose `dispatched_terminal`
+     * is in the set AND whose `dispatched_at` is still set (a cleared row has no
+     * active turn to attribute liveness to). Called once per sweep tick — NOT per
+     * output flush — so this is ~1 write per live card per 10s, well within the
+     * sql.js WASM-heap budget. Rows with an empty `dispatched_terminal` are never
+     * updated: they have no liveness evidence and fall through to the blind timer.
+     * Returns the count of rows stamped.
+     */
+    public async recordLiveness(workspaceId: string, terminalNames: string[], atIso: string): Promise<number> {
+        if (!(await this.ensureReady()) || !this._db) return 0;
+        const names = terminalNames.filter(n => !!n);
+        if (names.length === 0) return 0;
+        try {
+            const placeholders = names.map(() => '?').join(', ');
+            this._db.run(
+                `UPDATE plans SET last_liveness_at = ? ` +
+                `WHERE workspace_id = ? AND dispatched_at IS NOT NULL ` +
+                `AND dispatched_terminal IN (${placeholders})`,
+                [atIso, workspaceId, ...names]
+            );
+            const modified = this._db.getRowsModified();
+            if (modified > 0) { await this._persist(); }
+            return modified;
+        } catch (e) {
+            console.error('[KanbanDatabase] recordLiveness failed:', e);
             return 0;
         }
     }
@@ -9746,6 +10037,10 @@ FROM plans
                     // Absent from SELECT lists that predate V57 → undefined → "" (unknown).
                     dispatchedTerminal: String(row.dispatched_terminal || ""),
                     dispatchedAt: row.dispatched_at !== null && row.dispatched_at !== undefined ? String(row.dispatched_at) : null,
+                    // Absent from SELECT lists that predate V58 → undefined → null.
+                    lastLivenessAt: row.last_liveness_at !== null && row.last_liveness_at !== undefined ? String(row.last_liveness_at) : null,
+                    // Absent from SELECT lists that predate V59 → undefined → null.
+                    blockedAt: row.blocked_at !== null && row.blocked_at !== undefined ? String(row.blocked_at) : null,
                     clickupTaskId: String(row.clickup_task_id || ""),
                     linearIssueId: String(row.linear_issue_id || ""),
                     notionPageId: String(row.notion_page_id || ""),

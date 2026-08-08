@@ -9,6 +9,7 @@ import { LocalApiServer } from '../services/LocalApiServer';
 import { resolveParentsForTerminals } from '../services/WorkspaceIdentityService';
 import { DEFAULT_KANBAN_COLUMNS } from '../services/agentConfig';
 import {
+    buildAnalysisScopeLine,
     columnToPromptRole,
     FOCUS_DIRECTIVE,
     GIT_SAFETY_DIRECTIVE,
@@ -101,6 +102,7 @@ interface KanbanCardShape {
     featureId?: string;
     subtaskCount?: number;
     working: boolean;
+    blocked: boolean;
 }
 
 function log(opts: HeadlessSwitchboardOptions | undefined, ...args: any[]) {
@@ -145,11 +147,39 @@ function getRoleForTargetColumn(targetColumn: string): string {
     return col?.role || columnToPromptRole(targetColumn) || 'lead';
 }
 
-function isWorkingState(dispatchedAt: string | null | undefined, timeoutMs: number): boolean {
-    if (!dispatchedAt) return false;
+/**
+ * Read-time activity-light derive (V58-widened, V59-extended to return
+ * `{working, blocked}`). A card is `working` while its widened age basis —
+ * `MAX(dispatchedAt, lastLivenessAt ?? dispatchedAt)` — is younger than
+ * `timeoutMs`, with a `3 × timeoutMs`-from-`dispatchedAt` hard cap so a
+ * wedged agent whose terminal keeps repainting cannot stay lit forever.
+ *
+ * `blocked` (V59) is true when `blockedAt` is non-NULL AND the card is still
+ * within its working window — a cleared card is not blocked, just done. The
+ * two states share one age basis and one hard cap so they never disagree at
+ * the boundary. When `blockedAt` is absent (pre-V59 row, fleet-less host, or
+ * no hook ever fired), `blocked` is false and the working half is
+ * byte-identical to its pre-V59 self.
+ *
+ * `timeoutMs` is a parameter (read from the host config provider by the caller),
+ * matching the converged shape — no inline `vscode.workspace.getConfiguration`.
+ */
+function isWorkingState(
+    dispatchedAt: string | null | undefined,
+    timeoutMs: number,
+    lastLivenessAt?: string | null,
+    blockedAt?: string | null
+): { working: boolean; blocked: boolean } {
+    if (!dispatchedAt) return { working: false, blocked: false };
     const ts = Date.parse(dispatchedAt);
-    if (!Number.isFinite(ts)) return false;
-    return (Date.now() - ts) < timeoutMs;
+    if (!Number.isFinite(ts)) return { working: false, blocked: false };
+    const now = Date.now();
+    const withinHardCap = now - ts <= 3 * timeoutMs;
+    const livenessTs = lastLivenessAt ? Date.parse(lastLivenessAt) : NaN;
+    const basis = Number.isFinite(livenessTs) && (livenessTs as number) > ts ? (livenessTs as number) : ts;
+    const working = withinHardCap && (now - basis) < timeoutMs;
+    const blocked = working && !!blockedAt;
+    return { working, blocked };
 }
 
 async function buildBoardCards(db: KanbanDatabase, workspaceId: string, root: string, config: StandaloneHostPathConfigProvider): Promise<KanbanCardShape[]> {
@@ -178,6 +208,10 @@ async function buildBoardCards(db: KanbanDatabase, workspaceId: string, root: st
 
     const toCard = (row: any, overrideColumn?: string): KanbanCardShape => {
         const column = overrideColumn || row.kanbanColumn || 'CREATED';
+        const featureState = row.isFeature ? featureWorkingMap.get(row.planId) : undefined;
+        const cardState = row.isFeature
+            ? { working: featureState?.working ?? false, blocked: featureState?.blocked ?? false }
+            : isWorkingState(row.dispatchedAt, timeoutMs, row.lastLivenessAt, row.blockedAt);
         return {
             planId: row.planId,
             sessionId: row.sessionId,
@@ -193,7 +227,8 @@ async function buildBoardCards(db: KanbanDatabase, workspaceId: string, root: st
             isFeature: !!row.isFeature,
             featureId: row.featureId || undefined,
             subtaskCount: row.isFeature ? (subtaskCountMap.get(row.planId) || 0) : undefined,
-            working: row.isFeature ? (featureWorkingMap.get(row.planId) ?? false) : isWorkingState(row.dispatchedAt, timeoutMs),
+            working: cardState.working,
+            blocked: cardState.blocked,
         };
     };
 
@@ -234,7 +269,7 @@ async function buildPromptForCards(role: string, records: any[], root: string): 
  * does NOT inline plan bodies: this pass is read-only and the skill re-queries the
  * board itself, so the plan list is a starting point, not the payload.
  */
-function buildDispatchAnalysisPrompt(records: any[], root: string, apiPort: number): string {
+function buildDispatchAnalysisPrompt(records: any[], root: string, apiPort: number, scope?: string | null): string {
     const planList = records.map(rec => {
         const planFile = rec.planFile || '';
         let planPath = planFile;
@@ -246,11 +281,15 @@ function buildDispatchAnalysisPrompt(records: any[], root: string, apiPort: numb
         const planIdLine = rec.planId ? `\nPLAN_ID=${rec.planId}` : '';
         return `- [${rec.topic || 'Untitled'}] Plan File: ${absolutePath}${planIdLine}`;
     }).join('\n');
+    // Same shared resolver the extension host's arm uses — the `PROJECT=` line
+    // cannot fork between the two prompt builders because there is only one.
+    const scopeLine = buildAnalysisScopeLine(scope);
     return `Read and follow .agents/skills/dispatch-analysis/SKILL.md now.\n` +
         `This is a read-only analysis pass — do not modify any plan file.\n` +
         `WORKSPACE_ROOT=${root}\n` +
-        `API_PORT=${apiPort}\n\n` +
-        `PLANS TO PROCESS:\n${planList}`;
+        `API_PORT=${apiPort}\n` +
+        `${scopeLine}` +
+        `\nPLANS TO PROCESS:\n${planList}`;
 }
 
 export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions): Promise<HeadlessSwitchboardInstance> {
@@ -448,7 +487,10 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // is an abandonment, not a completion. Fire-and-forget by contract: a panel that was
     // closed when the agent finished simply misses it (same ephemeral semantics as the
     // board's activity light), so failures here are logged and swallowed.
-    ingestionEngine.setOnWorkingStateCleared((record) => {
+    // Extracted so any future second completion signal reuses the SAME broadcast
+    // path — the toast fires once from whichever clear wins the race, and the
+    // non-null→null transition is idempotent at the DB seam.
+    const broadcastAgentCompletedForRecord = (record: any) => {
         void (async () => {
             if (!server) { return; }
             let terminalName = (record.dispatchedTerminal || '').trim();
@@ -481,7 +523,18 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                 terminalName: terminalName || undefined,
             }, SURFACES.common);
         })().catch(e => console.error('[bootstrap] agentCompleted broadcast failed:', e));
+    };
+    ingestionEngine.setOnWorkingStateCleared((record) => {
+        broadcastAgentCompletedForRecord(record);
     });
+    // NOTE: the activity-light liveness seam is wired further down, immediately
+    // after `const ptyFleetService` is constructed — NOT here. A closure written
+    // here would reference that `const` before its initialiser runs, and the
+    // periodic sweep can invoke it on a timer: optional chaining does not rescue
+    // a temporal-dead-zone reference, so it would throw a ReferenceError out of
+    // an async interval callback that has no `catch`. Until it is wired the
+    // provider is simply unset and the sweep uses the blind timeout, which is
+    // exactly the fleet-less contract.
     await ingestionEngine.initialize();
     log(opts, 'PlanIngestionEngine initialized (headless)');
 
@@ -776,11 +829,11 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         }
         return await handlePtyVerb('triggerAction', { role, sessionId, instruction }, targetRoot || workspaceRoot);
     });
-    switchboardCommandRegistry.register('switchboard.triggerBatchAgentFromKanban', async (role: string, sessionIds: string[], instruction?: string, targetRoot?: string, terminalName?: string) => {
+    switchboardCommandRegistry.register('switchboard.triggerBatchAgentFromKanban', async (role: string, sessionIds: string[], instruction?: string, targetRoot?: string, terminalName?: string, _apiOriginated?: boolean, analysisScope?: string | null) => {
         if (!ptyReady) {
             return { success: false, error: 'PTY terminals are unavailable: node-pty module could not be loaded on this machine.' };
         }
-        return await handlePtyVerb('triggerAction', { role, sessionIds, instruction, terminalName }, targetRoot || workspaceRoot);
+        return await handlePtyVerb('triggerAction', { role, sessionIds, instruction, terminalName, analysisScope }, targetRoot || workspaceRoot);
     });
     switchboardCommandRegistry.register('revealFileInOS', async () => undefined);
     switchboardCommandRegistry.register('revealInExplorer', async () => undefined);
@@ -1145,7 +1198,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 }
 
                 case 'ptyListTerminals': {
-                    const rawTerminals = ptyFleetService.list().map(t => ({
+                    const liveTerminals = ptyFleetService.list().map(t => ({
                         friendlyName: t.friendlyName,
                         role: t.role,
                         status: t.status,
@@ -1153,7 +1206,19 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         startTime: t.startTime,
                         worktreePath: t.worktreePath,
                         cwd: t.cwd,
+                        lastDataAt: t.lastDataAt,
                     }));
+                    // `terminals` stays EXACTLY the live-handle projection it has
+                    // always been (plus V58's `lastDataAt`). recentlyClosed
+                    // tombstones ride a SIBLING `liveness` key — never appended to
+                    // `terminals` — because terminals.js assigns
+                    // `fleetList = data.terminals` unfiltered and renders every
+                    // entry, so a tombstone there makes an operator-closed terminal
+                    // reappear as a permanent ghost row in the sidebar and keeps its
+                    // pane slot alive. Standalone's own sweep reads the fleet
+                    // in-process via the engine seam; `liveness` is here for host
+                    // parity with the ptyHost arm.
+                    const rawTerminals = liveTerminals;
                     const dbMappings = await db.getWorkspaceMappings();
                     const { parents, parentMap } = resolveParentsForTerminals(dbMappings, root, rawTerminals);
                     const terminals = rawTerminals.map(t => ({
@@ -1164,6 +1229,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         success: true,
                         terminals,
                         parents,
+                        liveness: ptyFleetService.getLiveness(),
                     };
                 }
 
@@ -1189,15 +1255,28 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 case 'ptySendPrompt': {
                     // Same pipeline as ptyHost.ts's ptySendPrompt: sendPromptToPty
                     // owns bracketed-paste framing, chunked writes, /clear before
-                    // prompt, and the confirm CR for CLI agents. Use
-                    // getPromptDeliveryOptions() (reads config, default true/2000ms)
-                    // for parity with triggerAction — the ptyHost.ts version defaults
-                    // clearBeforePrompt to false, which is wrong for this surface.
+                    // prompt, and the confirm CR for CLI agents. An explicit
+                    // clearBeforePrompt / clearBeforePromptDelayMs in the payload wins;
+                    // the config default (getPromptDeliveryOptions, default true/2000ms)
+                    // applies only when the field is absent — matching the precedence
+                    // TaskViewerProvider.ts (inject the default only when the field is
+                    // undefined) and ptyHost.ts already implement. Strictly a superset
+                    // of the previous behaviour: every existing caller (the kanban
+                    // drag-drop, and the triggerAction paths) omits the field and keeps
+                    // the config default unchanged.
                     const handle = ptyFleetService.get(payload.name);
                     if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
                     if (handle.status !== 'active') { return { success: false, error: `Terminal ${payload.name} is not active` }; }
                     try {
-                        await sendPromptToPty(handle, payload.data || '', getPromptDeliveryOptions());
+                        const deliveryDefaults = getPromptDeliveryOptions();
+                        await sendPromptToPty(handle, payload.data || '', {
+                            clearBeforePrompt: typeof payload.clearBeforePrompt === 'boolean'
+                                ? payload.clearBeforePrompt
+                                : deliveryDefaults.clearBeforePrompt,
+                            clearBeforePromptDelayMs: typeof payload.clearBeforePromptDelayMs === 'number'
+                                ? payload.clearBeforePromptDelayMs
+                                : deliveryDefaults.clearBeforePromptDelayMs,
+                        });
                         return { success: true };
                     } catch (err) {
                         return { success: false, error: err instanceof Error ? err.message : String(err) };
@@ -1289,8 +1368,12 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // "process the following plans") — the planner then REWRITES the plan
                     // files, which is the exact opposite of a read-only analysis pass.
                     // Mirrors KanbanProvider.generateUnifiedPrompt's dispatch-analysis arm.
+                    // If analysisScope is undefined (a caller that did not forward it),
+                    // fall back to the standalone's own projectFilter variable, which the
+                    // kanbanVerb default arm maintains and setProjectFilter writes.
+                    const analysisScope = payload.analysisScope !== undefined ? payload.analysisScope : projectFilter;
                     const prompt = payload.instruction === 'dispatch-analysis'
-                        ? buildDispatchAnalysisPrompt(records, root, server?.getPort() ?? 0)
+                        ? buildDispatchAnalysisPrompt(records, root, server?.getPort() ?? 0, analysisScope)
                         : await buildPromptForCards(targetRole, records, root);
                     if (!prompt) { return { success: false, error: 'Failed to build dispatch prompt' }; }
 
@@ -1510,7 +1593,21 @@ Each plan file must include:
         }
     };
 
-    const ptyFleetService = new PtyFleetService(workspaceRoot, db);
+    // Third arg: the API session token. Terminal verbs are auth-gated
+    // (LocalApiServer _checkAuth), and standalone always has a token (wired as
+    // getAuthToken below) — without this an agent's own curl to
+    // /terminals/verb/ptySendPrompt gets 401 and the link-up relay recipe is a
+    // lie on this host. The token reaches the shell as SWITCHBOARD_API_TOKEN
+    // (an env var, never prompt text) so it never enters the agent's scrollback.
+    const ptyFleetService = new PtyFleetService(workspaceRoot, db, sessionToken);
+    // Activity-light liveness seam, wired HERE rather than beside the engine's
+    // other seams: the sweep calls this synchronous getter on a 10 s timer to
+    // partition the fleet into live (spare) / exited (force-clear) / silent (fall
+    // through to the blind timer), and wiring it before `ptyFleetService` is
+    // constructed would put a temporal-dead-zone reference behind a timer. The
+    // engine treats an unset provider as "no evidence", so the window before this
+    // line is the fleet-less contract, not a gap.
+    ingestionEngine.setTerminalLivenessProvider(() => ptyFleetService.getLiveness());
     // Awaited here, well before `server.start()` below: a ghost `purpose:'pty'`
     // entry from a previous run would otherwise satisfy /kanban/dispatch's
     // no-live-terminal pre-flight and route work at a dead pid.

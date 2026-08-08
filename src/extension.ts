@@ -1070,6 +1070,13 @@ export async function activate(context: vscode.ExtensionContext) {
     globalPlanWatcher.getEngine().setOnWorkingStateCleared((record, wsRoot) => {
         taskViewerProvider.broadcastAgentCompleted(record, wsRoot);
     });
+    // Activity-light liveness seam: the sweep (PlanIngestionEngine) consults this
+    // synchronous getter to spare a card whose terminal is still producing output
+    // and force-clear one whose terminal has exited. Reads the cached snapshot
+    // (`TaskViewerProvider._ptyLiveness`, refreshed on every ptyListTerminals
+    // forward) so the cross-process sweep loop never blocks on an HTTP call. Empty
+    // when the fleet is unavailable → the sweep degrades to today's blind timeout.
+    globalPlanWatcher.getEngine().setTerminalLivenessProvider(() => taskViewerProvider.getFleetLiveness());
     context.subscriptions.push(taskViewerProvider);
     if (workspaceRoot) {
         void taskViewerProvider.deregisterAllTerminals(true).then(() => {
@@ -1665,8 +1672,8 @@ export async function activate(context: vscode.ExtensionContext) {
     // a browser-originated BATCH advance could never reach the PTY fleet — the command
     // had no parameter to carry the surface, so allowPtyFleet was always false and the
     // batch resolved a vscode.Terminal the browser cannot display.
-    const batchTriggerFromKanbanDisposable = registerSwitchboardCommand('switchboard.triggerBatchAgentFromKanban', async (role: string, sessionIds: string[], instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string, apiOriginated?: boolean) => {
-        return taskViewerProvider.handleKanbanBatchTrigger(role, sessionIds, instruction, workspaceRoot, targetTerminalOverride, { apiOriginated: !!apiOriginated });
+    const batchTriggerFromKanbanDisposable = registerSwitchboardCommand('switchboard.triggerBatchAgentFromKanban', async (role: string, sessionIds: string[], instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string, apiOriginated?: boolean, analysisScope?: string | null) => {
+        return taskViewerProvider.handleKanbanBatchTrigger(role, sessionIds, instruction, workspaceRoot, targetTerminalOverride, { apiOriginated: !!apiOriginated, analysisScope });
     });
     context.subscriptions.push(batchTriggerFromKanbanDisposable);
 

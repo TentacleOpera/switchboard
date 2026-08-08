@@ -541,6 +541,14 @@ jobs:
       - name: Paste attribution + clipboard copy contract
         run: npm run test:contract:paste-attribution
 
+      # Dispatch-analysis candidate set: pins the project scoping of the
+      # dispatchAnalyze arm (all four initiatorProject forms), the feature-is-one-unit
+      # prompt filter, the SEVENTH-argument threading (the fifth is
+      # targetTerminalOverride — a project name there aborts the batch), the four
+      # PROJECT= spellings the skill's table dispatches on, and the boundary schema.
+      - name: Dispatch-analysis scope + feature-atomicity contract
+        run: npm run test:contract:dispatch-analysis-scope
+
       - name: Run integration suite
         run: npm run test:integration:all
 
