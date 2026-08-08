@@ -87,6 +87,18 @@ Promotion rules:
 
 This makes the chain Created → (mass improve) → PLAN REVIEWED → `dispatch-analysis` → DISPATCH fully automatic, which is the intended end state.
 
+#### Automation interlock (do not skip)
+
+`PLAN REVIEWED` ships with `autobanEnabled: true` (`agentConfig.ts:135`), and the autoban engine subscribes to `db.onColumnChanged`, waking on arrivals via `_notifyAutobanWatchArrival` (`TaskViewerProvider.ts:11117`). Promoting N plans into that column therefore fires N arrival notifications. **If autoban is armed, a "improve 20 plans" request silently becomes "start coding 20 plans"** — a far larger and more expensive action than the user asked for, and one that spends on the *coding* provider rather than the cheap improvement provider the batch was configured for.
+
+`POST /oversight/start` already guards precisely this hazard: it returns `409` "while autoban/orchestration automation is armed (double-dispatch guard)." Mass-improve must carry the same interlock:
+
+- **Refuse to start with `409` when autoban or orchestration automation is armed for the target column**, with a message naming what is armed. Mirror the oversight guard's shape rather than inventing a second convention.
+- Because promotion here is incremental rather than a single end-of-batch sweep, also **re-check the interlock before each promotion** — automation can be armed by the user midway through a long batch, and a check performed only at start would miss it.
+- If the interlock trips mid-batch, stop promoting, leave the remaining improved plans in Created, and report which plans were promoted and which were held. Improvements are never lost — they are already written to the plan files — only the column move is withheld.
+
+Document the interaction in the digest: a user who armed autoban deliberately and *wants* the chain to continue should see plainly that it did.
+
 ### Board action
 
 Add an action on the Created column ("Improve All") that resolves the visible set, shows the count and the concurrency it will use, and posts the batch. Per the project's standing rule, this button **must not** gate on a `confirm()` — `window.confirm()` is a silent no-op in VS Code webviews and would make the button do literally nothing. Showing the resolved count in the action's own affordance is the safeguard.
@@ -103,6 +115,9 @@ Add an action on the Created column ("Improve All") that resolves the visible se
 5. **Unit — promote only on completed.** Agents reaching `completed` are moved to PLAN REVIEWED; agents reaching `exited`, `failed`, or `stuck` remain in CREATED. Assert `exited` never promotes.
 6. **Unit — incremental promotion.** Complete 2 of 5 agents, stop the batch, assert exactly 2 cards moved.
 7. **Unit — promotion via API, not SQL.** Assert the move path is the kanban move service; assert no direct `kanban_column` UPDATE is issued.
+7b. **Unit — autoban interlock at start.** With autoban armed on `PLAN REVIEWED`, assert the batch refuses to start with `409` and a message naming what is armed, and that zero agents spawn.
+7c. **Unit — autoban interlock mid-batch.** Start with automation disarmed, arm it after two promotions, assert promotions 3+ are held, the batch still completes its improvements, and the digest reports promoted-vs-held.
+7d. **Unit — arrival amplification.** Promote 5 plans and assert exactly 5 `onColumnChanged` arrivals fire — no duplicate notifications per plan (a per-plan double-notify would double-wake autoban).
 8. **Unit — no confirm gate.** Static assertion that the Created-column action introduces no `confirm(`/`window.confirm(` call, matching the existing kanban confirm-gate regression tests.
 9. **Integration — concurrent writes.** Run 5 agents against 5 scratch plans in one directory; assert all 5 files are individually well-formed afterward and no file contains content from a sibling plan.
 10. **Manual (VSIX).** With ~8 loose plans in Created plus one Backlog card and one feature, click Improve All at concurrency 3. Confirm: only the 8 loose plans are picked up, at most 3 terminals run at once, cards move to Planned one at a time as they finish, and the Backlog card and feature are untouched.
