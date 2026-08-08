@@ -108,6 +108,23 @@ Clicking a group **locks** the view to it:
 - Clicking a terminal belonging to a *different* group switches the lock to that group — it does not drag the terminal into the current view, which is today's behaviour and the specific thing being replaced.
 - Clicking an **unassigned** terminal shows the unassigned set in the currently selected layout.
 
+### Terminal clicks are contextual — this is what preserves the composer
+
+The rules above describe behaviour **while a group is locked**. They must not apply when nothing is locked, or the composer is dead in practice:
+
+| State | Click on a terminal row |
+| :--- | :--- |
+| **No group locked** | Seats it — `assignToFocusedPane` exactly as today, pins beat focus, displacement, undo |
+| **Group locked** | Navigates — focuses a member, or switches the lock to that terminal's group |
+
+Without this split the composer is removed by accident. Derived groups mean nearly every terminal *is* in a group — every terminal has a role, so any role with two terminals forms one, and "unassigned" is nearly empty. A blanket navigate-on-click therefore consumes the seating gesture for almost every row, leaving no way to compose and no gesture to replace it.
+
+The split also matches intent rather than adding a mode to remember: unlocked means *I am arranging*, locked means *I am working inside this set*. And it reads exactly as described — "click a terminal in another group and it shows that group" presupposes you are already in a group, which is the locked state.
+
+Composing therefore needs no new gesture. To compose while locked, drop the lock first (click the locked group row again, or "All terminals") and the sidebar behaves precisely as it does today.
+
+**Do not reach for drag as the compose gesture.** Panes already accept drops, but that target carries a different payload: `.kanban-pane-row` rows are draggable so a *plan card* can be dropped onto a terminal to dispatch it (`terminals.js:2757-2770`, drop handler at 2028). Adding terminal-row drags means one drop target discriminating two payloads, and a mis-typed drop dispatches a plan when the user meant to seat a terminal. If a drag path is wanted later it must branch explicitly on payload type — but the contextual click above removes the need for it.
+
 ### Leaving the lock — required, not optional
 
 A locked mode with no visible exit is a trap. Provide both:
@@ -147,6 +164,8 @@ Found while reading, all in this feature:
 6. **Unit — cross-group click switches lock.** Clicking a terminal belonging to another group locks that group; assert the terminal is not dragged into the previous group's view.
 7. **Unit — unassigned.** Clicking an unassigned terminal shows the unassigned set in the current layout.
 8. **Unit — composer preserved.** With no lock active, assert `assignToFocusedPane` behaviour is byte-for-byte unchanged: pins beat focus, displacement, and undo all still work. Existing composer tests must pass unmodified.
+8b. **Unit — contextual click, the regression this plan nearly shipped.** A terminal that *is* a member of a derived group, clicked with **no lock active**, must seat — not navigate. Assert this for a terminal whose role has two or more instances, since that is the common case and the one a blanket navigate-on-click breaks.
+8c. **Unit — drag target untouched.** Assert terminal sidebar rows are not made draggable, and that dropping a `.kanban-pane-row` plan card onto a pane still dispatches exactly as before.
 9. **Unit — compose drops the lock.** Composing while locked exits the lock, keeps the panes, and clears the active-group state.
 10. **Unit — explicit exit.** "All terminals" drops the lock and restores free composition.
 11. **Unit — solo interaction.** Clicking a group while solo'd exits solo and locks the group; assert it is never a silent no-op.
