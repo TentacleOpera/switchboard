@@ -33,7 +33,7 @@ The responsive pane-size floor already uses this to override the rendered layout
 
 ## Metadata
 
-**Complexity:** 4
+**Complexity:** 5
 **Tags:** frontend, ui, ux, feature
 
 ## Reconcile Before Building
@@ -84,6 +84,47 @@ Use **Peek** (or Expand). Reserve "focus" for the caret.
 - **Peeked terminal closes while peeked**: dismiss automatically and restore. Never leave a peek pointing at a dead terminal.
 - **Rename while peeked**: peek must survive it. Prefer whatever stable handle the pane grid uses over the friendly name.
 
+## Shell strip icons become peek shortcuts
+
+### What they do today
+
+Each terminal icon in the shell's left strip opens a whole new browser window (`src/webview/shell.js:359-365`):
+
+```js
+const popoutUrl = `/terminals?solo=${encodeURIComponent(t.name)}`;
+popout = window.open(popoutUrl, popoutName, 'width=900,height=700');
+```
+
+That loads the **entire terminals webview from scratch** — full page boot, fresh socket connections, every xterm instance re-created — to show one terminal. The latency is inherent to the approach, not a tuning problem.
+
+### This resolves a compromise the code already records
+
+The strip click used to call `focusTerminal`, and was deliberately changed. From `terminals.js:593-600`:
+
+> Acknowledge-only sibling of `focusTerminal`. The strip's click now pops the terminal out into its own window, so the user HAS seen the completion — but the cockpit's pane layout must not be rearranged behind their back, which is exactly what `focusTerminal` would do. Without this arm the DONE light burns forever on the happy path, because `assignToFocusedPane` is never reached.
+
+So the strip has had two options and both were bad: rearrange the layout behind the user's back, or be slow. **Peek is the third option** — instant *and* non-destructive. Pointing the strip at it is what the existing comment was working around the absence of.
+
+### The bug this will cause if missed
+
+The `clearTerminalBadge` arm exists precisely because the pop-out path never reaches `assignToFocusedPane`, which is what normally clears a terminal's DONE badge. **Peek is another such path.** If the strip triggers peek without clearing the badge, the DONE light burns forever on the happy path — the exact regression that comment describes, reintroduced.
+
+Peek must clear the badge for the terminal it shows, whether entered from the strip or from the sidebar. In both cases the user has now seen the terminal.
+
+### Wiring
+
+The cross-panel bridge already exists — `shell.js:10` documents "Cross-panel bridge: listens for postMessage `{type:'switchPanel', panel}`", handled at line 483, and `terminals.js` already receives `focusTerminal` / `clearTerminalBadge` messages behind an `event.origin !== location.origin` guard.
+
+Strip click becomes: switch to the terminals panel via the existing bridge, then post a peek message. Preserve the origin checks on the new message exactly as the existing arms do.
+
+**Panel activation is required, not optional.** The strip is visible while other panels are active, so a peek message alone would change a panel the user cannot see and read as a dead click. Switch first, then peek.
+
+### Keep the pop-out reachable
+
+Do not delete the pop-out path or the `popoutWindows` tracking (`shell.js:203-219`). A real second window is genuinely wanted sometimes — a second monitor, or watching one agent while working in another panel — and peek cannot serve that because it lives inside one panel. Demote it from default to deliberate: a modifier-click or context-menu action on the same icon.
+
+If a pop-out window is already open for that terminal, focus the existing window rather than peeking; two live views of one terminal in two surfaces is confusing and the user has already expressed a preference for that terminal.
+
 ## Verification Plan
 
 1. **Unit — no mutation.** Snapshot `currentLayout`, `paneAssignments`, and `pinnedPanes`; peek; assert all three are byte-identical during and after.
@@ -97,7 +138,13 @@ Use **Peek** (or Expand). Reserve "focus" for the caret.
 9. **Unit — group lock preserved.** Lock a group, peek a member, dismiss; assert the lock is still active and the group's view is restored.
 10. **Unit — resize during peek.** Shrink the window past a floor threshold while peeked, then dismiss; assert the floor is applied correctly on restore and the fallback banner state is accurate.
 11. **Unit — control separation.** Assert the peek control is not adjacent to `close` in the row, and that no `confirm(` / `window.confirm(` is introduced.
-12. **Manual (VSIX).** With a 3×3 grid of planners, two panes pinned: peek several terminals in succession, confirm each is instant, confirm scrollback is preserved in the hidden panes, and confirm dismissing returns to the exact grid with pins intact.
+12. **Unit — strip click peeks, does not pop out.** Assert a plain strip-icon click issues `switchPanel` + peek and calls no `window.open`.
+13. **Unit — badge cleared on peek.** Give a terminal a DONE badge, peek it from both the strip and the sidebar; assert the badge clears in both cases. This is the "DONE light burns forever" regression the `clearTerminalBadge` comment describes.
+14. **Unit — panel activation.** With a non-terminals panel active, assert a strip click switches panels *before* peeking, and that the peek is visible without further interaction.
+15. **Unit — origin guard.** Assert the new peek message is rejected when `event.origin !== location.origin`, matching the existing arms.
+16. **Unit — pop-out still reachable.** Assert the modifier/context path still opens a window and still registers it in `popoutWindows`, and that its cleanup on close is unchanged.
+17. **Unit — existing pop-out wins.** With a pop-out already open for a terminal, assert a strip click focuses that window instead of peeking.
+18. **Manual (VSIX).** With a 3×3 grid of planners, two panes pinned: peek several terminals in succession, confirm each is instant, confirm scrollback is preserved in the hidden panes, and confirm dismissing returns to the exact grid with pins intact. Then from another panel, click a strip icon and confirm it switches panel, peeks, clears the DONE light, and dismisses back to the grid.
 
 ## Dependencies
 
