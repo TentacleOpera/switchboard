@@ -54,15 +54,33 @@ This area is being actively reworked locally. Check for unpushed work touching t
 ```
 
 - **Derived groups** (`role`, `worktree`, `project`) compute membership live. Nothing to save, nothing to repair — a new planner terminal joins "Planners" the moment it exists, and a renamed or recreated one never falls out, because membership is recomputed rather than remembered. This alone removes the `friendlyName` brittleness that today's model cannot escape.
-- **Manual groups** keep an explicit member list for genuinely ad-hoc sets, and remain creatable from the composer via "save current as group" — that path stays, it just stops being the *only* path.
+- **Manual groups** keep an explicit member list for genuinely ad-hoc sets.
 
 Derived groups are what make creation free, which is the actual complaint. "All planners" should not be something you *build*; it should be something that is simply true once you have planners.
+
+### How groups get created — three paths, cheapest first
+
+The existing "save current as group" flow requires composing every pane before you can capture anything, which is exactly the cost that made the feature go unused. It stays, but it must not remain the only way to get a manual group.
+
+1. **Derived — zero gestures.** Role, worktree, and project groups simply exist once the threshold is met. Nothing to create, name, or maintain.
+2. **Multi-select — one gesture.** Select terminal rows in the sidebar (modifier-click / shift-range, matching whatever selection idiom the sidebar already uses), then "Group selected." Name it inline, defaulting to something derived from the members. **No composing required** — the terminals never have to be seated first. This is the path that makes ad-hoc groups cheap, and it is the one missing today.
+3. **Save current composition.** The existing `saveCurrentAsGroup` path, retained for when you have hand-arranged something worth keeping. Now one option among three rather than the only door.
+
+### Editing a derived group: detach to manual
+
+A derived group is a rule and cannot be partially edited — but "all planners except the one I'm debugging" is a real need. Offer **detach**: materialise the derived group's current membership into a manual group, which is then freely editable.
+
+Detaching copies membership at that moment and stops tracking the rule, so the copy will not pick up new planners. Say so at the point of detaching — a user expecting a live group to also be editable is expecting a contradiction, and silently freezing it is the confusing outcome.
+
+Adding or removing members on an existing manual group should be possible directly from the sidebar (from the multi-select, or a per-row "add to group"), not only by rebuilding it.
 
 ### Which derived groups appear
 
 Show a derived group when it has **two or more members** (threshold configurable). One planner is not an arrangement. This keeps the sidebar from listing a group per role for a user with one of each, while a 3×3 fill of planners produces the "Planners" group automatically, with no save step at all.
 
-Users can hide derived groups they do not want, and pin ones they do. Do not require opt-in to see them — opt-in reintroduces the creation cost this design exists to remove.
+Derived groups are visible by default — **do not require opt-in**, which would reintroduce the creation cost this design exists to remove. Give each derived row a hide control, and keep a hidden-list in the same persisted settings as the threshold so it survives reload; surface a way to unhide (a count of hidden groups, or a setting) so a hidden group is not lost. Pinning a group to the top of the list uses the same persisted store.
+
+Hiding a derived group must not affect its membership or its ability to be locked from elsewhere — it is a sidebar display preference, nothing more.
 
 ### Placement in the hierarchy
 
@@ -119,6 +137,10 @@ Found while reading, all in this feature:
 
 1. **Unit — derived membership is live.** Create a planner terminal; assert it joins the "Planners" group with no save step. Rename it; assert it stays. Kill and recreate under a new name; assert it rejoins — the case today's snapshot model fails.
 2. **Unit — threshold.** One terminal of a role produces no derived group; two produce one.
+2b. **Unit — multi-select creation.** Select three unseated terminals and group them; assert a manual group is created with exactly those members and that `paneAssignments` is untouched — creation must not require or cause seating.
+2c. **Unit — detach.** Detaching a derived group produces a manual group with the same members; assert a subsequently created terminal of that role joins the derived group and **not** the detached copy.
+2d. **Unit — edit membership.** Adding and removing members on a manual group persists without rebuilding the group or changing its id.
+2e. **Unit — hide/unhide persists.** Hide a derived group, reload, assert it is still hidden and still discoverable via the unhide affordance; assert hiding does not change its membership or prevent it being locked programmatically.
 3. **Unit — hierarchy, not toggle.** Assert groups and terminals render in one tree; assert `groupsView` (or any successor boolean that hides one entirely) is gone.
 4. **Unit — lock overrides pins.** Pin a pane, click a group, assert all panes swap to the group's members and the pin does not block it.
 5. **Unit — click a member.** Clicking a terminal in the locked group focuses its pane and does not reseat or displace anything.
