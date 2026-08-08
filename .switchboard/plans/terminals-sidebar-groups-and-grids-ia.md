@@ -134,11 +134,37 @@ A locked mode with no visible exit is a trap. Provide both:
 
 When a manual group is locked and the user composes, offer to update that group rather than silently diverging. Derived groups are never dirtied — you simply leave them.
 
-### Layout for derived groups
+### Layout, the pane-size floor, and small screens
 
-A derived group's size varies. Pick the smallest layout whose slot count covers the membership (`LAYOUTS`, line 679-694 — up to `3x3` = 9), rather than storing one. Manual groups may store an explicit layout.
+A group expresses a *desired* layout — the smallest whose slot count covers its membership (`LAYOUTS`, lines 679-688, up to `3x3` = 9). It does not get to override the floor.
 
-**Membership above 9 needs an answer.** The largest layout holds nine, so a "Planners" group with fourteen members cannot be shown at once. Page within the group and show the position ("1–9 of 14"); do not silently truncate, which would make the group quietly lie about what it contains.
+`applyLayoutFloor` reduces the **rendered pane count** when the window is too small, and must: per its own comment, "leaving four pane elements in a two-column grid just reflows them into two implicit rows — i.e. 2x2 again — which is exactly the unreadable grid the floor exists to prevent." `3x3` needs 750×450; a small laptop lands on `2h` (2 slots) or `2v`. Only the first N assignments render.
+
+**This is where a naive group implementation destroys something the composer does today.** On a small screen a user can only fit two terminals legibly, and composing is precisely how they choose *which* two — they seat the ones that matter in the low-numbered slots, because those are the slots that survive a floor drop. Lock a 9-member derived "Planners" group on that laptop and the two visible terminals are whichever the membership enumeration ordered first. The user's most important control is gone, and the group looks broken rather than floored.
+
+Three requirements follow:
+
+1. **Groups carry a member order, and it is user-controllable and persisted.** The first N members occupy the N surviving slots. For derived groups, membership is computed but *order* is a stored display preference keyed to the group — that separation keeps derivation live while giving the user the say that matters.
+2. **Reordering within a locked group is the small-screen composition act.** It must not require dropping the lock: needing to leave the group to choose what the group shows is the exact friction this feature is meant to remove.
+3. **Paging is keyed to rendered slots, not to nine.** A 4-member group on a 2-slot screen needs paging just as much as a 14-member group on a full one. Page when `members > renderedSlots`.
+
+### Clicking an off-screen group member
+
+This gives the third click case a natural answer. Extending the contextual table:
+
+| State | Click on a terminal row |
+| :--- | :--- |
+| **No group locked** | Seats it — `assignToFocusedPane` exactly as today |
+| **Locked, member visible** | Focuses its pane |
+| **Locked, member not currently rendered** | **Promotes it into a visible slot** and persists the new group order |
+
+Clicking a member you cannot see should show it — anything else is a dead click. And promotion *is* composition, scoped to the group and requiring no new gesture, which is how the composer's small-screen role survives the lock.
+
+### The fallback banner needs group-aware text
+
+`applyLayoutFloor` toggles the banner whenever `effectiveLayout !== currentLayout`. For a large group on a small screen that condition is permanently true, and a permanently-visible banner is one users stop reading.
+
+In a locked group the useful message is not "your layout was reduced" but **"showing 2 of 9"**, with the paging control adjacent. State the shortfall and offer the remedy in the same place; do not silently truncate, which would make the group quietly lie about what it contains.
 
 ### Bugs to fix in passing
 
@@ -170,6 +196,13 @@ Found while reading, all in this feature:
 10. **Unit — explicit exit.** "All terminals" drops the lock and restores free composition.
 11. **Unit — solo interaction.** Clicking a group while solo'd exits solo and locks the group; assert it is never a silent no-op.
 12. **Unit — layout fit.** A 3-member group picks a 3-slot layout; a 9-member group picks `3x3`; a 14-member group pages and reports "1–9 of 14" rather than truncating.
+12b. **Unit — floor wins over group desire.** In a viewport below `3x3`'s 750×450 minimum, assert a 9-member group renders the floored pane count (not nine), and that the group's desired layout does not suppress or bypass `applyLayoutFloor`.
+12c. **Unit — order controls what survives the floor.** With a 9-member group in a 2-slot viewport, reorder two members to the front; assert exactly those two render, and that the order persists across reload.
+12d. **Unit — reorder does not drop the lock.** Reordering members while locked leaves the group locked and does not fall back to free composition.
+12e. **Unit — derived order is a preference, not membership.** Reorder a derived group, then add a new terminal of that role; assert it joins the group (membership stayed derived) and the stored order is still honoured.
+12f. **Unit — promote off-screen member.** Clicking a locked group member that is not currently rendered brings it into a visible slot and persists the order; assert it is never a no-op.
+12g. **Unit — paging keyed to rendered slots.** A 4-member group in a 2-slot viewport offers paging; assert the trigger is `members > renderedSlots`, not `members > 9`.
+12h. **Unit — banner text in a group.** With a group locked and the floor tripped, assert the banner reports the shortfall ("showing 2 of 9") rather than the generic layout-reduced message, and that a paging control is present alongside it.
 13. **Unit — delete separation.** A row click never deletes; assert no `confirm(` / `window.confirm(` is introduced, matching the existing confirm-gate regression tests.
 14. **Unit — save button survives.** The save-group control is still present and functional after saving (regression on line 547).
 15. **Manual (VSIX).** With 9 planners, 4 coders, and 2 terminals in a worktree: confirm Planners/Coders/worktree groups appear with no setup, clicking between them swaps the whole view over a pin, clicking a coder while Planners is locked switches to Coders, and composing by hand drops the lock and behaves exactly as it does today.
