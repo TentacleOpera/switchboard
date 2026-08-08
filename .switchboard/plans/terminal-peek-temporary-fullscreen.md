@@ -125,9 +125,24 @@ A separate-window path already exists at panel granularity: `btn-new-window` (`t
 
 So: strip click peeks, unconditionally. No modifier, no context menu.
 
-**Consequence to accept deliberately:** the `?solo=` single-terminal mode loses its only UI entry point. Do **not** rip out the mode itself — `soloTerminalName`, the URL-param path, and `src/test/terminal-solo-popout-contract.test.js` stay intact and passing. The URL remains directly reachable, and the pop-out capability shipped in a released version, so removing the machinery is a separate decision from removing its button.
+### Single-terminal pop-out moves into the pane frame
 
-Retain `popoutWindows` tracking and its close-cleanup (`shell.js:203-219`) as long as any path can still open one; remove it only if the mode is genuinely retired later.
+The `?solo=` mode keeps a UI entry point — it just moves to where it belongs. Add a pop-out control to each terminal pane's header, opening `/terminals?solo=<name>` for **that pane's** terminal.
+
+This is a better home than the strip: you pop out the terminal you are already looking at, rather than picking one from a list of icons. It also composes naturally with peek — a peeked pane is already full-size, so its header button reads as "promote this to a real window."
+
+`.pane-actions` already exists inside `.pane-header` (`terminals.js:2129-2135`), so there is a container to add to.
+
+Placement rules:
+
+- **Only on terminal-mode panes with an assignment.** Panes can render a kanban column instead of a terminal (`paneModes[index] === 'kanban'`, line 2283), and empty slots render a placeholder. Neither has a terminal to pop out.
+- **Suppress in solo.** A `?solo=` window offering to pop itself out again is nonsense; the existing `is-solo` body-class check (line 2278) is the test to use.
+- **Not adjacent to the pane's close/destructive controls**, for the same misclick reason as the sidebar row.
+- **Dismiss the peek when popping out from a peeked pane.** Otherwise the user is peeking a terminal that now lives in another window.
+
+**Handle popup blocking.** `btn-new-window` already does this and the reasoning applies verbatim (`terminals.js:475-481`): on a blocked or closed window it shows a toast and briefly disables the button, because "a console warning is invisible to users who never open devtools." Reuse `showPaneToast` rather than failing silently.
+
+Keep `soloTerminalName`, the URL-param path, and `src/test/terminal-solo-popout-contract.test.js` intact and passing — this change relocates the entry point, it does not retire the mode. `popoutWindows` tracking and its close-cleanup (`shell.js:203-219`) stay meaningful, since the pane button can still open one.
 
 If a `?solo=` window is already open for that terminal when the strip is clicked, focus that window rather than peeking — two live views of one terminal across two surfaces is confusing, and the open window is the stronger signal of intent.
 
@@ -150,6 +165,10 @@ If a `?solo=` window is already open for that terminal when the strip is clicked
 15. **Unit — origin guard.** Assert the new peek message is rejected when `event.origin !== location.origin`, matching the existing arms.
 16. **Unit — no modifier path.** Assert a plain strip click peeks and that no modifier variant opens a single-terminal window; assert `btn-new-window` still opens the whole panel unchanged.
 17. **Regression — solo mode intact.** `src/test/terminal-solo-popout-contract.test.js` passes unmodified; assert `/terminals?solo=<name>` still renders solo when reached directly.
+17b. **Unit — pane pop-out placement.** The control appears only on terminal-mode panes with an assignment; assert it is absent from kanban-mode panes, empty slots, and every pane in solo mode.
+17c. **Unit — pane pop-out target.** Clicking it opens `?solo=` for *that pane's* terminal, not the focused or active one — the bug a shared handler reading `activeTerminalName` would produce.
+17d. **Unit — pop-out from a peek.** Popping out from a peeked pane dismisses the peek and restores the prior layout, leaving no peek pointing at a terminal now shown in another window.
+17e. **Unit — popup blocked.** With `window.open` returning null, assert a toast is shown and the control is briefly disabled, matching the `btn-new-window` behaviour; assert it does not fail silently.
 18. **Unit — existing pop-out wins.** With a `?solo=` window already open for a terminal, assert a strip click focuses that window instead of peeking.
 19. **Manual (VSIX).** With a 3×3 grid of planners, two panes pinned: peek several terminals in succession, confirm each is instant, confirm scrollback is preserved in the hidden panes, and confirm dismissing returns to the exact grid with pins intact. Then from another panel, click a strip icon and confirm it switches panel, peeks, clears the DONE light, and dismisses back to the grid.
 
