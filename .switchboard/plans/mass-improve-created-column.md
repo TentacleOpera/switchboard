@@ -57,9 +57,23 @@ Every prompt MUST carry a hard file-scope directive, since all agents share one 
 
 Resolve `planFile` from the plan record, never by synthesizing `<planId>.md`. The `dispatch-analysis` skill documents the three forms this field takes (absolute, workspace-relative, `file://` URI) and warns that a synthesized filename "will almost always miss, and a miss silently drops the plan." The same hazard applies here, with worse consequences: a miss means an agent improves nothing while reporting success.
 
+Because the agents are **headless**, the prompt must also carry a report-back contract — a headless improver has no interlocutor and cannot ask anything interactively. Its two failure modes without this are equally bad: hang waiting for input nobody will provide, or guess and write the guess into a plan file.
+
+> If you hit an ambiguity you cannot resolve from the plan and the codebase, file it via `POST /agents/batch/report` (`type: "question"`, or `"research"` for something needing external sources) with your `batchId` and `ref`, then continue under an explicitly stated assumption and record that assumption in the plan. Do not stop to wait for an answer — no one is attached to this session. Never ask an interactive question.
+
+Do **not** have improvers call `/research/dispatch` directly: it requires a live `researcher` terminal and returns `{dispatched: false}` rather than spawning one, which from a headless agent is a silent drop. File the request; the supervisor routes it.
+
+### Provider selection
+
+The batch's `role` selects the CLI, the subscription, and therefore the bill. Expose the role choice in the board action, defaulting to a configured bulk-improvement role rather than a Claude-billed one — routing high-volume, low-judgement work to a cheaper provider is the primary motivation for headless dispatch, and a default that quietly bills Claude credits defeats it.
+
+Show the role's resolved `label` and the plan count in the action before dispatch ("Improve 14 plans via Gemini CLI (personal sub), 3 at a time"), so the cost target is visible at the moment of spending rather than discoverable afterward. Carry the same `providers` breakdown into the digest.
+
 ### Concurrency
 
 Default to the `switchboard.agentBatch.defaultConcurrency` setting; expose an override in the board action so the user can widen or narrow per run. Twenty simultaneous agents will hit provider rate limits and fail mid-write; a capped pool with backfill finishes in near-identical wall-clock and degrades gracefully.
+
+Note that rate limits are now **per provider**: a batch split across two roles has two independent budgets, and a single cap applied across the whole batch will throttle the cheap provider to protect a limit it does not share. Treat per-role concurrency as a follow-up if mixed-provider batches become common; a single cap is acceptable for the single-role case this plan delivers.
 
 ### Auto-promotion to PLAN REVIEWED
 
@@ -83,6 +97,9 @@ Add an action on the Created column ("Improve All") that resolves the visible se
 2. **Unit — selection delegates.** Assert the resolver calls `_visibleColumnCards` rather than filtering `_lastCards` inline.
 3. **Unit — planFile resolution.** Feed all three `planFile` forms (absolute, relative, `file://`); assert each resolves to a readable path and none is synthesized from the planId.
 4. **Unit — file-scope directive.** Assert every generated prompt names exactly one plan file and includes the do-not-touch-siblings directive.
+4b. **Unit — report-back directive.** Assert every generated prompt includes the file-a-report-and-continue contract, the never-ask-interactively directive, and the agent's own `batchId` and `ref`.
+4c. **Unit — no direct research dispatch.** Assert no generated prompt instructs the agent to call `/research/dispatch`.
+4d. **Unit — provider surfaced.** Assert the board action displays the resolved role `label` and plan count before dispatch, and that the digest carries the `providers` breakdown.
 5. **Unit — promote only on completed.** Agents reaching `completed` are moved to PLAN REVIEWED; agents reaching `exited`, `failed`, or `stuck` remain in CREATED. Assert `exited` never promotes.
 6. **Unit — incremental promotion.** Complete 2 of 5 agents, stop the batch, assert exactly 2 cards moved.
 7. **Unit — promotion via API, not SQL.** Assert the move path is the kanban move service; assert no direct `kanban_column` UPDATE is issued.

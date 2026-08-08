@@ -34,7 +34,9 @@ Add a section covering the batch surface, matching the existing house style of �
 
 Content requirements:
 
-- **Endpoint table** — `POST /agents/spawn-batch`, `GET /agents/batch/status`, `POST /agents/batch/stop`, with body/query and purpose columns.
+- **Endpoint table** — `POST /agents/spawn-batch`, `GET /agents/batch/status`, `POST /agents/batch/stop`, `POST /agents/batch/report`, with body/query and purpose columns.
+- **Headless execution model** — batch agents run as child processes, do **not** appear in the terminals UI, are absent from `runtime.terminals`, and cannot be targeted by any dispatch endpoint. State this plainly: an agent reading the existing docs will otherwise assume the `/kanban/dispatch` "live terminal agent" model applies and look for terminals that will never exist.
+- **The report-back channel, from both sides** — how a batch agent files a question/research/blocker (`POST /agents/batch/report`, non-blocking, best-effort, file-then-continue-under-a-stated-assumption), and how the supervisor consumes it (in `reports[]` on the status it already polls). Include the prohibition on batch agents calling `/research/dispatch` directly, and why: it needs a live `researcher` terminal and returns `{dispatched: false}` rather than spawning, which from a headless agent is a silent drop.
 - **Per-agent state vocabulary** — `queued | running | completed | exited | failed | stuck`, and explicitly that **`exited` is not `completed`**: the process ended without the plan file's mtime advancing, so no work landed. Any agent reading this doc must be able to tell a no-op from a success.
 - **`stuck` is report-only** — it does not kill the terminal, free the slot, or halt the batch.
 - **Failure isolation** — one failed agent does not halt a batch. State this in contrast to the oversight pass's documented halt-on-failure, since a reader coming from §4a will otherwise carry the wrong assumption across.
@@ -58,8 +60,13 @@ Add to the skill surface (and to the mass-improve dispatch prompt) an explicit s
 1. **Resolve IDs only.** Get the target set from `GET /kanban/plans?column=CREATED` or the board action's resolved set. Do **not** call `GET /kanban/plan?planId=` — that endpoint returns the plan's full file content (`.data.content`), which is exactly what must not enter the supervisor's context.
 2. **Dispatch by ID.** Post the batch with refs and prompts. Never inline plan bodies into the batch payload.
 3. **Poll in short turns.** Call `GET /agents/batch/status` and read `counts` first; only read the arrays when something needs naming. Keep each polling turn short — the point is a small, repeated context, not one long-lived one.
-4. **Digest from status, not from files.** The final summary reports counts, per-plan outcomes by title, durations, and specifically names every `exited`, `failed`, and `stuck` agent as needing attention. If the supervisor cannot describe an outcome from the status payload alone, that is a gap in the status payload to be fixed there — not a licence to read plan files.
-5. **Never read plan bodies. Never write plan files. Never move cards.** Promotion is the batch engine's job; a supervisor moving cards races the engine.
+4. **Triage `reports[]` on every poll.** This is the supervisor's only genuinely active duty, and the reason a supervisor exists at all rather than a progress bar. Headless agents cannot wait for answers, so every report is already-filed history, not a live prompt — triage it accordingly:
+   - `question` — if answerable and still relevant, answer it in the digest or, when it invalidates the agent's stated assumption, queue that plan for a re-run after the batch. Do not attempt to reply to a running agent; there is no channel back into a headless process.
+   - `research` — decide whether to forward to `/research/dispatch` (only meaningful if a live `researcher` terminal exists) or surface it to the human. Never assume filing equals dispatching.
+   - `blocker` — name it in the digest as needing a human. Do not attempt an automated fix.
+   - `note` — record; no action.
+5. **Digest from status, not from files.** The final summary reports counts, per-plan outcomes by title, durations, every filed report, and specifically names every `exited`, `failed`, `timedOut`, and `stuck` agent as needing attention. Include the `providers` breakdown so the user can confirm which subscription the batch actually billed — that verification is the point of headless dispatch and belongs in the digest, not in the user's head. If the supervisor cannot describe an outcome from the status payload alone, that is a gap in the status payload to be fixed there — not a licence to read plan files.
+6. **Never read plan bodies. Never write plan files. Never move cards.** Promotion is the batch engine's job; a supervisor moving cards races the engine.
 
 State the reason inline, not just the rule: reading N plan bodies makes supervisor context grow with batch size, which is the one thing this architecture exists to avoid.
 
@@ -74,7 +81,8 @@ Update the skills table in `CLAUDE.md` / `AGENTS.md` if a new skill entry is war
 3. **Catalog coverage.** Assert `GET /catalog` includes the batch endpoints.
 4. **Curl examples are well-formed.** Parse the JSON bodies in the skill's `curl` blocks; assert each is valid JSON and its keys are a subset of the handler's accepted fields.
 5. **Prompt directive present.** Assert the mass-improve dispatch prompt contains the never-read-plan-bodies directive.
-6. **Manual — read-only trace.** Run a supervised batch end to end and inspect the supervisor's tool calls: assert zero `GET /kanban/plan?planId=` calls and zero plan-file reads, and that the digest still correctly names an intentionally-failed agent.
+6. **Report triage documented.** Assert the skill documents all four report types with a defined supervisor action for each, and states that no channel exists back into a running headless agent.
+7. **Manual — read-only trace.** Run a supervised batch end to end, with one agent instructed to file a `question` and one to file a `research` report. Inspect the supervisor's tool calls: assert zero `GET /kanban/plan?planId=` calls and zero plan-file reads; assert the digest names the intentionally-failed agent, both reports, and the `providers` breakdown.
 
 ## Dependencies
 
