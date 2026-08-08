@@ -49,13 +49,11 @@ In the terminals interface, alongside the existing new-agent menu, add a "Fill g
 
 On confirm: switch the layout to the chosen mode and create `slots − (existing terminals of that role in this location)` new terminals.
 
-### Emit a saved group, not just a seating
+### Relationship to groups
 
-A group is already `{ layout, assignments }` (`saveCurrentAsGroup`, `src/webview/terminals.js:1181`) — so a grid *is* a group whose layout has many slots. Have the fill action persist the result as a named group ("Planners 3×3") rather than only seating panes transiently.
+Do **not** persist a saved group here. Under the sidebar rework (`terminals-sidebar-groups-and-grids-ia.md`), groups are derived from role rather than snapshotted, so filling a 3×3 with planners causes the "Planners" group to exist automatically — no save step, and the batch is recallable in one click for free.
 
-This costs almost nothing and buys the thing that matters once a batch is actually running: the user wanders off to other work, and getting back to the batch is one click instead of a re-fill. It also keeps "grid" from becoming a third noun in the UI alongside terminals and groups. Record the role the group was filled from, so "top up to full" is available later without re-deriving intent.
-
-See `terminals-sidebar-groups-and-grids-ia.md` for the sidebar rework this feeds.
+If that plan has not landed yet, this one still ships standalone: the fill seats the panes and the user can save a group by hand exactly as today. Do not build a bespoke persistence path here that the derived-group work would then have to unpick.
 
 ### Reuse the existing creation path
 

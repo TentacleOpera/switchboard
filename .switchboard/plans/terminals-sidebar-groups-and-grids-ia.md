@@ -1,45 +1,40 @@
-# Terminals Sidebar: Unify Groups and Grids, and Make Switching Rapid
+# Terminals Sidebar: Logical Groups That Lock the View
 
 ## Goal
 
-Rebuild the terminals sidebar so individual terminals, saved groups, and grids are all reachable at a glance and switchable in one click — and collapse "grid" into "group" so users hold one concept instead of two.
+Make groups *logical arrangements* — "all planners", "worktree X", "this project" — that cost nothing to create and repair themselves, sit as a tier in the workspace hierarchy, and **lock** the pane view while active. Free composition remains exactly as it is today whenever no group is locked.
 
 ### The problem
 
-The sidebar cannot show groups and terminals at the same time. `groupsView` (`src/webview/terminals.js:69`) is a boolean that flips the sidebar between "group list" and "flat terminal list":
+Groups today are **saved views, not logical arrangements**. `saveCurrentAsGroup` (`src/webview/terminals.js:1181`) freezes the current state:
+
+```js
+{ id, name, layout: currentLayout, assignments: paneAssignments.slice(0, getSlotCount(effectiveLayout)) }
+```
+
+Three consequences, and each one is a reason the feature goes unused:
+
+1. **Creation is expensive.** A group can only be made by first hand-composing every pane, then saving. Getting "all planners" on screen means seating nine terminals one click at a time — so the arrangement you most want is the one that costs the most to capture.
+2. **Membership is a frozen list of names.** The code says so directly (line 64-66): "Names are terminal friendlyNames — the fleet has no stable id, so `renameTerminal` must fixup group assignments." A terminal that exits and is recreated under a different name silently drops out of every group referencing it, leaving a hole nothing explains.
+3. **A saved view cannot answer "which group is this terminal in?"** — so clicking a terminal cannot navigate to its group. It can only do what it does now: seat that terminal into whatever grid happens to be showing.
+
+### The second problem: the sidebar is a mode toggle
+
+`groupsView` (line 69) is a boolean that flips the sidebar between the group list and the flat terminal list:
 
 ```js
 let groupsView = true; // when groups exist + !solo, true → group sidebar, false → flat list
 ```
 
-`renderGroupSidebar()` renders **only** group rows plus a "Show all terminals" row that sets `groupsView = false` and re-renders. So reaching one terminal means leaving the group list entirely, and returning means leaving the terminals. Rapid switching between individual terminals, groups, and grids is not slow in this design — it is structurally impossible, because no view contains more than one of them.
+`renderGroupSidebar()` emits only group rows plus a "Show all terminals" row that flips the flag back. Reaching a terminal means leaving the groups; returning means leaving the terminals. Groups are not a tier *in* the hierarchy — they are a replacement *for* it.
 
 ### Root cause
 
-Groups were added as a *replacement* view rather than a *section* of the existing one, and three unrelated organising ideas ended up competing for the same list element:
+Groups were modelled as snapshots of the composer's output rather than as sets with meaning. Everything else follows: snapshots are costly to produce, brittle to maintain, and cannot be navigated to. Meanwhile the sidebar treated them as an alternative view rather than a level of the tree, because a snapshot has no natural place in a workspace hierarchy.
 
-| Concept | Where it lives | What it means |
-| :--- | :--- | :--- |
-| **Seating group** | `terminalGroups`, `activeGroupId` (line 62-68) | A named snapshot of `(layout, assignments)` — which terminal sits in which pane |
-| **Workspace / worktree group** | `parent-group`, `worktree-group` (lines 541-576, 1406-1461) | Structural hierarchy: which workspace or worktree a terminal belongs to |
-| **Solo mode** | `soloTerminalName` | One pinned terminal, no grid at all |
+### What stays
 
-Two of these are called "group" and they are not the same thing. Worse, seating-group rows are rendered with `className = 'worktree-group-header'` (line 1217) — borrowing the *worktree* visual language for an unrelated concept, which is a large part of why the feature reads as confused.
-
-### The unification
-
-A group is already `{ layout, assignments }` (`saveCurrentAsGroup`, line 1181). A grid is a layout. **So a grid is a group whose layout has many slots** — exactly as observed. Treating "grid" as a separate noun adds a third concept that the data model does not have. Making the role-fill action produce a *saved group* means the grid concept disappears into groups rather than competing with them, and a batch of nine planners becomes a one-click recall forever after.
-
-### Correctness bugs found while reading
-
-These are not cosmetic and should be fixed as part of this work:
-
-1. **Dead button in solo mode.** `switchToGroup` opens with `if (soloTerminalName) { return; }` (line 1206). Clicking a group while solo'd does nothing, with no feedback — the same class of failure as a `confirm()` gate that silently no-ops.
-2. **`activeGroupId` never invalidates.** It is set on create and switch, cleared only on delete. Manually reassign a pane after seating a group and the sidebar still shows that group as active while the seating has diverged. There is no dirty indicator and no way to re-save.
-3. **Groups key on `friendlyName`.** Per the comment at line 64-66, "the fleet has no stable id, so `renameTerminal` must fixup group assignments." A terminal that exits and is recreated under a different name silently vanishes from every group referencing it, leaving a hole no UI explains.
-4. **`switch` and `delete` sit adjacent** as small text buttons on every group row, and deletion is immediate (correctly — no confirm dialogs). Adjacent destructive and non-destructive actions of identical weight is precisely the misclick hazard the project's no-confirm rule assumes buttons are shaped to avoid.
-5. **No rename.** `saveCurrentAsGroup` auto-names `Group N` when the name is blank, and nothing can rename it afterwards.
-6. **`btn-save-group` destroys itself.** The handler calls `btnSaveGroup.replaceWith(input)` (line 547) — the button is gone from the DOM until something re-renders it.
+Free composition is not being removed. `assignToFocusedPane` — including "Pins beat focus. This is the whole feature." (line 1651), displacement, and the undo snapshot — remains the behaviour whenever no group is locked. Groups add a mode; they do not replace the composer.
 
 ## Metadata
 
@@ -48,68 +43,96 @@ These are not cosmetic and should be fixed as part of this work:
 
 ## Reconcile Before Building
 
-Check for unpushed local work touching the terminals sidebar or grouping before starting — the user has noted this area is actively being reworked. Adopt whatever group identity scheme exists rather than minting a second one.
+This area is being actively reworked locally. Check for unpushed work touching the terminals sidebar, grouping, or pane assignment before starting, and adopt whatever group identity scheme exists rather than minting a second one.
 
 ## Design
 
-### One sidebar, sections not modes
+### Groups become rules, not snapshots
 
-Delete `groupsView` as a view switch. The sidebar renders a single scrollable column with persistent, independently collapsible sections:
+```
+{ id, name, source: 'role' | 'worktree' | 'project' | 'manual', value?, layout?, members? }
+```
 
-1. **Groups** — every saved group, including grids. Active group marked. One click seats it.
-2. **Terminals** — the flat list, retaining the existing workspace/worktree hierarchy and its per-workspace `+` spawn buttons.
+- **Derived groups** (`role`, `worktree`, `project`) compute membership live. Nothing to save, nothing to repair — a new planner terminal joins "Planners" the moment it exists, and a renamed or recreated one never falls out, because membership is recomputed rather than remembered. This alone removes the `friendlyName` brittleness that today's model cannot escape.
+- **Manual groups** keep an explicit member list for genuinely ad-hoc sets, and remain creatable from the composer via "save current as group" — that path stays, it just stops being the *only* path.
 
-Both are visible at once. Collapsed state persists per section. "Show all terminals" disappears as a concept because terminals are never hidden.
+Derived groups are what make creation free, which is the actual complaint. "All planners" should not be something you *build*; it should be something that is simply true once you have planners.
 
-Solo mode becomes a state indicated *within* this sidebar (the solo'd terminal marked in the Terminals section), not a mode that changes what the sidebar can display.
+### Which derived groups appear
 
-### Rapid switching
+Show a derived group when it has **two or more members** (threshold configurable). One planner is not an arrangement. This keeps the sidebar from listing a group per role for a user with one of each, while a 3×3 fill of planners produces the "Planners" group automatically, with no save step at all.
 
-- One click on a group row seats it. No separate `switch` button — the row **is** the control.
-- One click on a terminal row focuses its pane if seated, or solos it if not. Whatever the existing single-click behaviour is, keep it; the requirement is that it needs no mode change first.
-- Keyboard: cycle groups and focus panes without the mouse. This is the difference between "switching works" and "switching is rapid," and it is where the current design costs the most — every switch today is at minimum a mode toggle plus a click.
+Users can hide derived groups they do not want, and pin ones they do. Do not require opt-in to see them — opt-in reintroduces the creation cost this design exists to remove.
 
-### Visual separation of the two "group" ideas
+### Placement in the hierarchy
 
-Seating groups must stop borrowing `worktree-group-header`. Give them their own class and their own visual treatment, distinct from the workspace/worktree hierarchy. Consider retiring the word "group" for one of the two — the structural one is a *workspace* or *worktree*, and saying so removes the collision at the vocabulary level rather than papering over it with styling.
+Delete `groupsView` as a view switch. Groups become a tier inside the existing workspace hierarchy, above the terminals they contain:
 
-### Group rows
+```
+Switchboard (workspace)
+  ▸ Planners (9)              ← derived group
+  ▸ Coders (4)                ← derived group
+  ▸ Review batch (3)          ← manual group
+  ▸ Unassigned (2)
+      terminal rows…
+```
 
-Each row shows: name, layout badge (e.g. `3×3`), live terminal count, and a dirty marker when the current seating has diverged from the saved snapshot. Move `delete` out of the row's primary surface — into an overflow/hover affordance — so it is not adjacent to the row-click that seats the group. **No confirmation dialog**: `window.confirm()` is a silent no-op in VS Code webviews and would make delete do literally nothing. Separation and weight, not a gate.
+Both groups and terminals are visible at once. Sections collapse independently and persist. "Show all terminals" disappears as a concept because terminals are never hidden.
 
-Add **rename** and **re-save** (update the snapshot to current seating), the latter being the natural resolution of the dirty state.
+Seating groups must also stop borrowing `worktree-group-header` (line 1217) — the structural worktree hierarchy and user-facing groups are different things and must not share a visual language. Consider naming the structural tier *workspace* / *worktree* outright, so the word "group" means one thing.
 
-### Grids are groups
+### Lock semantics
 
-The role-fill action (`role-grid-fill-terminals.md`) creates a saved group named for what it built — "Planners 3×3" — rather than transiently seating panes. Consequences:
+Clicking a group **locks** the view to it:
 
-- The batch is recallable in one click after the user wanders off to other work, which is the actual daily need once a batch is running.
-- No third noun in the UI. The layout picker still exists for ad-hoc seating; groups are the saved form.
-- A group that was role-filled can record the role it was built from, so "top up this group to full" is available later without re-deriving intent.
+- All panes swap to that group's members. **This overrides pins** — pins protect against incidental reseating by a stray sidebar click, not against deliberate navigation. A locked group is deliberate.
+- Clicking a member focuses its pane. It does **not** reseat, because the terminal is already there.
+- Clicking a terminal belonging to a *different* group switches the lock to that group — it does not drag the terminal into the current view, which is today's behaviour and the specific thing being replaced.
+- Clicking an **unassigned** terminal shows the unassigned set in the currently selected layout.
 
-### Identity
+### Leaving the lock — required, not optional
 
-Assignments must survive rename and recreation. Prefer a stable terminal identifier over `friendlyName`; if the fleet genuinely has no stable id (per the line 64-66 comment), then either introduce one or make the failure legible — a group row showing "2 of 9 terminals missing" is recoverable, whereas today's silent hole is not. **Do not leave silent holes**; that is the current behaviour and it is the least defensible part of the feature.
+A locked mode with no visible exit is a trap. Provide both:
 
-### Dirty state
+- An explicit **"All terminals"** entry at the top of the hierarchy that drops the lock and restores free composition.
+- **Composing drops the lock automatically.** Any deliberate compose gesture while locked (drag to a pane, or whatever the composer's assign path is) exits the lock and returns to free seating, keeping the panes as they are. This preserves the composer with no new gesture to learn and no mode the user can get stuck in — the composer's presence *is* the escape.
 
-Any manual pane reassignment while a group is seated marks that group dirty. The row shows it; the user can re-save or switch away. `activeGroupId` alone is not sufficient state — it must be paired with a comparison against current `paneAssignments`.
+When a manual group is locked and the user composes, offer to update that group rather than silently diverging. Derived groups are never dirtied — you simply leave them.
+
+### Layout for derived groups
+
+A derived group's size varies. Pick the smallest layout whose slot count covers the membership (`LAYOUTS`, line 679-694 — up to `3x3` = 9), rather than storing one. Manual groups may store an explicit layout.
+
+**Membership above 9 needs an answer.** The largest layout holds nine, so a "Planners" group with fourteen members cannot be shown at once. Page within the group and show the position ("1–9 of 14"); do not silently truncate, which would make the group quietly lie about what it contains.
+
+### Bugs to fix in passing
+
+Found while reading, all in this feature:
+
+- **`switchToGroup` is a silent no-op in solo mode** (`if (soloTerminalName) { return; }`, line 1206). Under lock semantics the resolution is clear: the group wins, solo exits.
+- **`activeGroupId` never invalidates** — set on create/switch, cleared only on delete. With locks and auto-exit-on-compose this stops being ambiguous, but the state must actually be cleared when the lock drops.
+- **`switch` and `delete` are adjacent same-weight text buttons** on every group row (lines 1236-1250), and deletion is immediate. Move delete off the primary click surface. **No confirmation dialog** — `window.confirm()` is a silent no-op in VS Code webviews and would make delete do nothing at all. Separation and weight, not a gate.
+- **No rename** for groups; blank names become `Group N` permanently.
+- **`btn-save-group` calls `replaceWith(input)` on itself** (line 547), removing the button from the DOM until a re-render.
 
 ## Verification Plan
 
-1. **Unit — no modal toggle.** Assert groups and terminals are both present in one render; assert `groupsView` (or any successor boolean that hides one section entirely) is gone.
-2. **Unit — one-click seat.** Clicking a group row seats it: `paneAssignments` and layout both update, in one interaction.
-3. **Unit — solo does not dead-end.** Clicking a group while solo'd either exits solo and seats the group, or reports why it cannot. Assert it is never a silent no-op.
-4. **Unit — dirty state.** Seat a group, reassign one pane, assert the row is marked dirty; re-save clears it; switching away and back does not falsely mark it.
-5. **Unit — rename.** Renaming a group persists and does not alter its assignments or id.
-6. **Unit — delete separation.** Assert delete is not in the row's primary click surface, and that a row click never deletes. Assert no `confirm(` / `window.confirm(` is introduced, matching the existing confirm-gate regression tests.
-7. **Unit — identity survives rename.** Rename a terminal that belongs to a group; assert the group still resolves it.
-8. **Unit — missing members are legible.** Delete a terminal in a saved group; assert the group row reports the shortfall rather than silently seating a hole.
-9. **Unit — grid is a group.** Assert the role-fill action produces a persisted group with the right layout and assignments, and that it appears in the Groups section.
-10. **Unit — section collapse persists.** Collapse each section, reload, assert state is restored.
-11. **Unit — save button survives.** Assert the save-group control is still present and functional after saving (regression on the `replaceWith` self-destruction at line 547).
-12. **Manual (VSIX).** With 9 terminals, 2 saved groups, and one worktree hierarchy: switch between both groups and three individual terminals in under a handful of clicks with no mode changes, confirm the dirty marker appears on manual reassignment, and confirm delete cannot be hit while aiming for switch.
+1. **Unit — derived membership is live.** Create a planner terminal; assert it joins the "Planners" group with no save step. Rename it; assert it stays. Kill and recreate under a new name; assert it rejoins — the case today's snapshot model fails.
+2. **Unit — threshold.** One terminal of a role produces no derived group; two produce one.
+3. **Unit — hierarchy, not toggle.** Assert groups and terminals render in one tree; assert `groupsView` (or any successor boolean that hides one entirely) is gone.
+4. **Unit — lock overrides pins.** Pin a pane, click a group, assert all panes swap to the group's members and the pin does not block it.
+5. **Unit — click a member.** Clicking a terminal in the locked group focuses its pane and does not reseat or displace anything.
+6. **Unit — cross-group click switches lock.** Clicking a terminal belonging to another group locks that group; assert the terminal is not dragged into the previous group's view.
+7. **Unit — unassigned.** Clicking an unassigned terminal shows the unassigned set in the current layout.
+8. **Unit — composer preserved.** With no lock active, assert `assignToFocusedPane` behaviour is byte-for-byte unchanged: pins beat focus, displacement, and undo all still work. Existing composer tests must pass unmodified.
+9. **Unit — compose drops the lock.** Composing while locked exits the lock, keeps the panes, and clears the active-group state.
+10. **Unit — explicit exit.** "All terminals" drops the lock and restores free composition.
+11. **Unit — solo interaction.** Clicking a group while solo'd exits solo and locks the group; assert it is never a silent no-op.
+12. **Unit — layout fit.** A 3-member group picks a 3-slot layout; a 9-member group picks `3x3`; a 14-member group pages and reports "1–9 of 14" rather than truncating.
+13. **Unit — delete separation.** A row click never deletes; assert no `confirm(` / `window.confirm(` is introduced, matching the existing confirm-gate regression tests.
+14. **Unit — save button survives.** The save-group control is still present and functional after saving (regression on line 547).
+15. **Manual (VSIX).** With 9 planners, 4 coders, and 2 terminals in a worktree: confirm Planners/Coders/worktree groups appear with no setup, clicking between them swaps the whole view over a pin, clicking a coder while Planners is locked switches to Coders, and composing by hand drops the lock and behaves exactly as it does today.
 
 ## Dependencies
 
-- **Role Grid Fill** (`role-grid-fill-terminals.md`) — that plan's action should emit a saved group. The two can land in either order; if role-fill lands first, its output becomes a group here.
+- **Role Grid Fill** (`role-grid-fill-terminals.md`) — with derived groups, a role-filled grid produces its group automatically; that plan no longer needs to persist one explicitly.
