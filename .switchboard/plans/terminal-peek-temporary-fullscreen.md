@@ -119,11 +119,17 @@ Strip click becomes: switch to the terminals panel via the existing bridge, then
 
 **Panel activation is required, not optional.** The strip is visible while other panels are active, so a peek message alone would change a panel the user cannot see and read as a dead click. Switch first, then peek.
 
-### Keep the pop-out reachable
+### The strip click becomes plain peek — no modifier
 
-Do not delete the pop-out path or the `popoutWindows` tracking (`shell.js:203-219`). A real second window is genuinely wanted sometimes — a second monitor, or watching one agent while working in another panel — and peek cannot serve that because it lives inside one panel. Demote it from default to deliberate: a modifier-click or context-menu action on the same icon.
+A separate-window path already exists at panel granularity: `btn-new-window` (`terminals.js:466-473`) opens `/terminals` in its own window, sheds the shell sidebar, and carries its own grid — so a second monitor is served by popping out the *panel* and arranging (or peeking) inside it. The strip's `?solo=` pop-out is the only thing that windows a *single* terminal, and it is not worth preserving a modifier gesture for.
 
-If a pop-out window is already open for that terminal, focus the existing window rather than peeking; two live views of one terminal in two surfaces is confusing and the user has already expressed a preference for that terminal.
+So: strip click peeks, unconditionally. No modifier, no context menu.
+
+**Consequence to accept deliberately:** the `?solo=` single-terminal mode loses its only UI entry point. Do **not** rip out the mode itself — `soloTerminalName`, the URL-param path, and `src/test/terminal-solo-popout-contract.test.js` stay intact and passing. The URL remains directly reachable, and the pop-out capability shipped in a released version, so removing the machinery is a separate decision from removing its button.
+
+Retain `popoutWindows` tracking and its close-cleanup (`shell.js:203-219`) as long as any path can still open one; remove it only if the mode is genuinely retired later.
+
+If a `?solo=` window is already open for that terminal when the strip is clicked, focus that window rather than peeking — two live views of one terminal across two surfaces is confusing, and the open window is the stronger signal of intent.
 
 ## Verification Plan
 
@@ -142,9 +148,10 @@ If a pop-out window is already open for that terminal, focus the existing window
 13. **Unit — badge cleared on peek.** Give a terminal a DONE badge, peek it from both the strip and the sidebar; assert the badge clears in both cases. This is the "DONE light burns forever" regression the `clearTerminalBadge` comment describes.
 14. **Unit — panel activation.** With a non-terminals panel active, assert a strip click switches panels *before* peeking, and that the peek is visible without further interaction.
 15. **Unit — origin guard.** Assert the new peek message is rejected when `event.origin !== location.origin`, matching the existing arms.
-16. **Unit — pop-out still reachable.** Assert the modifier/context path still opens a window and still registers it in `popoutWindows`, and that its cleanup on close is unchanged.
-17. **Unit — existing pop-out wins.** With a pop-out already open for a terminal, assert a strip click focuses that window instead of peeking.
-18. **Manual (VSIX).** With a 3×3 grid of planners, two panes pinned: peek several terminals in succession, confirm each is instant, confirm scrollback is preserved in the hidden panes, and confirm dismissing returns to the exact grid with pins intact. Then from another panel, click a strip icon and confirm it switches panel, peeks, clears the DONE light, and dismisses back to the grid.
+16. **Unit — no modifier path.** Assert a plain strip click peeks and that no modifier variant opens a single-terminal window; assert `btn-new-window` still opens the whole panel unchanged.
+17. **Regression — solo mode intact.** `src/test/terminal-solo-popout-contract.test.js` passes unmodified; assert `/terminals?solo=<name>` still renders solo when reached directly.
+18. **Unit — existing pop-out wins.** With a `?solo=` window already open for a terminal, assert a strip click focuses that window instead of peeking.
+19. **Manual (VSIX).** With a 3×3 grid of planners, two panes pinned: peek several terminals in succession, confirm each is instant, confirm scrollback is preserved in the hidden panes, and confirm dismissing returns to the exact grid with pins intact. Then from another panel, click a strip icon and confirm it switches panel, peeks, clears the DONE light, and dismisses back to the grid.
 
 ## Dependencies
 
