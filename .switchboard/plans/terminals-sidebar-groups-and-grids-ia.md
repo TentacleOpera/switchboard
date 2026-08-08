@@ -123,6 +123,20 @@ The split also matches intent rather than adding a mode to remember: unlocked me
 
 Composing therefore needs no new gesture. To compose while locked, drop the lock first (click the locked group row again, or "All terminals") and the sidebar behaves precisely as it does today.
 
+#### The state must be legible — but do not add a mode switch
+
+Contextual clicks introduce hidden state: the same gesture seats or navigates depending on the lock. If the user cannot tell which state they are in, they cannot predict what a click does — which is worse than the `groupsView` toggle this plan removes, because that at least announced itself.
+
+Make the state readable, in one place:
+
+- The locked group row is visibly active; when nothing is locked, no row is.
+- The sidebar header carries a persistent, low-key indicator — the locked group's name, or "Composing" when free. Clicking it drops the lock.
+- **"All terminals" is the switch**, expressed as the zeroth entry of the hierarchy rather than a separate control. Label it so its effect is stated, not inferred (e.g. "All terminals — free composition").
+
+**Do not add a separate composer/groups toggle.** Lock state is already fully expressed by which group row is active, so a toggle would be a second control for one piece of state — and two controls for one fact drift. It also has no defined behaviour in the obvious case: flipping to "Groups" while nothing is locked has nothing to lock.
+
+Worse, a toggle invites decoupling "which group is locked" from "what a click does", allowing a locked group in compose mode — at which point clicking a group member has no coherent meaning. Those two facts must stay welded together; that is what keeps the model predictable, and the promote-into-view behaviour already covers the case a decoupled mode would be reaching for.
+
 **Do not reach for drag as the compose gesture.** Panes already accept drops, but that target carries a different payload: `.kanban-pane-row` rows are draggable so a *plan card* can be dropped onto a terminal to dispatch it (`terminals.js:2757-2770`, drop handler at 2028). Adding terminal-row drags means one drop target discriminating two payloads, and a mis-typed drop dispatches a plan when the user meant to seat a terminal. If a drag path is wanted later it must branch explicitly on payload type — but the contextual click above removes the need for it.
 
 ### Leaving the lock — required, not optional
@@ -192,6 +206,7 @@ Found while reading, all in this feature:
 8. **Unit — composer preserved.** With no lock active, assert `assignToFocusedPane` behaviour is byte-for-byte unchanged: pins beat focus, displacement, and undo all still work. Existing composer tests must pass unmodified.
 8b. **Unit — contextual click, the regression this plan nearly shipped.** A terminal that *is* a member of a derived group, clicked with **no lock active**, must seat — not navigate. Assert this for a terminal whose role has two or more instances, since that is the common case and the one a blanket navigate-on-click breaks.
 8c. **Unit — drag target untouched.** Assert terminal sidebar rows are not made draggable, and that dropping a `.kanban-pane-row` plan card onto a pane still dispatches exactly as before.
+8d. **Unit — lock state is legible.** Assert the header indicator names the locked group, reads "Composing" when nothing is locked, and that clicking it drops the lock. Assert exactly one control mutates lock state besides group rows themselves — no separate composer/groups toggle exists.
 9. **Unit — compose drops the lock.** Composing while locked exits the lock, keeps the panes, and clears the active-group state.
 10. **Unit — explicit exit.** "All terminals" drops the lock and restores free composition.
 11. **Unit — solo interaction.** Clicking a group while solo'd exits solo and locks the group; assert it is never a silent no-op.
