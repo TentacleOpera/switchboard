@@ -917,17 +917,8 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this.postMessage({ type: 'gitIgnoreConfig', ...config });
                     return { success: true };
                 }
-                case 'getDefaultPromptOverrides': {
-                    const overrides = await this._taskViewerProvider.handleGetDefaultPromptOverrides();
-                    this.postMessage({ type: 'defaultPromptOverrides', overrides });
-                    return { success: true };
-                }
                 case 'updateGitIgnoreConfig':
                     await this._taskViewerProvider.handleSaveGitIgnoreConfig(message);
-                    await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    return { success: true };
-                case 'saveDefaultPromptOverrides':
-                    await this._taskViewerProvider.handleSaveDefaultPromptOverrides(message);
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
                     return { success: true };
 
@@ -951,11 +942,6 @@ export class SetupPanelProvider implements vscode.Disposable {
                     await pathConfig.updateConfigWorkspace('planning.enabledSources', sources);
                     this.postMessage({ type: 'planningSourcesSaved', success: true });
                     await this._seams().commands.executeCommand('switchboard.refreshUI');
-                    return { success: true };
-                }
-                case 'getDefaultPromptPreviews': {
-                    const previews = await this._taskViewerProvider.handleGetDefaultPromptPreviews();
-                    this.postMessage({ type: 'defaultPromptPreviews', previews });
                     return { success: true };
                 }
                 case 'getDbPath': {

@@ -275,6 +275,58 @@ check('every webview CSP that allows ws://localhost also allows ws://*.localhost
     }
 });
 
+// ------------------------------------- 4. markdown editor paints its own surface
+//
+// The shared markdown editor (markdownEditor.js) is mounted in four panels
+// (planning/design/project/tickets) across both hosts. Its editing surface was
+// keyed off --panel-bg, which is #000000 in every host panel — pure black under
+// body text for an entire editing session. The fix: the editor owns its own
+// dark-grey surface via var(--md-editor-bg, #1a1a1a), and BOTH halves (the edit
+// textarea's shell and the live-preview pane) must paint the same value or split
+// view (the default mode) shows a visible seam. This assertion is structural: it
+// fails if either rule re-adopts a --panel-bg* token, or if the two halves
+// diverge — while staying green through any deliberate retune of the grey.
+//
+// It also pins the textarea's `background: transparent`, which is what makes the
+// shell's colour reach the operator at all. Every host panel ships its own
+// .markdown-editor background (#000 hardcoded in project.html, var(--panel-bg)
+// in the other three); the injected (0,2,1) selector out-scores them and paints
+// nothing, so the shell shows through. Paint the textarea directly and the shell
+// fix is cosmetically dead in all eleven textareas while every other assertion
+// here stays green.
+check('markdown editor paints its own surface, and both halves share it', () => {
+    const src = fs.readFileSync(path.join(WEBVIEW, 'markdownEditor.js'), 'utf8');
+    const ruleBody = (selector) => {
+        const i = src.indexOf(`${selector} {`);
+        assert.ok(i !== -1, `${selector} rule not found in markdownEditor.js`);
+        const open = src.indexOf('{', i);
+        const close = src.indexOf('}', open);
+        return src.slice(open + 1, close);
+    };
+    const backgroundOf = (selector) => {
+        const m = ruleBody(selector).match(/(?:^|\n)\s*background:\s*([^;]+);/);
+        assert.ok(m, `${selector} declares no background`);
+        return m[1].trim();
+    };
+    const shell = backgroundOf('.md-editor-shell');
+    const preview = backgroundOf('.md-live-preview');
+    for (const [name, value] of [['.md-editor-shell', shell], ['.md-live-preview', preview]]) {
+        assert.ok(!/--panel-bg\b/.test(value) && !/--panel-bg2\b/.test(value),
+            `${name} must not key its surface off the panel background tokens ` +
+            `(--panel-bg is #000000 and --panel-bg2 is #0a0a0a in every host panel) — got: ${value}`);
+    }
+    assert.strictEqual(shell, preview,
+        `the edit half and the preview half must paint the same surface or split view ` +
+        `(the default mode) shows a seam — shell=${shell} preview=${preview}`);
+
+    const textarea = backgroundOf('.md-body > textarea.markdown-editor');
+    assert.strictEqual(textarea, 'transparent',
+        `.md-body > textarea.markdown-editor must stay background: transparent so the ` +
+        `shell owns the editing surface — painting it here re-hides the shell behind ` +
+        `whatever the host panel wants (#000 in project.html, var(--panel-bg) = #000000 ` +
+        `in the other three) — got: ${textarea}`);
+});
+
 if (failures > 0) {
     console.error(`\n${failures} assertion(s) failed.`);
     process.exit(1);

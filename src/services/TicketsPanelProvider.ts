@@ -62,6 +62,23 @@ export class TicketsPanelProvider {
     private _ticketsViewWatcherFolders: string[] = [];
     private _cacheService: any | undefined;
     private _ticketsCurrentSelection: Map<string, { provider: string; listId?: string; projectId?: string }> = new Map();
+    // ── Tickets auto-sync engine (moved from PlanningPanelProvider). The 45s
+    //    delta-pull timer and the auto-push file watcher live here now — the
+    //    panel extraction left them behind in Planning with no writer, so users
+    //    who enabled auto-sync in a shipped build had a running engine they
+    //    could not see or turn off. See plan
+    //    feature_plan_20260807103000_tickets-autosync-migration-regression.md. ──
+    private _ticketsAutoSyncWatchers: Map<string, HostWatchHandle> = new Map();
+    private _ticketsAutoSyncDebounces: Map<string, NodeJS.Timeout> = new Map();
+    // Delta-pull timer (auto-sync ON only). Runs the delta pull on a 45s
+    // interval for the currently-selected list/project. Torn down on
+    // toggle-off or dispose. Rate-limit aware: exponential backoff on
+    // consecutive failures, cap at 5 then pause until next toggle cycle.
+    private _ticketsAutoSyncTimers: Map<string, NodeJS.Timeout> = new Map();
+    private _ticketsAutoSyncFailures: Map<string, number> = new Map();
+    // Exponential backoff: after N consecutive failures, the next eligible
+    // tick time is set to now + INTERVAL * 2^N. Reset to 0 on success.
+    private _ticketsAutoSyncNextEligible: Map<string, number> = new Map();
     // ── 2d: move-targets cache for fetchMoveTargets (TTL-bounded, per provider) ──
     private _moveTargetsCache = new Map<string, { at: number; targets: Array<{ id: string; name: string; path: string }> }>();
     private static readonly MOVE_TARGETS_TTL_MS = 60_000;
@@ -658,6 +675,204 @@ export class TicketsPanelProvider {
         return new LocalFolderService(workspaceRoot);
     }
 
+    /**
+     * Resolve the tickets-auto-sync setting for a root. Reads the global config
+     * first; if the global value is unset, falls back to the per-folder config
+     * and PROMOTES it to the global config. That promotion branch is the
+     * migration path for installs that only ever wrote the per-folder value in
+     * a shipped build — keep it exactly as-is.
+     */
+    private async _getTicketsAutoSync(root: string): Promise<boolean> {
+        const globalConfig = await GlobalIntegrationConfigService.loadGlobal();
+        if (globalConfig.ticketsAutoSync === undefined) {
+            const localService = this._getLocalFolderService(root);
+            const localValue = localService.getTicketsAutoSync();
+            if (localValue) {
+                await GlobalIntegrationConfigService.setTicketsAutoSync(true);
+                return true;
+            }
+            return false;
+        }
+        return globalConfig.ticketsAutoSync === true;
+    }
+
+    /**
+     * Arm/tear down the tickets auto-sync engine for a workspace root: a file
+     * watcher that pushes local `.md` edits to the provider, and a 45s
+     * delta-pull timer that polls for remote changes. Idempotent — the
+     * `if (existing) { return; }` guard makes arming from several hooks safe.
+     * Moved verbatim from PlanningPanelProvider; only the log prefix changed.
+     */
+    private _updateTicketsAutoSyncWatcher(workspaceRoot: string, enabled: boolean): void {
+        const existing = this._ticketsAutoSyncWatchers.get(workspaceRoot);
+        if (!enabled) {
+            if (existing) {
+                try { existing.dispose(); } catch (e) {}
+                this._ticketsAutoSyncWatchers.delete(workspaceRoot);
+            }
+            // Tear down the delta-pull timer as well — auto-sync OFF means
+            // no background network activity (manual Refresh still works).
+            const timer = this._ticketsAutoSyncTimers.get(workspaceRoot);
+            if (timer) {
+                clearInterval(timer);
+                this._ticketsAutoSyncTimers.delete(workspaceRoot);
+            }
+            this._ticketsAutoSyncFailures.delete(workspaceRoot);
+            this._ticketsAutoSyncNextEligible.delete(workspaceRoot);
+            return;
+        }
+        if (existing) { return; } // already watching
+
+        const watchFolders: string[] = [];
+        const clickup = GlobalIntegrationConfigService.loadConfigSync('clickup');
+        const linear = GlobalIntegrationConfigService.loadConfigSync('linear');
+        if (clickup?.ticketSaveLocation) { watchFolders.push(clickup.ticketSaveLocation); }
+        if (linear?.ticketSaveLocation) { watchFolders.push(linear.ticketSaveLocation); }
+        watchFolders.push(path.join(workspaceRoot, '.switchboard/tickets'));
+
+        const watchers: HostWatchHandle[] = [];
+        for (const folder of watchFolders) {
+            if (!fs.existsSync(folder)) { continue; }
+            const watcher = this._seams().watcher.watchFolder(folder, (event, filePath) => {
+                if (event !== 'change' || !filePath.endsWith('.md')) { return; }
+                const fileName = path.basename(filePath);
+                const match = fileName.match(/^(linear|clickup)_([^_]+)_.*\.md$/);
+                if (!match) { return; }
+                const [, provider, id] = match;
+
+                const debounceKey = filePath;
+                const existing = this._ticketsAutoSyncDebounces.get(debounceKey);
+                if (existing) { clearTimeout(existing); }
+                this._ticketsAutoSyncDebounces.set(debounceKey, setTimeout(async () => {
+                    this._ticketsAutoSyncDebounces.delete(debounceKey);
+                    try {
+                        const result: any = await this._seams().commands.executeCommand(
+                            'switchboard.pushTicketEdits',
+                            { workspaceRoot, provider: provider as 'linear' | 'clickup', id }
+                        );
+                        this.postMessageToWebview({
+                            type: 'pushTicketResult',
+                            success: result?.success ?? false,
+                            id,
+                            error: result?.error,
+                            autoSync: true
+                        });
+                    } catch (e) {
+                        this.postMessageToWebview({
+                            type: 'pushTicketResult',
+                            success: false,
+                            id,
+                            error: e instanceof Error ? e.message : String(e),
+                            autoSync: true
+                        });
+                    }
+                }, 2000));
+            });
+            watchers.push(watcher);
+        }
+
+        this._ticketsAutoSyncWatchers.set(workspaceRoot, {
+            dispose: () => watchers.forEach(w => { try { w.dispose(); } catch { } })
+        });
+
+        // Start the delta-pull timer (auto-sync ON only). Runs every 45s —
+        // safe for both ClickUp (100 req/min) and Linear (5,000 req/hour).
+        // The callback wraps API calls in try/catch with exponential backoff
+        // on consecutive failures (cap at 5, then pause until next toggle).
+        // Errors are logged silently — no user toast spam on every failed poll.
+        const POLL_INTERVAL_MS = 45000;
+        const MAX_CONSECUTIVE_FAILURES = 5;
+        const timer = setInterval(async () => {
+            const failures = this._ticketsAutoSyncFailures.get(workspaceRoot) || 0;
+            if (failures >= MAX_CONSECUTIVE_FAILURES) {
+                // Paused — wait for toggle cycle to reset. Log once.
+                return;
+            }
+            // Exponential backoff: after N consecutive failures, skip ticks
+            // until the next eligible time (now + INTERVAL * 2^N at the time
+            // of the failure). This spaces out retries: 45s → 90s → 180s → …
+            const now = Date.now();
+            const nextEligible = this._ticketsAutoSyncNextEligible.get(workspaceRoot) || 0;
+            if (nextEligible > now) { return; }
+            const selection = this._ticketsCurrentSelection.get(workspaceRoot);
+            if (!selection || !selection.provider) { return; }
+            try {
+                // Reuse the same delta-pull path as the manual Refresh button.
+                // The cursor is read/updated inside importAllTasks; here we
+                // just trigger it silently (no user toast on success).
+                if (!this._cacheService) {
+                    this._cacheService = this._adapterFactories.getCacheService(workspaceRoot);
+                }
+                const kanbanDb = (this._cacheService as any)?._kanbanDb;
+                const cursorKey = selection.provider === 'clickup'
+                    ? `last_delta_pull_clickup_${selection.listId || ''}`
+                    : `last_delta_pull_linear_${selection.projectId || ''}`;
+                let lastPullIso: string | null = null;
+                if (kanbanDb) {
+                    try { lastPullIso = await kanbanDb.getMeta(cursorKey); } catch { /* ignore */ }
+                }
+                const deltaSince = lastPullIso ? new Date(lastPullIso).getTime() : undefined;
+                const deltaSinceIso = lastPullIso || undefined;
+
+                const result: any = await this._seams().commands.executeCommand(
+                    'switchboard.importAllTasks',
+                    {
+                        workspaceRoot,
+                        provider: selection.provider,
+                        listId: selection.listId,
+                        projectId: selection.projectId,
+                        importMode: 'document',
+                        ...(deltaSince !== undefined ? { deltaSince } : {}),
+                        ...(deltaSinceIso ? { deltaSinceIso } : {})
+                    }
+                );
+
+                if (result?.success && kanbanDb) {
+                    try { await kanbanDb.setMeta(cursorKey, new Date().toISOString()); } catch { /* ignore */ }
+                }
+
+                if (result?.success) {
+                    this._ticketsAutoSyncFailures.set(workspaceRoot, 0);
+                    this._ticketsAutoSyncNextEligible.set(workspaceRoot, 0);
+                    // If any tickets were updated OR deleted, refresh the sidebar
+                    // silently. Without the deletedCount check, a tick where only
+                    // deletions occurred (no updates) would not refresh the sidebar
+                    // and the deleted ticket's card would linger until the next
+                    // update-bearing tick.
+                    if ((result.successCount || 0) > 0 || (result.deletedCount || 0) > 0) {
+                        this.postMessageToWebview({
+                            type: 'importAllTicketsComplete',
+                            success: true,
+                            successCount: result.successCount,
+                            failCount: result.failCount,
+                            deletedCount: result.deletedCount,
+                            errors: result.errors,
+                            importMode: 'document',
+                            workspaceRoot,
+                            provider: selection.provider,
+                            listId: selection.listId,
+                            projectId: selection.projectId,
+                            isDelta: lastPullIso !== null,
+                            autoSync: true
+                        });
+                    }
+                } else {
+                    const f = (this._ticketsAutoSyncFailures.get(workspaceRoot) || 0) + 1;
+                    this._ticketsAutoSyncFailures.set(workspaceRoot, f);
+                    // Exponential backoff: next eligible = now + INTERVAL * 2^f
+                    this._ticketsAutoSyncNextEligible.set(workspaceRoot, Date.now() + POLL_INTERVAL_MS * Math.pow(2, f));
+                    console.warn(`[TicketsPanel] Auto-sync delta pull failed (${f}/${MAX_CONSECUTIVE_FAILURES}):`, result?.error);
+                }
+            } catch (e) {
+                const f = (this._ticketsAutoSyncFailures.get(workspaceRoot) || 0) + 1;
+                this._ticketsAutoSyncFailures.set(workspaceRoot, f);
+                this._ticketsAutoSyncNextEligible.set(workspaceRoot, Date.now() + POLL_INTERVAL_MS * Math.pow(2, f));
+                console.warn(`[TicketsPanel] Auto-sync delta pull error (${f}/${MAX_CONSECUTIVE_FAILURES}):`, e);
+            }
+        }, POLL_INTERVAL_MS);
+        this._ticketsAutoSyncTimers.set(workspaceRoot, timer);
+    }
+
     private _mapClickUpTaskToSidebar(task: any): any {
         return {
             id: task.id,
@@ -931,17 +1146,54 @@ export class TicketsPanelProvider {
                         ]);
                         const clickupSetupComplete = clickUpConfig?.setupComplete === true;
                         const linearSetupComplete = linearConfig?.setupComplete === true;
+                        // Carry the auto-sync toggle on the provider-switch
+                        // push so the checkbox stays in step with the engine
+                        // when the user changes provider. Guard on presence in
+                        // the frontend so an omit never silently unticks it.
+                        //
+                        // `workspaceRoot` is stamped because this push now
+                        // carries ROOT-scoped state and _pushTo broadcasts to
+                        // every connected tickets surface: without it, a
+                        // provider switch on root A rewrites root B's checkbox
+                        // (the cross-talk class recorded in _stampReply).
+                        const ticketsAutoSync = await this._getTicketsAutoSync(workspaceRoot);
+                        this._updateTicketsAutoSyncWatcher(workspaceRoot, ticketsAutoSync);
                         this._pushTo(targetPanel, 'tickets', {
                             type: 'integrationProviderStates',
                             clickupSetupComplete,
                             linearSetupComplete,
-                            provider
+                            provider,
+                            ticketsAutoSync,
+                            workspaceRoot
                         });
                     } catch (err) {
                         console.warn('[TicketsPanel] Failed to switch ticket provider:', err);
                     }
                 }
                 break;
+            }
+
+            case 'setTicketsAutoSync': {
+                const root = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._getWorkspaceRoot() || '';
+                const enabled = msg.enabled === true;
+                await GlobalIntegrationConfigService.setTicketsAutoSync(enabled);
+                // Keep the per-folder value in step so a downgrade to an older
+                // build still sees the user's choice — the folder config is
+                // what shipped versions read. This also gives
+                // LocalFolderService.setTicketsAutoSync a caller again (it
+                // currently has zero).
+                if (root) { await this._getLocalFolderService(root).setTicketsAutoSync(enabled); }
+                if (root) { this._updateTicketsAutoSyncWatcher(root, enabled); }
+                // Writing the global value unconditionally closes the
+                // `=== undefined` migration branch for this install — once the
+                // user has made an explicit choice, the per-folder fallback
+                // must stop overriding it. Correct.
+                this._pushTo(targetPanel, 'tickets', {
+                    type: 'ticketsAutoSyncChanged',
+                    ticketsAutoSync: enabled,
+                    workspaceRoot: root || undefined
+                });
+                return { success: true, ticketsAutoSync: enabled };
             }
 
             case 'addTicketsFolder': {
@@ -1456,8 +1708,20 @@ export class TicketsPanelProvider {
 
             case 'setupTicketsWatcher': {
                 const root = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (root) { this._setupTicketsViewWatcher(root); }
-                break;
+                if (!root) { return { success: false, error: 'No workspace root resolved' }; }
+                this._setupTicketsViewWatcher(root);
+                // Arm the auto-sync engine and carry its state to the webview.
+                // This is the load-bearing carrier for the toggle on open: an
+                // affected user whose on-disk config has ticketsAutoSync: true
+                // must see the box already ticked on a cold open, with no
+                // provider-dropdown interaction. setupTicketsWatcher is posted
+                // from every path that resolves or changes the root
+                // (tickets.js ensureTicketsWatcherArmed), so it always runs.
+                const ticketsAutoSync = await this._getTicketsAutoSync(root);
+                this._updateTicketsAutoSyncWatcher(root, ticketsAutoSync);
+                const res = { type: 'ticketsAutoSyncChanged', ticketsAutoSync, workspaceRoot: root };
+                this._pushTo(targetPanel, 'tickets', res);
+                return { ...res, success: true };
             }
             case 'ticketsDefaultRoot': {
                 const allRoots = this._getWorkspaceRoots();
@@ -1492,10 +1756,25 @@ export class TicketsPanelProvider {
                     }
                 } catch {}
 
+                // Secondary carrier for the auto-sync toggle: arm the engine
+                // and carry the value in the reply. This arm does NOT run on
+                // every open (restoreTicketsState gates it on
+                // !lastIntegrationProvider), so setupTicketsWatcher remains the
+                // primary carrier — but when this arm does fire it must bring
+                // the toggle state with it.
+                let ticketsAutoSync = false;
+                const armRoot = defaultRoot || allRoots[0];
+                if (armRoot) {
+                    try {
+                        ticketsAutoSync = await this._getTicketsAutoSync(armRoot);
+                        this._updateTicketsAutoSyncWatcher(armRoot, ticketsAutoSync);
+                    } catch { /* keep default false */ }
+                }
                 this.postMessageToWebview({
                     type: 'ticketsDefaultRoot',
                     workspaceRoot: defaultRoot,
-                    provider: defaultProvider
+                    provider: defaultProvider,
+                    ticketsAutoSync
                 });
                 break;
             }
@@ -1544,6 +1823,9 @@ export class TicketsPanelProvider {
                     return { success: false, error: 'No workspace root resolved', type: 'importAllTicketsComplete', importMode: 'document', provider, listId, projectId };
                 }
                 this._ticketsCurrentSelection.set(workspaceRoot, { provider, listId, projectId });
+                // Re-arm the auto-sync engine now that the timer's
+                // precondition (a known selection) is satisfied. Idempotent.
+                try { this._updateTicketsAutoSyncWatcher(workspaceRoot, await this._getTicketsAutoSync(workspaceRoot)); } catch { /* keep */ }
                 try {
                     if (!this._cacheService) {
                         this._cacheService = this._adapterFactories.getCacheService(workspaceRoot);
@@ -3071,6 +3353,9 @@ export class TicketsPanelProvider {
                 // knows what to poll.
                 if (importMode === 'document' && !ids) {
                     this._ticketsCurrentSelection.set(workspaceRoot, { provider, listId, projectId });
+                    // Re-arm the auto-sync engine now that the timer's
+                    // precondition (a known selection) is satisfied. Idempotent.
+                    try { this._updateTicketsAutoSyncWatcher(workspaceRoot, await this._getTicketsAutoSync(workspaceRoot)); } catch { /* keep */ }
                 }
                 try {
                     const result: any = await this._seams().commands.executeCommand(
@@ -3657,6 +3942,19 @@ export class TicketsPanelProvider {
         this._ticketsViewWatcherDebounces.clear();
         this._ticketsViewWatcherRoot = undefined;
         this._ticketsViewWatcherFolders = [];
+        // Auto-sync engine teardown (moved from PlanningPanelProvider.dispose).
+        for (const watcher of this._ticketsAutoSyncWatchers.values()) {
+            try { watcher.dispose(); } catch (e) {}
+        }
+        this._ticketsAutoSyncWatchers.clear();
+        for (const t of this._ticketsAutoSyncDebounces.values()) { clearTimeout(t); }
+        this._ticketsAutoSyncDebounces.clear();
+        // Tear down delta-pull timers.
+        for (const t of this._ticketsAutoSyncTimers.values()) { clearInterval(t); }
+        this._ticketsAutoSyncTimers.clear();
+        this._ticketsAutoSyncFailures.clear();
+        this._ticketsAutoSyncNextEligible.clear();
+        this._ticketsCurrentSelection.clear();
         if (this._panel) {
             this._panel.dispose();
             this._panel = undefined;

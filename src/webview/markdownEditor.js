@@ -8,7 +8,13 @@
                 display: none;
                 flex-direction: column;
                 border: 1px solid var(--border-color, #30363d);
-                background: var(--panel-bg, #000000);
+                /* Editing surface, NOT the panel surface. This deliberately does not
+                   read --panel-bg: that token is #000000 in every host panel
+                   (planning/design/project/tickets), which put the operator on pure
+                   black for an entire editing session. The editor owns its own dark
+                   grey; --md-editor-bg is the per-panel override seam and is
+                   intentionally undefined everywhere today. */
+                background: var(--md-editor-bg, #1a1a1a);
                 border-radius: 6px;
                 overflow: hidden;
                 width: 100%;
@@ -88,6 +94,10 @@
                 flex: 1;
                 border: none !important;
                 resize: none;
+                /* Transparent on purpose — the shell owns the surface so the toolbar
+                   and the text area read as one panel. Do not paint this directly.
+                   This selector is (0,2,1) and beats every host panel's own
+                   .markdown-editor rule, which is how the shell wins. */
                 background: transparent;
                 color: var(--text-color, #c9d1d9);
                 font-family: var(--font-code);
@@ -105,7 +115,10 @@
                 padding: 12px;
                 overflow-y: auto;
                 box-sizing: border-box;
-                background: var(--panel-bg2, #0a0a0a);
+                /* Must stay byte-identical to .md-editor-shell — --panel-bg2
+                   (#0a0a0a) left a visible seam down the middle of split view,
+                   which is the default view mode. */
+                background: var(--md-editor-bg, #1a1a1a);
                 height: 100%;
             }
             /* Markdown styling integration */

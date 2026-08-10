@@ -321,7 +321,8 @@
             ticketsAgentApiBtn: document.getElementById('tickets-agent-api'),
             ticketsAgentApiModal: document.getElementById('tickets-agent-api-modal'),
             btnCloseTicketsAgentApiModal: document.getElementById('btn-close-tickets-agent-api-modal'),
-            btnCloseTicketsAgentApiModalAction: document.getElementById('btn-close-tickets-agent-api-modal-action')
+            btnCloseTicketsAgentApiModalAction: document.getElementById('btn-close-tickets-agent-api-modal-action'),
+            ticketsAutoSyncToggle: document.getElementById('tickets-auto-sync-toggle')
         };
     }
 
@@ -4701,8 +4702,23 @@
         // ── 2b listeners: Source modal, provider selector, folder modal ──
 
         const {
-            ticketsSourceBtn, ticketsSourceModal, btnCloseTicketsSourceModal, btnCloseTicketsSourceModalAction
+            ticketsSourceBtn, ticketsSourceModal, btnCloseTicketsSourceModal, btnCloseTicketsSourceModalAction,
+            ticketsAutoSyncToggle
         } = getTicketsTabElements();
+
+        // Auto-sync toggle: a mode switch, not an action. Posts the user's
+        // choice to the restored writer (setTicketsAutoSync); the backend
+        // writes BOTH the global and per-folder config (so a downgrade to an
+        // older build still sees the choice), arms/tears-down the engine, and
+        // broadcasts ticketsAutoSyncChanged back so every tickets surface
+        // (editor panel + browser tabs) stays in agreement.
+        ticketsAutoSyncToggle?.addEventListener('change', (e) => {
+            vscode.postMessage({
+                type: 'setTicketsAutoSync',
+                enabled: e.target.checked,
+                workspaceRoot: ticketsWorkspaceRoot || undefined
+            });
+        });
 
         ticketsSourceBtn?.addEventListener('click', () => {
             if (ticketsSourceModal) {
@@ -6798,6 +6814,27 @@ Instructions:
 
             // ── 2b response arms: provider hierarchy, folders, default root ──
 
+            case 'ticketsAutoSyncChanged': {
+                // Load-bearing carrier for the toggle on open (fed by
+                // setupTicketsWatcher) and the post-toggle broadcast. Every push
+                // from the provider is broadcast to all tickets surfaces (editor
+                // + browser tabs), so a root guard is required — but the guard is
+                // the workspaceRoot match ALONE, not _isForThisPanel().
+                //
+                // Auto-sync is a ROOT-scoped setting, not a list-scoped data
+                // reply, so this push carries no scopeId/listId. _isForThisPanel
+                // ends in `theirs === mine` against clickUpSelectedListId, which
+                // means it REJECTS every scope-less reply once a ClickUp list is
+                // selected — i.e. on every reopen with restored state. That left
+                // the checkbox unticked over a running engine: the exact defect
+                // this migration exists to correct.
+                if (message.workspaceRoot && ticketsWorkspaceRoot
+                        && message.workspaceRoot !== ticketsWorkspaceRoot) { break; }
+                const toggle = document.getElementById('tickets-auto-sync-toggle');
+                if (toggle) { toggle.checked = message.ticketsAutoSync === true; }
+                break;
+            }
+
             case 'ticketsDefaultRoot': {
                 // The provider is adopted BEFORE the root guard, not after it. The guard
                 // protects an already-chosen ROOT from being overwritten — it has nothing
@@ -6807,6 +6844,11 @@ Instructions:
                 // early return below discarded the one message that names the provider.
                 if (!lastIntegrationProvider) {
                     lastIntegrationProvider = message.provider || null;
+                }
+                // Secondary carrier: set the toggle from the reply when present.
+                if (message.ticketsAutoSync !== undefined) {
+                    const toggle = document.getElementById('tickets-auto-sync-toggle');
+                    if (toggle) { toggle.checked = message.ticketsAutoSync === true; }
                 }
                 if (ticketsWorkspaceRoot && _workspaceItems.some(item => item.workspaceRoot === ticketsWorkspaceRoot)) {
                     // Keep the chosen root, but the provider just arrived — so the source
@@ -6854,6 +6896,19 @@ Instructions:
 
                 if (!lastIntegrationProvider) {
                     lastIntegrationProvider = message.provider || null;
+                }
+                // Secondary carrier for the provider-switch path: set the
+                // checkbox when the field is present. Guard on presence, not
+                // truthiness — a push that omits the field must not silently
+                // untick a live setting. Root-guarded for the same reason as
+                // the ticketsAutoSyncChanged arm: this push is broadcast to
+                // every tickets surface, so another root's provider switch must
+                // not rewrite this panel's toggle.
+                if (message.ticketsAutoSync !== undefined
+                        && !(message.workspaceRoot && ticketsWorkspaceRoot
+                             && message.workspaceRoot !== ticketsWorkspaceRoot)) {
+                    const toggle = document.getElementById('tickets-auto-sync-toggle');
+                    if (toggle) { toggle.checked = message.ticketsAutoSync === true; }
                 }
                 if (providerSelector && lastIntegrationProvider) {
                     providerSelector.value = lastIntegrationProvider;

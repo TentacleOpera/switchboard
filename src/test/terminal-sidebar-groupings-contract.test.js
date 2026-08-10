@@ -225,6 +225,175 @@ test('deleteGroup removes the group and clears activeGroupId if it was active', 
     );
 });
 
+// ---------------------------------------------------------------- inline role picker
+
+test('pickerState is declared as module state for state-driven rendering', () => {
+    assert.ok(
+        /let pickerState = null;/.test(terminalsJs),
+        'pickerState must be declared as module-level state'
+    );
+    assert.ok(
+        /let pickerOpening = null;/.test(terminalsJs),
+        'pickerOpening must be declared as module-level state'
+    );
+    assert.ok(
+        /let rolePickerData = null;/.test(terminalsJs),
+        'rolePickerData must be declared as module-level state'
+    );
+    assert.ok(
+        /let pickerNeedsScroll = false;/.test(terminalsJs),
+        'pickerNeedsScroll must be declared as module-level state'
+    );
+});
+
+test('the picker renders from pickerState, never via getElementById(role-picker)', () => {
+    const render = block(terminalsJs, 'function renderSidebarList() {', 'function setLayoutMode(');
+    assert.ok(
+        render.includes('pickerState'),
+        'renderSidebarList must read pickerState to render the picker'
+    );
+    assert.ok(
+        !render.includes("getElementById('role-picker')"),
+        'renderSidebarList must NOT use getElementById(role-picker) — the static element is gone'
+    );
+    assert.ok(
+        render.includes('mountRolePicker('),
+        'renderSidebarList must mount the picker via mountRolePicker'
+    );
+});
+
+test('the picker is appended to the group container, not to .parent-group-items', () => {
+    const render = block(terminalsJs, 'function renderSidebarList() {', 'function setLayoutMode(');
+    // The parent picker is appended to parentDiv, between headerEl and itemsContainer.
+    assert.ok(
+        /parentDiv\.appendChild\(mountRolePicker/.test(render),
+        'parent picker must be appended to parentDiv, not to itemsContainer'
+    );
+    // The worktree picker is appended to wtDiv, between wtHeaderEl and wtItemsContainer.
+    assert.ok(
+        /wtDiv\.appendChild\(mountRolePicker/.test(render),
+        'worktree picker must be appended to wtDiv, not to wtItemsContainer'
+    );
+});
+
+test('the not-rendered clear appears after the parents loop, not inside it', () => {
+    const render = block(terminalsJs, 'function renderSidebarList() {', 'function setLayoutMode(');
+    assert.ok(
+        render.includes('if (pickerState && !pickerRendered)'),
+        'the not-rendered clear must be present'
+    );
+    // The clear must come after the parents loop closes — i.e. after the last
+    // listEl.appendChild(parentDiv) and before the Show groups block.
+    const clearIdx = render.indexOf('if (pickerState && !pickerRendered)');
+    const lastAppendIdx = render.lastIndexOf('listEl.appendChild(parentDiv)');
+    assert.ok(
+        clearIdx > lastAppendIdx,
+        'the not-rendered clear must come AFTER the parents loop, not inside it'
+    );
+});
+
+test('renderGroupSidebar offers a + New terminal row and clears a non-__groups__ key on entry', () => {
+    const groupSidebar = block(terminalsJs, 'function renderGroupSidebar() {', 'function renderSidebarList() {');
+    assert.ok(
+        groupSidebar.includes("'+ New terminal'"),
+        'renderGroupSidebar must offer a + New terminal row'
+    );
+    assert.ok(
+        groupSidebar.includes("onNewTerminalClicked(undefined, '__groups__')"),
+        'the + New terminal row must open the picker with the __groups__ key'
+    );
+    assert.ok(
+        groupSidebar.includes("pickerState.key !== '__groups__'"),
+        'renderGroupSidebar must clear a non-__groups__ picker key on entry'
+    );
+});
+
+test('onNewTerminalClicked claims a synchronous in-flight key before its await and re-checks after', () => {
+    const fn = block(terminalsJs, 'async function onNewTerminalClicked(', 'function buildRolePicker(');
+    const openingAssignIdx = fn.indexOf('pickerOpening = groupKey');
+    const awaitIdx = fn.indexOf('await fetchPtyVisibleRoles()');
+    const recheckIdx = fn.indexOf("if (pickerOpening !== groupKey)");
+    assert.ok(openingAssignIdx !== -1, 'pickerOpening must be assigned before the await');
+    assert.ok(awaitIdx !== -1, 'fetchPtyVisibleRoles must be awaited');
+    assert.ok(recheckIdx !== -1, 'pickerOpening must be re-checked after the await');
+    assert.ok(
+        openingAssignIdx < awaitIdx,
+        'pickerOpening must be claimed BEFORE the await'
+    );
+    assert.ok(
+        recheckIdx > awaitIdx,
+        'pickerOpening must be re-checked AFTER the await'
+    );
+});
+
+test('the picker mount path consumes a one-shot scroll flag, not scrolling on every render', () => {
+    const fn = block(terminalsJs, 'function mountRolePicker(', 'async function createTerminal(');
+    assert.ok(
+        fn.includes('pickerNeedsScroll'),
+        'mountRolePicker must consume the pickerNeedsScroll flag'
+    );
+    assert.ok(
+        fn.includes('pickerNeedsScroll = false'),
+        'mountRolePicker must reset the one-shot flag so poll re-renders do not scroll'
+    );
+    assert.ok(
+        fn.includes('scrollIntoView'),
+        'mountRolePicker must call scrollIntoView when the flag is set'
+    );
+});
+
+test('choosing a role closes the picker synchronously, not on the next incidental render', () => {
+    // Exact declaration marker: a bare `buildRolePicker(` also matches the prose
+    // reference in init()'s replacement comment ~3200 lines earlier.
+    const fn = block(terminalsJs, 'function buildRolePicker(targetSpec) {', 'function mountRolePicker(');
+    // Every handler that dismisses the picker must clear the state AND re-render.
+    // The static picker hid synchronously via `picker.hidden = true`; state-only
+    // clearing leaves the menu up until something else renders, and createTerminal's
+    // only re-render is behind `res.ok` — so a failed create leaves it up until the
+    // 5s fleet poll.
+    const dismissals = fn.match(/pickerState = null;/g) || [];
+    assert.ok(
+        dismissals.length >= 3,
+        'role, no-role and cancel handlers must all clear pickerState'
+    );
+    const renders = fn.match(/renderSidebarList\(\);/g) || [];
+    assert.ok(
+        renders.length >= dismissals.length,
+        'every pickerState clear in buildRolePicker must be followed by renderSidebarList() so the menu closes immediately'
+    );
+    assert.ok(
+        /pickerState = null;\s*\n\s*renderSidebarList\(\);\s*\n\s*createTerminal\(role,/.test(fn),
+        'the role button must close the picker BEFORE firing createTerminal'
+    );
+    assert.ok(
+        /pickerState = null;\s*\n\s*renderSidebarList\(\);\s*\n\s*createTerminal\(NO_ROLE,/.test(fn),
+        'the No role button must close the picker BEFORE firing createTerminal'
+    );
+});
+
+test('terminals.html no longer contains the static #role-picker or #btn-new-terminal', () => {
+    assert.ok(
+        !terminalsHtml.includes('id="btn-new-terminal"'),
+        'terminals.html must not contain the #btn-new-terminal button'
+    );
+    assert.ok(
+        !terminalsHtml.includes('id="role-picker"'),
+        'terminals.html must not contain the static #role-picker element'
+    );
+    assert.ok(
+        !terminalsHtml.includes('id="role-picker-cancel"'),
+        'terminals.html must not contain the static #role-picker-cancel button'
+    );
+    assert.ok(
+        !terminalsHtml.includes('.btn-new-terminal'),
+        'terminals.html must not contain the .btn-new-terminal CSS'
+    );
+    assert.ok(
+        terminalsHtml.includes('.role-picker.is-inline'),
+        'terminals.html must contain the .role-picker.is-inline CSS for the inline picker'
+    );
+});
+
 // ---------------------------------------------------------------- summary
 
 console.log(`\nResults: ${passed} passed, ${failed} failed`);

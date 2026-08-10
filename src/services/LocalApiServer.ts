@@ -322,7 +322,7 @@ interface LocalApiServerOptions {
      * client converges to the current board state rather than going stale.
      * Optional — absent means no resync push (clients get broadcasts only).
      */
-    getFullState?: () => Promise<any>;
+    getFullState?: (scope?: string | null) => Promise<any>;
     /**
      * Standalone-only: validate the one-time browser-launch token and consume it.
      * Returns true exactly once for the correct token.

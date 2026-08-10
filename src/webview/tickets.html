@@ -3989,6 +3989,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             <button id="tickets-refetch" class="strip-btn overflow-menu-item" title="Re-fetch from source and save local copies">Full re-fetch (recover from sync drift)</button>
                             <button id="tickets-sync-all" class="strip-btn overflow-menu-item" title="Push all local ticket changes back to the integration">Sync changes</button>
                             <button id="tickets-agent-api" class="strip-btn overflow-menu-item" title="What agents can do with this ticket source without the MCP">Agent API</button>
+                            <label class="strip-btn overflow-menu-item" style="display:flex; align-items:center; gap:6px; cursor:pointer;"
+                                   title="Poll the provider every 45s for remote changes, and push local ticket edits back automatically">
+                                <input id="tickets-auto-sync-toggle" type="checkbox" style="width:auto; margin:0;">
+                                Auto-sync with provider
+                            </label>
                         </div>
                     </div>
                 </div>

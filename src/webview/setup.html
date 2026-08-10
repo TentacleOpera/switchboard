@@ -1221,41 +1221,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         </div>
     </div>
 
-    <div id="custom-prompts-modal" class="modal-overlay hidden">
-        <div class="modal-card" style="max-width: 560px;">
-            <div class="modal-title">Customize Default Prompts</div>
-            <div style="font-size:10px; color:var(--text-secondary); margin-bottom:10px; line-height:1.5;">
-                Override the prompt sent to each built-in agent role. Changes apply to all dispatch paths.
-            </div>
-            <div id="prompt-role-tabs" style="display:flex; gap:4px; flex-wrap:wrap; margin-bottom:10px;"></div>
-            <details id="prompt-preview-details" style="margin-bottom:10px;">
-                <summary style="font-size:10px; letter-spacing:1px; cursor:pointer; color:var(--text-secondary); user-select:none;">
-                    DEFAULT PROMPT PREVIEW (read only)
-                </summary>
-                <div style="font-size:9px; color:var(--text-secondary); margin:4px 0 6px; line-height:1.4;">
-                    Base prompt structure only. Toggle options are applied at dispatch time on top of any override.
-                </div>
-                <textarea id="prompt-preview-text" class="modal-textarea" rows="10" readonly style="font-size:10px; opacity:0.7; cursor:default; resize:vertical;" placeholder="Loading preview..."></textarea>
-            </details>
-            <label class="modal-label" for="prompt-override-mode">Mode</label>
-            <select id="prompt-override-mode" class="modal-input">
-                <option value="append">Append — add after generated prompt</option>
-                <option value="prepend">Prepend — insert before generated prompt</option>
-                <option value="replace">Replace — replace prompt body (plan list always appended)</option>
-            </select>
-            <label class="modal-label" for="prompt-override-text">Custom instructions</label>
-            <textarea id="prompt-override-text" class="modal-textarea" rows="8" placeholder="Enter custom instructions for this role..."></textarea>
-            <div style="display:flex; align-items:center; gap:6px; margin-top:6px;">
-                <button id="btn-clear-prompt-override" class="secondary-btn" style="width:auto;">CLEAR OVERRIDE</button>
-                <span style="flex:1;"></span>
-            </div>
-            <div class="flex gap-2" style="margin-top:10px;">
-                <button id="btn-save-prompt-overrides" class="action-btn w-full">SAVE ALL OVERRIDES</button>
-                <button id="btn-cancel-prompt-overrides" class="secondary-btn w-full">CANCEL</button>
-            </div>
-        </div>
-    </div>
-
     <!-- SHARED_DEFAULTS_SCRIPT -->
     <script>
         const vscode = acquireVsCodeApi();
@@ -1268,12 +1233,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             return _origPostMessage.call(vscode, msg);
         };
 
-        const customPromptsModal = document.getElementById('custom-prompts-modal');
-        const promptRoleTabs = document.getElementById('prompt-role-tabs');
-        const promptOverrideMode = document.getElementById('prompt-override-mode');
-        const promptOverrideText = document.getElementById('prompt-override-text');
-        const promptOverrideSummary = document.getElementById('default-prompt-override-summary');
-        const promptPreviewText = document.getElementById('prompt-preview-text');
         const setupSaveStatus = document.getElementById('setup-save-status');
         const controlPlaneExplicitRootInput = document.getElementById('control-plane-explicit-root-input');
         const controlPlaneModeMigrateButton = document.getElementById('btn-control-plane-mode-migrate');
@@ -1294,9 +1253,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // wiped startup commands via the old `commands` echo.)
         let customAgentsHydrated = false;
         let kanbanStructureHydrated = false;
-        let lastPromptOverrides = {};
-        let lastPromptPreviews = {};
-        let editingPromptRole = 'planner';
 
         let currentDbPath = '';
         let workspaceRoot = '';
@@ -1428,8 +1384,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let controlPlaneBusy = false;
         let controlPlaneSetupMode = 'migrate-existing';
         let multiRepoBusy = false;
-
-        const PROMPT_ROLES = BUILT_IN_AGENT_LABELS.filter(r => !PROMPT_OVERRIDE_EXCLUDED_KEYS.has(r.key));
 
         function collapseAllAccordions(exceptFieldsId) {
             document.querySelectorAll('[data-accordion="true"]').forEach(fieldsEl => {
@@ -2019,66 +1973,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 .sort((left, right) => (left.order - right.order) || left.label.localeCompare(right.label));
         }
 
-        function renderPromptRoleTabs() {
-            promptRoleTabs.innerHTML = '';
-            PROMPT_ROLES.forEach(({ key, label }) => {
-                const btn = document.createElement('button');
-                const isActive = key === editingPromptRole;
-                const hasOverride = !!(lastPromptOverrides[key]?.text);
-                btn.className = isActive ? 'action-btn' : 'secondary-btn';
-                btn.style.cssText = 'width:auto; min-width:60px; font-size:10px; padding:3px 8px;';
-                btn.textContent = hasOverride ? `${label} ●` : label;
-                btn.addEventListener('click', () => {
-                    saveCurrentRoleDraft();
-                    editingPromptRole = key;
-                    loadCurrentRoleIntoForm();
-                    loadPreviewForCurrentRole();
-                    renderPromptRoleTabs();
-                });
-                promptRoleTabs.appendChild(btn);
-            });
-        }
-
-        function saveCurrentRoleDraft() {
-            const text = promptOverrideText.value.trim();
-            const mode = promptOverrideMode.value;
-            if (text) {
-                lastPromptOverrides[editingPromptRole] = { mode, text };
-            } else {
-                delete lastPromptOverrides[editingPromptRole];
-            }
-        }
-
-        function loadCurrentRoleIntoForm() {
-            const override = lastPromptOverrides[editingPromptRole];
-            promptOverrideMode.value = override?.mode || 'append';
-            promptOverrideText.value = override?.text || '';
-        }
-
-        function updatePromptOverrideSummary() {
-            const count = Object.values(lastPromptOverrides).filter(o => o?.text).length;
-            promptOverrideSummary.textContent = count > 0 ? `${count} role${count > 1 ? 's' : ''} customised` : '';
-        }
-
-        function loadPreviewForCurrentRole() {
-            promptPreviewText.value = lastPromptPreviews[editingPromptRole] || 'Loading preview...';
-        }
-
-        function openCustomPromptsModal() {
-            editingPromptRole = PROMPT_ROLES[0].key;
-            loadCurrentRoleIntoForm();
-            renderPromptRoleTabs();
-            loadPreviewForCurrentRole();
-            customPromptsModal.classList.remove('hidden');
-            if (Object.keys(lastPromptPreviews).length === 0) {
-                vscode.postMessage({ type: 'getDefaultPromptPreviews' });
-            }
-        }
-
-        function closeCustomPromptsModal() {
-            customPromptsModal.classList.add('hidden');
-        }
-
         function getCustomVisibleAgentsPatch() {
             return Object.fromEntries(
                 lastCustomAgents.map(agent => [agent.role, lastVisibleAgents[agent.role] !== false])
@@ -2437,8 +2331,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 pat: multiRepoPatInput?.value || ''
             });
         });
-        document.getElementById('btn-customize-default-prompts')?.addEventListener('click', openCustomPromptsModal);
-        document.getElementById('btn-cancel-prompt-overrides')?.addEventListener('click', closeCustomPromptsModal);
         document.getElementById('btn-open-control-plane-modal')?.addEventListener('click', openControlPlaneModal);
         document.getElementById('btn-cancel-control-plane-modal')?.addEventListener('click', closeControlPlaneModal);
         document.getElementById('control-plane-modal')?.addEventListener('click', (e) => {
@@ -2475,17 +2367,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // the destructive scope is visible without a two-click confirmation modal.
         document.getElementById('btn-agent-dir-cleanup')?.addEventListener('click', () => {
             vscode.postMessage({ type: 'performAgentDirCleanup' });
-        });
-        document.getElementById('btn-clear-prompt-override')?.addEventListener('click', () => {
-            promptOverrideText.value = '';
-            delete lastPromptOverrides[editingPromptRole];
-            renderPromptRoleTabs();
-        });
-        document.getElementById('btn-save-prompt-overrides')?.addEventListener('click', () => {
-            saveCurrentRoleDraft();
-            vscode.postMessage({ type: 'saveDefaultPromptOverrides', overrides: lastPromptOverrides });
-            updatePromptOverrideSummary();
-            closeCustomPromptsModal();
         });
         document.getElementById('git-ignore-strategy')?.addEventListener('change', () => {
             const strategy = document.getElementById('git-ignore-strategy')?.value || 'targetedGitignore';
@@ -2584,13 +2465,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             });
         }
 
-        customPromptsModal.addEventListener('click', (event) => {
-            if (event.target === customPromptsModal) closeCustomPromptsModal();
-        });
         document.addEventListener('keydown', (event) => {
-            if (event.key === 'Escape') {
-                closeCustomPromptsModal();
-            }
+            if (event.key === 'Escape') { closeControlPlaneModal(); }
         });
 
         document.getElementById('databases-list')?.addEventListener('change', (e) => {
@@ -3411,14 +3287,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         });
                     }
                     break;
-                case 'defaultPromptOverrides':
-                    lastPromptOverrides = message.overrides || {};
-                    updatePromptOverrideSummary();
-                    break;
-                case 'defaultPromptPreviews':
-                    lastPromptPreviews = message.previews || {};
-                    loadPreviewForCurrentRole();
-                    break;
                 case 'exportPromptSettingsResult': {
                     const statusEl = document.getElementById('prompt-settings-status');
                     if (statusEl) {
@@ -3805,7 +3673,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         const input = document.getElementById('notion-db-url-input');
                         if (input) input.value = message.databaseUrl;
                         if (autoError) autoError.textContent = '';
-                        document.getElementById('notion-backup-status').textContent = 'Configured';
+                        const badge = document.getElementById('notion-backup-status');
+                        if (badge) { badge.textContent = 'Configured'; }
                     } else {
                         if (autoError) autoError.textContent = message.error || 'Auto-create failed';
                     }

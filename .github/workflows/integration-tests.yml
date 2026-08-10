@@ -37,6 +37,9 @@ jobs:
       - name: Push-routing ratchet (Gap A)
         run: npm run push-routing:check
 
+      - name: Standalone push-parity ratchet
+        run: npm run standalone-parity:check
+
       - name: Verb return-contract ratchet
         run: npm run verb-returns:check
 
@@ -211,6 +214,18 @@ jobs:
 
       - name: Webview shim injection contract (SHARED_DEFAULTS_SCRIPT marker, shim-before-consumer ordering)
         run: npm run test:contract:shim-injection
+
+      - name: Setup panel element-ids contract (no orphaned getElementById reads, prompts-override residue gone)
+        run: npm run test:contract:setup-panel-element-ids
+
+      # BroadcastHub is shared by the extension host (~4,000 installs) and the
+      # standalone/npx host. Headless mode suppresses the pre-webview queue that
+      # would otherwise grow unbounded (one hub, six providers, 40 ms coalesced
+      # push loop). The load-bearing assertion is the EDITOR one: a naive "drop
+      # when no webview is bound" fix looks identical in standalone and silently
+      # breaks every cold panel open in the extension.
+      - name: BroadcastHub headless-mode contract (no headless retention, editor cold-start queue intact)
+        run: npm run test:contract:broadcast-hub-headless
 
       - name: Reviewer prompt anti-artifact contract (directive presence, completion handshake co-existence)
         run: npm run test:contract:reviewer-prompt
@@ -411,6 +426,18 @@ jobs:
 
       - name: Terminal sidebar groupings contract
         run: npm run test:contract:terminal-sidebar-groupings
+
+      # OPEN AGENT TERMINALS seating. Three defects from one click, all silent:
+      # pane 0 seated by the seed-on-first-load branch instead of the create loop
+      # (instant first pane, then a gap), a curtain armed into an already-rendered
+      # pane that nothing repaints, and six created terminals seated into a grid of
+      # four with no message. Pins the grow ladder (slot-ascending, no '2v'), the
+      # initialAssignmentDone disarm sitting AFTER the wanted.size guard, the
+      # arm-before-seat ordering, persist-once-in-the-tail, the unseated toast, and
+      # the single `await fetchTerminalList()` that multi-parent-terminals-contract
+      # uses as a block marker.
+      - name: Terminal open-all seating contract (grow ladder, curtain, remainder toast)
+        run: npm run test:contract:terminal-open-all-seating
 
       - name: Terminal sidebar role ordering contract
         run: npm run test:contract:terminal-sidebar-role-ordering

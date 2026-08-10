@@ -239,3 +239,13 @@ check('markdown editor paints its own surface, and both halves share it', () => 
 ---
 
 **Recommendation: Send to Intern** (Complexity 2).
+
+---
+
+## Completion Report
+
+Implemented the CSS-only fix exactly as specified. Changed `src/webview/markdownEditor.js` in three spots within the injected stylesheet: `.md-editor-shell` background moved from `var(--panel-bg, #000000)` to `var(--md-editor-bg, #1a1a1a)` with an explanatory comment; `.md-live-preview` background moved from `var(--panel-bg2, #0a0a0a)` to the same `var(--md-editor-bg, #1a1a1a)` expression so both halves share one surface (no split-view seam); and a comment added above the textarea's `background: transparent` to prevent a future pass from painting it directly. Appended one structural assertion to `src/test/webview-panel-runtime-surface.test.js` that fails if either rule re-adopts a `--panel-bg*` token or if the two halves diverge. Both contract tests (`webview-panel-runtime-surface` and `browser-panel-scrollbar-contract`) run green. No issues encountered.
+
+## Review Findings
+
+Reviewed the diff in `src/webview/markdownEditor.js` (3 hunks: `.md-editor-shell` and `.md-live-preview` both moved to `background: var(--md-editor-bg, #1a1a1a)`, plus the textarea comment) and `src/test/webview-panel-runtime-surface.test.js` — both match the plan; no panel HTML leaked in, no JS behaviour changed, `--panel-bg2` remains correctly in use by the toolbar/toggle/popover. One MAJOR fixed: the new gate pinned the two surfaces but not the textarea's `background: transparent`, which is what makes the shell visible at all — painting it would restore pure black in all eleven textareas with every check still green, so the assertion now also pins `.md-body > textarea.markdown-editor` to `transparent`. Verification: `npm run test:contract:panel-runtime-surface` (6/6) and `npm run test:contract:panel-scrollbars` (45/45) green, both CI-wired in `.github/workflows/integration-tests.yml:132,299`; all three invariants mutation-tested to confirm they fail on regression. Notes: the plan's specificity table missed `#tickets-detail-content .markdown-editor` (`planning.html:2551`, `tickets.html:2569`) at `(1,1,0)`, which out-scores the injected selector but sets the same `transparent`, so the outcome holds; `--panel-bg` is declared once per panel with no theme override, so no cyber/claudify transparency regression. Remaining risks are cosmetic and out of scope: chrome at `#0a0a0a` is now darker than content (plan-accepted), and under claudify the shell (`#1a1a1a`) sits on a `#171717` container separated only by the `#333333` border.

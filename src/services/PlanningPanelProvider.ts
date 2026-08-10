@@ -264,23 +264,8 @@ export class PlanningPanelProvider {
     private _constitutionWatchDebounce: NodeJS.Timeout | undefined;
     private _insightsWatchers: HostWatchHandle[] = [];
     private _insightsWatchDebounce: NodeJS.Timeout | undefined;
-    private _ticketsAutoSyncWatchers: Map<string, HostWatchHandle> = new Map();
     private _ticketsViewWatcher: HostWatchHandle | undefined;
     private _ticketsViewWatcherDebounces: Map<string, NodeJS.Timeout> = new Map();
-    private _ticketsAutoSyncDebounces: Map<string, NodeJS.Timeout> = new Map();
-    // Delta-pull timer (auto-sync ON only). Runs the delta pull on a 45s
-    // interval for the currently-selected list/project. Torn down on
-    // toggle-off or dispose. Rate-limit aware: exponential backoff on
-    // consecutive failures, cap at 5 then pause until next toggle cycle.
-    private _ticketsAutoSyncTimers: Map<string, NodeJS.Timeout> = new Map();
-    private _ticketsAutoSyncFailures: Map<string, number> = new Map();
-    // Exponential backoff: after N consecutive failures, the next eligible
-    // tick time is set to now + INTERVAL * 2^N. Reset to 0 on success.
-    private _ticketsAutoSyncNextEligible: Map<string, number> = new Map();
-    // Tracks the currently-selected list/project per workspace root so the
-    // delta-pull timer knows what to poll. Updated by refreshTicketsDelta
-    // and importAllTickets handlers.
-    private _ticketsCurrentSelection: Map<string, { provider: string; listId?: string; projectId?: string }> = new Map();
     private _lastPanelWriteTimestamp: number = 0;
     private _isAutoRefreshing: boolean = false;
     private _nonce: string = '';
@@ -2151,20 +2136,6 @@ Start by checking which documents exist, then present the menu.`;
         }
     }
 
-    private async _getTicketsAutoSync(root: string): Promise<boolean> {
-        const globalConfig = await GlobalIntegrationConfigService.loadGlobal();
-        if (globalConfig.ticketsAutoSync === undefined) {
-            const localService = this._getLocalFolderService(root);
-            const localValue = localService.getTicketsAutoSync();
-            if (localValue) {
-                await GlobalIntegrationConfigService.setTicketsAutoSync(true);
-                return true;
-            }
-            return false;
-        }
-        return globalConfig.ticketsAutoSync === true;
-    }
-
 
     private _getAllowedRoots(): Set<string> {
         const roots = this._getWorkspaceRoots();
@@ -2602,7 +2573,7 @@ Start by checking which documents exist, then present the menu.`;
                 const docTreeRoots = await this._handleFetchRoots(true);
 
                 // Send integration provider preference
-                let integrationProviderStates: any = { clickupSetupComplete: false, linearSetupComplete: false, provider: null, ticketsAutoSync: false };
+                let integrationProviderStates: any = { clickupSetupComplete: false, linearSetupComplete: false, provider: null };
                 try {
                     const [clickUpConfig, linearConfig] = await Promise.all([
                         this._adapterFactories.getClickUpSyncService(workspaceRoot).loadConfig(),
@@ -2624,9 +2595,7 @@ Start by checking which documents exist, then present the menu.`;
                         }
                     }
                     const provider = activeProvider || null;
-                    const ticketsAutoSync = await this._getTicketsAutoSync(workspaceRoot);
-                    if (provider) { this._updateTicketsAutoSyncWatcher(workspaceRoot, ticketsAutoSync); }
-                    integrationProviderStates = { clickupSetupComplete, linearSetupComplete, provider, ticketsAutoSync };
+                    integrationProviderStates = { clickupSetupComplete, linearSetupComplete, provider };
                     this.postMessageToWebview({ type: 'integrationProviderStates', ...integrationProviderStates });
                 } catch (err) {
                     console.warn('[PlanningPanel] Failed to determine integration provider states:', err);
@@ -7136,176 +7105,6 @@ Please format the updated output document strictly as follows:
         this._disposables.push(this._ticketsViewWatcher);
     }
 
-    private _updateTicketsAutoSyncWatcher(workspaceRoot: string, enabled: boolean): void {
-        const existing = this._ticketsAutoSyncWatchers.get(workspaceRoot);
-        if (!enabled) {
-            if (existing) {
-                try { existing.dispose(); } catch (e) {}
-                this._ticketsAutoSyncWatchers.delete(workspaceRoot);
-            }
-            // Tear down the delta-pull timer as well — auto-sync OFF means
-            // no background network activity (manual Refresh still works).
-            const timer = this._ticketsAutoSyncTimers.get(workspaceRoot);
-            if (timer) {
-                clearInterval(timer);
-                this._ticketsAutoSyncTimers.delete(workspaceRoot);
-            }
-            this._ticketsAutoSyncFailures.delete(workspaceRoot);
-            this._ticketsAutoSyncNextEligible.delete(workspaceRoot);
-            return;
-        }
-        if (existing) { return; } // already watching
-
-        const watchFolders: string[] = [];
-        const clickup = GlobalIntegrationConfigService.loadConfigSync('clickup');
-        const linear = GlobalIntegrationConfigService.loadConfigSync('linear');
-        if (clickup?.ticketSaveLocation) { watchFolders.push(clickup.ticketSaveLocation); }
-        if (linear?.ticketSaveLocation) { watchFolders.push(linear.ticketSaveLocation); }
-        watchFolders.push(path.join(workspaceRoot, '.switchboard/tickets'));
-
-        const watchers: HostWatchHandle[] = [];
-        for (const folder of watchFolders) {
-            if (!fs.existsSync(folder)) { continue; }
-            const watcher = this._seams().watcher.watchFolder(folder, (event, filePath) => {
-                if (event !== 'change' || !filePath.endsWith('.md')) { return; }
-                const fileName = path.basename(filePath);
-                const match = fileName.match(/^(linear|clickup)_([^_]+)_.*\.md$/);
-                if (!match) { return; }
-                const [, provider, id] = match;
-
-                const debounceKey = filePath;
-                const existing = this._ticketsAutoSyncDebounces.get(debounceKey);
-                if (existing) { clearTimeout(existing); }
-                this._ticketsAutoSyncDebounces.set(debounceKey, setTimeout(async () => {
-                    this._ticketsAutoSyncDebounces.delete(debounceKey);
-                    try {
-                        const result: any = await this._seams().commands.executeCommand(
-                            'switchboard.pushTicketEdits',
-                            { workspaceRoot, provider: provider as 'linear' | 'clickup', id }
-                        );
-                        this.postMessageToWebview({
-                            type: 'pushTicketResult',
-                            success: result?.success ?? false,
-                            id,
-                            error: result?.error,
-                            autoSync: true
-                        });
-                    } catch (e) {
-                        this.postMessageToWebview({
-                            type: 'pushTicketResult',
-                            success: false,
-                            id,
-                            error: e instanceof Error ? e.message : String(e),
-                            autoSync: true
-                        });
-                    }
-                }, 2000));
-            });
-            watchers.push(watcher);
-        }
-
-        this._ticketsAutoSyncWatchers.set(workspaceRoot, {
-            dispose: () => watchers.forEach(w => { try { w.dispose(); } catch { } })
-        });
-
-        // Start the delta-pull timer (auto-sync ON only). Runs every 45s —
-        // safe for both ClickUp (100 req/min) and Linear (5,000 req/hour).
-        // The callback wraps API calls in try/catch with exponential backoff
-        // on consecutive failures (cap at 5, then pause until next toggle).
-        // Errors are logged silently — no user toast spam on every failed poll.
-        const POLL_INTERVAL_MS = 45000;
-        const MAX_CONSECUTIVE_FAILURES = 5;
-        const timer = setInterval(async () => {
-            const failures = this._ticketsAutoSyncFailures.get(workspaceRoot) || 0;
-            if (failures >= MAX_CONSECUTIVE_FAILURES) {
-                // Paused — wait for toggle cycle to reset. Log once.
-                return;
-            }
-            // Exponential backoff: after N consecutive failures, skip ticks
-            // until the next eligible time (now + INTERVAL * 2^N at the time
-            // of the failure). This spaces out retries: 45s → 90s → 180s → …
-            const now = Date.now();
-            const nextEligible = this._ticketsAutoSyncNextEligible.get(workspaceRoot) || 0;
-            if (nextEligible > now) { return; }
-            const selection = this._ticketsCurrentSelection.get(workspaceRoot);
-            if (!selection || !selection.provider) { return; }
-            try {
-                // Reuse the same delta-pull path as the manual Refresh button.
-                // The cursor is read/updated inside importAllTasks; here we
-                // just trigger it silently (no user toast on success).
-                if (!this._cacheService) {
-                    this._cacheService = this._adapterFactories.getCacheService(workspaceRoot);
-                }
-                const kanbanDb = (this._cacheService as any)?._kanbanDb;
-                const cursorKey = selection.provider === 'clickup'
-                    ? `last_delta_pull_clickup_${selection.listId || ''}`
-                    : `last_delta_pull_linear_${selection.projectId || ''}`;
-                let lastPullIso: string | null = null;
-                if (kanbanDb) {
-                    try { lastPullIso = await kanbanDb.getMeta(cursorKey); } catch { /* ignore */ }
-                }
-                const deltaSince = lastPullIso ? new Date(lastPullIso).getTime() : undefined;
-                const deltaSinceIso = lastPullIso || undefined;
-
-                const result: any = await this._seams().commands.executeCommand(
-                    'switchboard.importAllTasks',
-                    {
-                        workspaceRoot,
-                        provider: selection.provider,
-                        listId: selection.listId,
-                        projectId: selection.projectId,
-                        importMode: 'document',
-                        ...(deltaSince !== undefined ? { deltaSince } : {}),
-                        ...(deltaSinceIso ? { deltaSinceIso } : {})
-                    }
-                );
-
-                if (result?.success && kanbanDb) {
-                    try { await kanbanDb.setMeta(cursorKey, new Date().toISOString()); } catch { /* ignore */ }
-                }
-
-                if (result?.success) {
-                    this._ticketsAutoSyncFailures.set(workspaceRoot, 0);
-                    this._ticketsAutoSyncNextEligible.set(workspaceRoot, 0);
-                    // If any tickets were updated OR deleted, refresh the sidebar
-                    // silently. Without the deletedCount check, a tick where only
-                    // deletions occurred (no updates) would not refresh the sidebar
-                    // and the deleted ticket's card would linger until the next
-                    // update-bearing tick.
-                    if ((result.successCount || 0) > 0 || (result.deletedCount || 0) > 0) {
-                        this.postMessageToWebview({
-                            type: 'importAllTicketsComplete',
-                            success: true,
-                            successCount: result.successCount,
-                            failCount: result.failCount,
-                            deletedCount: result.deletedCount,
-                            errors: result.errors,
-                            importMode: 'document',
-                            workspaceRoot,
-                            provider: selection.provider,
-                            listId: selection.listId,
-                            projectId: selection.projectId,
-                            isDelta: lastPullIso !== null,
-                            autoSync: true
-                        });
-                    }
-                } else {
-                    const f = (this._ticketsAutoSyncFailures.get(workspaceRoot) || 0) + 1;
-                    this._ticketsAutoSyncFailures.set(workspaceRoot, f);
-                    // Exponential backoff: next eligible = now + INTERVAL * 2^f
-                    this._ticketsAutoSyncNextEligible.set(workspaceRoot, Date.now() + POLL_INTERVAL_MS * Math.pow(2, f));
-                    console.warn(`[PlanningPanel] Auto-sync delta pull failed (${f}/${MAX_CONSECUTIVE_FAILURES}):`, result?.error);
-                }
-            } catch (e) {
-                const f = (this._ticketsAutoSyncFailures.get(workspaceRoot) || 0) + 1;
-                this._ticketsAutoSyncFailures.set(workspaceRoot, f);
-                this._ticketsAutoSyncNextEligible.set(workspaceRoot, Date.now() + POLL_INTERVAL_MS * Math.pow(2, f));
-                console.warn(`[PlanningPanel] Auto-sync delta pull error (${f}/${MAX_CONSECUTIVE_FAILURES}):`, e);
-            }
-        }, POLL_INTERVAL_MS);
-        this._ticketsAutoSyncTimers.set(workspaceRoot, timer);
-    }
-
     public postMessage(message: any): void {
         this.postMessageToWebview(message);
         this.postMessageToProjectWebview(message);
@@ -7371,18 +7170,6 @@ Please format the updated output document strictly as follows:
             try { watcher.dispose(); } catch (e) {}
         }
         this._insightsWatchers = [];
-        for (const watcher of this._ticketsAutoSyncWatchers.values()) {
-            try { watcher.dispose(); } catch (e) {}
-        }
-        this._ticketsAutoSyncWatchers.clear();
-        for (const t of this._ticketsAutoSyncDebounces.values()) { clearTimeout(t); }
-        this._ticketsAutoSyncDebounces.clear();
-        // Tear down delta-pull timers.
-        for (const t of this._ticketsAutoSyncTimers.values()) { clearInterval(t); }
-        this._ticketsAutoSyncTimers.clear();
-        this._ticketsAutoSyncFailures.clear();
-        this._ticketsAutoSyncNextEligible.clear();
-        this._ticketsCurrentSelection.clear();
 
         this._disposables.forEach(d => d.dispose());
         this._disposables = [];

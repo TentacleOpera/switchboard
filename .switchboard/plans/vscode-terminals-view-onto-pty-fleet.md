@@ -1,42 +1,44 @@
-# Give VS Code a View onto the PTY Fleet — One Terminal World, Both Hosts
+# Add an "Open Terminal Grid" Button Beside "Open Agent Terminals"
 
 ## Metadata
 
-**Complexity:** 6
-**Tags:** feature, frontend, ui, infrastructure, reliability
+**Complexity:** 2
+**Tags:** feature, ui, frontend
 **Project:** Browser Switchboard
 
 ## Goal
 
-Add a first-class Terminals view inside the VS Code extension that renders the PTY fleet, reusing `terminals.html` / `terminals.js` / the vendored xterm build verbatim from the shared panel module. Today the fleet is spawned **by** the extension but is visible **only** in a browser tab; VS Code can start those terminals and cannot see them.
+Add a second button — **Open Terminal Grid** — alongside the existing *Open Agent Terminals* control, in the two places that control already lives: the Switchboard status-bar Hub menu and the Terminals sub-tab of `implementation.html`. It opens the already-served PTY cockpit (`http://127.0.0.1:<apiPort>/terminals`) in the user's system browser.
 
-At release there are two supported hosts — the VS Code extension and standalone (`npx switchboard`). Each currently renders a different terminal set, and neither can see the other's. That asymmetry is the reason dispatch has to ask "which surface is calling?" at all. Giving VS Code a view onto the fleet collapses the two sets into one that both hosts can display.
+Nothing else changes. No dispatch routing changes, no new rendering surface inside VS Code, no change to the panel or the shared HTML builder.
 
-### Problem analysis and root cause
+### What this deliberately does NOT do
 
-**Two disjoint terminal sets.** `TaskViewerProvider._isLikelyPtyDispatchTarget`'s own docstring states it plainly:
+**Dispatch behaviour is unchanged.** The existing rule stands: the user must open agent terminals before dispatching prompts, and a prompt sent before that **must keep failing exactly as it does today**. This plan adds a way to *reach* the PTY cockpit; it does not make the fleet a dispatch target from VS Code, does not add a routing preference, and does not touch `allowPtyFleet` / `apiOriginated`.
 
-> *"PTYs live in the pty host child — not in `_registeredTerminals`, not in `vscode.window.terminals`, not in the `HostTerminal` seam"*
+> **Scope change — user decision, 2026-08-10.**
+> **Superseded:** A routing-target selector — two entry points that both open a surface *and* set where terminal prompts are dispatched, persisted per-workspace, with the browser fleet taking precedence when both are open.
+> **Reason:** User direction. The premise behind the selector was that a prompt could land somewhere the user cannot see. In practice the user must open terminals before dispatching, and dispatch fails otherwise — so there is no silent-misdelivery window to close and no default-routing problem to solve. The selector would have added persisted state, a resolver over ~9 derivation sites on the shipped dispatch path, and a behaviour change across ~4,000 installs, all to fix something that cannot happen.
+> **Replaced with:** A button. The fleet cockpit becomes reachable in one click from the two places the user already goes to open terminals.
 
-| Terminal set | Rendered in the browser cockpit | Rendered inside VS Code |
-|---|---|---|
-| PTY fleet (`ptyHost.js` child process) | ✅ Terminals panel | ❌ nothing |
-| `vscode.window.terminals` | ❌ nothing | ✅ editor terminal panel |
+### Background — what already exists
 
-`package.json` contributes **no** view for fleet terminals — a scan of `contributes.views` finds nothing terminal-related; only `switchboard.deregisterAllTerminals` / `switchboard.clearAllTerminals` commands, which operate on registered VS Code terminals. So the extension launches a fleet it cannot show.
+The cockpit is already built, already served, and already streaming. Verified live 2026-08-07; line references re-verified 2026-08-08:
 
-**Why this matters beyond convenience.** Because each host can only render one set, every dispatch has to decide which set to target based on *who is calling*. That decision is carried by the `allowPtyFleet` / `apiOriginated` boolean threaded through ~92 sites across four provider files, defaulting to `false`, failing silently and positively — a dropped flag delivers to a terminal the caller cannot see and returns `true`. Once VS Code can render the fleet, terminal resolution becomes a question of *where the named terminal lives*, not *what kind of client asked*, and the surface concept has no remaining job.
+- `TaskViewerProvider.ts:1952` spawns `dist/standalone/ptyHost.js`, which reports `{t:'ready', port, token}` on stdout (`:1995-1998`) and listens on its own port.
+- `GET /terminals` returns 200 from the extension host's `LocalApiServer` today, via `getPanelHtmlById` → `headlessPanelHtml.getTerminalsHtml` (`:386-414`).
+- `TaskViewerProvider.ts:2410-2426` injects `data-terminal-token` and `data-pty-host-origin` onto that page, so terminals stream as soon as it loads.
 
-**The mechanism already exists and is already running.** Verified live against the extension host on 2026-08-07:
+The only thing missing is a way to reach it without hand-typing a port that changes every launch.
 
-- The pty host child is an **independently addressable WS server**. `TaskViewerProvider.ts:1901` spawns `dist/standalone/ptyHost.js`; it listens on its own port (observed: `127.0.0.1:62209`, confirmed via `lsof` against the child PID).
-- The browser terminals panel connects **straight to it**, not through `LocalApiServer`: `terminals.js:4542` builds `${PTY_HOST_ORIGIN}/ws/terminal?name=…&token=…`, where `PTY_HOST_ORIGIN` comes from `document.body.dataset.ptyHostOrigin` (`terminals.js:80-82`). The served page carries `data-pty-host-origin="ws://127.0.0.1:62209"` and a `data-terminal-token`.
-- Confirming the separation: the extension host does **not** wire `terminalWsGateway` into its `LocalApiServer` (no reference in `TaskViewerProvider.ts`), and an upgrade attempt against `/ws/terminal` on the API port is destroyed by the upgrade router's `else` branch. The gateway is constructed in `bootstrap.ts` for standalone only. The extension-served browser panel works regardless, because it never uses that route.
-- Panel HTML already comes from the shared module — `headlessPanelHtml.ts:388-410` builds `terminals.html`, injects `{{TERMINALS_JS_URI}}`, the transport shim, `data-panel="terminals"`, host capabilities and the brand-icon set. `GET /terminals` returns 200 from the extension host today.
+### The one real technical decision — system browser, never Simple Browser
 
-So the fleet, its transport, its auth token, its renderer and its HTML builder all exist and all run under the extension. The only missing piece is a VS Code webview that loads that HTML with webview-appropriate asset URIs and a CSP that permits the loopback WebSocket.
+VS Code's Simple Browser is a webview wrapping a cross-origin iframe. Web research (2026-08-09) established that this shape breaks a terminal:
 
-**Scope boundary.** This plan delivers the view. It does **not** change dispatch resolution or remove `allowPtyFleet` — that is a separate, dependent change (see Dependencies), and shipping it before the view exists would route prompts into terminals VS Code still cannot display.
+- `navigator.clipboard.writeText()` in a cross-origin iframe inside a webview throws `DOMException: Write permission denied`; `allow="clipboard-write"` does not help, because Electron does not delegate clipboard permission into nested cross-origin renderers (`microsoft/vscode#182642`).
+- Electron menu accelerators capture `Cmd/Ctrl+C`, `+V`, `+A`, `+W` before they reach a nested cross-origin iframe; `Cmd+W` closes the editor tab (`microsoft/vscode#129178`, `#180234`).
+
+A terminal that cannot take `Ctrl+C` or copy its own output is not a terminal. **Use `vscode.env.openExternal`. Never `simpleBrowser.show`.**
 
 ## User Review Required
 
@@ -45,98 +47,117 @@ None.
 ## Complexity Audit
 
 ### Routine
-- Registering a webview panel provider, a command, and a `package.json` contribution.
-- Pointing `data-pty-host-origin` at the live `_ptyHostPort` and injecting the existing terminal token.
+- One command (`switchboard.openTerminalGrid`) registered via `registerSwitchboardCommand`, plus a `contributes.commands` entry.
+- One `QuickPickItem` appended to the Hub's existing `Terminal Controls` group (`extension.ts:2592-2610`).
+- One standalone status-bar item at priority 97.5, wired into `updateStatusBarVisibility` under the existing `showTerminalControls` gate.
+- One button in `implementation.html`, beside `#createAgentGrid` (`:1577`), with a message arm in `TaskViewerProvider`.
+- Reading the API port from `LocalApiServer.getPort()` (`:489`).
+
+**Status-bar context** (measured 2026-08-10). Ten items exist; `statusBar.compactMode` defaults to **true**, so by default all nine Right-side panel/terminal items are hidden and only the `$(circuit-board)` Hub is shown. Current Right-side layout, leftmost first: 101 `$(table) Kanban` · 100 `$(notebook) Artifacts` · 99.5 `$(tag) Tickets` · 99 `$(project) Project` · 98 `$(hubot) Agents` **and** 98 `$(symbol-color) Design` (a pre-existing priority collision) · 97 `$(clear-all) Clear` · 96 `$(stop-circle) Reset` · 95 Hub · 94 `$(comment-discussion) Memo`. Left/100 carries the conditional `$(rocket) Switchboard: Setup Required`.
 
 ### Complex / Risky
-- **Asset URIs must be rewritten for the webview, not forked.** `headlessPanelHtml.ts:399` rewrites `{{TERMINALS_JS_URI}}` to the HTTP path `/static/webview/terminals.js`. A webview cannot load that; it needs `webview.asWebviewUri(...)` values and matching `localResourceRoots` covering `src/webview/` **and** `src/webview/vendor/xterm/` (`xterm.js`, `xterm.css`, `addon-fit.js`, `addon-canvas.js`, `addon-webgl.js`). Add a **mode parameter** to the existing builder — do not copy the function. PRD contract #1 (anti-divergence): both hosts must render byte-identical panel HTML apart from the URI/CSP/bridge substitutions.
-- **The transport shim must not be injected in webview mode.** `headlessPanelHtml.ts:407` injects `transport.js`, which replaces `acquireVsCodeApi` with an HTTP/WS shim. Inside a real webview the genuine VS Code bridge must be used instead. `terminals.js` consumes `acquireVsCodeApi()` either way, so this is a swap at the injection site, not a change to the panel script.
-- **CSP `connect-src` is a deliberate departure from the house pattern.** Every existing webview CSP in this codebase sets `connect-src 'none'` (e.g. `KanbanProvider.ts:11645`). This view requires an outbound WebSocket. Research (2026-08-07) resolved the correct form: Chromium's CSP parser needs explicit loopback schemes with wildcard ports, and both the `ws:` and `http:` variants, i.e. `connect-src ws://127.0.0.1:* http://127.0.0.1:* ws://localhost:* http://localhost:*`. Pinning a single runtime port is **not** the recommended form. Keep it loopback-only — never `ws:` unqualified, never a non-loopback host.
-- **The WS server will receive a `vscode-webview://` Origin header — and may reject it.** This is the most likely hard blocker. Webview documents run under `vscode-webview://<id>` on desktop and `https://<id>.vscode-cdn.net` on VS Code Web. `terminalWsGateway.handleUpgrade` authorizes via `authorizeWsUpgrade` with `rejectWhenTokenEmpty: true` (`terminalWsGateway.ts:780`); audit whether that path (or anything upstream) also validates `Origin` for anti-CSWSH. If it does, it must explicitly allow the webview origins or skip origin checks on loopback while keeping the token requirement. Verify before building the view — a correct panel against an origin-rejecting gateway looks identical to a broken panel.
-- **The terminal token is a credential in page markup.** It already ships this way to the browser (`data-terminal-token`), and `headlessPanelHtml.ts:95-100` records a prior incident where a malformed `<body>` meant the token was never read and *"the fleet rendered terminals that accepted no input."* Reuse the same injection point and assert the token is present in a test rather than discovering it as a dead panel.
-- **Capability gating — no dead view.** PRD contract #6. When `node-pty` is unavailable (`_ptyHostPort` undefined), the view must be absent or explicitly disabled with a reason, never an empty panel that looks broken. Mirror how `/panels` marks `terminals` from `ptyReady`.
-- **xterm renderer selection inside a webview.** `terminals.js` selects WebGL, canvas or DOM renderers and has non-trivial resize/fit logic (`:152-260`) that depends on being able to measure a character cell. A webview that starts hidden or zero-sized is exactly the state that code guards against; confirm the guard holds on first reveal and on tab-switch, and confirm WebGL is available (falling back cleanly if not).
+- **The Simple Browser trap.** `simpleBrowser.show` is the obvious "keep the user in the editor" improvement and it ships a terminal that cannot copy or interrupt. The reason must live in a comment at the call site, not only in this plan.
+- **Do not join the existing button's state machine.** `#createAgentGrid` in `implementation.html` is stateful — `updateTerminalButtonState()` relabels it to `CLEAR TERMINALS` when terminals are alive (`:1757`, `:2290`, `:2324`, `:2301`). The new button is a plain, always-labelled action. Adding it to that function, or reusing its id prefix in the same query paths, makes it start relabelling itself.
+- **Remote hosts.** Under Remote-SSH / Dev Containers / Codespaces the extension host's `127.0.0.1` is not the user's machine. Resolve through `vscode.env.asExternalUri` before opening. Separately, the served page embeds a hardcoded `ws://127.0.0.1:<ptyPort>` (`TaskViewerProvider.ts:2422`) which is **not** tunnel-resolved — so under a remote host the page will load and the terminals will not stream. Pre-existing defect of the browser cockpit, not introduced here; either fix it or hide the button on remote hosts. Decide explicitly rather than shipping a button that opens a cockpit of dead terminals.
 
 ## Edge-Case & Dependency Audit
 
 **Race Conditions**
-- The pty host starts asynchronously and reports its port by message (`TaskViewerProvider.ts:1950`). Opening the view before the port arrives must wait or show a resolving state — not bake an `undefined` origin into the CSP.
-- Pty host crash/restart yields a **new** port. The view must detect the change and reload with a fresh CSP and origin; a stale panel would silently fail to reconnect.
+- The pty host reports its port asynchronously with a 5 s handshake timeout (`TaskViewerProvider.ts:1987-2016`). Clicking before the handshake must report "not ready", never open a URL built from an undefined port.
 
 **Security**
-- The WebSocket is authorized by `authorizeWsUpgrade` with `rejectWhenTokenEmpty: true` (`terminalWsGateway.ts:780`), so an unauthenticated connection is rejected. No new auth surface.
-- Loopback only. The CSP must pin `127.0.0.1` and the specific port; do not accept a hostname that could resolve off-box.
+- Loopback only. The URL is built from `LocalApiServer.getPort()` and `asExternalUri`; never from user input.
+- No new auth surface. `LocalApiServer._checkAuth` short-circuits to loopback trust when `getAuthToken()` is empty (`:544-547`), always the case under the extension host, so the browser needs no token or cookie. If a token setter is ever added (`_sendUnauthorized`'s note anticipates it), this button needs a session grant.
+- The terminal token already ships in the served page's markup, unchanged by this plan.
 
 **Side Effects**
-- A terminal that was previously only reachable from a browser tab becomes interactive inside VS Code. Input, resize and clear all now have a second live client — verify the gateway's per-terminal handling with **two simultaneous clients** (browser tab + VS Code view) attached to the same terminal, including the sequence/replay logic (`lastSeq`) and the send lock.
-- Nothing about `vscode.window.terminals` changes. Users who assigned roles to real VS Code terminals are unaffected by this plan.
+- Clicking twice yields two browser tabs on the same terminals. Two live clients on one terminal exercise the gateway's replay (`lastSeq`) and send-lock paths — already reachable today by opening the URL twice by hand, so one smoke test is proportionate.
+- Nothing about `vscode.window.terminals`, dispatch resolution, `allowPtyFleet`, or the existing *Open Agent Terminals* action changes.
 
 **Dependencies & Conflicts**
-- Touches `src/services/headlessPanelHtml.ts`, which is shared by both hosts. Standalone's `getTerminalsHtml` output must be **unchanged** — assert it, since a regression there breaks the browser cockpit that currently works.
-- Concurrent terminals-panel work exists in the plan set (sidebar row controls, layout/labels). Coordinate on `terminals.js` / `terminals.html`; this plan should not modify panel behaviour, only how it is hosted.
+- Touches `src/extension.ts`, `src/webview/implementation.html`, `src/services/TaskViewerProvider.ts` (one message arm + one accessor) and `package.json`. **No change** to `terminals.js`, `terminals.html`, or `headlessPanelHtml.ts` — so this does not contend with the in-flight terminals work (sidebar groups/grids IA, terminal peek, role-grid fill, hidden-terminal create) and can run beside them.
+- The Hub's `Terminal Controls` group is already gated by the `statusBar.showTerminalControls` setting (`extension.ts:2592`); the new item joins that group and inherits the gate.
 
 ## Dependencies
 
-None (hard).
+None.
 
-**Unblocks:** removal of the `allowPtyFleet` / `apiOriginated` surface flag and its ~92 threading sites. Once VS Code renders the fleet, dispatch can resolve a terminal by name/role across both sets and deliver where it lives, with no notion of caller surface. That follow-on must land **after** this plan, never before.
-
-**Supersedes:** the request-context refactor in `dispatch-surface-as-request-context-not-threaded-flag.md`, which hardens the surface distinction rather than removing its cause. Prefer this route.
+**Does NOT unblock:** removal of the `allowPtyFleet` / `apiOriginated` surface flag. VS Code still cannot see the fleet in-process. `dispatch-surface-as-request-context-not-threaded-flag.md` remains the live route for that problem — it is **not** superseded by this plan.
 
 ## Adversarial Synthesis
 
-**Risk Summary.** The load-bearing risks are all at the webview boundary rather than in the fleet itself: a CSP that must break the codebase-wide `connect-src 'none'` convention without widening to a wildcard, asset URIs that must be rewritten without forking the shared HTML builder, and a runtime-assigned pty host port that both the CSP and the origin depend on. The second-order risk is dual-client behaviour — two attached clients on one terminal exercise replay and send-locking paths that a single browser tab never has. Mitigations: mode-parameterise the existing builder rather than copying it, assert standalone's output is byte-unchanged, build the CSP after the port is known and rebuild on change, and test two clients on one terminal explicitly.
+**Risk Summary.** The change is a button and a URL; the risk is entirely in what a reasonable implementer substitutes for it. Routing to Simple Browser instead of the system browser yields a terminal that cannot copy or interrupt, and looks like better UX until someone tries to `Ctrl+C` a runaway agent. Wiring the new button into `updateTerminalButtonState()` makes it inherit the existing control's `CLEAR TERMINALS` relabelling. And under a remote host the cockpit opens with terminals that never stream, which reads as a working panel. Mitigations: comment the Simple Browser prohibition at the call site, keep the new button out of the existing state machine, gate on pty readiness, and decide the remote case explicitly.
 
 ## Proposed Changes
 
-### `src/services/headlessPanelHtml.ts`
-- **Context:** Shared panel HTML builder; the anti-divergence carrier for both hosts.
-- **Logic:** Add a `host: 'browser' | 'webview'` mode to the terminals builder. In `webview` mode, resolve `{{TERMINALS_JS_URI}}` and the vendored xterm assets via a caller-supplied URI mapper (`asWebviewUri`), skip the `transport.js` injection, and emit a CSP whose `connect-src` names the pty host origin exactly. Everything else — body dataset, capabilities, brand icons — stays identical.
-- **Edge Cases:** `browser`-mode output must be byte-identical to today; lock it with a snapshot test.
+### `src/extension.ts`
 
-### `src/services/TerminalsPanelProvider.ts` (new)
-- **Context:** VS Code webview panel host for the fleet view.
-- **Logic:** Create the panel with `localResourceRoots` covering `src/webview/` and `src/webview/vendor/xterm/`; obtain `_ptyHostPort` and the terminal token from `TaskViewerProvider`; render via the shared builder in `webview` mode; reload on pty-host port change.
-- **Edge Cases:** Absent/disabled when no pty host; wait for the port rather than rendering an undefined origin; dispose cleanly.
+- **Context:** Command registration and the Hub quick-pick.
+- **Logic:**
+  1. Register `switchboard.openTerminalGrid` via `registerSwitchboardCommand`. Handler: check pty readiness and `LocalApiServer.isListening()`; if either is false, report the reason and return. Otherwise build `http://127.0.0.1:${apiPort}/terminals`, pass through `await vscode.env.asExternalUri(...)`, hand to `vscode.env.openExternal(...)`.
+  2. Comment at the call site: *Simple Browser is a webview wrapping a cross-origin iframe — clipboard and `Ctrl+C` do not survive it (`microsoft/vscode#182642`, `#129178`). Do not "improve" this to `simpleBrowser.show`.*
+  3. Append to the Hub's `Terminal Controls` group, directly after `$(hubot) Agents` (`:2592-2610`): `{ label: '$(browser) Terminal Grid', description: 'Open the PTY terminal grid in your browser', command: 'switchboard.openTerminalGrid' }`.
+  4. Add a standalone status-bar item at **priority 97.5, Right** — between `$(hubot) Agents` (98) and `$(clear-all) Clear` (97), so it sits adjacent to Agents: `$(browser) Grid`, tooltip *Open Terminal Grid (browser)*, command `switchboard.openTerminalGrid`. Register it in `context.subscriptions` alongside the other three.
+  5. Wire it into `updateStatusBarVisibility` (`:2396+`) under the **existing `showTerminalControls` gate** — it is a terminal control and must appear and disappear with Agents/Clear/Reset. Add its `.hide()` to the compact branch and its `.show()`/`.hide()` pair to the non-compact branch.
+- **Edge Cases:**
+  - Never build a URL from an undefined port; report a reason rather than opening nothing silently (PRD contract #6 — no dead click).
+  - **Both entry points are required, and the Hub one reaches everybody.** `statusBar.compactMode` defaults to **true** (`:2403`), which hides every individual item and shows only the `$(circuit-board)` Hub. So the standalone item is visible only to users who opted out of compact mode; the Hub entry is what the default install sees. Shipping only the standalone item would make the button invisible by default.
+  - **`enabledCount += 3` is a hardcoded count** (`:2416`, compact branch) representing the three terminal controls; it drives whether the Hub icon shows at all. Adding a fourth terminal control makes it `+= 4`. Easy to miss, and getting it wrong skews the "should the hub appear" arithmetic.
+  - Priority 97.5 is deliberate: `$(hubot) Agents` and `$(symbol-color) Design` both sit at 98 already, so adding a third item at 98 would make a three-way ordering ambiguity worse. Do not reuse 98.
 
-### `src/extension.ts` / `package.json`
-- **Logic:** Register `switchboard.openTerminalsPanel` (via `registerSwitchboardCommand` so it is registry-reachable in-process, consistent with the other `switchboard.*` commands) and add the command + any view contribution to `package.json`.
-- **Edge Cases:** Command must be hidden or report a clear reason when `node-pty` is unavailable — no dead entry in the palette.
+### `src/webview/implementation.html`
+
+- **Context:** The Terminals sub-tab (`:1566`), whose content div (`:1576`) currently holds the single `#createAgentGrid` button (`:1577`).
+- **Logic:** Add a sibling button — `id="openTerminalGrid"`, label `OPEN TERMINAL GRID`, matching the existing `secondary-btn w-full` shape — posting `{ type: 'openTerminalGrid' }` on click.
+- **Edge Cases:** **Do not** register it with `updateTerminalButtonState()` (`:1757`, `:2290`, `:2324`) — it has one label, always. Hide or disable it when the host reports no pty capability, consistent with contract #6.
 
 ### `src/services/TaskViewerProvider.ts`
-- **Logic:** Expose the pty host port and terminal token through a narrow public accessor for the new provider. No change to dispatch or resolution logic in this plan.
+
+- **Logic:** Add an `openTerminalGrid` arm to `_handleMessage` that executes the command through the commands seam (not `vscode.commands` directly — PRD contract #3). Add a narrow public accessor returning `{ apiPort?: number; ready: boolean }` rather than widening `_ptyHostPort` / `_localApiServer` separately, so the pair cannot be read half-updated across an await.
+- **Edge Cases:** no change to dispatch, resolution, or `allowPtyFleet`. `_terminalSessionToken` stays private.
+
+### `package.json`
+
+- **Logic:** Add `switchboard.openTerminalGrid` to `contributes.commands`, titled `Switchboard: Open Terminal Grid`. No `contributes.views` entry — nothing renders inside VS Code.
 
 ## Verification Plan
 
 Compilation and automated test execution are out of scope for this planning session; the checks below are specified for the implementing change.
 
 ### Automated
-1. `browser`-mode terminals HTML is byte-identical to the pre-change output (snapshot) — proves standalone and the existing cockpit did not regress.
-2. `webview`-mode HTML contains `vscode-webview`-resolved URIs for `terminals.js` and every vendored xterm asset, and contains **no** `transport.js` injection.
-3. `webview`-mode CSP contains `connect-src` naming exactly `ws://127.0.0.1:<port>` — assert it rejects a wildcard and rejects an unset port.
-4. The rendered body carries a non-empty `data-terminal-token` and a `data-pty-host-origin` matching the live port (the regression recorded at `headlessPanelHtml.ts:95-100`).
-5. With `_ptyHostPort` undefined, the provider does not create a panel and the command reports a reason.
+1. With the pty host not ready or the API server not listening, the command opens nothing and reports a reason.
+2. The opened URI is built from the live `LocalApiServer.getPort()` and passed through `asExternalUri`; assert it is never constructed from an undefined port.
+3. The implementation calls `vscode.env.openExternal` and does **not** reference `simpleBrowser.show` — assert by source scan, since this is the specific regression the plan exists to prevent.
+4. `implementation.html` contains both `#createAgentGrid` and `#openTerminalGrid`, and `updateTerminalButtonState` references only the former.
 
 ### Manual (VS Code extension host)
-1. **It renders.** Open the Terminals view — the four fleet terminals (`planner-1`, `lead-1`, `reviewer-1`, `analyst-1`) appear with live scrollback.
-2. **It is interactive.** Type into a fleet terminal from VS Code; output streams back.
-3. **Dual client.** Open the same terminal in a browser tab *and* the VS Code view simultaneously — both render, input from either is delivered once, and neither corrupts the other's replay (`lastSeq`).
-4. **Resize.** Resize the VS Code panel and toggle to another editor tab and back; the grid refits and the renderer does not blank.
-5. **Restart resilience.** Kill the pty host; confirm the view reports the loss and recovers with the new port rather than silently failing to reconnect.
-6. **No pty.** With `node-pty` unavailable, the view is absent or disabled with a stated reason — no dead click, no empty panel.
-7. **Browser cockpit unaffected.** The standalone/browser terminals panel behaves exactly as before.
-8. **Editor terminals untouched.** `vscode.window.terminals` and the existing register/clear commands are unchanged.
+1. **Hub menu (default config).** With `statusBar.compactMode` at its default `true`, open the Switchboard hub (`$(circuit-board)`); *Terminal Grid* appears under *Terminal Controls*, below *Agents*. Clicking it opens the cockpit in the system browser with live terminals.
+2. **Standalone item (compactMode off).** Set `statusBar.compactMode` to `false`; `$(browser) Grid` appears immediately right of `$(hubot) Agents`. Set `statusBar.showTerminalControls` to `false`; it disappears along with Agents/Clear/Reset. Set compactMode back to `true`; it hides and the Hub returns.
+3. **Panel button.** In the sidebar's Terminals sub-tab, the new button sits beside *OPEN AGENT TERMINALS* and does the same thing.
+4. **No relabelling.** Open agent terminals so the existing button flips to *CLEAR TERMINALS*; confirm the new button's label is unchanged.
+5. **It is a real terminal.** In the opened tab: type, copy output, and `Ctrl+C` a running command.
+6. **Dispatch unchanged.** With no agent terminals open, dispatch a prompt from the board and confirm it fails exactly as it does today — opening the grid must not have made the fleet a target.
+7. **No pty.** With `node-pty` unavailable, the Hub entry, the status-bar item and the panel button are all absent or disabled with a reason — no dead click.
+8. **Remote.** Under Remote-SSH or a Dev Container, confirm the decision taken on the un-tunnelled `data-pty-host-origin` (fixed, or button hidden) behaves as decided.
+9. **Everything else unchanged.** `vscode.window.terminals`, the existing open/clear/reset controls, and the standalone browser cockpit all behave as before.
 
-## Research findings — resolved 2026-08-07
+## Design History — four rejected in-VS-Code rendering designs
 
-Web research was run; all three uncertainties are answered and folded into the design above. Summary of what changed:
+Recorded so they are not re-attempted. Each failed for a different reason and each looked correct on paper.
 
-1. **Loopback WebSockets from a webview work.** Desktop VS Code treats `vscode-webview://` as a secure origin and `127.0.0.1`/`localhost` as inherently trustworthy, so no mixed-content block. Required CSP form is scheme-explicit with wildcard ports (see Complexity Audit) — not a pinned port. **New constraint discovered:** the gateway receives a `vscode-webview://` `Origin` header on the handshake and must not reject it.
+1. **Native webview hosting via `asWebviewUri`** *(rejected 2026-08-08 — dead panel).* `terminals.js` never calls `acquireVsCodeApi` (zero references) and reaches its server through **21 root-relative `fetch()` calls** against `location.origin`, documented at `:5257`. Inside a webview `location.origin` is `vscode-webview://<id>`, so all 21 fail — including `ptyListTerminals` (`:810`), which populates the sidebar, pane grid and seating. The panel renders as chrome with no terminals while every proposed automated check passes.
+2. **Cross-origin iframe inside a thin webview** *(rejected 2026-08-09 — clipboard and keyboard).* Fixes the origin problem, but clipboard permission cannot be delegated into a nested cross-origin renderer and Electron eats `Cmd/Ctrl+C/V/A/W`. Also breaks under Codespaces, where third-party auth cookies are blocked in framed contexts. Same finding that rules out Simple Browser. The in-repo precedent that motivated it (`DesignPanelProvider.ts:4341`, `PlanningPanelProvider.ts:1982`) holds only for static preview HTML — no keyboard, no clipboard, no WebSocket.
+3. **Native hosting + injected `data-api-base`** *(designed, dropped on scope 2026-08-09).* Technically sound — xterm owns the top-level webview DOM so keyboard and clipboard work, and an injected API base fixes the 21 fetches. Cost: a mode parameter on the shared HTML builder, an additive edit to the contended `terminals.js` (including `buildLinkPrompt` at `:5273`, which bakes `location.origin` into a curl command handed to an agent), a clipboard bridge, two `asExternalUri` resolutions, and an unresolved VS Code Web WS-origin question (`wsUpgradeAuth.ts:32-43` allows `vscode-webview:` but not `https://<id>.vscode-cdn.net`). Scored 7. Dropped because an in-editor rendering surface is not wanted — PTY terminals get too little space inside the editor to be worth it.
+4. **Dispatch-target selector** *(rejected 2026-08-10 — solves a problem that cannot occur).* Two entry points that also set where prompts route, persisted per-workspace, fleet winning ties. Would have replaced the ~9 `allowPtyFleet = !!options?.apiOriginated` derivations (`TaskViewerProvider.ts:4752, 5432, 10116, 19370, 21642`; `apiOriginated` at `:4532, 19606, 24448`; `PlanningPanelProvider.ts:1274`) with one resolver, and rewritten the `browser-stray-dispatch-surface.test.js` contract test. Unnecessary: dispatch already requires terminals to be open and fails otherwise, so no prompt can land unseen.
 
-2. **Remote scenarios need `asExternalUri`, and this is a real supported-configuration question.** Under Remote-SSH, Dev Containers, Codespaces and cloud-hosted forks, the extension host (and the pty host child) run remotely while the webview renders on the client — so `ws://127.0.0.1:<port>` targets the *client's* loopback and fails. The fix is `vscode.env.asExternalUri(http://127.0.0.1:<port>)` in the extension host, converting the returned `http:`/`https:` to `ws:`/`wss:` before handing the origin to the webview, and adding that resolved origin to `connect-src`. **Decision for this plan:** implement the `asExternalUri` path from the start rather than a local-only shortcut — Devin is a VS Code fork and remote configurations are in scope for a shipped extension. A local-only implementation would appear to work on this machine and fail for remote users.
+A fifth option — proxying each fleet PTY into `vscode.window.createTerminal({ pty })` via the Pseudoterminal API — was raised and not chosen. It is the only design that would genuinely merge the two terminal sets and unblock the `allowPtyFleet` removal, at the cost of the entire cockpit UI (pane grid, seating groups, saved layouts, role sidebar, badges). `Pseudoterminal` is used nowhere in this repo today (all six `createTerminal` sites pass shell options). Recorded as the strongest candidate if the surface-flag problem is ever attacked from this direction.
 
-3. **xterm renderers work in a webview, with a fallback chain and a fit guard.** Use WebGL → Canvas → DOM, registering `webglAddon.onContextLoss()` to dispose and drop to Canvas (context loss is expected on GPU sleep and in virtualized/remote desktops). For sizing, guard `fitAddon.fit()` on `clientWidth > 0 && clientHeight > 0`, drive it from a `ResizeObserver` on the container rather than `window.onresize`, and post a message from `panel.onDidChangeVisibility` so a panel created hidden or in a background tab fits on first reveal. `terminals.js:152-260` already reasons about the zero-cell case — extend it rather than duplicating it.
+## Uncertain Assumptions
+
+One external detail, cheaper to test than to research: whether `vscode.env.openExternal` already performs loopback tunnel resolution on remote hosts, making the explicit `asExternalUri` call redundant. Calling both is harmless — locally `asExternalUri` is an identity no-op — so implement both and drop one only if testing shows a double-resolve.
+
+No web research is required. The platform questions that mattered were answered by the 2026-08-09 research recorded in Design History; the rest is repo-local.
 
 ## Recommendation
 
-Complexity 6 → **Send to Lead Coder.** The fleet, its transport, its auth and its renderer all already exist and already run under the extension — the work is a hosting layer. But it must mode-parameterise a shared builder without forking it, break the codebase-wide `connect-src 'none'` convention in a narrowly correct way, handle a runtime-assigned port in the CSP, and it opens a dual-client path the gateway has never served.
+Complexity 2 → **Send to Intern.** One command, one Hub entry, one panel button, one message arm, one accessor. Two things must survive review: the browser choice (`vscode.env.openExternal`, never `simpleBrowser.show`) and keeping the new button out of `updateTerminalButtonState()`. Comment both at their call sites so the next reader inherits the reasons and not just the rules.

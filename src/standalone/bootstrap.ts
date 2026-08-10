@@ -368,9 +368,6 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     });
     const ingestionEngine = new PlanIngestionEngine(getClickUpService, getLinearService, ingestionHost, getNotionService);
 
-    // Active project filter
-    let projectFilter: string | null = null;
-
     let server: LocalApiServer;
     const oneTimeToken = crypto.randomBytes(32).toString('hex');
     const sessionToken = crypto.randomBytes(32).toString('hex');
@@ -389,28 +386,51 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                 server.broadcastWs('showStatusMessage', { message: 'No workspace configured yet.', isError: false }, SURFACES.common);
                 return;
             }
-            const cards = await buildBoardCards(db, workspaceId, workspaceRoot, configProvider);
-            const projects = await db.getProjects(workspaceId);
-            const allWorktrees = await db.getWorktrees();
-            const featureWorktrees = allWorktrees
-                .filter((w: any) => w.feature_id !== null && w.status === 'active')
-                .reduce((acc: any, w: any) => {
-                    acc[w.feature_id] = { branch: w.branch, path: w.path, id: w.id };
-                    return acc;
-                }, {});
-            const workspaceItems = [{ value: workspaceRoot, label: path.basename(workspaceRoot) }];
-            const allWorkspaceProjects: Record<string, string[]> = { [workspaceRoot]: projects };
+            // Delegate to the provider's canonical state builder — the same pipeline
+            // the extension webview receives (getFullStateMessages), built from live
+            // state: custom columns, visibility, routing, CLI triggers, control-plane,
+            // repo scope, project context. Replaces the hand-built literals that
+            // silently reverted every toggle ~40ms after each user action.
+            const baseState = await kanbanProvider.getFullStateMessages(workspaceRoot, undefined);
+            if (!baseState || baseState.length === 0) { return; }
 
-            const state = [
-                { type: 'updateColumns', columns: DEFAULT_KANBAN_COLUMNS, surface: SURFACES.kanban },
-                { type: 'updateWorkspaceSelection', workspaceRoot, workspaces: workspaceItems, activeFilter: null, projectFilter, projects, allWorkspaceProjects, controlPlaneMode: 'none', controlPlaneRoot: null, effectiveControlPlaneRoot: workspaceRoot, explicitControlPlaneRoot: workspaceRoot, pendingCandidate: null, repoScopeFilter: null, projectContextEnabled: false, surface: SURFACES.kanban },
-                { type: 'cliTriggersState', enabled: false, surface: SURFACES.kanban },
-                { type: 'switchboardThemeNameSetting', theme: 'afterburner', surface: SURFACES.common },
-                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: kanbanProvider.showingBacklog, showingDispatch: kanbanProvider.showingDispatch, dispatchAnalyzeAvailable: ptyReady, routingConfig: {}, featureWorktrees, surface: SURFACES.kanban },
-            ];
-            for (const msg of state) {
-                server.broadcastWs(msg.type, msg, msg.surface);
+            // The theme entry is not produced by getFullStateMessages (the provider
+            // posts it separately at ready-time). Standalone emits it here from the
+            // resolved setting, tagged SURFACES.common so it reaches every panel.
+            // Explicit 'afterburner' fallback — commented so the parity guard and a
+            // future reader do not mistake a deliberate default for a reinstated
+            // hardcode.
+            const themeName = configProvider.getConfigStringWithDefault('theme.name', 'afterburner');
+            const themeEntry = { type: 'switchboardThemeNameSetting', theme: themeName, surface: SURFACES.common };
+
+            for (const msg of baseState) {
+                if (msg.type === 'updateBoard') {
+                    // Scope-dependent: broadcast as a factory so wsHub renders
+                    // routingConfig per declared scope, matching the extension's
+                    // factory-form push (KanbanProvider.ts:2067-2076). Override the
+                    // provider's unconditional dispatchAnalyzeAvailable: true with
+                    // the standalone-specific ptyReady gate — the browser must not
+                    // advertise dispatch-analyze when PTY is unavailable.
+                    const { routingConfig, dispatchAnalyzeAvailable, surface, ...rest } = msg;
+                    server.broadcastWs('updateBoard', (scope: string | null | undefined) => ({
+                        ...rest,
+                        routingConfig: kanbanProvider._routingMapForScope(scope),
+                        dispatchAnalyzeAvailable: ptyReady, // standalone-only override: gated on ptyReady
+                    }), surface);
+                } else if (msg.type === 'cliTriggersState') {
+                    // Scope-dependent: broadcast as a factory so wsHub renders
+                    // enabled per declared scope, matching the extension's
+                    // factory-form push (KanbanProvider.ts:2085-2088).
+                    const { enabled, surface, ...rest } = msg;
+                    server.broadcastWs('cliTriggersState', (scope: string | null | undefined) => ({
+                        ...rest,
+                        enabled: kanbanProvider._cliTriggersForScope(scope),
+                    }), surface);
+                } else {
+                    server.broadcastWs(msg.type, msg, msg.surface);
+                }
             }
+            server.broadcastWs(themeEntry.type, themeEntry, themeEntry.surface);
         } catch (err) {
             console.error('[bootstrap] pushFullState failed:', err);
         }
@@ -419,29 +439,31 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     const getFullState = async (scope?: string | null) => {
         const workspaceId = await getWorkspaceId();
         if (!workspaceId) return [];
-        const cards = await buildBoardCards(db, workspaceId, workspaceRoot, configProvider);
-        const projects = await db.getProjects(workspaceId);
-        const allWorktrees = await db.getWorktrees();
-        const featureWorktrees = allWorktrees
-            .filter((w: any) => w.feature_id !== null && w.status === 'active')
-            .reduce((acc: any, w: any) => {
-                acc[w.feature_id] = { branch: w.branch, path: w.path, id: w.id };
-                return acc;
-            }, {});
-        const workspaceItems = [{ value: workspaceRoot, label: path.basename(workspaceRoot) }];
-        const allWorkspaceProjects: Record<string, string[]> = { [workspaceRoot]: projects };
+        // Delegate to the provider's canonical state builder, scope-aware — the
+        // same pipeline the extension webview receives. The scope parameter is
+        // the connection's declared project, threaded from wsHub's getFullState
+        // callback. Replaces hand-built literals with live state.
+        const baseState = await kanbanProvider.getFullStateMessages(workspaceRoot, scope);
+        if (!baseState || baseState.length === 0) { return []; }
+        // Theme entry (not produced by getFullStateMessages) — from the resolved
+        // setting with an explicit 'afterburner' fallback. Tagged SURFACES.common
+        // so it reaches every standalone panel, not just the board.
+        const themeName = configProvider.getConfigStringWithDefault('theme.name', 'afterburner');
+        const themeEntry = { type: 'switchboardThemeNameSetting', theme: themeName, surface: SURFACES.common };
+        // Override dispatchAnalyzeAvailable on the updateBoard entry: the provider
+        // hardcodes true; standalone gates on ptyReady.
         return [
-            { type: 'updateColumns', columns: DEFAULT_KANBAN_COLUMNS, surface: SURFACES.kanban },
-            { type: 'updateWorkspaceSelection', workspaceRoot, workspaces: workspaceItems, activeFilter: null, projectFilter, projects, allWorkspaceProjects, controlPlaneMode: 'none', controlPlaneRoot: null, effectiveControlPlaneRoot: workspaceRoot, explicitControlPlaneRoot: workspaceRoot, pendingCandidate: null, repoScopeFilter: null, projectContextEnabled: false, surface: SURFACES.kanban },
-            { type: 'cliTriggersState', enabled: false, surface: SURFACES.kanban },
-            { type: 'switchboardThemeNameSetting', theme: 'afterburner', surface: SURFACES.common },
-            { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: kanbanProvider.showingBacklog, showingDispatch: kanbanProvider.showingDispatch, dispatchAnalyzeAvailable: ptyReady, routingConfig: {}, featureWorktrees, surface: SURFACES.kanban },
+            ...baseState.map(msg => msg.type === 'updateBoard'
+                ? { ...msg, dispatchAnalyzeAvailable: ptyReady }
+                : msg),
+            themeEntry,
         ];
     };
 
     // ─── Coalesced board push ────────────────────────────────────────────────
-    // `pushFullState` re-reads the whole board (buildBoardCards + getProjects +
-    // getWorktrees) and broadcasts five messages, so it must not be called twice
+    // `pushFullState` delegates to getFullStateMessages (column building, DB reads,
+    // routing/cli/control-plane resolution) and broadcasts the resulting messages,
+    // so it must not be called twice
     // for one user action. Two publishers now exist per delegated mutation: the
     // provider arm's `executeCommand('switchboard.refreshUI')` (43 call sites, 4 of
     // them inside delegated Board arms — saveKanbanColumn, deleteKanbanColumn,
@@ -635,9 +657,11 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // dialogs) and whose `secrets` resolves to StandaloneHostSecrets via the
     // SecretStorage adapter. Each provider is constructed with a minimal
     // in-memory ExtensionContext (globalState/workspaceState backed by Maps),
-    // then injected with the seam bundle + a BroadcastHub (webview null — no
-    // sidebar in npx; pushes go to the WS hub once `server` is wired below via
-    // setApiServer). This mirrors the verb-engine test harness: pre-assigning
+    // then injected with the seam bundle + a BroadcastHub (webview null, headless
+    // true — no sidebar in npx and never will be; pushes go to the WS hub once
+    // `server` is wired below via setApiServer, and the headless flag prevents the
+    // pre-webview pending queue from growing unbounded). This mirrors the
+    // verb-engine test harness: pre-assigning
     // `_hostSeams`/`_broadcaster` pre-empts each provider's `_initXService`,
     // which would otherwise derive an empty workspace root from the shim's
     // `workspaceFolders` and bail. `handleServiceVerb` then dispatches read/
@@ -689,7 +713,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
 
 
     const headlessSeams: HostSeams = createVscodeHostSeams(workspaceRoot, secretStorage as any);
-    const headlessBroadcaster = new BroadcastHub({ webview: null, apiServer: null });
+    const headlessBroadcaster = new BroadcastHub({ webview: null, apiServer: null, headless: true });
     const panelStateStore = new PanelStateStore(headlessContext.globalState, 'standalone');
 
     // Design: extensionUri, getWorkspaceRoot, context, stateStore, taskViewer?
@@ -757,6 +781,35 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     (kanbanProvider as any)._hostSeams = headlessSeams;
     (kanbanProvider as any)._broadcaster = headlessBroadcaster;
     (kanbanProvider as any)._currentWorkspaceRoot = workspaceRoot;
+
+    // Restore the active project filter from the DB config at boot.
+    //
+    // The extension restores `_projectFilter` at the top of every refresh
+    // (`KanbanProvider._refreshBoardImpl`), but that method returns immediately
+    // on `!this._panel` and standalone never has a panel — so without this seed
+    // `_projectFilter` stays pinned at its constructor default
+    // (UNASSIGNED_PROJECT_FILTER) for the life of the process. Since the state
+    // builders now delegate to `getFullStateMessages` (which reads
+    // `_projectFilter`) and `promptAll` passes `getProjectFilter()` to
+    // `getPlansByColumn`, an unseeded filter means the browser's project
+    // selection silently resets on every restart even though the provider's
+    // `setProjectFilter` persisted it to `kanban.activeProjectFilter`.
+    //
+    // READ-ONLY, mirroring the extension: never write the key here — the
+    // `setProjectFilter` verb is its only user-intent writer. A stored value of
+    // '' (the "no project" encoding) collapses to UNASSIGNED, same as the
+    // editor path.
+    try {
+        if (await db.ensureReady() && typeof db.getConfig === 'function') {
+            const storedFilter = await db.getConfig('kanban.activeProjectFilter');
+            (kanbanProvider as any)._projectFilter =
+                (storedFilter && storedFilter !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER)
+                    ? storedFilter
+                    : KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
+        }
+    } catch (e) {
+        console.warn('[bootstrap] failed to restore active project filter from DB config:', e);
+    }
     ingestionEngine.setFeatureColumnRecomputer(
         (featurePlanId, watchedRoot) => kanbanProvider.recomputeFeatureColumnFromSubtasks(featurePlanId, watchedRoot)
     );
@@ -866,14 +919,6 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                     }
                     return { success: true };
 
-                case 'setProjectFilter': {
-                    projectFilter = payload.project || null;
-                    await pushFullState();
-                    return { success: true };
-                }
-
-
-
                 case 'addProject': {
                     const workspaceId = await getWorkspaceId();
                     if (workspaceId && payload.projectName) {
@@ -933,7 +978,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                     if (!workspaceId) { return { success: false, error: 'No workspace ID' }; }
 
                     if (verb === 'promptAll' && sessionIds.length === 0) {
-                        const columnPlans = await db.getPlansByColumn(workspaceId, column, projectFilter);
+                        const columnPlans = await db.getPlansByColumn(workspaceId, column, kanbanProvider.getProjectFilter());
                         sessionIds = columnPlans.map(p => p.sessionId).filter(Boolean);
                     }
 
@@ -1140,7 +1185,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 default: {
                     try {
                         const result = await kanbanProvider.handleServiceVerb(verb, {
-                            initiatorProject: projectFilter,
+                            initiatorProject: kanbanProvider.getProjectFilter(),
                             ...payload,
                             workspaceRoot: root,
                         });
@@ -1369,9 +1414,9 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // files, which is the exact opposite of a read-only analysis pass.
                     // Mirrors KanbanProvider.generateUnifiedPrompt's dispatch-analysis arm.
                     // If analysisScope is undefined (a caller that did not forward it),
-                    // fall back to the standalone's own projectFilter variable, which the
-                    // kanbanVerb default arm maintains and setProjectFilter writes.
-                    const analysisScope = payload.analysisScope !== undefined ? payload.analysisScope : projectFilter;
+                    // fall back to the provider's project filter, which setProjectFilter
+                    // persists to the DB config key (parity with the extension host).
+                    const analysisScope = payload.analysisScope !== undefined ? payload.analysisScope : kanbanProvider.getProjectFilter();
                     const prompt = payload.instruction === 'dispatch-analysis'
                         ? buildDispatchAnalysisPrompt(records, root, server?.getPort() ?? 0, analysisScope)
                         : await buildPromptForCards(targetRole, records, root);

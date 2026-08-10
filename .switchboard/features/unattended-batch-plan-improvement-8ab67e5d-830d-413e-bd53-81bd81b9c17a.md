@@ -1,6 +1,6 @@
 # Unattended Batch Plan Improvement
 
-**Complexity:** 5
+**Complexity:** 6
 
 ## Goal
 
@@ -18,9 +18,9 @@ What remains genuinely missing is narrower and sharper: terminals that are live 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Hidden Terminal Creation with Mixed-Provider Allocation](../plans/hidden-terminal-create-and-provider-mix.md) — **PLAN REVIEWED**
-- [ ] [Improver Prompt Contract and Planner Lifecycle Protocol](../plans/improver-prompt-and-planner-lifecycle.md) — **PLAN REVIEWED**
-- [ ] [Plan-File Updates Notify the Planner Terminal](../plans/plan-update-notifies-planner.md) — **PLAN REVIEWED**
+- [ ] [Hidden, Batched Terminal Creation with Mixed-Provider Allocation](../plans/hidden-terminal-create-and-provider-mix.md) — **PLAN REVIEWED**
+- [ ] [Unattended Improver Contract: Outstanding Questions and Single-File Scope](../plans/improver-prompt-and-planner-lifecycle.md) — **PLAN REVIEWED**
+- [ ] [Parallel Planner Lane in the Oversight Pass](../plans/plan-update-notifies-planner.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

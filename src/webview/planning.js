@@ -186,7 +186,6 @@
     let ticketsEditMode = false;
     let _ticketsEditBackupHtml = null;
     let ticketsWorkspaceRoot = '';
-    let ticketsAutoSync = false;
     let researchWorkspaceRoot = '';
     let folderModalScope = 'local';
     let lastResearchFolderByRoot = {};

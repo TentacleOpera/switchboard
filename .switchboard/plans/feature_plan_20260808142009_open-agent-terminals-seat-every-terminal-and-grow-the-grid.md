@@ -60,6 +60,29 @@ So a curtain is only ever drawn by a pane render that happens **after** the arm.
 > **Reason:** This is not a race with a common case — it is a **deterministic loss**, and specifically a deterministic loss for exactly the terminals that are curtain-eligible. `armStartupCurtain(name, hasStartupCommand)` no-ops unless `hasCommand[role] === true`, and `hasCommand[role]` is computed as `typeof commands[role] === 'string' && commands[role].trim() !== ''` (`GlobalIntegrationConfigService.getPtyVisibleRoles`, `src/services/GlobalIntegrationConfigService.ts:462-466`) — the *same* predicate that decides whether `injectStartupCommand` takes the 750 ms sleep. So `hasCommand[role] === true` ⟺ the create response is withheld for ≥750 ms after the broadcast. The webview's refetch is two loopback round trips (`fetchKanbanColumnStructure()` then `ptyListTerminals`) and lands in single-digit-to-tens of milliseconds. Calling that a race understates it by two orders of magnitude, and treating it as a race invites a fix that merely narrows the window.
 > **Replaced with:** For every curtain-eligible terminal, the broadcast → refetch → `sanitizePaneAssignments()` → `renderPaneGrid()` chain completes ~750 ms *before* `await res.json()` resolves and `armStartupCurtain()` runs. Pane 0 is therefore **always** rendered before its curtain is armed, and the curtain is **always** armed into an already-rendered pane that nothing repaints. It then expires silently on its `noOutputTimer`/`quietTimer`. This is an asymmetry with `dismissStartupCurtain()`, which *does* address its nodes directly (`terminals.js:973-981`) rather than relying on a render.
 
+**Root cause B2 — a second, independent curtain killer: the 4 s no-output cap expires curtains 2..N before the loop ends.**
+
+*(Merged 2026-08-10 from the now-deleted `fix-open-all-startup-curtain-timing.md`, which diagnosed this mechanism and nothing else. Retained because it explains why the bug reads as intermittent across layouts, which root cause B alone does not.)*
+
+Root cause B explains terminal **#1** — armed after its pane already rendered. Terminals **2..N** fail differently: their curtain state is armed on time but **deleted by timer before seating**. `armStartupCurtain` starts a 4 s `noOutputTimer` (`CURTAIN_NO_OUTPUT_MS`, `terminals.js:94-97`), and seating only happens after the whole loop:
+
+| Event | Time |
+| :--- | :--- |
+| create #k resolves; `armStartupCurtain` runs | ≈750·k ms |
+| curtain #k's `noOutputTimer` fires (`sawLiveOutput === false`, no socket yet) | ≈750·k + 4000 ms |
+| loop ends; `fetchTerminalList()` + `fillEmptyPanes()` seat panes | ≈750·N ms |
+
+Curtain `k` survives to seating only when `750k + 4000 > 750N`, i.e. **`k > N − 5.3`**. `fillEmptyPanes` seats the *first* `slotCount` unseated terminals in `fleetList` order (fleet Map insertion = creation order), so the seated set is `#1..#slotCount` — precisely the set whose curtain state has already expired.
+
+This is why the failure looks intermittent rather than absolute:
+
+- **N = 12 roles, 1/2/4/6-pane layout** → seated `#1..#6` ∩ surviving `#7..#12` = ∅ → **zero** curtains. The reported symptom.
+- **N = 12 roles, 3×3 layout** (`slotCount = 9`) → panes 7, 8, 9 *do* curtain. A reviewer testing on 3×3 sees a partial, not total, failure.
+
+Moving seating inside the creation loop (Proposed Change 2) closes this as well as root cause A: once seated within ~1 RTT of arming, the pty's echo of the typed startup command arrives as **replay** (excluded from `bumpStartupCurtain` by the `awaitingReplayFrame` branch, `terminals.js:4797`), the CLI's first real paint 1–4 s later arrives **live** and bumps the curtain, and the 1.2 s quiet timer dismisses it normally — the individual path's proven sequence.
+
+> **Verification note:** do **not** implement this by adding an `await fetchTerminalList();` inside the loop. `src/test/multi-parent-terminals-contract.test.js:257` uses the *first* `await fetchTerminalList();` as a `block()` end marker; an earlier one truncates the extracted body and fails the test for an unrelated reason. See *Edge-Case & Dependency Audit → Regression surface*.
+
 **Root cause C — the grid never grows; it only ever shrinks.**
 
 `fillEmptyPanes()` (`terminals.js:3819`) seats into `getSlotCount(effectiveLayout)` slots and stops. Nothing in the open-all path raises the layout. `currentLayout` is the operator's persisted pick (`terminals.layoutMode`, default `'1'`), and the only automatic layout movement in the panel is `resolveFlooredLayout()` / `applyLayoutFloor()` (`terminals.js:2630`, `3213`), which walks `LAYOUT_FLOOR_ORDER` **downward** — it exists to prevent unreadable subdivisions and can only demote. So a persisted `2x2` (4 slots) plus six created terminals gives exactly the reported symptom: four panes, two terminals parked in the sidebar, no message.
@@ -462,3 +485,13 @@ Compilation and automated-test execution are **excluded from this plan's steps**
 ---
 
 **Recommendation: Send to Coder** (complexity 6).
+
+---
+
+## Completion Report
+
+Implemented all six proposed changes in `src/webview/terminals.js`: added `LAYOUT_GROW_ORDER` / `layoutForFleetCount()` / `growLayoutForFleet()` after `getMaxSlotCount()`; disarmed `initialAssignmentDone` after the `wanted.size === 0` guard in `openAllTerminals()`; added direct paint-on-arm to `armStartupCurtain()` (mirroring `dismissStartupCurtain()`'s direct-node addressing); reworked `openAllTerminals()` to grow once before the loop, seat each terminal inside the loop with `persist:false`, and persist once at the tail with an unseated-remainder toast; and reworked `fillEmptyPanes()` to accept an options bag and return the unseated count. Created `src/test/terminal-open-all-seating-contract.test.js` with 10 contract cases. All 9 existing test suites stay green (126 tests total, 0 failures); the 2 pre-existing reds in `terminal-pane-fit-verification-contract.test.js` (`DEFAULT_ROLES` marker) are unrelated to this change. No issues encountered.
+
+## Review Findings
+
+Reviewed against this plan with tests executed independently (this dispatch carried no skip directive, so the plan's SKIP TESTS note was treated as a record, not an instruction). One MAJOR gate-wiring defect fixed: `src/test/terminal-open-all-seating-contract.test.js` was authored and green but invoked by nothing — no `test:contract:*` entry and no CI step — so it is now wired as `test:contract:terminal-open-all-seating` in `package.json` and as a named step in `.github/workflows/integration-tests.yml` (files changed: those two). Regression trace found no correctness defects in the seating rework: paint-on-arm's `paneIndex < paneGridEl.children.length` bound is sound because `renderPaneGrid` keeps `paneGridEl.children` 1:1 with slots (`terminals.js:2240-2248`); the `initialAssignmentDone` disarm does not strand the single-create path, which seats explicitly via `assignToFocusedPane` (`terminals.js:3901`) and never relied on the seed branch; and the tail keeps exactly one `await fetchTerminalList()`, so the `multi-parent-terminals-contract.test.js:257` block marker survives. Validation: open-all-seating 10/10, sidebar-groupings 24/24, role-ordering 7/7, multi-parent 29/29, pane-grid-reconcile 6/6, pane-pinning 15/15, shell-terminal-strip 25/25, pty-route-surface and shim-injection 17/17 all green; `eslint` clean; `terminal-pane-fit-verification` 2 red, confirmed pre-existing (`const DEFAULT_ROLES` absent at HEAD too). Remaining risks are deliberate plan decisions, left as-is: a grow persists even when every create fails (pty host down → grid permanently widened with zero terminals), and the grid is sized to `plannedTotal` so partial create failure leaves empty slots; separately, this repo has no meta-gate asserting every `test:contract:*` script is invoked by CI, which is how this test slipped through in the first place.

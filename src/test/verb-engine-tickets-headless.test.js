@@ -443,9 +443,115 @@ async function main() {
         assert.ok(push, 'webview push emitted');
     });
 
+    // ── ticketsAutoSync migration guards ────────────────────────────────────
+    // The Tickets panel extraction left the auto-sync engine in
+    // PlanningPanelProvider and deleted its only writer, orphaning a setting
+    // real users had enabled in a shipped build (~4,000 installs). The move
+    // back into this provider is a STATE MIGRATION, and these are the two
+    // assertions that pin it:
+    //
+    //   1. the resolver still honours a per-folder `ticketsAutoSync: true` and
+    //      promotes it to the global config (the migration path for installs
+    //      that only ever wrote the folder value), and
+    //   2. the `setupTicketsWatcher` BODY carries the value.
+    //
+    // (2) is the display half. Without it, a correct engine can ship behind a
+    // checkbox that renders unticked on open — a silent reset that passes every
+    // structural gate. Order matters: the clean-root case must run BEFORE the
+    // seeded one, because the promotion branch writes a process-wide global.
+
+    // The per-folder value lives in the workspace kanban.db `config` table under
+    // `folders.paths` (LocalFolderService.getTicketsAutoSync /
+    // setTicketsAutoSync), so the fixture is the LocalFolderService seam rather
+    // than a file — standing a real DB up here would test sql.js, not the
+    // migration. `folderCalls` records what the provider wrote back, which is
+    // the downgrade-safety half of the contract.
+    function withFolderService(provider, initialValue) {
+        const folderCalls = [];
+        let value = initialValue;
+        provider._getLocalFolderService = () => ({
+            getTicketsAutoSync: () => value,
+            setTicketsAutoSync: async (v) => { value = v; folderCalls.push(v); },
+        });
+        return folderCalls;
+    }
+
+    await test('ticketsAutoSync: a root with the key set nowhere resolves to false (fresh install)', async () => {
+        const cleanRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-tickets-autosync-off-'));
+        try {
+            const { provider } = buildHeadlessTicketsProvider(cleanRoot);
+            withFolderService(provider, false);
+            assert.strictEqual(await provider._getTicketsAutoSync(cleanRoot), false);
+        } finally {
+            try { fs.rmSync(cleanRoot, { recursive: true, force: true }); } catch {}
+        }
+    });
+
+    const seededRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-tickets-autosync-on-'));
+
+    await test('ticketsAutoSync: a shipped per-folder value resolves to true and is promoted to global', async () => {
+        const { GlobalIntegrationConfigService } = require('../../out/services/GlobalIntegrationConfigService');
+        const before = await GlobalIntegrationConfigService.loadGlobal();
+        assert.strictEqual(before.ticketsAutoSync, undefined, 'precondition: global value unset');
+
+        const { provider } = buildHeadlessTicketsProvider(seededRoot);
+        withFolderService(provider, true);
+        assert.strictEqual(
+            await provider._getTicketsAutoSync(seededRoot), true,
+            'per-folder ticketsAutoSync:true must survive the move into TicketsPanelProvider'
+        );
+
+        const after = await GlobalIntegrationConfigService.loadGlobal();
+        assert.strictEqual(after.ticketsAutoSync, true, 'the local→global promotion branch was dropped');
+    });
+
+    await test('setupTicketsWatcher RETURNS ticketsAutoSync in-body and pushes it (the display half)', async () => {
+        const { provider, pushes } = buildHeadlessTicketsProvider(seededRoot);
+        withFolderService(provider, true);
+        try {
+            const result = await provider.handleServiceVerb('setupTicketsWatcher', { workspaceRoot: seededRoot });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.type, 'ticketsAutoSyncChanged');
+            assert.strictEqual(result.ticketsAutoSync, true, 'body must carry the value — the HTTP caller has no other source');
+            assert.strictEqual(result.workspaceRoot, seededRoot, 'the push is broadcast to every tickets surface; it must name its root');
+            const push = pushes.find(p => p.type === 'ticketsAutoSyncChanged');
+            assert.ok(push, 'webview push emitted');
+            assert.strictEqual(push.ticketsAutoSync, true);
+            assert.strictEqual(push.workspaceRoot, seededRoot);
+        } finally {
+            // Tear the 45s delta-pull interval down or the test process never exits.
+            provider._updateTicketsAutoSyncWatcher(seededRoot, false);
+            provider.dispose();
+        }
+    });
+
+    await test('setTicketsAutoSync writes BOTH the global and the per-folder value', async () => {
+        const { provider, pushes } = buildHeadlessTicketsProvider(seededRoot);
+        const folderCalls = withFolderService(provider, true);
+        try {
+            const result = await provider.handleServiceVerb('setTicketsAutoSync', { enabled: false, workspaceRoot: seededRoot });
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.ticketsAutoSync, false);
+
+            const { GlobalIntegrationConfigService } = require('../../out/services/GlobalIntegrationConfigService');
+            assert.strictEqual((await GlobalIntegrationConfigService.loadGlobal()).ticketsAutoSync, false);
+            // The per-folder value is written too, so a downgrade to an older
+            // build still finds the user's choice where that build looks.
+            assert.deepStrictEqual(folderCalls, [false], 'per-folder value not kept in step — a downgrade loses the choice');
+
+            const push = pushes.find(p => p.type === 'ticketsAutoSyncChanged');
+            assert.ok(push, 'webview push emitted');
+            assert.strictEqual(push.ticketsAutoSync, false);
+            assert.strictEqual(push.workspaceRoot, seededRoot);
+        } finally {
+            provider.dispose();
+        }
+    });
+
     // ── Cleanup ─────────────────────────────────────────────────────────────
 
     try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch {}
+    try { fs.rmSync(seededRoot, { recursive: true, force: true }); } catch {}
 
     console.log(`\n${passed} passed, ${failed} failed`);
     if (failed > 0) process.exit(1);

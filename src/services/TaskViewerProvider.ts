@@ -4955,6 +4955,21 @@ Each plan file must include:
         return `${prompt}\n\nAdditional Instructions:\n${parts.join('\n\n')}`;
     }
 
+    /**
+     * Instructions whose dispatch is a READ-ONLY analysis pass: the agent inspects the
+     * plans and decides what to do with them itself. The dispatch must not stamp run
+     * sheets, must not re-write the kanban column, and must not record dispatch identity
+     * — the cards are not moving, and doing that work per plan costs one board refresh,
+     * one integration sync and one feature-file rewrite EACH before a single prompt is
+     * sent (the Analyze button's card-by-card crawl).
+     */
+    private static readonly READ_ONLY_DISPATCH_INSTRUCTIONS = new Set(['dispatch-analysis']);
+
+    private _isReadOnlyDispatchInstruction(instruction?: string): boolean {
+        const { baseInstruction } = this._parsePromptInstruction(instruction);
+        return !!baseInstruction && TaskViewerProvider.READ_ONLY_DISPATCH_INSTRUCTIONS.has(baseInstruction);
+    }
+
     private _workflowNameForDispatchRole(role: string, instruction?: string): string | undefined {
         const plannerWorkflowName = role === 'planner'
             ? this._plannerWorkflowNameForInstruction(instruction)
@@ -5433,6 +5448,9 @@ Each plan file must include:
         const targetColumn = options?.targetColumn
             ? this._normalizeLegacyKanbanColumn(options.targetColumn)
             : this._targetColumnForRole(role);
+        // Read-only pass (see READ_ONLY_DISPATCH_INSTRUCTIONS): build the prompt and send
+        // it, nothing else. Skips the per-plan persist loop below.
+        const readOnlyDispatch = this._isReadOnlyDispatchInstruction(instruction);
 
         // Partition the batch by feature so each feature can be routed to its own
         // terminal when per-feature worktree mode is in play.
@@ -5483,32 +5501,37 @@ Each plan file must include:
             const prompt = await this._kanbanProvider!.generateUnifiedPrompt(role, group.plans, resolvedWorkspaceRoot, { instruction, analysisScope: options?.analysisScope });
             const finalPrompt = this._appendAdditionalInstructions(prompt, undefined, options?.additionalInstructions);
 
-            // Persist this group's cards before dispatch (immediate UI feedback)
-            for (const plan of group.plans) {
-                const sessionId = plan.sessionId || plan.planId || '';
-                if (!sessionId) {
-                    console.warn('[TaskViewerProvider] Batch dispatch skipping plan with no sessionId or planId');
-                    continue;
-                }
-                try {
-                    if (workflowName) {
-                        await this._updateSessionRunSheet(sessionId, workflowName, undefined, false, resolvedWorkspaceRoot);
+            // Persist this group's cards before dispatch (immediate UI feedback).
+            // Skipped entirely for a read-only pass: nothing is moving, so every write in
+            // here would be a no-op that still costs a run-sheet write, a board refresh,
+            // an integration sync and a feature-file rewrite PER PLAN.
+            if (!readOnlyDispatch) {
+                for (const plan of group.plans) {
+                    const sessionId = plan.sessionId || plan.planId || '';
+                    if (!sessionId) {
+                        console.warn('[TaskViewerProvider] Batch dispatch skipping plan with no sessionId or planId');
+                        continue;
                     }
-                    await this._updateKanbanColumnForSession(resolvedWorkspaceRoot, sessionId, targetColumn);
-                    // Record dispatch identity
-                    if (targetColumn) {
-                        await this._kanbanProvider?._recordDispatchIdentity(
-                            resolvedWorkspaceRoot, sessionId, targetColumn, group.targetAgent
-                        );
+                    try {
+                        if (workflowName) {
+                            await this._updateSessionRunSheet(sessionId, workflowName, undefined, false, resolvedWorkspaceRoot);
+                        }
+                        await this._updateKanbanColumnForSession(resolvedWorkspaceRoot, sessionId, targetColumn);
+                        // Record dispatch identity
+                        if (targetColumn) {
+                            await this._kanbanProvider?._recordDispatchIdentity(
+                                resolvedWorkspaceRoot, sessionId, targetColumn, group.targetAgent
+                            );
+                        }
+                    } catch (err) {
+                        console.error(`[TaskViewerProvider] Batch column update failed for ${sessionId}:`, err);
+                        // Continue with remaining cards in this group rather than aborting the entire batch
                     }
-                } catch (err) {
-                    console.error(`[TaskViewerProvider] Batch column update failed for ${sessionId}:`, err);
-                    // Continue with remaining cards in this group rather than aborting the entire batch
                 }
+                // Refresh the board now that this group's cards are persisted — restores the
+                // pre-fix "immediate UI feedback" timing (cards move before the send, not after).
+                this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);
             }
-            // Refresh the board now that this group's cards are persisted — restores the
-            // pre-fix "immediate UI feedback" timing (cards move before the send, not after).
-            this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);
 
             // Send the prompt to the resolved terminal
             try {
@@ -6552,9 +6575,6 @@ Each plan file must include:
 
         const gitIgnoreConfig = this.handleGetGitIgnoreConfig();
         this._setupPanelProvider.postMessage({ type: 'gitIgnoreConfig', ...gitIgnoreConfig });
-
-        const overrides = await this.handleGetDefaultPromptOverrides(workspaceRoot);
-        this._setupPanelProvider.postMessage({ type: 'defaultPromptOverrides', overrides });
 
         const dbPath = await this.handleGetDbPath(workspaceRoot);
         this._setupPanelProvider.postMessage({ type: 'controlPlaneStatus', ...dbPath });

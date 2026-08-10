@@ -27,6 +27,17 @@ export interface BroadcastTarget {
     webview?: { postMessage(msg: any): Thenable<boolean> } | null;
     /** The LocalApiServer whose wsHub is the WS fan-out target. */
     apiServer?: LocalApiServer | null;
+    /**
+     * Headless mode: set when the hub will NEVER acquire a webview (the
+     * standalone/npx host). When true, `push` and `pushWebviewOnly` skip the
+     * `_pendingWebviewMessages` append entirely — the queue is load-bearing
+     * only for the editor's pre-webview cold-start ordering, and in a
+     * headless process it grows unbounded (one shared hub, six providers,
+     * driven by the 40 ms coalesced push loop). The WS fan-out is the sole
+     * delivery path. Must NOT be set in the editor host — it would break
+     * initial-load ordering on ~4,000 installed extensions.
+     */
+    headless?: boolean;
 }
 
 export class BroadcastHub {
@@ -81,9 +92,11 @@ export class BroadcastHub {
         const isFactory = typeof msg === 'function';
         const webviewMsg = isFactory ? (msg as Function)(this._webviewScope) : msg;
         // Fan-out 1: the BOUND webview (with pending queue for initial-load ordering).
+        // In headless mode there is no webview and never will be — skip the queue
+        // entirely so it cannot grow unbounded. The WS fan-out is the sole path.
         if (this._target.webview) {
             this._target.webview.postMessage(webviewMsg).then(undefined, () => { /* panel closed */ });
-        } else {
+        } else if (!this._target.headless) {
             this._pendingWebviewMessages.push(webviewMsg);
         }
         // Fan-out 2: wsHub, tagged with `surface`.
@@ -122,8 +135,13 @@ export class BroadcastHub {
     /**
      * Push to the webview only (no WS fan-out). Used for messages that are
      * webview-internal (e.g. `switchToTab`) and should not go to external clients.
+     * In headless mode there is no webview and no WS fan-out by definition —
+     * the message is dropped (a webview-internal message has no headless
+     * consumer). This is correct: `switchToTab` etc. are editor-chrome
+     * directives that are meaningless without a sidebar panel.
      */
     pushWebviewOnly(msg: any): void {
+        if (this._target.headless) { return; }
         const isFactory = typeof msg === 'function';
         const webviewMsg = isFactory ? (msg as Function)(this._webviewScope) : msg;
         if (this._target.webview) {

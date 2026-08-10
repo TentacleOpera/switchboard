@@ -121,19 +121,6 @@
             text-transform: uppercase;
             color: var(--text-secondary);
         }
-        .btn-new-terminal {
-            background: var(--accent-teal);
-            color: #000;
-            border: none;
-            padding: 4px 8px;
-            font-size: 11px;
-            font-weight: 600;
-            border-radius: 3px;
-            cursor: pointer;
-        }
-        .btn-new-terminal:hover {
-            opacity: 0.9;
-        }
         /* Terminal-ops block. Ports .secondary-btn / .w-full from the extension
            sidebar's Terminals sub-tab (implementation.html) so the browser page
            presents the same full-width stacked controls rather than a row of
@@ -188,6 +175,17 @@
             background: var(--panel-bg);
         }
         .role-picker[hidden] { display: none; }
+        /* Inline picker: nested under the group header that opened it. The static
+           top-of-sidebar picker had a bottom border acting as a section divider;
+           inside a group that divider is wrong, so it becomes a left rail instead —
+           the same 2px accent rail .parent-group-header wears at :556, so the picker
+           reads as continuous with the header that opened it. */
+        .role-picker.is-inline {
+            border-bottom: none;
+            border-left: 2px solid var(--accent-teal, #4ec9b0);
+            margin: 2px 0 4px 6px;
+            border-radius: 0 3px 3px 0;
+        }
         .role-picker-title {
             font-size: 10px;
             text-transform: uppercase;
@@ -1369,9 +1367,10 @@
            renderSidebarList() shows it inline whenever the fleet list is empty. In
            solo mode the pane is pinned, so an empty fleet (operator close, rename)
            is normal and the pane keeps rendering — leaving the empty state visible
-           would stack "No terminal selected. Click + New" above the live terminal
-           and halve the window. It also collides with #solo-status on the
-           not-found path. Suppress it outright; solo mode never offers + New. */
+           would stack "No terminal selected. Use the + beside a workspace" above the
+           live terminal and halve the window. It also collides with #solo-status on
+           the not-found path. Suppress it outright; solo mode hides the sidebar, so
+           it never offers a spawn control at all. */
         body.is-solo #empty-state {
             display: none !important;
         }
@@ -1389,17 +1388,13 @@
     <div class="terminals-sidebar">
         <div class="sidebar-header">
             <span class="sidebar-title">Agents</span>
-            <button id="btn-new-terminal" class="btn-new-terminal">+ New</button>
         </div>
-        <!-- Role picker. Inline (not a modal) and dismissed by picking or by the
-             Cancel button — never a confirm gate. window.prompt() was the previous
-             implementation; it cannot be populated from agents.visibleAgents and
-             reads as a browser chrome dialog rather than part of the panel. -->
-        <div id="role-picker" class="role-picker" hidden>
-            <div class="role-picker-title">New terminal — pick a role</div>
-            <div id="role-picker-options" class="role-picker-options"></div>
-            <button type="button" id="role-picker-cancel" class="role-picker-cancel">Cancel</button>
-        </div>
+        <!-- The role picker is NOT declared here any more. It is built per group by
+             buildRolePicker() and rendered directly under the workspace or worktree
+             header whose `+` was clicked, so the menu is visually attached to the
+             place it will spawn into. A single static picker at the top of the
+             sidebar was shown for every `+` in the list, including groups scrolled
+             out of view. The .role-picker* CSS below is unchanged and still styles it. -->
         <!-- Terminal ops. Mirrors the extension sidebar's Terminals sub-tab
              (implementation.html): full-width stacked secondary-btns, same labels.
              Clear All lived in the layout toolbar wearing .btn-layout, where it
@@ -1449,7 +1444,7 @@
         <div id="pane-toast" class="pane-toast"><span id="pane-toast-text"></span><button type="button" id="pane-toast-undo">Undo</button></div>
         <div id="pane-grid" class="pane-grid layout-1"></div>
         <div id="empty-state" class="empty-state">
-            No terminal selected. Click "+ New" to spawn a terminal.
+            No terminal selected. Use the + beside a workspace in the sidebar to spawn one.
         </div>
         <div id="solo-status" class="solo-status-container" style="display: none;"></div>
         <div id="toast-container" class="toast-container"></div>

@@ -68,6 +68,37 @@
     let activeGroupId = null; // which group is currently seated, or null for "none/unsaved"
     let groupsView = true; // when groups exist + !solo, true → group sidebar, false → flat list
 
+    /**
+     * Which group header the role picker is currently open under.
+     *   { key: string, targetSpec: object|undefined }   — open
+     *   null                                            — closed
+     *
+     * State, not DOM: renderSidebarList() does `listEl.innerHTML = ''` on every
+     * fleet poll (5s), every terminalsChanged push and every collapse toggle, so a
+     * picker inserted imperatively on click would be destroyed mid-choice. The
+     * renderer rebuilds it from this.
+     */
+    let pickerState = null;
+    /**
+     * Group key whose roles fetch is in flight. Synchronous, so a second click that
+     * lands DURING the await is still seen: without it the toggle-closed check reads
+     * a pickerState the first click has not assigned yet, so double-clicking one `+`
+     * opens twice instead of closing, and two different `+` clicks race on whichever
+     * fetch resolves last rather than on whichever was clicked last.
+     */
+    let pickerOpening = null;
+    /** Cached { visibleAgents, hasCommand } so a re-render rebuilds the picker
+     *  without a round trip and without flashing an empty menu. */
+    let rolePickerData = null;
+    /**
+     * One-shot: scroll the picker into view on the render that OPENED it, and only
+     * that render. .terminals-list is overflow-y:auto, so a `+` on a header at the
+     * bottom of the scrollport renders the picker below the fold — the same
+     * "click did nothing" symptom this change exists to remove. Not applied on poll
+     * re-renders, which would yank the operator's scroll position every 5 seconds.
+     */
+    let pickerNeedsScroll = false;
+
     let soloTerminalName = null;
     let hasFetchedList = false;
     try {
@@ -107,7 +138,7 @@
     const listEl = document.getElementById('terminals-list');
     const mainEl = document.getElementById('terminals-main');
     const emptyStateEl = document.getElementById('empty-state');
-    const btnNew = document.getElementById('btn-new-terminal');
+    // `btnNew` is gone with #btn-new-terminal — spawning is per-group now.
     const paneGridEl = document.getElementById('pane-grid');
     const toastContainerEl = document.getElementById('toast-container');
     const fallbackBannerEl = document.getElementById('layout-fallback-banner');
@@ -467,9 +498,9 @@
             document.addEventListener('dragend', rearm, true);
         }, true);
 
-        if (btnNew) {
-            btnNew.addEventListener('click', () => onNewTerminalClicked());
-        }
+        // #btn-new-terminal and the static #role-picker-cancel are gone: the picker
+        // is built per group by buildRolePicker(), and its Cancel carries its own
+        // listener. Nothing global to bind.
 
         const btnNewWindow = document.getElementById('btn-new-window');
         if (btnNewWindow) {
@@ -488,13 +519,6 @@
                     btnNewWindow.disabled = true;
                     setTimeout(() => { btnNewWindow.disabled = false; }, 2000);
                 }
-            });
-        }
-        const pickerCancel = document.getElementById('role-picker-cancel');
-        if (pickerCancel) {
-            pickerCancel.addEventListener('click', () => {
-                const picker = document.getElementById('role-picker');
-                if (picker) { picker.hidden = true; }
             });
         }
 
@@ -711,6 +735,52 @@
 
     function getMaxSlotCount() {
         return Math.max(...LAYOUT_MODES.map(m => LAYOUTS[m].slots));
+    }
+
+    // Grow ladder for open-all. Slot-ordered, unlike LAYOUT_FLOOR_ORDER (which is
+    // demand-ordered for the DOWNWARD floor walk). '2v' is deliberately absent: it
+    // holds the same two panes as '2h' but stacks them, and auto-picking a stacked
+    // pair over a side-by-side one is a taste call that belongs to the operator.
+    const LAYOUT_GROW_ORDER = ['1', '2h', '1x3', '2x2', '2x3', '3x3'];
+
+    /**
+     * Smallest layout that seats `count` terminals, never smaller than what the
+     * operator already picked. Returns currentLayout when nothing needs to change.
+     *
+     * Monotonic by construction: the early return covers count <= currentSlots, and
+     * LAYOUT_GROW_ORDER is slot-ascending, so the first rung that fits can never have
+     * fewer slots than currentLayout.
+     *
+     * This is the ONLY upward layout movement in the panel. applyLayoutFloor() still
+     * owns effectiveLayout and can demote this pick on a small window — that is the
+     * fallback banner's job to explain, not this function's to pre-empt.
+     */
+    function layoutForFleetCount(count) {
+        const currentSlots = getSlotCount(currentLayout);
+        if (count <= currentSlots) { return currentLayout; }
+        for (const mode of LAYOUT_GROW_ORDER) {
+            if (LAYOUTS[mode].slots >= count) { return mode; }
+        }
+        return '3x3';
+    }
+
+    /**
+     * Widen the grid so a just-created fleet has somewhere to sit.
+     *
+     * setLayoutMode() does NOT persist (the picker's click handler calls
+     * saveLayoutSettings() itself), so the caller owns persistence — see the tail of
+     * openAllTerminals().
+     *
+     * No-op in solo mode. Solo hides .terminals-sidebar, which is where the open-all
+     * button lives, so this is unreachable today; the guard keeps the helper safe if a
+     * future caller is not so lucky (saveSetting is already suppressed under solo).
+     */
+    function growLayoutForFleet(count) {
+        if (document.body.classList.contains('is-solo')) { return false; }
+        const target = layoutForFleetCount(count);
+        if (target === currentLayout) { return false; }
+        setLayoutMode(target);   // syncs the picker, re-renders, re-applies the floor
+        return true;
     }
 
     async function loadSetting(key, defaultVal) {
@@ -932,6 +1002,36 @@
             if (s && !s.sawLiveOutput) { dismissStartupCurtain(name); }
         }, CURTAIN_NO_OUTPUT_MS);
         startupCurtains.set(name, state);
+
+        // Paint NOW rather than waiting for the next pane render. The gateway
+        // broadcasts terminalsChanged from inside fleetService.create() — and for any
+        // role with a startup command the create response is then withheld for
+        // SHELL_READINESS_DELAY_MS (750ms) — so a terminal can already be seated and
+        // rendered by the time this runs. Without this, its curtain is armed into a
+        // rendered pane that nothing repaints, and it expires invisibly.
+        //
+        // A no-op on the open-all path by design: there the arm precedes the seat, so
+        // indexOf() is -1 and the immediately following renderPaneGrid() paints via
+        // updatePaneElement's existing branch. This covers the single-create (+) path,
+        // where the seed branch can seat pane 0 before the arm.
+        //
+        // Direct node addressing, NOT renderPaneGrid(): a full reconcile would risk
+        // re-parenting live xterm DOM for a purely visual change, which is exactly
+        // what updatePaneElement's "no move when already in place" invariant forbids.
+        // renderStartupCurtain() is idempotent, so a later reconcile cannot double it.
+        if (paneGridEl) {
+            const paneIndex = paneAssignments.indexOf(name);
+            if (paneIndex >= 0 && paneIndex < paneGridEl.children.length) {
+                const contentEl = paneGridEl.children[paneIndex].querySelector('.pane-content');
+                if (contentEl) { renderStartupCurtain(contentEl, name); }
+            }
+        }
+        // Class add, NOT renderSidebarList() — the exact mirror of the class strip in
+        // dismissStartupCurtain().
+        if (listEl) {
+            const sel = `.item-role-icon[data-terminal="${cssAttrEscape(name)}"]`;
+            listEl.querySelectorAll(sel).forEach(el => el.classList.add('is-starting'));
+        }
     }
 
     /**
@@ -1348,6 +1448,11 @@
     }
 
     function renderGroupSidebar() {
+        // renderSidebarList early-returns into this function, so the not-rendered
+        // clear at the end of the parents loop never runs in groups view. A
+        // `parent:*` / `worktree:*` key would otherwise survive the switch and make
+        // the next `+` click back in flat view toggle instead of open.
+        if (pickerState && pickerState.key !== '__groups__') { pickerState = null; }
         for (const g of terminalGroups) {
             const row = document.createElement('div');
             row.className = 'worktree-group-header' + (g.id === activeGroupId ? ' active' : '');
@@ -1404,6 +1509,18 @@
             renderSidebarList();
         });
         listEl.appendChild(allRow);
+
+        const newRow = document.createElement('div');
+        newRow.className = 'worktree-group-header';
+        newRow.textContent = '+ New terminal';
+        newRow.addEventListener('click', () => onNewTerminalClicked(undefined, '__groups__'));
+        listEl.appendChild(newRow);
+        // Mandatory, not cosmetic: groups view has no per-group `+` at all, so
+        // without this row, deleting #btn-new-terminal leaves the view with zero
+        // spawn paths — the dead end the PRD's capability-gating contract forbids.
+        if (pickerState && pickerState.key === '__groups__') {
+            listEl.appendChild(mountRolePicker(pickerState.targetSpec));
+        }
     }
 
     /** Extract a trailing -N from a terminal name for numeric ordering. Renamed
@@ -1449,6 +1566,7 @@
 
     function renderSidebarList() {
         syncLinkUpEnabled();
+        let pickerRendered = false;
         listEl.innerHTML = '';
         // The empty state and the pane grid are in the MAIN area; the workspace groups
         // below are in the sidebar. So an empty fleet toggles those two and then keeps
@@ -1591,7 +1709,7 @@
             groupNewBtn.title = `Spawn terminal in ${parentGroup.name}`;
             groupNewBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                onNewTerminalClicked(parentGroup.fullPath ? { parentRoot: parentGroup.fullPath } : undefined);
+                onNewTerminalClicked(parentGroup.fullPath ? { parentRoot: parentGroup.fullPath } : undefined, parentKey);
             });
 
             headerEl.appendChild(titleArea);
@@ -1608,6 +1726,16 @@
             });
 
             parentDiv.appendChild(headerEl);
+
+            // Between header and items, NOT inside .parent-group-items — that
+            // container is display:none when the group is collapsed, and a picker
+            // the user opened must not vanish because the group happens to be shut.
+            // itemsContainer is appended later, so appending here yields
+            // header → picker → items.
+            if (pickerState && pickerState.key === parentKey) {
+                parentDiv.appendChild(mountRolePicker(pickerState.targetSpec));
+                pickerRendered = true;
+            }
 
             const itemsContainer = document.createElement('div');
             itemsContainer.className = 'parent-group-items';
@@ -1660,7 +1788,7 @@
                     wtNewBtn.title = `Spawn terminal in ${wtGroup.basename}`;
                     wtNewBtn.addEventListener('click', (e) => {
                         e.stopPropagation();
-                        onNewTerminalClicked({ worktreePath: wtPath });
+                        onNewTerminalClicked({ worktreePath: wtPath }, wtKey);
                     });
 
                     wtHeaderEl.appendChild(wtTitleArea);
@@ -1678,6 +1806,14 @@
 
                     wtDiv.appendChild(wtHeaderEl);
 
+                    // Between worktree header and items — same reasoning as the parent
+                    // group picker above. .worktree-items is display:none when the
+                    // worktree is collapsed, so the picker must sit outside it.
+                    if (pickerState && pickerState.key === wtKey) {
+                        wtDiv.appendChild(mountRolePicker(pickerState.targetSpec));
+                        pickerRendered = true;
+                    }
+
                     const wtItemsContainer = document.createElement('div');
                     wtItemsContainer.className = 'worktree-items';
                     for (const item of wtGroup.items) {
@@ -1691,6 +1827,12 @@
             parentDiv.appendChild(itemsContainer);
             listEl.appendChild(parentDiv);
         }
+
+        // The group that owned the open picker is gone (mapping removed, worktree
+        // pruned). Clearing here keeps the next `+` click from toggling a picker
+        // nobody can see. AFTER the loop, not inside it: inside, the first group
+        // that is not the owner would clear the state on every single render.
+        if (pickerState && !pickerRendered) { pickerState = null; }
 
         // When groups exist but the operator toggled to flat mode, offer the way back.
         if (terminalGroups.length > 0 && !soloTerminalName && !groupsView) {
@@ -3595,14 +3737,50 @@
         return Object.keys(data.visibleAgents).filter(k => data.visibleAgents[k] !== false);
     }
 
-    async function onNewTerminalClicked(targetSpec) {
-        const picker = document.getElementById('role-picker');
-        const optionsEl = document.getElementById('role-picker-options');
-        if (!picker || !optionsEl) { return; }
-
-        if (!picker.hidden) { picker.hidden = true; return; }
-
+    async function onNewTerminalClicked(targetSpec, key) {
+        const groupKey = key || '__default__';
+        // Toggle closed: an open picker on this group, OR one whose roles fetch is
+        // still in flight for this group.
+        if ((pickerState && pickerState.key === groupKey) || pickerOpening === groupKey) {
+            pickerState = null;
+            pickerOpening = null;
+            renderSidebarList();
+            return;
+        }
+        // Claim the open synchronously, then fetch BEFORE committing pickerState, so
+        // the picker never renders empty and then repopulates.
+        pickerOpening = groupKey;
         const data = await fetchPtyVisibleRoles();
+        // A later click (or a cancel) superseded this one — discard the result.
+        if (pickerOpening !== groupKey) { return; }
+        pickerOpening = null;
+        rolePickerData = data;
+        pickerState = { key: groupKey, targetSpec };
+        pickerNeedsScroll = true;
+        renderSidebarList();
+    }
+
+    /**
+     * Build the inline role picker for one group. Returns a detached element the
+     * renderer inserts between a group header and its items container, so it stays
+     * visible when the group is collapsed and is unmistakably attached to the
+     * workspace it will spawn into.
+     */
+    function buildRolePicker(targetSpec) {
+        const picker = document.createElement('div');
+        picker.className = 'role-picker is-inline';
+
+        const title = document.createElement('div');
+        title.className = 'role-picker-title';
+        title.textContent = 'New terminal — pick a role';
+        picker.appendChild(title);
+
+        const optionsEl = document.createElement('div');
+        optionsEl.className = 'role-picker-options';
+
+        // Defensive only: onNewTerminalClicked assigns rolePickerData before it
+        // assigns pickerState, so the renderer never sees one without the other.
+        const data = rolePickerData || { visibleAgents: {}, hasCommand: {} };
         const visible = data.visibleAgents;
         const hasCommand = data.hasCommand;
         const SYSTEM_ROLES = new Set(['orchestrator', 'mcp_monitor']);
@@ -3619,7 +3797,7 @@
                 // Both unmapped: alphabetical by role
                 return (a || '\uFFFF').localeCompare(b || '\uFFFF');
             });
-        optionsEl.innerHTML = '';
+
         for (const role of roles) {
             const btn = document.createElement('button');
             btn.type = 'button';
@@ -3630,8 +3808,17 @@
             btn.title = hasCommand[role]
                 ? `Open ${label} terminal`
                 : `${label} — no agent CLI configured (plain shell)`;
-            btn.addEventListener('click', () => {
-                picker.hidden = true;
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                // Close NOW, not whenever the next render happens to run. The static
+                // picker hid synchronously (`picker.hidden = true`); clearing state
+                // alone leaves the menu on screen until something re-renders, and
+                // createTerminal's only re-render sits behind `res.ok` — so a
+                // command-bearing role holds the menu for the ~750ms
+                // SHELL_READINESS_DELAY_MS create round trip, and a failed create
+                // holds it until the 5s fleet poll.
+                pickerState = null;
+                renderSidebarList();
                 createTerminal(role, targetSpec, hasCommand[role] === true);
             });
             optionsEl.appendChild(btn);
@@ -3644,13 +3831,52 @@
         noRoleBtn.className = 'role-option is-no-role';
         noRoleBtn.textContent = 'No role';
         noRoleBtn.title = 'Plain shell in the workspace directory — no agent CLI started';
-        noRoleBtn.addEventListener('click', () => {
-            picker.hidden = true;
+        noRoleBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            // Close synchronously — same reasoning as the role buttons above.
+            pickerState = null;
+            renderSidebarList();
             createTerminal(NO_ROLE, targetSpec, false);
         });
         optionsEl.appendChild(noRoleBtn);
+        picker.appendChild(optionsEl);
 
-        picker.hidden = false;
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'role-picker-cancel';
+        cancel.textContent = 'Cancel';
+        cancel.addEventListener('click', (e) => {
+            e.stopPropagation();
+            pickerState = null;
+            pickerOpening = null;
+            renderSidebarList();
+        });
+        picker.appendChild(cancel);
+
+        return picker;
+    }
+
+    /**
+     * buildRolePicker + the one-shot scroll-into-view. `.terminals-list` is the
+     * sidebar's scroll container (overflow-y:auto), so a picker opened under a
+     * header at the bottom of the scrollport lands below the fold and the click
+     * reads as a no-op — the original bug wearing a different hat. Scrolling only
+     * on the render that OPENED the picker is the point: doing it unconditionally
+     * would fight the operator's scroll on every 5s poll re-render.
+     *
+     * block:'nearest' is a no-op when the picker is already fully visible, and
+     * body is height:100vh/overflow:hidden, so .terminals-list is the only ancestor
+     * that can scroll — the movement cannot shift the panel layout.
+     */
+    function mountRolePicker(targetSpec) {
+        const el = buildRolePicker(targetSpec);
+        if (pickerNeedsScroll) {
+            pickerNeedsScroll = false;
+            requestAnimationFrame(() => {
+                if (el.isConnected) { el.scrollIntoView({ block: 'nearest' }); }
+            });
+        }
+        return el;
     }
 
     async function createTerminal(role, targetSpec, hasStartupCommand) {
@@ -3772,11 +3998,43 @@
             return;
         }
 
+        // Disarm the seed-on-first-load branch in sanitizePaneAssignments() before the
+        // first create. That branch exists for page load, where the fleet is fetched in
+        // one shot; here it is actively harmful. The gateway broadcasts terminalsChanged
+        // from inside fleetService.create() — 750ms before the create response resolves
+        // for any role with a startup command (SHELL_READINESS_DELAY_MS) — so the branch
+        // fires on the refetch and seats terminal 1 through a completely different path
+        // from terminals 2..N, at a completely different time. That is root cause A
+        // (one instant pane, then a gap) and root cause B (a curtain armed into an
+        // already-rendered pane) in a single line.
+        //
+        // AFTER the wanted.size guard, deliberately: a cockpit with every agent hidden
+        // must not lose first-paint seeding for the rest of the page's life.
+        initialAssignmentDone = true;
+
         const liveByRole = new Map();
+        let liveCount = 0;
         for (const t of fleetList) {
             if (t.status === 'exited') { continue; }
             liveByRole.set(t.role, (liveByRole.get(t.role) || 0) + 1);
+            liveCount++;
         }
+
+        // Size the grid to the FINAL fleet before creating anything. Growing per
+        // create would reflow the grid on every step (1 -> 2h -> 1x3 -> 2x2 -> 2x3),
+        // refitting every live xterm each time. Counts existing terminals too: open-all
+        // is a top-up, so `created` alone under-sizes the grid whenever the operator
+        // already had panes open.
+        let plannedTotal = liveCount;
+        for (const [role, count] of wanted.entries()) {
+            plannedTotal += Math.max(0, count - (liveByRole.get(role) || 0));
+        }
+        // Gate on there being something to create. Pressing the button on a fleet that
+        // already exceeds the picked layout must NOT override that pick: the operator
+        // may have collapsed to `1` on purpose, and the tail below persists only when
+        // work happened — so an ungated grow would move the grid now and revert it on
+        // reload. Grow only when new terminals are actually coming.
+        const grew = plannedTotal > liveCount ? growLayoutForFleet(plannedTotal) : false;
 
         let created = 0;
         for (const [role, count] of wanted.entries()) {
@@ -3795,7 +4053,26 @@
                         const data = await res.json();
                         if (data && data.success) {
                             created++;
-                            if (data.terminal) { armStartupCurtain(data.terminal.friendlyName, hasCommand[role] === true); }
+                            if (data.terminal) {
+                                // Adopt the new terminal into fleetList immediately.
+                                // fillEmptyPanes() reads fleetList, and for a role with
+                                // no startup command this response can beat the
+                                // terminalsChanged refetch. Partial projection
+                                // ({friendlyName, role, status}) is safe here only
+                                // because open-all posts no cwd/worktreePath — see the
+                                // Edge-Case audit before reusing this elsewhere.
+                                if (!fleetList.some(t => t.friendlyName === data.terminal.friendlyName)) {
+                                    fleetList.push(data.terminal);
+                                }
+                                // Arm BEFORE seating, so the seat's renderPaneGrid() is
+                                // what paints the curtain. Do not flip this order.
+                                armStartupCurtain(data.terminal.friendlyName, hasCommand[role] === true);
+                                // Seat NOW, so each terminal appears as it is born
+                                // instead of the whole batch landing seconds later.
+                                // persist:false — saveLayoutSettings() is 11 POSTs and
+                                // the single call below covers the whole batch.
+                                fillEmptyPanes({ persist: false });
+                            }
                         }
                         else if (data && data.error) { console.warn(`[Terminals] Open all: ${role} rejected:`, data.error); }
                     }
@@ -3805,23 +4082,43 @@
             }
         }
 
+        // Keep this the FIRST fetchTerminalList call in the function:
+        // multi-parent-terminals-contract.test.js:257 slices the open-all body from the
+        // function header to this exact line and asserts the create payload inside it.
         await fetchTerminalList();
-        if (created > 0) { fillEmptyPanes(); }
+        if (created > 0 || grew) {
+            // persist:false, then one explicit save. The trailing call normally finds
+            // nothing unseated (the loop seated everything) and returns at its first
+            // guard, so leaving persistence to it would drop the batch entirely; and
+            // letting it persist AND calling saveLayoutSettings() would write 22 POSTs.
+            const unseated = fillEmptyPanes({ persist: false });
+            saveLayoutSettings();
+            if (unseated > 0) {
+                // Never silent. The old behaviour created six terminals, seated four,
+                // and said nothing — which is what "why has this failed so hard" was
+                // actually about.
+                showPaneToast(`${unseated} terminal${unseated === 1 ? '' : 's'} could not be seated — open from the sidebar or pick a larger layout.`);
+            }
+        }
     }
 
     /**
      * Seat unassigned terminals into whatever rendered panes are still empty.
      *
-     * Open-all can spawn more terminals than there are panes; the remainder stay in
-     * the sidebar and the operator seats them by clicking. Deliberately does not
-     * displace anything already on screen.
+     * Returns the number of terminals still unseated, so the caller can tell the
+     * operator instead of dropping them silently.
+     *
+     * opts.persist === false skips saveLayoutSettings(). Open-all calls this once per
+     * create and persists once at the end; 11 setting POSTs per terminal is not a
+     * cost worth paying six times over for a batch that settles in one place.
      */
-    function fillEmptyPanes() {
+    function fillEmptyPanes(opts) {
+        const persist = !opts || opts.persist !== false;
         const slotCount = getSlotCount(effectiveLayout);
         const unseated = fleetList
             .filter(t => t.status !== 'exited' && !paneAssignments.includes(t.friendlyName))
             .map(t => t.friendlyName);
-        if (unseated.length === 0) { return; }
+        if (unseated.length === 0) { return 0; }
 
         let changed = false;
         for (let i = 0; i < slotCount && unseated.length > 0; i++) {
@@ -3834,12 +4131,13 @@
                 changed = true;
             }
         }
-        if (!changed) { return; }
+        if (!changed) { return unseated.length; }
         if (!activeTerminalName) { activeTerminalName = paneAssignments[focusedPaneIndex] || null; }
-        saveLayoutSettings();
+        if (persist) { saveLayoutSettings(); }
         renderSidebarList();
         renderPaneGrid();
         batchFitVisiblePanes();
+        return unseated.length;
     }
 
     async function renameTerminal(name, alias) {

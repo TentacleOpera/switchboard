@@ -10261,19 +10261,30 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 // the "copy prompt" counterpart to moveSelected's "send to terminal".
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
-                if (!Array.isArray(msg.sessionIds) || msg.sessionIds.length === 0) {
-                    void this._seams().ui.showWarningMessage('Please select at least one plan to copy the dispatch prompt.');
-                    return { success: false, error: 'Please select at least one plan to copy the dispatch prompt.' };
-                }
                 const column: string = msg.column || 'PLAN REVIEWED';
-                let sourceCards = this._lastCards.filter(card => card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds));
-                if (sourceCards.length === 0) {
-                    const dbCards = await this._buildCardsFromDbSessionIds(workspaceRoot, msg.sessionIds);
-                    if (dbCards.length === 0) {
-                        void this._seams().ui.showInformationMessage('No matching plans found for prompt generation.');
-                        return { success: false, error: 'No matching plans found for prompt generation.' };
+                let sourceCards: KanbanCard[];
+                if (Array.isArray(msg.sessionIds) && msg.sessionIds.length > 0) {
+                    sourceCards = this._lastCards.filter(card => card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds));
+                    if (sourceCards.length === 0) {
+                        const dbCards = await this._buildCardsFromDbSessionIds(workspaceRoot, msg.sessionIds);
+                        if (dbCards.length === 0) {
+                            void this._seams().ui.showInformationMessage('No matching plans found for prompt generation.');
+                            return { success: false, error: 'No matching plans found for prompt generation.' };
+                        }
+                        sourceCards = dbCards;
                     }
-                    sourceCards = dbCards;
+                } else {
+                    // No selection = the whole column, scoped to the caller's own project
+                    // filter — the same default the Analyze button uses. An empty selection
+                    // is not an error; the button is a batch, not a selection gate.
+                    const copyScope: string | null =
+                        msg.initiatorProject === undefined ? null : msg.initiatorProject;
+                    sourceCards = this._visibleColumnCards(workspaceRoot, column)
+                        .filter(card => this._cardMatchesProjectFilter(card, copyScope));
+                    if (sourceCards.length === 0) {
+                        void this._seams().ui.showInformationMessage(`No plans in ${column} to copy a dispatch prompt for.`);
+                        return { success: false, error: `No plans in ${column} to copy a dispatch prompt for.` };
+                    }
                 }
                 const nextCol = await this._getNextColumnId(column, workspaceRoot);
                 const prompt = await this._generatePromptForColumn(sourceCards, column, workspaceRoot, nextCol ?? undefined);

@@ -392,9 +392,11 @@ export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
             targetProject: { type: 'string' },
         },
     },
+    // sessionIds is OPTIONAL: omitting it copies the prompt for the whole column
+    // (scoped to the caller's project filter), the same default dispatchAnalyze uses.
     copyDispatchPromptSelected: {
         fields: {
-            sessionIds: { type: 'array', required: true },
+            sessionIds: { type: 'array' },
             column: { type: 'string' },
             workspaceRoot: { type: 'string' },
         },
@@ -971,6 +973,12 @@ const TICKETS_VERB_SCHEMAS: Record<string, VerbSchema> = {
     },
     ticketsDefaultRoot: {
         fields: {},
+    },
+    setTicketsAutoSync: {
+        fields: {
+            enabled: { type: 'boolean', required: true },
+            workspaceRoot: { type: 'string' },
+        },
     },
     // ── 2d: ticket detail + mutation schemas moved from PLANNING_VERB_SCHEMAS ──
     // Re-parents one REMOTE ticket under another (ClickUp `parent` / Linear

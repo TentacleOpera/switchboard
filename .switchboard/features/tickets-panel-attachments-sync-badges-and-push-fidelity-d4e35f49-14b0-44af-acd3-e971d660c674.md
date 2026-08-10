@@ -30,6 +30,6 @@ The unifying failure is the same class of mistake in four places: the panel *inf
 - [ ] [Tickets panel still presents remote attachments as local files](../plans/feature_plan_20260807161808_tickets-remote-attachments-presented-as-local-files.md) — **PLAN REVIEWED**
 - [ ] [Subtask cards in the Tickets sidebar always read "local" — their sync status is never fetched](../plans/feature_plan_20260807161809_tickets-subtask-drilldown-sync-badge-always-local.md) — **PLAN REVIEWED**
 - [ ] [Ticket push silently drops everything below a `## Subtasks` heading, even the ticket's own](../plans/feature_plan_20260807161810_ticket-push-truncates-at-any-subtasks-heading.md) — **PLAN REVIEWED**
-- [ ] [Refetching a ticket replaces its local inline image paths with remote URLs that don't render](../plans/feature_plan_20260808143000_ticket-refetch-replaces-local-inline-images-with-remote-urls.md) — **CREATED**
+- [ ] [Refetching a ticket replaces its local inline image paths with remote URLs that don't render](../plans/feature_plan_20260808143000_ticket-refetch-replaces-local-inline-images-with-remote-urls.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
 

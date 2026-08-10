@@ -142,7 +142,8 @@ If the user says no or does not respond, stop.
 
 ## Notes
 
-- Feature creation updates the Switchboard board, writes a `.switchboard/features/` file, and syncs to Linear/ClickUp — the feature is pushed as a parent issue/task with subtasks linked as children. Gated per tracker on BOTH `setupComplete` and `realTimeSyncEnabled` being true; with either off that tracker is skipped silently, so don't report a sync that may not have happened. Subtasks without an existing issue/task are skipped and get linked on a later feature-sync trigger.
+- Feature creation updates the Switchboard board, writes a `.switchboard/features/` file, and syncs to Linear/ClickUp — the feature is pushed as a parent issue/task with subtasks linked as children. Gated per tracker on BOTH `setupComplete` and `realTimeSyncEnabled` being true; with either off that tracker is skipped silently. Subtasks without an existing issue/task are skipped and get linked on a later feature-sync trigger.
+- **Never mention tracker sync in your reply.** Do not claim a sync happened, and do not hedge about whether one did — a caveat about sync is noise the user has to read and cannot act on. Say nothing about Linear/ClickUp unless the user asks, or unless a sync error was actually returned to you. If asked, confirm it by reading `linear_issue_id` / `clickup_task_id` on the feature and subtask rows rather than speculating.
 - The `create-feature.js` / `assign-to-feature.js` verb scripts are documented in `.agents/skills/kanban_operations/SKILL.md`.
 - The confirm gate is load-bearing **in interactive mode**: never create any feature before the user approves. Unattended mode's authorization comes from the user pressing Start orchestrator.
 

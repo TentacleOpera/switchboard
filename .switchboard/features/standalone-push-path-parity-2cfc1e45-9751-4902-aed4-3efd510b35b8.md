@@ -22,9 +22,9 @@ This feature installs a CI guard that turns the gap into a ratcheted number, rep
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Restore the Backlog View to the Standalone (Browser) Host](../plans/restore-backlog-view-to-standalone-host.md) — **PLAN REVIEWED**
-- [ ] [Standalone Push-Parity Guard — Make "Is the Browser Host at Parity?" a CI Number](../plans/standalone-push-parity-guard.md) — **PLAN REVIEWED**
-- [ ] [Standalone State Builders Fabricate the Board Payload — Delegate to `getFullStateMessages`](../plans/standalone-state-builders-delegate-to-getfullstatemessages.md) — **PLAN REVIEWED**
+- [ ] [Restore the Backlog View to the Standalone (Browser) Host](../plans/restore-backlog-view-to-standalone-host.md) — **CODE REVIEWED**
+- [ ] [Standalone Push-Parity Guard — Make "Is the Browser Host at Parity?" a CI Number](../plans/standalone-push-parity-guard.md) — **CODE REVIEWED**
+- [ ] [Standalone State Builders Fabricate the Board Payload — Delegate to `getFullStateMessages`](../plans/standalone-state-builders-delegate-to-getfullstatemessages.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -38,3 +38,7 @@ There are ordering constraints, and they matter more than usual here — the poi
 **Prerequisites / guards.** The delegation plan must not begin until it is confirmed that `KanbanDatabase.forWorkspace` returns the same cached instance to both `bootstrap.ts:286` and `KanbanProvider._getKanbanDb` — a second DB handle would give the browser a different card set from the same file. Per the project PRD's orchestration discipline, only one agent stream may hold `src/standalone/bootstrap.ts` at a time.
 
 **Cross-feature dependencies.** None inbound. Outbound: `dispatcher-column-and-bounce-analysis.md` declares this feature's transport work as a hard prerequisite — dispatch is implemented as a display mode on the Planned column and would inherit the fabricated-payload defect verbatim, so it must not start until the delegation plan lands.
+
+## Review Findings
+
+All three subtasks reviewed in-place with regression tracing; 1 CRITICAL and 4 MAJOR fixed, nothing deferred silently. The CRITICAL was in the delegation subtask: standalone's project filter never restored from the DB because `_refreshBoardImpl` returns on `!this._panel`, so the claimed cross-restart persistence was absent and `_projectFilter` stayed at `'__unassigned__'` — fixed with a read-only seed at the composition root. Two MAJORs were in the guard itself, which matters disproportionately because the other two subtasks are "verified by a number dropping": Set B under-counted through three emission shapes (variable-bound messages, cross-provider pushes, four unscanned sibling providers), making the 13-type gap mostly phantom — the same over-report the hand counts produced — and the broadcaster assertion was a one-of-six presence regex. Both fixed; the residual 6 types are now allowlisted with reasons and the baseline lowered 13 → 0. The remaining two MAJORs were unnecessary `as any` casts over already-public scope accessors, and the total absence of the `BroadcastHub` automated checks the backlog subtask specified — now added as a 7-assertion contract test wired into CI. Files changed: `src/standalone/bootstrap.ts`, `scripts/check-standalone-push-parity.js`, `scripts/standalone-parity-allowlist.json`, `src/test/broadcast-hub-headless-contract.test.js` (new), `package.json`, `.github/workflows/integration-tests.yml`. Validation: `tsc --noEmit` clean on all touched files (5 pre-existing TS2835 errors in unmodified files remain), `standalone-parity:check` green and demonstrated red on a seeded regression, `push-routing:check` unaffected, new contract test 7/7. Remaining risk: the delegation subtask's per-field automated checks (items 1–9) and every manual browser-host UAT step across all three subtasks were not executed — field-level payload correctness still rests on the delegation assertion plus UAT.
