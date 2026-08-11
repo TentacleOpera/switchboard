@@ -137,3 +137,7 @@ For each file, largest first:
 ## Recommendation
 
 Complexity 5 → **Send to Lead Coder.** Highest false-green risk in the feature; the post-settle re-observation discipline and a workspace with a custom column are what make the verdicts real.
+
+## Review Findings
+
+Reviewed 2026-08-10. This section produced the audit's one genuinely valuable finding: BRD-087 is **confirmed** — `moveCard` is never passed into `LocalApiServer` from `bootstrap.ts`, so `LocalApiServer.ts:1322-1325` returns `{"error":"Kanban move not available"}` and the documented move endpoint is dead in standalone. Item 7 passes (BRD-088 links `standalone-kanban-column-parity-audit.md` rather than re-planning it) and item 8 passes. **Items 3 and 4 fail:** BRD-010 through BRD-023 and BRD-055 through BRD-079 are `LIVE`/class-A on *"verb available"* / *"in catalog"*, and no state-changing row records either a post-settle or a post-reload observation. **Item 6 fails:** column verdicts could not confirm a hidden role, since none was provisioned; BRD-089's write path was verified (`TaskViewerProvider.ts:10604-10611`) but its claimed read path was not, so GAP-4 is downgraded to needs-confirmation. Files changed: register only; `npm run icons:parity` (the class-B guard named in this plan) was run and **passes**, and is correctly CI-wired at `.github/workflows/integration-tests.yml:55`.

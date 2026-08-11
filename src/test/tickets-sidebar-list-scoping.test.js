@@ -157,6 +157,79 @@ function testTicketsSidebarListScoping() {
             `${name} must render its empty state through _ticketsEmptyStateCopy`
         );
     }
+
+    // ── Assertion 12: the sync badge has FOUR inputs, not three. ─────────────────
+    // `undefined` means "not fetched yet" and must not fall through to the `local`
+    // verdict — that fallback is what made every drill-down subtask card claim it was
+    // local-only when its status had simply never been requested.
+    const badgeIdx = ticketsJs.indexOf('function _ticketSyncBadge(');
+    assert.notStrictEqual(badgeIdx, -1, '_ticketSyncBadge must exist in tickets.js');
+    const badgeBody = ticketsJs.slice(badgeIdx, ticketsJs.indexOf('\n    }', badgeIdx));
+    assert.ok(
+        badgeBody.includes("=== 'local-only'"),
+        "_ticketSyncBadge must compare against 'local-only' explicitly — a bare fallback to the "
+        + 'local badge cannot distinguish "not fetched yet" from "genuinely never pushed"'
+    );
+    assert.ok(
+        /ticket-sync-pending/.test(badgeBody),
+        '_ticketSyncBadge must render a distinct pending state for an unfetched status'
+    );
+    assert.ok(
+        fs.readFileSync(path.join(__dirname, '../webview/tickets.html'), 'utf8').includes('.ticket-sync-pending'),
+        'tickets.html must style .ticket-sync-pending, or the pending badge renders unstyled'
+    );
+
+    // Assertion 13: drill-down subtask ids ride the SAME scope-stamped request. A second,
+    // unscoped request would be discarded by _isForThisPanel on the way back.
+    const reqIdx = ticketsJs.indexOf('function _requestTicketSyncStatuses()');
+    assert.notStrictEqual(reqIdx, -1, '_requestTicketSyncStatuses must exist in tickets.js');
+    const reqBody = ticketsJs.slice(reqIdx, ticketsJs.indexOf('\n    }', reqIdx));
+    assert.ok(
+        reqBody.includes('_drillDownSubtasks'),
+        '_requestTicketSyncStatuses must fold drill-down subtask ids into its id list'
+    );
+    assert.strictEqual(
+        /if \(!issues\.length\) return;/.test(reqBody), false,
+        'the top-level-only early return must be gone — with an empty filtered list and an active '
+        + 'drill-down it skipped the subtask request entirely'
+    );
+
+    // Assertion 14: the re-request inside _maybeEnterDrillDown must come AFTER
+    // `_drillDownProvider = provider`. _isDrillDownActive gates on that variable, so one
+    // line too early sends zero subtask ids and the bug survives its own fix.
+    const drillIdx = ticketsJs.indexOf('function _maybeEnterDrillDown(');
+    assert.notStrictEqual(drillIdx, -1, '_maybeEnterDrillDown must exist in tickets.js');
+    const drillBody = ticketsJs.slice(drillIdx, ticketsJs.indexOf('\n    }', ticketsJs.indexOf('_drillDownParentTitle =', drillIdx)));
+    const providerAssignIdx = drillBody.indexOf('_drillDownProvider = provider');
+    const reqCallIdx = drillBody.indexOf('_requestTicketSyncStatuses()');
+    assert.notStrictEqual(providerAssignIdx, -1, '_maybeEnterDrillDown must set _drillDownProvider');
+    assert.notStrictEqual(reqCallIdx, -1, '_maybeEnterDrillDown must re-request sync statuses for the new subtask ids');
+    assert.ok(
+        reqCallIdx > providerAssignIdx,
+        '_requestTicketSyncStatuses() must be called AFTER _drillDownProvider = provider'
+    );
+
+    // Assertion 15: the response arm patches the drill-down array itself (it is a separate
+    // array the sidebar renders from, and it survives subtask-detail loads), and the
+    // local-file rebuild does not wipe statuses already resolved.
+    const syncArmIdx = ticketsJs.indexOf("case 'ticketSyncStatusesLoaded': {");
+    assert.notStrictEqual(syncArmIdx, -1, "case 'ticketSyncStatusesLoaded' must exist in tickets.js");
+    const syncArm = ticketsJs.slice(syncArmIdx, ticketsJs.indexOf('\n            }', syncArmIdx));
+    assert.ok(
+        /_drillDownSubtasks = _drillDownSubtasks\.map/.test(syncArm),
+        'ticketSyncStatusesLoaded must splice statuses back into _drillDownSubtasks'
+    );
+    const listArmIdx = ticketsJs.indexOf("case 'localTicketFilesListed': {");
+    const listArm = ticketsJs.slice(listArmIdx, ticketsJs.indexOf("case 'localTicketFileRead':", listArmIdx));
+    assert.strictEqual(
+        /syncStatus: t\.syncStatus,/.test(listArm), false,
+        'the local-file rebuild must not carry a bare `syncStatus: t.syncStatus` — the lister emits '
+        + 'no syncStatus, so it wipes every status already resolved and the pending badge sticks'
+    );
+    assert.ok(
+        /prevSync/.test(listArm) && /_requestTicketSyncStatuses\(\)/.test(listArm),
+        'the local-file rebuild must preserve known statuses and re-request the unknown ones'
+    );
 }
 
 if (require.main === module) {

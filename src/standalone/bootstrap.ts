@@ -86,25 +86,6 @@ export interface HeadlessSwitchboardInstance {
     stop: () => Promise<void>;
 }
 
-interface KanbanCardShape {
-    planId: string;
-    sessionId: string;
-    topic: string;
-    planFile: string;
-    column: string;
-    lastActivity: string;
-    createdAt: string;
-    complexity: string;
-    workspaceRoot: string;
-    project: string;
-    worktreeId?: number;
-    isFeature: boolean;
-    featureId?: string;
-    subtaskCount?: number;
-    working: boolean;
-    blocked: boolean;
-}
-
 function log(opts: HeadlessSwitchboardOptions | undefined, ...args: any[]) {
     if (opts?.verbose) {
         console.log('[switchboard]', ...args);
@@ -125,116 +106,6 @@ function findFile(candidates: string[]): string | undefined {
 
 function htmlEscapeJson(json: string): string {
     return json.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function getNextKanbanColumn(sourceColumn: string): string | null {
-    const map: Record<string, string> = {
-        'CREATED': 'PLAN REVIEWED',
-        'RESEARCHER': 'LEAD CODED',
-        'PLAN REVIEWED': 'LEAD CODED',
-        'LEAD CODED': 'CODE REVIEWED',
-        'CODER CODED': 'CODE REVIEWED',
-        'INTERN CODED': 'CODE REVIEWED',
-        'CODE REVIEWED': 'ACCEPTANCE TESTED',
-        'ACCEPTANCE TESTED': 'COMPLETED',
-        'TICKET UPDATER': 'COMPLETED',
-    };
-    return map[sourceColumn] || null;
-}
-
-function getRoleForTargetColumn(targetColumn: string): string {
-    const col = DEFAULT_KANBAN_COLUMNS.find(c => c.id === targetColumn);
-    return col?.role || columnToPromptRole(targetColumn) || 'lead';
-}
-
-/**
- * Read-time activity-light derive (V58-widened, V59-extended to return
- * `{working, blocked}`). A card is `working` while its widened age basis —
- * `MAX(dispatchedAt, lastLivenessAt ?? dispatchedAt)` — is younger than
- * `timeoutMs`, with a `3 × timeoutMs`-from-`dispatchedAt` hard cap so a
- * wedged agent whose terminal keeps repainting cannot stay lit forever.
- *
- * `blocked` (V59) is true when `blockedAt` is non-NULL AND the card is still
- * within its working window — a cleared card is not blocked, just done. The
- * two states share one age basis and one hard cap so they never disagree at
- * the boundary. When `blockedAt` is absent (pre-V59 row, fleet-less host, or
- * no hook ever fired), `blocked` is false and the working half is
- * byte-identical to its pre-V59 self.
- *
- * `timeoutMs` is a parameter (read from the host config provider by the caller),
- * matching the converged shape — no inline `vscode.workspace.getConfiguration`.
- */
-function isWorkingState(
-    dispatchedAt: string | null | undefined,
-    timeoutMs: number,
-    lastLivenessAt?: string | null,
-    blockedAt?: string | null
-): { working: boolean; blocked: boolean } {
-    if (!dispatchedAt) return { working: false, blocked: false };
-    const ts = Date.parse(dispatchedAt);
-    if (!Number.isFinite(ts)) return { working: false, blocked: false };
-    const now = Date.now();
-    const withinHardCap = now - ts <= 3 * timeoutMs;
-    const livenessTs = lastLivenessAt ? Date.parse(lastLivenessAt) : NaN;
-    const basis = Number.isFinite(livenessTs) && (livenessTs as number) > ts ? (livenessTs as number) : ts;
-    const working = withinHardCap && (now - basis) < timeoutMs;
-    const blocked = working && !!blockedAt;
-    return { working, blocked };
-}
-
-async function buildBoardCards(db: KanbanDatabase, workspaceId: string, root: string, config: StandaloneHostPathConfigProvider): Promise<KanbanCardShape[]> {
-    const dbReady = await db.ensureReady();
-    if (!dbReady) return [];
-
-    const hotWindowDays = KanbanDatabase.getHotWindowDays();
-    const completedLimit = parseInt(config.getConfigString('kanban.completedLimit'), 10) || 100;
-    const timeoutMs = parseInt(config.getConfigString('activityLight.timeoutMs'), 10) || 600000;
-
-    const activeRows = (await db.getBoard(workspaceId)).filter(row => {
-        const planFile = row.planFile || '';
-        if (!planFile) return false;
-        let planPath = planFile;
-        if (planPath.startsWith('file://')) {
-            try { planPath = new URL(planPath).pathname; } catch { planPath = planPath.replace(/^file:\/\/\/?/, ''); }
-            if (process.platform !== 'win32' && !planPath.startsWith('/')) { planPath = '/' + planPath; }
-        }
-        const resolvedPath = path.isAbsolute(planPath) ? planPath : path.resolve(root, planPath);
-        return fs.existsSync(resolvedPath);
-    });
-
-    const completedRecords = await db.getCompletedPlansInHotWindow(workspaceId, hotWindowDays, completedLimit);
-    const subtaskCountMap = await db.getSubtaskCountsByFeature(workspaceId);
-    const featureWorkingMap = await db.getFeatureWorkingStates(workspaceId, timeoutMs);
-
-    const toCard = (row: any, overrideColumn?: string): KanbanCardShape => {
-        const column = overrideColumn || row.kanbanColumn || 'CREATED';
-        const featureState = row.isFeature ? featureWorkingMap.get(row.planId) : undefined;
-        const cardState = row.isFeature
-            ? { working: featureState?.working ?? false, blocked: featureState?.blocked ?? false }
-            : isWorkingState(row.dispatchedAt, timeoutMs, row.lastLivenessAt, row.blockedAt);
-        return {
-            planId: row.planId,
-            sessionId: row.sessionId,
-            topic: row.topic || row.planFile || 'Untitled',
-            planFile: row.planFile || '',
-            column,
-            lastActivity: row.updatedAt || row.createdAt || '',
-            createdAt: row.createdAt || '',
-            complexity: row.complexity || 'Unknown',
-            workspaceRoot: root,
-            project: row.project || '',
-            worktreeId: row.worktreeId,
-            isFeature: !!row.isFeature,
-            featureId: row.featureId || undefined,
-            subtaskCount: row.isFeature ? (subtaskCountMap.get(row.planId) || 0) : undefined,
-            working: cardState.working,
-            blocked: cardState.blocked,
-        };
-    };
-
-    const cards = activeRows.map(r => toCard(r));
-    cards.push(...completedRecords.map(r => toCard(r, 'COMPLETED')));
-    return cards;
 }
 
 async function buildPromptForCards(role: string, records: any[], root: string): Promise<string | null> {
@@ -405,6 +276,18 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
 
             for (const msg of baseState) {
                 if (msg.type === 'updateBoard') {
+                    // Prime _lastCards from the board push so delegated verbs
+                    // (moveAll, promptAll) can resolve their card set. The
+                    // extension populates _lastCards via the editor refresh path
+                    // (KanbanProvider.ts:1990); standalone never runs that path,
+                    // so without this priming delegated moveAll/promptAll would
+                    // return a plausible-but-wrong "no plans in column" instead
+                    // of working. The assignment lives here (standalone-side),
+                    // not inside getFullStateMessages, so the shipped provider
+                    // is untouched.
+                    if (Array.isArray((msg as any).cards)) {
+                        (kanbanProvider as any)._lastCards = (msg as any).cards;
+                    }
                     // Scope-dependent: broadcast as a factory so wsHub renders
                     // routingConfig per declared scope, matching the extension's
                     // factory-form push (KanbanProvider.ts:2067-2076). Override the
@@ -445,6 +328,11 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         // callback. Replaces hand-built literals with live state.
         const baseState = await kanbanProvider.getFullStateMessages(workspaceRoot, scope);
         if (!baseState || baseState.length === 0) { return []; }
+        // Prime _lastCards from the updateBoard entry (same as pushFullState).
+        const boardMsg = baseState.find((m: any) => m.type === 'updateBoard');
+        if (boardMsg && Array.isArray((boardMsg as any).cards)) {
+            (kanbanProvider as any)._lastCards = (boardMsg as any).cards;
+        }
         // Theme entry (not produced by getFullStateMessages) — from the resolved
         // setting with an explicit 'afterburner' fallback. Tagged SURFACES.common
         // so it reaches every standalone panel, not just the board.
@@ -876,12 +764,16 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         }
         return true;
     });
-    switchboardCommandRegistry.register('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, targetRoot?: string) => {
+    switchboardCommandRegistry.register('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, targetRoot?: string, terminalName?: string) => {
         if (!ptyReady) {
             return { success: false, error: 'PTY terminals are unavailable: node-pty module could not be loaded on this machine.' };
         }
-        return await handlePtyVerb('triggerAction', { role, sessionId, instruction }, targetRoot || workspaceRoot);
+        return await handlePtyVerb('triggerAction', { role, sessionId, instruction, terminalName }, targetRoot || workspaceRoot);
     });
+    // `_apiOriginated` is a DEAD SLOT held on purpose, mirroring extension.ts: the
+    // surface flag is gone, but closing the slot up would land a boolean in
+    // `analysisScope` at every KanbanProvider call site, with no compile error
+    // (the command registry is untyped). Both hosts must keep or drop it together.
     switchboardCommandRegistry.register('switchboard.triggerBatchAgentFromKanban', async (role: string, sessionIds: string[], instruction?: string, targetRoot?: string, terminalName?: string, _apiOriginated?: boolean, analysisScope?: string | null) => {
         if (!ptyReady) {
             return { success: false, error: 'PTY terminals are unavailable: node-pty module could not be loaded on this machine.' };
@@ -892,7 +784,18 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     switchboardCommandRegistry.register('revealInExplorer', async () => undefined);
     switchboardCommandRegistry.register('vscode.open', async () => undefined);
 
-    const moveSessionsToColumn = async (sessionIds: string[], sourceColumn: string, targetColumn: string) => {
+    // Attachments. Registered ONLY in extension.ts before this change (lines 2096/2101), so the
+    // standalone host's registry-first command seam fell through to vscodeShim's no-op
+    // and viewAttachments returned success with no data — a faked success (contract #6)
+    // and a missing Layer 2 (contract #7).
+    switchboardCommandRegistry.register('switchboard.getAttachmentList', async (data: any) =>
+        await taskViewerProvider.getAttachmentList(
+            data.workspaceRoot || workspaceRoot, data.provider, data.ticketId, data.attachmentsArray
+        ));
+    switchboardCommandRegistry.register('switchboard.downloadAttachment', async (data: any) =>
+        await taskViewerProvider.downloadAttachment(data.workspaceRoot || workspaceRoot, data));
+
+    const moveSessionsToColumn = async (sessionIds: string[], targetColumn: string) => {
         for (const sid of sessionIds) {
             const plan = await db.getPlanBySessionId(sid);
             if (!plan) continue;
@@ -937,90 +840,14 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                     return { success: true };
                 }
 
-                case 'moveSelected':
-                case 'moveAll': {
-                    const column: string = payload.column;
-                    const sessionIds: string[] = Array.isArray(payload.sessionIds) ? payload.sessionIds : [];
-                    if (!column || sessionIds.length === 0) {
-                        return { success: false, error: 'Missing column or sessionIds' };
-                    }
-                    const nextCol = getNextKanbanColumn(column);
-                    if (!nextCol) { return { success: false, error: `No next column from ${column}` }; }
-
-                    // Dispatch variant: in the extension these buttons move the cards
-                    // AND fire the target column's drop action (the move↔dispatch
-                    // coupling). A column dispatches when its drop mode is 'cli' and it
-                    // has a role; 'prompt' columns are copy-only and stay move-only.
-                    // Custom columns are not in DEFAULT_KANBAN_COLUMNS, so they keep the
-                    // conservative move-only behaviour rather than silently dispatching.
-                    const targetDef = DEFAULT_KANBAN_COLUMNS.find(c => c.id === nextCol);
-                    const isDispatchColumn = !!targetDef && targetDef.dragDropMode === 'cli' && !!targetDef.role;
-                    if (ptyReady && isDispatchColumn) {
-                        // triggerAction performs the move itself, so don't move twice.
-                        return await handlePtyVerb('triggerAction', { ...payload, column, sessionIds }, root);
-                    }
-
-                    await moveSessionsToColumn(sessionIds, column, nextCol);
-                    server.broadcastWs('moveCards', { sessionIds, targetColumn: nextCol }, SURFACES.kanban);
-                    server.broadcastWs('showStatusMessage', { message: `Moved ${sessionIds.length} plan(s) to ${nextCol}.`, isError: false }, SURFACES.common);
-                    return { success: true, column, targetColumn: nextCol, moved: sessionIds.length };
-                }
-
-                case 'promptSelected':
-                case 'promptAll': {
-                    const column: string = payload.column;
-                    let sessionIds: string[] = Array.isArray(payload.sessionIds) ? payload.sessionIds : [];
-                    if (!column) { return { success: false, error: 'Missing column' }; }
-                    const nextCol = getNextKanbanColumn(column);
-                    if (!nextCol) { return { success: false, error: `No next column from ${column}` }; }
-
-                    const workspaceId = await getWorkspaceId();
-                    if (!workspaceId) { return { success: false, error: 'No workspace ID' }; }
-
-                    if (verb === 'promptAll' && sessionIds.length === 0) {
-                        const columnPlans = await db.getPlansByColumn(workspaceId, column, kanbanProvider.getProjectFilter());
-                        sessionIds = columnPlans.map(p => p.sessionId).filter(Boolean);
-                    }
-
-                    const records: any[] = [];
-                    for (const sid of sessionIds) {
-                        const plan = await db.getPlanBySessionId(sid);
-                        if (plan) records.push(plan);
-                    }
-                    if (records.length === 0) { return { success: false, error: 'No matching plans' }; }
-
-                    const role = getRoleForTargetColumn(nextCol);
-                    const prompt = await buildPromptForCards(role, records, root);
-
-                    await moveSessionsToColumn(sessionIds, column, nextCol);
-                    server.broadcastWs('moveCards', { sessionIds, targetColumn: nextCol }, SURFACES.kanban);
-                    server.broadcastWs('showStatusMessage', { message: `Copied prompt for ${records.length} plan(s) and advanced to ${nextCol}.`, isError: false }, SURFACES.common);
-                    return { success: true, prompt, targetColumn: nextCol };
-                }
-
-                case 'chatCopyPrompt': {
-                    const sessionIds: string[] = Array.isArray(payload.sessionIds) ? payload.sessionIds : [];
-                    const workspaceId = await getWorkspaceId();
-                    if (!workspaceId) return { success: false, error: 'No workspace ID' };
-                    const records: any[] = [];
-                    if (sessionIds.length > 0) {
-                        for (const sid of sessionIds) { const p = await db.getPlanBySessionId(sid); if (p) records.push(p); }
-                    } else {
-                        records.push(...(await db.getBoard(workspaceId)).slice(0, 20));
-                    }
-                    const prompt = await buildPromptForCards('analyst', records, root);
-                    return { success: true, prompt };
-                }
-
-                case 'completePlan':
-                case 'completeSelected': {
-                    const sessionIds: string[] = Array.isArray(payload.sessionIds) ? payload.sessionIds : (payload.sessionId ? [payload.sessionId] : []);
-                    if (sessionIds.length === 0) { return { success: false, error: 'No sessionIds' }; }
-                    await moveSessionsToColumn(sessionIds, 'ACCEPTANCE TESTED', 'COMPLETED');
-                    server.broadcastWs('moveCards', { sessionIds, targetColumn: 'COMPLETED' }, SURFACES.kanban);
-                    server.broadcastWs('showStatusMessage', { message: `Completed ${sessionIds.length} plan(s).`, isError: false }, SURFACES.common);
-                    return { success: true };
-                }
+                // moveSelected/moveAll, promptSelected/promptAll, chatCopyPrompt,
+                // completePlan/completeSelected: deleted — these forked cases are
+                // now handled by the default: arm, which delegates to
+                // kanbanProvider.handleServiceVerb → the real provider arms. This
+                // closes all seven confirmed standalone/extension divergences:
+                // complexity routing, cascade, run-sheet writes, the CLI-triggers
+                // gate, completion status, moveAll with no sessionIds, and
+                // CODE REVIEWED advancing into a hidden column.
 
                 case 'createPlan': {
                     // Headless Ingestion piece 2: create a draft plan then ingest it via the
@@ -1379,6 +1206,16 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 }
 
                 case 'triggerAction': {
+                    // CLI-triggers gate — mirrors KanbanProvider.ts:8153. An
+                    // API-originated dispatch (POST /kanban/dispatch) passes
+                    // bypassTriggerGate: true; a board drag-drop respects the
+                    // setting. Without this gate the standalone host dispatches
+                    // regardless of the toggle while the board UI reports it off.
+                    const cliTriggersEnabled = kanbanProvider._getScopedSetting<boolean>('kanban.cliTriggersEnabled', true);
+                    if (!cliTriggersEnabled && !payload?.bypassTriggerGate) {
+                        return { success: false, error: 'CLI triggers are disabled' };
+                    }
+
                     const sourceColumn: string | undefined = payload.column;
                     const explicitTarget: string | undefined = payload.targetColumn;
                     const planFile: string | undefined = payload.planFile;
@@ -1405,8 +1242,19 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     }
                     if (records.length === 0) { return { success: false, error: 'No matching plans' }; }
 
-                    const targetColumn = explicitTarget || (sourceColumn ? getNextKanbanColumn(sourceColumn) : null);
-                    const targetRole = payload.role || (targetColumn ? getRoleForTargetColumn(targetColumn) : 'coder');
+                    // The target column must come from the caller — every
+                    // board-initiated dispatch supplies targetColumn or role.
+                    // The source-column fallback (getNextKanbanColumn) is gone:
+                    // it was a silent map lookup that duplicated the extension's
+                    // _getNextColumnId with no visibility awareness. If no
+                    // explicit target is supplied, fail honestly.
+                    const targetColumn = explicitTarget || null;
+                    if (!targetColumn && !payload.role) {
+                        return { success: false, error: 'Missing targetColumn or role for dispatch' };
+                    }
+                    const targetRole = payload.role || (targetColumn
+                        ? (DEFAULT_KANBAN_COLUMNS.find(c => c.id === targetColumn)?.role || columnToPromptRole(targetColumn) || 'lead')
+                        : 'coder');
                     // Instruction parity with the extension host. buildPromptForCards has no
                     // notion of `instruction`, so without this arm the Analyze button in the
                     // browser silently delivers a normal planner prompt (plan bodies inlined,
@@ -1427,19 +1275,33 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     const activeWorktrees = await db.getWorktrees();
                     const matchedWtPath = records[0] ? matchWorktreePath(activeWorktrees, records[0]) : undefined;
 
-                    // Mirrors _findTerminalNameByWorktreePathAndRole's strictRole
-                    // semantics (TaskViewerProvider.ts:7747-7778): exact role+worktree
-                    // first, then ANY role already living in that worktree. Without the
-                    // path-only fallback a worktree holding one agent spawns a second
-                    // terminal in the same checkout on every differently-routed dispatch.
+                    // Terminal resolution (mirrors TaskViewerProvider's
+                    // targetTerminalOverride → role+worktree fallback chain):
+                    // 1. If the caller supplied terminalName (targetTerminalOverride),
+                    //    look up that specific terminal by friendlyName — a drag
+                    //    with an explicit terminal override must reach it, not spawn
+                    //    a fresh one. This closes the single-card parity gap where
+                    //    the extension host honored the override but standalone
+                    //    silently discarded it.
+                    // 2. Else, match by role+worktree (strictRole semantics,
+                    //    TaskViewerProvider.ts:7747-7778): exact role+worktree first,
+                    //    then ANY role already living in that worktree.
+                    // 3. Else, create a new terminal.
                     const active = ptyFleetService.listActive();
-                    let terminal = matchedWtPath
-                        ? active.find(t => t.worktreePath === matchedWtPath && t.role === targetRole)
-                            || active.find(t => t.worktreePath === matchedWtPath)
-                        : active.find(t => t.role === targetRole);
+                    let terminal: any;
+                    const overrideName: string | undefined = payload.terminalName;
+                    if (overrideName) {
+                        terminal = active.find(t => t.friendlyName === overrideName);
+                    }
+                    if (!terminal) {
+                        terminal = matchedWtPath
+                            ? active.find(t => t.worktreePath === matchedWtPath && t.role === targetRole)
+                                || active.find(t => t.worktreePath === matchedWtPath)
+                            : active.find(t => t.role === targetRole);
+                    }
 
                     if (!terminal) {
-                        terminal = await ptyFleetService.create(targetRole, undefined, matchedWtPath || root, matchedWtPath);
+                        terminal = await ptyFleetService.create(targetRole, overrideName, matchedWtPath || root, matchedWtPath);
                     }
 
                     await sendPromptToPty(terminal, prompt, getPromptDeliveryOptions());
@@ -1461,7 +1323,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     if (targetColumn && sessionIds.length > 0) {
                         const moveFrom = sourceColumn || records[0]?.kanbanColumn;
                         if (moveFrom && moveFrom !== targetColumn) {
-                            await moveSessionsToColumn(sessionIds, moveFrom, targetColumn);
+                            await moveSessionsToColumn(sessionIds, targetColumn);
                             server.broadcastWs('moveCards', { sessionIds, targetColumn }, SURFACES.kanban);
                         }
                     }

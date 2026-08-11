@@ -55,8 +55,16 @@ export class KanbanMigration {
             }
 
             const remappedColumn = KanbanMigration._normalizeLegacyCodedColumn(row.kanbanColumn, row.lastAction);
-            const updated = await db.updateColumn(row.sessionId, remappedColumn);
-            if (!updated) {
+            // Reason-carrying form so the one outcome class that CHANGED meaning does
+            // not newly abort a shipped-install migration. `updateColumnByPlanFile` now
+            // inspects rows-modified, so a plan whose stored `plan_file` does not match
+            // `_ensureRelativePlanFile`'s output (the `needs_path_fix = 1` rows) returns
+            // `no_rows_matched` where it previously returned `true`. That row was never
+            // actually migrated either way — but aborting here would leave the schema
+            // version permanently un-stamped for that workspace. Skip it; every other
+            // failure class still aborts exactly as before.
+            const outcome = await db.updateColumnWithReason(row.sessionId, remappedColumn);
+            if (!outcome.ok && outcome.reason !== 'no_rows_matched') {
                 return false;
             }
         }

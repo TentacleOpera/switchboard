@@ -283,6 +283,10 @@
             color: #f85149;
             background: color-mix(in srgb, #f85149 12%, transparent);
         }
+        /* The sidebar row's `clear` shares .btn-unassign-pane's rules outright
+           (line 809) rather than getting a same-valued copy: two definitions of
+           one button language drift the first time either is touched. It carries
+           only the one declaration that differs — see .item-clear-btn there. */
         .toolbar-actions {
             display: flex;
             align-items: center;
@@ -338,6 +342,41 @@
             overflow: hidden;
             text-overflow: ellipsis;
         }
+        /* Name + inline edit affordance. min-width:0 on the name is load-bearing:
+           it is what lets the name ellipsize instead of pushing the pencil out of
+           the 220px sidebar. */
+        .item-name-row {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            min-width: 0;
+        }
+        .item-name-row .item-name { min-width: 0; flex: 1; }
+        /* beginInlineRename swaps .item-name for .item-name-input in this row, and
+           that input is width:100% — it needs the same flex treatment or it
+           overflows and displaces the pencil mid-edit. */
+        .item-name-row .item-name-input { min-width: 0; flex: 1; width: auto; }
+        .item-edit-btn {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 16px;
+            height: 16px;
+            padding: 0;
+            background: none;
+            border: none;
+            border-radius: 3px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            opacity: 0.55;
+            transition: all 0.15s;
+        }
+        .item-edit-btn:hover {
+            opacity: 1;
+            color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 12%, transparent);
+        }
         .item-role {
             font-size: 10px;
             color: var(--text-secondary);
@@ -365,24 +404,53 @@
             object-fit: contain;
             pointer-events: none;
         }
-        .status-dot {
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            background: #4ec9b0;
+        /* Row close. Occupies the slot the status dot held — the row's most
+           reachable point — because ending the process is the row's most
+           consequential action and used to be its least visible control (a 10px
+           borderless `close` link, third in a strip of three lookalikes).
+           Fires immediately on click: this codebase does not gate destructive
+           buttons behind confirms, it makes them hard to misclick instead — hence
+           the fixed 16px box and danger colour on hover only. No margin: the dot
+           sat flush against the row's 10px padding edge and the × keeps that
+           alignment. */
+        .item-close-btn {
+            flex-shrink: 0;
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            background: none;
+            border: none;
+            border-radius: 3px;
+            color: var(--text-secondary);
+            font-size: 14px;
+            line-height: 1;
+            font-family: inherit;
+            cursor: pointer;
+            opacity: 0.6;
+            transition: all 0.15s;
         }
-        .status-dot.exited {
-            background: #f85149;
+        .item-close-btn:hover {
+            opacity: 1;
+            color: #f85149;
+            background: color-mix(in srgb, #f85149 14%, transparent);
         }
-        /* Always visible. Hover-reveal put the three destructive-ish actions
-           underneath a cursor that was already moving, and hid them from anyone
-           who never hovered. The sidebar shows locate/clear unconditionally and
-           disables what is unavailable; do the same. */
+        /* Exited rows: the state the deleted red dot used to carry, now in the
+           name/subline text plus this dimming. Opacity, not colour — it must
+           compose with `.terminal-item.assigned .item-name` (line 871), which
+           sets colour. */
+        .terminal-item.is-exited .item-name,
+        .terminal-item.is-exited .item-role { opacity: 0.55; }
+        /* Always visible. Hover-reveal put a destructive action underneath a cursor
+           that was already moving, and hid it from anyone who never hovered. Now a
+           single bordered `clear`; `rename` moved to the pencil beside the name and
+           `close` to the × at the row's right edge. */
         .item-actions {
             display: flex;
-            gap: 2px;
+            gap: 4px;
             flex-wrap: wrap;
-            margin-left: -6px;
         }
         .terminals-main {
             flex: 1;
@@ -703,7 +771,12 @@
             flex-shrink: 0;
         }
         /* No .is-input-live rule: the live state renders no chip at all — see
-           syncInputStateChip. Only the two states an operator must act on. */
+           syncInputStateChip. The other three each say something the operator
+           cannot otherwise see. */
+        .is-input-queued .pane-input-state {
+            color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 12%, transparent);
+        }
         .is-input-connecting .pane-input-state {
             color: var(--state-connecting);
             background: color-mix(in srgb, var(--state-connecting) 12%, transparent);
@@ -729,7 +802,12 @@
             gap: 2px;
             flex-shrink: 0;
         }
-        .btn-unassign-pane {
+        /* Also worn by the sidebar row's `clear` (.item-clear-btn). ONE bordered
+           small-button language for the panel: a box that reads as pressable at
+           10px on black, which .locate-btn does not. The row variant differs by a
+           single declaration (padding), which follows this block. */
+        .btn-unassign-pane,
+        .item-clear-btn {
             background: transparent;
             border: 1px solid var(--border-color);
             color: var(--text-secondary);
@@ -742,11 +820,16 @@
             cursor: pointer;
             transition: all 0.2s;
         }
-        .btn-unassign-pane:hover:not(:disabled) {
+        /* Roomier than the pane-header buttons: the sidebar row has the horizontal
+           space the terse pane headers do not. */
+        .item-clear-btn { padding: 3px 8px; }
+        .btn-unassign-pane:hover:not(:disabled),
+        .item-clear-btn:hover:not(:disabled) {
             color: var(--accent-teal);
             border-color: var(--accent-teal);
         }
-        .btn-unassign-pane:disabled {
+        .btn-unassign-pane:disabled,
+        .item-clear-btn:disabled {
             opacity: 0.4;
             cursor: default;
         }
@@ -852,6 +935,12 @@
             font-weight: 700;
             padding: 1px 5px;
             border-radius: 3px;
+        }
+        /* Semantic status, not brand accent — a gap is a warning, and reusing
+           --accent-teal would make a lost-output notice look like DONE. Same token
+           family and same reasoning as the input-state chip. */
+        .pane-badge.is-gap {
+            background: var(--state-connecting);
         }
         .pane-content {
             flex: 1;
@@ -1207,6 +1296,12 @@
             padding: 0;
         }
         .toast-close:hover { color: var(--text-primary); }
+        .completion-toast.is-error {
+            border-color: var(--state-readonly);
+        }
+        .completion-toast.is-error .toast-title {
+            color: var(--state-readonly);
+        }
 
         .layout-fallback-banner {
             background: rgba(248, 81, 73, 0.15);

@@ -155,3 +155,7 @@ Verbatim, so every section subtask is bound by them. **The register header is th
 ## Recommendation
 
 Complexity 4 → **Send to Coder.** Mechanically simple, but it sets the conditions every other subtask depends on; a stale build, a single rebuilt artefact, or a thin workspace invalidates the whole feature.
+
+## Review Findings
+
+Reviewed 2026-08-10. The register exists at `.switchboard/audits/standalone-extension-parity.md` with the row schema and evidence-rules block, so items 1 and 7 of the Verification Plan pass — but three harness preconditions failed and the audit proceeded anyway. **Item 2 fails:** the header records `VSIX: Not rebuilt`, so only one of the two required artefacts exists and "Open in Browser" was never launched, leaving every per-host divergence row unobservable. **Item 5 fails:** the scratch workspace carried only a custom column and ClickUp keys — no plans, features, worktrees, configured project or hidden role — and this directly manufactured one false-positive gap (REF-024) and one avoidable `BLOCKED` row (REF-023). Additionally the header widened evidence class A to admit `curl` responses and invented a `BLOCKED-visual` verdict, so no browser was ever driven and class A no longer means what this subtask defined it to mean. Files changed: register header now carries a **Harness deviations** block stating all three; no source code was touched by this subtask.

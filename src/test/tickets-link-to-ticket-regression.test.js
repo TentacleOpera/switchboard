@@ -5,57 +5,102 @@ const fs = require('fs');
 const path = require('path');
 
 function run() {
-    const planningProviderPath = path.join(process.cwd(), 'src', 'services', 'PlanningPanelProvider.ts');
-    const planningProviderSource = fs.readFileSync(planningProviderPath, 'utf8');
+    // The copyToClipboard implementation moved out of PlanningPanelProvider.ts into
+    // sharedUtilityVerbs.ts (handleCopyToClipboard), and the Tickets front-end moved
+    // out of planning.js into tickets.js, during the Tickets panel extraction. This
+    // test follows the logic to its real owners — pointing it at the old files made
+    // it fail for the wrong reason while the actual regressions went unnoticed.
+    const verbsPath = path.join(process.cwd(), 'src', 'services', 'sharedUtilityVerbs.ts');
+    const verbsSource = fs.readFileSync(verbsPath, 'utf8');
 
-    // (a) The copyToClipboard case in PlanningPanelProvider.ts contains importTaskAsDocument
+    // (a) The copy path resolves a real local ticket file rather than reconstructing one
     assert.ok(
-        planningProviderSource.includes('switchboard.importTaskAsDocument'),
-        'Expected PlanningPanelProvider.ts to contain switchboard.importTaskAsDocument'
+        verbsSource.includes('findTicketFilePath'),
+        'Expected sharedUtilityVerbs.ts to resolve ticket paths via findTicketFilePath'
     );
 
     // (b) The copied path does NOT use '@' + prefix
     assert.ok(
-        !planningProviderSource.includes("'@' + filePath"),
-        "Expected PlanningPanelProvider.ts to NOT prefix copied path with '@'"
+        !verbsSource.includes("'@' + filePath"),
+        "Expected sharedUtilityVerbs.ts to NOT prefix copied path with '@'"
     );
     assert.ok(
-        planningProviderSource.includes("paths.push(filePath)"),
-        "Expected PlanningPanelProvider.ts to push filePath without '@' prefix"
+        verbsSource.includes('paths.push(filePath)'),
+        "Expected sharedUtilityVerbs.ts to push filePath without '@' prefix"
     );
 
     // (c) The backend posts a ticketLinkCopied message on success and ticketLinkFailed on failure
     assert.ok(
-        planningProviderSource.includes("type: 'ticketLinkCopied'"),
-        "Expected PlanningPanelProvider.ts to post ticketLinkCopied message"
+        verbsSource.includes("type: 'ticketLinkCopied'"),
+        'Expected sharedUtilityVerbs.ts to post ticketLinkCopied message'
     );
     assert.ok(
-        planningProviderSource.includes("type: 'ticketLinkFailed'"),
-        "Expected PlanningPanelProvider.ts to post ticketLinkFailed message"
-    );
-
-    const planningJsPath = path.join(process.cwd(), 'src', 'webview', 'planning.js');
-    const planningJsSource = fs.readFileSync(planningJsPath, 'utf8');
-
-    // (d) planning.js has a ticketLinkCopied case in the message listener and calls showTicketsStatus
-    assert.ok(
-        planningJsSource.includes("case 'ticketLinkCopied':"),
-        "Expected planning.js to handle ticketLinkCopied message"
-    );
-    
-    // (e) handleLinkToTicket does NOT call flashCopyBtn synchronously
-    const handleLinkStart = planningJsSource.indexOf('function handleLinkToTicket');
-    const handleLinkEnd = planningJsSource.indexOf('}', handleLinkStart);
-    const handleLinkBlock = planningJsSource.slice(handleLinkStart, handleLinkEnd);
-    assert.ok(
-        !handleLinkBlock.includes('flashCopyBtn'),
-        'Expected handleLinkToTicket to NOT call flashCopyBtn synchronously'
+        verbsSource.includes("type: 'ticketLinkFailed'"),
+        'Expected sharedUtilityVerbs.ts to post ticketLinkFailed message'
     );
 
-    // (f) The ticketLinkFailed handler surfaces msg.error
+    // (d) Both panel providers route the verb to that shared handler
+    for (const provider of ['PlanningPanelProvider.ts', 'TicketsPanelProvider.ts']) {
+        const source = fs.readFileSync(path.join(process.cwd(), 'src', 'services', provider), 'utf8');
+        assert.ok(
+            source.includes('handleCopyToClipboard'),
+            `Expected ${provider} to route copyToClipboard to handleCopyToClipboard`
+        );
+    }
+
+    const ticketsJsPath = path.join(process.cwd(), 'src', 'webview', 'tickets.js');
+    const ticketsJsSource = fs.readFileSync(ticketsJsPath, 'utf8');
+
+    // (e) tickets.js handles both result messages in its message listener
     assert.ok(
-        planningJsSource.includes('msg.error ||'),
-        'Expected ticketLinkFailed handler in planning.js to surface msg.error'
+        ticketsJsSource.includes("case 'ticketLinkCopied':"),
+        'Expected tickets.js to handle ticketLinkCopied message'
+    );
+    assert.ok(
+        ticketsJsSource.includes("case 'ticketLinkFailed':"),
+        'Expected tickets.js to handle ticketLinkFailed message'
+    );
+
+    // (f) handleLinkToTicket does NOT flash the button synchronously — the flash is
+    //     driven by the ticketLinkCopied reply so a failure does not read as success.
+    const handleLinkStart = ticketsJsSource.indexOf('function handleLinkToTicket');
+    assert.ok(handleLinkStart !== -1, 'Expected handleLinkToTicket to live in tickets.js');
+    const handleLinkBlock = ticketsJsSource.slice(handleLinkStart, ticketsJsSource.indexOf('\n    }', handleLinkStart));
+    assert.ok(
+        !handleLinkBlock.includes('flashIconBtn'),
+        'Expected handleLinkToTicket to NOT flash the button synchronously'
+    );
+
+    // (g) The ticketLinkFailed handler surfaces the backend error text
+    assert.ok(
+        ticketsJsSource.includes('message.error ||'),
+        'Expected ticketLinkFailed handler in tickets.js to surface message.error'
+    );
+
+    // (h) REGRESSION GUARD: the "Link all" button must actually have a click listener.
+    //     The extraction moved the #tickets-link-all accessor into tickets.js but left
+    //     its listener behind in planning.js, where it was deleted — so the button was
+    //     present, styled, and completely inert. An accessor alone is not wiring.
+    assert.ok(
+        ticketsJsSource.includes("linkAllButton: document.getElementById('tickets-link-all')"),
+        'Expected tickets.js to look up the #tickets-link-all button'
+    );
+    const linkAllWiring = /linkAllButton\s*\??\.\s*addEventListener\(\s*'click'/.test(ticketsJsSource);
+    assert.ok(
+        linkAllWiring,
+        'Expected tickets.js to attach a click listener to linkAllButton (the "Link all" button is inert without it)'
+    );
+    // ...and that listener must post the copyToClipboard verb with a ticketIds array,
+    // which is what distinguishes "link all" from the whole-directory copy fallback.
+    const linkAllStart = ticketsJsSource.search(/linkAllButton\s*\??\.\s*addEventListener/);
+    const linkAllBlock = ticketsJsSource.slice(linkAllStart, linkAllStart + 900);
+    assert.ok(
+        linkAllBlock.includes("type: 'copyToClipboard'") && linkAllBlock.includes('ticketIds'),
+        'Expected the Link all listener to post copyToClipboard with a ticketIds array'
+    );
+    assert.ok(
+        linkAllBlock.includes('getFilteredLinearIssues') && linkAllBlock.includes('getFilteredClickUpTasks'),
+        'Expected the Link all listener to collect ids from the filtered list for both providers'
     );
 
     console.log('tickets link-to-ticket regression test passed');

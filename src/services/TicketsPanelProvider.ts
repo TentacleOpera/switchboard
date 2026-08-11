@@ -464,6 +464,16 @@ export class TicketsPanelProvider {
             roots.push(...service.getTicketsFolderPaths());
             roots.push(...service.getFolderPaths());
         } catch { /* config unreadable — fall through to the default tickets dir */ }
+        // The integration config's ticketSaveLocation is where _buildTicketDir actually
+        // writes ticket documents (TaskViewerProvider.ts:21960-21971). It is a DIFFERENT
+        // setting from LocalFolderService's ticketsFolderPaths, so a custom save location
+        // was absent from the allow-list and every asset under it failed the guard.
+        for (const p of ['linear', 'clickup'] as const) {
+            try {
+                const cfg = GlobalIntegrationConfigService.loadConfigSync(p);
+                if (cfg?.ticketSaveLocation) { roots.push(path.join(cfg.ticketSaveLocation, p)); }
+            } catch { /* config unreadable — the defaults below still apply */ }
+        }
         if (workspaceRoot) {
             roots.push(path.join(workspaceRoot, '.switchboard', 'tickets'));
         }
@@ -1837,6 +1847,12 @@ export class TicketsPanelProvider {
 
                     const includeClosed = !!msg.includeClosed;
                     const forceFull = includeClosed || !!msg.forceFull;
+                    // `authoritative` is true ONLY for an explicit Refetch click (forceFull).
+                    // includeClosed must bypass the delta CURSOR (a ticket closed before the
+                    // cursor never appears in a delta payload) but it must NOT bypass the
+                    // conflict guard — only an explicit Refetch means "discard my local
+                    // edits and take the remote".
+                    const authoritative = !!msg.forceFull;
                     let lastPullIso: string | null = null;
                     if (!forceFull && kanbanDb) {
                         try { lastPullIso = await kanbanDb.getMeta(cursorKey); } catch { /* ignore */ }
@@ -1854,6 +1870,7 @@ export class TicketsPanelProvider {
                             projectId,
                             importMode: 'document',
                             includeClosed,
+                            authoritative,
                             ...(deltaSince !== undefined ? { deltaSince } : {}),
                             ...(deltaSinceIso ? { deltaSinceIso } : {})
                         }
@@ -1878,7 +1895,7 @@ export class TicketsPanelProvider {
                         this._seams().ui.showErrorMessage(`Refresh failed: ${result?.error || 'unknown'}`);
                     } else if (skippedModified > 0) {
                         this._seams().ui.showWarningMessage(
-                            `Refreshed ${result.successCount} ticket${result.successCount !== 1 ? 's' : ''}. ${skippedModified} skipped (locally modified — push or discard changes first).`
+                            `Refreshed ${result.successCount} ticket${result.successCount !== 1 ? 's' : ''}. ${skippedModified} skipped (local file has unpushed edits). Push them, or hit Refetch to take the remote version and discard local changes.`
                         );
                     } else if ((result.failCount || 0) > 0) {
                         this._seams().ui.showWarningMessage(`Refresh: ${result.successCount} updated, ${result.failCount} failed — ${errDetail}`);
@@ -3123,11 +3140,11 @@ export class TicketsPanelProvider {
             }
             case 'downloadAttachment': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                const { provider, url, filename, ticketId, ticketTitle } = msg;
+                const { provider, url, filename, ticketId, ticketTitle, attachmentId } = msg;
                 try {
                     const result: any = await this._seams().commands.executeCommand(
                         'switchboard.downloadAttachment',
-                        { workspaceRoot, provider, url, filename, ticketId, ticketTitle }
+                        { workspaceRoot, provider, url, filename, ticketId, ticketTitle, attachmentId }
                     );
                     const res = {
                         type: 'attachmentDownloaded',
@@ -3160,19 +3177,23 @@ export class TicketsPanelProvider {
                         { workspaceRoot, provider, ticketId, attachmentsArray: attachments }
                     );
                     const targetPanel = this._panel;
-                    // The webviewUri rewrite requires a live webview (vscode.Uri + webview.asWebviewUri).
-                    // Headless / HTTP callers have no webview — skip the rewrite and return the stored
-                    // localPath ref shape so the arm stays host-agnostic (contract #3).
-                    if (Array.isArray(result) && targetPanel && targetPanel.webview) {
+                    // webviewUri prefers the loopback asset route: `_buildLocalAssetUrl`
+                    // emits an allow-listed http://127.0.0.1:<port>/design/asset URL that
+                    // satisfies BOTH hosts (tickets.html's meta CSP already permits
+                    // http://127.0.0.1:*), so the browser cockpit can finally preview a
+                    // downloaded image. asWebviewUri stays as the fallback for a VS Code
+                    // panel with no API server running. Headless with no port and no panel
+                    // still yields no webviewUri — the preview branch just stays off.
+                    if (Array.isArray(result)) {
                         const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp'];
                         result = result.map((att: any) => {
-                            if (att.isDownloaded && att.localPath) {
-                                const ext = path.extname(att.localPath).toLowerCase();
-                                if (imageExts.includes(ext)) {
-                                    const uri = vscode.Uri.file(att.localPath);
-                                    att.webviewUri = targetPanel.webview.asWebviewUri(uri).toString();
-                                }
-                            }
+                            if (!att.isDownloaded || !att.localPath) { return att; }
+                            if (!imageExts.includes(path.extname(att.localPath).toLowerCase())) { return att; }
+                            const uri = this._buildLocalAssetUrl(att.localPath)
+                                || (targetPanel?.webview
+                                    ? targetPanel.webview.asWebviewUri(vscode.Uri.file(att.localPath)).toString()
+                                    : undefined);
+                            if (uri) { att.webviewUri = uri; }
                             return att;
                         });
                     }
@@ -3455,13 +3476,35 @@ export class TicketsPanelProvider {
                         return true;
                     });
 
+                    // Only push tickets that actually differ from what we last pulled. Pushing an
+                    // unmodified file is not a no-op: push is a FULL description replacement, so a
+                    // stale file overwrites newer remote work — ~250 overwrites per click here.
+                    let dbTickets: any[] = [];
+                    try {
+                        if (!this._cacheService) {
+                            this._cacheService = this._adapterFactories.getCacheService(workspaceRoot);
+                        }
+                        dbTickets = await this._cacheService.getImportedTickets();
+                    } catch (e) {
+                        // If the cache is unreachable, fall back to pushing everything —
+                        // Sync All is a deliberate user action, not a background timer.
+                        console.warn('[TicketsPanelProvider] syncAllTickets: could not load cache for sync-status filter, pushing all:', e);
+                    }
+                    const bySlug = new Map(dbTickets.map((t: any) => [t.slugPrefix, t]));
+                    const pushable = uniqueTickets.filter(t => {
+                        const e: any = bySlug.get(`${provider}_${t.id}`);
+                        if (!e) { return true; }   // never pulled — local-only, push it
+                        return this._ticketSyncStatusFromTimestamps(t.filePath, e.lastSyncedAt) !== 'synced';
+                    });
+                    const skippedCount = uniqueTickets.length - pushable.length;
+
                     // Bounded concurrency: push up to 4 tickets at a time so total wall time
                     // is ~ceil(N/4) × per-ticket latency instead of N × per-ticket latency.
                     const CONCURRENCY = 4;
                     let done = 0;
-                    const total = uniqueTickets.length;
-                    for (let i = 0; i < uniqueTickets.length; i += CONCURRENCY) {
-                        const batch = uniqueTickets.slice(i, i + CONCURRENCY);
+                    const total = pushable.length;
+                    for (let i = 0; i < pushable.length; i += CONCURRENCY) {
+                        const batch = pushable.slice(i, i + CONCURRENCY);
                         const batchResults = await Promise.all(batch.map(async (ticket) => {
                             try {
                                 const result: any = await this._seams().commands.executeCommand(
@@ -3491,6 +3534,7 @@ export class TicketsPanelProvider {
                         count: uniqueTickets.length,
                         succeeded: results.succeeded,
                         failed: results.failed,
+                        skipped: skippedCount,
                         errors: results.errors
                     });
                 } else {
@@ -3500,6 +3544,7 @@ export class TicketsPanelProvider {
                         count: 0,
                         succeeded: 0,
                         failed: 0,
+                        skipped: 0,
                         errors: ['No workspace root resolved']
                     });
                 }
@@ -3687,8 +3732,7 @@ export class TicketsPanelProvider {
                             id: ticketId,
                             title: String(msg.title || '').trim(),
                             description: String(msg.description || '').trim(),
-                            provider,
-                            apiOriginated: !!msg.apiOriginated
+                            provider
                         }
                     );
                     this.postMessageToWebview({ type: 'ticketsAskAgentResult', success: true, workspaceRoot: askWorkspaceRoot });

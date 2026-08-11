@@ -2973,8 +2973,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 if (!prompt) return { success: false, error: 'prompt is required' };
                 if (this._taskViewerProvider) {
                     const sent = await this._taskViewerProvider.sendPromptToAgentTerminal(
-                        'coder', prompt, message.workspaceRoot || undefined,
-                        { apiOriginated: !!message.apiOriginated }
+                        'coder', prompt, message.workspaceRoot || undefined
                     );
                     if (sent) {
                         showTemporaryNotification('Sent element tweak prompt to agent terminal.');
@@ -3004,8 +3003,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 if (!prompt) return { success: false, error: 'prompt is required' };
                 if (this._taskViewerProvider) {
                     const sent = await this._taskViewerProvider.sendPromptToAgentTerminal(
-                        'coder', prompt, message.workspaceRoot || undefined,
-                        { apiOriginated: !!message.apiOriginated }
+                        'coder', prompt, message.workspaceRoot || undefined
                     );
                     if (sent) {
                         showTemporaryNotification('Sent element tweak prompt to agent terminal.');
@@ -3035,8 +3033,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 if (!prompt) return { success: false, error: 'prompt is required' };
                 if (this._taskViewerProvider) {
                     const sent = await this._taskViewerProvider.sendPromptToAgentTerminal(
-                        'claude_import', prompt, message.workspaceRoot || undefined,
-                        { apiOriginated: !!message.apiOriginated }
+                        'claude_import', prompt, message.workspaceRoot || undefined
                     );
                     if (sent) {
                         showTemporaryNotification('Sent Claude import prompt to agent terminal.');
@@ -3067,8 +3064,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 if (!prompt) return { success: false, error: 'prompt is required' };
                 if (this._taskViewerProvider) {
                     const sent = await this._taskViewerProvider.sendPromptToAgentTerminal(
-                        'claude_artifacts', prompt, message.workspaceRoot || undefined,
-                        { apiOriginated: !!message.apiOriginated }
+                        'claude_artifacts', prompt, message.workspaceRoot || undefined
                     );
                     if (sent) {
                         showTemporaryNotification('Sent artifact upload prompt to Claude.');

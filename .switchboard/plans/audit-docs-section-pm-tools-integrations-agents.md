@@ -124,3 +124,7 @@ For each file, largest first:
 ## Recommendation
 
 Complexity 5 → **Send to Lead Coder.** Smallest by line count but the highest-risk group: live credentials, outbound writes, a known destructive import path, and a per-host divergence that is intended behaviour rather than a defect.
+
+## Review Findings
+
+Reviewed 2026-08-10. Items 6 and 7 pass by omission — no real tracker object was created or modified and no import was run, so the destructive short-fetch prune was never risked. **Items 2 and 9 fail together:** `getIntegrationSetupStates` records Linear and Notion as *not configured*, yet PMT-026 to PMT-040 mark the Linear agent API, Notion fetch and all three remote-board providers `LIVE` on verb presence — under this plan those rows are `BLOCKED` with the credential absence recorded, and a section this heavily blocked is escalated, not reported as audited. **Item 5 fails:** every row names host `standalone`; the required per-host secret-entry rows do not exist because the VSIX was never built. **Item 8 fails:** PMT-051 to PMT-056 claim memo capture is `LIVE` without a reload-persistence observation. PMT-046's `GAP` was reclassified — `planAutoFetch` is absent from `src/` entirely, so it is a both-hosts doc defect, not a standalone gap. Files changed: register only; no source code touched.

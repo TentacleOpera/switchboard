@@ -61,21 +61,33 @@ test('solo mode initializes layout mode to 1 and pre-sets initialAssignmentDone'
 
 test('websocket exit frame distinguishes transport eviction from process exit', () => {
     const exitArm = block(terminalsJs, "} else if (frame.t === 'exit') {", "entry.term.options.disableStdin = true;");
+    const polarity = exitArm.match(/if \(frame\.reason (===|!==) 'Lagging client evicted'\)/);
+    assert.ok(polarity, 'exit arm must branch on eviction reason');
+    // The eviction case carries NO notice of its own. It used to write
+    // `[Disconnected — reconnecting…]` into the xterm buffer, which desynchronised
+    // any TUI's relative-cursor redraw permanently; the socket close already drives
+    // the `connecting` chip, so the buffer line was a second notification stacked on
+    // one the operator already had. See terminal-chrome-not-in-buffer-contract.
     assert.ok(
-        exitArm.includes("if (frame.reason === 'Lagging client evicted')"),
-        'exit arm must branch on eviction reason'
-    );
-    assert.ok(
-        exitArm.includes("[Disconnected — reconnecting…]"),
-        'eviction exit frame must show reconnecting message'
+        !exitArm.includes('[Disconnected — reconnecting…]'),
+        'the eviction branch must not write a notice into the buffer — the chip is the whole signal'
     );
     // Leaving entry.exited false is the whole point: ws.onclose returns early on
     // `exited`, so setting it would suppress the backoff reconnect and strand the
-    // view claiming a live process died.
-    assert.ok(
-        !/Lagging client evicted'\)\s*\{[^}]*entry\.exited = true/.test(exitArm),
-        'the eviction branch must NOT set entry.exited — ws.onclose skips reconnect when it is true'
-    );
+    // view claiming a live process died. Asserted in whichever polarity the branch
+    // is written: `===` guards the eviction case (must not set it), `!==` guards the
+    // real-process-exit case (must set it, and the eviction case is then unhandled).
+    if (polarity[1] === '===') {
+        assert.ok(
+            !/Lagging client evicted'\)\s*\{[^}]*entry\.exited = true/.test(exitArm),
+            'the eviction branch must NOT set entry.exited — ws.onclose skips reconnect when it is true'
+        );
+    } else {
+        assert.ok(
+            /Lagging client evicted'\)\s*\{[\s\S]*entry\.exited = true/.test(exitArm),
+            'entry.exited must be set on the real-process-exit branch only — the eviction case stays unhandled so the reconnect survives'
+        );
+    }
 });
 
 test('the eviction sentinel matches the string the gateway actually sends', () => {
@@ -86,8 +98,10 @@ test('the eviction sentinel matches the string the gateway actually sends', () =
     const gateway = fs.readFileSync(path.join(__dirname, '../standalone/terminalWsGateway.ts'), 'utf8');
     const sent = gateway.match(/\{ t: 'exit', code: -1, reason: '([^']+)' \}/);
     assert.ok(sent, "terminalWsGateway must still emit an exit frame carrying a `reason` for lagging-client eviction");
+    // Polarity-agnostic: the client now branches `!==` (the eviction case is
+    // deliberately unhandled). The cross-file pin is the LITERAL, not the operator.
     assert.ok(
-        terminalsJs.includes(`frame.reason === '${sent[1]}'`),
+        new RegExp(`frame\\.reason (===|!==) '${sent[1]}'`).test(terminalsJs),
         `terminals.js branches on a different string than the gateway sends ("${sent[1]}")`
     );
 });

@@ -58,8 +58,25 @@
     let ws;
     let reconnectDelay = 500;
     const maxReconnectDelay = 30000;
+    const HANDSHAKE_TIMEOUT_MS = 10000;
     let reconnectTimer;
     let intentionallyClosed = false;
+    let handshakeDeadline = null;
+
+    // Opt-in, not always-on: this file ships to every panel in both hosts, and an
+    // unconditional log per inbound frame is unreadable in the cockpit (all panels
+    // are mounted at once) and unshippable to the installed base. Either switch
+    // turns it on; the localStorage one survives the reload a popout needs.
+    const wsDebug = (function () {
+        try {
+            if (new URLSearchParams(window.location.search).get('wsdebug') === '1') { return true; }
+            return localStorage.getItem('sb-debug-ws') === '1';
+        } catch { return false; }
+    })();
+    function wsLog() {
+        if (!wsDebug) { return; }
+        console.log.apply(console, ['[transport:ws]'].concat(Array.prototype.slice.call(arguments)));
+    }
 
     let isReconnecting = false;
     let pushScope = null;
@@ -127,6 +144,15 @@
         return url;
     }
 
+    function wsUrlForLog() {
+        try {
+            const u = new URL(wsUrl(), window.location.href);
+            if (u.searchParams.has('token')) { u.searchParams.set('token', '<redacted>'); }
+            if (u.searchParams.has('scope')) { u.searchParams.set('scope', '<scope>'); }
+            return u.toString();
+        } catch { return '<unparseable>'; }
+    }
+
     // Generate the per-client originatorId BEFORE the first WS connect if no
     // panel script has set it yet. This script is injected ahead of the panel's
     // own JS and connects immediately, so waiting for the panel to generate the
@@ -140,6 +166,7 @@
 
     function connectWs() {
         if (ws) { return; }
+        wsLog('connecting', wsUrlForLog());
         try {
             ws = new WebSocket(wsUrl());
         } catch (err) {
@@ -148,8 +175,26 @@
             return;
         }
 
+        // Chromium has NO opening-handshake timeout: a server that accepts the TCP
+        // connection and then never writes `101 Switching Protocols` leaves this
+        // socket in CONNECTING with no open/error/close event until the OS TCP
+        // timeout (minutes to hours). `connectWs`'s `if (ws) return` guard then reads
+        // that corpse as a live connection and blocks every reconnect trigger below.
+        // Firefox self-heals here at ~20s (network.websocket.timeout.open); Chromium
+        // needs this. close() on a CONNECTING socket fires onclose, which arms the
+        // normal backoff — so this is the whole recovery path, not just a tidy-up.
+        if (handshakeDeadline) { clearTimeout(handshakeDeadline); handshakeDeadline = null; }
+        handshakeDeadline = setTimeout(function () {
+            if (ws && ws.readyState === 0 /* CONNECTING */) {
+                console.warn('[transport] WebSocket handshake did not complete in '
+                    + HANDSHAKE_TIMEOUT_MS + 'ms — abandoning and retrying');
+                try { ws.close(); } catch { /* fall through to onclose */ }
+            }
+        }, HANDSHAKE_TIMEOUT_MS);
+
         ws.onopen = function () {
-            console.log('[transport] WebSocket connected');
+            if (handshakeDeadline) { clearTimeout(handshakeDeadline); handshakeDeadline = null; }
+            wsLog('open', wsUrlForLog());
             if (isReconnecting) {
                 try {
                     window.dispatchEvent(new CustomEvent('sbTransportReconnected'));
@@ -171,6 +216,8 @@
             }
 
             if (msg.type === '__resync') {
+                wsLog('RESYNC received — this connection is in the hub broadcast set',
+                    Array.isArray(msg.payload) ? msg.payload.length + ' messages' : typeof msg.payload);
                 const payload = msg.payload;
                 if (Array.isArray(payload)) {
                     payload.forEach(dispatchMessage);
@@ -192,6 +239,8 @@
                 return;
             }
 
+            wsLog('frame', msg.type, 'seq=' + msg.seq, 'surface=' + (msg.surface || '<untagged>'));
+
             // Unwrap the wsHub envelope (type/seq/payload/surface) into the legacy
             // postMessage shape the UI handlers expect.
             const payload = msg.payload;
@@ -203,10 +252,14 @@
         };
 
         ws.onerror = function (err) {
-            console.error('[transport] WebSocket error:', err);
+            console.error('[transport] WebSocket error:', err, 'url=', wsUrlForLog());
         };
 
-        ws.onclose = function () {
+        ws.onclose = function (ev) {
+            if (handshakeDeadline) { clearTimeout(handshakeDeadline); handshakeDeadline = null; }
+            console.warn('[transport] WebSocket closed:',
+                'code=' + (ev && ev.code), 'reason=' + ((ev && ev.reason) || ''),
+                'wasClean=' + (ev && ev.wasClean));
             ws = null;
             if (!intentionallyClosed) {
                 scheduleReconnect();
@@ -216,12 +269,39 @@
 
     function scheduleReconnect() {
         if (reconnectTimer) { return; }
+        wsLog('reconnect scheduled in', reconnectDelay, 'ms');
         reconnectTimer = setTimeout(function () {
             reconnectTimer = null;
             reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay);
             connectWs();
         }, reconnectDelay);
     }
+
+    // A socket that closed while the window was hidden waits out a backoff that may
+    // already have grown to 30 s, so the operator's first half-minute back is stale.
+    // `reconnectTimer` covers an already-armed retry. `ws` is checked by READYSTATE,
+    // not truthiness — a socket stuck in CONNECTING (see the handshake deadline
+    // above) must be treated as dead and replaced. OPEN (1) and CLOSING (2) are left
+    // alone: OPEN needs nothing, and CLOSING will fire onclose and arm the backoff.
+    function reconnectIfDown(why) {
+        if (reconnectTimer) { return; }
+        if (ws && (ws.readyState === 1 || ws.readyState === 2)) { return; }
+        if (ws && ws.readyState === 0) {
+            wsLog('abandoning a stuck CONNECTING socket —', why);
+            try { ws.close(); } catch { /* ignore */ }
+            return;
+        }
+        wsLog('reconnect now —', why);
+        reconnectDelay = 500;
+        connectWs();
+    }
+    document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'visible') { reconnectIfDown('became visible'); }
+    });
+    window.addEventListener('pageshow', function (ev) {
+        reconnectIfDown(ev && ev.persisted ? 'pageshow (from bfcache)' : 'pageshow');
+    });
+    window.addEventListener('focus', function () { reconnectIfDown('window focus'); });
 
     connectWs();
 

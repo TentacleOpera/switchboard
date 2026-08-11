@@ -128,18 +128,31 @@ test('the client does not double-filter', () => {
 });
 
 test('every resync producer tags its entries', () => {
-    const bootstrapEntryLines = bootstrapCode.split('\n').filter(l => /^\s*\{ type: '/.test(l));
-    ['updateColumns', 'updateWorkspaceSelection', 'cliTriggersState', 'updateBoard'].forEach(type => {
-        const lines = bootstrapEntryLines.filter(l => l.includes(`type: '${type}'`));
-        assert.ok(lines.length > 0, `bootstrap.ts must build a '${type}' resync entry`);
-        lines.forEach(l => assert.ok(l.includes('surface: SURFACES.'),
-            `bootstrap.ts resync entry '${type}' must be tagged`));
-    });
+    // Re-anchored 2026-08-10. This used to require bootstrap.ts to BUILD the four
+    // board resync entries itself. It no longer does, deliberately: the standalone
+    // column-parity work deleted the hand-assembled payload so both hosts read the
+    // one producer, KanbanProvider.getFullStateMessages. Asserting bootstrap still
+    // builds them would pin the fork that change removed — so the tag contract is
+    // asserted at the producer, and bootstrap is checked only for what it still
+    // builds on its own (today: the theme entry).
     const resync = block(kanbanProviderCode, 'public async getFullStateMessages(', '\n    /**');
-    assert.ok(resync.includes("type: 'updateBoard'") && /updateBoard[^\n]*surface: SURFACES\.kanban/.test(resync),
-        'the extension-hosted cockpit uses this producer — leaving it untagged ships the full board snapshot to every panel, which is the single largest payload the filter exists for');
+    ['updateColumns', 'updateWorkspaceSelection', 'cliTriggersState', 'updateBoard'].forEach(type => {
+        const at = resync.indexOf(`type: '${type}'`);
+        assert.ok(at !== -1, `getFullStateMessages must build a '${type}' resync entry`);
+        // Bound the search to this entry: the next `type: '` starts the next one, so a
+        // neighbour's tag can never stand in for a missing one.
+        const nextEntry = resync.indexOf("type: '", at + 7);
+        const entry = resync.substring(at, nextEntry === -1 ? resync.length : nextEntry);
+        assert.ok(/surface: SURFACES\.kanban/.test(entry),
+            `resync entry '${type}' must be tagged — untagged, the full board snapshot ships to every panel, which is the single largest payload the filter exists for`);
+    });
     assert.ok(/updateAutobanConfig[^\n]*surface: SURFACES\./.test(resync),
         'the autoban entries are spread in CONDITIONALLY — tag them as built, or a post-pass ships them untagged');
+    // Anything bootstrap still assembles by hand must carry a tag too.
+    bootstrapCode.split('\n')
+        .filter(l => /^\s*(?:const \w+ = )?\{ type: '/.test(l))
+        .forEach(l => assert.ok(l.includes('surface: SURFACES.'),
+            `bootstrap.ts builds an untagged resync entry: ${l.trim()}`));
 });
 
 test('producers use the shared constant, not string literals', () => {

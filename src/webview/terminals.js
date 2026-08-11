@@ -117,7 +117,20 @@
     // two surfaces cannot disagree about what a role is running.
     let agentNames = {};
 
-    const terminalBadges = new Map(); // terminalName -> string label / count
+    // name -> { label: string, stamp: number }
+    //
+    // The stamp is a monotonic completion sequence, relayed to the shell so its rail
+    // can pulse the completion ring ONCE per completion. It lives on the badge value
+    // rather than in a parallel Map so it cannot outlive the badge: there are seven
+    // badge-delete sites and a rename re-key, and a second Map would eventually drift
+    // out of sync with all of them.
+    const terminalBadges = new Map();
+    let badgeStampSeq = 0;
+    /** Terminals whose last reattach spliced over evicted output. Deliberately NOT
+     *  terminalBadges: that map is the agent-completed signal and feeds the shell rail's
+     *  `done` light (postFleetStateToShell), so a gap recorded there would report a
+     *  finished agent. */
+    const terminalReplayGaps = new Set();
     // name -> { quietTimer, noOutputTimer, hardTimer, sawLiveOutput }. Module-level,
     // NOT on the terminalsMap entry: a curtain is armed at ptyCreateTerminal time, and
     // the entry does not exist until the pane has a rendered box (see whenRendered).
@@ -225,6 +238,7 @@
                     rows: entry.term.rows,
                     rendered: true
                 }));
+                entry.sizeVoteActive = true;
             }
         } catch { /* ignore */ }
         // A grid resize invalidates the WebGL glyph model, and xterm does not
@@ -250,10 +264,53 @@
         if (resized) { resyncPaneRenderer(entry, 'stale-canvas'); }
     }
 
+    /**
+     * Tell the gateway this client no longer has a viewport, so its last reported
+     * size stops constraining the shared pty.
+     *
+     * `client.reportedSize` is sticky server-side: fitAndReportSize returns early
+     * when the box is 0x0, so a client that goes hidden simply stops sending and
+     * its final size clamps the pty until the socket closes. That is why switching
+     * the shell to another panel did not release the cockpit's hold on a
+     * popped-out terminal.
+     *
+     * Sent once per transition, not per ResizeObserver tick — a hidden panel must
+     * not become a chatty client.
+     */
+    function releaseSizeVote(entry) {
+        if (!entry || !entry.sizeVoteActive) { return; }
+        if (!entry.ws || entry.ws.readyState !== WebSocket.OPEN) { return; }
+        try {
+            entry.ws.send(JSON.stringify({ t: 'resize', cols: 0, rows: 0, rendered: false }));
+            entry.sizeVoteActive = false;
+        } catch { /* ignore */ }
+    }
+
+    /**
+     * Re-cast a withdrawn vote. The counterpart to releaseSizeVote, and NOT optional:
+     * a client that withdraws and never re-votes is permanently removed from the pty
+     * sizing calculation, which is a worse bug than the clamp this all exists to fix.
+     *
+     * Deliberately NOT routed through startFitLadder. The ladder reports only on a
+     * verified 'mismatch' verdict, and a pane that comes back at exactly the size it
+     * left at inspects as 'ok' — so the ladder alone would leave the vote withdrawn
+     * forever. fitAndReportSize sends unconditionally from a rendered box, which is
+     * precisely what is needed here.
+     */
+    function ensureSizeVote(entry) {
+        if (!entry || entry.disposed || entry.sizeVoteActive) { return; }
+        if (!isRendered(entry.container)) { return; }
+        fitAndReportSize(entry);
+    }
+
     const DETACH_GRACE_MS = 300000; // 5 min — exited-terminal cleanup grace
                                       // (live terminals are retained by the isExited
                                       // guard in armDetachTimer, not by this timer)
     const detachTimers = new Map();
+    // Our own per-document ceiling. It is NOT the process cap: liveWebglContexts
+    // is a `let` inside this IIFE, and a second same-origin document (a pop-out)
+    // starts its own counter at zero. The real cap is ~16 live contexts per
+    // renderer process, shared across every same-origin document in it.
     const MAX_WEBGL_CONTEXTS = 12;
     let liveWebglContexts = 0;
 
@@ -291,6 +348,11 @@
         }
     }
 
+    /** Is a WebGL renderer even possible in this document? */
+    function webglAvailable() {
+        return !!(window.WebglAddon && window.WebglAddon.WebglAddon);
+    }
+
     /**
      * Attach the fastest renderer this browser will give us.
      *
@@ -307,46 +369,195 @@
      * current, not the one that happened to be attached at creation.
      */
     function attachRenderer(term, entry) {
-        const holder = { current: null };
-        if (window.WebglAddon && window.WebglAddon.WebglAddon && liveWebglContexts < MAX_WEBGL_CONTEXTS) {
+        // `release` is a no-op on every non-WebGL path, so callers never branch.
+        const holder = { current: null, release: () => {} };
+        // A container with no box cannot be painted, and a WebGL context is a
+        // PROCESS-wide resource. createTerminalView already defers materialization
+        // until the container has a box (see whenRendered), so this is a belt on top
+        // of braces for the ORIGINAL acquisition — but swapRenderer re-enters here on
+        // the upgrade path, and this is what keeps that path honest without the caller
+        // having to re-check. MAX_WEBGL_CONTEXTS cannot catch a boxless acquisition:
+        // it counts THIS document's contexts, and the pop-out is a second document in
+        // the same process with its own counter starting at zero.
+        const hasBox = entry ? isRendered(entry.container) : true;
+        if (webglAvailable() && hasBox && liveWebglContexts < MAX_WEBGL_CONTEXTS) {
             try {
                 const webgl = new window.WebglAddon.WebglAddon();
-                // A lost context (GPU reset, driver crash, too many live contexts)
-                // leaves the addon painting nothing at all. Drop to canvas rather
-                // than leaving the operator with a blank terminal.
-                webgl.onContextLoss(() => {
-                    console.warn('[Terminals] WebGL context lost — falling back to canvas renderer');
-                    if (entry) entry.isWebgl = false;
+                // EXACTLY ONE decrement per acquisition, from any path, in any order.
+                // Before this there were three independent decrement sites keyed on
+                // entry.isWebgl; a renderer swap makes that a fourth, and hand-pairing
+                // four sites is how a counter drifts low and over-allocates (or drifts
+                // high and pins every pane to canvas for the life of the page).
+                let released = false;
+                holder.release = () => {
+                    if (released) { return; }
+                    released = true;
                     liveWebglContexts = Math.max(0, liveWebglContexts - 1);
+                    if (entry) { entry.isWebgl = false; }
+                    // The ONLY call site. Folding the real release into the accounting
+                    // release is what makes it impossible for the counter to say
+                    // "freed" while the process still holds the context.
+                    forceReleaseWebglContext(webgl);
+                };
+                webgl.onContextLoss(() => {
+                    // A release WE initiated. forceReleaseWebglContext calls
+                    // loseContext(), which fires webglcontextlost right back into this
+                    // handler — and swapRenderer/destroyTerminalView are mid-teardown
+                    // and will attach the replacement themselves. Recovering here would
+                    // double-attach and race them. `released` is already true by the
+                    // time loseContext() runs, so this guard is exact.
+                    if (released) { return; }
+                    console.warn('[Terminals] WebGL context lost — falling back to canvas renderer');
+                    holder.release();
                     try { webgl.dispose(); } catch { /* ignore */ }
                     holder.current = attachCanvasRenderer(term);
-                    // A renderer swap does NOT repaint what is already on screen. The
-                    // incoming canvas renderer starts with an empty surface and then
-                    // paints only rows the terminal subsequently marks dirty, so every
-                    // row nothing rewrites keeps whatever the dead WebGL canvas left
-                    // behind. On an idle CLI that is the entire visible screen.
-                    //
-                    // This fires on terminals that did nothing wrong. The browser caps
-                    // live WebGL contexts per PROCESS and force-loses the OLDEST ones
-                    // when a new context pushes it over — so materialising one new
-                    // terminal view can strand every long-lived pane at once, which is
-                    // why the damage arrives in a batch and never on the pane that was
-                    // actually touched. MAX_WEBGL_CONTEXTS is our own ceiling and does
-                    // not see the rest of the process's contexts, so it cannot prevent
-                    // this; the repair has to be here.
-                    if (entry) { resyncPaneRenderer(entry, 'stale-canvas'); }
+                    if (entry) {
+                        // Debt, not defeat: the context was taken away, not declined.
+                        // The next visibility tick retries once the budget allows.
+                        entry.rendererDeferred = webglAvailable();
+                        // A renderer swap does NOT repaint what is already on screen. The
+                        // incoming canvas renderer starts with an empty surface and then
+                        // paints only rows the terminal subsequently marks dirty, so every
+                        // row nothing rewrites keeps whatever the dead WebGL canvas left
+                        // behind. On an idle CLI that is the entire visible screen.
+                        resyncPaneRenderer(entry, 'stale-canvas');
+                    }
                 });
                 term.loadAddon(webgl);
                 holder.current = webgl;
-                if (entry) entry.isWebgl = true;
+                if (entry) { entry.isWebgl = true; entry.rendererDeferred = false; }
                 liveWebglContexts++;
                 return holder;
             } catch (err) {
                 console.warn('[Terminals] WebGL renderer unavailable, falling back:', err);
+                // No debt recorded. A constructor that threw will throw again on the
+                // next tick, and retrying it per tick is exactly the churn this
+                // machinery exists to avoid. This pane stays on canvas for the life
+                // of the page; every other pane is unaffected.
+                if (entry) { entry.rendererDeferred = false; }
+                holder.current = attachCanvasRenderer(term);
+                return holder;
             }
         }
+        // Boxless, budget-exhausted, or no addon at all — one expression covers all
+        // three: a debt is owed exactly when WebGL is possible but not held.
+        if (entry) { entry.rendererDeferred = webglAvailable(); }
         holder.current = attachCanvasRenderer(term);
         return holder;
+    }
+
+    /** Hidden long enough to be worth reclaiming. Short flips between shell panels
+     *  must not thrash the GPU: a switch out and back inside this window keeps its
+     *  context and costs nothing. */
+    const RENDERER_RELEASE_DELAY_MS = 5000;
+
+    /**
+     * Hand the GL context back to the browser NOW, rather than whenever GC runs.
+     *
+     * The vendored addon-webgl.js contains ZERO references to WEBGL_lose_context.
+     * WebglAddon.dispose() tears down its renderer, listeners and atlas page canvases
+     * and then leaves the live WebGL2 context to the garbage collector. The browser's
+     * per-process ceiling is charged against the LIVE context, not against our intent
+     * to drop it, so a disposed-but-uncollected addon still occupies a slot for an
+     * unbounded time. Without this call the entire release half of this change is
+     * cosmetic: liveWebglContexts and __sbTerminalStats would both report a freed
+     * budget that the process has not freed.
+     *
+     * Private surface, same precedent and same defensive shape as
+     * term._core._renderService in readRenderedGrid/resyncPaneRenderer: every hop
+     * guarded, whole thing inside a try, silent no-op if a vendored xterm upgrade
+     * changes the shape. MUST run BEFORE dispose() — dispose() drops the renderer
+     * reference, and with it the only path to the context.
+     */
+    function forceReleaseWebglContext(addon) {
+        try {
+            const gl = addon && addon._renderer && addon._renderer._gl;
+            if (!gl || typeof gl.getExtension !== 'function') { return; }
+            const ext = gl.getExtension('WEBGL_lose_context');
+            if (ext && typeof ext.loseContext === 'function') { ext.loseContext(); }
+        } catch { /* vendored shape changed — dispose() below still runs */ }
+    }
+
+    /**
+     * Bring `entry`'s renderer in line with whether it currently has a box.
+     *
+     * This function is the AUTHORITY — every trigger (the ResizeObserver and the release
+     * timer) funnels here, and here alone re-reads isRendered. Triggers may be cheap
+     * and approximate; this is not.
+     */
+    function reconcileRendererForVisibility(entry) {
+        if (!entry || entry.disposed || !entry.term || !entry.rendererAddon) { return; }
+        const hasBox = isRendered(entry.container);
+
+        if (hasBox) {
+            // Budget still exhausted -> keep the debt and return; the next tick retries,
+            // and a released context (a closed terminal, another pane hidden) is what
+            // lets it through.
+            if (!entry.isWebgl && entry.rendererDeferred
+                && webglAvailable() && liveWebglContexts < MAX_WEBGL_CONTEXTS) {
+                swapRenderer(entry, /* wantWebgl */ true);
+            }
+            return;
+        }
+        // Released, not merely idle. Without this a panel switched away from — or a
+        // terminal unassigned from the grid but retained for its scrollback — keeps its
+        // context for the life of the page, which is the exact budget a popped-out
+        // window then cannot get.
+        if (entry.isWebgl) { swapRenderer(entry, /* wantWebgl */ false); }
+    }
+
+    function swapRenderer(entry, wantWebgl) {
+        const outgoing = entry.rendererAddon;
+        // RELEASE, then DISPOSE, then attach. All three orderings are load-bearing:
+        //  - release BEFORE dispose, because release() reaches addon._renderer._gl and
+        //    dispose() drops _renderer — after it, the context is unreachable and can
+        //    only be reclaimed by a GC we do not control.
+        //  - release BEFORE the try, so a dispose() that throws still gives the budget
+        //    back. Otherwise the counter is short by one for the life of the page and
+        //    after enough of them every terminal is pinned to the DOM/canvas renderer
+        //    for the life of the page with no diagnostic.
+        //  - dispose BEFORE attach, because two renderers loaded on one Terminal is not
+        //    a supported xterm state and the outgoing one owns the surface the incoming
+        //    one needs.
+        // release() is one-shot, so the webglcontextlost it provokes cannot re-enter
+        // this swap through the addon's own onContextLoss handler.
+        outgoing.release();
+        try { if (outgoing.current) { outgoing.current.dispose(); } } catch { /* ignore */ }
+        outgoing.current = null;
+
+        // A NEW holder, deliberately. The outgoing addon's onContextLoss closure captured
+        // the OLD holder, and the incoming WebGL addon's closure must write to the new
+        // one — which attachRenderer returning a fresh holder gives for free. Do not
+        // "optimise" this into mutating the holder in place.
+        entry.rendererAddon = wantWebgl
+            ? attachRenderer(entry.term, entry)          // sets isWebgl + rendererDeferred
+            : { current: attachCanvasRenderer(entry.term), release: () => {} };
+        if (!wantWebgl) { entry.rendererDeferred = webglAvailable(); }
+
+        // ONLY when there is something on screen to repair. A renderer swap does not
+        // repaint what is already drawn — the incoming renderer starts empty and paints
+        // only rows the terminal later marks dirty, which is the same defect the
+        // onContextLoss handler had. But on the RELEASE direction there are no pixels to
+        // strand, and driving _renderService.handleResize against a zero-size box makes
+        // the canvas renderer measure a zero cell and size itself to nothing. The pane
+        // would self-heal on its next fit ladder, but there is no reason to break it in
+        // the first place.
+        if (isRendered(entry.container)) { resyncPaneRenderer(entry, 'stale-canvas'); }
+    }
+
+    function cancelRendererRelease(entry) {
+        if (entry.releaseTimer) {
+            clearTimeout(entry.releaseTimer);
+            entry.releaseTimer = null;
+        }
+    }
+
+    function armRendererRelease(entry) {
+        if (entry.releaseTimer || entry.disposed) { return; }   // idempotent
+        entry.releaseTimer = setTimeout(() => {
+            entry.releaseTimer = null;
+            reconcileRendererForVisibility(entry);
+        }, RENDERER_RELEASE_DELAY_MS);
     }
 
     /** Theme classes the host swaps between; mirrors planning.js's set. */
@@ -608,6 +819,17 @@
             if (!message) return;
             if (message.type === 'terminalsChanged') {
                 fetchTerminalList();
+            } else if (message.type === 'requestFleetState') {
+                // Shell-side fallback: the shell asked for our current fleet state.
+                // Push it immediately (stale is better than dark) and trigger a fresh fetch.
+                // Origin-guarded like the other two arms driven by a REAL postMessage
+                // (focusTerminal, clearTerminalBadge). Unlike terminalsChanged /
+                // switchboardThemeChanged / agentCompleted, this one never arrives from
+                // transport.js's synthetic dispatch (origin ''), so the check is safe here
+                // — and it keeps a foreign framer from driving ptyListTerminals traffic.
+                if (event.origin !== location.origin) { return; }
+                postFleetStateToShell();
+                fetchTerminalList();
             } else if (message.type === 'switchboardThemeChanged') {
                 applyThemeToAllTerminals(message.theme);
             } else if (message.type === 'agentCompleted') {
@@ -617,6 +839,7 @@
                 if (terminalBadges.has(message.name)) {
                     terminalBadges.delete(message.name);
                 }
+                terminalReplayGaps.delete(message.name);
                 // locateTerminal, not assignToFocusedPane: an inbound focus request
                 // from the board means "let me type in this one", which needs the
                 // caret and not just the pane slot.
@@ -639,6 +862,49 @@
                     renderPaneGrid();
                     postFleetStateToShell();
                 }
+                terminalReplayGaps.delete(message.name);
+            } else if (message.type === 'panelVisibility' && typeof message.visible === 'boolean') {
+                if (event.origin !== location.origin) { return; }
+                // The shell hides a panel by setting display:none on its IFRAME. This
+                // document then stops being rendered, so its ResizeObservers no longer
+                // run — the container observer above cannot see this transition in
+                // either direction, and on the way back the box is unchanged so there
+                // is nothing for it to observe anyway. The shell is the only thing that
+                // knows, so the shell has to say so.
+                //
+                // The GPU renderer rides the SAME carrier, and must: the release
+                // machinery's headline case is "a panel switched away from keeps every
+                // context it took", and its only other trigger is that same container
+                // ResizeObserver. Two of this feature's plans reached OPPOSITE research
+                // conclusions about whether an in-iframe ResizeObserver sees the parent's
+                // display:none — so leaving the release on the observer alone bets the
+                // whole reclaim on the optimistic reading, and loses silently if it is
+                // wrong (a hidden panel's __sbTerminalStats is never the one anybody
+                // reads). Arming here costs nothing if the observer does fire:
+                // armRendererRelease early-returns on an already-armed timer, and
+                // reconcileRendererForVisibility re-reads isRendered and no-ops when the
+                // state already matches. Both directions are idempotent by construction.
+                if (!message.visible) {
+                    for (const entry of terminalsMap.values()) {
+                        releaseSizeVote(entry);
+                        armRendererRelease(entry);
+                    }
+                } else {
+                    // Cancel synchronously, BEFORE the rAF: the release timer is a plain
+                    // setTimeout and keeps running in a hidden iframe, so a reveal that
+                    // waited for a frame could be beaten by a release that fires first
+                    // and drops a now-visible pane to canvas.
+                    for (const entry of terminalsMap.values()) { cancelRendererRelease(entry); }
+                    // rAF, not a direct call: the display flip and this message can land
+                    // in the same task, and a frame callback is by definition only
+                    // delivered once the document is actually being rendered.
+                    requestAnimationFrame(() => {
+                        for (const entry of terminalsMap.values()) {
+                            ensureSizeVote(entry);
+                            reconcileRendererForVisibility(entry);
+                        }
+                    });
+                }
             }
         });
 
@@ -654,6 +920,62 @@
         // Reordering columns in Setup never reaches this panel directly. Focus is the
         // moment the operator comes back, so refetch the structure then (throttle bypassed).
         window.addEventListener('focus', () => fetchKanbanColumnStructure(true));
+
+        // Renderer repair on visibility regain. While the document is hidden rAF is
+        // fully suspended (0 Hz on every desktop engine) but the BATCH_FALLBACK_MS
+        // timer is only clamped to ~1 Hz, so drainAllBatches -> term.write keeps
+        // advancing the buffer with nothing painting. On restore the parked
+        // RenderDebouncer rAF fires and repaints the merged dirty-row range — and
+        // that is ALL that fires. RenderService is never paused by a minimize
+        // (IntersectionObserver is computed from layout geometry, which a minimize
+        // does not change), so there is no _handleIntersectionChange full refresh to
+        // ride on. Restore has no full-repaint step.
+        //
+        // So rows that changed while hidden but fell outside that merged range keep
+        // their stale pixels indefinitely over a CORRECT buffer. That is the whole
+        // bug: the damage sits on regions nothing rewrites (a CLI's static status
+        // strip), and ANY later repaint of those rows clears it — which is why both
+        // typing and simply SCROLLING the pane fix it. Scrolling is the proof: it
+        // changes no buffer content at all, it only marks viewport rows dirty, and
+        // WebglRenderer.renderRows -> _updateModel rewrites those rows' vertex data
+        // from the buffer. The atlas and the vertex array are therefore intact —
+        // do NOT reintroduce clearTextureAtlas() here (see plan Root Cause).
+        //
+        // handleResize IS still needed: a DPR change or a resize-while-hidden leaves
+        // the canvas backing store at the wrong scale, and no repaint fixes that.
+        // Both it and the unpainted rows are invisible to inspectPaneFit (which only
+        // ever compares grid geometry, never pixel content), which is why this repair
+        // is unconditional rather than verdict-gated.
+        //
+        // NOTE ON FREQUENCY: Chromium (Win/macOS) and Safari also report 'hidden' for
+        // a fully OCCLUDED window, so this fires on an alt-tab, not just a dock
+        // minimize. With the atlas rebuild dropped the per-regain cost is one
+        // full-range repaint per visible pane — cheap enough to pay on every app
+        // switch. See the plan's Side Effects note before adding any gate here.
+        //
+        // The repair is LATCHED, not run inline here. In the shell an inactive panel
+        // is display:none, and a nested document still receives the top-level
+        // visibilitychange — so repairing only what is currently rendered would miss
+        // every terminal in a hidden Terminals iframe, and the later reveal goes
+        // through ResizeObserver -> startFitLadder, whose verdict is 'ok' (cols/rows
+        // and the painted grid all agree; a corrupt glyph model is invisible to
+        // inspectPaneFit) and therefore repairs nothing. The flag survives until the
+        // pane actually has a box.
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState !== 'visible') { return; }
+            for (const entry of terminalsMap.values()) {
+                if (!entry || entry.disposed || !entry.term) { continue; }
+                entry.needsRendererResync = true;
+            }
+            // The ladder owns the schedule: attempt 0 is a double rAF, later attempts
+            // are timers, and fitLadderGen collapses rapid minimize/restore cycles into
+            // one live ladder per terminal.
+            const slotCount = getSlotCount(effectiveLayout);
+            for (let i = 0; i < slotCount; i++) {
+                const name = paneAssignments[i];
+                if (name) { startFitLadder(name); }
+            }
+        });
 
         fetchKanbanColumnStructure(true);
 
@@ -677,6 +999,24 @@
             });
         }
 
+        // Fleet-list catch-up on visibility regain. Registered AFTER the first-fetch
+        // dispatch above, and deliberately NOT folded into the renderer-repair
+        // visibilitychange listener earlier in init(): terminal-solo-popout-contract
+        // asserts that init paints the transient "Connecting…" state before the first
+        // `fetchTerminalList()` appears, and it reads init as source text — a deferred
+        // fetch inside an earlier listener body reads as an earlier first fetch and
+        // breaks a contract that is otherwise still true.
+        //
+        // Why it is needed at all: startFleetPoll skips its tick on
+        // `visibilityState === 'hidden'`, and Chromium reports a FULLY OCCLUDED popup
+        // as hidden — not just a background tab. A popped-out panel sitting behind the
+        // main browser window therefore stops polling entirely and is frozen rather
+        // than 5s-stale. Catch up on the way back rather than removing the skip:
+        // polling a covered window is still wasted work.
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') { fetchTerminalList(); }
+        });
+
         startFleetPoll();
     }
 
@@ -684,10 +1024,17 @@
         if (window.parent === window) { return; }
         const terminals = fleetList.map(t => {
             let light = 'active';
+            let doneStamp = 0;
             if (t.status === 'exited') {
                 light = 'exited';
             } else if (terminalBadges.has(t.friendlyName)) {
                 light = 'done';
+                // Monotonic per completion. The shell rebuilds every rail button on
+                // every push (5s poll + terminalsChanged), so `light === 'done'` twice
+                // running cannot tell a fresh completion from a stale one. The stamp
+                // can — and it also distinguishes a SECOND completion of a terminal
+                // whose badge never cleared, which a plain edge detector would miss.
+                doneStamp = terminalBadges.get(t.friendlyName).stamp;
             }
             // Resolve the coloured brand icon URI panel-side so the shell needs no
             // brand-icon table or data-brand-icon-* body attributes of its own.
@@ -702,6 +1049,7 @@
                 role: t.role,
                 worktreePath: t.worktreePath,
                 light,
+                doneStamp,
                 iconUri
             };
         });
@@ -912,6 +1260,9 @@
         // function deliberately swallows all three and leaves fleetList untouched, so
         // for solo mode the state is "not loaded yet" — NOT "terminal missing". Repaint
         // the transient state and let the next terminalsChanged refetch resolve it.
+        // Push the stale fleet list to the shell so the sidebar doesn't go dark during
+        // a transient fetch failure — the next successful poll will correct it.
+        postFleetStateToShell();
         checkSoloNotFound();
     }
 
@@ -1283,18 +1634,43 @@
         return map[key] || '';
     }
 
+    /** Codicon-shaped pencil, built as inline SVG DOM so it inherits currentColor
+     *  and follows the theme. No asset fetch, so no img-src dependency (the panel
+     *  CSP is `img-src 'self' data:`, terminals.html:5). */
+    function buildEditGlyph() {
+        const NS = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(NS, 'svg');
+        svg.setAttribute('viewBox', '0 0 16 16');
+        svg.setAttribute('width', '11');
+        svg.setAttribute('height', '11');
+        svg.setAttribute('aria-hidden', 'true');
+        const path = document.createElementNS(NS, 'path');
+        path.setAttribute('fill', 'currentColor');
+        path.setAttribute('d', 'M13.23 1a1.2 1.2 0 0 1 .85.35l.57.57a1.2 1.2 0 0 1 0 1.7l-8.4 8.4-3.4 1.13a.4.4 0 0 1-.5-.5l1.13-3.4 8.4-8.4A1.2 1.2 0 0 1 13.23 1Zm0 1.2-.7.7 1.07 1.07.7-.7-1.07-1.07ZM4.3 11.02l.68.68-1.2.4.52-1.08Zm.44-.86 6.9-6.9 1.07 1.07-6.9 6.9-1.07-1.07Z');
+        svg.appendChild(path);
+        return svg;
+    }
+
     function renderTerminalRow(item) {
         const itemDiv = document.createElement('div');
         const paneIndex = paneAssignments.indexOf(item.friendlyName);
         const isFocused = activeTerminalName === item.friendlyName;
         itemDiv.className = 'terminal-item'
             + (isFocused ? ' active' : '')
-            + (paneIndex !== -1 ? ' assigned' : '');
+            + (paneIndex !== -1 ? ' assigned' : '')
+            + (item.status === 'exited' ? ' is-exited' : '');
 
         const info = document.createElement('div');
         info.className = 'item-info';
 
         const agentLabel = agentLabelForRole(item.role);
+
+        // "(exited)" qualifies the HANDLE, matching the pane header
+        // (terminals.js:2755-2759). WHERE the handle renders depends on the row:
+        // with an agent label the name line shows the CLI label and the handle
+        // moves to the subline; without one the name line IS the handle. The
+        // suffix follows the handle rather than living in a fixed slot.
+        const exitedSuffix = item.status === 'exited' ? ' (exited)' : '';
 
         const termNameEl = document.createElement('div');
         termNameEl.className = 'item-name';
@@ -1303,9 +1679,13 @@
         // subline. It stays VISIBLE because it is the only thing separating two terminals
         // running the same agent — and it stays available to the rename path via the
         // dataset stamp below, which the dblclick handler now reads instead of textContent.
-        termNameEl.textContent = agentLabel || item.friendlyName;
+        termNameEl.textContent = agentLabel || `${item.friendlyName}${exitedSuffix}`;
         termNameEl.dataset.friendlyName = item.friendlyName;
-        termNameEl.title = `${agentLabel ? agentLabel + ' — ' : ''}${item.friendlyName} (${item.role})`;
+        // Suffix on the hover title too: the pane header's title carries it
+        // (updatePaneElement, terminals.js:2775), and a tooltip that says the row
+        // is fine while the row itself says "(exited)" is the two-sources-of-truth
+        // split this suffix exists to close.
+        termNameEl.title = `${agentLabel ? agentLabel + ' — ' : ''}${item.friendlyName}${exitedSuffix} (${item.role})`;
 
         const roleRow = document.createElement('div');
         roleRow.className = 'item-role-row';
@@ -1332,11 +1712,39 @@
         roleEl.className = 'item-role';
         // Handle first on the subline: it is what the user needs to tell siblings apart.
         roleEl.textContent = agentLabel
-            ? `${item.friendlyName} · ${item.role}`
+            ? `${item.friendlyName}${exitedSuffix} · ${item.role}`
             : item.role;
         roleRow.appendChild(roleEl);
 
-        info.appendChild(termNameEl);
+        // Rename now lives NEXT TO the thing it renames. It was a `rename` word in a
+        // strip of lookalike 10px links below the row, displaced from its object; the
+        // only other entry point was a double-click gesture with no affordance. Both
+        // still work — the delegated dblclick on .item-name (terminals.js:540) is
+        // untouched.
+        const nameRow = document.createElement('div');
+        nameRow.className = 'item-name-row';
+        nameRow.appendChild(termNameEl);
+
+        const editBtn = document.createElement('button');
+        editBtn.type = 'button';
+        editBtn.className = 'item-edit-btn';
+        editBtn.title = 'Rename terminal';
+        editBtn.setAttribute('aria-label', `Rename ${item.friendlyName}`);
+        editBtn.appendChild(buildEditGlyph());
+        editBtn.addEventListener('click', (e) => {
+            // The row seats the terminal on click (itemDiv handler below).
+            e.stopPropagation();
+            // Re-read the LIVE node: beginInlineRename swaps .item-name out for an
+            // input and back, and that input commits on blur — which fires on this
+            // button's mousedown, before this click. Closing over the render-time
+            // node would act on one that has just been detached.
+            const liveNameEl = nameRow.querySelector('.item-name');
+            if (!liveNameEl) { return; }
+            beginInlineRename(liveNameEl, liveNameEl.dataset.friendlyName || item.friendlyName);
+        });
+        nameRow.appendChild(editBtn);
+
+        info.appendChild(nameRow);
         info.appendChild(roleRow);
 
         if (paneIndex !== -1) {
@@ -1353,12 +1761,33 @@
         if (terminalBadges.has(item.friendlyName)) {
             const badge = document.createElement('span');
             badge.className = 'pane-badge';
-            badge.textContent = terminalBadges.get(item.friendlyName);
+            badge.textContent = terminalBadges.get(item.friendlyName).label;
             info.appendChild(badge);
         }
+        if (terminalReplayGaps.has(item.friendlyName)) {
+            const gapBadge = document.createElement('span');
+            gapBadge.className = 'pane-badge is-gap';
+            gapBadge.textContent = 'GAP';
+            gapBadge.title = 'Output was evicted while this pane was disconnected — the screen was reset rather than spliced';
+            info.appendChild(gapBadge);
+        }
 
-        const dot = document.createElement('div');
-        dot.className = 'status-dot' + (item.status === 'exited' ? ' exited' : '');
+        // Was a .status-dot: a non-interactive 7px pip in the row's most reachable
+        // slot, encoding a bit that is "active" on virtually every row. The exited
+        // state it carried now lives in the subline/name text and the row's
+        // is-exited class (§1-2), which is strictly more legible than a red circle.
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'item-close-btn';
+        closeBtn.textContent = '×';
+        closeBtn.title = 'Close terminal (ends the process)';
+        closeBtn.setAttribute('aria-label', `Close ${item.friendlyName}`);
+        closeBtn.addEventListener('click', (e) => {
+            // The whole row seats the terminal on click (listener below). Without
+            // this, closing also seats it a frame before it dies.
+            e.stopPropagation();
+            closeTerminal(item.friendlyName);
+        });
 
         const actions = document.createElement('div');
         actions.className = 'item-actions';
@@ -1366,43 +1795,33 @@
         // No "locate" button: clicking the row already seats the terminal in the
         // focused pane and hands it the caret (itemDiv click handler below). The
         // locate button duplicated that exactly, which is why it read as pointless.
-        // clear/rename/close remain because they do things the row click does not.
+        // `close` moved OUT of this strip to the × at the row's right edge and
+        // `rename` moved to the pencil beside the name, leaving `clear` — which is
+        // the strip's highest-frequency action and now wears a weight to match.
 
         const clearBtn = document.createElement('button');
-        clearBtn.className = 'locate-btn';
+        clearBtn.type = 'button';
+        // NOT .locate-btn: that style is borderless, 10px, opacity 0.7 — near
+        // invisible on this panel. `clear` is the highest-frequency per-terminal
+        // action in a session and now wears the panel's existing
+        // small-visible-button treatment (same language as .btn-unassign-pane).
+        clearBtn.className = 'item-clear-btn';
         clearBtn.textContent = 'clear';
-        clearBtn.title = 'Send /clear to this terminal';
+        clearBtn.title = 'Send /clear to this terminal (resets its context)';
         clearBtn.disabled = item.status === 'exited';
         clearBtn.addEventListener('click', (e) => {
             e.stopPropagation();
+            // Third arg is the label to restore after the transient 'clearing'
+            // feedback — it must stay byte-identical to the textContent set above
+            // (withClearingFeedback, terminals.js:4468).
             withClearingFeedback(clearBtn, () => clearTerminal(item.friendlyName), 'clear');
         });
         actions.appendChild(clearBtn);
 
-        const renameBtn = document.createElement('button');
-        renameBtn.className = 'locate-btn';
-        renameBtn.textContent = 'rename';
-        renameBtn.title = 'Rename terminal';
-        renameBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            beginInlineRename(termNameEl, item.friendlyName);
-        });
-        actions.appendChild(renameBtn);
-
-        const closeBtn = document.createElement('button');
-        closeBtn.className = 'locate-btn is-danger';
-        closeBtn.textContent = 'close';
-        closeBtn.title = 'Close terminal (ends the process)';
-        closeBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            closeTerminal(item.friendlyName);
-        });
-        actions.appendChild(closeBtn);
-
         const topRow = document.createElement('div');
         topRow.className = 'terminal-item-top';
         topRow.appendChild(info);
-        topRow.appendChild(dot);
+        topRow.appendChild(closeBtn);
 
         itemDiv.appendChild(topRow);
         itemDiv.appendChild(actions);
@@ -1920,6 +2339,7 @@
             focusedPaneIndex = existingIndex;
             activeTerminalName = terminalName;
             terminalBadges.delete(terminalName);
+            terminalReplayGaps.delete(terminalName);
             renderSidebarList();
             renderPaneGrid();
             postFleetStateToShell();
@@ -2008,6 +2428,7 @@
         if (terminalBadges.has(terminalName)) {
             terminalBadges.delete(terminalName);
         }
+        terminalReplayGaps.delete(terminalName);
         postFleetStateToShell();
 
         // No navigation toast. Retract any toast still on screen from a prior unassign —
@@ -2097,6 +2518,15 @@
             return { key: 'readonly', label: 'read-only' };
         }
         if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
+            // Throttled is NOT a failure state and must not outrank `connecting`:
+            // input is queued, never dropped (see the inputThrottled arm of the
+            // socket handler and enqueueInput in terminalWsGateway). The chip says
+            // "still landing", which is the only thing the operator cannot
+            // otherwise see — the CLI shows nothing until the paste arrives.
+            if (entry.inputThrottled) {
+                const kb = Math.max(1, Math.round((entry.queuedBytes || 0) / 1024));
+                return { key: 'queued', label: `paste queued — ${kb} KB` };
+            }
             return { key: 'live', label: 'accepts input' };
         }
         return { key: 'connecting', label: 'connecting' };
@@ -2112,7 +2542,7 @@
         const paneEl = paneGridEl.querySelector(`.terminal-pane[data-pane-index="${paneIndex}"]`);
         if (!paneEl) { return; }
         const state = resolveInputState(name);
-        paneEl.classList.remove('is-input-live', 'is-input-connecting', 'is-input-readonly');
+        paneEl.classList.remove('is-input-live', 'is-input-connecting', 'is-input-readonly', 'is-input-queued');
         paneEl.classList.add(`is-input-${state.key}`);
         syncInputStateChip(paneEl, paneEl.querySelector('.pane-title'), state);
     }
@@ -2170,6 +2600,20 @@
      * self-corrects when the socket returns, and it leaves no residue. */
     function notifyInputDropped(entry) {
         refreshInputState(entry.name);
+    }
+
+    /**
+     * Surface an unrecoverable scrollback gap on the PANE CHROME.
+     *
+     * Never written into the terminal buffer: a notice injected there lands inside a
+     * screen the CLI believes it owns and shifts the row count its next relative redraw
+     * depends on — the defect the chrome-writes plan exists to remove.
+     */
+    function markReplayGap(terminalName) {
+        terminalReplayGaps.add(terminalName);
+        renderSidebarList();
+        renderPaneGrid();
+        showPaneToast(`${terminalName}: scrollback gap — screen reset (output was evicted while disconnected)`);
     }
 
     /**
@@ -2565,7 +3009,7 @@
         // both style off, so they can never disagree. Cleared for empty panes —
         // an empty pane is not a read-only terminal, and a red chip there would
         // be a false alarm.
-        paneEl.classList.remove('is-input-live', 'is-input-connecting', 'is-input-readonly');
+        paneEl.classList.remove('is-input-live', 'is-input-connecting', 'is-input-readonly', 'is-input-queued');
 
         const titleEl = paneEl.querySelector('.pane-title');
         const actionsEl = paneEl.querySelector('.pane-actions');
@@ -2648,8 +3092,15 @@
             if (terminalBadges.has(assignedName)) {
                 const badgeSpan = document.createElement('span');
                 badgeSpan.className = 'pane-badge';
-                badgeSpan.textContent = terminalBadges.get(assignedName);
+                badgeSpan.textContent = terminalBadges.get(assignedName).label;
                 titleEl.appendChild(badgeSpan);
+            }
+            if (terminalReplayGaps.has(assignedName)) {
+                const gapBadge = document.createElement('span');
+                gapBadge.className = 'pane-badge is-gap';
+                gapBadge.textContent = 'GAP';
+                gapBadge.title = 'Output was evicted while this pane was disconnected — the screen was reset rather than spliced';
+                titleEl.appendChild(gapBadge);
             }
 
             // Input-state chip. The class goes on the PANE, not the chip: it is
@@ -2899,7 +3350,7 @@
      *  column picker + a "Terminal" toggle to switch back to terminal mode; the
      *  body lists plan rows with "Copy Prompt" (advance is implied) and "Link" buttons. */
     function renderKanbanPane(paneEl, index) {
-        paneEl.classList.remove('is-input-live', 'is-input-connecting', 'is-input-readonly');
+        paneEl.classList.remove('is-input-live', 'is-input-connecting', 'is-input-readonly', 'is-input-queued');
         const titleEl = paneEl.querySelector('.pane-title');
         const actionsEl = paneEl.querySelector('.pane-actions');
         const contentEl = paneEl.querySelector('.pane-content');
@@ -3457,11 +3908,12 @@
      * Ordered least-invasive first:
      *  1. Read the host box. Cheap, but it forces a style/layout flush, which is
      *     what lets the next IntersectionObserver computation see real geometry
-     *     and unpause RenderService (_isPaused is only ever written from that
-     *     callback — see xterm.js _handleIntersectionChange).
-     *  2. clearTextureAtlas() + refresh(). Non-destructive repaint request. Both
-     *     route through _renderService and are no-ops while paused, which is
-     *     exactly why step 3 exists.
+     *     and unpause RenderService.
+     *  2. refresh() — marks every row dirty, requesting a full repaint. This is
+     *     the actual repair for the visibility-regain bug: it reaches WebGL's
+     *     _updateModel(0, rows-1), which repaints every row from the current
+     *     buffer. For context-loss / renderer-swap paths, add rebuildAtlas:true
+     *     to also clear the atlas and force a full model rebuild.
      *  3. Drive RenderService.handleResize directly with the CURRENT cols/rows.
      *     This is the one call that re-runs renderer._updateDimensions() and so
      *     re-sizes the canvas and .xterm-screen; FitAddon.fit() refuses to reach
@@ -3472,9 +3924,18 @@
      *     _core._renderService to produce the 'stale-canvas' verdict that gates
      *     this, so the two stand or fall together.
      */
-    function resyncPaneRenderer(entry, verdict) {
+    function resyncPaneRenderer(entry, verdict, options) {
         try { void entry.container.getBoundingClientRect(); } catch { /* ignore */ }
-        try { entry.term.clearTextureAtlas(); } catch { /* ignore */ }
+        // Atlas rebuild is a sledgehammer route to a full repaint: it makes
+        // beginFrame() return true, forcing _clearModel(true) + a full-range
+        // _updateModel. refresh() below reaches that same full-range update
+        // directly. Wanted on the context-loss path (the renderer really was
+        // swapped); NOT wanted on visibility regain, where the atlas is intact
+        // and the rebuild only costs re-rasterisation on every alt-tab.
+        // Default true so all pre-existing callers are unchanged.
+        if (options?.rebuildAtlas !== false) {
+            try { entry.term.clearTextureAtlas(); } catch { /* ignore */ }
+        }
         try { entry.term.refresh(0, Math.max(0, entry.term.rows - 1)); } catch { /* ignore */ }
         if (verdict !== 'stale-canvas') { return; }
         try {
@@ -3574,6 +4035,26 @@
             // load-bearing — paneAssignments is padded to nine regardless of layout, so
             // a bare .includes() would also match a terminal parked off-screen.
             if (!paneAssignments.slice(0, getSlotCount(effectiveLayout)).includes(name)) { return; }
+
+            // Visibility-regain repair, latched by the visibilitychange listener in
+            // init(). UNCONDITIONAL and NOT gated on inspectPaneFit: unpainted rows
+            // leave cols/rows and the painted grid in perfect agreement (inspectPaneFit
+            // compares grid geometry, never pixel content), so the verdict is 'ok' and
+            // the ladder's early return below would skip the repair entirely.
+            // Gated on isRendered instead, because a repair against a zero-box
+            // container is wasted and would clear the flag that is meant to carry the
+            // intent forward to the reveal.
+            // rebuildAtlas:false -- the atlas is intact on this path; refresh(0,rows-1)
+            // inside resyncPaneRenderer is the actual repair. 'stale-canvas' is still
+            // passed because it is what gates step 4 (handleResize), which covers the
+            // DPR / backing-store cases a repaint cannot.
+            // Cleared BEFORE the calls: resyncPaneRenderer swallows its own errors, and
+            // an entry that could not be repaired must not re-arm on every later ladder.
+            if (entry.needsRendererResync && entry.term && isRendered(entry.container)) {
+                entry.needsRendererResync = false;
+                resyncPaneRenderer(entry, 'stale-canvas', { rebuildAtlas: false });
+                refreshTerminalScrollbar(entry);
+            }
 
             const before = inspectPaneFit(entry);
             if (before === 'skip') { return; }
@@ -4205,6 +4686,12 @@
                     terminalBadges.set(next, terminalBadges.get(name));
                     terminalBadges.delete(name);
                 }
+                // The gap set is keyed by friendlyName like terminalBadges; without this
+                // a rename strands the GAP badge on the old name with no terminal behind it.
+                if (terminalReplayGaps.has(name)) {
+                    terminalReplayGaps.delete(name);
+                    terminalReplayGaps.add(next);
+                }
                 // The curtain map is keyed by friendlyName like terminalsMap; without this a
                 // rename mid-boot strands the overlay with no timer able to find its node. The
                 // dataset stamps are re-pointed in the same block: the sidebar row is rebuilt by
@@ -4265,6 +4752,7 @@
             if (activeTerminalName === name) { activeTerminalName = null; }
             dismissStartupCurtain(name);
             terminalBadges.delete(name);
+            terminalReplayGaps.delete(name);
             saveLayoutSettings();
             await fetchTerminalList();
         } catch (err) {
@@ -4279,7 +4767,9 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name })
             });
-            if (terminalBadges.delete(name)) { renderSidebarList(); renderPaneGrid(); }
+            const badgeChanged = terminalBadges.delete(name);
+            const gapChanged = terminalReplayGaps.delete(name);
+            if (badgeChanged || gapChanged) { renderSidebarList(); renderPaneGrid(); }
         } catch (err) {
             console.error('[Terminals] Failed to clear terminal:', err);
         }
@@ -4304,11 +4794,12 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({})
             });
-            // Only re-render if a badge actually went away. renderPaneGrid() empties the
+            // Only re-render if a badge or gap actually went away. renderPaneGrid() empties the
             // grid and reparents every live xterm container — too much teardown to run
             // for no visual change, and the clear itself alters no pane state.
-            if (terminalBadges.size > 0) {
+            if (terminalBadges.size > 0 || terminalReplayGaps.size > 0) {
                 terminalBadges.clear();
+                terminalReplayGaps.clear();
                 renderSidebarList();
                 renderPaneGrid();
             }
@@ -4504,6 +4995,7 @@
         if (!entry) { return; }
         entry.disposed = true;
         if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
+        cancelRendererRelease(entry);
         pendingBatchEntries.delete(entry);
         entry.exited = true;
         entry.pendingAttribution = null;
@@ -4521,14 +5013,14 @@
             entry.pendingObserver = null;
         }
         // Before term.dispose(): the GPU renderers hold a WebGL context / canvas
-        // that browsers cap per page (~16 contexts), so leaking one per closed
-        // terminal eventually forces every terminal back to the DOM renderer.
-        if (entry.rendererAddon && entry.rendererAddon.current) {
+        // that browsers cap per RENDERER PROCESS (~16 contexts), shared with every
+        // same-origin document in it, including a popped-out second panel — so
+        // leaking one per closed terminal eventually forces every terminal back
+        // to the DOM renderer.
+        if (entry.rendererAddon) {
+            entry.rendererAddon.release();   // BEFORE the try and BEFORE dispose — see swapRenderer
             try {
-                entry.rendererAddon.current.dispose();
-                if (entry.isWebgl) {
-                    liveWebglContexts = Math.max(0, liveWebglContexts - 1);
-                }
+                if (entry.rendererAddon.current) { entry.rendererAddon.current.dispose(); }
             } catch { /* ignore */ }
             entry.rendererAddon.current = null;
         }
@@ -4576,7 +5068,10 @@
             term: null,
             fitAddon: null,
             rendererAddon: null,
+            rendererDeferred: false,
+            releaseTimer: null,
             isWebgl: false,
+            sizeVoteActive: false,
             ws: null,
             lastSeq: 0,
             batchQueue: [],
@@ -4598,7 +5093,10 @@
             disposed: false,
             suppressAnswerback: false,
             awaitingReplayFrame: false,
-            pendingModes: null
+            pendingModes: null,
+            inputThrottled: false,
+            queuedBytes: 0,
+            replayGap: false
         };
         terminalsMap.set(name, entry);
         whenRendered(entry, () => materializeTerminalView(entry));
@@ -4796,6 +5294,22 @@
         const resizeObserver = new ResizeObserver(() => {
             if (resizeTimer) clearTimeout(resizeTimer);
             resizeTimer = setTimeout(() => {
+                // The box collapsed — Peek hiding a sibling pane, or the pane losing
+                // its assignment. Withdraw before returning, or the gateway keeps
+                // clamping the shared pty to a viewport nobody can see.
+                if (!isRendered(entry.container)) {
+                    releaseSizeVote(entry);
+                    armRendererRelease(entry);
+                    return;
+                }
+                // Re-cast BEFORE the ladder: a pane restored at its previous size
+                // inspects as 'ok' and the ladder reports nothing.
+                cancelRendererRelease(entry);
+                ensureSizeVote(entry);
+                // BEFORE the fit ladder: the ladder inspects the PAINTED grid via
+                // readRenderedGrid, and running it across a renderer swap would have
+                // it measure a surface that is about to be replaced.
+                reconcileRendererForVisibility(entry);
                 // `active` is pane ASSIGNMENT, not visibility — a hidden panel's panes
                 // are still "active". inspectPaneFit/fitAndReportSize gate on actually
                 // having a box.
@@ -5040,11 +5554,26 @@
         // replies until something else cleared it.
         entry.suppressAnswerback = false;
         entry.awaitingReplayFrame = false;
+        // A gap flag left armed by a socket that died mid-handshake would mark the next
+        // connection's screen for a reset it does not need. Cleared here alongside the
+        // other per-socket windows.
+        entry.replayGap = false;
         // Belongs to the socket that just went away. A set left armed by a socket that
         // died mid-replay describes a stream this connection will not receive.
         entry.pendingModes = null;
+        // The server issues a fresh ClientState with no reportedSize, so a stale true
+        // here would make ensureSizeVote suppress the first report on the new socket.
+        entry.sizeVoteActive = false;
 
         let wsUrl = `${PTY_HOST_ORIGIN}/ws/terminal?name=${encodeURIComponent(entry.name)}`;
+        // Connection-scoped, not per-frame: this document is a single-terminal pop-out
+        // for its whole life, and the gateway lets a primary viewer outrank the grid
+        // cells showing the same terminal. Read from the body class rather than
+        // `window.parent === window` — the NEW WINDOW cockpit is also top-level and must
+        // NOT claim primacy (it is a second grid, not a single-terminal viewer).
+        if (document.body.classList.contains('is-solo')) {
+            wsUrl += '&solo=1';
+        }
         const terminalToken = (document.body && document.body.dataset && document.body.dataset.terminalToken)
             || window.__SB_TERMINAL_TOKEN__;
         if (terminalToken) {
@@ -5069,6 +5598,12 @@
 
         ws.onopen = () => {
             entry.reconnectDelay = 500;
+            // A throttle flag left stranded by a socket that died mid-paste would
+            // keep the chip reading "paste queued" forever — the gateway's
+            // throttled:false frame for that queue will never arrive. Cleared here
+            // and in ws.onclose.
+            entry.inputThrottled = false;
+            entry.queuedBytes = 0;
             refreshInputState(entry.name);
             // Unconditionally reporting term.cols/rows here is what pinned the shared
             // pty to 80x24: on a connection opened before the terminal had a box, that
@@ -5137,6 +5672,41 @@
                     // unconditionally, so a window armed by a socket that died before
                     // its replay arrived cannot leak into this connection.
                     entry.awaitingReplayFrame = entry.ackSuppressChars > 0;
+                    // Per-socket, assigned unconditionally so a flag armed by a socket
+                    // that died before its replay arrived cannot leak into the next
+                    // connection (cleared in the connectWs teardown).
+                    entry.replayGap = frame.replayGap === true;
+                    // The ring evicted output this connection never saw, so what is
+                    // already on screen is not contiguous with what is about to be
+                    // written. Splicing the two produces a transcript that READS
+                    // continuous and is not, and leaves the parser holding state from
+                    // before the hole.
+                    //
+                    // RIS rather than term.reset(): term.reset() does NOT reset the
+                    // escape-sequence parser (only fullReset() calls _parser.reset(),
+                    // and Terminal.reset() never reaches it), so it cannot guarantee the
+                    // clean parse start this whole change exists to provide. RIS also
+                    // travels through WriteBuffer, so it is ORDERED before the replay
+                    // write instead of racing it, and an ESC aborts whatever the parser
+                    // was mid-way through.
+                    //
+                    // No write callback, deliberately: these two characters were never
+                    // credited by the server, and billing them to pendingAckChars would
+                    // corrupt the backpressure ledger — the same rule applyServerModes
+                    // follows for its synthetic writes.
+                    //
+                    // Safe against the mode-restore path: RIS restores DEC defaults, and
+                    // writeReplay's callback applies the gateway's recorded `modes` AFTER
+                    // the replay parses — so the authoritative state still wins, in the
+                    // right order. When there is no replay to wait for, the inline
+                    // applyServerModes below does the same job.
+                    if (entry.replayGap) {
+                        // Pre-gap output from the dead socket. Superseded by definition —
+                        // dropped rather than flushed, so it cannot be parsed after RIS.
+                        entry.batchQueue = [];
+                        try { entry.term.write('\x1bc'); } catch { /* disposed */ }
+                        markReplayGap(entry.name);
+                    }
                     // Applied AFTER the replay, not here: a stale enable inside the
                     // replayed ring would otherwise overwrite the authoritative state
                     // and the pane would come back stuck. Held on the entry and
@@ -5156,23 +5726,34 @@
                         entry.pendingModes = null;
                     }
                 } else if (frame.t === 'inputThrottled') {
-                    // Informational only — stdin stays enabled. Input is queued, never
-                    // dropped, so the operator can keep typing behind a large paste.
-                    if (frame.throttled === false) {
-                        entry.term.write(`\r\n\x1b[2m[Input queue drained]\x1b[0m\r\n`);
-                    } else {
-                        entry.term.write(`\r\n\x1b[2m[Pasting — input queued: ${frame.queued || 0} bytes…]\x1b[0m\r\n`);
-                    }
+                    // Informational only — stdin stays enabled and input is queued,
+                    // never dropped. The signal is the header chip, NOT a line in the
+                    // buffer: see the prohibition on notifyInputDropped. A dispatch
+                    // prompt clears INPUT_HIGH_WATER_BYTES routinely, and the old
+                    // writes injected six rows of shift per paste into whatever
+                    // full-screen CLI was running in the pane.
+                    entry.inputThrottled = frame.throttled !== false;
+                    entry.queuedBytes = frame.queued || 0;
+                    refreshInputState(entry.name);
                 } else if (frame.t === 'error') {
+                    // State first, notification second. A throw inside the toast path
+                    // must not be able to leave a dead terminal accepting input — the
+                    // onmessage catch swallows it into a console.warn.
                     dismissStartupCurtain(entry.name);
                     entry.exited = true;
-                    entry.term.write(`\r\n\x1b[31m[${frame.message || 'Terminal unavailable'}]\x1b[0m\r\n`);
-                    entry.term.options.disableStdin = true;
+                    if (entry.term) { entry.term.options.disableStdin = true; }
                     refreshInputState(entry.name);
+                    showTerminalErrorToast(entry.name, frame.message || 'Terminal unavailable');
                 } else if (frame.t === 'exit') {
-                    if (frame.reason === 'Lagging client evicted') {
-                        entry.term.write(`\r\n\x1b[33m[Disconnected — reconnecting…]\x1b[0m\r\n`);
-                    } else {
+                    // 'Lagging client evicted' is deliberately unhandled. The gateway
+                    // calls ws.close() immediately after sending it
+                    // (terminalWsGateway.ts), so ws.onclose fires, calls
+                    // refreshInputState, and resolveInputState reports `connecting`
+                    // off the non-OPEN socket. The old buffer line was a second
+                    // notification stacked on one the operator already had — and a
+                    // permanent one, still reading "reconnecting" long after the
+                    // socket came back.
+                    if (frame.reason !== 'Lagging client evicted') {
                         dismissStartupCurtain(entry.name);
                         const exitCode = typeof frame.code === 'number' ? frame.code : 0;
                         entry.exited = true;
@@ -5189,6 +5770,13 @@
         ws.onclose = () => {
             entry.pendingAttribution = null;
             if (entry.exited) { return; }
+            // Same strand as ws.onopen: a socket that died mid-paste will never get
+            // its throttled:false frame, so the flag would strand the chip on
+            // "paste queued". readonly outranks queued in the resolver, so an
+            // exited terminal's stranded flag is unreachable — but a reconnecting
+            // one is not exited.
+            entry.inputThrottled = false;
+            entry.queuedBytes = 0;
             refreshInputState(entry.name);
             const item = fleetList.find(i => i.friendlyName === entry.name);
             if (item && item.status === 'active') {
@@ -5333,12 +5921,14 @@
                 // window is how that gets diagnosed without catching a console warning
                 // at the exact moment it fires.
                 isWebgl: entry.isWebgl === true,
+                rendererDeferred: entry.rendererDeferred === true,
                 cols: entry.term ? entry.term.cols : null,
                 rows: entry.term ? entry.term.rows : null,
                 lastSeq: entry.lastSeq,
                 batchQueueLength: entry.batchQueue ? entry.batchQueue.length : 0,
                 pendingAckChars: entry.pendingAckChars || 0,
                 ackSuppressChars: entry.ackSuppressChars || 0,
+                replayGapped: terminalReplayGaps.has(name),
                 bytesWritten: entry.bytesWritten || 0,
                 writeThrowCount: entry.writeThrowCount || 0,
                 largestInputDataLen: entry.largestInputDataLen || 0,
@@ -5365,7 +5955,7 @@
         }
 
         if (targetTerm) {
-            terminalBadges.set(targetTerm, 'DONE');
+            terminalBadges.set(targetTerm, { label: 'DONE', stamp: ++badgeStampSeq });
             renderSidebarList();
             renderPaneGrid();
             postFleetStateToShell();
@@ -5415,6 +6005,45 @@
 
         setTimeout(() => {
             if (toast.parentNode) toast.parentNode.removeChild(toast);
+        }, 8000);
+    }
+
+    /** Transient, dismissible terminal failure notice. Deliberately NOT a line in
+     *  the buffer: see the prohibition on notifyInputDropped. Mirrors
+     *  showCompletionToast's DOM so the two share every .toast-* rule. */
+    function showTerminalErrorToast(termName, message) {
+        if (!toastContainerEl) { return; }
+        const toast = document.createElement('div');
+        toast.className = 'completion-toast is-error';
+
+        const content = document.createElement('div');
+        content.className = 'toast-content';
+
+        const titleEl = document.createElement('div');
+        titleEl.className = 'toast-title';
+        titleEl.textContent = `Terminal error: ${termName}`;
+
+        const bodyEl = document.createElement('div');
+        bodyEl.className = 'toast-body';
+        // textContent, never innerHTML — frame.message comes off the wire.
+        bodyEl.textContent = message;
+
+        content.appendChild(titleEl);
+        content.appendChild(bodyEl);
+
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'toast-close';
+        closeBtn.textContent = '×';
+        closeBtn.addEventListener('click', () => {
+            if (toast.parentNode) { toast.parentNode.removeChild(toast); }
+        });
+
+        toast.appendChild(content);
+        toast.appendChild(closeBtn);
+        toastContainerEl.appendChild(toast);
+
+        setTimeout(() => {
+            if (toast.parentNode) { toast.parentNode.removeChild(toast); }
         }, 8000);
     }
 

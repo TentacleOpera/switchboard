@@ -101,12 +101,12 @@ test('relay carries only fleet metadata — no terminal bytes', () => {
         .filter(Boolean);
     assert.deepStrictEqual(
         names.slice().sort(),
-        ['iconUri', 'light', 'name', 'role', 'worktreePath'],
-        'the relay payload must be the five metadata fields; iconUri is a resolved same-origin SVG path, not terminal bytes'
+        ['doneStamp', 'iconUri', 'light', 'name', 'role', 'worktreePath'],
+        'the relay payload must be the six metadata fields; doneStamp is a monotonic completion sequence, iconUri is a resolved same-origin SVG path, not terminal bytes'
     );
     for (const n of names) {
         assert.ok(
-            ['name', 'role', 'worktreePath', 'light', 'iconUri'].includes(n),
+            ['name', 'role', 'worktreePath', 'light', 'doneStamp', 'iconUri'].includes(n),
             `relay payload field "${n}" is outside the metadata set the plan allows`
         );
     }
@@ -206,7 +206,10 @@ test('the pop-out click path acknowledges the badge without rearranging the cock
 });
 
 test('the panel accepts badge messages only from its own origin', () => {
-    for (const type of ['focusTerminal', 'clearTerminalBadge']) {
+    // requestFleetState joins the guarded set: it is driven by a REAL shell postMessage
+    // (shell.js requestFleetState), never by transport.js's synthetic origin-'' dispatch,
+    // and it fires a ptyListTerminals round trip — so a foreign framer must not reach it.
+    for (const type of ['focusTerminal', 'clearTerminalBadge', 'requestFleetState']) {
         const arm = block(terminalsJs, `message.type === '${type}'`, 'postFleetStateToShell();');
         assert.ok(
             arm.includes('if (event.origin !== location.origin) { return; }'),
@@ -300,12 +303,25 @@ test('terminal state is encoded without a separate dot — exited fades, done ri
     assert.ok(/brightness\(/.test(exited[1]), 'exited must lift brightness — grayscale alone sinks the dark-fill brands into the rail');
     assert.ok(/opacity:\s*0\./.test(exited[1]), 'exited must fade the icon');
 
-    const done = shellHtml.match(/\.strip-term-btn\.strip-term-done\s*\{([^}]*)\}/);
-    assert.ok(done, '.strip-term-done rule is missing');
-    assert.ok(/border-color:/.test(done[1]) && /box-shadow:/.test(done[1]),
-        'done must add a ring AND a glow — a shape plus salience, not a hairline');
-    assert.ok(!/var\(--accent/.test(done[1]),
+    // done is now a one-shot PULSE, not a permanent state class. The permanence
+    // being removed is the whole point of the change: no bare .strip-term-done rule
+    // may survive (it would ring the icon for as long as the badge holds).
+    assert.ok(!/\.strip-term-btn\.strip-term-done\s*\{/.test(shellHtml),
+        'no bare .strip-term-done rule may survive — the ring is now a transient notification, not a permanent state');
+
+    const pulseKeyframes = shellHtml.match(/@keyframes strip-term-done-pulse\s*\{([\s\S]*?)\n        \}/);
+    assert.ok(pulseKeyframes, '@keyframes strip-term-done-pulse must exist — the ring is a CSS animation now');
+    assert.ok(/border-color:/.test(pulseKeyframes[1]) && /box-shadow:/.test(pulseKeyframes[1]),
+        'the pulse keyframes must animate both border-color and box-shadow — ring AND glow, shape plus salience');
+    assert.ok(/#22c55e/.test(pulseKeyframes[1]),
+        'the pulse must use the hardcoded #22c55e green — the shape-not-hue rationale the old rule carried');
+    assert.ok(!/var\(--accent/.test(pulseKeyframes[1]),
         'done must not borrow the accent — that is the panel-SELECTION colour in this rail, and --accent-dim is near-invisible under theme-claudify');
+
+    const pulsingRule = shellHtml.match(/\.strip-term-btn\.strip-term-done\.is-pulsing\s*\{([^}]*)\}/);
+    assert.ok(pulsingRule, '.strip-term-done.is-pulsing rule is missing — the pulse is gated on a live window class');
+    assert.ok(/\b1\b/.test(pulsingRule[1]) && /both/.test(pulsingRule[1]),
+        'the pulse must be a ONE-SHOT animation (iteration count 1, fill-mode both) — not an infinite loop');
 
     // active is the null state: no rule may fade or ring it, or it collapses into exited/done.
     assert.ok(!/\.strip-term-btn\.strip-term-active\b/.test(shellHtml),
@@ -450,6 +466,139 @@ test('the bottom anchor is reconciled onto the FIRST cluster member, not just th
         (section.match(/applyBottomAnchor\(\)/g) || []).length, 2,
         'both branches of renderTerminalSection must reconcile the anchor'
     );
+});
+
+// ------------------------------------------------------ fleet-state presence recovery
+
+test('fetchTerminalList relays on its FAILURE path, not only on success', () => {
+    // The reported bug: a transient ptyListTerminals failure left the rail dark because
+    // the catch/fall-through path never pushed. Relaying the STALE fleetList there is
+    // deliberate — stale terminals beat no terminals, and the next poll corrects it.
+    const fn = block(terminalsJs, 'async function fetchTerminalList() {', 'function checkSoloNotFound() {');
+    const relays = (fn.match(/postFleetStateToShell\(\)/g) || []).length;
+    assert.strictEqual(relays, 2,
+        'fetchTerminalList must relay on BOTH exit paths — the success return AND the failure fall-through');
+    const tail = fn.slice(fn.indexOf('} catch (err) {'));
+    assert.ok(/postFleetStateToShell\(\)/.test(tail),
+        'the relay must sit on the post-catch fall-through, which is the path a network error / non-OK / non-array payload all reach');
+});
+
+test('the shell can request fleet state instead of only waiting to be pushed', () => {
+    // Without a pull path the rail depends entirely on the iframe's one-directional
+    // push; a push lost before the shell's listener was ready left it empty forever.
+    assert.ok(
+        /termFrame\.contentWindow\.postMessage\(\{ type: 'requestFleetState' \}, location\.origin\)/.test(shellJs),
+        'shell.js must post requestFleetState to the terminals frame, targeted at its own origin'
+    );
+    const manifest = block(shellJs, 'function renderManifest(manifest) {', 'function loadManifest() {');
+    assert.ok(
+        /addEventListener\('load'[\s\S]*requestFleetState/.test(manifest),
+        'the request must be armed off the terminals iframe load event — attached synchronously in renderManifest, so the event cannot be missed'
+    );
+    const arm = block(terminalsJs, "message.type === 'requestFleetState'", '} else if');
+    assert.ok(
+        /postFleetStateToShell\(\);/.test(arm),
+        'the panel must answer requestFleetState by relaying immediately — a fresh fetch alone re-opens the dark window it exists to close'
+    );
+});
+
+// -------------------------------------------------- completion ring pulse lifecycle
+
+test('the relay sources doneStamp from the badge value, not a parallel Map', () => {
+    // A parallel stamp Map would have seven delete sites to keep in sync with
+    // terminalBadges; folding the stamp into the value makes it impossible to leak.
+    const relay = block(terminalsJs, 'function postFleetStateToShell() {', 'const LAYOUTS = {');
+    assert.ok(
+        /doneStamp = terminalBadges\.get\(t\.friendlyName\)\.stamp/.test(relay),
+        'doneStamp must be read from the badge value (.stamp), so a badge delete cannot leave a stamp behind'
+    );
+});
+
+test('handleAgentCompleted writes a strictly increasing stamp inside the badge set', () => {
+    const handler = block(terminalsJs, 'function handleAgentCompleted(msg) {', 'function showCompletionToast(');
+    assert.ok(
+        /terminalBadges\.set\([^,]+,\s*\{\s*label:\s*'DONE',\s*stamp:\s*\+\+badgeStampSeq\s*\}\)/.test(handler),
+        'handleAgentCompleted must write { label: \'DONE\', stamp: ++badgeStampSeq } — a second completion of an already-badged terminal re-pulses'
+    );
+    assert.ok(
+        terminalsJs.includes('let badgeStampSeq = 0;'),
+        'badgeStampSeq must be declared as a module-level counter so ++ is monotonic across completions'
+    );
+});
+
+test('renderTerminalSection pulses once per stamp and resumes across rebuilds', () => {
+    const fn = block(shellJs, 'function renderTerminalSection(terminals) {', 'function renderManifest(manifest) {');
+    // The stamp gate: a new stamp arms the pulse; a repeated stamp does not re-arm.
+    assert.ok(
+        /prev\.stamp !== t\.doneStamp/.test(fn),
+        'the pulse must be armed only when the incoming doneStamp differs from the last recorded one — a stamp gate, not a boolean'
+    );
+    // The elapsed guard: STRICTLY less than. An offset that reaches the duration
+    // lands the element on its 100% keyframe under fill-mode both, flashing green
+    // on an already-expired completion.
+    assert.ok(
+        /elapsed < DONE_PULSE_MS/.test(fn),
+        'the elapsed guard must be STRICTLY less than DONE_PULSE_MS — never <=, or an expired completion flashes its end keyframe'
+    );
+    // The resume: a negative animation-delay picks up where the destroyed predecessor
+    // was killed. Without this the pulse is truncated by the next rebuild.
+    assert.ok(
+        /animationDelay\s*=\s*'-' \+ Math\.floor\(pulseElapsed\)/.test(fn),
+        'a rebuilt element must carry a negative animation-delay equal to the elapsed time — resume, do not restart'
+    );
+    // FLOOR, not round. The elapsed guard admits values strictly below DONE_PULSE_MS,
+    // but Math.round(2199.6) === 2200 hands the animation a delay whose magnitude
+    // EQUALS the duration — the post-active phase, where fill-mode `both` paints the
+    // 100% keyframe for a frame. Rounding silently defeats the strict comparison above.
+    assert.ok(
+        !/Math\.round\(pulseElapsed\)/.test(fn),
+        'the resume offset must be floored, never rounded — rounding can reach DONE_PULSE_MS and flash the end keyframe'
+    );
+});
+
+test('both early-return branches of renderTerminalSection clear the pulse ledger', () => {
+    const fn = block(shellJs, 'function renderTerminalSection(terminals) {', 'function renderManifest(manifest) {');
+    const clears = (fn.match(/pulsedDoneStamps\.clear\(\)/g) || []).length;
+    assert.ok(clears >= 2,
+        'both early-return branches (no terminals frame, empty fleet) must clear the ledger, or it retains entries for a fleet that went to zero');
+});
+
+test('a visibilitychange to visible clears the pulse ledger', () => {
+    assert.ok(
+        /document\.addEventListener\('visibilitychange'[\s\S]*visibilityState === 'visible'[\s\S]*pulsedDoneStamps\.clear\(\)/.test(shellJs),
+        'returning to a visible tab must clear the ledger so a completion missed in a background tab is re-announced exactly once'
+    );
+});
+
+test('DONE_PULSE_MS equals the CSS animation duration', () => {
+    const msMatch = shellJs.match(/const DONE_PULSE_MS = (\d+)/);
+    assert.ok(msMatch, 'DONE_PULSE_MS must be declared in shell.js');
+    const ms = parseInt(msMatch[1], 10);
+    const durMatch = shellHtml.match(/animation:\s*strip-term-done-pulse\s+([\d.]+)s/);
+    assert.ok(durMatch, 'the pulse animation duration must be declared in shell.html');
+    const seconds = parseFloat(durMatch[1]);
+    assert.strictEqual(
+        seconds * 1000, ms,
+        `DONE_PULSE_MS (${ms}) must equal the CSS duration (${seconds * 1000}) — two files, one number, nothing else keeps them honest`
+    );
+});
+
+test('the reduced-motion variant overrides animation-name only, with a distinct keyframes name', () => {
+    assert.ok(
+        /@keyframes strip-term-done-pulse-reduced\s*\{/.test(shellHtml),
+        '@keyframes strip-term-done-pulse-reduced must exist — a distinct name, not a second same-named declaration'
+    );
+    const media = shellHtml.match(/@media \(prefers-reduced-motion:\s*reduce\)\s*\{([\s\S]*?)\}\s*\}/);
+    assert.ok(media, 'a prefers-reduced-motion media block must exist');
+    assert.ok(/animation-name:\s*strip-term-done-pulse-reduced/.test(media[1]),
+        'the reduced-motion variant must override animation-name only — duration, iteration count and fill-mode are inherited');
+    // No second same-named @keyframes inside the media query (the rejected approach).
+    const reducedBlock = media[1];
+    // `\s*\{`, not `\b`: a word boundary sits between "pulse" and "-reduced", so `\b`
+    // would also flag the legitimate case of the -reduced track being moved inside the
+    // media query. Only a same-NAMED re-declaration is the hazard.
+    assert.ok(!/@keyframes strip-term-done-pulse\s*\{/.test(reducedBlock),
+        'the media query must NOT re-declare @keyframes strip-term-done-pulse — a second same-named block is invisible to this test and reorder-unsafe');
 });
 
 console.log(`\nResults: ${passed} passed, ${failed} failed`);

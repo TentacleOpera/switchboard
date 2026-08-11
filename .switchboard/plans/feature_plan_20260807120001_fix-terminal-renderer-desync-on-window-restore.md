@@ -8,12 +8,44 @@ Terminal output in the browser cockpit's PTY panes occasionally shows corrupted 
 
 The observed symptoms above are the fixed points of this plan and are not in dispute: corruption appears after a hide/show transition of the whole window, survives arbitrarily long, and disappears the moment the pty rewrites the affected cells.
 
+**Decisive field observation (2026-08-11): scrolling the terminal fixes the content it scrolls.**
+This is the cleanest available discriminator and it narrows the mechanism to one candidate. Scrolling
+changes **no buffer content whatsoever** — it moves `buffer.ydisp`, marks the viewport rows dirty, and
+repaints them. Typing is a confounded test (it rewrites the buffer *and* triggers a repaint); scrolling
+isolates the repaint. Read against the vendored renderer, `WebglRenderer.renderRows(start, end)`
+(`src/webview/vendor/xterm/addon-webgl.js`, minified) ends in:
+
+```js
+this._glyphRenderer.value.beginFrame()
+  ? (this._clearModel(!0), this._updateModel(0, this._terminal.rows - 1))
+  : this._updateModel(start, end)
+```
+
+`_updateModel` rewrites the glyph vertex data for the rows in range **from the current buffer**. So a
+plain repaint of a row range refreshes the model for those rows. Three consequences, all of which
+constrain the fix:
+
+- **The texture atlas is not corrupt.** A bad atlas would reproduce the same wrong glyphs on repaint.
+- **The vertex array is not undersized.** Out-of-bounds typed-array writes are silently dropped, so an
+  undersized array would keep dropping them on repaint and scrolling would heal nothing.
+- **The buffer content is correct.** Only the *painted output* is stale.
+
+**The defect is therefore missed repaint, not corrupt GPU state:** rows changed while hidden and no
+repaint on the restore path ever covered them. Anything that marks them dirty — a pty rewrite
+(typing), or a viewport scroll — heals them.
+
 **What the client actually does while the document is hidden.** `src/webview/terminals.js` keeps writing into xterm while the page is hidden. Output arrives on the WebSocket (`onmessage` runs regardless of visibility), is queued into `entry.batchQueue`, and `scheduleBatchFlush` (line 4909) arms **two** drains: a `requestAnimationFrame` and a `BATCH_FALLBACK_MS` (200 ms, constant at line 133) `setTimeout` (lines 4913–4924). rAF is suspended for a hidden document; the timer is only throttled, so `drainAllBatches` → `flushBatch` → `term.write(combined)` still runs. The buffer therefore advances while nothing paints.
 
 **Why the paint does not simply catch up on restore.** Two distinct pieces of renderer state can be stale when the window comes back, and only one of them is self-healing:
 
 1. **The row paint.** Rows the pty subsequently rewrites re-rasterise and self-heal. That is exactly why the damage is only ever visible on regions nothing rewrites — a CLI's static status strip — and why the operator's own keystroke "fixes" it.
-2. **The WebGL glyph model.** `GlyphRenderer` sizes and indexes its vertex array by `cols*rows`, but `WebglRenderer.handleResize` only forwards the new dimensions (`GlyphRenderer.setDimensions` is a bare `this._dimensions = e`, with no reallocation and no re-index) — this is the codebase's own finding, documented at `terminals.js:199-219`. A repaint reads the same stale model, so **a plain repaint cannot repair it**. `clearTextureAtlas()` is the only call that reaches `_clearModel(true)` → `GlyphRenderer.clear()` and rebuilds the vertex array. Nothing on the minimize/restore path calls it today.
+2. **The rows nothing repaints.**
+
+> **Superseded:** "**The WebGL glyph model.** `GlyphRenderer` sizes and indexes its vertex array by `cols*rows`, but `WebglRenderer.handleResize` only forwards the new dimensions … A repaint reads the same stale model, so **a plain repaint cannot repair it**. `clearTextureAtlas()` is the only call that reaches `_clearModel(true)` → `GlyphRenderer.clear()` and rebuilds the vertex array."
+> **Reason:** Falsified by the scroll observation above, confirmed against the vendored `renderRows`. A repaint *does* rewrite the model for the rows it covers (`_updateModel`), so scrolling — which changes no buffer content — heals the damage. If the model were genuinely stale or the vertex array undersized, scrolling could not fix anything. The claim was also self-contradictory as written: it said a repaint cannot repair the model and, in the same breath, that typing "fixes" it — typing heals *via* a repaint.
+> **Replaced with:** The damage is **unpainted rows over a correct buffer**. On regain the only thing that fires is the parked `RenderDebouncer` rAF, which repaints the merged dirty-row range and nothing else; rows outside that range keep their stale pixels indefinitely. This is why the damage sits on regions nothing rewrites (a CLI's static status strip) and why *any* subsequent repaint of those rows — keystroke or scroll — clears it. The repair required is therefore a **full-range repaint** (`refresh(0, rows-1)`), not an atlas rebuild.
+>
+> **Why `clearTextureAtlas()` nevertheless appeared to be the fix.** It is a sledgehammer route to the same repaint: it makes `beginFrame()` return true, which forces `_clearModel(true)` plus a full-range `_updateModel(0, rows-1)`. `refresh(0, rows-1)` reaches that full-range update directly, without discarding and re-rasterising every glyph.
 
 **Why a WebGL context loss makes it worse.**
 
@@ -23,9 +55,19 @@ The observed symptoms above are the fixed points of this plan and are not in dis
 
 > **Superseded:** "xterm.js's `RenderService` pauses when its `IntersectionObserver` reports `isIntersecting: false` (window minimized, tab hidden). While paused, the renderer parks all repaint requests and renderer resizes. … On window restore, rAF resumes and the IntersectionObserver should fire `isIntersecting: true` to unpause the renderer. But there is a race: the rAF callback (which flushes batched writes) can fire BEFORE the IntersectionObserver delivers the 'intersecting' record. When the renderer finally unpauses, it may only paint dirty cells from the queued write — not a full repaint."
 > **Reason:** Read against the vendored bundle (`src/webview/vendor/xterm/xterm.js`), the pause is **not** lossy, so the race it describes cannot produce the symptom. `RenderService._fullRefresh()` is `this._isPaused ? this._needsFullRefresh = true : this.refreshRows(0, this._rowCount - 1)`; `refreshRows` does the same latch; `handleResize` parks the renderer call into `this._pausedResizeTask` and then calls `_fullRefresh()`. `_handleIntersectionChange` — the *only* writer of `_isPaused` — ends with `!this._isPaused && this._needsFullRefresh && (this._pausedResizeTask.flush(), this.refreshRows(0, this._rowCount - 1), this._needsFullRefresh = !1)`. So work requested while paused is **deferred and flushed on unpause**, never dropped, and a repair issued into a paused renderer still lands. Separately — and now confirmed by the platform research under **Resolved Assumptions** — `IntersectionObserver` computes intersection from *layout geometry*, which a minimize does not change, so a minimized window keeps reporting `isIntersecting: true`. **`RenderService` is never paused by a minimize at all.** The race the plan described cannot occur because neither of its two participants behaves as described.
-> **Replaced with:** The durable defect is the **glyph model**, not the pause bookkeeping: no code path on a hide/show transition calls `clearTextureAtlas()`, and no repaint can substitute for it. The fix must therefore issue an unconditional atlas rebuild on visibility regain, and must be correct whether or not `_isPaused` was ever true. Note the corollary: because the renderer is *not* paused on minimize, there is also **no `_handleIntersectionChange` full refresh on restore** — the only thing that fires is the parked `RenderDebouncer` rAF, which repaints the merged dirty-row range and nothing else. Restore has no full-repaint step today.
+> **Replaced with:** The durable defect is that **restore carries no full-repaint step**. Because the renderer is *not* paused on minimize, there is no `_handleIntersectionChange` full refresh on restore either — the only thing that fires is the parked `RenderDebouncer` rAF, which repaints the merged dirty-row range and nothing else. The fix must therefore issue an unconditional **full-range repaint** on visibility regain, and must be correct whether or not `_isPaused` was ever true.
+>
+> *(Amended 2026-08-11: this callout previously concluded "the durable defect is the glyph model … the fix must issue an unconditional atlas rebuild." The scroll observation falsified that; the surviving half — no full-repaint step on restore — is the whole root cause and is unchanged.)*
 
-**Which trigger actually stales the glyph model — the honest narrowing.** With the pause narrative and the minimize-loses-the-context narrative both falsified, the surviving candidates for what corrupts renderer state across a hide/show are: (a) **an LRU context eviction** from elsewhere in the origin landing while the document is hidden, so the canvas fallback is attached with `requestAnimationFrame` at 0 Hz; (b) **a devicePixelRatio change** — the window restored onto a different-scaling monitor — which leaves the canvas backing store at the wrong scale while `term.cols/rows` and the CSS-derived `readRenderedGrid()` numbers all still agree, so `inspectPaneFit` returns `'ok'`; (c) **a geometry change while hidden** (window resized in the dock, layout floor demotion), which the `ResizeObserver` → `fitAndReportSize` path *does* already repair at line 219 when it changes `cols`/`rows`, but does not when only the backing scale moved. All three are repaired by the same unconditional `clearTextureAtlas()` + `refresh()` + `handleResize()` sequence, and all three are invisible to `inspectPaneFit`. This plan therefore does **not** claim a single proven trigger; it claims a repair that is correct for the whole candidate set, is idempotent, and costs one atlas rebuild per regain. The verification plan carries instrumentation (step 10) to record which candidate actually fires in the field.
+**What leaves rows unpainted — and the two secondary states the repair also covers.** The primary mechanism is settled: the buffer advanced while hidden (rAF at 0 Hz, `BATCH_FALLBACK_MS` still draining), and on regain only the merged dirty-row range repaints. A full-range `refresh(0, rows-1)` repairs that outright.
+
+Two *further* states can survive a hide/show and are **not** repaired by a repaint, because they concern canvas geometry rather than row contents: (a) **a devicePixelRatio change** — the window restored onto a different-scaling monitor — which leaves the backing store at the wrong scale while `term.cols/rows` and the CSS-derived `readRenderedGrid()` numbers all still agree, so `inspectPaneFit` returns `'ok'`; (b) **a geometry change while hidden** (window resized in the dock, layout floor demotion) where only the backing scale moved, which the `ResizeObserver` → `fitAndReportSize` path does not catch. Both need `_renderService.handleResize(cols, rows)` — step 4 of `resyncPaneRenderer` — and both are invisible to `inspectPaneFit`, which is why the repair stays unconditional rather than verdict-gated.
+
+A third state, **an LRU context eviction** from elsewhere in the origin landing while the document is hidden, attaches the canvas fallback with rAF at 0 Hz. Its own handler already calls `resyncPaneRenderer(entry, 'stale-canvas')` (see the context-loss note above); the latch simply re-runs that repair once the pane has a box.
+
+> **Superseded:** "All three are repaired by the same unconditional `clearTextureAtlas()` + `refresh()` + `handleResize()` sequence … and costs one atlas rebuild per regain."
+> **Reason:** The scroll observation shows the glyph atlas and vertex array are intact, so the atlas rebuild is not what repairs any of these. `refresh()` covers the unpainted rows; `handleResize()` covers the backing-store cases. `clearTextureAtlas()` adds cost and flicker risk without adding coverage.
+> **Replaced with:** `refresh()` + `handleResize()`, with the atlas rebuild **suppressed on this path only** (see Proposed Changes). UAT step 10 still records which candidate fires in the field, and step 22 is the explicit escape hatch if the cheaper repair proves insufficient.
 
 **There is no `visibilitychange` listener anywhere in `terminals.js`.** (The file reads `document.visibilityState` exactly once, at line 3125, to skip the fleet poll in a hidden tab — a read, not a transition hook.) The codebase already has the fix primitives — `resyncPaneRenderer` (line 3333) does `getBoundingClientRect()` + `clearTextureAtlas()` + `refresh()` + `_renderService.handleResize()`, and `startFitLadder` (line 3421) handles dimension changes — but these are only reached from `ResizeObserver` callbacks (pane switches, layout changes) and from the context-loss handler. Window minimize/restore is an unhandled visibility transition.
 
@@ -40,11 +82,11 @@ None of these fire on window minimize/restore.
 
 The `resyncPaneRenderer` function (line 3333) is the key repair primitive:
 1. `getBoundingClientRect()` — forces a style/layout flush, which lets the next IntersectionObserver computation see real geometry and unpause `RenderService`
-2. `clearTextureAtlas()` — forces the renderer to rebuild its glyph texture atlas (fixes WebGL glyph-model corruption); in `RenderService` this calls `this._renderer.value.clearTextureAtlas?.()` **unconditionally** and then `_fullRefresh()`, so it is effective even while paused
-3. `refresh(0, rows-1)` — marks all rows as dirty, requesting a full repaint
-4. `_renderService.handleResize(cols, rows)` — re-runs `_updateDimensions()` to re-size the canvas and `.xterm-screen` (fixes stale canvas dimensions); gated on the `'stale-canvas'` verdict argument
+2. `clearTextureAtlas()` — discards every rasterised glyph and forces `beginFrame()` → `_clearModel(true)` + a full-range `_updateModel`. **Not required on the visibility-regain path** (see Root Cause): it is an expensive route to the same full repaint step 3 already performs. It remains correct and wanted on the *context-loss* path, where the renderer really has been swapped.
+3. `refresh(0, rows-1)` — marks all rows as dirty, requesting a full repaint. **This is the repair this bug actually needs.**
+4. `_renderService.handleResize(cols, rows)` — re-runs `_updateDimensions()` to re-size the canvas and `.xterm-screen` (fixes stale canvas dimensions); gated on the `'stale-canvas'` verdict argument. Still required, for the DPR / backing-store cases.
 
-But `resyncPaneRenderer` is only called from the fit ladder when `inspectPaneFit` returns `'stale-canvas'` or `'mismatch'`. **If the dimensions are correct but the glyph model is corrupted, `inspectPaneFit` (line 3290) returns `'ok'` and the resync is skipped** — `inspectPaneFit` compares `term.cols/rows` against `proposeDimensions()` and against `readRenderedGrid()` (line 3261, derived from `dimensions.css.canvas / dimensions.css.cell`). None of those three numbers change when the glyph vertex array is stale. That blind spot is precisely the case this plan must cover.
+But `resyncPaneRenderer` is only called from the fit ladder when `inspectPaneFit` returns `'stale-canvas'` or `'mismatch'`. **If the dimensions are correct but rows are simply unpainted, `inspectPaneFit` (line 3290) returns `'ok'` and the resync is skipped** — `inspectPaneFit` compares `term.cols/rows` against `proposeDimensions()` and against `readRenderedGrid()` (line 3261, derived from `dimensions.css.canvas / dimensions.css.cell`). **None of those three numbers change when a row's pixels are stale**, because all three describe grid geometry and none of them inspect pixel content. That blind spot is precisely the case this plan must cover, and the argument is unaffected by the amended root cause — it never depended on the glyph-model story.
 
 ## Metadata
 
@@ -58,7 +100,9 @@ But `resyncPaneRenderer` is only called from the fit ladder when `inspectPaneFit
 
 ## User Review Required
 
-None. The trigger (`visibilitychange` → visible), the repair primitive (`resyncPaneRenderer` with the `'stale-canvas'` verdict), and the scheduler (the existing fit ladder) are all determined by the code as it stands, and every platform behaviour they rest on is settled under **Resolved Assumptions**. The one judgement call — accepting one atlas rebuild per visible pane on every alt-tab, on the platforms that report occlusion as `hidden` — is made in this plan, with the hidden-duration gate named as the remedy if UAT step 12 shows flicker.
+None. The trigger (`visibilitychange` → visible), the repair primitive (`resyncPaneRenderer` with the `'stale-canvas'` verdict and `rebuildAtlas: false`), and the scheduler (the existing fit ladder) are all determined by the code as it stands, and every platform behaviour they rest on is settled under **Resolved Assumptions**.
+
+The one judgement call is **dropping `clearTextureAtlas()` from this path**, decided by the 2026-08-11 scroll observation recorded in **Root Cause**. UAT step 22 is the escape hatch: if the cheaper repair leaves any residue, flip `rebuildAtlas` back to `true` at the single call site and re-run — a one-word change that restores the original, known-working behaviour at its original cost.
 
 ## Complexity Audit
 
@@ -95,7 +139,11 @@ None. No network call, no user-controlled string, no DOM injection, no new origi
 ### Side Effects
 
 - **Forced layout flushes on regain.** `resyncPaneRenderer` step 1 (`getBoundingClientRect`), `isRendered`, and `inspectPaneFit`'s `proposeDimensions()` each force style/layout. Worst case is a 3x3 grid → 9 panes. One-time on regain, not per-frame, and the same cost the pane-switch path already pays.
-- **Texture atlas rebuild, once per regain, per visible pane.** `clearTextureAtlas()` discards rasterised glyphs; the next frames re-rasterise them. This is the intended repair, but note the frequency: **window occlusion also reports `hidden`** in Chromium on Windows and macOS and in Safari on macOS (not in Firefox, not in Chromium on Linux). So on those platforms the handler fires every time the operator alt-tabs to a full-screen editor and back — not merely on a dock minimize. Worst case is 9 atlas rebuilds per app switch on a 3x3 grid. xterm already rebuilds the atlas on every theme change and every context-loss swap, so this is a known-shape cost rather than a new one, and it is accepted as shipped. **If UAT step 12 shows visible re-rasterisation flicker on repeated alt-tab, the remedy is to stamp a hidden-at timestamp on the `hidden` transition and latch only when the hidden interval exceeded ~2 s** — not to make the repair conditional on `inspectPaneFit`, which is the blind spot the whole change exists to route around.
+- **One full-range repaint per regain, per visible pane.** `refresh(0, rows-1)` marks every row dirty and repaints from the existing atlas. Note the frequency: **window occlusion also reports `hidden`** in Chromium on Windows and macOS and in Safari on macOS (not in Firefox, not in Chromium on Linux). So on those platforms the handler fires every time the operator alt-tabs to a full-screen editor and back — not merely on a dock minimize. Worst case is 9 full repaints per app switch on a 3x3 grid: one frame's work per pane, no glyph re-rasterisation, no texture upload.
+
+> **Superseded:** "**Texture atlas rebuild, once per regain, per visible pane.** … Worst case is 9 atlas rebuilds per app switch on a 3x3 grid … accepted as shipped. **If UAT step 12 shows visible re-rasterisation flicker on repeated alt-tab, the remedy is to stamp a hidden-at timestamp on the `hidden` transition and latch only when the hidden interval exceeded ~2 s** — not to make the repair conditional on `inspectPaneFit`."
+> **Reason:** The atlas rebuild is dropped from this path entirely (scroll observation — the atlas is intact), so there is no re-rasterisation to flicker and the hidden-duration gate has nothing left to mitigate. Keeping that contingency would have pointed the implementer at the wrong lever: throttling *when* the repair runs, rather than removing the part that was never needed.
+> **Replaced with:** No frequency gate. If UAT step 12 somehow still shows a visible cost, profile before gating — a bare `refresh()` that is too expensive to run on an alt-tab would be a separate finding about the renderer, not about this trigger. The `inspectPaneFit` gate remains forbidden for the original, still-valid reason: it is blind to pixel content.
 - **Possible `{t:'resize'}` to the shared pty**, only when the ladder finds a genuine `'mismatch'` (e.g. the window was resized while minimized). Existing, desired behaviour.
 - **Scroll area touch.** `refreshTerminalScrollbar`'s fallback path sets `viewport.style.overflowY = 'hidden'` and restores it on the next rAF. If the window is re-minimized inside that one-frame window, the viewport is left non-scrollable until rAF resumes on the next restore, at which point the pending callback runs and restores it. Self-correcting; no persistent state.
 
@@ -115,13 +163,15 @@ None — this is a standalone bugfix. No `sess_*` prerequisite. It uses existing
 
 ## Adversarial Synthesis
 
-**Risk Summary.** The three real risks are: (1) a repair that runs only against currently-visible panes silently misses every terminal in a `display:none` Terminals iframe — confirmed to receive the propagated `visibilitychange` while reporting `visibilityState: 'visible'` and a `0x0` box — and the later reveal returns `'ok'` and repairs nothing; (2) the fit ladder cannot be relied on as a retry net, because its attempt 0 returns immediately on an `'ok'` verdict and schedules nothing further — the exact verdict this bug produces; (3) the trigger fires far more often than "minimize/restore" implies, because Chromium (Win/macOS) and Safari also report `hidden` on full **window occlusion**, so every alt-tab back from an editor costs one atlas rebuild per visible pane. Mitigations: carry the repair as a latched per-entry flag consumed by the ladder on its first attempt that finds a non-zero box, so a hidden panel repairs on reveal instead of never; make the repair unconditional rather than verdict-gated; and accept the occlusion frequency as shipped, with a hidden-duration gate as the named remedy if UAT step 12 shows visible re-rasterisation flicker.
+**Risk Summary.** The three real risks are: (1) a repair that runs only against currently-visible panes silently misses every terminal in a `display:none` Terminals iframe — confirmed to receive the propagated `visibilitychange` while reporting `visibilityState: 'visible'` and a `0x0` box — and the later reveal returns `'ok'` and repairs nothing; (2) the fit ladder cannot be relied on as a retry net, because its attempt 0 returns immediately on an `'ok'` verdict and schedules nothing further — the exact verdict this bug produces; (3) the trigger fires far more often than "minimize/restore" implies, because Chromium (Win/macOS) and Safari also report `hidden` on full **window occlusion**, so every alt-tab back from an editor pays the repair cost on every visible pane. Mitigations: carry the repair as a latched per-entry flag consumed by the ladder on its first attempt that finds a non-zero box, so a hidden panel repairs on reveal instead of never; make the repair unconditional rather than verdict-gated; and make the repair cheap enough that the occlusion frequency stops mattering — dropping `clearTextureAtlas()` reduces it to one full-range repaint per pane, with no glyph re-rasterisation.
+
+**Fourth risk, added 2026-08-11: this plan previously carried the wrong root cause.** It attributed the corruption to a stale WebGL glyph model repairable only by an atlas rebuild — falsified by the field observation that *scrolling* heals the rows it scrolls, which no glyph-model or atlas defect survives. The fix direction was right for the wrong reason: `refresh()` was always doing the work and `clearTextureAtlas()` was an expensive detour to the same place. The lesson for the implementer: **judge this change by whether panes are clean on restore without input, not by whether the atlas was rebuilt.** If a future symptom shows damage pinned to screen-row position while content scrolls *through* it, that is a genuinely different bug and the glyph-model story comes back.
 
 ## Proposed Changes
 
 ### `src/webview/terminals.js`
 
-Two edits: a latch set by a new `visibilitychange` listener, and a latch consumer inside the existing fit ladder.
+Three edits: an opt-out for the atlas rebuild inside `resyncPaneRenderer`, a latch set by a new `visibilitychange` listener, and a latch consumer inside the existing fit ladder.
 
 > **Superseded:** The original plan's implementation — a `document.addEventListener('visibilitychange', ...)` in `init()` whose handler runs a bespoke double-rAF loop over `terminalsMap`, calling `resyncPaneRenderer(entry, 'stale-canvas')`, `refreshTerminalScrollbar(entry)` and `startFitLadder(name)` inline for every terminal in `paneAssignments.slice(0, getSlotCount(effectiveLayout))`.
 > **Reason:** Three defects. (a) **It cannot repair a hidden panel.** In the shell, inactive panels are `display:none`; a nested document still receives the top-level `visibilitychange`, so the loop runs against zero-box containers, `getBoundingClientRect()` returns zeros and the repair is wasted — and when the operator later clicks the Terminals icon, the reveal goes through the `ResizeObserver` → `startFitLadder` path, which returns `'ok'` and repairs nothing. The corruption survives the fix. (b) **Its stated retry net does not exist.** The plan argued that if the resync landed too early "the subsequent `startFitLadder` timer-based attempts (60ms, 180ms, 420ms) would catch up". They do not: `attempt(0)` returns at `if (before === 'ok') { return; }` (line 3443) and only schedules `step + 1` when the *post-fit* verdict is `'stale-canvas'`/`'mismatch'`. In this bug's signature case — dimensions correct, glyph model corrupt — the verdict is `'ok'`, so the ladder exits at attempt 0 and never retries. (c) **It duplicates the scheduler.** The bespoke double rAF plus `startFitLadder`'s own double rAF means two schedulers, two visible-slot guards, and a resync that can run twice per regain, with no generation counter to collapse rapid cycles.
@@ -142,7 +192,32 @@ Two edits: a latch set by a new `visibilitychange` listener, and a latch consume
 
 #### Implementation
 
-**Edit 1 — `init()`**, immediately after the `window.addEventListener('focus', ...)` block (line 632) and before `fetchKanbanColumnStructure(true)` (line 634), keeping the window-level listeners grouped:
+**Edit 1 — `resyncPaneRenderer`** (`function resyncPaneRenderer(entry, verdict)`; grep for the name, the plan's original line numbers have drifted). Add a third, optional argument so the visibility-regain path can skip the atlas rebuild. **Every existing call site stays byte-identical** — the default preserves today's behaviour, which the context-loss path genuinely needs:
+
+```javascript
+    function resyncPaneRenderer(entry, verdict, options) {
+        try { void entry.container.getBoundingClientRect(); } catch { /* ignore */ }
+        // Atlas rebuild is a sledgehammer route to a full repaint: it makes
+        // beginFrame() return true, forcing _clearModel(true) + a full-range
+        // _updateModel. refresh() below reaches that same full-range update
+        // directly. Wanted on the context-loss path (the renderer really was
+        // swapped); NOT wanted on visibility regain, where the atlas is intact
+        // and the rebuild only costs re-rasterisation on every alt-tab.
+        // Default true so all pre-existing callers are unchanged.
+        if (options?.rebuildAtlas !== false) {
+            try { entry.term.clearTextureAtlas(); } catch { /* ignore */ }
+        }
+        try { entry.term.refresh(0, Math.max(0, entry.term.rows - 1)); } catch { /* ignore */ }
+        if (verdict !== 'stale-canvas') { return; }
+        try {
+            entry.term._core._renderService.handleResize(entry.term.cols, entry.term.rows);
+        } catch { /* ignore */ }
+    }
+```
+
+Update the function's doc comment accordingly: step 2 is no longer described as the repair, and step 3 is.
+
+**Edit 2 — `init()`**, immediately after the `window.addEventListener('focus', ...)` block (line 632) and before `fetchKanbanColumnStructure(true)` (line 634), keeping the window-level listeners grouped:
 
 ```javascript
         // Renderer repair on visibility regain. While the document is hidden rAF is
@@ -155,30 +230,36 @@ Two edits: a latch set by a new `visibilitychange` listener, and a latch consume
         // does not change), so there is no _handleIntersectionChange full refresh to
         // ride on. Restore has no full-repaint step.
         //
-        // What a dirty-row repaint cannot fix is the WebGL glyph model: GlyphRenderer
-        // indexes its vertex array by cols*rows and WebglRenderer.handleResize only
-        // forwards the new dimensions (see the note in fitAndReportSize), so a repaint
-        // reads the same stale model -- which is why the damage sits on the regions
-        // nothing rewrites (a CLI's static status strip) and why typing "fixes" it.
-        // Only clearTextureAtlas() rebuilds it, and nothing on the hide/show path
-        // calls it. Same for a backing-store scale left behind by a DPR change while
-        // hidden, and for a canvas fallback attached by an LRU context eviction that
-        // landed while rAF was at 0 Hz. All three are invisible to inspectPaneFit,
-        // which is why this repair is unconditional rather than verdict-gated.
+        // So rows that changed while hidden but fell outside that merged range keep
+        // their stale pixels indefinitely over a CORRECT buffer. That is the whole
+        // bug: the damage sits on regions nothing rewrites (a CLI's static status
+        // strip), and ANY later repaint of those rows clears it -- which is why both
+        // typing and simply SCROLLING the pane fix it. Scrolling is the proof: it
+        // changes no buffer content at all, it only marks viewport rows dirty, and
+        // WebglRenderer.renderRows -> _updateModel rewrites those rows' vertex data
+        // from the buffer. The atlas and the vertex array are therefore intact --
+        // do NOT reintroduce clearTextureAtlas() here (see plan Root Cause).
+        //
+        // handleResize IS still needed: a DPR change or a resize-while-hidden leaves
+        // the canvas backing store at the wrong scale, and no repaint fixes that.
+        // Both it and the unpainted rows are invisible to inspectPaneFit (which only
+        // ever compares grid geometry, never pixel content), which is why this repair
+        // is unconditional rather than verdict-gated.
         //
         // NOTE ON FREQUENCY: Chromium (Win/macOS) and Safari also report 'hidden' for
         // a fully OCCLUDED window, so this fires on an alt-tab, not just a dock
-        // minimize. One atlas rebuild per visible pane per regain is the accepted
-        // cost; see the plan's Side Effects note before adding any gate here.
+        // minimize. With the atlas rebuild dropped the per-regain cost is one
+        // full-range repaint per visible pane -- cheap enough to pay on every app
+        // switch. See the plan's Side Effects note before adding any gate here.
         //
         // The repair is LATCHED, not run inline here. In the shell an inactive panel
         // is display:none, and a nested document still receives the top-level
         // visibilitychange -- so repairing only what is currently rendered would miss
         // every terminal in a hidden Terminals iframe, and the later reveal goes
         // through ResizeObserver -> startFitLadder, whose verdict is 'ok' (cols/rows
-        // and the painted grid all agree; a corrupt glyph model is invisible to
-        // inspectPaneFit) and therefore repairs nothing. The flag survives until the
-        // pane actually has a box.
+        // and the painted grid all agree; inspectPaneFit compares grid geometry and
+        // never pixel content, so unpainted rows are invisible to it) and therefore
+        // repairs nothing. The flag survives until the pane actually has a box.
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState !== 'visible') { return; }
             for (const entry of terminalsMap.values()) {
@@ -196,21 +277,26 @@ Two edits: a latch set by a new `visibilitychange` listener, and a latch consume
         });
 ```
 
-**Edit 2 — `startFitLadder`'s `attempt()`**, inserted after the visible-slot guard (line 3434) and before `const before = inspectPaneFit(entry);` (line 3436):
+**Edit 3 — `startFitLadder`'s `attempt()`**, inserted after the visible-slot guard (line 3434) and before `const before = inspectPaneFit(entry);` (line 3436):
 
 ```javascript
             // Visibility-regain repair, latched by the visibilitychange listener in
-            // init(). UNCONDITIONAL and NOT gated on inspectPaneFit: a stale glyph
-            // model leaves cols/rows and the painted grid in perfect agreement, so the
-            // verdict is 'ok' and the ladder's early return below would skip the one
-            // call (clearTextureAtlas) that can repair it. Gated on isRendered instead,
-            // because a repair against a zero-box container is wasted and would clear
-            // the flag that is meant to carry the intent forward to the reveal.
+            // init(). UNCONDITIONAL and NOT gated on inspectPaneFit: unpainted rows
+            // leave cols/rows and the painted grid in perfect agreement (inspectPaneFit
+            // compares grid geometry, never pixel content), so the verdict is 'ok' and
+            // the ladder's early return below would skip the repair entirely.
+            // Gated on isRendered instead, because a repair against a zero-box
+            // container is wasted and would clear the flag that is meant to carry the
+            // intent forward to the reveal.
+            // rebuildAtlas:false -- the atlas is intact on this path; refresh(0,rows-1)
+            // inside resyncPaneRenderer is the actual repair. 'stale-canvas' is still
+            // passed because it is what gates step 4 (handleResize), which covers the
+            // DPR / backing-store cases a repaint cannot.
             // Cleared BEFORE the calls: resyncPaneRenderer swallows its own errors, and
             // an entry that could not be repaired must not re-arm on every later ladder.
             if (entry.needsRendererResync && entry.term && isRendered(entry.container)) {
                 entry.needsRendererResync = false;
-                resyncPaneRenderer(entry, 'stale-canvas');
+                resyncPaneRenderer(entry, 'stale-canvas', { rebuildAtlas: false });
                 refreshTerminalScrollbar(entry);
             }
 ```
@@ -223,7 +309,7 @@ Nothing else in `startFitLadder` changes — the signature, the generation count
 
 - **Terminals panel hidden at the moment of regain (`display:none` iframe).** Confirmed behaviour, not an assumption: a nested document inherits the top-level `visibilityState` (so it reads `'visible'` even while its `<iframe>` is `display:none`), and the top-level `visibilitychange` is dispatched down into every descendant document. The listener therefore still runs, every entry is flagged, and `startFitLadder` is called for the seated names. Each `attempt` hits `isRendered() === false` → the latch is *not* consumed → `inspectPaneFit` returns `'skip'` → the ladder exits. When the operator later clicks the Terminals icon, the container's box goes 0 → non-zero, the per-container `ResizeObserver` (line 4498) fires `startFitLadder`, and *that* ladder consumes the latch and repairs. This is the case the superseded design could not reach.
 - **Terminal alive but not seated in any pane.** The ladder's visible-slot guard returns before the latch is consumed, so the flag persists. It is consumed by the ladder that `updatePaneElement`'s re-parent branch (line 2320) starts when the terminal is next assigned to a pane.
-- **WebGL context loss during minimize.** The `onContextLoss` handler (line 286) disposes WebGL, attaches the canvas fallback, and already calls `resyncPaneRenderer(entry, 'stale-canvas')` (line 306). If that ran while hidden, the latch adds a second, effective repair once the pane has a box. `clearTextureAtlas()` is optional-chained inside `RenderService` (`this._renderer.value.clearTextureAtlas?.()`), so it is a safe no-op for the canvas and DOM renderers; `refresh()` and `handleResize()` are effective for all three.
+- **WebGL context loss during minimize.** The `onContextLoss` handler (line 286) disposes WebGL, attaches the canvas fallback, and already calls `resyncPaneRenderer(entry, 'stale-canvas')` (line 306). If that ran while hidden, the latch adds a second, effective repair once the pane has a box. `clearTextureAtlas()` is optional-chained inside `RenderService` (`this._renderer.value.clearTextureAtlas?.()`), so it is a safe no-op for the canvas and DOM renderers; `refresh()` and `handleResize()` are effective for all three. **This call site keeps the atlas rebuild** — it passes no `options`, and `rebuildAtlas` defaults to `true`. That is deliberate and must not be "tidied" into `false` for consistency with the visibility path: a context loss really has swapped the renderer, so the atlas genuinely is gone and rebuilding it is the point. Only the visibility-regain path opts out, because there the atlas was never damaged.
 - **Multiple minimize/restore cycles in rapid succession.** The latch is a boolean and `fitLadderGen` keeps one live ladder per terminal, so N cycles cost one repair. rAF-scheduled attempts do not run while hidden; timer attempts that do fire hit `isRendered() === false` and consume nothing.
 - **Terminal exited during minimize.** The exit frame is processed by the WebSocket `onmessage` handler regardless of visibility, `entry.exited` is set, and the exit line is written. `flushBatch` guards on `disposed`, not `exited`, so that final output is not lost. On regain the latch repaints the pane including the exit message. `entry.disposed` is checked both in the listener and by the ladder, so a destroyed view is never touched.
 - **Solo mode (pop-out window).** `soloTerminalName` forces `effectiveLayout = '1'` and `paneAssignments = [soloTerminalName]`, so `getSlotCount('1') === 1` and the loop starts exactly one ladder. The pop-out is its own document with its own `terminalsMap`.
@@ -259,7 +345,7 @@ Verification is manual, below.
     ```
     Reproduce the corruption, then record which of the three root-cause candidates was present: a `CONTEXT LOST` line (candidate a), a changed `dpr` across the hidden interval (candidate b), or neither (candidate c / unidentified). Report the answer back — it is the only way to narrow the mechanism beyond the candidate set, and the repair is correct either way.
 11. **Hidden-panel path (the regression the superseded design missed).** In `/shell`, click a non-Terminals rail icon so the Terminals iframe is `display:none`. Minimize, wait 10 s, restore, *then* click the Terminals icon. **Verify:** panes are clean on first paint. Optionally confirm the latch survived by inspecting an entry's `needsRendererResync` before the reveal.
-12. **Occlusion frequency / flicker check (new — the trigger fires more often than "minimize").** On Chrome or Safari on macOS (or Chrome on Windows), open a 3x3 grid of terminals, then alt-tab to a full-screen editor and back **ten times**. **Verify:** no visible glyph re-rasterisation flash on return, and no sustained CPU spike in the Performance panel. If flicker is visible, apply the hidden-duration gate named in **Side Effects** (latch only when the hidden interval exceeded ~2 s) and re-run.
+12. **Occlusion frequency check (the trigger fires more often than "minimize").** On Chrome or Safari on macOS (or Chrome on Windows), open a 3x3 grid of terminals, then alt-tab to a full-screen editor and back **ten times**. **Verify:** no visible flash on return, and no sustained CPU spike in the Performance panel. With the atlas rebuild dropped there is no re-rasterisation to see; if a flash *is* visible, profile before adding any gate — see the superseded contingency in **Side Effects**.
 13. **WebGL renderer:** DevTools → Console, run `__sbTerminalStats()` and verify at least one terminal reports `isWebgl: true`. Minimize and restore — verify no corruption.
 14. **Canvas renderer:** force the fallback by opening enough terminals to exceed `MAX_WEBGL_CONTEXTS` (12, line 226). Minimize and restore — verify no corruption in the canvas-rendered terminals.
 15. **Origin-wide context eviction (candidate a, reproduced deliberately).** With a full grid already running on WebGL, open two or three solo pop-outs (`/terminals?solo=<name>`) to push the **origin** past the 16-context ceiling and force LRU eviction on the cockpit's panes. Minimize, wait 10 s, restore. **Verify:** the evicted panes repaint clean rather than showing a blank or garbled canvas.
@@ -269,6 +355,8 @@ Verification is manual, below.
 19. **Terminal exits during minimize:** start a terminal running `sleep 3 && exit`, minimize immediately, wait 5 s, restore. Verify the exit line renders correctly and is not garbled.
 20. **Solo mode:** open a terminal in a pop-out (`/terminals?solo=<name>`), minimize and restore the pop-out. Verify no corruption.
 21. **No-regression on the untouched paths:** switch panes, change layout (1 → 2x2 → 3x3), and drag a terminal between slots. Verify fit/scrollbar behaviour is unchanged and no extra `{t:'resize'}` frames appear (watch the WebSocket frames in DevTools → Network).
+22. **Escape hatch — does the cheaper repair actually suffice?** This is the one step that validates the 2026-08-11 amendment, so run it deliberately rather than folding it into step 7. Reproduce the corruption (steps 4–6) and confirm the pane is clean on restore **with `rebuildAtlas: false` in place**. If any residue survives — even one row — flip that single call site to `{ rebuildAtlas: true }`, re-run, and **report which one was needed**. A difference there means the atlas is implicated after all and the Root Cause needs re-opening; identical results confirm the atlas rebuild was dead weight. Do not silently leave it on.
+23. **Confirm the falsifying observation still holds (cheap, do it first).** Before applying the fix at all: reproduce the corruption, then **scroll the affected pane up and down without typing**. **Verify:** the rows that scroll through come back correct. This is the evidence the whole amended Root Cause rests on — if scrolling does *not* heal it on your machine, stop and report that before implementing, because the mechanism is then not what this plan describes.
 
 ## Resolved Assumptions
 
@@ -279,8 +367,13 @@ Settled by platform research (2026-08-09). **Authoritative — do not re-open th
 3. **`IntersectionObserver` keeps reporting `isIntersecting: true` for a minimized or occluded window** — intersection is computed from layout geometry, which window state does not change. It *does* report `isIntersecting: false` for content inside a `display:none` container. → xterm's `RenderService` is **never paused by a minimize**; the plan's original pause/race root cause is falsified (see the Superseded callout in **Root Cause**), and restore carries no full-repaint step.
 4. **`requestAnimationFrame` is fully suspended (0 Hz), not throttled**, for a minimized window on all three engines; `setTimeout`/`setInterval` are clamped to ~1 Hz (Chromium escalates to 1/min after 5 min for timers nested ≥5 deep, which `scheduleBatchFlush` is not). → confirms the mechanism in **Root Cause**: the rAF drain parks while the `BATCH_FALLBACK_MS` drain keeps writing.
 5. **Minimization alone does not lose a WebGL context** on macOS or Windows; the context and its VRAM survive. Loss requires LRU eviction past the **16-active-contexts-per-origin** ceiling, a GPU process restart / Windows TDR, GPU or display switching, or tab discard. → the macOS-GPU-reclaim claim is superseded; the real exposure is origin-wide LRU eviction, which `MAX_WEBGL_CONTEXTS` (a per-*document* counter of 12) cannot see. UAT step 15 reproduces it deliberately.
-6. **A `display:none` nested iframe's document reports `visibilityState: 'visible'`** (CSS box suppression is decoupled from Page Visibility per spec and in all three engines) **and does receive the `visibilitychange` propagated from the top-level context**; CSS show/hide of the iframe itself fires no `visibilitychange`. → this is exactly the hazard the latch exists for: repairing inline would measure `0x0` and corrupt the geometry it was meant to fix. The latch + `isRendered()` consumption gate is the same shape as the research's recommended "IntersectionObserver + positive-dimension guard" pattern, reusing the ladder the file already has instead of adding a second observer per pane.
+6. **A repaint of a row range rewrites that range's glyph vertex data.** `WebglRenderer.renderRows(start, end)` (`src/webview/vendor/xterm/addon-webgl.js`) ends in `beginFrame() ? (_clearModel(true), _updateModel(0, rows-1)) : _updateModel(start, end)`, and `_updateModel` reads the current buffer. → a plain repaint is sufficient to heal stale pixels; the glyph-model-corruption root cause is falsified (see the Superseded callout in **Root Cause**). Corroborated by the field observation that **scrolling heals the rows it scrolls** while changing no buffer content — the clean version of the "typing fixes it" test, which is confounded because typing both rewrites the buffer and triggers a repaint. Also explains why `clearTextureAtlas()` appeared to be the cure: it forces `beginFrame()` true, hence a full-range `_updateModel`.
+7. **A `display:none` nested iframe's document reports `visibilityState: 'visible'`** (CSS box suppression is decoupled from Page Visibility per spec and in all three engines) **and does receive the `visibilitychange` propagated from the top-level context**; CSS show/hide of the iframe itself fires no `visibilitychange`. → this is exactly the hazard the latch exists for: repairing inline would measure `0x0` and corrupt the geometry it was meant to fix. The latch + `isRendered()` consumption gate is the same shape as the research's recommended "IntersectionObserver + positive-dimension guard" pattern, reusing the ladder the file already has instead of adding a second observer per pane.
 
 ---
 
 **Recommendation:** Complexity 4 → **Send to Coder**.
+
+## Review Findings
+
+Implementation matches the amended Root Cause: the latch (`entry.needsRendererResync`), the `visibilitychange` setter in `init()`, and the ladder consumer gated on `isRendered` are all present, and `resyncPaneRenderer`'s new `options.rebuildAtlas` defaults to `true` so every pre-existing caller — including the context-loss path — is byte-identical. One CRITICAL regression fixed: the coder merged this listener with the WS-freeze plan's change-#7 fetch catch-up, which put a `fetchTerminalList()` above the solo `checkSoloNotFound()` paint and turned `terminal-solo-popout-contract` red in CI; the two listeners are now split, with the fetch catch-up registered after the first-fetch dispatch (behaviourally identical — no `visibilitychange` fires during `init()`). Files changed by this review: `src/webview/terminals.js`. Verification: `test:contract:terminal-solo-popout` 11/0 (was 10/1), `terminal-flow-control` 16/0, `terminal-input-path` 19/0, `terminal-rename-rekey` 8/0, `panel-runtime-surface` green, `tsc --noEmit` 5 errors = HEAD baseline. Remaining risk: `terminal-pane-fit` is red at HEAD (2 failures, missing `const DEFAULT_ROLES` marker) and unrelated to this plan, so the ladder edit is not covered by it; UAT steps 22 and 23 (the `rebuildAtlas: false` escape hatch and the falsifying scroll observation) are browser-only and remain unrun.

@@ -1,10 +1,10 @@
 'use strict';
 
 /**
- * Contract: browser-originated "Send to Planner"-family buttons must thread the
- * apiOriginated surface flag end-to-end so a browser PTY planner is reachable,
- * and the failure path must return the prompt in the reply body so the browser
- * clipboard fallback is real (not the extension host's clipboard).
+ * Contract: browser-originated "Send to Planner"-family buttons must use
+ * host-derived fleet resolution (no apiOriginated flag). The failure path
+ * must return the prompt in the reply body so the browser clipboard fallback
+ * is real (not the extension host's clipboard).
  *
  * (browser-send-to-planner-drops-surface-flag.md)
  *
@@ -42,10 +42,6 @@ function test(name, fn) {
     }
 }
 
-/**
- * Extract a method body by signature marker, brace-matched (mirrors the helper
- * in pty-dispatch-focus-contract.test.js).
- */
 function extractMethodBody(tsSource, methodName) {
     const marker = new RegExp(`(?:private|public|protected)\\s+(?:async\\s+)?${methodName}\\s*\\(`);
     const match = marker.exec(tsSource);
@@ -73,63 +69,43 @@ function extractMethodBody(tsSource, methodName) {
 function run() {
     console.log('\n── Browser planner dispatch surface contract ──\n');
 
-    // 1. dispatchCustomPromptToRole declares an options parameter and derives
-    //    allowPtyFleet from options?.apiOriginated.
-    test('dispatchCustomPromptToRole declares options?: { apiOriginated?: boolean }', () => {
-        assert.match(
-            taskViewerSource,
-            /public\s+async\s+dispatchCustomPromptToRole\([\s\S]*?options\?\s*:\s*\{\s*apiOriginated\?\s*:\s*boolean\s*\}/,
-            'dispatchCustomPromptToRole must declare a trailing options?: { apiOriginated?: boolean } parameter.'
-        );
+    // 1. dispatchCustomPromptToRole has no apiOriginated parameter.
+    test('dispatchCustomPromptToRole has no apiOriginated parameter', () => {
+        const sigIdx = taskViewerSource.search(/public\s+async\s+dispatchCustomPromptToRole\s*\(/);
+        const sigRegion = taskViewerSource.slice(sigIdx, sigIdx + 400);
+        assert.doesNotMatch(sigRegion, /apiOriginated/,
+            'dispatchCustomPromptToRole must NOT declare an apiOriginated parameter.');
+        assert.match(sigRegion, /workspaceRoot:\s*string\s*\)/,
+            'dispatchCustomPromptToRole must end at the workspaceRoot parameter (no options).');
     });
 
-    test('allowPtyFleet is derived as !!options?.apiOriginated (fail-closed)', () => {
+    test('dispatchCustomPromptToRole uses host-derived resolution (no allowPtyFleet)', () => {
         const body = extractMethodBody(taskViewerSource, 'dispatchCustomPromptToRole');
-        assert.match(body, /const\s+allowPtyFleet\s*=\s*!!options\?\.apiOriginated/,
-            'allowPtyFleet must be derived as !!options?.apiOriginated.');
-        // Reject a literal true default — that would let sidebar dispatches land in a PTY.
-        assert.doesNotMatch(body, /allowPtyFleet\s*=\s*true/,
-            'allowPtyFleet must NOT default to a literal true (fail-closed invariant).');
+        assert.doesNotMatch(body, /allowPtyFleet/,
+            'dispatchCustomPromptToRole must NOT reference allowPtyFleet.');
     });
 
-    test('dispatchCustomPromptToRole forwards allowPtyFleet to resolution and delivery', () => {
+    test('dispatchCustomPromptToRole forwards to resolution and delivery without allowPtyFleet', () => {
         const body = extractMethodBody(taskViewerSource, 'dispatchCustomPromptToRole');
-        assert.match(body, /_resolveAgentTerminalForPlan\(\s*role,\s*resolvedWorkspaceRoot,\s*undefined,\s*allowPtyFleet\s*\)/,
-            'must pass allowPtyFleet as the fourth argument to _resolveAgentTerminalForPlan.');
-        assert.match(body, /_dispatchExecuteMessage\(\s*resolvedWorkspaceRoot,\s*targetAgent,\s*prompt,\s*\{\},\s*'sidebar',\s*allowPtyFleet\s*\)/,
-            'must pass allowPtyFleet as the sixth argument to _dispatchExecuteMessage.');
-        assert.match(body, /_isLikelyPtyDispatchTarget\(\s*targetAgent,\s*allowPtyFleet\s*\)/,
-            'must guard the focus call with _isLikelyPtyDispatchTarget(targetAgent, allowPtyFleet).');
+        assert.match(body, /_resolveAgentTerminalForPlan\(\s*role,\s*resolvedWorkspaceRoot,\s*undefined\s*\)/,
+            'must pass 3 args to _resolveAgentTerminalForPlan (no allowPtyFleet).');
+        assert.match(body, /_dispatchExecuteMessage\(\s*resolvedWorkspaceRoot,\s*targetAgent,\s*prompt,\s*\{\},\s*'sidebar'\s*\)/,
+            'must pass 5 args to _dispatchExecuteMessage (no allowPtyFleet).');
+        assert.match(body, /_isLikelyPtyDispatchTarget\(\s*targetAgent\s*\)/,
+            'must guard the focus call with _isLikelyPtyDispatchTarget(targetAgent) (1 arg).');
     });
 
-    // 3. All eight call sites pass an apiOriginated value (none calls the 3-arg form).
-    test('every dispatchCustomPromptToRole call site passes an apiOriginated value', () => {
-        const sources = [taskViewerSource, planningSource, kanbanSource];
-        let total = 0;
-        for (const src of sources) {
-            // Match call sites (not the definition) — a call has no `async` before it.
-            const calls = src.match(/dispatchCustomPromptToRole\(/g) || [];
-            // Subtract the definition occurrence in taskViewerSource.
-            total += calls.length;
-        }
-        // Subtract 1 for the `public async dispatchCustomPromptToRole(` definition.
-        const callSites = total - 1;
-        assert.ok(callSites >= 8, `expected at least 8 call sites, found ${callSites}.`);
-        // No call site may use the bare 3-arg form: 'planner'|'lead', prompt, root )
-        // immediately closed. A 3-arg call ends with the root arg then `)` on the
-        // same or next line with no options object. We assert every call site passes
-        // an apiOriginated-bearing options object.
+    // 3. All call sites use the 3-arg form (no apiOriginated).
+    test('every dispatchCustomPromptToRole call site uses the 3-arg form (no apiOriginated)', () => {
         const allSrc = [taskViewerSource, planningSource, kanbanSource].join('\n');
-        // Find each call site region and assert it contains apiOriginated.
         const re = /dispatchCustomPromptToRole\([\s\S]{0,200}?\)/g;
         let m;
         let checked = 0;
         while ((m = re.exec(allSrc)) !== null) {
-            // Skip the definition (it spans the whole signature + body — too long).
             if (m[0].includes('public async')) { continue; }
-            if (m[0].length > 180) { continue; } // definition body, not a call
-            assert.ok(/apiOriginated/.test(m[0]),
-                `call site must pass apiOriginated: ${m[0].replace(/\s+/g, ' ').slice(0, 80)}`);
+            if (m[0].length > 180) { continue; }
+            assert.doesNotMatch(m[0], /apiOriginated/,
+                `call site must NOT pass apiOriginated: ${m[0].replace(/\s+/g, ' ').slice(0, 80)}`);
             checked++;
         }
         assert.ok(checked >= 8, `checked ${checked} call sites, expected >= 8.`);
@@ -137,7 +113,6 @@ function run() {
 
     // 4. The memo failure body carries `prompt`, and the success body does not.
     test('memoGeneratePrompt failure body carries prompt; success body does not', () => {
-        // The memo return spreads prompt only when !sendSucceeded.
         assert.match(
             taskViewerSource,
             /\.\.\.\(sendSucceeded\s*\?\s*\{\}\s*:\s*\{\s*error:\s*msg,\s*prompt\s*\}\s*\)/,
@@ -145,28 +120,24 @@ function run() {
         );
     });
 
-    // Tickets command boundary: extension.ts must forward apiOriginated explicitly.
-    test('extension.ts askAgentTask registration forwards apiOriginated across the command boundary', () => {
+    // Tickets command boundary: extension.ts must NOT forward apiOriginated.
+    test('extension.ts askAgentTask registration does NOT forward apiOriginated', () => {
         const start = extensionSource.indexOf("'switchboard.askAgentTask'");
         const region = extensionSource.slice(start, start + 1200);
-        assert.match(region, /apiOriginated\?\s*:\s*boolean/,
-            'askAgentTask command payload type must include apiOriginated?.');
-        assert.match(region, /apiOriginated:\s*!!data\.apiOriginated/,
-            'askAgentTask must forward apiOriginated: !!data.apiOriginated (the boundary destructures field-by-field).');
+        assert.doesNotMatch(region, /apiOriginated/,
+            'askAgentTask command must NOT reference apiOriginated (host-derived policy).');
     });
 
-    test('askAgentTask method accepts and forwards apiOriginated', () => {
-        // Assert against the signature region (params + return type live before the body `{`).
+    test('askAgentTask method does NOT accept or forward apiOriginated', () => {
         const sigIdx = taskViewerSource.search(/public\s+async\s+askAgentTask\s*\(/);
         const sigRegion = taskViewerSource.slice(sigIdx, sigIdx + 600);
-        assert.match(sigRegion, /apiOriginated\?\s*:\s*boolean/,
-            'askAgentTask data type must include apiOriginated?.');
+        assert.doesNotMatch(sigRegion, /apiOriginated/,
+            'askAgentTask data type must NOT include apiOriginated.');
         const body = extractMethodBody(taskViewerSource, 'askAgentTask');
-        assert.match(body, /dispatchCustomPromptToRole\([\s\S]*?apiOriginated:\s*!!data\.apiOriginated/,
-            'askAgentTask must forward apiOriginated to dispatchCustomPromptToRole.');
-        // The VS Code-only pre-check (_getAgentNameForRole before dispatch) must be gone.
-        assert.doesNotMatch(body, /if\s*\(!agentName\)\s*\{[\s\S]*?showWarningMessage\('No planner agent found/,
-            'askAgentTask must NOT keep the stale VS Code-only pre-check that reported "no planner" for a PTY planner.');
+        assert.match(body, /dispatchCustomPromptToRole\(\s*'planner',\s*prompt,\s*resolvedRoot\s*\)/,
+            'askAgentTask must call dispatchCustomPromptToRole with 3 args (no options).');
+        assert.doesNotMatch(body, /apiOriginated/,
+            'askAgentTask must NOT reference apiOriginated.');
     });
 
     console.log(`\nResult: ${passed} passed, ${failed} failed`);

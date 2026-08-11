@@ -903,6 +903,21 @@ const VALID_STATUSES = new Set(['active', 'archived', 'completed', 'deleted', 'm
 // Allow built-in columns plus custom agent columns (alphanumeric, underscores, spaces)
 const SAFE_COLUMN_NAME_RE = /^[a-zA-Z0-9 _-]{1,128}$/;
 
+/**
+ * Discriminated outcome of a kanban column update. The existing boolean methods
+ * delegate to the `…WithReason` siblings and return `.ok`, preserving every
+ * current `if (ok)` / `!!moved` call site. The reason vocabulary is the single
+ * channel that distinguishes "no such card" from "the write failed" — see the
+ * plan `feature_plan_20260808103200_column-update-failed-masks-plan-not-found.md`.
+ */
+export type ColumnUpdateOutcome =
+    | { ok: true }
+    | {
+          ok: false;
+          reason: 'not_found' | 'invalid_column' | 'no_rows_matched' | 'cascade_failed' | 'not_ready' | 'error';
+          detail: string;   // caller-safe sentence, no SQL, no paths beyond what the caller supplied
+      };
+
 function delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -2449,17 +2464,50 @@ export class KanbanDatabase {
         );
     }
 
-    public async updateColumnByPlanFile(planFile: string, workspaceId: string, newColumn: string): Promise<boolean> {
+    public async updateColumnByPlanFileWithReason(planFile: string, workspaceId: string, newColumn: string): Promise<ColumnUpdateOutcome> {
         if (!VALID_KANBAN_COLUMNS.has(newColumn) && !SAFE_COLUMN_NAME_RE.test(newColumn)) {
             console.error(`[KanbanDatabase] Rejected invalid column name: ${newColumn}`);
-            return false;
+            return { ok: false, reason: 'invalid_column', detail: `Column name '${newColumn}' is not a valid kanban column.` };
         }
         const normalized = this._ensureRelativePlanFile(planFile);
         console.log(`[KanbanDatabase] updateColumnByPlanFile: planFile=${normalized}, workspaceId=${workspaceId}, newColumn=${newColumn}`);
-        const result = await this._persistedUpdate(
-            'UPDATE plans SET kanban_column = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
-            [newColumn, new Date().toISOString(), normalized, workspaceId]
-        );
+        if (!(await this.ensureReady()) || !this._db) {
+            return { ok: false, reason: 'not_ready', detail: 'Kanban database is not ready.' };
+        }
+        // Run the UPDATE inline (mirroring updateFeatureStatus) so rows-modified is
+        // inspected — _persistedUpdate never checks it, so a zero-row UPDATE would
+        // return true and _fireColumnChanged would fire for a no-op write.
+        let affected = 0;
+        try {
+            this._db.run(
+                'UPDATE plans SET kanban_column = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+                [newColumn, new Date().toISOString(), normalized, workspaceId]
+            );
+            affected = this._db.getRowsModified();   // NO await between run() and this line
+            await this._persist();
+        } catch (error) {
+            console.error('[KanbanDatabase] updateColumnByPlanFile failed:', error);
+            return { ok: false, reason: 'error', detail: error instanceof Error ? error.message : String(error) };
+        }
+        if (affected === 0) {
+            // The VERIFY block below already logged NOT FOUND — the returned reason
+            // is now the primary carrier, but keep the console lines for continuity.
+            if (this._db) {
+                try {
+                    const stmt = this._db.prepare('SELECT kanban_column FROM plans WHERE plan_file = ? AND workspace_id = ?', [normalized, workspaceId]);
+                    if (stmt.step()) {
+                        const row = stmt.getAsObject();
+                        console.log(`[KanbanDatabase] updateColumnByPlanFile VERIFY: planFile=${normalized}, column now=${row.kanban_column}`);
+                    } else {
+                        console.warn(`[KanbanDatabase] updateColumnByPlanFile VERIFY: planFile=${normalized} NOT FOUND in DB`);
+                    }
+                    stmt.free();
+                } catch (e) {
+                    console.error(`[KanbanDatabase] updateColumnByPlanFile VERIFY failed:`, e);
+                }
+            }
+            return { ok: false, reason: 'no_rows_matched', detail: `No plan row matched plan_file '${normalized}' in this workspace.` };
+        }
         // Verify the update took effect
         if (this._db) {
             try {
@@ -2475,17 +2523,24 @@ export class KanbanDatabase {
                 console.error(`[KanbanDatabase] updateColumnByPlanFile VERIFY failed:`, e);
             }
         }
-        if (result) {
-            this._fireColumnChanged(normalized, newColumn);
-        }
-        return result;
+        this._fireColumnChanged(normalized, newColumn);
+        return { ok: true };
+    }
+
+    public async updateColumnByPlanFile(planFile: string, workspaceId: string, newColumn: string): Promise<boolean> {
+        return (await this.updateColumnByPlanFileWithReason(planFile, workspaceId, newColumn)).ok;
+    }
+
+    /** @deprecated session_id is no longer the unique key; use updateColumnByPlanFile instead. */
+    public async updateColumnWithReason(sessionId: string, newColumn: string): Promise<ColumnUpdateOutcome> {
+        const plan = await this.getPlanBySessionId(sessionId);
+        if (!plan) { return { ok: false, reason: 'not_found', detail: `No plan found for key '${sessionId}'.` }; }
+        return this.updateColumnByPlanFileWithReason(plan.planFile, plan.workspaceId, newColumn);
     }
 
     /** @deprecated session_id is no longer the unique key; use updateColumnByPlanFile instead. */
     public async updateColumn(sessionId: string, newColumn: string): Promise<boolean> {
-        const plan = await this.getPlanBySessionId(sessionId);
-        if (!plan) { return false; }
-        return this.updateColumnByPlanFile(plan.planFile, plan.workspaceId, newColumn);
+        return (await this.updateColumnWithReason(sessionId, newColumn)).ok;
     }
 
     /**

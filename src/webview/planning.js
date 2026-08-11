@@ -7377,7 +7377,10 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         // ── 2f: Import All, Import All as Plans, Link all, Sync all button
         //    listeners moved to tickets.js initTicketsTab (buttons live in
-        //    tickets.html; handlers post verbs now routed to TicketsPanelProvider). ──
+        //    tickets.html; handlers post verbs now routed to TicketsPanelProvider).
+        //    NOTE: the Link all listener was dropped, not moved, in 30d82f81 —
+        //    the accessor landed in tickets.js but the click handler did not, so
+        //    the button was inert until it was re-wired in tickets.js. ──
 
         // ── 2d: detail-pane + meta-bar listeners (btn-edit-ticket through
         //    mention handlers) moved to tickets.js initTicketsTab. ──

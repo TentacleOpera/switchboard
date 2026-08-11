@@ -49,6 +49,43 @@ node .agents/skills/kanban_operations/move-card.js my-plan.md CODER_CODED
 
 **Valid columns:** Sourced from `VALID_KANBAN_COLUMNS` export in `KanbanDatabase.ts`. Includes all built-in columns (CREATED, BACKLOG, PLAN REVIEWED, CONTEXT GATHERER, INTERN CODED, LEAD CODED, CODER CODED, CODE REVIEWED, ACCEPTANCE TESTED, CODED, COMPLETED) plus any custom agent columns matching the safe-name regex.
 
+### ⚠️ The user names the BOARD LABEL — translate it before you move anything
+
+Those are **storage ids**, not what the board shows and not what the user will say. Translate the
+label to the id and proceed. **Never** tell the user their column "doesn't exist" or recite the
+storage ids back at them.
+
+| Board label (what the user says) | Column id (what `move-card.js` takes) |
+| :--- | :--- |
+| **New** | `CREATED` |
+| **Backlog** | `BACKLOG` |
+| **Planned** | `PLAN REVIEWED` |
+| **Dispatch** | `DISPATCH` |
+| **Researcher** | `RESEARCHER` |
+| **Lead Coder** | `LEAD CODED` |
+| **Coder** | `CODER CODED` |
+| **Intern** | `INTERN CODED` |
+| **Reviewed** | `CODE REVIEWED` |
+| **Acceptance Tested** | `ACCEPTANCE TESTED` |
+| **Ticket Updater** | `TICKET UPDATER` |
+| **Completed** | `COMPLETED` |
+
+**This is a correctness hazard on a write path, not a naming nicety.** Two labels resolve to the
+opposite of the obvious guess:
+
+- **"Planned" → `PLAN REVIEWED`.** No column is stored as `PLANNED`.
+- **"Reviewed" → `CODE REVIEWED`.** Reading "Reviewed" as `PLAN REVIEWED` moves the card
+  **backwards** past every coding column — silently, because both ids are valid and the move
+  succeeds.
+
+Confirm the resolved id in your reply when you move a card (*"Moved to Planned (`PLAN REVIEWED`)"*)
+so a mis-resolution is visible immediately.
+
+**Custom columns** carry user-chosen labels this table cannot cover. The live mapping is
+`GET /kanban/columns` (`{id, label}` for built-in and custom alike). Code source of truth:
+`DEFAULT_KANBAN_COLUMNS` / `DISPLAY_MODE_COLUMNS` in `src/services/agentConfig.ts` — that file wins
+over this table.
+
 **Features:** When the card is a feature, all of its subtasks cascade to the same column automatically.
 
 **How it routes (and why it matters for Linear/ClickUp sync):**

@@ -141,8 +141,8 @@ function run() {
         // The silent call must be wrapped in the !isLikelyPty guard: assert the guard
         // block contains the executeCommand, and that there is exactly one silent
         // focus call in the method.
-        const guardIdx = body.indexOf('_isLikelyPtyDispatchTarget(targetAgent, allowPtyFleet)');
-        assert.ok(guardIdx >= 0, '_handleTriggerAgentActionInternal must guard its focus call with _isLikelyPtyDispatchTarget(targetAgent, allowPtyFleet).');
+        const guardIdx = body.indexOf('_isLikelyPtyDispatchTarget(targetAgent)');
+        assert.ok(guardIdx >= 0, '_handleTriggerAgentActionInternal must guard its focus call with _isLikelyPtyDispatchTarget(targetAgent).');
         const silentCall = /executeCommand\('switchboard\.focusTerminalByName',\s*targetAgent,\s*\{\s*silent:\s*true\s*\}\)/;
         assert.ok(silentCall.test(body), '_handleTriggerAgentActionInternal must pass { silent: true } to focusTerminalByName.');
         // The silent call must come AFTER the guard (i.e. inside its if-block).
@@ -158,8 +158,8 @@ function run() {
         // extract the outer method body and assert on the inner call.
         const body = extractMethodBody(providerSource, 'handleKanbanBatchTrigger');
         assert.ok(
-            /_isLikelyPtyDispatchTarget\(\s*group\.targetAgent,\s*allowPtyFleet\s*\)/.test(body),
-            'dispatchToGroup must guard its focus call with _isLikelyPtyDispatchTarget(group.targetAgent, allowPtyFleet).'
+            /_isLikelyPtyDispatchTarget\(\s*group\.targetAgent\s*\)/.test(body),
+            'dispatchToGroup must guard its focus call with _isLikelyPtyDispatchTarget(group.targetAgent).'
         );
         assert.ok(
             /executeCommand\('switchboard\.focusTerminalByName',\s*group\.targetAgent,\s*\{\s*silent:\s*true\s*\}\)/.test(body),
@@ -175,18 +175,18 @@ function run() {
         );
         assert.match(
             body,
-            /_isLikelyPtyDispatchTarget\(\s*targetAgent,\s*allowPtyFleet\s*\)/,
-            'dispatchCustomPromptToRole must guard its focus call with _isLikelyPtyDispatchTarget(targetAgent, allowPtyFleet) because its target can now be a PTY.'
+            /_isLikelyPtyDispatchTarget\(\s*targetAgent\s*\)/,
+            'dispatchCustomPromptToRole must guard its focus call with _isLikelyPtyDispatchTarget(targetAgent) because its target can now be a PTY.'
         );
         assert.match(
             body,
-            /_resolveAgentTerminalForPlan\(\s*role,\s*resolvedWorkspaceRoot,\s*undefined,\s*allowPtyFleet\s*\)/,
-            'dispatchCustomPromptToRole must pass allowPtyFleet as the fourth argument to _resolveAgentTerminalForPlan.'
+            /_resolveAgentTerminalForPlan\(\s*role,\s*resolvedWorkspaceRoot,\s*undefined\s*\)/,
+            'dispatchCustomPromptToRole must pass 3 args to _resolveAgentTerminalForPlan (no allowPtyFleet).'
         );
         assert.match(
             body,
-            /_dispatchExecuteMessage\(\s*resolvedWorkspaceRoot,\s*targetAgent,\s*prompt,\s*\{\},\s*'sidebar',\s*allowPtyFleet\s*\)/,
-            'dispatchCustomPromptToRole must pass allowPtyFleet as the sixth argument to _dispatchExecuteMessage.'
+            /_dispatchExecuteMessage\(\s*resolvedWorkspaceRoot,\s*targetAgent,\s*prompt,\s*\{\},\s*'sidebar'\s*\)/,
+            'dispatchCustomPromptToRole must pass 5 args to _dispatchExecuteMessage (no allowPtyFleet).'
         );
     });
 
@@ -196,8 +196,8 @@ function run() {
         const body = extractMethodBody(providerSource, '_isLikelyPtyDispatchTarget');
         assert.match(
             body,
-            /if\s*\(!allowPtyFleet\s*\|\|\s*!this\._ptyHostPort\)\s*\{\s*return\s+false;\s*\}/,
-            '_isLikelyPtyDispatchTarget must short-circuit to false when !allowPtyFleet || !this._ptyHostPort (no-PTY install keeps today\'s behaviour, never throws).'
+            /if\s*\(!this\._ptyHostPort\)\s*\{\s*return\s+false;\s*\}/,
+            '_isLikelyPtyDispatchTarget must short-circuit to false when !this._ptyHostPort (no-PTY install keeps today\'s behaviour, never throws).'
         );
         assert.match(
             body,
@@ -239,16 +239,36 @@ function run() {
 
     // --- the explicit-focus surfaces keep their warning --------------------
 
-    test('kanbanService focusTerminal verb passes NO options (warning intended)', () => {
+    // Re-anchored 2026-08-10, then 2026-08-12. `ea1077da` added `{ silent: true }`;
+    // the advanceCards plan then added a PTY-skip guard that returns before the
+    // call entirely — a PTY fleet terminal is in neither `_registeredTerminals`
+    // nor `vscode.window.terminals`, so focusing it by name always misses. The
+    // wasted executeCommand was pure noise even with `silent: true`. The guard
+    // uses `ctx.isPtyTerminalName`, wired from KanbanProvider._initKanbanService
+    // to TaskViewerProvider._isLikelyPtyDispatchTarget.
+    test('kanbanService focusTerminal skips PTY targets entirely', () => {
+        assert.ok(
+            /isPtyTerminalName/.test(kanbanServiceSource),
+            'kanbanService.focusTerminal must check ctx.isPtyTerminalName and skip the focus call for PTY targets.'
+        );
+        assert.ok(
+            /return\s*\{\s*success:\s*true\s*\}/.test(kanbanServiceSource),
+            'kanbanService.focusTerminal must return early for PTY targets.'
+        );
+    });
+
+    test('kanbanService focusTerminal is still silent for non-PTY targets', () => {
         assert.match(
             kanbanServiceSource,
-            /executeCommand\('switchboard\.focusTerminalByName',\s*terminalName\s*\)/,
-            'kanbanService.focusTerminal must call without an options argument — the warning is the answer there.'
+            /executeCommand\('switchboard\.focusTerminalByName',\s*terminalName,\s*\{\s*silent:\s*true\s*\}\)/,
+            'kanbanService.focusTerminal must pass { silent: true } for non-PTY targets.'
         );
-        assert.doesNotMatch(
-            kanbanServiceSource,
-            /executeCommand\('switchboard\.focusTerminalByName',\s*terminalName,\s*\{/,
-            'kanbanService.focusTerminal must NOT pass an options object.'
+    });
+
+    test('KanbanProvider _initKanbanService wires isPtyTerminalName', () => {
+        assert.ok(
+            /isPtyTerminalName.*_isLikelyPtyDispatchTarget/.test(kanbanProviderSource),
+            'KanbanProvider._initKanbanService must wire isPtyTerminalName to TaskViewerProvider._isLikelyPtyDispatchTarget.'
         );
     });
 

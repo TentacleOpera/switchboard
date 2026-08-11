@@ -38,14 +38,14 @@ This feature's first draft carried factual errors of exactly the class it exists
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Standalone Doc-Parity Audit — Harness, Claim Register and Evidence Rules](../plans/audit-standalone-against-extension-docs.md) — **PLAN REVIEWED**
-- [ ] [Doc-Parity Audit — `reference` Section (6 files, 788 lines)](../plans/audit-docs-section-reference.md) — **PLAN REVIEWED**
-- [ ] [Doc-Parity Audit — `board` Section (11 files, 775 lines)](../plans/audit-docs-section-board.md) — **PLAN REVIEWED**
-- [ ] [Doc-Parity Audit — `getting-started` Section (9 files, 594 lines)](../plans/audit-docs-section-getting-started.md) — **PLAN REVIEWED**
-- [ ] [Doc-Parity Audit — `project` Section (12 files, 480 lines)](../plans/audit-docs-section-project.md) — **PLAN REVIEWED**
-- [ ] [Doc-Parity Audit — `artifacts` Section (14 files, 462 lines)](../plans/audit-docs-section-artifacts.md) — **PLAN REVIEWED**
-- [ ] [Doc-Parity Audit — `pm-tools`, `integrations` and `agents` Sections (9 files, 456 lines)](../plans/audit-docs-section-pm-tools-integrations-agents.md) — **PLAN REVIEWED**
-- [ ] [Doc-Parity Audit — Closeout: Convert Gaps to Plans and Rewrite the Standalone Doc](../plans/audit-docs-closeout-gaps-to-plans-and-doc-rewrite.md) — **PLAN REVIEWED**
+- [ ] [Standalone Doc-Parity Audit — Harness, Claim Register and Evidence Rules](../plans/audit-standalone-against-extension-docs.md) — **CODE REVIEWED**
+- [ ] [Doc-Parity Audit — `reference` Section (6 files, 788 lines)](../plans/audit-docs-section-reference.md) — **CODE REVIEWED**
+- [ ] [Doc-Parity Audit — `board` Section (11 files, 775 lines)](../plans/audit-docs-section-board.md) — **CODE REVIEWED**
+- [ ] [Doc-Parity Audit — `getting-started` Section (9 files, 594 lines)](../plans/audit-docs-section-getting-started.md) — **CODE REVIEWED**
+- [ ] [Doc-Parity Audit — `project` Section (12 files, 480 lines)](../plans/audit-docs-section-project.md) — **CODE REVIEWED**
+- [ ] [Doc-Parity Audit — `artifacts` Section (14 files, 462 lines)](../plans/audit-docs-section-artifacts.md) — **CODE REVIEWED**
+- [ ] [Doc-Parity Audit — `pm-tools`, `integrations` and `agents` Sections (9 files, 456 lines)](../plans/audit-docs-section-pm-tools-integrations-agents.md) — **CODE REVIEWED**
+- [ ] [Doc-Parity Audit — Closeout: Convert Gaps to Plans and Rewrite the Standalone Doc](../plans/audit-docs-closeout-gaps-to-plans-and-doc-rewrite.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## How the Subtasks Achieve This
@@ -76,3 +76,7 @@ Two human parity audits have already been run and declared complete; a third hum
 **Reconciled — `standalone-kanban-column-parity-audit.md` is linked, not folded in.** See the Corrections section above: it is a code-fix plan whose deliverable is a shared next-column resolver plus a drift gate, not register rows. The `board` subtask links it wherever a documented advance/move fails on wrong-next-column, and neither re-plans nor executes it.
 
 **Overlap by design:** many `board`, `getting-started`, `reference` and `project` findings will map onto the **three** Standalone Push-Path Parity plans. Those are linked, never re-planned; the closeout dedupe step is where that is enforced. Note that five plans merged into the delegation plan on 2026-08-07 and no longer exist as files — a row linking one of them is a stale link to repair, not a plan to open. Each section subtask carries the gap → plan link mapping inline.
+
+## Review Findings
+
+Reviewed 2026-08-10 across all 8 subtasks. The feature file warned that if the evidence standard were relaxed during execution this would produce "another worthless completion claim" — the standard was relaxed: evidence class A was widened in the register header to admit `curl` responses, no browser was ever driven, the VSIX was never built, and the scratch workspace lacked plans, features, worktrees and a hidden role. The result is that **178 of 286 `LIVE` rows rest on verb or endpoint presence** — the criterion the feature exists to ban — so this is a repetition of the predecessors' failure rather than a correction of it. Genuine value delivered: the corpus was fully enumerated (61 files / 3,555 lines, confirmed against the tree), the audited-but-never-cited rule for `headless-switchboard.md` held, the pre-audit finding that the fabricated-payload mechanism is gone was re-verified correct at `bootstrap.ts:394/403/417/427/446`, and BRD-087 found a real defect (`moveCard` never passed to `LocalApiServer`; `LocalApiServer.ts:1322-1325` returns 503). Files changed: `.switchboard/audits/standalone-extension-parity.md` (totals recounted, `IDX-001` added, harness-deviation and quality-gate-result sections added, GAP-1 withdrawn, GAP-7 and GAP-8 reclassified) plus a `## Review Findings` block on each subtask plan; no source code was touched by this feature. The register now records its own gate as **FAILED**, so it must not be used as a planning input until a browser-driven re-audit with both build artefacts is run.

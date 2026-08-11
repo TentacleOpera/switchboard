@@ -1,9 +1,10 @@
 'use strict';
 
 /**
- * Contract: the four direct-to-vscode.Terminal helpers must be fleet-aware, must
- * NOT conjure a VS Code terminal for a browser caller, must report honest
- * success/failure, and the design + setup verb rails must stamp apiOriginated.
+ * Contract: the four direct-to-vscode.Terminal helpers must be fleet-aware,
+ * must NOT conjure a VS Code terminal when a PTY fleet is available, must
+ * report honest success/failure. Host-derived creation policy: the fleet
+ * gate replaces the old apiOriginated flag.
  *
  * (browser-direct-terminal-helpers-not-fleet-aware.md)
  *
@@ -68,11 +69,11 @@ function extractMethodBody(tsSource, methodName) {
 function run() {
     console.log('\n── Browser direct terminal helpers contract ──\n');
 
-    // 1. _tryFleetDeliveryForRole: guards + delivers via _dispatchExecuteMessage.
-    test('_tryFleetDeliveryForRole guards on apiOriginated && _ptyHostPort and delivers via _dispatchExecuteMessage', () => {
+    // 1. _tryFleetDeliveryForRole: guards on _ptyHostPort and delivers via _dispatchExecuteMessage.
+    test('_tryFleetDeliveryForRole guards on _ptyHostPort and delivers via _dispatchExecuteMessage', () => {
         const body = extractMethodBody(taskViewerSource, '_tryFleetDeliveryForRole');
-        assert.match(body, /if\s*\(!apiOriginated\s*\|\|\s*!this\._ptyHostPort\)\s*\{\s*return\s+false;\s*\}/,
-            '_tryFleetDeliveryForRole must short-circuit when !apiOriginated || !this._ptyHostPort.');
+        assert.match(body, /if\s*\(!this\._ptyHostPort\)\s*\{\s*return\s+false;\s*\}/,
+            '_tryFleetDeliveryForRole must short-circuit when !this._ptyHostPort.');
         assert.match(body, /_ptyHostVerb\('ptyListTerminals'/,
             '_tryFleetDeliveryForRole must authoritatively ask the fleet via ptyListTerminals.');
         assert.match(body, /_dispatchExecuteMessage\(/,
@@ -85,30 +86,30 @@ function run() {
     });
 
     // 2. _sendPromptToTerminal and sendPromptToAgentTerminal return boolean and
-    //    guard terminal creation for browser callers.
-    test('_sendPromptToTerminal returns Promise<boolean> and refuses to create a terminal for browser callers', () => {
+    //    guard terminal creation using host-derived policy (hasPtyHost).
+    test('_sendPromptToTerminal returns Promise<boolean> and refuses to create a terminal when fleet is available', () => {
         const sigIdx = planningSource.search(/private\s+async\s+_sendPromptToTerminal\s*\(/);
         const sigRegion = planningSource.slice(sigIdx, sigIdx + 400);
         assert.match(sigRegion, /:\s*Promise<boolean>/,
             '_sendPromptToTerminal must return Promise<boolean>.');
         const body = extractMethodBody(planningSource, '_sendPromptToTerminal');
-        assert.match(body, /if\s*\(\s*apiOriginated\s*\)\s*\{\s*return\s+false;\s*\}/,
-            '_sendPromptToTerminal must `if (apiOriginated) { return false; }` before creating a VS Code terminal.');
-        // Tries fleet first for api-originated callers.
+        assert.match(body, /hasPtyHost\(\)/,
+            '_sendPromptToTerminal must check hasPtyHost() before creating a VS Code terminal.');
+        // Tries fleet first.
         assert.match(body, /tryFleetDeliveryForRole\(/,
-            '_sendPromptToTerminal must try the fleet first for api-originated callers.');
+            '_sendPromptToTerminal must try the fleet first.');
     });
 
-    test('sendPromptToAgentTerminal returns Promise<boolean> and refuses to create a terminal for browser callers', () => {
+    test('sendPromptToAgentTerminal returns Promise<boolean> and refuses to create a terminal when fleet is available', () => {
         const sigIdx = taskViewerSource.search(/public\s+async\s+sendPromptToAgentTerminal\s*\(/);
         const sigRegion = taskViewerSource.slice(sigIdx, sigIdx + 400);
         assert.match(sigRegion, /:\s*Promise<boolean>/,
             'sendPromptToAgentTerminal must return Promise<boolean>.');
         const body = extractMethodBody(taskViewerSource, 'sendPromptToAgentTerminal');
-        assert.match(body, /if\s*\(\s*apiOriginated\s*\)\s*\{\s*return\s+false;\s*\}/,
-            'sendPromptToAgentTerminal must `if (apiOriginated) { return false; }` before creating a VS Code terminal.');
+        assert.match(body, /if\s*\(\s*this\._ptyHostPort\s*\)\s*\{\s*return\s+false;\s*\}/,
+            'sendPromptToAgentTerminal must `if (this._ptyHostPort) { return false; }` before creating a VS Code terminal.');
         assert.match(body, /_tryFleetDeliveryForRole\(/,
-            'sendPromptToAgentTerminal must try the fleet first for api-originated callers.');
+            'sendPromptToAgentTerminal must try the fleet first.');
         // The editor cold-terminal creation waits must survive (2000ms/3000ms).
         assert.match(body, /setTimeout\(r,\s*2000\)/,
             'sendPromptToAgentTerminal must keep the 2000ms spawn settle for editor callers.');
@@ -121,14 +122,12 @@ function run() {
     const sendArms = ['sendStitchTweakPrompt', 'sendHtmlTweakPrompt', 'sendClaudeImportPrompt', 'sendClaudeArtifactPrompt'];
     for (const arm of sendArms) {
         test(`DesignPanelProvider ${arm} propagates the real result (no bare success:true)`, () => {
-            // The arms are switch cases inside _handleMessage, not methods — extract by case marker.
             const caseMarker = new RegExp(`case\\s+'${arm}'\\s*:\\s*\\{`);
             const idx = designSource.search(caseMarker);
             assert.ok(idx >= 0, `case '${arm}' must exist in DesignPanelProvider.`);
-            // Grab the case body up to the next `case ` or `}` at the switch level.
             const region = designSource.slice(idx, idx + 900);
-            assert.match(region, /sendPromptToAgentTerminal\([\s\S]*?apiOriginated:\s*!!message\.apiOriginated/,
-                `${arm} must pass { apiOriginated: !!message.apiOriginated } to sendPromptToAgentTerminal.`);
+            assert.match(region, /sendPromptToAgentTerminal\(/,
+                `${arm} must call sendPromptToAgentTerminal.`);
             // The arm must branch on the delivery result — no unconditional return { success: true }.
             assert.match(region, /if\s*\(\s*!?sent\s*\)/,
                 `${arm} must branch on the delivery result (if (sent) / if (!sent)).`);
@@ -139,8 +138,6 @@ function run() {
 
     // 4. Failure returns carry error + prompt; success returns do not carry prompt.
     test('PlanningPanelProvider builder arms carry prompt only on failure', () => {
-        // Each builder arm returns { success: false, error, prompt } on miss and
-        // { success: true } on hit. Assert the pattern exists for invokePrdBuilder.
         const idx = planningSource.indexOf("case 'invokePrdBuilder':");
         const region = planningSource.slice(idx, idx + 1200);
         assert.match(region, /if\s*\(\s*!?sent\s*\)/, 'invokePrdBuilder must branch on the delivery result.');
@@ -150,8 +147,8 @@ function run() {
             'invokePrdBuilder success must return { success: true } with NO prompt field.');
     });
 
-    // 5. Fail-closed: no options?.apiOriginated defaults to true.
-    test('fail-closed: no helper defaults apiOriginated to a literal true', () => {
+    // 5. No apiOriginated parameter remains on the helper signatures.
+    test('no helper accepts an apiOriginated parameter (host-derived policy)', () => {
         const bodies = [
             extractMethodBody(planningSource, '_sendPromptToTerminal'),
             extractMethodBody(taskViewerSource, 'sendPromptToAgentTerminal'),
@@ -160,29 +157,17 @@ function run() {
             extractMethodBody(taskViewerSource, '_handleSendAnalystMessage'),
         ];
         for (const body of bodies) {
-            assert.doesNotMatch(body, /apiOriginated\s*=\s*true/,
-                'no helper may default apiOriginated to a literal true (fail-closed invariant).');
+            // Strip comments before checking — comments may reference the old flag name.
+            const stripped = body.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+            assert.doesNotMatch(stripped, /apiOriginated/,
+                'no helper may reference apiOriginated in code (host-derived policy replaces it).');
         }
     });
 
-    // 6. _handleDesignVerb and _handleSetupVerb both stamp; every verb-rail
-    //    handler either stamps or is in the documented exclusion list.
-    test('every verb-rail handler in LocalApiServer stamps apiOriginated (or is excluded by name)', () => {
-        // Find every `private async _handle*Verb(` handler.
-        const re = /private\s+async\s+_handle(\w+?)Verb\s*\(/g;
-        let m;
-        const excluded = ['Terminal']; // _handleTerminalVerb: pty control plane, no prompt dispatch
-        while ((m = re.exec(localApiSource)) !== null) {
-            const name = m[1];
-            const body = extractMethodBody(localApiSource, `_handle${name}Verb`);
-            if (excluded.includes(name)) {
-                assert.doesNotMatch(body, /_stampHttpSurface/,
-                    `_handle${name}Verb is in the exclusion list (pty control plane) and must NOT stamp.`);
-                continue;
-            }
-            assert.match(body, /_stampHttpSurface\(/,
-                `_handle${name}Verb must call _stampHttpSurface (the design/setup rails were the blocking gap).`);
-        }
+    // 6. _stampHttpSurface is gone — no verb-rail handler stamps it.
+    test('no verb-rail handler in LocalApiServer stamps apiOriginated (_stampHttpSurface removed)', () => {
+        assert.doesNotMatch(localApiSource, /_stampHttpSurface/,
+            '_stampHttpSurface must be fully removed from LocalApiServer.');
     });
 
     // 7. _deliverPromptToPmTerminal and _handleSendAnalystMessage are fleet-aware.
@@ -195,12 +180,12 @@ function run() {
             '_deliverPromptToPmTerminal must try the fleet first for project_manager.');
     });
 
-    test('_handleSendAnalystMessage tries the fleet first and threads root + flag', () => {
+    test('_handleSendAnalystMessage tries the fleet first and threads root', () => {
         const body = extractMethodBody(taskViewerSource, '_handleSendAnalystMessage');
         assert.match(body, /_tryFleetDeliveryForRole\(\s*'analyst'/,
             '_handleSendAnalystMessage must try the fleet first for analyst.');
-        assert.match(body, /_getAgentNameForRole\(\s*'analyst',\s*resolvedRoot,\s*apiOriginated\s*\)/,
-            '_handleSendAnalystMessage must pass root + apiOriginated to _getAgentNameForRole.');
+        assert.match(body, /_getAgentNameForRole\(\s*'analyst',\s*resolvedRoot\s*\)/,
+            '_handleSendAnalystMessage must pass root to _getAgentNameForRole (no apiOriginated).');
         // The existing regression test invariant: no "inbox" word.
         assert.doesNotMatch(body, /inbox/i,
             '_handleSendAnalystMessage must not introduce the word "inbox" (analyst-direct-dispatch-regression test invariant).');

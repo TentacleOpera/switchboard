@@ -574,12 +574,19 @@
         return '';
     }
 
-    // Builds the sync-status badge shown bottom-left on each card. Renders for all
-    // states (synced / modified / local-only) so it's present on every card.
+    // Builds the sync-status badge shown bottom-left on each card.
+    //
+    // FOUR inputs, not three. `undefined` means "status not fetched yet" — it is NOT
+    // the same as 'local-only', and collapsing them made every drill-down subtask card
+    // claim it was local-only when its status had simply never been requested.
+    //
+    // The pending label is ASCII: this panel's font stack carries no symbol glyphs, so
+    // an ellipsis or arrow renders as tofu.
     function _ticketSyncBadge(syncStatus) {
         if (syncStatus === 'modified') { return `<span class="ticket-sync-badge ticket-sync-modified">modified</span>`; }
         if (syncStatus === 'synced') { return `<span class="ticket-sync-badge ticket-sync-synced">synced</span>`; }
-        return `<span class="ticket-sync-badge ticket-sync-local">local</span>`;
+        if (syncStatus === 'local-only') { return `<span class="ticket-sync-badge ticket-sync-local">local</span>`; }
+        return `<span class="ticket-sync-badge ticket-sync-pending">checking</span>`;
     }
 
     // ── 2c: Priority popover dismiss + outside-click/ESC handlers ──
@@ -1348,11 +1355,19 @@
         // (the Tickets tab has none) — let the backend resolve it.
         if (!lastIntegrationProvider) return;
         const issues = lastIntegrationProvider === 'clickup' ? clickUpProjectIssues : linearProjectIssues;
-        if (!issues.length) return;
+        // Drill-down subtasks are rendered as full cards with the same badge, but they
+        // arrive from the detail fetch carrying no syncStatus. Fold their ids into the
+        // SAME request so they inherit this request's scope stamp — a second, unscoped
+        // request would be discarded by _isForThisPanel on the way back.
+        const drillIds = _isDrillDownActive(lastIntegrationProvider)
+            ? (_drillDownSubtasks || []).map(s => s.id).filter(Boolean)
+            : [];
+        const ids = Array.from(new Set([...issues.map(t => t.id), ...drillIds])).filter(Boolean);
+        if (ids.length === 0) return;
         vscode.postMessage({
             type: 'getTicketSyncStatuses',
             provider: lastIntegrationProvider,
-            ids: issues.map(t => t.id),
+            ids,
             workspaceRoot: ticketsWorkspaceRoot || undefined,
             // Pass the scope id so the backend can stamp it on the broadcast reply
             // (cross-panel contamination fix). ClickUp scopes by listId; Linear has
@@ -2798,7 +2813,8 @@
                 `;
             } else {
                 html += `
-                            <button class="strip-btn download-attachment-modal-btn" data-url="${escapeAttr(url)}" data-filename="${escapeAttr(filename)}" style="font-size: 11px; padding: 2px 6px; background: var(--accent-teal, #00ffcc); color: black;">Download</button>
+                            <a href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer" class="strip-btn" style="font-size: 11px; padding: 2px 6px;">Open remote</a>
+                            <button class="strip-btn download-attachment-modal-btn" data-url="${escapeAttr(url)}" data-filename="${escapeAttr(filename)}" data-attachment-id="${escapeAttr(att.id || '')}" style="font-size: 11px; padding: 2px 6px; background: var(--accent-teal, #00ffcc); color: black;">Download</button>
                 `;
             }
 
@@ -2864,6 +2880,7 @@
             btn.addEventListener('click', () => {
                 const url = btn.dataset.url;
                 const filename = btn.dataset.filename;
+                const attachmentId = btn.dataset.attachmentId;
                 const provider = lastIntegrationProvider;
                 const ticketId = provider === 'linear' ? selectedLinearIssue?.issue?.id : selectedClickUpIssue?.task?.id;
                 const ticketTitle = provider === 'linear' ? selectedLinearIssue?.issue?.title : selectedClickUpIssue?.task?.title;
@@ -2873,6 +2890,7 @@
                     provider,
                     url,
                     filename,
+                    attachmentId,
                     ticketId,
                     ticketTitle
                 });
@@ -3007,7 +3025,7 @@
         }
         if (attachments.length > 0) {
             html += '<h3 style="user-select:none;">Attachments</h3>';
-            html += attachments.map(a => `<button type="button" class="tickets-attachment-item" data-clickup-attachment-url="${escapeAttr(a.url || '')}">${escapeHtml(a.title || a.filename || a.url || 'Attachment')}</button>`).join('');
+            html += attachments.map(a => `<button type="button" class="tickets-attachment-item" data-attachment-id="${escapeAttr(a.id || '')}" data-clickup-attachment-url="${escapeAttr(a.url || '')}">${escapeHtml(a.title || a.filename || a.url || 'Attachment')}</button>`).join('');
         }
 
         _lastTicketsClickUpDetailContentHtml = '';
@@ -3320,7 +3338,7 @@
         if (selectedLinearIssue.attachments && selectedLinearIssue.attachments.length > 0) {
             contentHtml += '<h3>Attachments</h3>';
             contentHtml += selectedLinearIssue.attachments.map(attachment => `
-                <button type="button" class="tickets-attachment-item" data-linear-attachment-url="${escapeAttr(attachment.url || '')}">
+                <button type="button" class="tickets-attachment-item" data-attachment-id="${escapeAttr(attachment.id || '')}" data-linear-attachment-url="${escapeAttr(attachment.url || '')}">
                     ${escapeHtml(attachment.title || attachment.filename || attachment.url || 'Attachment')}
                 </button>
             `).join('');
@@ -3425,7 +3443,7 @@
         if (selectedClickUpIssue.attachments && selectedClickUpIssue.attachments.length > 0) {
             contentHtml += '<h3>Attachments</h3>';
             contentHtml += selectedClickUpIssue.attachments.map(attachment => `
-                <button type="button" class="tickets-attachment-item" data-clickup-attachment-url="${escapeAttr(attachment.url || '')}">
+                <button type="button" class="tickets-attachment-item" data-attachment-id="${escapeAttr(attachment.id || '')}" data-clickup-attachment-url="${escapeAttr(attachment.url || '')}">
                     ${escapeHtml(attachment.title || attachment.filename || attachment.url || 'Attachment')}
                 </button>
             `).join('');
@@ -3456,6 +3474,9 @@
             _drillDownParentTitle = provider === 'linear'
                 ? ((detail.issue && (detail.issue.title || detail.issue.identifier)) || '')
                 : ((detail.task && (detail.task.title || detail.task.name)) || '');
+            // AFTER _drillDownProvider — _isDrillDownActive gates on it, so a request
+            // fired earlier in this block would omit every subtask id.
+            _requestTicketSyncStatuses();
         }
     }
     function loadMoreClickUpTasks() {
@@ -5010,9 +5031,26 @@
             });
         });
 
-        // ── 2f: Sync-all + Agent API modal wiring (moved from planning.js). ──
-        const { syncAllButton, ticketsAgentApiBtn, ticketsAgentApiModal,
+        // ── 2f: Link-all + Sync-all + Agent API modal wiring (moved from planning.js). ──
+        const { linkAllButton, syncAllButton, ticketsAgentApiBtn, ticketsAgentApiModal,
             btnCloseTicketsAgentApiModal, btnCloseTicketsAgentApiModalAction } = getTicketsTabElements();
+
+        linkAllButton?.addEventListener('click', () => {
+            const provider = lastIntegrationProvider;
+            let ids = [];
+            if (provider === 'linear') {
+                ids = getFilteredLinearIssues().map(issue => issue.id);
+            } else if (provider === 'clickup') {
+                ids = getFilteredClickUpTasks().map(task => task.id);
+            }
+            vscode.postMessage({
+                type: 'copyToClipboard',
+                provider,
+                workspaceRoot: ticketsWorkspaceRoot,
+                ticketIds: ids
+            });
+            _lastLinkTicketBtn = linkAllButton;
+        });
 
         syncAllButton?.addEventListener('click', () => {
             // Do NOT call setTicketsLoadingState(true) — that dims the whole previewer
@@ -5251,6 +5289,7 @@ Instructions:
                 const provider = lastIntegrationProvider;
                 const url = attachmentBtn.dataset.linearAttachmentUrl || attachmentBtn.dataset.clickupAttachmentUrl;
                 const filename = attachmentBtn.textContent.trim();
+                const attachmentId = attachmentBtn.dataset.attachmentId;
                 const ticketId = provider === 'linear'
                     ? selectedLinearIssue?.issue.id
                     : selectedClickUpIssue?.task.id;
@@ -5263,6 +5302,7 @@ Instructions:
                     provider,
                     url,
                     filename,
+                    attachmentId,
                     ticketId,
                     ticketTitle
                 });
@@ -7489,6 +7529,12 @@ Instructions:
                 if (!_isForThisPanel(message)) { break; }
                 const provider = message.provider;
                 const statuses = message.statuses || {};
+                if (message.success === false) {
+                    // Ids stay unresolved and their badges stay `checking`. That is the
+                    // honest report of a broken fetch — log it so it's diagnosable, but
+                    // do NOT substitute a made-up status.
+                    console.warn('[tickets] sync-status fetch failed:', message.error);
+                }
                 if (provider === 'clickup') {
                     clickUpProjectIssues = clickUpProjectIssues.map(t => ({
                         ...t, syncStatus: statuses[t.id] ?? t.syncStatus
@@ -7497,6 +7543,12 @@ Instructions:
                     linearProjectIssues = linearProjectIssues.map(t => ({
                         ...t, syncStatus: statuses[t.id] ?? t.syncStatus
                     }));
+                }
+                // Patch the drill-down set in place too — it is a separate array that the
+                // sidebar renders from directly, and it survives subtask-detail loads, so a
+                // render-local copy would lose the status on the next re-render.
+                if (_drillDownSubtasks && _drillDownProvider === provider) {
+                    _drillDownSubtasks = _drillDownSubtasks.map(s => ({ ...s, syncStatus: statuses[s.id] ?? s.syncStatus }));
                 }
                 renderTicketsTab();
                 break;
@@ -7514,13 +7566,22 @@ Instructions:
                 // regression — say what actually happened instead.
                 _ticketsScopeCoverage = message.scopeCoverage || null;
                 _ticketsAwaitingListSelection = !!message.unscopedPlaceholder;
+                // The local-file lister does not emit syncStatus, so a bare
+                // `syncStatus: t.syncStatus` wipes every status already resolved by
+                // ticketSyncStatusesLoaded — and both call sites fire the status request
+                // BEFORE this load, so a fast reply loses that race. Carry the known
+                // value forward; the re-request below fills anything still unknown.
+                const prevSync = new Map(
+                    (localProvider === 'clickup' ? clickUpProjectIssues : linearProjectIssues)
+                        .map(t => [t.id, t.syncStatus])
+                );
                 if (localProvider === 'clickup') {
                     clickUpProjectIssues = tickets.map(t => ({
                         id: t.id, title: t.title, identifier: t.id,
                         status: t.status || '',
                         assignees: Array.isArray(t.assignees) ? t.assignees.map(n => ({ username: n })) : [],
                         filePath: t.filePath,
-                        syncStatus: t.syncStatus, url: t.url,
+                        syncStatus: t.syncStatus ?? prevSync.get(t.id), url: t.url,
                         dateCreated: t.dateCreated,
                         // Priority persisted in the ticket file frontmatter (backend reads it
                         // into { priority, color, orderindex }); pass it through so the
@@ -7536,7 +7597,7 @@ Instructions:
                         state: { name: t.status || '' },
                         assignee: Array.isArray(t.assignees) && t.assignees.length ? { name: t.assignees[0] } : null,
                         description: '', filePath: t.filePath,
-                        syncStatus: t.syncStatus, url: t.url,
+                        syncStatus: t.syncStatus ?? prevSync.get(t.id), url: t.url,
                         dateCreated: t.dateCreated
                     }));
                     linearProjectStatus = 'loaded';
@@ -7544,6 +7605,7 @@ Instructions:
                     linearProjectLoading = false;
                 }
                 renderTicketsTab();
+                _requestTicketSyncStatuses();
                 break;
             }
             case 'localTicketFileRead': {
@@ -7825,14 +7887,25 @@ Instructions:
             case 'syncAllTicketsResult': {
                 const syncAllBtn = document.getElementById('tickets-sync-all');
                 if (syncAllBtn) syncAllBtn.disabled = false;
+                // `skipped` = files already in sync with the remote, which Sync All now
+                // filters out instead of pushing. Report it: without it, the common case
+                // (nothing modified) rendered as "No local ticket files to sync." — a lie
+                // when there are hundreds of files, all of them simply current.
+                const skipped = message.skipped || 0;
+                const inSync = skipped > 0 ? ` ${skipped} already in sync.` : '';
                 if (message.success) {
                     if (message.succeeded === 0) {
-                        showTicketsStatus('No local ticket files to sync.', false);
+                        showTicketsStatus(
+                            skipped > 0
+                                ? `Nothing to push —${inSync.replace(/\.$/, '')}.`
+                                : 'No local ticket files to sync.',
+                            false
+                        );
                     } else {
-                        showTicketsStatus(`Synced ${message.succeeded} tickets successfully.`, false);
+                        showTicketsStatus(`Pushed ${message.succeeded} ticket${message.succeeded === 1 ? '' : 's'}.${inSync}`, false);
                     }
                 } else {
-                    showTicketsStatus(`Synced ${message.succeeded} succeeded, ${message.failed} failed.`, true);
+                    showTicketsStatus(`Pushed ${message.succeeded} succeeded, ${message.failed} failed.${inSync}`, true);
                 }
                 break;
             }

@@ -130,9 +130,126 @@ function encodeOutputFrame(seq: number, payload: string): Buffer {
     return frame;
 }
 
+/**
+ * Ceiling on the CSI param/intermediate run the replay boundary scanner will cross.
+ *
+ * A legitimate CSI is short (`\x1b[?1049;2004;1000;1002;1006h` is 28 bytes). Anything
+ * longer is either not a CSI or is unresolvable, and both cases must bail to "trim
+ * nothing" rather than guess. Same ceiling and same reason as MODE_SCAN_CARRY_MAX.
+ */
+export const REPLAY_CSI_SCAN_MAX = 64;
+
+/**
+ * Ceiling on the unterminated tail carried across an eviction, and on the forward scan
+ * into the new head chunk. Larger than the CSI bound because OSC 52 (clipboard) payloads
+ * are legitimately kilobytes; small enough that the per-terminal cost is one 4 KB string
+ * held only between an eviction and the next one.
+ */
+export const REPLAY_BOUNDARY_CARRY_MAX = 4096;
+
+/**
+ * Index just past the end of the escape sequence starting at `escIdx`, or -1 when it does
+ * not terminate within `text`.
+ *
+ * The string-domain, index-returning sibling of isEscapeSequenceComplete. Not merged with
+ * it deliberately: that one is on the INPUT hot path, operates on Buffer, and returns a
+ * boolean by design. Changing its shape to serve the replay path would churn shipped
+ * input-path behaviour for no gain.
+ *
+ * Terminator sets are taken from the vendored VT500_TRANSITION_TABLE, not from memory:
+ * CSI dispatches to GROUND on 0x40-0x7E; OSC ends on ST / ESC / CAN / SUB / BEL.
+ */
+export function escapeSequenceEnd(text: string, escIdx: number): number {
+    let j = escIdx + 1;
+    if (j >= text.length) { return -1; }   // bare ESC at the very end
+    const introducer = text.charCodeAt(j);
+
+    if (introducer === 0x5b /* [ */) {
+        const limit = Math.min(text.length, j + 1 + REPLAY_CSI_SCAN_MAX);
+        for (let k = j + 1; k < limit; k++) {
+            const c = text.charCodeAt(k);
+            // ESC aborts the sequence (transition table: byte 27 -> CLEAR/ESCAPE from
+            // every state). Bail rather than pretend to know where the abort leaves us.
+            if (c === 0x1b) { return -1; }
+            if (c >= 0x40 && c <= 0x7e) { return k + 1; }
+            if (c < 0x20 || c > 0x3f) { return -1; }  // not a param/intermediate byte
+        }
+        return -1;
+    }
+
+    // OSC (ESC ]) and the string families DCS/APC/PM/SOS (ESC P / _ / ^ / X). All end on
+    // ST (ESC \) and OSC also on BEL. ESC alone is treated as the terminator, consuming a
+    // following `\` when present — the one-byte ambiguity is accepted: over-consuming a
+    // lone trailing `\` costs one character at the very top of a replay, and refusing to
+    // resolve it at all would leave the whole OSC payload printed as junk.
+    if (introducer === 0x5d /* ] */ || introducer === 0x50 /* P */
+        || introducer === 0x5f /* _ */ || introducer === 0x5e /* ^ */
+        || introducer === 0x58 /* X */) {
+        const limit = Math.min(text.length, j + 1 + REPLAY_BOUNDARY_CARRY_MAX);
+        for (let k = j + 1; k < limit; k++) {
+            const c = text.charCodeAt(k);
+            if (c === 0x07 /* BEL */ || c === 0x18 /* CAN */ || c === 0x1a /* SUB */) { return k + 1; }
+            if (c === 0x9c /* ST, 8-bit */) { return k + 1; }
+            if (c === 0x1b) { return text.charCodeAt(k + 1) === 0x5c ? k + 2 : k + 1; }
+        }
+        return -1;
+    }
+
+    // ESC <intermediate> <final> (ESC ( B, ESC # 8 …): one more byte closes it.
+    if (introducer >= 0x20 && introducer <= 0x2f) { return j + 2 <= text.length ? j + 2 : -1; }
+
+    // Two-byte escape (ESC c, ESC 7, ESC =): the introducer itself closes it.
+    return j + 1;
+}
+
+/**
+ * The trailing fragment of `text` that is an escape sequence still open at its end, or ''
+ * when `text` ends at a clean boundary.
+ *
+ * Called ONCE PER EVICTION, over the chunk being discarded — the last moment at which the
+ * bytes preceding the new ring head still exist. Returns '' (give up) when the open
+ * sequence is longer than REPLAY_BOUNDARY_CARRY_MAX, which degrades to today's behaviour
+ * rather than to a guess.
+ */
+export function unterminatedEscapeTail(text: string): string {
+    const escIdx = text.lastIndexOf('\x1b');
+    if (escIdx === -1) { return ''; }
+    if (escapeSequenceEnd(text, escIdx) !== -1) { return ''; }
+    const tail = text.slice(escIdx);
+    return tail.length > REPLAY_BOUNDARY_CARRY_MAX ? '' : tail;
+}
+
+/**
+ * Offset into `head` at which a parser starting COLD can safely begin, given `carry` — the
+ * unterminated tail of the chunk immediately before it.
+ *
+ * Returns 0 whenever the remainder cannot be resolved inside the bounds. That direction is
+ * deliberate and asymmetric: an under-trim leaves the cosmetic junk this exists to remove,
+ * an over-trim deletes real pty output. Only the first is acceptable.
+ */
+export function replaySafeStart(carry: string, head: string): number {
+    if (!carry) { return 0; }
+    const combined = carry + head.slice(0, REPLAY_BOUNDARY_CARRY_MAX);
+    const end = escapeSequenceEnd(combined, 0);
+    if (end === -1) { return 0; }
+    return Math.max(0, Math.min(head.length, end - carry.length));
+}
+
 interface ScrollbackBuffer {
     chunks: ScrollbackChunk[];
     totalBytes: number;
+    /**
+     * Offset into chunks[0].data at which a COLD parser can safely start.
+     *
+     * Non-zero only after an eviction that cut an escape sequence in half. 0 while the
+     * ring still holds the stream origin, which is why an origin replay is never trimmed.
+     *
+     * A field on the buffer, NOT a sibling Map keyed by terminal name: rekeyTerminal
+     * moves the buffer wholesale, and terminal-rename-rekey-contract.test.js derives its
+     * collection list from untrackTerminalData — a new name-keyed Map would have to be
+     * threaded through both.
+     */
+    headSafeStart: number;
     /**
      * Monotonic output counter for THIS TERMINAL — not per-connection.
      *
@@ -154,6 +271,10 @@ interface ClientState {
     /** Last size this client reported FROM A RENDERED VIEWPORT. Undefined until it
      *  has one — a client with nothing on screen does not get a vote. See applyResize. */
     reportedSize?: { cols: number; rows: number };
+    /** This connection is a single-terminal viewer (a `?solo=` pop-out window), declared
+     *  once on the upgrade URL. When any primary is attached, only primaries vote on the
+     *  pty size. Immutable for the life of the socket: a solo window cannot become a grid. */
+    primary: boolean;
 }
 
 export class TerminalWsGateway {
@@ -386,7 +507,7 @@ export class TerminalWsGateway {
     private trackTerminalData(t: ExtendedTerminalHandle): void {
         if (this.terminalSubscriptions.has(t.name)) return;
 
-        const buffer: ScrollbackBuffer = { chunks: [], totalBytes: 0, nextSeq: 1 };
+        const buffer: ScrollbackBuffer = { chunks: [], totalBytes: 0, headSafeStart: 0, nextSeq: 1 };
         this.scrollbackBuffers.set(t.name, buffer);
 
         // Accumulate only. Everything expensive — seq assignment, ring-buffer
@@ -463,6 +584,11 @@ export class TerminalWsGateway {
             while (buffer.totalBytes > MAX_SCROLLBACK_BYTES && buffer.chunks.length > 1) {
                 const removed = buffer.chunks.shift()!;
                 buffer.totalBytes -= removed.data.length;
+                // The bytes before the new head are about to stop existing. This is the only
+                // moment at which "does the new head begin mid-sequence" is answerable exactly
+                // rather than guessed from the head's own bytes — stripped of its introducer, a
+                // sequence tail is indistinguishable from plain text.
+                buffer.headSafeStart = replaySafeStart(unterminatedEscapeTail(removed.data), buffer.chunks[0].data);
             }
         }
 
@@ -814,18 +940,23 @@ export class TerminalWsGateway {
         // client to discard the prefix.
         const rawLastSeq = Number(reqUrl.searchParams.get('lastSeq'));
         const lastSeq = Number.isFinite(rawLastSeq) && rawLastSeq > 0 ? rawLastSeq : 0;
+        // Declared by the client at connect time, never per-frame: a `?solo=` pop-out
+        // window exists BECAUSE the operator wants this one terminal at that window's
+        // size, and it cannot stop being one while the socket lives.
+        const primary = reqUrl.searchParams.get('solo') === '1';
 
         this.wss.handleUpgrade(req, socket, head, (ws) => {
-            this.setupClient(ws, terminal, lastSeq);
+            this.setupClient(ws, terminal, lastSeq, primary);
         });
     }
 
-    private setupClient(ws: WebSocket, terminal: ExtendedTerminalHandle, lastSeq = 0): void {
+    private setupClient(ws: WebSocket, terminal: ExtendedTerminalHandle, lastSeq = 0, primary = false): void {
         const client: ClientState = {
             ws,
             terminalName: terminal.name,
             isAlive: true,
             unackedChars: 0,
+            primary,
         };
         this.clients.add(client);
 
@@ -842,15 +973,61 @@ export class TerminalWsGateway {
         // whole mechanism exists to break.
         let replayFrame: Buffer | undefined;
         let replayChars = 0;
+        let replayGap = false;
         if (buffer && buffer.chunks.length > 0) {
+            const oldestRetained = buffer.chunks[0].seq;
+            // The ring evicts at MAX_SCROLLBACK_BYTES, so a client that was away long
+            // enough is asking for output that no longer exists. The filter alone
+            // cannot tell that from "you missed nothing" — it returns the survivors
+            // either way and the client seals the hole by advancing its lastSeq.
+            // Seqs are contiguous (one per flush, evicted only from the front), so this
+            // comparison is exact, not a heuristic.
+            replayGap = lastSeq > 0 && oldestRetained > lastSeq + 1;
             const missed = lastSeq > 0
                 ? buffer.chunks.filter(c => c.seq > lastSeq)
                 : buffer.chunks;
             if (missed.length > 0) {
                 const replaySeq = missed[missed.length - 1].seq;
-                const combined = missed.map(c => c.data).join('');
+                let combined = missed.map(c => c.data).join('');
+                // Trim ONLY when the payload starts at the RING HEAD, which is exactly
+                // when the receiving parser is at GROUND: a fresh attach builds a new
+                // xterm, and a gapped reconnect is preceded by RIS on the client.
+                //
+                // On a CONTIGUOUS reconnect the payload starts mid-ring against the SAME
+                // xterm instance, whose parser may legitimately be mid-sequence from the
+                // chunk it already consumed — the continuation is parsed correctly and
+                // trimming it would corrupt the common path. headSafeStart is 0 while the
+                // ring still holds the origin, so this also leaves an origin replay
+                // byte-identical.
+                //
+                // Starting at the ring head is NECESSARY but not SUFFICIENT. It is also
+                // true of a contiguous reconnect whose lastSeq is exactly the evicted
+                // chunk's seq (oldestRetained === lastSeq + 1): no gap, no RIS, the SAME
+                // xterm — and its parser is sitting mid-sequence on precisely the
+                // continuation this trim would delete, after which it eats real output
+                // hunting for a final byte. So require a provably COLD parser too:
+                // lastSeq === 0 is a fresh attach against a new xterm, and replayGap
+                // means the client wrote RIS on the hello arm before this payload.
+                if (missed.length === buffer.chunks.length
+                    && (lastSeq === 0 || replayGap)
+                    && buffer.headSafeStart > 0) {
+                    combined = combined.slice(buffer.headSafeStart);
+                }
+                // AFTER the trim. replayChars is the client's ackSuppressChars budget
+                // and it must equal what the client actually writes, or the ledger
+                // drifts by the trimmed bytes on every attach.
                 replayChars = combined.length;
-                replayFrame = encodeOutputFrame(replaySeq, combined);
+                if (replayChars > 0) {
+                    replayFrame = encodeOutputFrame(replaySeq, combined);
+                }
+            }
+            if (replayGap) {
+                // The client-side badge tells the operator; this is what makes the drop
+                // diagnosable afterwards, since it is otherwise invisible in every log.
+                console.warn(
+                    `[TerminalWsGateway] Scrollback gap on ${terminal.name}: client lastSeq=${lastSeq}, ` +
+                    `oldest retained seq=${oldestRetained} — ${oldestRetained - lastSeq - 1} frame(s) evicted before reattach`
+                );
             }
         }
 
@@ -866,6 +1043,7 @@ export class TerminalWsGateway {
             rows: terminal.pty.rows || 24,
             seq: buffer ? buffer.nextSeq - 1 : 0,
             replayChars,
+            ...(replayGap ? { replayGap: true } : {}),
             // Omitted, NOT false, when nothing has been observed: telling a client to
             // DISABLE a mode nobody has ruled on is a regression, not a default. Same
             // rule per-mode inside `modes`, which only ever contains observed modes.
@@ -970,18 +1148,27 @@ export class TerminalWsGateway {
      * with no layout reports its 80x24 construction default. The operator's visible
      * terminal was squashed to 24 rows on every shell load and tab switch.
      *
-     * Two rules, in order:
+     * Three rules, in order:
      *  - A client that says it is not rendering gets no vote at all. terminals.js now
      *    stamps `rendered: true` on frames sent from a real box; a frame WITHOUT the
      *    field is treated as rendered so an older client behaves exactly as before.
-     *  - Among the clients that do have a viewport, take the MIN. That is the
-     *    conventional multi-client rule (tmux does the same): the smallest attached
-     *    viewport is the only size where nobody is looking at wrapped or clipped
-     *    output. With one client attached — overwhelmingly the common case — the min
-     *    of one is just that client's size, so nothing changes.
+     *  - A primary viewer (`?solo=1` pop-out) outranks every non-primary; the min rule
+     *    then applies within the primary set. A solo pop-out exists BECAUSE the operator
+     *    wants this one terminal at that window's size; every other viewer is a thumbnail.
+     *  - With no primary attached, the candidate set is every client and the arithmetic
+     *    is exactly what it was.
      */
     private applyResize(client: ClientState, parsed: { cols: number; rows: number; rendered?: boolean }): void {
         if (parsed.rendered === false) {
+            // A vote WITHDRAWN, not merely absent. Without clearing, the last size a
+            // client reported before it was hidden clamps the pty for the life of
+            // the socket — which is how a hidden cockpit grid cell kept a solo pop-out
+            // at the grid cell's width. Note this arm returns BEFORE the degenerate-size
+            // warning below: the withdrawal frame legitimately carries 0x0.
+            if (client.reportedSize) {
+                client.reportedSize = undefined;
+                this.reconcileTerminalSize(client.terminalName);
+            }
             return;
         }
         if (parsed.cols < 1 || parsed.rows < 1) {
@@ -996,12 +1183,22 @@ export class TerminalWsGateway {
         const terminal = this.fleetService.get(terminalName);
         if (!terminal) { return; }
 
+        const voters = Array.from(this.clients)
+            .filter(c => c.terminalName === terminalName && c.reportedSize);
+        // A solo pop-out exists BECAUSE the operator wants this terminal at that
+        // window's size. Every other viewer of it is a thumbnail. So when any
+        // primary is attached, the grid cells stop voting entirely; the min rule
+        // then applies among the primaries (two pop-outs of one terminal is the
+        // same tmux situation, one tier up). With no primary attached the candidate
+        // set is every client and the arithmetic is exactly what it was.
+        const primaries = voters.filter(c => c.primary);
+        const candidates = primaries.length > 0 ? primaries : voters;
+
         let cols = Infinity;
         let rows = Infinity;
-        for (const c of this.clients) {
-            if (c.terminalName !== terminalName || !c.reportedSize) { continue; }
-            cols = Math.min(cols, c.reportedSize.cols);
-            rows = Math.min(rows, c.reportedSize.rows);
+        for (const c of candidates) {
+            cols = Math.min(cols, c.reportedSize!.cols);
+            rows = Math.min(rows, c.reportedSize!.rows);
         }
         // Every attached client is still headless (or the last one with a viewport
         // just left). Leave the pty at whatever it already is rather than inventing

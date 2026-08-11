@@ -40,6 +40,12 @@ jobs:
       - name: Standalone push-parity ratchet
         run: npm run standalone-parity:check
 
+      - name: Standalone kanban fork-detector
+        run: npm run standalone-fork:check
+
+      - name: Kanban dispatch callers guard
+        run: npm run kanban-dispatch-callers:check
+
       - name: Verb return-contract ratchet
         run: npm run verb-returns:check
 
@@ -274,6 +280,16 @@ jobs:
       - name: Tickets delta deletion-sweep authorisation gate (short fetch must not delete)
         run: npm run test:contract:tickets-delta-sweep-gate
 
+      # eaee275a widened the conflict guard from "delta pulls" to "all pulls" as a drive-by
+      # in an unrelated commit, with no test. That removed the ONLY escape from a ticket
+      # flagged locally-modified — the delta cursor advances past skips, so a delta pull
+      # never re-offers it — and a live ticket sat 3 days stale while Push stood ready to
+      # replace newer remote work with it. Holds the whole chain: Refetch is authoritative,
+      # Refresh/includeClosed is not, the stamp precedes orphan cleanup (and orphan cleanup
+      # does not delete the row it just stamped), and a stale push is refused.
+      - name: Tickets refetch full-pull regression (Refetch must refetch)
+        run: npm run test:contract:tickets-refetch-full-pull
+
       # Tickets replies are BROADCAST to every surface. Unstamped, a reply for another
       # panel's list is indistinguishable from your own and overwrites the sidebar
       # ("flashes with a lot of stuff and then disappears"). Both halves — the backend
@@ -362,6 +378,17 @@ jobs:
       - name: Terminal flow control + view lifecycle contract (ack credit, page-level drain, WebGL cap)
         run: npm run test:contract:terminal-flow-control
 
+      # GPU renderer lifecycle. The failure mode is SILENT SUCCESS: WebglAddon.dispose()
+      # leaves the live WebGL2 context to the garbage collector, and the browser charges
+      # its ~16-per-renderer-process ceiling against the live context — so a release path
+      # that only disposes reports a freed budget in every in-panel signal
+      # (liveWebglContexts, isWebgl, __sbTerminalStats) while the process frees nothing.
+      # Pins the explicit WEBGL_lose_context call, the one-shot release closure that makes
+      # the counter unable to drift, and the vendored addon._renderer._gl hop, so an xterm
+      # bump breaks the build instead of quietly turning the reclaim into a no-op.
+      - name: Terminal renderer lifecycle contract (one-shot release, real context handback, swap ordering)
+        run: npm run test:contract:terminal-renderer-lifecycle
+
       # The chunk-boundary logic is the entire input plan. A cut inside a multi-byte
       # codepoint silently corrupts pasted text; a cut inside \x1b[200~ turns a paste
       # into an escape plus literal text. Neither throws. This pins the CSI parse in
@@ -412,6 +439,15 @@ jobs:
       - name: Terminal focus affordance contract (ring, chip, drop notice)
         run: npm run test:contract:terminal-focus-affordance
 
+      # The four client-side connection/throttle notices (input queue drained,
+      # pasting, terminal unavailable, disconnected-reconnecting) used to be
+      # written straight into xterm's buffer, permanently desynchronising any
+      # Ink-based TUI's relative-cursor redraw. Pins their absence, the chrome
+      # that replaced them (queued chip + error toast), the call-site count, and
+      # the resolver-key-derived removal-set invariant.
+      - name: Terminal chrome not in buffer contract (notices on chrome, not buffer)
+        run: npm run test:contract:terminal-chrome-not-in-buffer
+
       # Shell terminal strip. The two defects a screenshot review waves through: the
       # bottom anchor is an INLINE style on the theme toggle, so a second
       # `margin-top: auto` child parks the terminal list mid-strip instead of stacking;
@@ -457,6 +493,17 @@ jobs:
 
       - name: Terminal DEC mode restore contract
         run: npm run test:contract:terminal-dec-mode-restore
+
+      # Scrollback replay gap detection + safe parse start. Two defects: (A) the
+      # replay filter could not tell "missed nothing" from "missed everything was
+      # evicted", splicing survivors onto a stale screen; (B) the first retained
+      # chunk can begin mid-escape-sequence. Pins the exact gap comparison, the
+      # ring-head-gated trim, the in-band RIS reset on the hello arm, the separate
+      # terminalReplayGaps set (not terminalBadges), and the derived clear-site
+      # invariant. Behavioural cases for the three exported pure helpers run when
+      # out/ is compiled.
+      - name: Terminal replay gap contract (gap detection, safe parse start)
+        run: npm run test:contract:terminal-replay-gap
 
       # NOT wired, deliberately — `test:contract:terminal-operations-no-periodic-reopen`
       # is now runnable (the script was missing entirely until the multi-parent review
@@ -521,6 +568,18 @@ jobs:
       # project-bound pushes as 'planning'.
       - name: WS surface scoping contract (fail-open, resync filtering, producer tagging)
         run: npm run test:contract:ws-surface-scoping
+
+      # The "New Window freeze" discriminator, and the only regression guard on the
+      # bounded resync. handleUpgrade awaits getFullState BEFORE _connections.add(meta);
+      # unbounded, a snapshot that never settles leaves the socket OPEN on the wire (the
+      # client's onopen already fired) while the connection sits permanently outside the
+      # broadcast set — every push skipped, no close event, so no reconnect either. Two
+      # of these cases fail against that shape and pass against the timeout, so the file
+      # discriminates rather than merely describing. Also pins the meta.seq === 0 guard
+      # that keeps a LATE snapshot from clobbering an already-delivered delta, which is
+      # the failure this fix could otherwise have traded the freeze for.
+      - name: WS popout broadcast contract (stalled resync cannot orphan a connection)
+        run: npm run test:contract:ws-popout-broadcast
 
       # Wired during the Setup-hydration review pass. Both halves of this fix fail
       # SILENTLY and identically — a browser /setup panel that renders every control

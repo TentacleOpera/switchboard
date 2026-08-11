@@ -49,7 +49,17 @@ interface LocalApiServerOptions {
         sessionId: string,
         targetColumn: string,
         planFile?: string
-    ) => Promise<{ success: boolean; error?: string }>;
+    ) => Promise<{ success: boolean; error?: string; reason?: string }>;
+    /**
+     * Read-only: which registered roots contain a plan addressed by `key`
+     * (plan_id or legacy session_id)? Used ONLY when the caller omitted
+     * workspaceRoot. Never opens a DB that does not exist, never writes.
+     * `stopAtFirst` lets a UUID key short-circuit after one hit.
+     */
+    resolvePlanRoots?: (
+        key: string,
+        opts: { candidates: string[]; stopAtFirst: boolean }
+    ) => Promise<{ matched: string[]; searched: string[] }>;
     /**
      * Create a feature from a set of subtask plan IDs through the running extension so
      * the create inherits the DB upsert, subtask linking, feature-file write, and board
@@ -488,6 +498,18 @@ export class LocalApiServer {
 
     public getPort(): number {
         return this._port;
+    }
+
+    /**
+     * WS connection roster for diagnostics. Deliberately narrow rather than a public
+     * `wsHub` getter: DesignPanelProvider.setApiServer does `if (server?.wsHub)
+     * { server.wsHub.onDisconnect(...) }` against an `any`-typed field, so that branch
+     * is dead today. Exposing `wsHub` would silently revive it and start evicting
+     * Design seats on WS disconnect — a behaviour change to a shipped provider that
+     * belongs in its own plan, not in a diagnostic endpoint.
+     */
+    public getWsConnectionInfo(): any[] {
+        return this._wsHub ? this._wsHub.getConnectionInfo() : [];
     }
 
     /**
@@ -1245,7 +1267,7 @@ export class LocalApiServer {
 
             // 3. Pre-flight the gates the arm breaks silently on — fail loudly instead.
             //    (CLI-triggers is NOT checked: that setting gates webview drag-drop
-            //    auto-dispatch; an explicit API dispatch bypasses it via apiOriginated.)
+            //    auto-dispatch; an explicit API dispatch bypasses it via bypassTriggerGate.)
             let gate: { role: string | null; cliTriggersEnabled: boolean; dragDropMode: string | null; source: string | null } | undefined;
             if (this._options.resolveKanbanDispatch) {
                 gate = await this._options.resolveKanbanDispatch(workspaceRoot, targetColumn);
@@ -1265,7 +1287,7 @@ export class LocalApiServer {
             // 4. Fire the exact arm a webview drag fires: it persists the move FIRST,
             //    then dispatches (the known move↔dispatch coupling order).
             const dispatchedAtBefore = record.dispatchedAt ?? null;
-            await kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, apiOriginated: true, bypassTriggerGate: true }, workspaceRoot);
+            await kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, bypassTriggerGate: true }, workspaceRoot);
 
             // 5. Verify against the DB — report what happened, not what was requested.
             const after: any = await db.getPlanByPlanId(record.planId);
@@ -1311,6 +1333,18 @@ export class LocalApiServer {
      * board refresh. Reached by the kanban_operations fallback script over the
      * bridge; the script's direct-DB path cannot sync to external trackers because
      * the integration token lives in VS Code secret storage.
+     *
+     * workspaceRoot contract:
+     * - **Omitted** ⇒ the route resolves the card by identity (plan_id or legacy
+     *   session_id) across all registered roots (GET /health → `roots` lists them).
+     *   The probe is read-only (hasPlan-based — never writes, never opens a DB that
+     *   does not exist). UUID-shaped keys stop at the first hit; legacy sess_* keys
+     *   probe every root and refuse on ambiguity. The resolved root is echoed as
+     *   `resolvedWorkspaceRoot` with `rootResolution: 'searched'` (or `'path'` for
+     *   plan-file-shaped keys, resolved by path containment with zero DB opens).
+     * - **Supplied** ⇒ that root is used verbatim or the move fails naming that root.
+     *   An explicit root is NEVER overridden — the search runs only on the omitted path.
+     *
      * Body: { sessionId?: string, planId?: string, targetColumn: string, workspaceRoot?: string, planFile?: string }.
      */
     private async _handleKanbanMove(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -1332,23 +1366,103 @@ export class LocalApiServer {
             const planId = String(body?.planId || '').trim();
             const effectiveKey = sessionId || planId;
             const rawColumn = String(body?.targetColumn || '').trim();
-            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const explicitRoot = String(body?.workspaceRoot || '').trim();
+            const defaultRoot = String(this._options.workspaceRoot || '').trim();
             const planFile = body?.planFile ? String(body.planFile).trim() : undefined;
             if (!effectiveKey || !rawColumn) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Missing required fields: sessionId/planId and targetColumn' }));
                 return;
             }
-            const targetColumn = await this._canonicalColumnId(rawColumn, workspaceRoot);
+
+            const rootWasExplicit = explicitRoot.length > 0;
+            let resolvedRoot = rootWasExplicit ? explicitRoot : defaultRoot;
+            let rootResolution: 'explicit' | 'default' | 'searched' | 'path' = rootWasExplicit ? 'explicit' : 'default';
+
+            // ── Omitted-root path: resolve by identity across registered roots ──
+            if (!rootWasExplicit) {
+                // Zero-DB fast path for path-shaped keys (plan-file paths). Containment
+                // is path-aware on purpose: `startsWith(root + '/')` is a no-op on
+                // Windows, where both `_allRoots` and an absolute plan path are
+                // backslash-separated — the fast path would never match and every
+                // multi-root move would silently fall back to the default root.
+                const keyIsPathShaped =
+                    effectiveKey.includes('/') || effectiveKey.includes('\\') || effectiveKey.endsWith('.md');
+                let pathResolved: string | undefined;
+                if (keyIsPathShaped && path.isAbsolute(effectiveKey)) {
+                    const absKey = path.resolve(effectiveKey);
+                    pathResolved = this._allRoots.find(r => {
+                        const rel = path.relative(path.resolve(r), absKey);
+                        return rel === '' || (!rel.startsWith('..' + path.sep) && rel !== '..' && !path.isAbsolute(rel));
+                    });
+                }
+                if (pathResolved) {
+                    resolvedRoot = pathResolved;
+                    rootResolution = 'path';
+                } else if (this._options.resolvePlanRoots) {
+                    // Containment did not settle it (relative plan-file path, or a path
+                    // under no registered root) — fall through to the identity probe
+                    // rather than silently addressing the default root, which is the
+                    // exact defect this route exists to fix.
+                    // Classify key shape: UUID ⇒ stop at first hit; legacy sess_* ⇒ probe all.
+                    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(effectiveKey);
+                    // Path keys also stop at the first hit: the default root is probed
+                    // first, so a relative path resolves to today's winner unchanged.
+                    // Probe the default root first (preserving today's fast path), then the rest.
+                    const candidates = [
+                        ...(defaultRoot ? [defaultRoot] : []),
+                        ...this._allRoots.filter(r => r !== defaultRoot)
+                    ];
+                    const { matched, searched } = await this._options.resolvePlanRoots(effectiveKey, {
+                        candidates,
+                        stopAtFirst: isUuid || keyIsPathShaped
+                    });
+                    if (matched.length === 1) {
+                        resolvedRoot = matched[0];
+                        rootResolution = 'searched';
+                    } else if (matched.length === 0) {
+                        res.writeHead(404, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({
+                            success: false,
+                            error: `No plan found for key '${effectiveKey}' in any registered workspace.`,
+                            reason: 'not_found',
+                            searchedRoots: searched
+                        }));
+                        return;
+                    } else {
+                        // Ambiguity: refuse to pick one. Name every matching root.
+                        res.writeHead(409, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({
+                            success: false,
+                            error: `Plan key '${effectiveKey}' matched multiple workspaces: ${matched.join(', ')}. Supply workspaceRoot explicitly.`,
+                            reason: 'ambiguous',
+                            matchedRoots: matched
+                        }));
+                        return;
+                    }
+                }
+                // If resolvePlanRoots is not wired, fall back to default root (today's behaviour).
+            }
+
+            // Canonicalise the column against the RESOLVED root, not the guess.
+            // _canonicalColumnId reads that root's board + kanban.customColumns, so
+            // canonicalising against the default root makes a custom column that exists
+            // only in the card's real workspace 400 as "Unknown targetColumn".
+            const targetColumn = await this._canonicalColumnId(rawColumn, resolvedRoot);
             if (!targetColumn) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: this._unknownColumnError(rawColumn) }));
                 return;
             }
 
-            const result = await moveCard(workspaceRoot, effectiveKey, targetColumn, planFile);
+            const result = await moveCard(resolvedRoot, effectiveKey, targetColumn, planFile);
+            const responsePayload = {
+                ...result,
+                resolvedWorkspaceRoot: resolvedRoot,
+                rootResolution
+            };
             res.writeHead(result.success ? 200 : 502, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(result));
+            res.end(JSON.stringify(responsePayload));
         } catch (err) {
             console.error('[LocalApiServer] kanbanMove error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -1753,21 +1867,6 @@ export class LocalApiServer {
         }
     }
 
-    /**
-     * Every body arriving on a verb rail is, by definition, NOT the in-process VS Code
-     * sidebar — it came over HTTP from a browser panel, a CLI script or the orchestrator,
-     * all of which can display a PTY. Stamping here (rather than per entry point) is what
-     * makes the discriminator impossible to forget; the previous per-caller convention
-     * left every browser panel dispatching into invisible VS Code terminals.
-     *
-     * Note this sets ONLY the fleet-selection flag. `bypassTriggerGate` stays opt-in per
-     * endpoint so a browser drag-drop still honours the CLI-triggers setting.
-     */
-    private _stampHttpSurface(body: any): any {
-        body.apiOriginated = true;
-        return body;
-    }
-
     private async _handleKanbanVerb(verb: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
             this._sendUnauthorized(res);
@@ -1795,7 +1894,6 @@ export class LocalApiServer {
             const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
             delete body.type;
             delete body.bypassTriggerGate;
-            this._stampHttpSurface(body);
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
             const result = await kanbanVerb(verb, body, workspaceRoot);
             const ok = !result || result.success !== false;
@@ -1824,7 +1922,6 @@ export class LocalApiServer {
             const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
             delete body.type;
             delete body.bypassTriggerGate;
-            this._stampHttpSurface(body);
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
             const result = await planningVerb(verb, body, workspaceRoot);
             const ok = !result || result.success !== false;
@@ -1853,7 +1950,6 @@ export class LocalApiServer {
             const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
             delete body.type;
             delete body.bypassTriggerGate;
-            this._stampHttpSurface(body);
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
             const result = await ticketsVerb(verb, body, workspaceRoot);
             const ok = !result || result.success !== false;
@@ -1890,11 +1986,6 @@ export class LocalApiServer {
             const rawBody = await this._parseJsonBody(req);
             const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
             delete body.type;
-            // Every body on a verb rail arrived over HTTP, so it is by definition not the
-            // in-process sidebar. Without this stamp the four design send arms read
-            // apiOriginated:undefined and their fleet branch is dead code — a browser Stitch
-            // or artifact send lands in (or creates) an invisible VS Code terminal.
-            this._stampHttpSurface(body);
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
             const result = await designVerb(verb, body, workspaceRoot);
             const ok = !result || result.success !== false;
@@ -1939,10 +2030,6 @@ export class LocalApiServer {
             const rawBody = await this._parseJsonBody(req);
             const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
             delete body.type;
-            // Stamp for consistency with the other verb rails — the apiOriginated
-            // discriminator is meant to be impossible to forget, even for verbs that
-            // have no prompt-dispatch arm today. See _handleDesignVerb above.
-            this._stampHttpSurface(body);
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
             const result = await setupVerb(verb, body, workspaceRoot);
             const ok = !result || result.success !== false;
@@ -1971,7 +2058,6 @@ export class LocalApiServer {
             const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
             delete body.type;
             delete body.bypassTriggerGate;
-            this._stampHttpSurface(body);
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
             const result = await taskViewerVerb(verb, body, workspaceRoot);
             const ok = !result || result.success !== false;
@@ -3676,6 +3762,15 @@ export class LocalApiServer {
                 await this._handleServeBoard(req, res);
             } else if (pathname === '/panels' && req.method === 'GET') {
                 await this._handleServePanels(req, res);
+            } else if (pathname === '/ws/connections' && req.method === 'GET') {
+                if (!await this._checkAuth(req, true)) {
+                    this._sendUnauthorized(res);
+                    return;
+                }
+                const connections = this.getWsConnectionInfo();
+                res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+                res.end(JSON.stringify({ count: connections.length, connections }, null, 2));
+                return;
             } else if ((pathname === '/project' || pathname === '/project.html') && req.method === 'GET') {
                 await this._handleServeProject(req, res);
             } else if ((pathname === '/memo' || pathname === '/memo.html') && req.method === 'GET') {

@@ -80,6 +80,21 @@ export const PANEL_SURFACES: Record<string, string[]> = {
 
 const VALID_SURFACES = new Set<string>(Object.values(SURFACES));
 
+/** Upper bound on the connect-time snapshot. Generous on purpose: the standalone
+ *  snapshot is four sql.js reads producing the whole board (~84ms measured, and the
+ *  cockpit opens one connection per mounted panel, so the Nth caller queues behind
+ *  the others). This is a stall backstop, not a latency budget. */
+const RESYNC_TIMEOUT_MS = 5000;
+
+/** Upper bound on the auth gate before the 101 is written. The only await before
+ *  `_wss.handleUpgrade` is `authorizeWsUpgrade`, and a stalled token read (notably
+ *  VS Code SecretStorage under the extension host) leaves the client in CONNECTING
+ *  forever on Chromium. */
+const UPGRADE_AUTH_TIMEOUT_MS = 3000;
+
+const WS_DEBUG = process.env.SWITCHBOARD_WS_DEBUG === '1';
+function wsDebugLog(msg: string): void { if (WS_DEBUG) { console.log(`[wsHub] ${msg}`); } }
+
 export interface WsHubOptions {
     /** The http.Server to attach the WS upgrade handler to. */
     server: Server;
@@ -118,6 +133,10 @@ interface ConnectionMeta {
      *  load-bearing — do not collapse the two. */
     project?: string | null;
     surfaces?: Set<string>;
+    /** True when the connect-time snapshot timed out and no late snapshot was
+     *  eligible. Surfaced by getConnectionInfo() — a client in this state is
+     *  subscribed but never received a baseline. */
+    resyncFailed?: boolean;
 }
 
 export class WsHub {
@@ -158,6 +177,8 @@ export class WsHub {
             this._pingInterval = setInterval(() => {
                 for (const meta of this._connections) {
                     if (meta.isAlive === false) {
+                        console.warn(`[wsHub] reaping connection with no pong: originatorId=${meta.originatorId || 'unknown'}, `
+                            + `surfaces=${meta.surfaces ? [...meta.surfaces].join(',') : 'all'}`);
                         try { meta.ws.terminate(); } catch { /* ignore */ }
                     } else {
                         meta.isAlive = false;
@@ -173,6 +194,13 @@ export class WsHub {
     // are shared with the terminal gateway — deliberately deleted rather than left
     // behind, so the next auth fix has exactly one place to land.
 
+    private _filterResync(state: any, meta: ConnectionMeta): any {
+        if (Array.isArray(state) && meta.surfaces) {
+            return state.filter((item: any) => !item.surface || meta.surfaces!.has(item.surface));
+        }
+        return state;
+    }
+
     /**
      * Validate Origin + token, then complete the WS upgrade.
      */
@@ -181,7 +209,25 @@ export class WsHub {
             this._wss = new WebSocketServer({ noServer: true });
         }
 
-        const auth = await authorizeWsUpgrade(req, () => this._options.getAuthToken());
+        // A stalled token read must become a 503 the client can see, never silence.
+        // Below this line the socket is connected with no HTTP response written, and
+        // Chromium will wait in CONNECTING indefinitely for one — so failing loudly
+        // and fast is strictly better than failing open or failing slow. Mirrors
+        // LocalApiServer.start()'s listen race.
+        let auth: { authorized: boolean; statusCode?: number; reason?: string };
+        let authTimer: NodeJS.Timeout | undefined;
+        try {
+            const authPromise = authorizeWsUpgrade(req, () => this._options.getAuthToken());
+            const authTimeout = new Promise<never>((_resolve, reject) => {
+                authTimer = setTimeout(() => reject(new Error('upgrade auth timeout')), UPGRADE_AUTH_TIMEOUT_MS);
+            });
+            auth = await Promise.race([authPromise, authTimeout]);
+            if (authTimer) { clearTimeout(authTimer); }
+        } catch (err) {
+            if (authTimer) { clearTimeout(authTimer); }
+            console.error('[wsHub] upgrade auth did not settle — refusing the upgrade:', err);
+            auth = { authorized: false, statusCode: 503, reason: 'Auth Unavailable' };
+        }
         if (!auth.authorized) {
             const status = auth.statusCode || 401;
             const msg = auth.reason || 'Unauthorized';
@@ -250,27 +296,58 @@ export class WsHub {
             // exact ordering hazard the plan flags). Every broadcast after this point
             // increments strictly monotonically from the snapshot baseline.
             if (this._options.getFullState) {
+                const snapshot = Promise.resolve()
+                    .then(() => this._options.getFullState!(meta.project));
+                let timer: NodeJS.Timeout | undefined;
+                const timeout = new Promise<never>((_resolve, reject) => {
+                    timer = setTimeout(
+                        () => reject(new Error(`resync exceeded ${RESYNC_TIMEOUT_MS}ms`)),
+                        RESYNC_TIMEOUT_MS
+                    );
+                });
                 try {
-                    let state = await this._options.getFullState(meta.project);
-                    if (Array.isArray(state) && meta.surfaces) {
-                        state = state.filter((item: any) => !item.surface || meta.surfaces!.has(item.surface));
-                    }
+                    const state = await Promise.race([snapshot, timeout]);
                     this._safeSend(ws, {
                         type: '__resync',
                         seq: meta.seq, // 0 — the baseline; broadcasts increment from here
-                        payload: state,
+                        payload: this._filterResync(state, meta),
                     });
                 } catch (err) {
-                    console.error('[wsHub] resync error:', err);
+                    console.error('[wsHub] resync did not complete — joining the broadcast set anyway:', err);
+                    meta.resyncFailed = true;
+                    // A LATE snapshot may still be useful, but only while nothing has
+                    // been sent on this connection: a seq-0 __resync arriving behind a
+                    // seq-1 delta is exactly the clobber the ordering comment warns
+                    // about, and the client would apply the older state last.
+                    snapshot.then((state) => {
+                        if (meta.seq !== 0) { return; }
+                        meta.resyncFailed = false;
+                        this._safeSend(ws, {
+                            type: '__resync',
+                            seq: 0,
+                            payload: this._filterResync(state, meta),
+                        });
+                    }).catch(() => { /* the race already logged it */ });
+                } finally {
+                    // Mirrors LocalApiServer.start()'s race — an un-cleared timer keeps a
+                    // 5s handle alive per connection and fires a no-op reject later.
+                    if (timer) { clearTimeout(timer); }
                 }
             }
 
-            // Join the broadcast set only now that the snapshot is on the wire.
+            // Join the broadcast set — now unconditional.
             this._connections.add(meta);
+            wsDebugLog(`connection established: originatorId=${originatorId || 'unknown'}, `
+                + `surfaces=${surfaces ? [...surfaces].join(',') : 'all'}, `
+                + `scope=${initialScope === undefined ? 'undeclared' : initialScope === null ? 'null' : initialScope}, `
+                + `resyncFailed=${meta.resyncFailed === true}, total=${this._connections.size}`);
 
             const handleDisconnect = () => {
                 if (this._connections.has(meta)) {
                     this._connections.delete(meta);
+                    console.warn(`[wsHub] connection closed: originatorId=${meta.originatorId || 'unknown'}, `
+                        + `surfaces=${meta.surfaces ? [...meta.surfaces].join(',') : 'all'}, `
+                        + `remaining=${this._connections.size}`);
                     if (meta.originatorId) {
                         for (const listener of Array.from(this._disconnectListeners)) {
                             try { listener(meta.originatorId); } catch (e) { console.error('[wsHub] disconnect listener error:', e); }
@@ -326,6 +403,9 @@ export class WsHub {
                 }
                 body = rendered.get(key);
             }
+            if (WS_DEBUG && verb === 'terminalsChanged') {
+                wsDebugLog(`-> terminalsChanged to originatorId=${meta.originatorId || 'unknown'}, seq=${meta.seq + 1}`);
+            }
             meta.seq += 1;
             this._safeSend(meta.ws, {
                 type: verb,
@@ -354,6 +434,27 @@ export class WsHub {
     /** Number of currently connected clients. */
     get connectionCount(): number {
         return this._connections.size;
+    }
+
+    /**
+     * Diagnostic roster. `pingAcked` is the reaper's bookkeeping, NOT "the socket is
+     * open": it is set false on every ping and true on the pong, so it reads false
+     * for a perfectly healthy connection for part of each interval. Do not diagnose
+     * a dead connection from one false reading. Presence in this array is the
+     * load-bearing fact — it means the connection is in the broadcast set.
+     */
+    public getConnectionInfo(): Array<{
+        originatorId?: string; surfaces?: string[]; pingAcked?: boolean;
+        project?: string | null; seq: number; resyncFailed?: boolean;
+    }> {
+        return Array.from(this._connections).map(m => ({
+            originatorId: m.originatorId,
+            surfaces: m.surfaces ? [...m.surfaces] : undefined,
+            pingAcked: m.isAlive,
+            project: m.project,
+            seq: m.seq,
+            resyncFailed: m.resyncFailed === true,
+        }));
     }
 
     /** Close all connections and shut down the WS server. */

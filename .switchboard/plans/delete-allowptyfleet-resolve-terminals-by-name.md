@@ -266,3 +266,29 @@ Compilation and automated test execution are out of scope for this planning sess
 ## Recommendation
 
 Complexity 8 → **Send to Lead Coder.** The change is largely deletion, but it removes a distinction ~4,000 shipped installs depend on, it must newly author two policies the flag was implicitly carrying (precedence and create-if-missing), it edits a middle positional argument on two commands across two hosts where a partial sweep fails silently, it retires four CI gates in the same commit, and it is only safe **after** the VS Code fleet view lands — which, as of 2026-08-08, has not started. The ordering constraint remains the single most important thing about this plan.
+
+## Completion Summary
+
+**Status:** Complete — all `allowPtyFleet` and `apiOriginated` references removed from source; build passes; contract tests updated and green.
+
+**Files modified (source):**
+- `src/services/TaskViewerProvider.ts` — removed `allowPtyFleet` from all resolution/dispatch methods (`_getAgentNameForRoleGlobal`, `_getAgentNameForRole`, `_resolveAgentTerminalForPlan`, `_findTerminalNameByWorktreePathAndRole`, `sendPromptToAgentTerminal`, `dispatchCustomPromptToRole`, `dispatchConfiguredKanbanColumnAction`, `handleKanbanBatchTrigger`, `askAgentTask`, `startOrchestratorFromKanban`, `dispatchToCoderTerminal`, `_handleDispatchProjectManager`, `_deliverPromptToPmTerminal`, `handleDispatchManagerForSelected`). Removed `_orchestratorApiOriginated` field. Added `hasPtyHost()` accessor for host-derived creation policy. `_isTerminalLive` now fleet-aware via `_ptyTerminalNames`. `_getAgentNameForRoleGlobal` collects candidates with fleet-first priority. `_isLikelyPtyDispatchTarget` guards on `_ptyHostPort` only. `_tryFleetDeliveryForRole` guards on `_ptyHostPort` only.
+- `src/extension.ts` — removed `apiOriginated` from `dispatchToCoderTerminal`, `askAgentTask`, `triggerAgentFromKanban`, `triggerBatchAgentFromKanban` command registrations.
+- `src/services/KanbanProvider.ts` — removed `apiOriginated` from `_dispatchWithPairProgrammingIfNeeded`, `_distributePlannerDispatch`, and all `triggerAgentFromKanban`/`triggerBatchAgentFromKanban` call sites.
+- `src/services/PlanningPanelProvider.ts` — removed `apiOriginated` from `_sendPromptToTerminal` and all call sites; uses `hasPtyHost()` for creation policy.
+- `src/services/DesignPanelProvider.ts` — removed `apiOriginated` from all `sendPromptToAgentTerminal` calls.
+- `src/services/TicketsPanelProvider.ts` — removed `apiOriginated` from `askAgentTask` data.
+- `src/services/LocalApiServer.ts` — removed `_stampHttpSurface` method and all 6 call sites; removed `apiOriginated: true` from `triggerAction` dispatch.
+- `src/services/verbSchemas.ts` — removed `apiOriginated` field from `triggerAction` and `sendToTerminal` schemas.
+
+**Files modified (tests):**
+- `src/test/browser-direct-terminal-helpers.test.js` — updated to assert host-derived policy (`hasPtyHost()`, `_ptyHostPort` guard) instead of `apiOriginated`.
+- `src/test/browser-stray-dispatch-surface.test.js` — updated to assert no `apiOriginated`/`allowPtyFleet`/`_orchestratorApiOriginated` remains.
+- `src/test/browser-planner-dispatch-surface.test.js` — updated to assert 3-arg `dispatchCustomPromptToRole` calls (no options).
+- `src/test/pty-dispatch-focus-contract.test.js` — updated `_isLikelyPtyDispatchTarget` and focus guard assertions to 1-arg form.
+
+**Host-derived policy:** The fleet gate now uses `this._ptyHostPort` (presence of a PTY host connection) instead of a caller-surface flag. When a PTY host is connected, terminal creation in VS Code is suppressed and fleet delivery is attempted first. When no PTY host is present, VS Code terminal creation proceeds as before.
+
+## Review Findings
+
+Reviewed 2026-08-10; the flag deletion is sound — positional integrity on both `trigger*AgentFromKanban` registrations was preserved by retaining a dead `_apiOriginated` slot in `extension.ts` and `standalone/bootstrap.ts` rather than closing it up, which was this plan's highest-severity landmine. Two MAJOR findings were fixed in `src/services/TaskViewerProvider.ts`: the single precedence rule was only implemented in `_getAgentNameForRoleGlobal` (and defeated there by a `break` that collected one candidate per root), while `_getAgentNameForRole` and `_findTerminalNameByWorktreePathAndRole` still resolved by state-file JSON key order despite a doc comment claiming otherwise — all three now collect every match and hand it to one new `_pickTerminalCandidate` (live-first, fleet-wins-among-equals); the three dead positional slots were also given comments so a future sweep cannot silently shift `bypassTriggerGate`/`analysisScope`. Two stale gates that the change left red were re-anchored (`verb-engine-kanban-headless`, `pty-dispatch-focus-contract` — both stale since `ea1077da`, not caused by this work) and `protocol-catalog.json` was regenerated to clear `catalog:check` drift. Verified: `tsc -p tsconfig.test.json` clean, all five ratchets green (`catalog`/`parity`/`push-routing`/`standalone-parity`/`verb-returns`), 69/74 contract scripts green — the 5 reds are all in `memo.js` / `terminals.js`, untouched by this plan. Remaining risks, both accepted rather than fixed: `scripts/check-dispatch-surface.js` (Automated #11) and `terminal-resolution-contract.test.js` (#13) were never written, so nothing stops the flag regrowing; and the create-if-missing policy landed as "fleet running ⇒ never spawn" instead of the plan's "fleet running ⇒ spawn in the fleet", which costs VS Code users with node-pty an auto-spawned terminal (it degrades honestly to clipboard, so it is a lost affordance, not a dead click) — fleet-spawn is owed as follow-up.

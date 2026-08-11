@@ -1644,12 +1644,14 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(mappingsChangedDisposable);
 
     // Helper commands for Kanban ↔ sidebar delegation
-    // `apiOriginated` is the per-surface fleet discriminator (see
-    // ConfiguredKanbanDispatchOptions). It is appended LAST and is optional so every
-    // existing positional caller — and the pair-programming tests — keep working
-    // unchanged and default to VS Code terminals.
-    const triggerFromKanbanDisposable = registerSwitchboardCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string, apiOriginated?: boolean, bypassTriggerGate?: boolean) => {
-        return await taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction, workspaceRoot, { targetTerminalOverride, persistColumnOnError: true, apiOriginated: !!apiOriginated, bypassTriggerGate: !!bypassTriggerGate } as any);
+    // `_apiOriginated` is a DEAD SLOT, deliberately retained. The surface flag it
+    // used to carry is gone (terminals now resolve by name across both sets), but
+    // this seam is untyped — `executeCommand` checks nothing — so removing the
+    // parameter without removing the argument at all ~16 KanbanProvider call sites
+    // in the same edit silently slides `bypassTriggerGate` into slot 6 and compiles
+    // clean. Keep the slot, or convert BOTH commands to a trailing options object.
+    const triggerFromKanbanDisposable = registerSwitchboardCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string, _apiOriginated?: boolean, bypassTriggerGate?: boolean) => {
+        return await taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction, workspaceRoot, { targetTerminalOverride, persistColumnOnError: true, bypassTriggerGate: !!bypassTriggerGate } as any);
     });
     context.subscriptions.push(triggerFromKanbanDisposable);
 
@@ -1668,12 +1670,11 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(triggerPlanScanDisposable);
 
-    // `apiOriginated` mirrors switchboard.triggerAgentFromKanban's 6th arg. Without it
-    // a browser-originated BATCH advance could never reach the PTY fleet — the command
-    // had no parameter to carry the surface, so allowPtyFleet was always false and the
-    // batch resolved a vscode.Terminal the browser cannot display.
-    const batchTriggerFromKanbanDisposable = registerSwitchboardCommand('switchboard.triggerBatchAgentFromKanban', async (role: string, sessionIds: string[], instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string, apiOriginated?: boolean, analysisScope?: string | null) => {
-        return taskViewerProvider.handleKanbanBatchTrigger(role, sessionIds, instruction, workspaceRoot, targetTerminalOverride, { apiOriginated: !!apiOriginated, analysisScope });
+    // `_apiOriginated` is the same retained dead slot as the single-card command
+    // above — here it protects `analysisScope`, which is `string | null` and would
+    // silently receive a boolean if the slot were closed up. See that comment.
+    const batchTriggerFromKanbanDisposable = registerSwitchboardCommand('switchboard.triggerBatchAgentFromKanban', async (role: string, sessionIds: string[], instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string, _apiOriginated?: boolean, analysisScope?: string | null) => {
+        return taskViewerProvider.handleKanbanBatchTrigger(role, sessionIds, instruction, workspaceRoot, targetTerminalOverride, { analysisScope });
     });
     context.subscriptions.push(batchTriggerFromKanbanDisposable);
 
@@ -1719,6 +1720,14 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     );
     context.subscriptions.push(moveKanbanCardByPlanFileDisposable);
+
+    const moveKanbanCardByPlanFileWithReasonDisposable = vscode.commands.registerCommand(
+        'switchboard.moveKanbanCardByPlanFileWithReason',
+        async (workspaceRoot: string, planFile: string, targetColumn: string) => {
+            return await kanbanProvider!.moveCardToColumnByPlanFileWithReason(workspaceRoot, planFile, targetColumn);
+        }
+    );
+    context.subscriptions.push(moveKanbanCardByPlanFileWithReasonDisposable);
 
     const setAutobanFromKanbanDisposable = registerSwitchboardCommand('switchboard.setAutobanEnabledFromKanban', async (enabled: boolean) => {
         await taskViewerProvider.setAutobanEnabledFromKanban(!!enabled);
@@ -1786,8 +1795,8 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(resetAutobanPoolsDisposable);
 
     const dispatchToCoderTerminalDisposable = registerSwitchboardCommand('switchboard.dispatchToCoderTerminal',
-        async (prompt: string, worktreePath?: string, options?: { apiOriginated?: boolean }) => {
-            await taskViewerProvider.dispatchToCoderTerminal(prompt, worktreePath, options);
+        async (prompt: string, worktreePath?: string) => {
+            await taskViewerProvider.dispatchToCoderTerminal(prompt, worktreePath);
         });
     context.subscriptions.push(dispatchToCoderTerminalDisposable);
 
@@ -2058,7 +2067,7 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(pushTicketEditsDisposable);
 
-    const importAllTasksDisposable = vscode.commands.registerCommand('switchboard.importAllTasks', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; ids?: string[]; listId?: string; projectId?: string; workspaceId?: string; page?: number; append?: boolean; importMode: 'plan' | 'document'; deltaSince?: number; deltaSinceIso?: string; includeClosed?: boolean }) => {
+    const importAllTasksDisposable = vscode.commands.registerCommand('switchboard.importAllTasks', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; ids?: string[]; listId?: string; projectId?: string; workspaceId?: string; page?: number; append?: boolean; importMode: 'plan' | 'document'; deltaSince?: number; deltaSinceIso?: string; includeClosed?: boolean; authoritative?: boolean }) => {
         return taskViewerProvider.importAllTasks(data.workspaceRoot, data);
     });
     context.subscriptions.push(importAllTasksDisposable);
@@ -2093,7 +2102,11 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(postTicketReplyDisposable);
 
-    const downloadAttachmentDisposable = vscode.commands.registerCommand('switchboard.downloadAttachment', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; url: string; filename: string; ticketId: string; ticketTitle: string }) => {
+    // `attachmentId` is the sidecar's provenance key (TaskViewerProvider._assetKey). It is
+    // declared here, not just passed through, so a future tightening of this signature
+    // cannot silently drop it — without it every download is recorded under the
+    // signature-stripped URL instead of the provider's stable id.
+    const downloadAttachmentDisposable = vscode.commands.registerCommand('switchboard.downloadAttachment', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; url: string; filename: string; ticketId: string; ticketTitle: string; attachmentId?: string }) => {
         return taskViewerProvider.downloadAttachment(data.workspaceRoot, data);
     });
     context.subscriptions.push(downloadAttachmentDisposable);
@@ -2103,12 +2116,8 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(getAttachmentListDisposable);
 
-    const askAgentTaskDisposable = vscode.commands.registerCommand('switchboard.askAgentTask', async (data: { workspaceRoot: string; id: string; title: string; description: string; provider: 'linear' | 'clickup'; apiOriginated?: boolean }) => {
-        // apiOriginated MUST be forwarded explicitly: this registration destructures the
-        // payload field-by-field, so any field not named here is dropped at the command
-        // boundary. Without it the browser tickets 'Ask agent' button keeps failing even
-        // though TicketsPanelProvider set the flag one call earlier.
-        return taskViewerProvider.askAgentTask(data.workspaceRoot, { id: data.id, title: data.title, description: data.description, provider: data.provider, apiOriginated: !!data.apiOriginated });
+    const askAgentTaskDisposable = vscode.commands.registerCommand('switchboard.askAgentTask', async (data: { workspaceRoot: string; id: string; title: string; description: string; provider: 'linear' | 'clickup' }) => {
+        return taskViewerProvider.askAgentTask(data.workspaceRoot, { id: data.id, title: data.title, description: data.description, provider: data.provider });
     });
     context.subscriptions.push(askAgentTaskDisposable);
 

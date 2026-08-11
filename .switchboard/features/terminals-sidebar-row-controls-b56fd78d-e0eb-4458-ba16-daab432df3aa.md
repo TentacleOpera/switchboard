@@ -26,6 +26,10 @@ The three defects share one root cause and one owner: `renderTerminalRow` (`src/
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Rework the Terminals Sidebar Row Controls: Inline ×, Edit Pencil, and a Real Clear Button](../plans/feature_plan_20260807093000_terminals-sidebar-row-controls-rework.md) — **PLAN REVIEWED**
+- [ ] [Rework the Terminals Sidebar Row Controls: Inline ×, Edit Pencil, and a Real Clear Button](../plans/feature_plan_20260807093000_terminals-sidebar-row-controls-rework.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
+
+## Review Findings
+
+Reviewed the feature's single subtask in place; all four of its parts landed as specified in `src/webview/terminals.js` and `src/webview/terminals.html` (× replaces the status dot in the same slot, pencil beside the name, bordered `clear` as the strip's only entry, `(exited)` suffix + `is-exited` dimming re-encoding the deleted red pip). Regression tracing found no orphaned `.status-dot` reference in this panel, `.locate-btn`/`.locate-btn.is-danger` intact for `renderGroupSidebar`'s saved-group buttons, both `renderTerminalRow` call sites still inside `listEl` so delegated dblclick rename works at both nesting levels, and no confirm gate anywhere. One MAJOR fixed — `.item-clear-btn` duplicated `.btn-unassign-pane`'s rules verbatim instead of reusing them; consolidated to one selector with a single padding override — plus three NITs (stale line refs, `(exited)` missing from the row's hover title). Verification: `node --check` OK, lint 0 errors, `npm run compile` clean, 9 terminal/panel contract suites pass; the one red in `terminal-focus-affordance` is pre-existing at HEAD and unrelated. Remaining risk is entirely visual and unguarded by CI — the plan's 30 manual UAT steps were not executed, and `.item-name { flex: 1 }` right-aligns the pencil to the info column rather than to the name text on rows whose subline is wider (plan-specified, left as authored).
 

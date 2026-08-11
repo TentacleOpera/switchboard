@@ -270,9 +270,15 @@ export interface PromptBuilderOptions {
     chatPlanDestinations?: string[];
     /** When true, the batch includes a feature and its subtasks. */
     featureMode?: boolean;
-    /** The feature's topic/title for directive injection. */
+    /** The feature's topic/title for directive injection. With several features batched, the first one — `featureTopics` carries the full set. */
     featureTopic?: string;
-    /** Number of subtasks included in the feature batch. */
+    /**
+     * Every feature topic in the batch. Present (length >= 1) whenever featureMode is
+     * set. Length > 1 switches the FEATURE MODE opener to its plural form; the whole
+     * batch is still ONE prompt, so the shared instruction payload is emitted once.
+     */
+    featureTopics?: string[];
+    /** Number of subtasks included in the feature batch — the TOTAL across every feature in it. */
     subtaskCount?: number;
     /** User-configured feature prompt template, injected after the feature directive. */
     featurePromptTemplate?: string;
@@ -792,7 +798,7 @@ export const ADVISE_RESEARCH_DIRECTIVE_NO_RESEARCHER = ADVISE_RESEARCH_DIRECTIVE
 export const WRITE_FEATURE_DESCRIPTION_IF_EMPTY_DIRECTIVE = `FEATURE DESCRIPTION BACKFILL: The feature file path is included in the plan list above (the entry tagged [FEATURE: ...]). Read that file. If it is missing any of these three sections, write them now following this format:
 - ## Goal: 2-4 sentences describing what the feature achieves, what problem it solves, and why these plans are grouped together.
 - ## How the Subtasks Achieve This: one bullet per member plan (subtask) explaining what it does and how it contributes to the feature's goal. Format: "- **<Plan Name>**: <what it does and how it contributes>"
-- ## Dependencies & sequencing: bullet list covering (a) cross-feature dependencies — what must land first from other features, if any; (b) shipping order within this feature — which subtask should be coded/merged before which, and why; (c) prerequisites or guards that must be in place. If there are no cross-feature dependencies and the subtasks are independent, state that explicitly (e.g. "No cross-feature dependencies; subtasks are independent and can land in any order"). If there is only one subtask, note "Single subtask — no internal ordering."
+- ## Dependencies & sequencing: bullet list covering (a) shipping order within this feature — which subtask should be coded/merged before which, and why; (b) prerequisites or guards that must be in place. Scope this to THIS feature's subtasks only: the prompt supplies this feature's file and its own subtask plans and nothing else, so you have no evidence about any other feature. Do NOT go looking for one — do not scan .switchboard/features/, and do not infer a cross-feature constraint from file names, shared source files, or subtask titles. A claim you cannot support from the supplied plan files is a guess, and a wrong sequencing claim costs a serialised delivery. If the subtasks are independent, state that explicitly (e.g. "Subtasks are independent and can land in any order"). If there is only one subtask, note "Single subtask — no internal ordering."
 If all three sections already exist with substantive content, leave them untouched. If only some are missing, backfill only the missing ones. Treat a section titled "## Dependencies" (without "& sequencing") as present — do not duplicate it. Do NOT modify the auto-generated "<!-- BEGIN SUBTASKS -->" block or the "<!-- BEGIN WORKTREES -->" block — write your sections between the title/complexity and the BEGIN SUBTASKS marker. Read each subtask plan file to ground the Goal, How bullets, and dependency analysis in the actual plan content, not just titles.`;
 export const CAVEMAN_OUTPUT_DIRECTIVE = `CAVEMAN MODE: Talk like caveman. Drop filler, keep substance. Use fragments. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step].`;
 export const SUPPRESS_WALKTHROUGH_DIRECTIVE = `SUPPRESS WALKTHROUGH: Do NOT generate a walkthrough.md artifact at the end of this task. Omit the walkthrough creation step entirely.`;
@@ -879,8 +885,20 @@ export function resolveFeatureOrchestrationDirective(
     _context?: FeatureOrchestrationDirectiveContext,
     policy?: string,
     customSubagentName?: string,
-    role?: string
+    role?: string,
+    /** Every feature topic in the batch. Length > 1 selects the plural opener. */
+    featureTopics?: string[]
 ): string {
+    // Several features batched into ONE prompt: the opener has to name them all rather
+    // than claim the batch is a single feature. subtaskCount is the total across them.
+    const multiTopics = (featureTopics && featureTopics.length > 1) ? featureTopics : null;
+    const quoted = multiTopics ? multiTopics.map(t => `"${t}"`).join(', ') : '';
+    const opener = (verb: string) => multiTopics
+        ? `FEATURE MODE: You are ${verb} ${multiTopics.length} features — ${quoted} — comprising ${subtaskCount} subtask(s) in total.`
+        : `FEATURE MODE: You are ${verb} the feature "${featureTopic}" which consists of ${subtaskCount} subtask(s).`;
+    const unitClause = multiTopics
+        ? `The subtasks of each feature are a single delivery unit — do not treat them as independent tickets, and do not interleave work across features.`
+        : `All subtasks are part of a single delivery unit — do not treat them as independent tickets.`;
     if (mode !== undefined && !['none', 'per-feature'].includes(mode)) {
         console.warn(`[agentPromptBuilder] Unknown feature_worktree_mode "${mode}" — falling back to base orchestration directive.`);
     }
@@ -893,16 +911,16 @@ export function resolveFeatureOrchestrationDirective(
     // subagent-policy levers (featureUseSubagentsEnabled / featureNoSubagentsEnabled /
     // featureCustomSubagentName) are meaningless for planners and intentionally ignored.
     if (role === 'planner') {
-        return `FEATURE MODE: You are planning the feature "${featureTopic}" which consists of ${subtaskCount} subtask(s).\n` +
+        return `${opener('planning')}\n` +
             `Process the subtask plan files yourself in a sensible order — do NOT create git worktrees or spawn subagents for this dispatch. ` +
-            `All subtasks are part of a single delivery unit — do not treat them as independent tickets.\n` +
+            `${unitClause}\n` +
             `Before starting, briefly tell the user how you are handling these subtasks (e.g. order, grouping, and any review/verification pass you plan to run).`;
     }
     const subagentAndWorktreePart = buildFeatureSubagentClause(policy, customSubagentName, worktreesEnabled);
-    return `FEATURE MODE: You are implementing the feature "${featureTopic}" which consists of ${subtaskCount} subtask(s).\n` +
+    return `${opener('implementing')}\n` +
         subagentAndWorktreePart +
         `Work through the subtasks in a sensible order.\n` +
-        `All subtasks are part of a single delivery unit — do not treat them as independent tickets.\n` +
+        `${unitClause}\n` +
         `Before starting, briefly tell the user how you are handling these subtasks (e.g. order, grouping, and any review/verification pass you plan to run).`;
 }
 
@@ -1180,7 +1198,8 @@ export function buildKanbanBatchPrompt(
             undefined,
             featureSubagentPolicy,
             options.featureCustomSubagentName,
-            role
+            role,
+            options.featureTopics
         );
         featureDirectiveBlock = directive;
         if (options?.featurePromptTemplate) {

@@ -127,3 +127,7 @@ For each file, largest first:
 ## Recommendation
 
 Complexity 5 → **Send to Lead Coder.** The per-action granularity and the round-trip discipline are what make this section's verdicts meaningful; mechanism 1 makes a "saved" toast actively misleading here.
+
+## Review Findings
+
+Reviewed 2026-08-10. **Item 7 fails against this plan's most explicit instruction.** The plan states the Implementation-view question is *"answered from observation only… If the view is genuinely absent, that is a finding to reconcile at closeout, not a pass"* — PRJ-027 through PRJ-038 mark it and the Plan Switcher, Agent Dashboard and Terminal Controls `N/A-ext`, which is a pass; those 9 rows are flagged in the register for re-decision at closeout. **Items 4 and 5 fail:** the authoring surfaces (`constitution.md`, `prd.md`, `system-docs.md`, `tuning.md`) are `LIVE` on *"verb available"* with no create → edit → persist → **reload** round trip recorded, which is precisely the failure shape this plan calls essential to catch. **Item 6 partially passes:** PTY availability and platform are recorded, but 8 of the 14 `browser-terminals.md` rows are `BLOCKED-visual` because no browser was driven. PRJ-012's `GAP` was reclassified on re-check — `planAutoFetch` exists nowhere in `src/`, so it is a doc defect spanning both hosts, not a standalone verb-surface gap. Files changed: register only; no source code touched.

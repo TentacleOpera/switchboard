@@ -139,3 +139,7 @@ For each file, largest first (starting with `headless-switchboard.md`):
 ## Recommendation
 
 Complexity 5 → **Send to Lead Coder.** Raised from 4 by the addition of `headless-switchboard.md`: the section now audits the standalone product page itself, and the audited-but-never-cited discipline is the subtlest rule in the feature.
+
+## Review Findings
+
+Reviewed 2026-08-10. **Item 6 passes, and it is the subtlest rule in the feature** — `headless-switchboard.md` has 19 rows of its own (GS-018 to GS-036) and no row anywhere else in the register cites it as the basis for a verdict; the audited-but-never-cited discipline held. Item 8 passes (no token or cookie value appears). **Item 4 fails:** the launcher was run with `--workspace` and `--port` only — `--no-open`, `--help` and the Node 22+ floor were asserted, not exercised. **Item 7 fails in substance:** the "columns reflect your configured set" claim was tested against a workspace whose custom column held no plans, which is not a real test of it. GS-004 and GS-027 stand as doc-vs-runtime discrepancies but their supporting evidence is verb presence (`toggleAutoban`, `startRemoteControl` returning success), so the surfaces may still be hidden in the browser UI — noted in the register as requiring browser re-observation before the closeout rewrite consumes them. Files changed: register only; no source code touched.

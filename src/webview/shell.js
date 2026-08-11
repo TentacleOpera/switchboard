@@ -34,6 +34,17 @@
         activePanel = id;
         for (const [pid, frame] of frames) {
             frame.classList.toggle('is-active', pid === id);
+            // A document inside a display:none iframe is not rendered and gets no
+            // rendering opportunities, so it cannot observe its own hiding — the
+            // Terminals panel needs this to release its hold on the shared pty size
+            // (see releaseSizeVote in terminals.js). Panels with no arm for this type
+            // fall through their message chain and ignore it.
+            try {
+                frame.contentWindow?.postMessage(
+                    { type: 'panelVisibility', visible: pid === id },
+                    location.origin
+                );
+            } catch { /* frame not ready yet — its first fit reports a size anyway */ }
         }
         for (const [pid, icon] of icons) {
             icon.classList.toggle('is-active', pid === id);
@@ -202,6 +213,28 @@
 
     const popoutWindows = new Set();
 
+    // name -> { stamp, startedAt }. renderTerminalSection rebuilds EVERY button from
+    // scratch on every fleet push (5s poll + terminalsChanged + the completion push
+    // itself), so a bare CSS animation on `.strip-term-done` would restart every few
+    // seconds and blink forever. A plain "already pulsed" boolean is not enough
+    // either: the rebuild destroys the animating element mid-pulse and its
+    // replacement, marked pulsed, wears no ring — the pulse is silently truncated,
+    // often to nothing (handleAgentCompleted relays, then fetchTerminalList relays
+    // again ~200ms later).
+    //
+    // So record WHEN the pulse started and keep re-applying the class with a negative
+    // animation-delay equal to the elapsed time: a negative delay starts a CSS
+    // animation already that far into its timeline, so each rebuilt element picks up
+    // exactly where its predecessor was killed. Once elapsed >= DONE_PULSE_MS the
+    // class stops being applied and the ring is gone for good.
+    //
+    // performance.now(), not document.timeline.currentTime: they share the same
+    // monotonic clock and both keep advancing while the tab is hidden, so the two are
+    // interchangeable for this arithmetic — and document.timeline can be null on a
+    // freshly attached document, which performance.now() never is.
+    const pulsedDoneStamps = new Map();
+    const DONE_PULSE_MS = 2200; // MUST equal the animation duration in shell.html
+
     function applyThemeToAll(themeName) {
         const isClaudify = themeName === 'claudify';
         if (isClaudify) {
@@ -280,6 +313,7 @@
         const themeBtn = document.querySelector('.theme-toggle-btn');
 
         if (!frames.has('terminals')) {
+            pulsedDoneStamps.clear();
             if (container) {
                 container.remove();
             }
@@ -324,13 +358,56 @@
 
         container.innerHTML = '';
         if (!Array.isArray(terminals) || terminals.length === 0) {
+            pulsedDoneStamps.clear();
             return;
         }
 
+        const seenNames = new Set();
         for (const t of terminals) {
+            seenNames.add(t.name);
+
+            // -1 = no ring. 0 = start now. >0 = resume this far in.
+            let pulseElapsed = -1;
+            if (t.light === 'done') {
+                const prev = pulsedDoneStamps.get(t.name);
+                if (!prev || prev.stamp !== t.doneStamp) {
+                    pulsedDoneStamps.set(t.name, { stamp: t.doneStamp, startedAt: performance.now() });
+                    pulseElapsed = 0;
+                } else {
+                    // STRICTLY less than. A delay whose magnitude reaches the duration
+                    // puts the animation straight into its post-active phase, and with
+                    // fill-mode `both` the element paints the 100% keyframe for one
+                    // frame — a green flash on an expired completion. This comparison
+                    // is the guard against that, not a rounding nicety.
+                    const elapsed = performance.now() - prev.startedAt;
+                    if (elapsed < DONE_PULSE_MS) { pulseElapsed = elapsed; }
+                }
+            } else {
+                // Not done any more (acknowledged, or exited): forget it, so a LATER
+                // completion of the same terminal pulses again from the top.
+                pulsedDoneStamps.delete(t.name);
+            }
+
             const btn = document.createElement('button');
-            btn.className = 'strip-icon strip-term-btn strip-term-' + t.light;
+            // The done ring is a one-shot ANIMATION, not a state class: it plays for
+            // DONE_PULSE_MS from the push that carried a new completion stamp, and is
+            // simply absent on every push after that window closes. A terminal that
+            // completed a minute ago wears no ring — the sidebar DONE chip and the
+            // pane badge in the Terminals panel remain the durable record of an
+            // unacknowledged completion.
+            btn.className = 'strip-icon strip-term-btn strip-term-' + t.light
+                + (pulseElapsed >= 0 ? ' is-pulsing' : '');
             btn.type = 'button';
+            if (pulseElapsed > 0) {
+                // Resume, do not restart — the previous element was destroyed mid-pulse.
+                // FLOOR, never round: the guard above admits pulseElapsed strictly below
+                // DONE_PULSE_MS, but rounding 2199.6 up to 2200 hands the animation a
+                // delay whose magnitude EQUALS the duration — straight into the
+                // post-active phase, where fill-mode `both` paints the 100% keyframe for
+                // one frame. That is the green flash on an expired completion the strict
+                // comparison exists to prevent; rounding would reintroduce it.
+                btn.style.animationDelay = '-' + Math.floor(pulseElapsed) + 'ms';
+            }
 
             const roleChar = (t.role || 'T').charAt(0).toUpperCase();
             let wtBase = 'Workspace Root';
@@ -427,6 +504,19 @@
 
             container.appendChild(btn);
         }
+
+        for (const name of Array.from(pulsedDoneStamps.keys())) {
+            if (!seenNames.has(name)) { pulsedDoneStamps.delete(name); }
+        }
+    }
+
+    function requestFleetState() {
+        const termFrame = frames.get('terminals');
+        if (termFrame && termFrame.contentWindow) {
+            try {
+                termFrame.contentWindow.postMessage({ type: 'requestFleetState' }, location.origin);
+            } catch { /* ignore */ }
+        }
     }
 
     function renderManifest(manifest) {
@@ -470,6 +560,18 @@
         strip.appendChild(themeBtn);
 
         renderTerminalSection([]);
+
+        // Ask the terminals iframe for its fleet state once it's loaded. The iframe's
+        // own postFleetStateToShell runs on init and on a 5s poll, but a transient
+        // fetch failure in the iframe can leave the rail dark. This request ensures
+        // the shell gets fleet state even if the iframe's initial push was lost or
+        // sent before the shell's message listener was ready.
+        const termFrame = frames.get('terminals');
+        if (termFrame) {
+            termFrame.addEventListener('load', () => {
+                setTimeout(requestFleetState, 500);
+            });
+        }
 
         const hash = window.location.hash.replace(/^#/, '');
         const initial = (hash && frames.has(hash)) ? hash : defaultPanelId(manifest);
@@ -515,6 +617,18 @@
         if (hash && frames.has(hash) && hash !== activePanel) {
             selectPanel(hash);
         }
+    });
+
+    // A completion that lands while the cockpit tab is hidden burns its whole 2.2s
+    // window unwatched — the fleet poll is suspended (terminals.js skips it on
+    // visibilityState === 'hidden'), background tabs throttle animation frames, and
+    // even if neither were true the pulse is over before the operator looks. Dropping
+    // the ledger on return re-arms every STILL-OUTSTANDING completion so the next push
+    // re-announces it exactly once. Identical semantics to a shell reload, which this
+    // design already treats as correct. A terminal whose badge was acknowledged is not
+    // `done` any more, so it is not re-announced.
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') { pulsedDoneStamps.clear(); }
     });
 
     if (document.readyState === 'loading') {

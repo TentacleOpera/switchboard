@@ -281,3 +281,7 @@ Add unit coverage for the helper itself in the same file (it is a pure function,
 ## Recommendation
 
 Complexity 5 → **Send to Coder.**
+
+## Review Findings
+
+Reviewed as implemented. `stripAppendedBlocksForPush` (`src/services/ticketDisplayContent.ts`) and its `pushTicketEdits` call site match the plan, and the retargeted pinning assertion survived. Two defects fixed: (1) **CRITICAL** — `src/test/tickets-subtask-embedding.test.js` was red (CI gate `integration-tests.yml:301`), because its `[^{]*\{` signature-skip stopped at the *return type's* brace and `new Function` got TypeScript garbage; it now transpiles the module instead, and case 16e's round-trip assertion was corrected to keep the trailing newline the kept-path actually returns. (2) **MAJOR** — the plan's shape-based legacy fallback can never match a pre-marker `## Comments` block (comment bodies are free prose, so the checklist test always fails), so the whole imported comment history would have been pushed into the remote *description* on the first push of any legacy ticket; `looksLikeImportedCommentLog` now recognises the author-line + `---` frame, with cases 16g/16h pinning both directions. Remaining risks: the `## Comments` shape rule is a heuristic — a human section that opens with a bold author line and contains a `---` will be withheld (the push notice reports it, so a wrong verdict is visible, not silent); and a `## Subtasks` heading inside a fenced code block is still matched by the line-anchored regex, as the plan accepted.

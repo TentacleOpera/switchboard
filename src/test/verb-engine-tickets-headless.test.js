@@ -394,7 +394,12 @@ async function main() {
         assert.ok(push, 'webview push emitted');
     });
 
-    await test('viewAttachments RETURNS in-body attachments (headless: no webviewUri rewrite, no vscode reached)', async () => {
+    // The webviewUri decoration used to be gated on a live VS Code panel and produced only
+    // an `asWebviewUri`, so the browser cockpit could never preview a downloaded image. It
+    // now prefers `_buildLocalAssetUrl`'s loopback asset route, which satisfies both hosts.
+    // Two cases, because a single "must be undefined" assertion passes for the WRONG reason
+    // — a stub localPath outside every allowed asset root yields undefined regardless.
+    await test('viewAttachments RETURNS in-body attachments (headless, no api port: no webviewUri, no vscode reached)', async () => {
         const { provider } = buildHeadlessTicketsProvider(tmpRoot, {
             commandResults: {
                 'switchboard.getAttachmentList': () => ([{ isDownloaded: true, localPath: '/tmp/a.png' }]),
@@ -403,9 +408,51 @@ async function main() {
         const result = await provider.handleServiceVerb('viewAttachments', { provider: 'clickup', ticketId: 't1', attachments: [] });
         assert.strictEqual(result.success, true);
         assert.ok(Array.isArray(result.attachments));
-        // Headless has no webview → webviewUri must NOT be set (host-agnostic guard).
+        // No API server port and no panel → nothing to build a URL from. Still host-agnostic:
+        // the preview branch simply stays off, and no `vscode` API is reached.
         assert.strictEqual(result.attachments[0].webviewUri, undefined);
         assert.strictEqual(result.type, 'attachmentsListResult');
+    });
+
+    await test('viewAttachments decorates webviewUri via the loopback asset route (browser cockpit preview)', async () => {
+        // A real file inside an allowed asset root — _buildLocalAssetUrl realpaths the
+        // target and rejects anything outside getTicketsAssetRoots(root).
+        const assetDir = path.join(tmpRoot, '.switchboard', 'tickets', 'clickup', 'a-list', 'attachments');
+        fs.mkdirSync(assetDir, { recursive: true });
+        const assetPath = path.join(assetDir, 'shot.png');
+        fs.writeFileSync(assetPath, 'not-really-a-png');
+
+        const { provider } = buildHeadlessTicketsProvider(tmpRoot, {
+            commandResults: {
+                'switchboard.getAttachmentList': () => ([{ isDownloaded: true, localPath: assetPath }]),
+            },
+        });
+        provider._apiServer = { getPort: () => 45999 };
+
+        const result = await provider.handleServiceVerb('viewAttachments', { provider: 'clickup', ticketId: 't1', attachments: [] });
+        assert.strictEqual(result.success, true);
+        const uri = result.attachments[0].webviewUri;
+        assert.ok(uri, 'a downloaded image inside an allowed asset root must get a webviewUri with no panel present');
+        assert.ok(
+            uri.startsWith('http://127.0.0.1:45999/design/asset?'),
+            `webviewUri must be the loopback asset URL (got ${uri})`
+        );
+        assert.ok(uri.includes(encodeURIComponent(fs.realpathSync(assetPath))), 'the asset URL must carry the resolved path');
+    });
+
+    await test('viewAttachments leaves a non-image attachment undecorated', async () => {
+        const assetDir = path.join(tmpRoot, '.switchboard', 'tickets', 'clickup', 'a-list', 'attachments');
+        fs.mkdirSync(assetDir, { recursive: true });
+        const docPath = path.join(assetDir, 'spec.pdf');
+        fs.writeFileSync(docPath, 'pdf');
+        const { provider } = buildHeadlessTicketsProvider(tmpRoot, {
+            commandResults: {
+                'switchboard.getAttachmentList': () => ([{ isDownloaded: true, localPath: docPath }]),
+            },
+        });
+        provider._apiServer = { getPort: () => 45999 };
+        const result = await provider.handleServiceVerb('viewAttachments', { provider: 'clickup', ticketId: 't1', attachments: [] });
+        assert.strictEqual(result.attachments[0].webviewUri, undefined, 'only image extensions get an inline preview URL');
     });
 
     await test('loadTicketComments RETURNS in-body ticketCommentsLoaded via command seam and keeps push additive', async () => {

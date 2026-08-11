@@ -275,7 +275,11 @@ async function main() {
         const result = await provider.handleServiceVerb('focusTerminal', { terminalName: 'Lead' });
         assert.deepStrictEqual(result, { success: true });
         assert.deepStrictEqual(recorders.executedCommands, [
-            { command: 'switchboard.focusTerminalByName', args: ['Lead'] },
+            // `{ silent: true }` landed in ea1077da: this is a dispatch-path focus, and
+            // a PTY fleet target is in neither _registeredTerminals nor
+            // vscode.window.terminals, so the "Terminal not found" toast always fires
+            // and reads as a failed dispatch beside one that succeeded.
+            { command: 'switchboard.focusTerminalByName', args: ['Lead', { silent: true }] },
         ]);
     });
 

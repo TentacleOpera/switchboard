@@ -101,8 +101,16 @@ test('the throttle notice is informational and two-sided', () => {
     const branch = block(terminalsJs, "frame.t === 'inputThrottled'", "frame.t === 'error'");
     assert.ok(!branch.includes('disableStdin'),
         'input is queued, never dropped — the operator must be able to keep typing');
-    assert.ok(branch.includes('frame.throttled === false'),
+    // Either polarity. The branch no longer WRITES the notice into the buffer (it
+    // records entry.inputThrottled and repaints the header chip — see
+    // terminal-chrome-not-in-buffer-contract), so it reads `frame.throttled !== false`
+    // rather than branching on `=== false`. The invariant is unchanged: the CLEAR
+    // frame must be distinguished, or the signal reads as "permanently throttled"
+    // long after the queue drained.
+    assert.ok(/frame\.throttled\s*(===|!==)\s*false/.test(branch),
         'without the CLEAR, the notice reads as "input is permanently throttled" long after the queue drained');
+    assert.ok(/refreshInputState\(/.test(branch),
+        'the throttle state must reach the operator through the pane chrome, which is now the whole signal');
     assert.ok(gatewayCode.includes('private clearInputThrottleIfDrained('), 'the server must send the complementary clear');
 });
 
@@ -181,7 +189,11 @@ test('hello omits the mode when unobserved and the client re-arms from it', () =
     const arm = block(terminalsJs, "frame.t === 'hello'", "frame.t === 'inputThrottled'");
     assert.ok(arm.includes('entry.pendingModes'),
         'a rebuilt view starts with bracketedPasteMode false and would paste unbracketed — the recorded mode set is armed on the entry and applied after the replay');
-    assert.ok(!arm.includes('batchQueue'),
+    // `push`, not any mention. The hazard is ENQUEUEING synthetic chars into the
+    // billed flush path; the gap branch's `entry.batchQueue = []` is the opposite
+    // move — it DISCARDS pre-gap output so it cannot be parsed after the RIS reset
+    // (see terminal-replay-gap-contract) — and nothing it drops was ever billed.
+    assert.ok(!/batchQueue\.push/.test(arm),
         'the mode escape must bypass batchQueue: that path is billed to pendingAckChars and synthetic chars corrupt the backpressure ledger');
     const apply = block(terminalsJs, 'function applyServerModes(', 'function isAnswerback(');
     assert.ok(apply.includes('REARMABLE_DEC_MODES'),

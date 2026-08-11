@@ -45,6 +45,8 @@ export interface KanbanServiceContext {
     updateScopedSetting(key: string, value: any, initiatorProject?: string | null): Promise<void>;
     remoteGetConfigPayload(workspaceRoot?: string): Promise<Record<string, any> | null>;
     remoteSetConfig(workspaceRoot: string | undefined, config: any): Promise<Record<string, any> | null>;
+    /** Check if a terminal name is a PTY fleet target (no VS Code terminal to reveal). */
+    isPtyTerminalName?(terminalName: string): boolean;
 }
 
 export class KanbanService {
@@ -138,12 +140,17 @@ export class KanbanService {
     async focusTerminal(payload: { terminalName?: string }): Promise<{ success: boolean }> {
         const terminalName = String(payload.terminalName || '');
         if (!terminalName) return { success: false };
-        // `silent: true` — a PTY fleet terminal exists in neither `registeredTerminals`
-        // nor `vscode.window.terminals`, so focusing one by name always misses and used
-        // to raise "Terminal 'X' not found. It may have been closed." That toast fires in
-        // VS Code, is invisible to the browser caller that triggered it, and reads as a
-        // failed dispatch next to a dispatch that in fact succeeded. Matches the guarded
-        // call in TaskViewerProvider._handleTriggerAgentAction.
+        // PTY skip: a PTY fleet terminal exists in neither `registeredTerminals`
+        // nor `vscode.window.terminals`, so focusing one by name always misses.
+        // Skip the call entirely — matching the drag path
+        // (TaskViewerProvider.ts:19405) and the KanbanProvider arm guard. The
+        // wasted executeCommand was pure noise even with `silent: true`.
+        if (this._ctx.isPtyTerminalName?.(terminalName)) {
+            return { success: true };
+        }
+        // `silent: true` — a non-PTY terminal that is not found should not
+        // raise a visible toast (the board's focus call is best-effort, not
+        // an explicit user focus request).
         await this._ctx.seams.commands.executeCommand('switchboard.focusTerminalByName', terminalName, { silent: true });
         return { success: true };
     }

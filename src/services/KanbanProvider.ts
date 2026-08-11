@@ -22,7 +22,7 @@ import {
 import { AgentSkillExporter } from './AgentSkillExporter';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
 import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine } from './agentPromptBuilder';
-import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow } from './KanbanDatabase';
+import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow, type ColumnUpdateOutcome } from './KanbanDatabase';
 import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (is_feature clobber) — remove with the probes
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { buildFetchPlansPrompt } from './schedulerPresets';
@@ -4881,8 +4881,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
 
         const partition = partitionPlansByFeature(plans);
         const totalFeatureGroups = partition.featureGroups.length;
-        const hasLoosePlans = partition.loosePlans.length > 0;
-        const segmentCount = totalFeatureGroups + (hasLoosePlans ? 1 : 0);
 
         // Board-level feature config is shared across groups; read it once and stamp it
         // into each per-group options copy so the existing single-feature builder keeps
@@ -4895,70 +4893,60 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             featureWorktreeMode = (await db.getConfig('feature_worktree_mode')) || 'none';
         }
 
-        const segments: string[] = [];
-
-        for (let i = 0; i < totalFeatureGroups; i++) {
-            const group = partition.featureGroups[i];
-            const groupPlans = [group.feature, ...group.subtasks];
-
-            // Fresh options copy per group — scalar feature fields must not leak between
-            // iterations (e.g. group 2 inheriting group 1's featurePlanId).
-            const groupOptions: PromptBuilderOptions = {
-                ...resolvedOptions,
-                ...overrides,
-            };
-            groupOptions.featureMode = true;
-            groupOptions.featureTopic = group.feature.topic || '';
-            groupOptions.subtaskCount = group.subtasks.length;
-            const featurePlanId = group.feature.planId || group.feature.sessionId || '';
-            if (featurePlanId) {
-                groupOptions.featurePlanId = featurePlanId;
-                groupOptions.featureWorktreeMode = featureWorktreeMode || 'none';
+        // ONE prompt for the whole batch. buildKanbanBatchPrompt does not build a
+        // *section* — it builds a COMPLETE prompt (git policy, safeguards, subagent
+        // directive, PRD/design-system refs, constitution, execution rules, workflow
+        // body, then PLANS TO PROCESS). Calling it per feature group and concatenating
+        // therefore re-emitted the entire instruction payload once per feature — three
+        // features meant three verbatim copies of the same prompt. The only things that
+        // differed per group were featureTopic/featurePlanId/subtaskCount, so the batch
+        // now carries every feature's topics in `featureTopics` (plural FEATURE MODE
+        // opener) and buildPromptDispatchContext's `[FEATURE: x]` / `[SUBTASK]` labels
+        // keep the plan list unambiguous.
+        const batchOptions: PromptBuilderOptions = {
+            ...resolvedOptions,
+            ...overrides,
+        };
+        if (totalFeatureGroups > 0) {
+            const featureTopics = partition.featureGroups.map(g => g.feature.topic || 'Untitled');
+            batchOptions.featureMode = true;
+            batchOptions.featureTopics = featureTopics;
+            batchOptions.featureTopic = featureTopics[0];
+            // Total across every feature in the batch — the plural opener reports the sum.
+            batchOptions.subtaskCount = partition.featureGroups.reduce((n, g) => n + g.subtasks.length, 0);
+            batchOptions.featureWorktreeMode = featureWorktreeMode || 'none';
+            if (totalFeatureGroups === 1) {
+                // Single-feature batches keep the exact prior payload, planId included.
+                const soleId = partition.featureGroups[0].feature.planId || partition.featureGroups[0].feature.sessionId || '';
+                if (soleId) { batchOptions.featurePlanId = soleId; }
             }
             if (featurePromptTemplate) {
-                groupOptions.featurePromptTemplate = featurePromptTemplate;
+                batchOptions.featurePromptTemplate = featurePromptTemplate;
             }
-
-            // §10 — REQUIRED pre-dispatch step for feature-mode coder dispatch: regenerate
-            // the feature file so its SUBTASKS/WORKTREES blocks reflect the current
-            // subtask set before the coder reads it. Run once per feature group.
-            if (role === 'coder' && groupOptions.featureMode && groupOptions.featurePlanId) {
-                if (db && await db.ensureReady()) {
-                    await this._regenerateFeatureFile(workspaceRoot, groupOptions.featurePlanId, db);
-                }
-            }
-
-            const segment = buildKanbanBatchPrompt(role, groupPlans, groupOptions);
-            if (segmentCount > 1) {
-                segments.push(`=== FEATURE ${i + 1} of ${totalFeatureGroups} ===\n\n${segment}`);
-            } else {
-                segments.push(segment);
-            }
-        }
-
-        if (hasLoosePlans) {
-            const looseOptions: PromptBuilderOptions = {
-                ...resolvedOptions,
-                ...overrides,
-            };
-            looseOptions.featureMode = false;
-            const looseSegment = buildKanbanBatchPrompt(role, partition.loosePlans, looseOptions);
-            if (totalFeatureGroups > 0) {
-                segments.push(`=== LOOSE PLANS ===\n\n${looseSegment}`);
-            } else {
-                segments.push(looseSegment);
-            }
-        }
-
-        let built: string;
-        if (segments.length === 0) {
-            // Empty plan array: keep the existing preamble behavior (used by the
-            // autoban scheduler) rather than returning an empty string.
-            const emptyOptions: PromptBuilderOptions = { ...resolvedOptions, ...overrides };
-            built = buildKanbanBatchPrompt(role, [], emptyOptions);
         } else {
-            built = segments.join('\n\n');
+            batchOptions.featureMode = false;
         }
+
+        // §10 — REQUIRED pre-dispatch step for feature-mode coder dispatch: regenerate
+        // each feature file so its SUBTASKS/WORKTREES blocks reflect the current subtask
+        // set before the coder reads it. Still once per feature — only the PROMPT is
+        // deduplicated, not this side effect.
+        if (role === 'coder' && totalFeatureGroups > 0 && db && await db.ensureReady()) {
+            for (const group of partition.featureGroups) {
+                const fid = group.feature.planId || group.feature.sessionId || '';
+                if (fid) { await this._regenerateFeatureFile(workspaceRoot, fid, db); }
+            }
+        }
+
+        // Feature groups first (each feature immediately followed by its subtasks), then
+        // loose plans — the order the concatenated segments used to produce.
+        const orderedPlans = [
+            ...partition.featureGroups.flatMap(g => [g.feature, ...g.subtasks]),
+            ...partition.loosePlans,
+        ];
+        // Empty plan array: keep the existing preamble behavior (used by the autoban
+        // scheduler) rather than returning an empty string.
+        const built = buildKanbanBatchPrompt(role, orderedPlans, batchOptions);
 
         // Feature workflow mode prepend: when ANY selected plan is a feature and a
         // board-level workflow toggle (ultracode / goal) is active, prepend the
@@ -5624,8 +5612,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
 
     private async _dispatchWithPairProgrammingIfNeeded(
         cards: KanbanCard[],
-        workspaceRoot: string,
-        options?: { apiOriginated?: boolean }
+        workspaceRoot: string
     ): Promise<void> {
         const mode = this._autobanState?.pairProgrammingMode ?? 'off';
         if (mode === 'off') { return; }
@@ -5651,12 +5638,8 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             const commonWorktree = plans[0]?.worktreePath;
             const allSameWorktree = plans.every(p => p.worktreePath === commonWorktree);
             const worktreePath = allSameWorktree ? commonWorktree : undefined;
-            // Third arg is the fix: without it the pair-programming coder send is
-            // VS Code-only even when the board click came from the browser cockpit.
-            // The value is already in scope at every call site (see :8101).
             await this._seams().commands.executeCommand(
-                'switchboard.dispatchToCoderTerminal', coderPrompt, worktreePath,
-                { apiOriginated: !!options?.apiOriginated }
+                'switchboard.dispatchToCoderTerminal', coderPrompt, worktreePath
             );
         }
     }
@@ -5665,7 +5648,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
         workspaceRoot: string,
         sourceCards: KanbanCard[],
         nextCol: string,
-        options?: { skipLimit?: boolean; apiOriginated?: boolean }
+        options?: { skipLimit?: boolean }
     ): Promise<void> {
         const tvp = this._taskViewerProvider;
         if (!tvp) return;
@@ -5681,14 +5664,14 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             const failures: { id: string; sourceColumn: string; reason: string }[] = [];
             for (const card of sourceCards) {
                 const sid = this._cardId(card);
-                const ok = await this.moveCardToColumn(workspaceRoot, sid, nextCol);
-                if (ok) {
+                const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, nextCol);
+                if (outcome.ok) {
                     await tvp.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
                     const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
                     movedIds.push(...cascadeIds);
                     dispatchIds.push(sid);
                 } else {
-                    failures.push({ id: sid, sourceColumn: card.column, reason: "couldn't save — board may be out of sync" });
+                    failures.push({ id: sid, sourceColumn: card.column, reason: outcome.detail });
                 }
             }
             if (movedIds.length > 0) {
@@ -5697,7 +5680,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             if (failures.length > 0) {
                 this.postMessage({ type: 'moveCardsFailed', failures });
             }
-            await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', 'planner', dispatchIds, 'improve-plan', workspaceRoot, undefined, !!options?.apiOriginated);
+            await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', 'planner', dispatchIds, 'improve-plan', workspaceRoot, undefined);
             return;
         }
 
@@ -5724,13 +5707,13 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
         const failures: { id: string; sourceColumn: string; reason: string }[] = [];
         for (const card of plans) {
             const sid = this._cardId(card);
-            const ok = await this.moveCardToColumn(workspaceRoot, sid, nextCol);
-            if (ok) {
+            const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, nextCol);
+            if (outcome.ok) {
                 await tvp.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
                 const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
                 movedIds.push(...cascadeIds);
             } else {
-                failures.push({ id: sid, sourceColumn: card.column, reason: "couldn't save — board may be out of sync" });
+                failures.push({ id: sid, sourceColumn: card.column, reason: outcome.detail });
             }
         }
         if (movedIds.length > 0) {
@@ -5770,7 +5753,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             bucketEntries.map(([terminalName, ids]) =>
                 this._seams().commands.executeCommand(
                     'switchboard.triggerBatchAgentFromKanban',
-                    'planner', ids, 'improve-plan', workspaceRoot, terminalName, !!options?.apiOriginated
+                    'planner', ids, 'improve-plan', workspaceRoot, terminalName
                 )
             )
         );
@@ -6920,31 +6903,37 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
         await this._taskViewerProvider.autoCommitForCodeReview(workspaceRoot, planTopic);
     }
 
-    public async moveCardToColumn(
+    public async moveCardToColumnWithReason(
         workspaceRoot: string,
         sessionId: string,
         targetColumn: string
-    ): Promise<boolean> {
-        if (!sessionId) return false;
+    ): Promise<ColumnUpdateOutcome> {
+        if (!sessionId) return { ok: false, reason: 'not_found', detail: 'No plan key supplied.' };
         try {
             const db = this._getKanbanDb(workspaceRoot);
-            if (!await db.ensureReady()) return false;
+            if (!await db.ensureReady()) return { ok: false, reason: 'not_ready', detail: `Kanban database for workspace '${workspaceRoot}' is not ready.` };
 
             await this._autoCommitIfCodeReviewTransition(workspaceRoot, sessionId, targetColumn);
 
             const plan = await db.getPlanBySessionId(sessionId);
-            let moved: boolean;
+            let outcome: ColumnUpdateOutcome;
             let subtaskSessionIds: string[] = [];
             if (plan && plan.isFeature) {
                 // Atomic: move feature + all subtasks in one transaction, keyed by plan_id (Class 2).
                 // session_id-keyed cascade silently no-ops for file-based plans (session_id='').
                 const subtasks = await db.getSubtasksByFeatureId(plan.planId);
                 subtaskSessionIds = subtasks.map(st => st.sessionId).filter(Boolean);
-                moved = await db.cascadeFeatureByPlanId(plan.planId, targetColumn);
+                const cascaded = await db.cascadeFeatureByPlanId(plan.planId, targetColumn);
+                outcome = cascaded
+                    ? { ok: true }
+                    : { ok: false, reason: 'cascade_failed', detail: `Feature cascade for plan ${plan.planId} updated no rows.` };
             } else {
-                moved = await db.updateColumn(sessionId, targetColumn);
+                outcome = await db.updateColumnWithReason(sessionId, targetColumn);
+                if (!outcome.ok && outcome.reason === 'not_found') {
+                    outcome = { ok: false, reason: 'not_found', detail: `No plan found for key '${sessionId}' in workspace '${workspaceRoot}'.` };
+                }
             }
-            if (moved) {
+            if (outcome.ok) {
                 await this.queueIntegrationSyncForSession(workspaceRoot, sessionId, targetColumn);
                 // Exact sync: fan out integration sync for subtasks so Linear/ClickUp
                 // reflect the cascaded subtask status. Mirrors moveCardToColumnByPlanFile.
@@ -6963,11 +6952,19 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                     }
                 }
             }
-            return moved;
+            return outcome;
         } catch (err) {
             console.error(`[KanbanProvider] moveCardToColumn failed for session ${sessionId}:`, err);
-            return false;
+            return { ok: false, reason: 'error', detail: err instanceof Error ? err.message : String(err) };
         }
+    }
+
+    public async moveCardToColumn(
+        workspaceRoot: string,
+        sessionId: string,
+        targetColumn: string
+    ): Promise<boolean> {
+        return (await this.moveCardToColumnWithReason(workspaceRoot, sessionId, targetColumn)).ok;
     }
 
     private async _collectAllMovedSessionIds(workspaceRoot: string, sessionId: string): Promise<string[]> {
@@ -6983,14 +6980,14 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
         return [sessionId];
     }
 
-    public async moveCardToColumnByPlanFile(
+    public async moveCardToColumnByPlanFileWithReason(
         workspaceRoot: string,
         planFile: string,
         targetColumn: string
-    ): Promise<boolean> {
+    ): Promise<ColumnUpdateOutcome> {
         try {
             const db = this._getKanbanDb(workspaceRoot);
-            if (!await db.ensureReady()) return false;
+            if (!await db.ensureReady()) return { ok: false, reason: 'not_ready', detail: `Kanban database for workspace '${workspaceRoot}' is not ready.` };
             const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
 
             const previousRecord = await db.getPlanByPlanFile(planFile, workspaceId);
@@ -7002,19 +6999,22 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 }
             }
 
-            let moved: boolean;
+            let outcome: ColumnUpdateOutcome;
             let subtaskSessionIds: string[] = [];
             if (previousRecord && previousRecord.isFeature) {
                 // plan_id-keyed cascade (Class 2): works for file-based features (session_id='')
                 // where the old session_id-keyed path + updateColumnTransaction fallback no-opped.
                 const subtasks = await db.getSubtasksByFeatureId(previousRecord.planId);
                 subtaskSessionIds = subtasks.map(st => st.sessionId).filter(Boolean) as string[];
-                moved = await db.cascadeFeatureByPlanId(previousRecord.planId, targetColumn);
+                const cascaded = await db.cascadeFeatureByPlanId(previousRecord.planId, targetColumn);
+                outcome = cascaded
+                    ? { ok: true }
+                    : { ok: false, reason: 'cascade_failed', detail: `Feature cascade for plan ${previousRecord.planId} updated no rows.` };
             } else {
-                moved = await db.updateColumnByPlanFile(planFile, workspaceId, targetColumn);
+                outcome = await db.updateColumnByPlanFileWithReason(planFile, workspaceId, targetColumn);
             }
 
-            if (moved) {
+            if (outcome.ok) {
                 await this.queueIntegrationSyncForPlanFile(workspaceRoot, planFile, targetColumn);
                 if (subtaskSessionIds.length > 0) {
                     await Promise.allSettled(
@@ -7032,11 +7032,19 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 }
                 await this._refreshBoard(workspaceRoot);
             }
-            return moved;
+            return outcome;
         } catch (err) {
             console.error(`[KanbanProvider] moveCardToColumnByPlanFile failed for ${planFile}:`, err);
-            return false;
+            return { ok: false, reason: 'error', detail: err instanceof Error ? err.message : String(err) };
         }
+    }
+
+    public async moveCardToColumnByPlanFile(
+        workspaceRoot: string,
+        planFile: string,
+        targetColumn: string
+    ): Promise<boolean> {
+        return (await this.moveCardToColumnByPlanFileWithReason(workspaceRoot, planFile, targetColumn)).ok;
     }
 
 
@@ -7158,6 +7166,183 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
     }
 
     /**
+     * Advance a batch of cards with a unified operation. When `target` is
+     * `'CODED_AUTO'`, each card is complexity-routed to its real coder column
+     * (closing the client/server routing divergence — the webview sends
+     * `CODED_AUTO` as intent, the server resolves). When `target` is a specific
+     * column ID, cards move there unrouted. When `target` is undefined, the
+     * next pipeline stage is computed.
+     *
+     * Owns: unknown-complexity filtering, complexity partition (CODED_AUTO
+     * only), visible-agent resolution, target-column resolution + degradation,
+     * per-card forward/backward classification, per-card moveCardToColumn,
+     * run-sheet recording, cascade-id collection, moveCards/moveCardsFailed
+     * pushes, the _cliTriggersEnabled gate, and the dispatch call.
+     *
+     * Returns `moved[]` with a resolved `targetColumn` per card — the payload
+     * that lets the webview arm its optimistic guard without re-implementing
+     * routing (PRD contract #4).
+     */
+    private async _advanceCards(
+        workspaceRoot: string,
+        sessionIds: string[],
+        options: {
+            sourceColumn?: string;
+            target?: string;
+            initiatorProject?: string | null;
+            bypassTriggerGate?: boolean;
+        }
+    ): Promise<{
+        success: boolean;
+        moved: Array<{ id: string; targetColumn: string }>;
+        failures: Array<{ id: string; sourceColumn: string; reason: string }>;
+        skippedUnknownComplexity: number;
+        dispatched: boolean;
+        error?: string;
+    }> {
+        const target = options.target;
+        const sourceColumn = options.sourceColumn;
+
+        if (target === 'CODED_AUTO') {
+            // Complexity-route per card, classifying direction (forward/backward)
+            // from the resolved target vs the card's current column.
+            const { filtered: knownIds, skippedCount } = this._filterUnknownComplexitySessions(sessionIds);
+            if (knownIds.length === 0) {
+                this._notifySkippedUnknownComplexity(skippedCount, 0);
+                return { success: false, moved: [], failures: [], skippedUnknownComplexity: skippedCount, dispatched: false, error: 'All selected plans have unknown complexity' };
+            }
+            const groups = await this._partitionByComplexityRoute(workspaceRoot, knownIds);
+            const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+            if (['lead', 'coder', 'intern'].every(r => visibleAgents[r] === false)) {
+                void this._seams().ui.showErrorMessage('No coding agent is currently enabled. Enable a coding agent in Setup or move manually.');
+                return { success: false, moved: [], failures: [], skippedUnknownComplexity: skippedCount, dispatched: false, error: 'No coding agent is currently enabled.' };
+            }
+
+            const moved: Array<{ id: string; targetColumn: string }> = [];
+            const failures: Array<{ id: string; sourceColumn: string; reason: string }> = [];
+            let dispatched = false;
+
+            for (const [role, sids] of groups) {
+                if (sids.length === 0) { continue; }
+                const targetCol = this._targetColumnForDispatchRole(role, visibleAgents);
+                const dispatchRole = this._columnToRole(targetCol) || role;
+                const movedSids: string[] = [];
+                const dispatchSids: string[] = [];
+                // Per-group, NOT the accumulator: posting the running `failures`
+                // array once per group re-sends every earlier group's failures, so a
+                // card that failed in the lead group is reported again in the coder
+                // and intern groups — one real failure, three toasts.
+                const groupFailures: Array<{ id: string; sourceColumn: string; reason: string }> = [];
+
+                for (const sid of sids) {
+                    const card = this._lastCards.find(c => (c.planId || c.sessionId) === sid && c.workspaceRoot === workspaceRoot);
+                    const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, targetCol);
+                    if (outcome.ok) {
+                        const direction = this._isColumnBefore(targetCol, card?.column ?? sourceColumn ?? '') ? 'backward' : 'forward';
+                        await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, direction, workspaceRoot);
+                        const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                        movedSids.push(...cascadeIds);
+                        dispatchSids.push(sid);
+                        moved.push({ id: sid, targetColumn: targetCol });
+                    } else {
+                        groupFailures.push({ id: sid, sourceColumn: card?.column ?? sourceColumn ?? '', reason: outcome.detail });
+                    }
+                }
+                failures.push(...groupFailures);
+
+                if (movedSids.length > 0) {
+                    this.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
+                }
+                if (groupFailures.length > 0) {
+                    this.postMessage({ type: 'moveCardsFailed', failures: groupFailures });
+                }
+
+                // Dispatch forward cards only — backward moves never dispatch.
+                const forwardSids = dispatchSids.filter(sid => {
+                    const card = this._lastCards.find(c => (c.planId || c.sessionId) === sid && c.workspaceRoot === workspaceRoot);
+                    return !this._isColumnBefore(targetCol, card?.column ?? sourceColumn ?? '');
+                });
+
+                // `bypassTriggerGate` is the explicit-command escape hatch (today only
+                // POST /kanban/dispatch). It was threaded into this operation but never
+                // read, so an explicit API dispatch onto CODED_AUTO moved the cards and
+                // then silently declined to dispatch whenever the toggle was off.
+                if (this._cliTriggersEnabled || options.bypassTriggerGate) {
+                    if (forwardSids.length === 1) {
+                        await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, forwardSids[0], undefined, workspaceRoot, undefined);
+                        dispatched = true;
+                    } else if (forwardSids.length > 1) {
+                        await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, forwardSids, undefined, workspaceRoot, undefined);
+                        dispatched = true;
+                    }
+                }
+            }
+
+            if (skippedCount > 0) {
+                this._notifySkippedUnknownComplexity(skippedCount, moved.length);
+            }
+
+            return { success: true, moved, failures, skippedUnknownComplexity: skippedCount, dispatched };
+        }
+
+        // Specific target column — move all cards there, no routing.
+        const moved: Array<{ id: string; targetColumn: string }> = [];
+        const failures: Array<{ id: string; sourceColumn: string; reason: string }> = [];
+        const movedIds: string[] = [];
+        const dispatchIds: string[] = [];
+
+        for (const sid of sessionIds) {
+            const card = this._lastCards.find(c => (c.planId || c.sessionId) === sid && c.workspaceRoot === workspaceRoot);
+            const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, target!);
+            if (outcome.ok) {
+                await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, target!, 'forward', workspaceRoot);
+                const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                movedIds.push(...cascadeIds);
+                dispatchIds.push(sid);
+                moved.push({ id: sid, targetColumn: target! });
+            } else {
+                failures.push({ id: sid, sourceColumn: card?.column ?? sourceColumn ?? '', reason: outcome.detail });
+            }
+        }
+
+        if (movedIds.length > 0) {
+            this.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn: target });
+        }
+        if (failures.length > 0) {
+            this.postMessage({ type: 'moveCardsFailed', failures });
+        }
+
+        let dispatched = false;
+        if ((this._cliTriggersEnabled || options.bypassTriggerGate) && dispatchIds.length > 0) {
+            const role = this._columnToRole(target!);
+            if (role) {
+                if (dispatchIds.length === 1) {
+                    await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', role, dispatchIds[0], undefined, workspaceRoot, undefined);
+                } else {
+                    await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, undefined, workspaceRoot, undefined);
+                }
+                dispatched = true;
+            }
+        }
+
+        return { success: true, moved, failures, skippedUnknownComplexity: 0, dispatched };
+    }
+
+    /**
+     * Check if `colA` comes before `colB` in the pipeline order.
+     * Used by _advanceCards to classify forward vs backward moves.
+     */
+    private _isColumnBefore(colA: string, colB: string): boolean {
+        const order = ['CREATED', 'BACKLOG', 'RESEARCHER', 'PLAN REVIEWED', 'DISPATCH',
+            'LEAD CODED', 'CODER CODED', 'INTERN CODED', 'CODE REVIEWED',
+            'ACCEPTANCE TESTED', 'COMPLETED', 'TICKET UPDATER'];
+        const idxA = order.indexOf(colA);
+        const idxB = order.indexOf(colB);
+        if (idxA < 0 || idxB < 0) { return false; }
+        return idxA < idxB;
+    }
+
+    /**
      * Validate that a role column is currently visible. If not, degrade to the
      * nearest visible coding column (intern → coder → lead). If no coding column
      * is visible, throw a KanbanDispatchError so the caller can surface a clear
@@ -7258,6 +7443,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             updateScopedSetting: (key, value, initiatorProject) => this._updateScopedSetting(key, value, initiatorProject),
             remoteGetConfigPayload: (wsRoot) => this.remoteGetConfigPayload(wsRoot),
             remoteSetConfig: (wsRoot, config) => this.remoteSetConfig(wsRoot, config),
+            isPtyTerminalName: (name) => (this._taskViewerProvider as any)?._isLikelyPtyDispatchTarget?.(name) ?? false,
         };
         if (this._kanbanService) {
             this._kanbanService.setContext(ctx);
@@ -8008,7 +8194,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             case 'startOrchestrator': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (workspaceRoot && this._taskViewerProvider) {
-                    await this._taskViewerProvider.startOrchestratorFromKanban(workspaceRoot, undefined, { apiOriginated: !!msg?.apiOriginated });
+                    await this._taskViewerProvider.startOrchestratorFromKanban(workspaceRoot, undefined);
                     return { success: true };
                 }
                 return { success: false, error: 'No workspace root or task viewer available' };
@@ -8150,18 +8336,41 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 return { success: true };
             }
             case 'triggerAction': {
-                // The CLI-triggers setting exists to stop webview DRAG-DROP from
-                // auto-dispatching. An API-originated dispatch (POST /kanban/dispatch)
-                // is an explicit manager command, not an accidental drag — it passes
-                // bypassTriggerGate: true. Every browser verb rail sets apiOriginated
-                // for fleet selection; reading bypassTriggerGate here keeps the setting
-                // bound to accidental drag-drops across all surfaces.
-                if (!this._cliTriggersEnabled && !msg?.bypassTriggerGate) {
-                    return { success: false, error: 'CLI triggers are disabled' };
-                }
                 // Drag-drop triggered a column transition
                 const { sessionId, targetColumn } = msg;
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+
+                // CODED_AUTO: delegate to _advanceCards for complexity routing.
+                // Single-card CODED_AUTO drops are rare (the collapsed column
+                // is a batch affordance) but must still route by complexity.
+                //
+                // Checked BEFORE the CLI-triggers gate, matching triggerBatchAction.
+                // _advanceCards applies the gate to the DISPATCH only, so with
+                // triggers off the card still moves — which is the documented
+                // behaviour ("advance moves cards without dispatching"). Gating here
+                // instead made a one-card CODED_AUTO drop refuse outright while a
+                // two-card drop of the same gesture moved: the same drag behaving
+                // differently by cardinality.
+                if (targetColumn === 'CODED_AUTO' && workspaceRoot && sessionId) {
+                    const result = await this._advanceCards(workspaceRoot, [sessionId], {
+                        target: 'CODED_AUTO',
+                        sourceColumn: msg.sourceColumn,
+                        initiatorProject: msg.initiatorProject,
+                        bypassTriggerGate: msg?.bypassTriggerGate
+                    });
+                    this._scheduleBoardRefresh(workspaceRoot);
+                    return { success: result.success, role: undefined, targetColumn, moved: result.moved, failures: result.failures, skippedUnknownComplexity: result.skippedUnknownComplexity, dispatched: result.dispatched, error: result.error };
+                }
+
+                // The CLI-triggers setting exists to stop webview DRAG-DROP from
+                // auto-dispatching. An API-originated dispatch (POST /kanban/dispatch)
+                // is an explicit manager command, not an accidental drag — it passes
+                // bypassTriggerGate: true. Reading bypassTriggerGate here keeps the
+                // setting bound to accidental drag-drops across all surfaces.
+                if (!this._cliTriggersEnabled && !msg?.bypassTriggerGate) {
+                    return { success: false, error: 'CLI triggers are disabled' };
+                }
+
                 const dispatchSpec = workspaceRoot
                     ? await this._resolveKanbanDispatchSpec(workspaceRoot, targetColumn, msg.initiatorProject)
                     : null;
@@ -8224,11 +8433,6 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                             instruction,
                             workspaceRoot: workspaceRoot || undefined,
                             targetTerminalOverride,
-                            // Per-surface fleet selection: an HTTP-originated dispatch (browser
-                            // cockpit / CLI / orchestrator) may land in a PTY, which those callers
-                            // can display; an in-process sidebar drag may not. See
-                            // ConfiguredKanbanDispatchOptions.apiOriginated.
-                            apiOriginated: !!msg?.apiOriginated,
                             bypassTriggerGate: !!msg?.bypassTriggerGate
                         });
                         if (dispatched && plannerCursorLocationKey && tvp) {
@@ -8237,7 +8441,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                         if (dispatched && role === 'lead') {
                             const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
                             if (card && !this._isLowComplexity(card) && card.complexity !== 'Unknown') {
-                                await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot, { apiOriginated: !!msg?.apiOriginated });
+                                await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot);
                             }
                         }
                         if (!dispatched) {
@@ -8292,7 +8496,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                             await this.moveCardToColumn(workspaceRoot, sessionId, targetColumn);
                             await this._recordDispatchIdentity(workspaceRoot, sessionId, targetColumn, undefined, true);
                             if (!this._isLowComplexity(card) && card.complexity !== 'Unknown') {
-                                await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot, { apiOriginated: !!msg?.apiOriginated });
+                                await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot);
                             }
                         }
                     } else {
@@ -8314,7 +8518,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                         }
                         // Trailing arg is the per-surface fleet discriminator — see the
                         // custom-user branch above and ConfiguredKanbanDispatchOptions.
-                        const dispatched = await this._seams().commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot, targetTerminalOverride, !!msg?.apiOriginated, !!msg?.bypassTriggerGate);
+                        const dispatched = await this._seams().commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot, targetTerminalOverride, undefined, !!msg?.bypassTriggerGate);
                         if (dispatched && workspaceRoot) {
                             // Advance the rotation cursor AFTER successful dispatch so a failed dispatch
                             // doesn't skip a terminal (consistent with _distributePlannerDispatch).
@@ -8330,7 +8534,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                             if (role === 'lead' && targetColumn === 'LEAD CODED') {
                                 const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
                                 if (card && !this._isLowComplexity(card) && card.complexity !== 'Unknown') {
-                                    await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot, { apiOriginated: !!msg?.apiOriginated });
+                                    await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot);
                                 }
                             }
                         }
@@ -8375,11 +8579,31 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 return { success: true, role, targetColumn, dispatchable: canDispatch };
             }
             case 'triggerBatchAction': {
+                const { sessionIds, targetColumn } = msg;
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+
+                // CODED_AUTO: delegate to _advanceCards for per-card complexity
+                // routing. The webview sends 'CODED_AUTO' as intent (not a
+                // pre-resolved target), and the server resolves each card's
+                // real coder column — closing the client/server routing
+                // divergence where unscored cards landed in CODER CODED
+                // (client) vs LEAD CODED (button). _advanceCards handles the
+                // CLI-triggers gate internally (moves always, dispatches only
+                // when enabled), so the top-level gate is skipped for CODED_AUTO.
+                if (targetColumn === 'CODED_AUTO' && workspaceRoot) {
+                    const result = await this._advanceCards(workspaceRoot, sessionIds, {
+                        target: 'CODED_AUTO',
+                        sourceColumn: msg.sourceColumn,
+                        initiatorProject: msg.initiatorProject,
+                        bypassTriggerGate: msg?.bypassTriggerGate
+                    });
+                    this._scheduleBoardRefresh(workspaceRoot);
+                    return { success: result.success, role: undefined, targetColumn, moved: result.moved, failures: result.failures, skippedUnknownComplexity: result.skippedUnknownComplexity, dispatched: result.dispatched, error: result.error };
+                }
+
                 if (!this._cliTriggersEnabled) {
                     return { success: false, error: 'CLI triggers are disabled' };
                 }
-                const { sessionIds, targetColumn } = msg;
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const dispatchSpec = workspaceRoot
                     ? await this._resolveKanbanDispatchSpec(workspaceRoot, targetColumn, msg.initiatorProject)
                     : null;
@@ -8432,7 +8656,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                             workspaceRoot: workspaceRoot || undefined
                         });
                     } else if (role) {
-                        await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, undefined, workspaceRoot, undefined, !!msg?.apiOriginated);
+                        await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, undefined, workspaceRoot, undefined);
                     }
                 }
                 this._scheduleBoardRefresh(workspaceRoot ?? undefined);
@@ -8929,7 +9153,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                     if (dispatched && dispatchSpec.role === 'lead') {
                         const highComplexityCards = sourceCards.filter(c => !this._isLowComplexity(c) && c.complexity !== 'Unknown');
                         if (highComplexityCards.length > 0) {
-                            await this._dispatchWithPairProgrammingIfNeeded(highComplexityCards, workspaceRoot, { apiOriginated: !!msg?.apiOriginated });
+                            await this._dispatchWithPairProgrammingIfNeeded(highComplexityCards, workspaceRoot);
                         }
                     }
                     this.postMessage({ type: 'promptOnDropResult', sessionIds, success: dispatched });
@@ -9013,7 +9237,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 if (sourceColumn === 'PLAN REVIEWED') {
                     const highComplexityCards = sourceCards.filter(c => !this._isLowComplexity(c) && c.complexity !== 'Unknown');
                     if (highComplexityCards.length > 0) {
-                        await this._dispatchWithPairProgrammingIfNeeded(highComplexityCards, workspaceRoot, { apiOriginated: !!msg?.apiOriginated });
+                        await this._dispatchWithPairProgrammingIfNeeded(highComplexityCards, workspaceRoot);
                     }
                 }
 
@@ -9090,7 +9314,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 const eligibleSessionIds = await this._getEligibleSessionIds(sourceCards.map(card => this._cardId(card)), 'PLAN REVIEWED', workspaceRoot);
                 let dispatchedCount = 0;
                 for (const sessionId of eligibleSessionIds) {
-                    const dispatched = await this._seams().commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', 'jules', sessionId, undefined, workspaceRoot, undefined, !!msg?.apiOriginated);
+                    const dispatched = await this._seams().commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', 'jules', sessionId, undefined, workspaceRoot, undefined);
                     if (dispatched) {
                         dispatchedCount++;
                     }
@@ -9128,14 +9352,14 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                         const dispatchSids: string[] = [];
                         const failures: { id: string; sourceColumn: string; reason: string }[] = [];
                         for (const sid of sids) {
-                            const ok = await this.moveCardToColumn(workspaceRoot, sid, targetCol);
-                            if (ok) {
+                            const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, targetCol);
+                            if (outcome.ok) {
                                 await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
                                 const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
                                 movedSids.push(...cascadeIds);
                                 dispatchSids.push(sid);
                             } else {
-                                failures.push({ id: sid, sourceColumn: 'PLAN REVIEWED', reason: "couldn't save — board may be out of sync" });
+                                failures.push({ id: sid, sourceColumn: 'PLAN REVIEWED', reason: outcome.detail });
                             }
                         }
                         if (movedSids.length > 0) {
@@ -9146,9 +9370,9 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                         }
                         if (this._cliTriggersEnabled) {
                             if (dispatchSids.length === 1) {
-                                await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot, undefined, !!msg?.apiOriginated);
+                                await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot, undefined);
                             } else {
-                                await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot, undefined, !!msg?.apiOriginated);
+                                await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot, undefined);
                             }
                         }
                         movedParts.push(`${sids.length} → ${targetCol}`);
@@ -9182,7 +9406,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                                     card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
                                 ).filter(card => !this._isLowComplexity(card) && card.complexity !== 'Unknown');
                                 if (leadCards.length > 0) {
-                                    await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot, { apiOriginated: !!msg?.apiOriginated });
+                                    await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot);
                                 }
                             }
                         } else {
@@ -9194,20 +9418,20 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                             const selectedCards = this._lastCards.filter(card =>
                                 card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
                             );
-                            await this._distributePlannerDispatch(workspaceRoot, selectedCards, nextCol, { skipLimit: true, apiOriginated: !!msg?.apiOriginated });
+                            await this._distributePlannerDispatch(workspaceRoot, selectedCards, nextCol, { skipLimit: true });
                         } else {
                             const movedIds: string[] = [];
                             const dispatchIds: string[] = [];
                             const failures: { id: string; sourceColumn: string; reason: string }[] = [];
                             for (const sid of msg.sessionIds) {
-                                const ok = await this.moveCardToColumn(workspaceRoot, sid, nextCol);
-                                if (ok) {
+                                const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, nextCol);
+                                if (outcome.ok) {
                                     await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
                                     const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
                                     movedIds.push(...cascadeIds);
                                     dispatchIds.push(sid);
                                 } else {
-                                    failures.push({ id: sid, sourceColumn: column, reason: "couldn't save — board may be out of sync" });
+                                    failures.push({ id: sid, sourceColumn: column, reason: outcome.detail });
                                 }
                             }
                             if (movedIds.length > 0) {
@@ -9219,9 +9443,9 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                             if (this._cliTriggersEnabled && role) {
                                 const instruction = role === 'planner' ? 'improve-plan' : undefined;
                                 if (dispatchIds.length === 1) {
-                                    await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', role, dispatchIds[0], instruction, workspaceRoot, undefined, !!msg?.apiOriginated);
+                                    await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', role, dispatchIds[0], instruction, workspaceRoot, undefined);
                                 } else {
-                                    await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, instruction, workspaceRoot, undefined, !!msg?.apiOriginated);
+                                    await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, instruction, workspaceRoot, undefined);
                                 }
                             } else if (!role) {
                                 console.log(`[Kanban] Column '${nextCol}' has no role mapping, using visual move only`);
@@ -9272,14 +9496,14 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                         const dispatchSids: string[] = [];
                         const failures: { id: string; sourceColumn: string; reason: string }[] = [];
                         for (const sid of sids) {
-                            const ok = await this.moveCardToColumn(workspaceRoot, sid, targetCol);
-                            if (ok) {
+                            const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, targetCol);
+                            if (outcome.ok) {
                                 await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
                                 const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
                                 movedSids.push(...cascadeIds);
                                 dispatchSids.push(sid);
                             } else {
-                                failures.push({ id: sid, sourceColumn: 'PLAN REVIEWED', reason: "couldn't save — board may be out of sync" });
+                                failures.push({ id: sid, sourceColumn: 'PLAN REVIEWED', reason: outcome.detail });
                             }
                         }
                         if (movedSids.length > 0) {
@@ -9290,9 +9514,9 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                         }
                         if (this._cliTriggersEnabled) {
                             if (dispatchSids.length === 1) {
-                                await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot, undefined, !!msg?.apiOriginated);
+                                await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot, undefined);
                             } else {
-                                await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot, undefined, !!msg?.apiOriginated);
+                                await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot, undefined);
                             }
                         }
                         movedParts.push(`${sids.length} → ${targetCol}`);
@@ -9325,7 +9549,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                                 const leadCards = sourceCards
                                     .filter(card => !this._isLowComplexity(card) && card.complexity !== 'Unknown');
                                 if (leadCards.length > 0) {
-                                    await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot, { apiOriginated: !!msg?.apiOriginated });
+                                    await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot);
                                 }
                             }
                         } else {
@@ -9334,7 +9558,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                     } else {
                         const role = this._columnToRole(nextCol);
                         if (role === 'planner' && this._cliTriggersEnabled) {
-                            await this._distributePlannerDispatch(workspaceRoot, sourceCards, nextCol, { apiOriginated: !!msg?.apiOriginated });
+                            await this._distributePlannerDispatch(workspaceRoot, sourceCards, nextCol);
                             // _distributePlannerDispatch persists + posts its own targeted
                             // moveCards echo (and moveCardsFailed for any failed write) BEFORE
                             // the slow /clear+send chain, and posts its own accurate status
@@ -9346,14 +9570,14 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                             const dispatchIds: string[] = [];
                             const failures: { id: string; sourceColumn: string; reason: string }[] = [];
                             for (const sid of sessionIds) {
-                                const ok = await this.moveCardToColumn(workspaceRoot, sid, nextCol);
-                                if (ok) {
+                                const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, nextCol);
+                                if (outcome.ok) {
                                     await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
                                     const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
                                     movedIds.push(...cascadeIds);
                                     dispatchIds.push(sid);
                                 } else {
-                                    failures.push({ id: sid, sourceColumn: column, reason: "couldn't save — board may be out of sync" });
+                                    failures.push({ id: sid, sourceColumn: column, reason: outcome.detail });
                                 }
                             }
                             if (movedIds.length > 0) {
@@ -9363,7 +9587,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                                 this.postMessage({ type: 'moveCardsFailed', failures });
                             }
                             if (this._cliTriggersEnabled && role) {
-                                await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, undefined, workspaceRoot, undefined, !!msg?.apiOriginated);
+                                await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, undefined, workspaceRoot, undefined);
                             } else if (!role) {
                                 console.log(`[Kanban] Column '${nextCol}' has no role mapping, using visual move only`);
                             }
@@ -9472,7 +9696,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                         const leadCards = sourceCards
                             .filter(card => !this._isLowComplexity(card) && card.complexity !== 'Unknown');
                         if (leadCards.length > 0) {
-                            await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot, { apiOriginated: !!msg?.apiOriginated });
+                            await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot);
                         }
                     }
                     const allMovedIds: string[] = [];
@@ -9581,7 +9805,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                         const leadCards = sourceCards
                             .filter(card => !this._isLowComplexity(card) && card.complexity !== 'Unknown');
                         if (leadCards.length > 0) {
-                            await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot, { apiOriginated: !!msg?.apiOriginated });
+                            await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot);
                         }
                     }
                     const allMovedIds: string[] = [];
@@ -9742,7 +9966,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 const eligibleSessionIds = await this._getEligibleSessionIds(msg.sessionIds, 'PLAN REVIEWED', workspaceRoot);
                 let dispatchedCount = 0;
                 for (const sessionId of eligibleSessionIds) {
-                    const dispatched = await this._seams().commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', 'jules', sessionId, undefined, workspaceRoot, undefined, !!msg?.apiOriginated);
+                    const dispatched = await this._seams().commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', 'jules', sessionId, undefined, workspaceRoot, undefined);
                     if (dispatched) {
                         dispatchedCount++;
                     }
@@ -10158,7 +10382,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     'dispatch-analysis',
                     workspaceRoot,
                     undefined,
-                    !!msg?.apiOriginated,
+                    undefined,
                     analysisScope
                 );
                 void this._seams().ui.showInformationMessage(`Analyzing ${plannedIds.length} plan(s) for parallel dispatch.`);
@@ -10215,14 +10439,14 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     const movedSids: string[] = [];
                     const dispatchSids: string[] = [];
                     for (const sid of sids) {
-                        const ok = await this.moveCardToColumn(workspaceRoot, sid, targetCol);
-                        if (ok) {
+                        const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, targetCol);
+                        if (outcome.ok) {
                             await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
                             const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
                             movedSids.push(...cascadeIds);
                             dispatchSids.push(sid);
                         } else {
-                            dispatchFailures.push({ id: sid, sourceColumn: 'DISPATCH', reason: "couldn't save — board may be out of sync" });
+                            dispatchFailures.push({ id: sid, sourceColumn: 'DISPATCH', reason: outcome.detail });
                         }
                     }
                     if (movedSids.length > 0) {
@@ -10232,9 +10456,9 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // Same gate and same commands the PLAN REVIEWED forward move uses.
                     if (this._cliTriggersEnabled && dispatchSids.length > 0) {
                         if (dispatchSids.length === 1) {
-                            await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot, undefined, !!msg?.apiOriginated);
+                            await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot, undefined);
                         } else {
-                            await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot, undefined, !!msg?.apiOriginated);
+                            await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot, undefined);
                         }
                     }
                     dispatchMovedCount += dispatchSids.length;
@@ -10256,12 +10480,23 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 await this._seams().commands.executeCommand('switchboard.importPlanFromClipboard', msg.markdownText);
                 return { success: true };
             case 'copyDispatchPromptSelected': {
-                // Copy the coder dispatch prompt for selected Planned plans to the
-                // clipboard WITHOUT advancing the column or sending to a terminal —
-                // the "copy prompt" counterpart to moveSelected's "send to terminal".
+                // The clipboard counterpart of the Analyze button: same dispatch-analysis
+                // prompt, same planner role, same project scope — written to the clipboard
+                // instead of fired into a terminal.
+                //
+                // Every send/copy pair on this column copies exactly the prompt its
+                // send-counterpart dispatches (moveSelected↔promptSelected,
+                // moveAll↔promptAll). This arm used to call _generatePromptForColumn,
+                // which builds the CODER advance prompt — making it a duplicate of
+                // promptSelected minus the advance, and leaving the dispatch-analysis
+                // prompt with no clipboard path at all.
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
                 const column: string = msg.column || 'PLAN REVIEWED';
+                // The initiating client's own view filter — identical three-way handling to
+                // the dispatchAnalyze arm (undefined = raw API caller, no scope).
+                const copyScope: string | null =
+                    msg.initiatorProject === undefined ? null : msg.initiatorProject;
                 let sourceCards: KanbanCard[];
                 if (Array.isArray(msg.sessionIds) && msg.sessionIds.length > 0) {
                     sourceCards = this._lastCards.filter(card => card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds));
@@ -10277,8 +10512,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // No selection = the whole column, scoped to the caller's own project
                     // filter — the same default the Analyze button uses. An empty selection
                     // is not an error; the button is a batch, not a selection gate.
-                    const copyScope: string | null =
-                        msg.initiatorProject === undefined ? null : msg.initiatorProject;
                     sourceCards = this._visibleColumnCards(workspaceRoot, column)
                         .filter(card => this._cardMatchesProjectFilter(card, copyScope));
                     if (sourceCards.length === 0) {
@@ -10286,14 +10519,25 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         return { success: false, error: `No plans in ${column} to copy a dispatch prompt for.` };
                     }
                 }
-                const nextCol = await this._getNextColumnId(column, workspaceRoot);
-                const prompt = await this._generatePromptForColumn(sourceCards, column, workspaceRoot, nextCol ?? undefined);
+                // Same prompt the Analyze button dispatches: planner role + the
+                // 'dispatch-analysis' instruction that routes it to the dispatch-analysis
+                // skill, carrying the initiator's project scope. Deliberately NOT
+                // _generatePromptForColumn — that is promptSelected's coder advance prompt.
+                const plans = await this._cardsToPromptPlans(sourceCards, workspaceRoot);
+                if (plans.length === 0) {
+                    void this._seams().ui.showInformationMessage('No matching plans found for prompt generation.');
+                    return { success: false, error: 'No matching plans found for prompt generation.' };
+                }
+                const prompt = await this.generateUnifiedPrompt('planner', plans, workspaceRoot, {
+                    instruction: 'dispatch-analysis',
+                    analysisScope: copyScope
+                });
                 await this._seams().clipboard.writeText(prompt);
                 for (const card of sourceCards) {
                     const sid = this._cardId(card);
                     this.postMessage({ type: 'copyPlanLinkResult', planId: sid, sessionId: sid, success: true });
                 }
-                this.postMessage({ type: 'showStatusMessage', message: `Copied dispatch prompt for ${sourceCards.length} plan(s) to clipboard.`, isError: false });
+                this.postMessage({ type: 'showStatusMessage', message: `Copied dispatch-analysis prompt for ${sourceCards.length} plan(s) to clipboard.`, isError: false });
                 return { success: true, prompt };
             }
             case 'codeMapConfirm': {
@@ -10411,7 +10655,7 @@ ${FOCUS_DIRECTIVE}`;
                     // should always be deliverable to the lead coder.
                     if (msg.action === 'sendToLead' && this._taskViewerProvider) {
                         const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole(
-                            'lead', prompt, workspaceRoot, { apiOriginated: !!msg?.apiOriginated }
+                            'lead', prompt, workspaceRoot
                         );
                         if (!dispatched) {
                             void this._seams().ui.showWarningMessage('Prompt copied to clipboard but could not dispatch to lead coder. Paste manually.');
@@ -10451,6 +10695,14 @@ ${FOCUS_DIRECTIVE}`;
 
             case 'focusTerminal': {
                 // A2b: delegated to kanbanService (extracted verb).
+                // PTY guard: a PTY fleet terminal exists in neither
+                // _registeredTerminals nor vscode.window.terminals, so focusing
+                // one by name always misses. Skip the focus call entirely for a
+                // PTY target — matching the drag path (TaskViewerProvider.ts:19405).
+                const focusTerminalName = String(msg.terminalName || '');
+                if (focusTerminalName && (this._taskViewerProvider as any)?._isLikelyPtyDispatchTarget?.(focusTerminalName)) {
+                    return { success: true, terminalName: focusTerminalName };
+                }
                 if (this._kanbanService) { return await this._kanbanService.focusTerminal(msg); }
                 const terminalName = String(msg.terminalName || '');
                 if (terminalName) {
@@ -11219,7 +11471,7 @@ ${FOCUS_DIRECTIVE}`;
 
                 if (this._taskViewerProvider) {
                     await this._taskViewerProvider.handleDispatchManagerForSelected(
-                        plans, workspaceRoot, { apiOriginated: !!msg?.apiOriginated }
+                        plans, workspaceRoot
                     );
                 }
                 return { success: true, dispatched: plans.length, dropped: dropped.length };

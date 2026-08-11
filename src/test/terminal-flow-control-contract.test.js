@@ -157,11 +157,45 @@ test('WebGL contexts are capped before construction, and released exactly once',
         'the cap must be checked BEFORE constructing WebglAddon; by the time onContextLoss fires the damage has landed on a different terminal');
     const attach = block(terminalsJs, 'function attachRenderer(term, entry)', 'const ALL_THEME_CLASSES');
     assert.ok(attach.includes('liveWebglContexts - 1'), 'context loss must decrement the counter');
-    assert.ok(/entry\.isWebgl = false;\s*\n\s*liveWebglContexts/.test(attach),
-        'the loss handler must clear isWebgl so destroyTerminalView cannot double-decrement');
+
+    // Accounting is a ONE-SHOT closure minted at the moment of acquisition, not three
+    // hand-paired sites keyed on entry.isWebgl. The old shape needed the loss handler to
+    // clear isWebgl so destroyTerminalView would not double-decrement; the release closure
+    // makes double-decrement structurally impossible instead, and the flag is cleared
+    // INSIDE it. Asserting the old shape here would forbid the fix.
+    assert.ok(/holder\.release = \(\) => \{\s*\n\s*if \(released\) \{ return; \}\s*\n\s*released = true;/.test(attach),
+        'the release closure must be one-shot: guard on `released` BEFORE the decrement, or a swap plus a late context loss decrements twice');
+    assert.ok(/released = true;[\s\S]{0,400}?liveWebglContexts = Math\.max\(0, liveWebglContexts - 1\);[\s\S]{0,200}?entry\.isWebgl = false;/.test(attach),
+        'the one-shot closure must own BOTH the counter decrement and the isWebgl clear, so the two can never disagree');
+    assert.ok(/released = true;[\s\S]{0,600}?forceReleaseWebglContext\(webgl\)/.test(attach),
+        'the closure must also hand the GL context back: WebglAddon.dispose() leaves the live context to GC, so accounting-only release frees nothing the process can see');
+
+    // The invariant that replaces hand-paired accounting: exactly one increment, and no
+    // decrement anywhere outside the closure.
+    const incrementSites = terminalsJs.match(/liveWebglContexts\+\+/g) || [];
+    assert.strictEqual(incrementSites.length, 1, 'exactly one increment site, and it must be in attachRenderer');
+    assert.ok(attach.includes('liveWebglContexts++'), 'the single increment must live in attachRenderer');
+    const decrementSites = terminalsJs.match(/liveWebglContexts(--|\s*-=|\s*=\s*Math\.max\(0, liveWebglContexts - 1\))/g) || [];
+    assert.strictEqual(decrementSites.length, 1,
+        'exactly one decrement site — it must live in the holder.release closure and nowhere else');
+
+    // Re-entrancy: forceReleaseWebglContext calls loseContext(), which fires
+    // webglcontextlost straight back into this handler while swapRenderer is mid-teardown.
+    const lossHandler = attach.slice(attach.indexOf('webgl.onContextLoss('));
+    assert.ok(/webgl\.onContextLoss\(\(\) => \{[\s\S]{0,900}?if \(released\) \{ return; \}/.test(attach),
+        'onContextLoss must early-return on `released`, or our own deliberate loseContext() double-attaches a renderer');
+    assert.ok(lossHandler.indexOf('if (released) { return; }') < lossHandler.indexOf('holder.release()'),
+        'the re-entrancy guard must precede the release call it is guarding');
+
     const destroy = block(terminalsJs, 'function destroyTerminalView(name)', 'function createTerminalView(');
-    assert.ok(/if \(entry\.isWebgl\)\s*\{\s*\n\s*liveWebglContexts/.test(destroy),
-        'disposal must decrement only when this entry still holds a context');
+    const releaseAt = destroy.indexOf('entry.rendererAddon.release()');
+    const disposeAt = destroy.indexOf('.dispose()', releaseAt);
+    const tryAt = destroy.indexOf('try {', releaseAt);
+    assert.ok(releaseAt !== -1, 'disposal must route the context drop through the holder, never a bare decrement');
+    assert.ok(releaseAt < disposeAt,
+        'release BEFORE dispose — dispose() drops addon._renderer, and with it the only path to the GL context');
+    assert.ok(releaseAt < tryAt,
+        'release OUTSIDE the try wrapping dispose() — a dispose() that throws must still give the budget back');
 });
 
 test('exited and disposed stay distinct, and reconnect keys on exited', () => {

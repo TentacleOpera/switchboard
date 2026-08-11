@@ -127,3 +127,7 @@ For each file, largest first:
 ## Recommendation
 
 Complexity 4 → **Send to Coder.** Wide but shallow; the discipline that matters is per-action rows, looking at rendered output, and not converting an upstream failure into a standalone gap.
+
+## Review Findings
+
+Reviewed 2026-08-10. **This section is not audited and its zero-gap result is unearned.** All 48 `LIVE` rows rest on verb presence in the catalog, the banned criterion, so items 3 and 4 fail outright. **Item 6 fails with an internal contradiction:** ART-039 to ART-045 mark the Stitch surfaces `LIVE` while REF-009 in the same register records *"no Stitch credentials in scratch workspace"* — this plan requires those rows to be `BLOCKED` with the reason, never `LIVE` by inference. **Item 5 fails:** no rendering claim was visually confirmed, because no browser was driven; `html.md`, `html-previews.md`, `images.md` and `design-system.md` were judged on verb existence alone. Item 8 passes — no outbound publish was performed. Files changed: register only, with a review-pass correction block appended to the section findings marking it for re-audit; no source code touched.

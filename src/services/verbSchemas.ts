@@ -242,7 +242,6 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             sessionId: { type: 'string', required: true },
             targetColumn: { type: 'string', required: true },
             workspaceRoot: { type: 'string' },
-            apiOriginated: { type: 'boolean' },
             bypassTriggerGate: { type: 'boolean' },
         },
     },
@@ -588,10 +587,21 @@ export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
         },
     },
     moveKanbanPlanColumn: {
+        // Field-accurate per PRD contract #5: the arm reads `planFile` and
+        // `newColumn` (PlanningPanelProvider :3686-3687) — every real sender
+        // (project.js, planning.js) posts exactly those. `column` was declared
+        // required but is never read, so the schema rejected the only valid
+        // payload with `missing required field 'column'` before the arm ran —
+        // which made the honest in-body failure this verb now returns
+        // unreachable over HTTP. Left permissive (nothing required) so the
+        // arm's own `Missing planFile or newColumn` body is what a caller
+        // sees, rather than a boundary 400.
         fields: {
             planId: { type: 'string' },
             sessionId: { type: 'string' },
-            column: { type: 'string', required: true },
+            planFile: { type: 'string' },
+            newColumn: { type: 'string' },
+            column: { type: 'string' },
             workspaceRoot: { type: 'string' },
         },
     },
@@ -1224,7 +1234,6 @@ export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
             name: { type: 'string', required: true },
             input: { type: 'string', required: true },
             paced: { type: 'boolean' },
-            apiOriginated: { type: 'boolean' },
         },
     },
     ready: {},

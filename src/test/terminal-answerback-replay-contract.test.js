@@ -130,5 +130,21 @@ test('a dead socket cannot leak its replay window into the next connection', () 
     assert.ok(connect.includes('entry.awaitingReplayFrame = false'), 'reset on reconnect');
 });
 
+test('a gapped reconnect resets the parser in-band before the replay write', () => {
+    // RIS (\x1bc) is written from the hello arm, which the gateway sends
+    // synchronously before the replay frame — so it precedes writeReplay in
+    // document order AND in wire order. term.reset() is NOT acceptable here: it
+    // does not reset the escape-sequence parser, so a stale mid-CSI would consume
+    // the replay's first bytes.
+    const hello = block(terminalsJs, "frame.t === 'hello'", "frame.t === 'inputThrottled'");
+    const risIdx = hello.indexOf("entry.term.write('\\x1bc')");
+    assert.ok(risIdx !== -1, 'the hello arm must write RIS (\\x1bc) on a gap');
+    // Whole-line comments stripped first: the branch's own comment explains why
+    // term.reset() is unusable, so matching the raw block flags the compliant code.
+    const helloCode = hello.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+    assert.ok(!/term\.reset\(\)/.test(helloCode),
+        'term.reset() does not reset the parser — it must not be used on the gap path');
+});
+
 console.log(`\nResults: ${passed} passed, ${failed} failed.`);
 if (failed > 0) { process.exit(1); }

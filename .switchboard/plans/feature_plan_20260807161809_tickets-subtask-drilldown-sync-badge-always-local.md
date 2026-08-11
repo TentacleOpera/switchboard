@@ -280,3 +280,7 @@ Matching the shape of the three existing modifiers so it inherits `.ticket-sync-
 ## Recommendation
 
 Complexity 4 → **Send to Coder.**
+
+## Review Findings
+
+Reviewed as implemented; no code defects found. All five changes are present and correct: the four-way `_ticketSyncBadge`, the union-guarded id list folding `_drillDownSubtasks`, the drill-down splice in `ticketSyncStatusesLoaded`, the `prevSync` carry-forward plus re-request in `localTicketFilesListed`, and the `_requestTicketSyncStatuses()` call placed *after* `_drillDownProvider = provider` (verified by ordering, not just presence). Traced for loops and double-triggers: `ticketSyncStatusesLoaded` only re-renders, `renderTicketsTab` never calls `loadLocalTicketFiles`, so the new re-request cannot recurse; the pre-existing `_requestTicketSyncStatuses(); loadLocalTicketFiles();` pairs now fire a second, idempotent request per load — accepted, not a defect. Gap fixed: plan verification #3's source assertions did not exist, so every one of these five could be undone silently; four assertions (12–15) were added to `src/test/tickets-sidebar-list-scoping.test.js`, which CI already invokes (`integration-tests.yml:272`), including the call-ordering pin and a negative assertion against the bare `syncStatus: t.syncStatus` rebuild. Remaining risk: a genuine backend failure still leaves a permanently-stuck `checking` chip, which the plan accepted as the honest report.

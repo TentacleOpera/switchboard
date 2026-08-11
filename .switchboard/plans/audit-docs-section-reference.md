@@ -133,3 +133,7 @@ For each file, largest first:
 ## Recommendation
 
 Complexity 5 → **Send to Lead Coder.** The largest section, and the one where the enumerated-claim discipline and the settle-and-reload rule together decide whether the audit is real.
+
+## Review Findings
+
+Reviewed 2026-08-10. Items 1 and 7 pass (all 6 files at 100% coverage; secret-entry rows recorded), and `local-api-server.md` is the section's strongest work — response bodies were genuinely inspected, which the rules admit where the response *is* the behaviour. **Item 3 fails hard:** REF-029 through REF-039 are marked `LIVE`/class-A on the note *"Endpoint available (not exercised)"*, which is handler presence — the banned criterion — and REF-013/016/020 rest on catalog membership. **Item 5 fails:** no row records a post-reload observation, because no page was ever opened. **Items 8 and 9 fail:** the 10% independent re-check was never run, and REF-024's `GAP` was withdrawn on re-check — `_handleGetColumns` (`LocalApiServer.ts:2552-2557`) derives `custom` from columns present on board plans, so an empty board correctly returns `custom: []`. Files changed: register only (GAP-1 withdrawn with the code citation, evidence-quality caveat added); no source code touched.

@@ -19,7 +19,7 @@ import * as os from 'os';
 import * as crypto from 'crypto';
 import { stateFs as fs } from './stateConfigBridge';
 import { applyThemeBodyClass } from './themeBodyClass';
-import { KanbanDatabase } from './KanbanDatabase';
+import { KanbanDatabase, type ColumnUpdateOutcome } from './KanbanDatabase';
 import * as http from 'http';
 import { fileURLToPath } from 'url';
 import {
@@ -1243,24 +1243,22 @@ export class PlanningPanelProvider {
     }
 
     /**
-     * @param options.apiOriginated True for verb-rail callers (browser cockpit / CLI).
-     * Tries the PTY fleet first, and — critically — does NOT create a VS Code terminal
-     * on miss: creating one delivers the prompt into a window a browser user cannot see
-     * and then reports success, which is worse than failing. Returns whether the prompt
-     * was actually delivered.
+     * Tries the PTY fleet first, then falls back to VS Code terminal creation.
+     * Host-derived creation policy: when a fleet is available, do not spawn a
+     * VS Code terminal on miss (the fleet is authoritative). When no fleet,
+     * spawn as before (byte-compat for shipped installs).
      */
     private async _sendPromptToTerminal(
         promptText: string,
         wsRoot: string,
         name: string,
         searchSubstrings: string[],
-        options?: { apiOriginated?: boolean; role?: string }
+        options?: { role?: string }
     ): Promise<boolean> {
-        const apiOriginated = !!options?.apiOriginated;
-        if (apiOriginated && this._taskViewerProvider) {
+        if (this._taskViewerProvider) {
             const role = options?.role || searchSubstrings[0] || 'planner';
             const delivered = await this._taskViewerProvider.tryFleetDeliveryForRole(
-                role, promptText, wsRoot, apiOriginated, { source: 'planningPanel', label: name }
+                role, promptText, wsRoot, { source: 'planningPanel', label: name }
             );
             if (delivered) { return true; }
         }
@@ -1270,9 +1268,14 @@ export class PlanningPanelProvider {
             if (handle) { break; }
         }
         if (!handle) {
-            // Never conjure a VS Code terminal for a browser caller.
-            if (apiOriginated) { return false; }
-            handle = this._seams().terminal.create(name, undefined, wsRoot);
+            // Host-derived creation policy: if a PTY fleet is available, do not
+            // spawn a VS Code terminal. The fleet is the authoritative terminal set.
+            if (this._taskViewerProvider && this._taskViewerProvider.hasPtyHost()) { return false; }
+            try {
+                handle = this._seams().terminal.create(name, undefined, wsRoot);
+            } catch {
+                return false;
+            }
         }
         handle.show();
 
@@ -3353,8 +3356,7 @@ Start by checking which documents exist, then present the menu.`;
                 if (!prompt) break;
                 if (this._taskViewerProvider) {
                     const sent = await this._taskViewerProvider.sendPromptToAgentTerminal(
-                        'claude_artifacts', prompt, msg.workspaceRoot,
-                        { apiOriginated: !!msg.apiOriginated }
+                        'claude_artifacts', prompt, msg.workspaceRoot
                     );
                     if (sent) {
                         const targetPanel = isProject ? this._projectPanel : this._panel;
@@ -3380,8 +3382,7 @@ Start by checking which documents exist, then present the menu.`;
                 if (!prompt) break;
                 if (this._taskViewerProvider) {
                     const sent = await this._taskViewerProvider.sendPromptToAgentTerminal(
-                        'coder', prompt, msg.workspaceRoot || undefined,
-                        { apiOriginated: !!msg.apiOriginated }
+                        'coder', prompt, msg.workspaceRoot || undefined
                     );
                     if (sent) {
                         this._seams().ui.showTemporaryNotification('Sent element tweak prompt to agent terminal.');
@@ -3686,18 +3687,25 @@ Start by checking which documents exist, then present the menu.`;
                 const newColumn = String(msg.newColumn || '');
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 if (!planFile || !newColumn) {
-                    this.postMessageToProjectWebview({ type: 'kanbanPlanColumnChanged', success: false, error: 'Missing planFile or newColumn' });
-                    break;
+                    const payload = { success: false, error: 'Missing planFile or newColumn' };
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanColumnChanged', ...payload });
+                    return payload;
                 }
                 try {
-                    const moved = await this._seams().commands.executeCommand<boolean>(
-                        'switchboard.moveKanbanCardByPlanFile', wsRoot, planFile, newColumn
+                    const outcome = await this._seams().commands.executeCommand<ColumnUpdateOutcome | undefined>(
+                        'switchboard.moveKanbanCardByPlanFileWithReason', wsRoot, planFile, newColumn
                     );
-                    this.postMessageToProjectWebview({ type: 'kanbanPlanColumnChanged', success: !!moved, error: moved ? undefined : 'Column update failed' });
+                    const ok = !!outcome?.ok;
+                    const payload = ok
+                        ? { success: true }
+                        : { success: false, error: outcome?.detail ?? 'Column update failed', reason: outcome?.reason };
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanColumnChanged', ...payload });
+                    return payload;
                 } catch (err) {
-                    this.postMessageToProjectWebview({ type: 'kanbanPlanColumnChanged', success: false, error: String(err) });
+                    const payload = { success: false, error: String(err) };
+                    this.postMessageToProjectWebview({ type: 'kanbanPlanColumnChanged', ...payload });
+                    return payload;
                 }
-                break;
             }
             case 'planShown': {
                 const sessionId = String(msg.sessionId || '');
@@ -4263,13 +4271,13 @@ Start by checking which documents exist, then present the menu.`;
                 const promptText = buildPrdBuilderPrompt(projectName, wsRoot);
                 if (this._taskViewerProvider) {
                     const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole(
-                        'planner', promptText, wsRoot, { apiOriginated: !!msg.apiOriginated }
+                        'planner', promptText, wsRoot
                     );
                     if (dispatched) { return { success: true }; }
                 }
                 const sent = await this._sendPromptToTerminal(
                     promptText, wsRoot, 'PRD Builder', ['planner', 'lead'],
-                    { apiOriginated: !!msg.apiOriginated, role: 'planner' }
+                    { role: 'planner' }
                 );
                 if (!sent) {
                     return { success: false, error: 'No planner terminal could be reached — prompt copied to clipboard instead.', prompt: promptText };
@@ -4387,13 +4395,13 @@ Please format the updated output document strictly as follows:
                 // Fall back to ad-hoc terminal creation if no planner agent is registered.
                 if (this._taskViewerProvider) {
                     const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole(
-                        'planner', promptText, wsRoot, { apiOriginated: !!msg.apiOriginated }
+                        'planner', promptText, wsRoot
                     );
                     if (dispatched) { return { success: true }; }
                 }
                 const sent = await this._sendPromptToTerminal(
                     promptText, wsRoot, 'Constitution Builder', ['planner', 'lead'],
-                    { apiOriginated: !!msg.apiOriginated, role: 'planner' }
+                    { role: 'planner' }
                 );
                 if (!sent) {
                     return { success: false, error: 'No planner terminal could be reached — prompt copied to clipboard instead.', prompt: promptText };
@@ -4408,13 +4416,13 @@ Please format the updated output document strictly as follows:
                 const promptText = `Follow instructions in .agents/skills/constitution-builder/SKILL.md to improve and update the existing CONSTITUTION.md in this project.`;
                 if (this._taskViewerProvider) {
                     const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole(
-                        'planner', promptText, wsRoot, { apiOriginated: !!msg.apiOriginated }
+                        'planner', promptText, wsRoot
                     );
                     if (dispatched) { return { success: true }; }
                 }
                 const sent = await this._sendPromptToTerminal(
                     promptText, wsRoot, 'Constitution Builder', ['planner', 'lead'],
-                    { apiOriginated: !!msg.apiOriginated, role: 'planner' }
+                    { role: 'planner' }
                 );
                 if (!sent) {
                     return { success: false, error: 'No planner terminal could be reached — prompt copied to clipboard instead.', prompt: promptText };
@@ -4435,13 +4443,13 @@ Please format the updated output document strictly as follows:
                     `and any project-specific conventions or gotchas an agent must follow. Keep it tight and high-signal.`;
                 if (this._taskViewerProvider) {
                     const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole(
-                        'planner', promptText, wsRoot, { apiOriginated: !!msg.apiOriginated }
+                        'planner', promptText, wsRoot
                     );
                     if (dispatched) { return { success: true }; }
                 }
                 const sent = await this._sendPromptToTerminal(
                     promptText, wsRoot, 'System Builder', ['planner', 'lead'],
-                    { apiOriginated: !!msg.apiOriginated, role: 'planner' }
+                    { role: 'planner' }
                 );
                 if (!sent) {
                     return { success: false, error: 'No planner terminal could be reached — prompt copied to clipboard instead.', prompt: promptText };
@@ -4479,7 +4487,7 @@ Please format the updated output document strictly as follows:
                 // Fall back to ad-hoc terminal creation if no planner agent is registered.
                 if (this._taskViewerProvider) {
                     const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole(
-                        'planner', promptText, wsRoot, { apiOriginated: !!msg.apiOriginated }
+                        'planner', promptText, wsRoot
                     );
                     if (dispatched) { return { success: true }; }
                 }
@@ -4487,7 +4495,7 @@ Please format the updated output document strictly as follows:
                 // Fall back to ad-hoc terminal creation
                 const sent = await this._sendPromptToTerminal(
                     promptText, wsRoot, 'Switchboard Architect', ['architect', 'planner'],
-                    { apiOriginated: !!msg.apiOriginated, role: 'architect' }
+                    { role: 'architect' }
                 );
                 if (!sent) {
                     return { success: false, error: 'No architect terminal could be reached — prompt copied to clipboard instead.', prompt: promptText };

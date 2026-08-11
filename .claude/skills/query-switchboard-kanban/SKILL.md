@@ -74,6 +74,45 @@ ORDER BY updated_at DESC;
 
 **Valid columns:** CREATED, BACKLOG, PLAN REVIEWED, CONTEXT GATHERER, LEAD CODED, CODER CODED, CODE REVIEWED, CODED, COMPLETED
 
+### ⚠️ Users say the BOARD LABEL, not the stored column id — translate silently
+
+The `kanban_column` values above are **storage ids**. They are NOT what the user sees on the
+board, and they are NOT what the user will say to you. When a user names a column, they mean the
+label. Map it and move on — **never** reply that a column "doesn't exist" or list the storage ids
+back at them. That is a bug in your response, not a correction.
+
+| Board label (what the user says) | `kanban_column` (what you query) |
+| :--- | :--- |
+| **New** | `CREATED` |
+| **Backlog** | `BACKLOG` *(display mode of `CREATED`)* |
+| **Planned** | `PLAN REVIEWED` |
+| **Dispatch** | `DISPATCH` *(display mode of `PLAN REVIEWED`)* |
+| **Researcher** | `RESEARCHER` |
+| **Lead Coder** | `LEAD CODED` |
+| **Coder** | `CODER CODED` |
+| **Intern** | `INTERN CODED` |
+| **Reviewed** | `CODE REVIEWED` |
+| **Acceptance Tested** | `ACCEPTANCE TESTED` |
+| **Ticket Updater** | `TICKET UPDATER` |
+| **Completed** | `COMPLETED` |
+
+**Three traps — guessing gets these wrong:**
+- **"Planned" is `PLAN REVIEWED`.** There is no column stored as `PLANNED`.
+- **"Reviewed" is `CODE REVIEWED`, not `PLAN REVIEWED`.** The label that *looks* like `PLAN REVIEWED`
+  belongs to a different column. Resolving "Reviewed" to `PLAN REVIEWED` reads the wrong column, and
+  on a write path moves cards backwards through the workflow.
+- **"New" is `CREATED`.** Nothing is stored as `NEW`.
+
+**Custom columns:** users can add their own, with labels this table cannot cover. The authoritative
+live mapping is `GET /kanban/columns` (see the `switchboard-orchestration` skill), which returns
+`{id, label}` for built-in and custom columns alike. Source of truth in code is
+`DEFAULT_KANBAN_COLUMNS` / `DISPLAY_MODE_COLUMNS` in `src/services/agentConfig.ts` — if this table
+ever disagrees with that file, the file wins and this table is stale.
+
+**If a label is genuinely ambiguous**, query the closest match and say which column you read
+(*"Planned (`PLAN REVIEWED`) has 3 plans"*) — one clause, then the answer. Do not open with a
+correction, and do not ask the user to restate the column in storage terms.
+
 ### Get Plans for Dependency Check (CREATED, BACKLOG, PLAN REVIEWED)
 
 ```sql

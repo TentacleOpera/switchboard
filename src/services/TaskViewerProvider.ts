@@ -96,7 +96,8 @@ import {
     type ClickUpAutomationRule,
     type LinearAutomationRule
 } from '../models/PipelineDefinition';
-import { hostInlineImages } from './ImageHostingHelper';
+import { hostInlineImages, resolveLocalImagePath } from './ImageHostingHelper';
+import { stripAppendedBlocksForPush } from './ticketDisplayContent';
 import {
     AutobanConfigState,
     buildAutobanBroadcastState,
@@ -212,27 +213,11 @@ type ConfiguredKanbanDispatchOptions = {
     /** Skip column rollback on dispatch failure. Used by kanban drag-dispatch which persists the column move independently and handles the fallback prompt. */
     persistColumnOnError?: boolean;
     /**
-     * Per-surface dispatch discriminator. True when this dispatch arrived over HTTP
-     * — i.e. from the browser cockpit, a CLI script or the orchestrator. False/absent
-     * means an in-process webview dispatch from the VS Code sidebar.
-     *
-     * It selects the terminal FLEET: an api-originated dispatch may resolve and deliver
-     * to a PTY (visible in the browser Terminals panel); an in-process dispatch may not
-     * (the sidebar cannot display a PTY, so delivering there is a silent black hole).
-     *
-     * Set centrally by LocalApiServer's verb rails — every HTTP entry point gets it
-     * for free. Do NOT re-derive it per call site; that is what left the browser
-     * panels routing into VS Code terminals they could not see.
-     */
-    apiOriginated?: boolean;
-    /**
      * Bypass the CLI-triggers gate (KanbanProvider `_cliTriggersEnabled`). That gate
      * exists to stop an ACCIDENTAL drag-drop from auto-dispatching; it must still
      * apply to a browser drag-drop, which is the same accident on a different surface.
      *
      * Only an explicit manager command sets this — today just POST /kanban/dispatch.
-     * Deliberately separate from `apiOriginated`: a browser drag IS api-originated
-     * (it may use the PTY fleet) but is NOT an explicit command (the gate still binds).
      */
     bypassTriggerGate?: boolean;
     /** Resolved project scope for the dispatch-analysis pass (null = all, '__unassigned__' = unpinned, else project name). Threaded from the dispatchAnalyze arm through to generateUnifiedPrompt's overrides. */
@@ -677,14 +662,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _orchestrationSkippedWakes = 0;
     private _orchestrationFailedWakes = 0;
     private _orchestrationWakeSentAt = 0; // epoch ms of the last successfully injected wake (single-flight ref)
-    /**
-     * Which surface started the current orchestrator run. The kickoff arrives on an
-     * HTTP click (apiOriginated stamped by LocalApiServer._stampHttpSurface), but the
-     * WAKE fires from a timer with no request in scope — so the surface has to be
-     * remembered for the life of the run rather than read from a body. Reset on stop.
-     * false = started from the VS Code sidebar (fail-closed default).
-     */
-    private _orchestratorApiOriginated = false;
 
     /** Get the primary identifier for a dispatch card (planId-first, sessionId-legacy). */
     private _dispatchCardId(card: KanbanDispatchCard): string {
@@ -2180,17 +2157,66 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             }
                         }
                     }
-                    const moved = await this._kanbanProvider.moveCardToColumn(wsRoot, targetSessionId, targetColumn);
-                    if (moved && targetPlanFile) {
+                    const outcome = await this._kanbanProvider.moveCardToColumnWithReason(wsRoot, targetSessionId, targetColumn);
+                    if (outcome.ok && targetPlanFile) {
                         const db = await this._getKanbanDb(wsRoot);
                         if (db && await db.ensureReady()) {
                             await db.updatePlanFile(targetSessionId, targetPlanFile);
                         }
                     }
-                    return { success: moved, error: moved ? undefined : 'Column update failed' };
+                    return outcome.ok
+                        ? { success: true }
+                        : { success: false, error: outcome.detail, reason: outcome.reason };
                 } catch (err) {
                     return { success: false, error: err instanceof Error ? err.message : String(err) };
                 }
+            },
+            resolvePlanRoots: async (key, { candidates, stopAtFirst }) => {
+                // Read-only cross-root plan probe. Used ONLY when the caller omitted
+                // workspaceRoot on POST /kanban/move. Probes with hasPlan() (pure boolean,
+                // no cold-restore write) via KanbanDatabase.forWorkspace directly — NOT
+                // through _getKanbanDb, whose failure branch shows a warning toast per
+                // uninitialised root. Each root is try/caught independently so one bad
+                // root does not reject the whole search.
+                const matched: string[] = [];
+                const searched: string[] = [];
+                // A plan-file-shaped key is probed with hasPlanByPlanFile (also a pure
+                // boolean — hot SELECT then cold SELECT, no restore). Without this the
+                // route's path fast path is the only handler for path keys, and a
+                // RELATIVE plan-file path (the documented move-card.js shape) matches no
+                // root by containment and would silently address the default root.
+                const keyIsPathShaped = key.includes('/') || key.includes('\\') || key.endsWith('.md');
+                // De-duplicate by effective root so two roots mapped to one parent DB
+                // are probed once.
+                const seen = new Set<string>();
+                for (const candidate of candidates) {
+                    const effective = this._kanbanProvider?.resolveEffectiveWorkspaceRoot(candidate) || path.resolve(candidate);
+                    if (seen.has(effective)) { continue; }
+                    seen.add(effective);
+                    try {
+                        const db = KanbanDatabase.forWorkspace(effective);
+                        if (!await db.ensureReady()) {
+                            searched.push(candidate);
+                            continue;
+                        }
+                        searched.push(candidate);
+                        let hit: boolean;
+                        if (keyIsPathShaped) {
+                            const wsId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+                            hit = await db.hasPlanByPlanFile(key, wsId);
+                        } else {
+                            hit = await db.hasPlan(key);
+                        }
+                        if (hit) {
+                            matched.push(candidate);
+                            if (stopAtFirst) { return { matched, searched }; }
+                        }
+                    } catch {
+                        // forWorkspace throws on an invalid root; record and continue.
+                        searched.push(candidate);
+                    }
+                }
+                return { matched, searched };
             },
             createFeature: async (wsRoot, name, planIds, description) => {
                 // Route the create-feature.js script through the provider so it inherits
@@ -2469,7 +2495,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             orchestrationStart: async (wsRoot) => {
                 // POST /kanban/orchestration/start — an HTTP caller by definition, so the
                 // surface is known statically here. There is no body to stamp.
-                await this.startOrchestratorFromKanban(wsRoot, undefined, { apiOriginated: true });
+                await this.startOrchestratorFromKanban(wsRoot, undefined);
             },
             orchestrationStop: async () => {
                 await this.stopOrchestratorFromKanban();
@@ -2661,6 +2687,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      */
     public getLocalApiServerPort(): number {
         return this._localApiServer?.getPort() ?? 0;
+    }
+
+    /** Whether a PTY host is connected — used by panel providers for host-derived creation policy. */
+    public hasPtyHost(): boolean {
+        return !!this._ptyHostPort;
     }
 
     private _browserTokens = new Map<string, number>();
@@ -4524,18 +4555,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     public async sendPromptToAgentTerminal(
         role: string,
         text: string,
-        workspaceRoot?: string,
-        options?: { apiOriginated?: boolean }
+        workspaceRoot?: string
     ): Promise<boolean> {
         const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot || '');
         if (!resolvedWorkspaceRoot) { return false; }
-        const apiOriginated = !!options?.apiOriginated;
-        if (await this._tryFleetDeliveryForRole(role, text, resolvedWorkspaceRoot, apiOriginated, { source: 'designPanel' })) {
+        if (await this._tryFleetDeliveryForRole(role, text, resolvedWorkspaceRoot, { source: 'designPanel' })) {
             return true;
         }
 
         // Resolve the agent name for the role
-        const agentName = await this._getAgentNameForRole(role, resolvedWorkspaceRoot, apiOriginated)
+        const agentName = await this._getAgentNameForRole(role, resolvedWorkspaceRoot)
             || (role === 'claude_artifacts' ? 'Claude Artifacts' : role);
         const suffixedKey = this._suffixedName(agentName);
 
@@ -4551,26 +4580,34 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         if (!terminal) {
-            // A browser caller must not have a VS Code terminal spawned on its behalf.
-            if (apiOriginated) { return false; }
-            // Spawn the terminal
-            const startupCmd = await this.getAgentStartupCommand(role, resolvedWorkspaceRoot);
-            terminal = vscode.window.createTerminal({
-                name: agentName,
-                location: vscode.TerminalLocation.Panel,
-                cwd: resolvedWorkspaceRoot
-            });
-            if (this._registeredTerminals) {
-                this._registeredTerminals.set(suffixedKey, terminal);
-            }
-            terminal.show();
+            // Host-derived creation policy (replaces the old apiOriginated gate):
+            // - Fleet available: do not spawn a vscode.Terminal; the fleet is the
+            //   authoritative terminal set. Return false — the caller surfaces a reason.
+            // - No fleet: spawn a vscode.Terminal exactly as before (byte-compat for
+            //   the ~4,000 shipped installs). In standalone (no vscode.window), this
+            //   throws and is caught.
+            if (this._ptyHostPort) { return false; }
+            try {
+                const startupCmd = await this.getAgentStartupCommand(role, resolvedWorkspaceRoot);
+                terminal = vscode.window.createTerminal({
+                    name: agentName,
+                    location: vscode.TerminalLocation.Panel,
+                    cwd: resolvedWorkspaceRoot
+                });
+                if (this._registeredTerminals) {
+                    this._registeredTerminals.set(suffixedKey, terminal);
+                }
+                terminal.show();
 
-            // Wait for terminal process to spawn and shell to initialize
-            await new Promise(r => setTimeout(r, 2000));
-            if (startupCmd && startupCmd.trim()) {
-                terminal.sendText(startupCmd.trim(), true);
-                // Wait for the startup command to complete / shell to settle
-                await new Promise(r => setTimeout(r, 3000));
+                // Wait for terminal process to spawn and shell to initialize
+                await new Promise(r => setTimeout(r, 2000));
+                if (startupCmd && startupCmd.trim()) {
+                    terminal.sendText(startupCmd.trim(), true);
+                    // Wait for the startup command to complete / shell to settle
+                    await new Promise(r => setTimeout(r, 3000));
+                }
+            } catch {
+                return false;
             }
         } else {
             terminal.show();
@@ -4734,22 +4771,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * @param options.apiOriginated True when the caller is a verb rail (browser cockpit,
-     * CLI, orchestrator) rather than the in-process VS Code sidebar. Set from the payload's
-     * `apiOriginated` flag, which LocalApiServer._stampHttpSurface stamps on every HTTP
-     * body. It becomes `allowPtyFleet` for resolution AND delivery, so a browser click can
-     * reach the browser's own PTY terminal. Defaults false — every sidebar caller keeps
-     * today's VS Code-only routing and can never dispatch into a terminal VS Code cannot show.
+     * Dispatch a custom prompt to a role's terminal. Resolution considers both
+     * terminal sets (fleet + VS Code) with live-first/fleet-wins precedence.
      */
     public async dispatchCustomPromptToRole(
         role: string,
         prompt: string,
-        workspaceRoot: string,
-        options?: { apiOriginated?: boolean }
+        workspaceRoot: string
     ): Promise<boolean> {
         const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedWorkspaceRoot) { return false; }
-        const allowPtyFleet = !!options?.apiOriginated;
 
         // For planner role: pick the next terminal from the rotation cursor
         // (mirrors the kanban single-card path). For other roles: use default resolution.
@@ -4768,9 +4799,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
         // Fallback: default resolution (also covers non-planner roles and empty/single-terminal pools)
         if (!targetAgent) {
-            // Fourth arg is the fix: without it the PTY branch at :8276 is skipped and a
-            // browser-only planner is unreachable. Third arg stays undefined (no worktree).
-            targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, undefined, allowPtyFleet);
+            targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, undefined);
         }
 
         if (!targetAgent) {
@@ -4778,12 +4807,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             return false;
         }
         if (!this._isValidAgentName(targetAgent)) { return false; }
-        // A PTY has no VS Code terminal to reveal — mirrors the board path at :19198.
-        if (!this._isLikelyPtyDispatchTarget(targetAgent, allowPtyFleet)) {
+        // A PTY has no VS Code terminal to reveal — mirrors the board path.
+        if (!this._isLikelyPtyDispatchTarget(targetAgent)) {
             this._seams().commands.executeCommand('switchboard.focusTerminalByName', targetAgent, { silent: true });
         }
         const success = await this._dispatchExecuteMessage(
-            resolvedWorkspaceRoot, targetAgent, prompt, {}, 'sidebar', allowPtyFleet
+            resolvedWorkspaceRoot, targetAgent, prompt, {}, 'sidebar'
         );
 
         // Advance the rotation cursor ONLY after successful dispatch
@@ -4924,7 +4953,6 @@ Each plan file must include:
             workspaceRoot: resolvedWorkspaceRoot,
             targetTerminalOverride: options.targetTerminalOverride,
             persistColumnOnError: true,
-            apiOriginated: options.apiOriginated
         };
 
         if (options.dragDropMode === 'prompt') {
@@ -5443,8 +5471,6 @@ Each plan file must include:
         }
 
         const workflowName = this._workflowNameForDispatchRole(role, instruction);
-        // Per-surface fleet selection (see ConfiguredKanbanDispatchOptions.apiOriginated).
-        const allowPtyFleet = !!options?.apiOriginated;
         const targetColumn = options?.targetColumn
             ? this._normalizeLegacyKanbanColumn(options.targetColumn)
             : this._targetColumnForRole(role);
@@ -5464,7 +5490,7 @@ Each plan file must include:
             const groupAllSameWorktree = groupPlans.every(p => p.worktreePath === groupCommonWorktree);
             const worktreePath = groupAllSameWorktree ? groupCommonWorktree : undefined;
             const targetAgent = String(targetTerminalOverride || '').trim()
-                || await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath, allowPtyFleet);
+                || await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath);
             if (!targetAgent || !this._isValidAgentName(targetAgent)) {
                 this._seams().ui.showErrorMessage(`No agent assigned to role '${role}' for feature '${g.feature.topic || 'Untitled'}'. Cannot dispatch batch.`);
                 return false;
@@ -5478,7 +5504,7 @@ Each plan file must include:
             const looseAllSameWorktree = loose.every(p => p.worktreePath === looseCommonWorktree);
             const worktreePath = looseAllSameWorktree ? looseCommonWorktree : undefined;
             const targetAgent = String(targetTerminalOverride || '').trim()
-                || await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath, allowPtyFleet);
+                || await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath);
             if (!targetAgent || !this._isValidAgentName(targetAgent)) {
                 this._seams().ui.showErrorMessage(`No agent assigned to role '${role}' for loose plans. Cannot dispatch batch.`);
                 return false;
@@ -5540,13 +5566,13 @@ Each plan file must include:
                 // succeeded. The predicate is advisory: skip the lookup entirely when we
                 // already believe the target is a browser terminal. Kept inside the
                 // per-group body so a mixed batch is covered group by group.
-                if (!this._isLikelyPtyDispatchTarget(group.targetAgent, allowPtyFleet)) {
+                if (!this._isLikelyPtyDispatchTarget(group.targetAgent)) {
                     this._seams().commands.executeCommand('switchboard.focusTerminalByName', group.targetAgent, { silent: true });
                 }
                 const sent = await this._dispatchExecuteMessage(resolvedWorkspaceRoot, group.targetAgent, finalPrompt, {
                     batch: true,
                     sessionIds: group.plans.map(p => p.sessionId || p.planId || '').filter(Boolean)
-                }, 'sidebar', allowPtyFleet);
+                }, 'sidebar');
                 if (!sent) {
                     throw new Error(`Could not deliver prompt to '${group.targetAgent}'`);
                 }
@@ -5591,7 +5617,7 @@ Each plan file must include:
                         await this._seams().clipboard.writeText(coderPrompt);
                     }
                 } else {
-                    await this.dispatchToCoderTerminal(coderPrompt, group.worktreePath, { apiOriginated: allowPtyFleet });
+                    await this.dispatchToCoderTerminal(coderPrompt, group.worktreePath);
                 }
             }
 
@@ -7531,17 +7557,13 @@ Each plan file must include:
 
     public async askAgentTask(
         workspaceRoot: string,
-        data: { id: string; title: string; description: string; provider: 'linear' | 'clickup'; apiOriginated?: boolean }
+        data: { id: string; title: string; description: string; provider: 'linear' | 'clickup' }
     ): Promise<void> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) return;
-        // The pre-check duplicated resolution and, at allowPtyFleet=false, reported "no
-        // planner" for a browser user whose planner is a PTY. dispatchCustomPromptToRole
-        // owns resolution (fleet-aware) and reports its own failure; throw on ITS result so
-        // the tickets panel still surfaces an error to the caller.
         const prompt = `Please review the following ${data.provider} ticket and action it. Assess the request, investigate the relevant code, and either implement the change or report back with findings:\n\nTitle: ${data.title}\nDescription: ${data.description}\n\nTicket ID: ${data.id}`;
         const dispatched = await this.dispatchCustomPromptToRole(
-            'planner', prompt, resolvedRoot, { apiOriginated: !!data.apiOriginated }
+            'planner', prompt, resolvedRoot
         );
         if (!dispatched) { throw new Error('No planner agent could be reached for this ticket'); }
     }
@@ -8299,13 +8321,55 @@ Each plan file must include:
             const creationName = this._normalizeAgentKey((t.creationOptions as vscode.TerminalOptions | undefined)?.name || '');
             return tName === strippedTarget || creationName === strippedTarget;
         });
-        return !!found;
+        if (found) return true;
+        // Fleet-aware: check the _ptyTerminalNames snapshot so fleet terminals
+        // report as live. The snapshot is advisory (refreshed on every ptyListTerminals
+        // forward); delivery uses a live round-trip, not this check.
+        if (this._ptyHostPort && this._ptyTerminalNames.length > 0) {
+            const normalized = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
+            if (normalized && this._ptyTerminalNames.some(n =>
+                this._normalizeAgentKey(this._stripIdeSuffix(n)) === normalized)) {
+                return true;
+            }
+        }
+        return false;
     }
 
-    private async _getAgentNameForRoleGlobal(role: string, skipStatePath?: string | null, allowPtyFleet: boolean = false): Promise<string | undefined> {
+    /** A state-file `terminals` entry belongs to the PTY fleet, not to vscode.window. */
+    private _isFleetTerminalInfo(info: any): boolean {
+        return info?.purpose === 'pty' || info?.ideName === PTY_IDE_NAME;
+    }
+
+    /**
+     * The ONE precedence rule for terminal-name candidates: **live-first,
+     * fleet-wins-among-equals**.
+     *
+     * It exists because deleting the caller-surface flag made every
+     * `purpose:'pty'` row eligible in all three role-matching scans at once. A scan
+     * that stops at its first match therefore resolves by the state file's JSON key
+     * order — insertion order, which differs per install and changes on every
+     * state-file rewrite. That is a silent, nondeterministic precedence, so the
+     * order is stated here once and every scan hands its candidates to it.
+     *
+     * Single-candidate resolution is returned untouched, which is the overwhelmingly
+     * common shape and keeps the shipped install base byte-compatible: only a genuine
+     * collision (same role, both sets) can now resolve differently than at HEAD.
+     */
+    private _pickTerminalCandidate(candidates: Array<{ name: string; isFleet: boolean }>): string | undefined {
+        if (candidates.length === 0) { return undefined; }
+        if (candidates.length === 1) { return candidates[0].name; }
+        const liveFleet = candidates.find(c => c.isFleet && this._isTerminalLive(c.name));
+        if (liveFleet) { return liveFleet.name; }
+        const liveVscode = candidates.find(c => !c.isFleet && this._isTerminalLive(c.name));
+        if (liveVscode) { return liveVscode.name; }
+        const deadFleet = candidates.find(c => c.isFleet);
+        if (deadFleet) { return deadFleet.name; }
+        return candidates[0].name;
+    }
+
+    private async _getAgentNameForRoleGlobal(role: string, skipStatePath?: string | null): Promise<string | undefined> {
         const allRoots = this._filterMappedRoots(this._getWorkspaceRoots());
-        const candidates: string[] = [];
-        const isEligible = (info: any) => allowPtyFleet || !(info?.purpose === 'pty' || info?.ideName === PTY_IDE_NAME);
+        const candidates: Array<{ name: string; isFleet: boolean }> = [];
 
         for (const root of allRoots) {
             const statePath = this._resolveStateFilePath(root);
@@ -8318,12 +8382,14 @@ Each plan file must include:
 
                 let foundInRoot = false;
                 if (state.terminals) {
+                    // Collect EVERY role match, not the first: a root can hold both a
+                    // fleet and a vscode.Terminal for one role, and stopping at the
+                    // first hands precedence to JSON key order before
+                    // _pickTerminalCandidate ever sees the collision.
                     for (const [name, info] of Object.entries(state.terminals) as [string, any][]) {
-                        if (!isEligible(info)) continue;
                         if (info.role === role) {
-                            candidates.push(name);
+                            candidates.push({ name, isFleet: this._isFleetTerminalInfo(info) });
                             foundInRoot = true;
-                            break;
                         }
                     }
                 }
@@ -8331,7 +8397,7 @@ Each plan file must include:
                 if (!foundInRoot && state.chatAgents) {
                     for (const [name, info] of Object.entries(state.chatAgents) as [string, any][]) {
                         if (info.role === role) {
-                            candidates.push(name);
+                            candidates.push({ name, isFleet: false });
                             break;
                         }
                     }
@@ -8341,23 +8407,12 @@ Each plan file must include:
             }
         }
 
-        if (candidates.length === 0) return undefined;
-
-        // Try to find a live one first
-        for (const name of candidates) {
-            if (this._isTerminalLive(name)) {
-                return name;
-            }
-        }
-
-        // Otherwise return the first matched candidate
-        return candidates[0];
+        return this._pickTerminalCandidate(candidates);
     }
 
-    private async _getAgentNameForRole(role: string, workspaceRoot?: string, allowPtyFleet: boolean = false): Promise<string | undefined> {
+    private async _getAgentNameForRole(role: string, workspaceRoot?: string): Promise<string | undefined> {
         const statePath = this._resolveStateFilePath(workspaceRoot);
         let localMatch: string | undefined = undefined;
-        const isEligible = (info: any) => allowPtyFleet || !(info?.purpose === 'pty' || info?.ideName === PTY_IDE_NAME);
 
         if (statePath) {
             try {
@@ -8366,13 +8421,16 @@ Each plan file must include:
                     const state = JSON.parse(content);
 
                     if (state.terminals) {
+                        // Same collision as the global path: collect all role matches
+                        // and let the one precedence rule choose, instead of taking
+                        // whichever key the state file happens to list first.
+                        const localCandidates: Array<{ name: string; isFleet: boolean }> = [];
                         for (const [name, info] of Object.entries(state.terminals) as [string, any][]) {
-                            if (!isEligible(info)) continue;
                             if (info.role === role) {
-                                localMatch = name;
-                                break;
+                                localCandidates.push({ name, isFleet: this._isFleetTerminalInfo(info) });
                             }
                         }
+                        localMatch = this._pickTerminalCandidate(localCandidates);
                     }
 
                     if (!localMatch && state.chatAgents) {
@@ -8393,25 +8451,23 @@ Each plan file must include:
             return localMatch;
         }
 
-        return this._getAgentNameForRoleGlobal(role, statePath, allowPtyFleet);
+        return this._getAgentNameForRoleGlobal(role, statePath);
     }
 
     private async _resolveAgentTerminalForPlan(
         role: string,
         workspaceRoot: string,
-        worktreePath?: string,
-        allowPtyFleet: boolean = false
+        worktreePath?: string
     ): Promise<string | undefined> {
         if (worktreePath) {
-            const wtTerminal = await this._findTerminalNameByWorktreePathAndRole(worktreePath, role, false, allowPtyFleet);
+            const wtTerminal = await this._findTerminalNameByWorktreePathAndRole(worktreePath, role, false);
             if (wtTerminal) { return wtTerminal; }
         }
-        // Per-surface routing: an api-originated dispatch prefers a live PTY of the
-        // requested role, because that is the fleet the calling surface (the browser
-        // cockpit) can actually display. `_getAliveAutobanTerminalRegistry` cannot
-        // supply one — it keeps a row only on a VS Code pid/name match or a heartbeat,
-        // and PTY rows have none of those — so the fleet is consulted directly here.
-        if (allowPtyFleet && this._ptyHostPort) {
+        // Fleet consultation: a live PTY of the requested role is preferred.
+        // `_getAliveAutobanTerminalRegistry` cannot supply one — it keeps a row only
+        // on a VS Code pid/name match or a heartbeat, and PTY rows have none of
+        // those — so the fleet is consulted directly here.
+        if (this._ptyHostPort) {
             const normalizedRole = this._normalizeAgentKey(role);
             const res = await this._ptyHostVerb('ptyListTerminals', {});
             if (res?.success && Array.isArray(res.terminals)) {
@@ -8420,46 +8476,45 @@ Each plan file must include:
                 if (match) { return match.friendlyName; }
             }
         }
-        return this._getAgentNameForRole(role, workspaceRoot, allowPtyFleet);
+        return this._getAgentNameForRole(role, workspaceRoot);
     }
 
     /**
-     * @param allowPtyFleet When false (the default, and every in-process/sidebar caller),
-     * `purpose:'pty'` registry rows are skipped. Those terminals live in the browser
-     * Terminals panel and are invisible in VS Code, so routing a sidebar dispatch to one
-     * delivers the prompt into a window the user is not looking at. See the
-     * `apiOriginated` discriminator on ConfiguredKanbanDispatchOptions.
+     * Resolves a terminal name by matching worktree path AND role against the state
+     * file's `terminals` map. Fleet terminals (purpose:'pty') are eligible alongside
+     * VS Code terminals, and ties are broken by {@link _pickTerminalCandidate}
+     * (live-first, fleet-wins-among-equals) — not by state-file key order.
      */
     private async _findTerminalNameByWorktreePathAndRole(
         worktreePath: string,
         role: string,
-        strictRole: boolean = false,
-        allowPtyFleet: boolean = false
+        strictRole: boolean = false
     ): Promise<string | undefined> {
         const resolvedTarget = path.resolve(worktreePath);
         const normalizedRole = this._normalizeAgentKey(role);
-        const isEligible = (info: any) => allowPtyFleet || !(info?.purpose === 'pty' || info?.ideName === PTY_IDE_NAME);
         return new Promise<string | undefined>((resolve) => {
             this.updateState(async (state) => {
                 if (state.terminals) {
+                    // Role-matched pass wins outright over the path-only pass; within
+                    // each pass the shared precedence rule breaks the fleet/vscode tie.
+                    // Collecting before resolving is what makes that possible — the
+                    // previous first-match-wins loops resolved by JSON key order.
+                    const roleMatches: Array<{ name: string; isFleet: boolean }> = [];
+                    const pathMatches: Array<{ name: string; isFleet: boolean }> = [];
                     for (const [name, info] of Object.entries(state.terminals) as [string, any][]) {
-                        if (!isEligible(info)) { continue; }
-                        if (info.worktreePath && path.resolve(info.worktreePath) === resolvedTarget && this._normalizeAgentKey(info.role) === normalizedRole) {
-                            resolve(name);
-                            return;
-                        }
+                        if (!info.worktreePath || path.resolve(info.worktreePath) !== resolvedTarget) { continue; }
+                        const entry = { name, isFleet: this._isFleetTerminalInfo(info) };
+                        pathMatches.push(entry);
+                        if (this._normalizeAgentKey(info.role) === normalizedRole) { roleMatches.push(entry); }
                     }
+                    const roleHit = this._pickTerminalCandidate(roleMatches);
+                    if (roleHit) { resolve(roleHit); return; }
                     // Path-only fallback is for routing (any worktree terminal will do). It MUST be
                     // skipped for the create-if-missing guard (strictRole), otherwise once the first
                     // role's terminal exists every other role matches it and is never created.
                     if (!strictRole) {
-                        for (const [name, info] of Object.entries(state.terminals) as [string, any][]) {
-                            if (!isEligible(info)) { continue; }
-                            if (info.worktreePath && path.resolve(info.worktreePath) === resolvedTarget) {
-                                resolve(name);
-                                return;
-                            }
-                        }
+                        const pathHit = this._pickTerminalCandidate(pathMatches);
+                        if (pathHit) { resolve(pathHit); return; }
                     }
                 }
                 resolve(undefined);
@@ -9368,12 +9423,8 @@ Each plan file must include:
      */
     public async startOrchestratorFromKanban(
         workspaceRoot?: string,
-        initiatorProject?: string | null,
-        options?: { apiOriginated?: boolean }
+        initiatorProject?: string | null
     ): Promise<void> {
-        // Remember the starting surface for the life of the run — the WAKE dispatch
-        // has no request in scope. Fail-closed default: a sidebar start stays VS Code-only.
-        this._orchestratorApiOriginated = !!options?.apiOriginated;
         const root = this._resolveWorkspaceRoot(workspaceRoot);
         if (!root) {
             this._seams().ui.showErrorMessage('No workspace folder found. Cannot start the orchestrator.');
@@ -9531,7 +9582,7 @@ Each plan file must include:
         if (createdNew) { await new Promise(r => setTimeout(r, 1500)); }
         const kickoffSent = await this._dispatchExecuteMessage(
             root, ORCHESTRATOR_TERMINAL_NAME, kickoffPrompt,
-            { orchestrationKickoff: true }, 'sidebar', this._orchestratorApiOriginated
+            { orchestrationKickoff: true }, 'sidebar'
         );
         if (!kickoffSent) {
             // Silent failure here means the orchestrator terminal sits idle forever and the
@@ -9578,7 +9629,6 @@ Each plan file must include:
             orchestrationConfig: { ...DEFAULT_ORCHESTRATION_CONFIG, ...this._autobanState.orchestrationConfig, enabled: false }
         });
         this._stopAutobanEngine();
-        this._orchestratorApiOriginated = false;
         await this._persistAutobanState();
         this._postAutobanStateNow();
     }
@@ -10119,24 +10169,19 @@ Each plan file must include:
 
 
     /**
-     * @param options.apiOriginated True when the caller is a verb rail (browser cockpit /
-     * CLI). Becomes allowPtyFleet for BOTH resolution and delivery so a browser-side coder
-     * PTY is reachable. Defaults false — sidebar/autoban callers keep VS Code-only routing.
+     * Dispatch a prompt to the coder terminal. Resolution considers both terminal
+     * sets (fleet + VS Code) with live-first/fleet-wins precedence.
      */
     public async dispatchToCoderTerminal(
         prompt: string,
-        worktreePath?: string,
-        options?: { apiOriginated?: boolean }
+        worktreePath?: string
     ): Promise<boolean> {
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) {
             this._seams().ui.showWarningMessage('Pair Program: no workspace root found.');
             return false;
         }
-        const allowPtyFleet = !!options?.apiOriginated;
-        // Fourth arg is the fix — without it the PTY branch at :8276 is skipped and a
-        // browser-only coder is invisible. worktreePath stays the third arg.
-        const coderAgent = await this._resolveAgentTerminalForPlan('coder', workspaceRoot, worktreePath, allowPtyFleet);
+        const coderAgent = await this._resolveAgentTerminalForPlan('coder', workspaceRoot, worktreePath);
         if (!coderAgent) {
             this._seams().ui.showWarningMessage('Pair Program: no Coder terminal found. Please register a Coder terminal first.');
             return false;
@@ -10144,7 +10189,7 @@ Each plan file must include:
         return await this._dispatchExecuteMessage(workspaceRoot, coderAgent, prompt, {
             batch: true,
             pairProgramming: true
-        }, 'sidebar', allowPtyFleet);
+        }, 'sidebar');
     }
 
     /** Public accessor for role resolution (used by command handlers) */
@@ -11091,7 +11136,7 @@ Each plan file must include:
             try {
                 ok = await this._dispatchExecuteMessage(
                     root, ORCHESTRATOR_TERMINAL_NAME, wakePrompt,
-                    { orchestrationWake: true }, 'sidebar', this._orchestratorApiOriginated
+                    { orchestrationWake: true }, 'sidebar'
                 );
             } catch (err) {
                 console.error('[Autoban] Orchestration wake dispatch failed:', err);
@@ -11615,7 +11660,7 @@ Each plan file must include:
                         this._seams().commands.executeCommand('switchboard.setupIDEs');
                         return { success: true };
                     case 'dispatchProjectManager': {
-                        const sent = await this._handleDispatchProjectManager({ apiOriginated: !!data.apiOriginated });
+                        const sent = await this._handleDispatchProjectManager();
                         return { success: sent, ...(sent ? {} : { error: 'No Project Manager terminal could be reached.' }) };
                     }
                     case 'openKanban':
@@ -12486,7 +12531,7 @@ Each plan file must include:
 
                     case 'triggerAgentAction':
                         if (data.role && data.sessionFile) {
-                            await this._handleTriggerAgentAction(data.role, data.sessionFile, data.instruction, data.workspaceRoot, { apiOriginated: !!data.apiOriginated } as any);
+                            await this._handleTriggerAgentAction(data.role, data.sessionFile, data.instruction, data.workspaceRoot);
                         }
                         return { success: true };
                     case 'sendAnalystMessage':
@@ -12494,8 +12539,7 @@ Each plan file must include:
                             await this._handleSendAnalystMessage(
                                 data.instruction,
                                 'analyst',
-                                data.workspaceRoot,
-                                { apiOriginated: !!data.apiOriginated }
+                                data.workspaceRoot
                             );
                         }
                         return { success: true };
@@ -12807,7 +12851,7 @@ Each plan file must include:
                             // Send to Planner dispatches only — it must NOT copy to clipboard
                             // on success, matching every other dispatch action in the extension.
                             sendSucceeded = await this.dispatchCustomPromptToRole(
-                                'planner', prompt, workspaceRoot, { apiOriginated: !!data.apiOriginated }
+                                'planner', prompt, workspaceRoot
                             );
                             if (!sendSucceeded) {
                                 // Failure fallback: copy so the user can paste manually
@@ -12917,7 +12961,7 @@ Each plan file must include:
                         return { success: true };
                     case 'airlock_sendToCoder':
                         if (data.text) {
-                            this._handleAirlockSendToCoder(data.text, { apiOriginated: !!data.apiOriginated });
+                            this._handleAirlockSendToCoder(data.text);
                         }
                         return { success: true };
                     case 'airlock_syncRepo':
@@ -13039,8 +13083,7 @@ What would you like to find?`;
                         await this._handleSendAnalystMessage(
                             instruction,
                             'analyst',
-                            data.workspaceRoot,
-                            { apiOriginated: !!data.apiOriginated }
+                            data.workspaceRoot
                         );
                         return { success: true };
                     }
@@ -13072,7 +13115,7 @@ What would you like to find?`;
                         // here — this arm mirrors the old `sendText(input, true)`, a bare
                         // line submit with no bracketed-paste framing and, per the note
                         // below, deliberately no clearBeforePrompt side effect.
-                        if (data?.apiOriginated && this._ptyHostPort) {
+                        if (this._ptyHostPort) {
                             const normalized = this._normalizeAgentKey(this._stripIdeSuffix(name));
                             const res = await this._ptyHostVerb('ptyListTerminals', {});
                             if (res?.success && Array.isArray(res.terminals)) {
@@ -18957,12 +19000,9 @@ What would you like to find?`;
      * the call it guards is fire-and-forget, and a stale answer costs nothing in either
      * direction — a false negative is one silent no-op lookup, a false positive is one
      * un-revealed terminal. The toast itself is suppressed by `silent`, not by this.
-     *
-     * `allowPtyFleet` mirrors the delivery gate: a caller that cannot deliver to a PTY
-     * cannot be targeting one, so it must never skip its reveal.
      */
-    private _isLikelyPtyDispatchTarget(agentName: string, allowPtyFleet: boolean): boolean {
-        if (!allowPtyFleet || !this._ptyHostPort) { return false; }
+    private _isLikelyPtyDispatchTarget(agentName: string): boolean {
+        if (!this._ptyHostPort) { return false; }
         const normalized = this._normalizeAgentKey(this._stripIdeSuffix(agentName));
         if (!normalized) { return false; }
         return this._ptyTerminalNames.some(name =>
@@ -18974,24 +19014,23 @@ What would you like to find?`;
      * (_sendPromptToTerminal, sendPromptToAgentTerminal, _deliverPromptToPmTerminal,
      * _handleSendAnalystMessage). PTYs live in the pty host child — not in
      * _registeredTerminals, not in vscode.window.terminals, not in the HostTerminal
-     * seam — so a browser-originated send cannot reach one without this step. Mirrors
-     * sendToTerminal (:12887) and _attemptDirectTerminalPush (:18883).
+     * seam — so a send cannot reach one without this step. Mirrors
+     * sendToTerminal and _attemptDirectTerminalPush.
      *
      * Delivery goes through _dispatchExecuteMessage so ptySendPrompt owns bracketed-paste
      * framing, chunking, the per-terminal send lock and the confirm CR. Do NOT hand-roll
      * a ptyWrite here — a multi-line prompt written raw runs one fragment per line.
      *
-     * Returns false when not applicable (not api-originated, no fleet, no match) so the
-     * caller falls through to its existing VS Code path unchanged.
+     * Returns false when not applicable (no fleet, no match) so the caller falls through
+     * to its existing VS Code path unchanged.
      */
     private async _tryFleetDeliveryForRole(
         role: string,
         prompt: string,
         workspaceRoot: string,
-        apiOriginated: boolean,
         metadata: Record<string, any> = {}
     ): Promise<boolean> {
-        if (!apiOriginated || !this._ptyHostPort) { return false; }
+        if (!this._ptyHostPort) { return false; }
         // Authoritative single lookup: ask the fleet for an ACTIVE terminal of this role.
         // A miss means "no fleet terminal for this role" — return false and let the caller
         // run its unchanged VS Code path (roles like claude_artifacts may exist only there).
@@ -19003,17 +19042,16 @@ What would you like to find?`;
             .find((t: any) => this._normalizeAgentKey(t.role) === normalizedRole);
         const target = match?.friendlyName;
         if (!target || !this._isValidAgentName(target)) { return false; }
-        return await this._dispatchExecuteMessage(workspaceRoot, target, prompt, metadata, 'sidebar', true);
+        return await this._dispatchExecuteMessage(workspaceRoot, target, prompt, metadata, 'sidebar');
     }
 
     public async tryFleetDeliveryForRole(
         role: string,
         prompt: string,
         workspaceRoot: string,
-        apiOriginated: boolean,
         metadata: Record<string, any> = {}
     ): Promise<boolean> {
-        return this._tryFleetDeliveryForRole(role, prompt, workspaceRoot, apiOriginated, metadata);
+        return this._tryFleetDeliveryForRole(role, prompt, workspaceRoot, metadata);
     }
 
     private async _dispatchExecuteMessage(
@@ -19021,8 +19059,7 @@ What would you like to find?`;
         targetAgent: string,
         payload: string,
         metadata: Record<string, any>,
-        sender: string = 'sidebar',
-        allowPtyFleet: boolean = false
+        sender: string = 'sidebar'
     ): Promise<boolean> {
         // F-04 SECURITY: Validate agent name before using as path segment
         if (!this._isValidAgentName(targetAgent)) {
@@ -19038,23 +19075,11 @@ What would you like to find?`;
             recipient: targetAgent,
             action: 'execute',
             metadata
-        }, allowPtyFleet);
+        });
         if (pushed) return true;
 
-        let ptyMatch = false;
-        if (!allowPtyFleet && this._ptyHostPort) {
-            try {
-                const res = await this._ptyHostVerb('ptyListTerminals', {});
-                if (res?.success && Array.isArray(res.terminals)) {
-                    ptyMatch = !!res.terminals.filter((t: any) => t.status === 'active').find((t: any) =>
-                        this._normalizeAgentKey(this._stripIdeSuffix(t.friendlyName))
-                        === this._normalizeAgentKey(this._stripIdeSuffix(targetAgent)));
-                }
-            } catch { /* fleet unavailable */ }
-        }
-        this._seams().ui.showWarningMessage(ptyMatch
-            ? `'${targetAgent}' is a browser terminal (Switchboard Terminals panel), so the VS Code sidebar cannot dispatch to it. Dispatch from the browser board, or open a VS Code agent terminal for this role.`
-            : `Could not deliver prompt to '${targetAgent}'. No live agent terminal with that name was found.`);
+        this._seams().ui.showWarningMessage(
+            `Could not deliver prompt to '${targetAgent}'. No live agent terminal with that name was found.`);
         return false;
     }
 
@@ -19106,16 +19131,13 @@ What would you like to find?`;
         terminalName: string,
         payload: string,
         messageId: string,
-        meta: { sender: string; recipient: string; action: string; metadata: Record<string, any> },
-        allowPtyFleet: boolean = false
+        meta: { sender: string; recipient: string; action: string; metadata: Record<string, any> }
     ): Promise<boolean> {
-        // Per-surface routing: the PTY fleet is checked FIRST, but only for callers that
-        // opted in via the `apiOriginated` discriminator. Checking it first (rather than
-        // as a not-found fallback) matters — a PTY and a VS Code terminal can normalize
-        // to the same agent key, and for an api-originated dispatch the PTY is the one
-        // the calling surface can display. Sidebar callers never opt in, so they can
-        // never deliver into a terminal VS Code cannot show.
-        if (allowPtyFleet && this._ptyHostPort) {
+        // The PTY fleet is checked FIRST. Checking it first (rather than as a
+        // not-found fallback) matters — a PTY and a VS Code terminal can normalize
+        // to the same agent key, and the PTY is the one the browser cockpit can
+        // display. The !this._ptyHostPort guard short-circuits fleet-less installs.
+        if (this._ptyHostPort) {
             const normalizedTarget = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
             try {
                 const res = await this._ptyHostVerb('ptyListTerminals', {});
@@ -19386,8 +19408,6 @@ What would you like to find?`;
 
 
 
-        // Per-surface fleet selection (see ConfiguredKanbanDispatchOptions.apiOriginated).
-        const allowPtyFleet = !!options?.apiOriginated;
         let targetAgent: string | undefined;
         let plannerLocationKey: string | undefined;
         if (options?.targetTerminalOverride && this._isValidAgentName(options.targetTerminalOverride)) {
@@ -19403,10 +19423,10 @@ What would you like to find?`;
                 }
             }
             if (!targetAgent) {
-                targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath, allowPtyFleet);
+                targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath);
             }
         } else {
-            targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath, allowPtyFleet);
+            targetAgent = await this._resolveAgentTerminalForPlan(role, resolvedWorkspaceRoot, worktreePath);
         }
 
         if (!targetAgent) {
@@ -19432,7 +19452,7 @@ What would you like to find?`;
         // and next to a dispatch that in fact succeeded it reads as a second, failed send.
         // The predicate is advisory: skip the lookup entirely when we already believe the
         // target is a browser terminal.
-        if (!this._isLikelyPtyDispatchTarget(targetAgent, allowPtyFleet)) {
+        if (!this._isLikelyPtyDispatchTarget(targetAgent)) {
             this._seams().commands.executeCommand('switchboard.focusTerminalByName', targetAgent, { silent: true });
         }
 
@@ -19548,7 +19568,7 @@ What would you like to find?`;
 
         // 4. Send Message (Write to Inbox) — dispatch after column is moved
         try {
-            const success = await this._dispatchExecuteMessage(resolvedWorkspaceRoot, targetAgent, messagePayload, messageMetadata, 'sidebar', allowPtyFleet);
+            const success = await this._dispatchExecuteMessage(resolvedWorkspaceRoot, targetAgent, messagePayload, messageMetadata, 'sidebar');
 
             if (success) {
                 // Dispatch succeeded — no additional state updates needed (already done above)
@@ -19611,8 +19631,7 @@ What would you like to find?`;
     private async _handleSendAnalystMessage(
         instruction: string,
         resultRole: 'analyst' | 'analystMap' = 'analyst',
-        workspaceRoot?: string,
-        options?: { apiOriginated?: boolean }
+        workspaceRoot?: string
     ): Promise<boolean> {
         const postAnalystResult = (success: boolean) => {
             this.postMessage({ type: 'actionTriggered', role: resultRole, success });
@@ -19623,7 +19642,6 @@ What would you like to find?`;
             return false;
         }
 
-        const apiOriginated = !!options?.apiOriginated;
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot || '') || this._getWorkspaceRoot();
         if (!resolvedRoot) {
             this._seams().ui.showErrorMessage('No workspace root open.');
@@ -19635,8 +19653,8 @@ What would you like to find?`;
         let targetAgent: string | undefined;
 
         try {
-            // PTY fleet first: browser / CLI callers can display a PTY, the editor cannot.
-            if (await this._tryFleetDeliveryForRole('analyst', messageText, resolvedRoot, apiOriginated, { source: 'analyst' })) {
+            // PTY fleet first.
+            if (await this._tryFleetDeliveryForRole('analyst', messageText, resolvedRoot, { source: 'analyst' })) {
                 postAnalystResult(true);
                 await this._logEvent('dispatch', {
                     event: 'analyst_dispatch_sent',
@@ -19647,7 +19665,7 @@ What would you like to find?`;
                 return true;
             }
 
-            targetAgent = await this._getAgentNameForRole('analyst', resolvedRoot, apiOriginated);
+            targetAgent = await this._getAgentNameForRole('analyst', resolvedRoot);
             if (!targetAgent) {
                 this._seams().ui.showErrorMessage("No agent assigned to role 'analyst'. Please assign a terminal first.");
                 postAnalystResult(false);
@@ -21634,7 +21652,7 @@ What would you like to find?`;
         }
     }
 
-    private async _handleAirlockSendToCoder(text: string, options?: { apiOriginated?: boolean }): Promise<void> {
+    private async _handleAirlockSendToCoder(text: string): Promise<void> {
         if (Buffer.byteLength(text, 'utf8') > TaskViewerProvider.MAX_AIRLOCK_TEXT_BYTES) {
             this.postMessage({ type: 'airlock_coderError', message: 'Text exceeds 2MB limit. Please reduce the size.' });
             return;
@@ -21656,11 +21674,8 @@ What would you like to find?`;
 
             await fs.promises.writeFile(patchPath, text, 'utf8');
 
-            // Pass the root explicitly (it is already in scope and used on the dispatch
-            // line below) so resolution and delivery agree on one workspace, and pass the
-            // surface flag so a browser coder PTY is eligible.
-            const allowPtyFleet = !!options?.apiOriginated;
-            const targetAgent = await this._getAgentNameForRole('coder', workspaceRoot, allowPtyFleet);
+            // Pass the root explicitly so resolution and delivery agree on one workspace.
+            const targetAgent = await this._getAgentNameForRole('coder', workspaceRoot);
 
             if (!targetAgent) {
                 this.postMessage({ type: 'airlock_coderError', message: 'No Coder agent assigned. Assign a terminal role first.' });
@@ -21671,7 +21686,7 @@ What would you like to find?`;
             const sent = await this._dispatchExecuteMessage(workspaceRoot, targetAgent, payload, {
                 source: 'airlock',
                 patchFile: patchPath,
-            }, 'airlock', allowPtyFleet);
+            }, 'airlock');
 
             // Reporting 'sent' on a failed delivery is what made this read as a silent
             // no-op in the browser: the patch file was written, nothing was dispatched.
@@ -21944,6 +21959,10 @@ What would you like to find?`;
             const filename = `${provider}_${id}_${slug}.md`;
             const filePath = path.join(targetDir, filename);
 
+            // Map any hosted inline image URLs back to the local files they were uploaded
+            // from, so a refetch keeps the local .md renderable. The remote still holds the
+            // hosted URL — only the local copy is relocalised.
+            content = this._relocalizeInlineImages(content, path.join(targetDir, 'attachments'), `${provider}_${id}`, filePath);
             fs.writeFileSync(filePath, content, 'utf8');
 
             await this._removeOrphanTicketFiles(resolvedRoot, targetDir, provider, id, filename);
@@ -22049,10 +22068,188 @@ What would you like to find?`;
         return null;
     }
 
+    /**
+     * Attachments directory for ONE ticket.
+     *
+     * Prefers the directory of the ticket's own imported document — the hierarchy
+     * derivation below reads the picker's CURRENT selection (getSelectedHierarchy /
+     * getTeamName), which drifts the moment the operator changes list, opens a
+     * subtask drill-down, or the ticket was imported under a different list.
+     */
+    private async _ticketAttachmentsDir(
+        resolvedRoot: string, provider: 'linear' | 'clickup', ticketId: string
+    ): Promise<string> {
+        const docPath = await this._findTicketDocument(resolvedRoot, provider, ticketId);
+        if (docPath) { return path.join(path.dirname(docPath), 'attachments'); }
+
+        // Fallback: the old hierarchy-derived path for tickets that have never been imported.
+        let segments: string[] = [];
+        if (provider === 'clickup') {
+            const clickUp = this._getClickUpService(resolvedRoot);
+            const h = clickUp.getSelectedHierarchy();
+            segments.push(h.spaceName);
+            if (h.folderName) { segments.push(h.folderName); }
+            segments.push(h.listName);
+        } else {
+            const linear = this._getLinearService(resolvedRoot);
+            const teamName = linear.getTeamName();
+            const issue = await linear.getIssue(ticketId);
+            const projectName = issue?.project?.name || '_no-project';
+            segments.push(teamName, projectName);
+        }
+
+        let baseDir = this._buildTicketDir(resolvedRoot, provider, segments);
+        if (!baseDir) {
+            const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
+            baseDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir, ...segments.map(s => this._slugify(s).slice(0, 60)));
+        }
+        return path.join(baseDir, 'attachments');
+    }
+
+    /**
+     * `<attachmentsDir>/_attachments.json` — three sibling namespaces per ticket:
+     *
+     *   "<provider>_<ticketId>"          { "<assetKey>": "<absolute path>" }  downloads
+     *   "<provider>_<ticketId>#images"   { "<assetKey>": "<absolute path>" }  inline uploads
+     *   "<provider>_<ticketId>#hosted"   { "<absolute path>": "<uploadedAtMs>|<mtimeMs>|<url>" }
+     *
+     * `assetKey` is the attachment's STABLE provider id, never its URL. ClickUp
+     * pre-signs every attachment URL per fetch (`?X-Amz-Signature=…&X-Amz-Expires=…`,
+     * 60-minute TTL) and Linear's signed URLs expire too, so a URL-keyed record misses
+     * on the very next list fetch and the download is "forgotten" again.
+     *
+     * The download and inline-upload namespaces are SEPARATE on purpose. getAttachmentList
+     * reads "has this ticket any recorded download?" to decide whether the pre-change
+     * flat-path `existsSync` fallback still applies; folding inline-image uploads into the
+     * same bucket meant one push of a locally-authored image disarmed that fallback and
+     * every legacy download on the install base lost its Open/Reveal buttons.
+     */
+    private static readonly _ATTACHMENT_INDEX_FILE = '_attachments.json';
+
+    private _readAttachmentIndex(dir: string): Record<string, Record<string, string>> {
+        try { return JSON.parse(fs.readFileSync(path.join(dir, TaskViewerProvider._ATTACHMENT_INDEX_FILE), 'utf8')); }
+        catch { return {}; }
+    }
+
+    private _recordAttachment(dir: string, key: string, assetKey: string, filePath: string): void {
+        const idx = this._readAttachmentIndex(dir);
+        idx[key] = { ...(idx[key] || {}), [assetKey]: filePath };
+        try {
+            // mkdir first. The push path derives this directory from the ticket document,
+            // and a ticket that never downloaded an attachment has no `attachments/`
+            // directory at all — writeFileSync then threw ENOENT into the catch below and
+            // the whole relocalisation feature silently no-opped.
+            fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(path.join(dir, TaskViewerProvider._ATTACHMENT_INDEX_FILE), JSON.stringify(idx, null, 2), 'utf8');
+        }
+        catch (e) { console.warn('[TaskViewerProvider] attachment index write failed:', e); }
+    }
+
+    /**
+     * Record that `localPath` was uploaded to `hostedUrl`, so the next push of the same
+     * unchanged file reuses the URL instead of adding a duplicate attachment to the
+     * remote. Keyed by local path (the question is "have I already hosted THIS file?").
+     */
+    private _recordHostedImage(dir: string, key: string, localPath: string, hostedUrl: string): void {
+        // A reused URL must keep its ORIGINAL upload timestamp. Re-stamping it to now on
+        // every push would slide the signed-URL reuse window forward forever, which is
+        // exactly the expiry bound _hostedImageLookup exists to enforce.
+        const existing = this._readAttachmentIndex(dir)[`${key}#hosted`]?.[localPath];
+        if (existing && existing.slice(existing.indexOf('|', existing.indexOf('|') + 1) + 1) === hostedUrl) { return; }
+        let mtimeMs = 0;
+        try { mtimeMs = Math.floor(fs.statSync(localPath).mtimeMs); } catch { /* unreadable — 0 forces a re-upload next time */ }
+        this._recordAttachment(dir, `${key}#hosted`, localPath, `${Date.now()}|${mtimeMs}|${hostedUrl}`);
+    }
+
+    /**
+     * `alreadyHosted` lookup for uploadInlineImagesAndRewrite: given a local image path,
+     * the hosted URL to reuse, or undefined to upload afresh.
+     *
+     * Two bounds, both required:
+     *  - the local file must not have changed since the recorded upload (else the remote
+     *    would keep showing the old image);
+     *  - a URL that carries its own expiry (a pre-signed `X-Amz-Expires` / `Expires=`
+     *    query) is only reused while it is demonstrably still live. ClickUp pre-signs with
+     *    a 60-minute TTL, so reusing a day-old record would write a dead URL into the
+     *    remote description — losing the exact property the CDN rewrite exists to buy.
+     *    Linear asset URLs carry no expiry param and are reused indefinitely.
+     */
+    private static readonly _SIGNED_URL_REUSE_WINDOW_MS = 45 * 60 * 1000;
+
+    private _hostedImageLookup(dir: string, key: string): (localPath: string) => string | undefined {
+        const hosted = this._readAttachmentIndex(dir)[`${key}#hosted`] || {};
+        if (Object.keys(hosted).length === 0) { return () => undefined; }
+        return (localPath: string) => {
+            const rec = hosted[localPath];
+            if (!rec) { return undefined; }
+            const sep1 = rec.indexOf('|');
+            const sep2 = rec.indexOf('|', sep1 + 1);
+            if (sep1 === -1 || sep2 === -1) { return undefined; }
+            const uploadedAtMs = Number(rec.slice(0, sep1));
+            const recordedMtimeMs = Number(rec.slice(sep1 + 1, sep2));
+            const url = rec.slice(sep2 + 1);
+            if (!url || !Number.isFinite(uploadedAtMs) || !Number.isFinite(recordedMtimeMs)) { return undefined; }
+            let currentMtimeMs: number;
+            try { currentMtimeMs = Math.floor(fs.statSync(localPath).mtimeMs); } catch { return undefined; }
+            if (currentMtimeMs > recordedMtimeMs) { return undefined; }   // edited since upload
+            const carriesExpiry = /[?&](X-Amz-Expires|Expires)=/i.test(url);
+            if (carriesExpiry && Date.now() - uploadedAtMs > TaskViewerProvider._SIGNED_URL_REUSE_WINDOW_MS) {
+                return undefined;
+            }
+            return url;
+        };
+    }
+
+    /**
+     * Stable key for one remote asset. Prefers the provider's attachment id; falls back
+     * to the URL's origin+pathname with the query string dropped — that is where the
+     * signature and expiry live, and everything before it is stable.
+     */
+    private _assetKey(attachmentId: string | undefined, url: string): string {
+        if (attachmentId) { return attachmentId; }
+        try { const u = new URL(url); return `${u.origin}${u.pathname}`; } catch { return url; }
+    }
+
+    /**
+     * Rewrite inline image refs in an imported body back to the local files they were
+     * uploaded from.
+     *
+     * Import rebuilds the ticket .md wholesale from the remote payload, so every image
+     * link becomes whatever the remote holds — and push deliberately rewrites local refs
+     * to hosted CDN URLs. The net effect was that a refetch replaced the operator's own
+     * rendering images with remote URLs that are blocked (browser cockpit CSP) or
+     * auth-gated (Linear assets). The remote keeps its hosted URL; only the local copy is
+     * mapped back, so other people reading the ticket are unaffected.
+     *
+     * Emits a path RELATIVE to the file being written — absolute paths are not portable
+     * across machines or clones, and the ticket filename is slugified from the current
+     * title, so the target directory is only known here.
+     */
+    private _relocalizeInlineImages(content: string, dir: string, key: string, targetFilePath: string): string {
+        const all = this._readAttachmentIndex(dir);
+        // Both namespaces answer the same question — "which local file is this URL?" — so
+        // an inline image we uploaded AND an attachment we downloaded both relocalise. They
+        // are stored apart only so getAttachmentList's legacy fallback can still tell
+        // "this ticket has recorded downloads" from "this ticket has recorded uploads".
+        const index = { ...(all[key] || {}), ...(all[`${key}#images`] || {}) };
+        if (Object.keys(index).length === 0) { return content; }
+        return content.replace(/!\[[^\]]*\]\(([^)]+)\)/g, (match, rawSrc) => {
+            // Look up by the STABLE asset key, not the raw URL. Both providers re-sign
+            // asset URLs (ClickUp pre-signed with a 60-minute TTL; Linear signed on
+            // request), so the query string differs between the push that recorded the
+            // mapping and the import that reads it. `_assetKey` drops the query.
+            const abs = index[this._assetKey(undefined, String(rawSrc).trim())];
+            if (!abs || !fs.existsSync(abs)) { return match; }      // moved/deleted -> keep the CDN URL
+            const rel = path.relative(path.dirname(targetFilePath), abs);
+            if (rel.startsWith('..') || path.isAbsolute(rel)) { return match; }  // outside the ticket dir -> keep
+            return match.replace(rawSrc, rel.split(path.sep).join('/'));
+        });
+    }
+
     public async pushTicketEdits(
         workspaceRoot: string,
         data: { provider: 'linear' | 'clickup'; id: string }
-    ): Promise<{ success: boolean; message?: string; error?: string }> {
+    ): Promise<{ success: boolean; message?: string; error?: string; stale?: boolean }> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) {
             return { success: false, error: 'No workspace open.' };
@@ -22084,20 +22281,16 @@ What would you like to find?`;
 
             const bodyLines = lines.slice(startIdx);
             
-            // The description is only the body up to the first appended section.
-            // `## Subtasks` is import-generated, read-only context — it must NOT be
-            // folded back into the remote description on push. (`## Comments` is no
-            // longer written to imported docs — see importTaskAsDocument — but the
-            // clause is retained defensively for legacy files that still contain it.)
-            let endIdx = bodyLines.length;
-            for (let i = 0; i < bodyLines.length; i++) {
-                const trimmed = bodyLines[i].trim();
-                if (trimmed === '## Subtasks' || trimmed === '## Comments') {
-                    endIdx = i;
-                    break;
-                }
-            }
-            const description = bodyLines.slice(0, endIdx).join('\n').trim();
+            // The description is the body MINUS any appended, import-generated tail.
+            //
+            // Was: truncate at the first line equal to '## Subtasks' or '## Comments'.
+            // That keyed on the heading alone, so a parent ticket whose OWN description
+            // used a `## Subtasks` heading lost that heading and everything after it on
+            // every push — silently. stripImportedSubtasksBlock (the display path) was
+            // already fixed to require the generated-by-import marker; this is the same
+            // rule, with a shape-based fallback for pre-marker legacy files.
+            const { pushBody, withheld } = stripAppendedBlocksForPush(bodyLines.join('\n'));
+            const description = pushBody.trim();
 
             // The first `# ` heading is the ticket title for both providers.
             const titleFromHeading = (lines[0] && lines[0].startsWith('# '))
@@ -22106,26 +22299,114 @@ What would you like to find?`;
 
             let descriptionToPush = description;
             const warningsAll: string[] = [];
+            const notes: string[] = [];
+            if (withheld) {
+                notes.push('An import-generated block (subtasks/comments) was withheld from the remote description.');
+            }
+
+            // Obtain the provider service once — used by both the staleness guard below
+            // and the push itself.
+            const clickUp = provider === 'clickup' ? this._getClickUpService(resolvedRoot) : null as any;
+            const linear = provider === 'linear' ? this._getLinearService(resolvedRoot) : null as any;
+
+            // Refuse to replace a remote that moved since our last pull. push sends the
+            // local body as a FULL replacement of the description — with a stale file that
+            // silently deletes every remote edit made since. 86d3y200v: a 3-day-old
+            // 6315-byte local file against a 7353-byte description edited 2 hours earlier.
+            //
+            // 60s grace, not 1s: last_synced_at is our clock, date_updated is the
+            // provider's, and the auto-sync watcher echo-pushes ~2s after every pull.
+            // A false block is recoverable (Refetch, then push); a false pass is not.
+            try {
+                const cacheService = this._getCacheService(resolvedRoot);
+                const entry = await cacheService.getImportBySlugPrefix(`${provider}_${id}`);
+                const baselineMs = entry?.lastSyncedAt ? Date.parse(entry.lastSyncedAt) : 0;
+                if (baselineMs) {
+                    let remoteUpdatedMs = 0;
+                    try {
+                        // getTaskDateUpdated, not getTaskDetails: one bare GET /task/{id}
+                        // instead of ?include_subtasks=true&include_markdown_description=true,
+                        // and getTaskDetails throws on non-200 (ClickUpSyncService:1358).
+                        remoteUpdatedMs = provider === 'clickup'
+                            ? Date.parse(await clickUp.getTaskDateUpdated(id))
+                            : Date.parse((await linear.getIssue(id))?.updatedAt || '');
+                    } catch (e) {
+                        // A 404 means the remote is gone. Never fall through to "push anyway" —
+                        // that recreates a deleted ticket from a stale body.
+                        return { success: false, error: `Could not verify remote ticket ${id} before pushing: ${e instanceof Error ? e.message : String(e)}. Push cancelled; the local file is untouched.` };
+                    }
+                    if (!Number.isFinite(remoteUpdatedMs)) {
+                        // Remote returned no usable timestamp (deleted, auth failure, or
+                        // empty response). Never fall through to "push anyway" — that
+                        // recreates a deleted ticket from a stale body.
+                        return { success: false, error: `Could not verify remote ticket ${id} before pushing: remote returned no update timestamp. Push cancelled; the local file is untouched.` };
+                    }
+                    if (remoteUpdatedMs > baselineMs + 60000) {
+                        return {
+                            success: false,
+                            stale: true,
+                            error: `Remote ticket ${id} changed after your last pull `
+                                 + `(remote ${new Date(remoteUpdatedMs).toISOString()}, local baseline ${entry!.lastSyncedAt}). `
+                                 + `Pushing would overwrite it. Refetch to take the remote version, then push again.`
+                        };
+                    }
+                }
+            } catch (guardErr) {
+                // If the cache service itself is unreachable, do not block the push —
+                // that would make a DB failure look like a staleness block. Allow-on-
+                // guard-error is safe because the staleness check is additive hardening,
+                // not the primary sync mechanism.
+                console.warn('[TaskViewerProvider] staleness guard skipped (cache unavailable):', guardErr);
+            }
+
+            // The sidecar lives beside the document we just read. Derived from `filePath`
+            // rather than re-entering _ticketAttachmentsDir: that helper resolves through
+            // _findTicketDocument, which pushTicketEdits has ALREADY called for this very
+            // path — a second call is one redundant DB query plus a directory scan per
+            // push, and for a Linear ticket with no local doc an extra getIssue() round
+            // trip, on the Sync All hot path.
+            const sidecarKey = `${provider}_${id}`;
+            const attachmentsDir = path.join(path.dirname(filePath), 'attachments');
+            // Reuse an unexpired hosted URL for an unchanged local file instead of
+            // uploading it again. Without this, the import-side relocalisation puts a local
+            // path back in the .md on every refetch, so every subsequent push added a fresh
+            // duplicate attachment to the remote ticket.
+            const alreadyHosted = this._hostedImageLookup(attachmentsDir, sidecarKey);
+            // Persist local-source provenance for the inline images we just hosted, so the
+            // next import can map the hosted URL in the remote body back to the local file.
+            // Two records per image: URL -> local (import lookup) and local -> URL (upload
+            // dedupe). Written under the `#images` namespace so getAttachmentList's
+            // download-provenance fallback is not disarmed by an inline-image push.
+            const recordHostedImages = (replacements: Array<{ from: string; to: string }>) => {
+                for (const r of replacements) {
+                    const abs = resolveLocalImagePath(r.from, filePath);
+                    if (!abs) { continue; }
+                    this._recordAttachment(attachmentsDir, `${sidecarKey}#images`, this._assetKey(undefined, r.to), abs);
+                    this._recordHostedImage(attachmentsDir, sidecarKey, abs, r.to);
+                }
+            };
 
             if (provider === 'linear') {
-                const linear = this._getLinearService(resolvedRoot);
                 const res = await hostInlineImages(
                     (fileName, buffer) => linear.uploadAttachment(id, buffer, fileName),
                     description,
-                    filePath
+                    filePath,
+                    alreadyHosted
                 );
                 descriptionToPush = res.rewritten;
                 warningsAll.push(...res.warnings);
+                recordHostedImages(res.replacements);
                 await linear.updateIssueDescription(id, descriptionToPush, titleFromHeading);
             } else {
-                const clickUp = this._getClickUpService(resolvedRoot);
                 const res = await hostInlineImages(
                     (fileName, buffer) => clickUp.attachFile(id, fileName, buffer),
                     description,
-                    filePath
+                    filePath,
+                    alreadyHosted
                 );
                 descriptionToPush = res.rewritten;
                 warningsAll.push(...res.warnings);
+                recordHostedImages(res.replacements);
                 const name = titleFromHeading;
                 // ClickUp's WRITE field for markdown is `markdown_content`
                 // (`markdown_description` is read-only on GET responses and is
@@ -22147,9 +22428,10 @@ What would you like to find?`;
             }
 
             const baseMsg = `Pushed edits to remote ticket ${id}.`;
-            const message = warningsAll.length
-                ? `${baseMsg} (${warningsAll.length} image issue(s): ${warningsAll.join('; ')})`
-                : baseMsg;
+            const parts: string[] = [];
+            if (warningsAll.length) { parts.push(`${warningsAll.length} image issue(s): ${warningsAll.join('; ')}`); }
+            if (notes.length) { parts.push(notes.join('; ')); }
+            const message = parts.length ? `${baseMsg} (${parts.join(' | ')})` : baseMsg;
             return { success: true, message };
         } catch (error) {
             return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -22167,6 +22449,64 @@ What would you like to find?`;
         return content.trim();
     }
 
+    /**
+     * Every ticket base directory this provider may have written into: the configured
+     * global save location plus every allowed workspace root's `.switchboard/tickets`.
+     * Mirrors _findTicketDocument's fallback scan, because anything THAT can resolve is
+     * a file the cleanup below must be able to reach.
+     */
+    private async _ticketBaseDirs(resolvedRoot: string, provider: 'linear' | 'clickup'): Promise<string[]> {
+        const baseDirs: string[] = [];
+        try {
+            const config = await GlobalIntegrationConfigService.loadConfig(provider as any);
+            if (config && config.ticketSaveLocation) {
+                baseDirs.push(path.join(config.ticketSaveLocation, provider));
+            }
+        } catch { /* ignore */ }
+        // _getAllowedRoots reaches for host workspace state; a throw here must not take
+        // the whole sweep down with it — the resolved root alone still heals the common
+        // single-workspace case.
+        let roots: Iterable<string> = [];
+        try { roots = this._getAllowedRoots(); } catch { /* resolvedRoot only */ }
+        for (const root of new Set<string>([resolvedRoot, ...roots])) {
+            baseDirs.push(path.join(root, '.switchboard', 'tickets', provider));
+        }
+        return baseDirs;
+    }
+
+    /** Every `<provider>_<id>_*.md` under `dir`, recursively. */
+    private _collectTicketFileCopies(dir: string, prefix: string, out: string[]): void {
+        let entries: import('fs').Dirent[];
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+        for (const entry of entries) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                this._collectTicketFileCopies(full, prefix, out);
+            } else if (entry.isFile() && entry.name.startsWith(prefix) && entry.name.endsWith('.md')) {
+                out.push(full);
+            }
+        }
+    }
+
+    /**
+     * Reduce a ticket to exactly ONE local file: the one just written.
+     *
+     * Scans EVERY ticket base directory, not just `targetDir`. A ticket that changes
+     * list (ClickUp) or project (Linear) is written into the NEW list's directory, and
+     * `moveTicket` relocates nothing — so a directory-scoped cleanup left the previous
+     * copy stranded under the old list forever. Ticket 86d34at7w accumulated three
+     * copies that way (sprint-1 Jul 9, sprint-3 Aug 1, sprint-4 Aug 10).
+     *
+     * That is not cosmetic. `_findTicketDocument`'s fallback scan returns the FIRST
+     * match while walking base dirs, so the sidebar renders the OLDEST copy and Push
+     * sends its bytes as a full replacement of a description that has moved on for
+     * weeks. Refetch appears not to work because it correctly rewrites a file nothing
+     * is reading.
+     *
+     * Stale copies are removed unconditionally: a copy sitting under a list the ticket
+     * has left is unreachable through the registry, can never be pushed to the right
+     * place, and is the active data-loss hazard. Each removal is logged.
+     */
     private async _removeOrphanTicketFiles(
         resolvedRoot: string,
         targetDir: string,
@@ -22175,30 +22515,46 @@ What would you like to find?`;
         keepFilename: string
     ): Promise<void> {
         try {
-            const cacheService = this._getCacheService(resolvedRoot);
-            const dbTickets = await cacheService.getImportedTickets();
-            const slugPrefix = `${provider}_${id}`;
-            const dbEntry = dbTickets.find((t: any) => t.slugPrefix === slugPrefix);
-
-            const entries = fs.existsSync(targetDir) ? fs.readdirSync(targetDir) : [];
             const filePrefix = `${provider}_${id}_`;
-            for (const fname of entries) {
-                if (!fname.endsWith('.md') || !fname.startsWith(filePrefix)) { continue; }
-                if (fname === keepFilename) { continue; }
-                const fullPath = path.join(targetDir, fname);
-                // Preserve locally-modified files.
-                if (dbEntry && dbEntry.lastSyncedAt) {
-                    try {
-                        if (fs.statSync(fullPath).mtimeMs > new Date(dbEntry.lastSyncedAt).getTime() + 1000) {
-                            continue; // modified — keep it
-                        }
-                    } catch { /* fall through to delete */ }
+            const keepPath = path.resolve(path.join(targetDir, keepFilename));
+
+            const baseDirs = await this._ticketBaseDirs(resolvedRoot, provider);
+            // targetDir may sit outside every base dir (a relocated save location mid-run),
+            // so scan it explicitly too. De-duplicated by resolved path below.
+            const scanRoots = [...new Set([...baseDirs, targetDir].map(d => path.resolve(d)))];
+
+            const copies: string[] = [];
+            for (const dir of scanRoots) {
+                this._collectTicketFileCopies(dir, filePrefix, copies);
+            }
+
+            for (const fullPath of new Set(copies.map(p => path.resolve(p)))) {
+                if (fullPath === keepPath) { continue; }
+                // Safety rail: only ever unlink inside a directory we scanned.
+                const inScope = scanRoots.some(rootDir => {
+                    const rel = path.relative(rootDir, fullPath);
+                    return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+                });
+                if (!inScope) {
+                    console.error('[TaskViewerProvider] orphan cleanup: refusing to unlink out-of-scope path', fullPath);
+                    continue;
                 }
                 try {
                     fs.unlinkSync(fullPath);
-                    await cacheService.deleteImportedTicket(slugPrefix);
-                } catch (e) {
-                    console.warn('[TaskViewerProvider] orphan cleanup: failed to delete', fullPath, e);
+                    console.warn(`[TaskViewerProvider] orphan cleanup: removed stale copy of ${provider}_${id} at ${fullPath} (current file: ${keepPath})`);
+                    // Deliberately NOT deleteImportedTicket(slugPrefix): every file here
+                    // shares the CURRENT ticket's id, so the row keyed on that slug
+                    // describes `keepFilename` — the file we just wrote — not the orphan.
+                    // _writeTaskDocument stamps last_synced_at BEFORE calling this, so
+                    // deleting the row would wipe the fresh stamp and leave the ticket with
+                    // no baseline at all: sync status reads 'local-only', the push staleness
+                    // guard has nothing to compare against, and the conflict guard can never
+                    // skip it. Row deletion for a genuinely-gone ticket is
+                    // _applyConfirmedDeletions' job, not this one's.
+                } catch (e: any) {
+                    if (e?.code !== 'ENOENT') {
+                        console.warn('[TaskViewerProvider] orphan cleanup: failed to delete', fullPath, e);
+                    }
                 }
             }
         } catch (e) {
@@ -22444,13 +22800,17 @@ What would you like to find?`;
             const slug = this._slugify(title);
             const filename = `${provider}_${id}_${slug}.md`;
             const filePath = path.join(targetDir, filename);
+
+            // Map any hosted inline image URLs back to the local files they were uploaded
+            // from, so a refetch keeps the local .md renderable. The remote still holds the
+            // hosted URL — only the local copy is relocalised.
+            content = this._relocalizeInlineImages(content, path.join(targetDir, 'attachments'), `${provider}_${id}`, filePath);
             fs.writeFileSync(filePath, content, 'utf8');
 
-            await this._removeOrphanTicketFiles(resolvedRoot, targetDir, provider, id, filename);
-
-            // Record the fetch time as last_synced_at. Without this, the freshly
-            // re-fetched file (mtime = now) would read as "modified" because the
-            // DB still held an older sync time — the exact opposite of a refetch.
+            // Stamp FIRST. _removeOrphanTicketFiles runs a full getImportedTickets() query
+            // and per-file readdir/unlink passes; stamping after it puts last_synced_at
+            // seconds behind the file's own mtime and self-flags the ticket we just
+            // imported — that is how 86d3y200v flagged itself 13.2s after its own import.
             try {
                 const cacheService = this._getCacheService(resolvedRoot);
                 const slugPrefix = `${provider}_${id}`;
@@ -22458,6 +22818,8 @@ What would you like to find?`;
             } catch (regErr) {
                 console.error('[TaskViewerProvider] failed to record sync time after bulk write:', regErr);
             }
+
+            await this._removeOrphanTicketFiles(resolvedRoot, targetDir, provider, id, filename);
 
             return { success: true, filePath };
         } catch (error) {
@@ -22707,13 +23069,14 @@ What would you like to find?`;
             deltaSince?: number;       // ClickUp: epoch ms for date_updated_gt
             deltaSinceIso?: string;    // Linear: ISO 8601 for updatedAt gt filter
             includeClosed?: boolean;   // when true, also import done/closed (Linear: completed/canceled) tickets
+            authoritative?: boolean;   // true ONLY for an explicit Refetch (forceFull) — discards local edits and takes the remote
         }
     ): Promise<{ success: boolean; successCount: number; failCount: number; errors: { id: string; error: string }[]; skippedModified?: number; pruned?: number; deletedCount?: number; deletionChecksUnresolved?: number; deletionChecksSkipped?: number }> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) {
             return { success: false, successCount: 0, failCount: 0, errors: [{ id: 'all', error: 'No workspace open.' }] };
         }
-        const { provider, ids, listId, projectId, page = 1, append = false, importMode, deltaSince, deltaSinceIso, includeClosed = false } = data;
+        const { provider, ids, listId, projectId, page = 1, append = false, importMode, deltaSince, deltaSinceIso, includeClosed = false, authoritative = false } = data;
         const isDelta = deltaSince !== undefined || deltaSinceIso !== undefined;
 
         let successCount = 0;
@@ -22848,7 +23211,16 @@ What would you like to find?`;
 
             const fetchIsAuthoritative = fetchComplete && !resolutionFailed && rawItemCount > 0;
 
-            // Load the cache DB entries once to check conflict status (file mtime > last_synced_at → locally modified → skip).
+            // Cache DB entries, used by THREE independent consumers below: the conflict
+            // guard (skip locally-modified tickets), the prune's "preserve locally-modified
+            // files" check, and the orphan-subtask upsert's last_synced_at restamp.
+            //
+            // Loaded UNCONDITIONALLY, and the Refetch exemption lives on the conflict guard
+            // alone (`!authoritative`). Gating the LOAD instead would silently disarm the
+            // other two on a Refetch: the prune would delete locally-modified files it is
+            // documented to spare, and the orphan-subtask upsert would rewrite a parent file
+            // without restamping — manufacturing the exact false "modified" flag this change
+            // exists to eliminate.
             let dbTickets: any[] = [];
             try {
                 const cacheService = this._getCacheService(resolvedRoot);
@@ -22858,10 +23230,16 @@ What would you like to find?`;
             }
 
             for (const item of items) {
-                // Conflict guard: skip tasks whose local file has unpushed changes
-                // (syncStatus === 'modified'). A import/pull must never silently
-                // overwrite local edits — route through the existing conflict path instead.
-                if (item.id) {
+                // Conflict guard: skip tasks whose local file has unpushed changes. Only an
+                // authoritative Refetch overwrites them — that is what the user asked for by
+                // clicking it. This gate is not an optimisation — eaee275a dropped it as a
+                // drive-by in an unrelated commit and that is what left 86d3y200v three days
+                // stale, because the full pull is the only escape from a flagged ticket (the
+                // delta cursor advances past skips, so a delta pull never re-offers them).
+                // `authoritative` is true ONLY for an explicit Refetch click (forceFull). It
+                // is deliberately NOT `!isDelta`: includeClosed also forces a full pull (to
+                // bypass the delta cursor), and a filter toggle must not discard local edits.
+                if (!authoritative && item.id) {
                     const slugPrefix = `${provider}_${item.id}`;
                     const dbEntry = dbTickets.find(t => t.slugPrefix === slugPrefix);
                     if (dbEntry && dbEntry.filePath && dbEntry.lastSyncedAt) {
@@ -22908,9 +23286,11 @@ What would you like to find?`;
                         // 1 — a file that looks complete and is not, which is worse than a
                         // file visibly missing the section. Let a full import build it.
                         if (headingIdx === -1) { continue; }
-                        // Same conflict guard as the write loop: never rewrite local edits.
+                        // Same conflict guard as the write loop, on the same `!authoritative`
+                        // gate: a Refetch takes the remote here too, or a flagged parent
+                        // would still have no escape hatch.
                         const dbEntry = dbTickets.find(t => t.slugPrefix === `${provider}_${parentId}`);
-                        if (dbEntry && dbEntry.lastSyncedAt) {
+                        if (!authoritative && dbEntry && dbEntry.lastSyncedAt) {
                             const parentMtime = fs.statSync(parentFile).mtimeMs;
                             if (parentMtime > new Date(dbEntry.lastSyncedAt).getTime() + 1000) {
                                 skippedModified++;
@@ -23526,42 +23906,19 @@ What would you like to find?`;
 
     public async downloadAttachment(
         workspaceRoot: string,
-        data: { provider: 'linear' | 'clickup'; url: string; filename: string; ticketId: string; ticketTitle: string }
+        data: { provider: 'linear' | 'clickup'; url: string; filename: string; ticketId: string; ticketTitle: string; attachmentId?: string }
     ): Promise<{ success: boolean; filePath?: string; error?: string }> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) {
             return { success: false, error: 'No workspace open.' };
         }
-        const { provider, url, filename, ticketId, ticketTitle } = data;
+        const { provider, url, filename, ticketId, ticketTitle, attachmentId } = data;
 
         try {
-            let segments: string[] = [];
-            if (provider === 'clickup') {
-                const clickUp = this._getClickUpService(resolvedRoot);
-                const h = clickUp.getSelectedHierarchy();
-                segments.push(h.spaceName);
-                if (h.folderName) {
-                    segments.push(h.folderName);
-                }
-                segments.push(h.listName);
-            } else {
-                const linear = this._getLinearService(resolvedRoot);
-                const teamName = linear.getTeamName();
-                const issue = await linear.getIssue(ticketId);
-                const projectName = issue?.project?.name || '_no-project';
-                segments.push(teamName, projectName);
-            }
+            const targetDir = await this._ticketAttachmentsDir(resolvedRoot, provider, ticketId);
 
-            let baseDir = this._buildTicketDir(resolvedRoot, provider, segments);
-            if (!baseDir) {
-                const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
-                baseDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir, ...segments.map(s => this._slugify(s).slice(0, 60)));
-            }
-
-            const targetDir = path.join(baseDir, 'attachments');
-            
             const resolvedTargetDir = path.resolve(targetDir);
-            const resolvedBaseFolder = path.resolve(baseDir);
+            const resolvedBaseFolder = path.resolve(path.dirname(targetDir));
             if (!resolvedTargetDir.startsWith(resolvedBaseFolder + path.sep) && resolvedTargetDir !== resolvedBaseFolder) {
                 return { success: false, error: 'Path traversal detected.' };
             }
@@ -23631,6 +23988,7 @@ What would you like to find?`;
                 }).on('error', (err: any) => reject(err));
             });
 
+            this._recordAttachment(resolvedTargetDir, `${provider}_${ticketId}`, this._assetKey(attachmentId, url), targetFilePath);
             return { success: true, filePath: targetFilePath };
         } catch (error) {
             return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -23642,36 +24000,19 @@ What would you like to find?`;
         provider: 'linear' | 'clickup',
         ticketId: string,
         attachmentsArray: any[]
-    ): Promise<{ filename: string; url: string; localPath: string; isDownloaded: boolean }[]> {
+        // `id` is the provider's stable attachment id, echoed back so the modal's Download
+        // button can hand it to downloadAttachment as the sidecar provenance key.
+    ): Promise<{ id?: string; filename: string; url: string; localPath: string; isDownloaded: boolean }[]> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot || !attachmentsArray) {
             return [];
         }
 
         try {
-            let segments: string[] = [];
-            if (provider === 'clickup') {
-                const clickUp = this._getClickUpService(resolvedRoot);
-                const h = clickUp.getSelectedHierarchy();
-                segments.push(h.spaceName);
-                if (h.folderName) {
-                    segments.push(h.folderName);
-                }
-                segments.push(h.listName);
-            } else {
-                const linear = this._getLinearService(resolvedRoot);
-                const teamName = linear.getTeamName();
-                const issue = await linear.getIssue(ticketId);
-                const projectName = issue?.project?.name || '_no-project';
-                segments.push(teamName, projectName);
-            }
-
-            let baseDir = this._buildTicketDir(resolvedRoot, provider, segments);
-            if (!baseDir) {
-                const providerDir = provider === 'clickup' ? 'clickup' : 'linear';
-                baseDir = path.join(resolvedRoot, '.switchboard', 'tickets', providerDir, ...segments.map(s => this._slugify(s).slice(0, 60)));
-            }
-            const targetDir = path.join(baseDir, 'attachments');
+            const targetDir = await this._ticketAttachmentsDir(resolvedRoot, provider, ticketId);
+            const key = `${provider}_${ticketId}`;
+            const index = this._readAttachmentIndex(targetDir)[key] || {};
+            const hasProvenance = Object.keys(index).length > 0;
 
             return attachmentsArray.map(attachment => {
                 const url = attachment.url || '';
@@ -23685,12 +24026,23 @@ What would you like to find?`;
                     }
                 }
                 filename = filename.replace(/[\/\\]/g, '_');
-                const localPath = path.join(targetDir, filename);
-                const isDownloaded = fs.existsSync(localPath);
+
+                // Authoritative: what THIS ticket actually downloaded, keyed by the
+                // attachment's stable id — NOT its url, which is re-signed per fetch.
+                let localPath = index[this._assetKey(attachment.id, url)] || '';
+                // Legacy fallback ONLY for tickets with no provenance at all — pre-change
+                // downloads landed in the shared flat folder with no record. Once a ticket
+                // has any recorded download, the record is the only truth.
+                if (!localPath && !hasProvenance) {
+                    const guessed = path.join(targetDir, filename);
+                    if (fs.existsSync(guessed)) { localPath = guessed; }
+                }
+                const isDownloaded = !!localPath && fs.existsSync(localPath);
                 return {
+                    id: attachment.id,
                     filename,
                     url,
-                    localPath,
+                    localPath: isDownloaded ? localPath : '',
                     isDownloaded
                 };
             });
@@ -24430,7 +24782,7 @@ What would you like to find?`;
      * (unlike sendPromptToAgentTerminal) so the clipboard escape hatch stays
      * available when no PM terminal is configured.
      */
-    private async _handleDispatchProjectManager(options?: { apiOriginated?: boolean }): Promise<boolean> {
+    private async _handleDispatchProjectManager(): Promise<boolean> {
         const workspaceRoot = this._getWorkspaceRoot();
         if (!workspaceRoot) {
             this._seams().ui.showErrorMessage('No workspace root open.');
@@ -24451,7 +24803,7 @@ What would you like to find?`;
         const prompt = `Read ${workspaceRoot}/.agents/workflows/switchboard.md and follow its entry protocol exactly: concise one-line board snapshot, then present the skill's two-tier entry menu (Plan / Code / Board / Automate, plus a one-line More: design & artifacts, external PM, setup & tour), then wait for my direction. The workspace root is ${workspaceRoot} — use it as $ROOT directly (this is the board's selected workspace; do not derive the root from your terminal's working directory). The API server is running on port ${port}.`;
 
         // 3. Deliver via the shared PM-terminal-else-clipboard path.
-        return await this._deliverPromptToPmTerminal(prompt, workspaceRoot, options);
+        return await this._deliverPromptToPmTerminal(prompt, workspaceRoot);
     }
 
     /**
@@ -24462,11 +24814,9 @@ What would you like to find?`;
      */
     private async _deliverPromptToPmTerminal(
         prompt: string,
-        workspaceRoot: string,
-        options?: { apiOriginated?: boolean }
+        workspaceRoot: string
     ): Promise<boolean> {
-        const apiOriginated = !!options?.apiOriginated;
-        if (await this._tryFleetDeliveryForRole('project_manager', prompt, workspaceRoot, apiOriginated, { source: 'pmTerminal' })) {
+        if (await this._tryFleetDeliveryForRole('project_manager', prompt, workspaceRoot, { source: 'pmTerminal' })) {
             this._seams().ui.showInformationMessage(
                 'Manage prompt sent to Project Manager terminal.'
             );
@@ -24478,7 +24828,7 @@ What would you like to find?`;
         // terminals by normalized name. Falls back to the literal 'Project Manager'
         // so the open-terminals scan has a stable name to match against even when
         // no agent name is configured.
-        const agentName = await this._getAgentNameForRole('project_manager', workspaceRoot, apiOriginated)
+        const agentName = await this._getAgentNameForRole('project_manager', workspaceRoot)
             || 'Project Manager';
         const suffixedKey = this._suffixedName(agentName);
         let terminal: vscode.Terminal | undefined;
@@ -24566,8 +24916,7 @@ Execution rules (from SKILL.md §6 Targeted pass):
      */
     public async handleDispatchManagerForSelected(
         plans: { planId: string; topic: string; planFile: string; kanbanColumn: string; complexity: string }[],
-        workspaceRoot: string,
-        options?: { apiOriginated?: boolean }
+        workspaceRoot: string
     ): Promise<boolean> {
         if (plans.length === 0) {
             this._seams().ui.showWarningMessage('No dispatchable plans in the selection.');
@@ -24588,6 +24937,6 @@ Execution rules (from SKILL.md §6 Targeted pass):
         const prompt = this._buildTargetedPassPrompt(plans, workspaceRoot, port);
 
         // 3. Deliver via the shared PM-terminal-else-clipboard path.
-        return await this._deliverPromptToPmTerminal(prompt, workspaceRoot, options);
+        return await this._deliverPromptToPmTerminal(prompt, workspaceRoot);
     }
 }
