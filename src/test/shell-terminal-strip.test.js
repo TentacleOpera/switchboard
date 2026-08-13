@@ -154,7 +154,7 @@ test('focusTerminal clears the badge itself, not via the seating call', () => {
 });
 
 test('locateTerminal seats the terminal AND gives it the caret', () => {
-    const fn = block(terminalsJs, 'function locateTerminal(name) {', 'function assignToFocusedPane(terminalName) {');
+    const fn = block(terminalsJs, 'function locateTerminal(name) {', 'function assignToFocusedPane(terminalName, opts = {}) {');
     assert.ok(fn.includes('assignToFocusedPane('), 'locateTerminal must still seat via assignToFocusedPane');
     assert.ok(fn.includes('focusPaneTerminal('), 'locateTerminal must focus the pane, or "focus terminal" cannot be typed into');
 });
@@ -185,24 +185,116 @@ test('renderPaneGrid hands the caret back only when it actually took it', () => 
 });
 
 test('assignToFocusedPane re-relays on BOTH of its badge-clear paths', () => {
-    const fn = block(terminalsJs, 'function assignToFocusedPane(terminalName) {', 'function undoLastAssignment() {');
+    const fn = block(terminalsJs, 'function assignToFocusedPane(terminalName, opts = {}) {', 'function undoLastAssignment() {');
     const clears = (fn.match(/terminalBadges\.delete\(/g) || []).length;
     const relays = (fn.match(/postFleetStateToShell\(\)/g) || []).length;
     assert.strictEqual(clears, 2, 'assignToFocusedPane is expected to clear a badge on exactly two paths');
     assert.strictEqual(relays, 2, 'each badge-clear path must relay, or the strip light outlives the panel badge');
 });
 
-test('the pop-out click path acknowledges the badge without rearranging the cockpit', () => {
+test('the strip click peeks in-cockpit and acknowledges the badge on every branch', () => {
     const handler = block(shellJs, "btn.addEventListener('click', () => {", 'container.appendChild(btn);');
-    assert.ok(handler.includes('window.open('), 'the strip click must open the solo pop-out');
+    // Peek replaced the pop-out: instant AND non-destructive, which is the third
+    // option the old acknowledge-only comment was working around the absence of.
+    assert.ok(!handler.includes('window.open('), 'the strip click must no longer open a single-terminal window');
+    assert.ok(!/setTimeout\(/.test(handler), 'the 100ms failed-pop-out focus re-check must be gone');
     assert.ok(
-        handler.includes("type: 'clearTerminalBadge'"),
-        'the pop-out path must clear the badge — focusTerminal is only reached on the fallback, so the DONE light would burn forever'
+        handler.includes("type: 'peekTerminal'"),
+        'the strip click must post peekTerminal into the terminals panel'
+    );
+    // Panel activation is required, not optional: the strip is visible while other
+    // panels are active, so a peek alone reads as a dead click.
+    assert.ok(
+        handler.indexOf("selectPanel('terminals')") < handler.indexOf("type: 'peekTerminal'"),
+        'the panel must be switched BEFORE the peek is posted'
+    );
+    // An already-open solo window wins over a peek — but that branch reaches no peek
+    // arm, so it must clear the badge itself or the DONE light burns forever.
+    const existingBranch = block(handler, 'if (existing) {', 'selectPanel(');
+    assert.ok(
+        existingBranch.includes("type: 'clearTerminalBadge'"),
+        'the already-open-pop-out branch must clear the badge before it returns'
     );
     assert.ok(
-        handler.includes("type: 'focusTerminal'"),
-        'the blocked-popup / refused-focus fallback must still post focusTerminal'
+        existingBranch.indexOf("type: 'clearTerminalBadge'") < existingBranch.indexOf('existing.focus()'),
+        'the badge clear must precede the early return, matching the focusTerminal arm ordering'
     );
+});
+
+test('the panel clears the badge on peek before any early-return', () => {
+    const fn = block(terminalsJs, 'function peekTerminal(name) {', 'function wireTerminalDropTarget');
+    const clearAt = fn.indexOf('terminalBadges.delete(name)');
+    assert.ok(clearAt > -1, 'peekTerminal must clear the badge — it IS the acknowledgement');
+    assert.ok(
+        clearAt < fn.indexOf('if (index === -1) { return; }'),
+        'the badge clear must precede the unseated early-return, or the DONE light survives the peek'
+    );
+});
+
+test('pop-out windows stay owned by the shell, so theme fan-out keeps working', () => {
+    // The pane-header control posts to the parent; the shell does the window.open and
+    // adds it to popoutWindows, which applyThemeToAll iterates. Opening it from inside
+    // the iframe would silently stop every pop-out following the cockpit theme.
+    const arm = block(shellJs, "data.type === 'popoutTerminal'", 'popoutBlocked');
+    assert.ok(arm.includes('if (event.origin !== location.origin) { return; }'), 'the popoutTerminal arm must check event.origin');
+    assert.ok(arm.includes('window.open('), 'the shell performs the window.open');
+    assert.ok(arm.includes('popoutWindows.add(popout)'), 'the opened window must land in popoutWindows for theme fan-out');
+    assert.ok(
+        /replace\(\/\[\^A-Za-z0-9_-\]\/g, '_'\)/.test(arm),
+        'the incoming name is untrusted — keep the window-name slug sanitisation'
+    );
+    assert.ok(arm.includes('encodeURIComponent('), 'the ?solo= value stays encoded');
+    assert.ok(
+        !arm.includes('window.open') || arm.includes("type: 'popoutBlocked'") || shellJs.includes("type: 'popoutBlocked'"),
+        'a blocked window must be reported back to the panel, not fail silently'
+    );
+});
+
+test('the peek is a presentation override — it never writes layout or seating state', () => {
+    for (const fn of ['function applyPeekClasses() {', 'function dismissPeek() {']) {
+        const body = block(terminalsJs, fn, '\n    }');
+        for (const forbidden of ['effectiveLayout =', 'currentLayout =', 'paneAssignments =', 'pinnedPanes[']) {
+            assert.ok(!body.includes(forbidden), `${fn.trim()} must not assign ${forbidden}`);
+        }
+    }
+    // Re-derived on every render, never set once: a resize mid-peek re-runs
+    // applyLayoutFloor -> renderPaneGrid, and a peek asserted once evaporates.
+    const floor = block(terminalsJs, 'function applyLayoutFloor(opts) {', 'Attempt schedule for the settle ladder');
+    assert.ok(floor.includes('applyPeekClasses()'), 'applyLayoutFloor must re-assert the peek classes');
+    const grid = block(terminalsJs, 'function applyPeekClasses() {', 'function afterPeekTransition');
+    assert.ok(grid.includes('peekTerminalName'), 'the classes must be derived from peekTerminalName, the single source of truth');
+});
+
+test('Esc dismisses a peek only when the caret is not inside the peeked terminal', () => {
+    const handler = block(terminalsJs, "document.addEventListener('keydown', (e) => {", '});');
+    assert.ok(handler.includes("e.key !== 'Escape'"), 'the binding is on Escape');
+    assert.ok(
+        handler.includes('peekedPane.contains(document.activeElement)'),
+        'Esc must stand down while the caret is inside the peeked pane — it is a terminal key'
+    );
+    assert.ok(handler.includes('dismissPeek()'), 'otherwise it dismisses');
+});
+
+test('peek is cleared when its terminal dies or is renamed', () => {
+    const sanitize = block(terminalsJs, 'function sanitizePaneAssignments() {', 'function renderSidebarList() {');
+    assert.ok(
+        /if \(peekTerminalName && !liveNames\.has\(peekTerminalName\)\)/.test(sanitize),
+        'a peeked terminal that exits must clear peekTerminalName rather than peeking a dead pane'
+    );
+    const rename = block(terminalsJs, 'async function renameTerminal(name, alias) {', 'The undo snapshot must follow the rename too');
+    assert.ok(
+        rename.includes('if (peekTerminalName === name) { peekTerminalName = next; }'),
+        'peekTerminalName must be re-keyed in the same block paneAssignments is'
+    );
+});
+
+test('the peek control is leftmost in the row action cluster, away from close', () => {
+    const row = block(terminalsJs, "const peekBtn = document.createElement('button');", 'itemDiv.appendChild(actions);');
+    const peekAt = row.indexOf('actions.appendChild(peekBtn)');
+    const clearAt = row.indexOf('actions.appendChild(clearBtn)');
+    assert.ok(peekAt > -1 && clearAt > -1, 'both controls are appended');
+    assert.ok(peekAt < clearAt, 'peek must be leftmost — a misfire next to the destructive close is unrecoverable');
+    assert.ok(!/\bconfirm\(/.test(row), 'no confirm gate — window.confirm() is a silent no-op in a webview');
 });
 
 test('the panel accepts badge messages only from its own origin', () => {

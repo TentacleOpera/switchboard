@@ -23,7 +23,11 @@ Drag-and-drop from a Terminals-panel kanban pane onto a terminal pane is missing
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Kanban-pane drag-to-terminal never marks the plan as dispatched — no active-agent tracking](../plans/feature_plan_20260807161805_kanban-pane-drop-does-not-mark-agent-working.md) — **PLAN REVIEWED**
-- [ ] [Kanban-pane rows have no multi-select — drag-to-terminal can only ever dispatch one plan](../plans/feature_plan_20260807161806_kanban-pane-multi-select-drag-to-terminal.md) — **PLAN REVIEWED**
+- [ ] [Kanban-pane drag-to-terminal never marks the plan as dispatched — no active-agent tracking](../plans/feature_plan_20260807161805_kanban-pane-drop-does-not-mark-agent-working.md) — **CODER CODED**
+- [ ] [Kanban-pane rows have no multi-select — drag-to-terminal can only ever dispatch one plan](../plans/feature_plan_20260807161806_kanban-pane-multi-select-drag-to-terminal.md) — **CODER CODED**
 <!-- END SUBTASKS -->
+
+## Completion Report
+
+Implemented the two drag-to-terminal dispatch behaviours in the Terminals panel: `attributeDropDispatch` now stamps `dispatched_agent` / `dispatched_terminal` / `dispatched_at` for every successful drop, including the Shift raw-WebSocket and normal `ptySendPrompt` branches, using the array-shaped `attributePastedPrompt` verb. Added per-pane `kanbanPaneSelection`, row click toggling with a cross-workspace guard, multi-id `dragstart`/`dragend` highlighting, and the `Array.isArray(dragData)` rejection in `wireTerminalDropTarget`; `promptSelected` now receives `sessionIds: ids`. Added `.selected` and `.dragging` rules to `terminals.html` and extended `paste-attribution-contract.test.js` and `browser-kanban-pane-order.test.js` with the requested source assertions. Files changed: `src/webview/terminals.js`, `src/webview/terminals.html`, `src/test/paste-attribution-contract.test.js`, `src/test/browser-kanban-pane-order.test.js`.
 

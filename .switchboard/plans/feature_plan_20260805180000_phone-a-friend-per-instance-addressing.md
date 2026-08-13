@@ -207,3 +207,7 @@ Not run in this planning pass (session directive). Recorded for the implementer 
 ## Recommendation
 
 **Complexity 5 → Send to Coder.**
+
+## Review Findings
+
+Reviewed `agentConfig.ts`, `agentPromptBuilder.ts`, `KanbanProvider.ts`, `TaskViewerProvider.ts`, `LocalApiServer.ts`, `kanban.html`. Two CRITICAL compat regressions fixed in `_dispatchPhoneAFriend`: the `|| 'Phone-a-Friend'` literal fallback had been dropped and a new `addons.phoneAFriend === true` receive-side gate had been added, which together silently unwired installs with no saved role mapping and dropped in-flight pre-upgrade prompts (verification 1 and 9). Also fixed: the ADD TARGET button threw on an undefined `phoneAFriendTargets` map (dead control, verification 11), and the rename migration rewrote only override keys, so renaming the *friend* detached every override pointing at it. **Remaining gap — the headline capability is still inert:** no caller passes `PromptBuilderOptions.originTerminal`, and both call sites read `process.env.SWITCHBOARD_TERMINAL`, a pty-child variable never set in the prompt-building process; the placeholder was removed so the field is now omitted rather than emitted as a shared `"unknown"` key, but per-instance addressing needs the terminal name threaded through the dispatch funnel (~12 `generateUnifiedPrompt` call sites) before verification 3–6 and 12 can pass. Verified: typecheck clean; `terminal-rename-rekey` (8/8) and `shim-injection` (17/17) green; `sharedDefaults.js` correctly untouched.

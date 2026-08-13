@@ -21,18 +21,123 @@
     const icons = new Map();  // id -> HTMLButtonElement
     let activePanel = null;
 
+    const modalPanels = new Set();   // manifest ids with presentation === 'modal'
+    let openModalId = null;
+    let modalReturnFocus = null;
+    let modalHost = null, modalDialog = null;
+
+    function ensureModalHost() {
+        if (modalHost) { return modalHost; }
+        modalHost = document.createElement('div');
+        modalHost.id = 'modal-host';
+        modalHost.setAttribute('role', 'dialog');
+        modalHost.setAttribute('aria-modal', 'true');
+
+        const backdrop = document.createElement('div');
+        backdrop.id = 'modal-backdrop';
+        backdrop.addEventListener('click', closeModal);
+        modalHost.appendChild(backdrop);
+
+        modalDialog = document.createElement('div');
+        modalDialog.id = 'modal-dialog';
+
+        const closeBtn = document.createElement('button');
+        closeBtn.id = 'modal-close';
+        closeBtn.type = 'button';
+        closeBtn.setAttribute('aria-label', 'Close');
+        // data-tooltip, never .title — shell.js is asserted free of native title
+        // tooltips (shell-terminal-strip.test.js:395); a native one would
+        // double-fire beside the styled overlay.
+        closeBtn.dataset.tooltip = 'Close';
+        closeBtn.textContent = '×';
+        closeBtn.addEventListener('click', closeModal);
+        modalDialog.appendChild(closeBtn);
+
+        modalHost.appendChild(modalDialog);
+        content.appendChild(modalHost);
+        return modalHost;
+    }
+
+    /** Show a modal panel over the current one. The frame is only UNHIDDEN: its
+     *  document, its live WebSocket, its pending autosave debounce and any text
+     *  the operator has typed all survive, exactly as they do when panels are
+     *  switched. Nothing here may destroy or reload the frame. */
+    function openModal(id) {
+        const frame = frames.get(id);
+        if (!frame) { return; }
+        ensureModalHost();
+        modalHost.classList.add('is-open');
+        modalHost.setAttribute('aria-label', frame.getAttribute('aria-label') || id);
+        openModalId = id;
+        const icon = icons.get(id);
+        if (icon) { icon.classList.add('is-active'); icon.setAttribute('aria-expanded', 'true'); }
+        modalReturnFocus = icon || null;
+        focusModalContent(frame);
+    }
+
+    function closeModal() {
+        if (!openModalId) { return; }
+        const icon = icons.get(openModalId);
+        if (icon) { icon.classList.remove('is-active'); icon.setAttribute('aria-expanded', 'false'); }
+        if (modalHost) { modalHost.classList.remove('is-open'); }
+        openModalId = null;
+        // No flush, no save, no postMessage on the way out: memo.js owns its own
+        // debounced save and the frame is still alive to run it. Adding a second
+        // writer here is exactly the two-writer hazard this design removes.
+        if (modalReturnFocus) { try { modalReturnFocus.focus(); } catch { /* ignore */ } }
+        modalReturnFocus = null;
+    }
+
+    function toggleModal(id) {
+        if (openModalId === id) { closeModal(); } else { openModal(id); }
+    }
+
+    /** The frame is same-origin (frame-src 'self', /memo on this host), so the
+     *  shell can listen inside it. Without this, Escape while typing in the memo
+     *  textarea reaches nothing and the dialog feels stuck. */
+    function wireModalFrameKeys(frame) {
+        try {
+            const doc = frame.contentDocument;
+            if (!doc || doc.dataset && doc.dataset.sbModalKeys === '1') { return; }
+            if (doc.documentElement && doc.documentElement.dataset.sbModalKeys === '1') { return; }
+            doc.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') { closeModal(); }
+            });
+            if (doc.documentElement) { doc.documentElement.dataset.sbModalKeys = '1'; }
+        } catch { /* cross-origin or not yet loaded — retried on open */ }
+    }
+
+    function focusModalContent(frame) {
+        wireModalFrameKeys(frame);
+        try {
+            const doc = frame.contentDocument;
+            const ta = doc && doc.querySelector('textarea');
+            if (ta) { ta.focus(); return; }
+        } catch { /* ignore */ }
+        try { frame.focus(); } catch { /* ignore */ }
+    }
+
     function defaultPanelId(manifest) {
-        // First enabled panel in manifest order; Board is conventionally first.
+        // First enabled, non-modal panel in manifest order; Board is conventionally first.
         for (const p of manifest) {
-            if (p.enabled !== false) { return p.id; }
+            if (p.enabled === false) { continue; }
+            if (p.presentation === 'modal') { continue; }
+            return p.id;
         }
         return null;
     }
 
     function selectPanel(id) {
         if (!frames.has(id)) { return; }
+        // A modal panel is never "the active panel" — it overlays one. Every
+        // caller (rail click, hash deep-link, hashchange, the switchPanel bridge)
+        // funnels through here, so intercepting at this single point is what
+        // keeps them all correct.
+        if (modalPanels.has(id)) { openModal(id); return; }
+        closeModal();                       // navigating away dismisses the overlay
         activePanel = id;
         for (const [pid, frame] of frames) {
+            if (modalPanels.has(pid)) { continue; }   // modal frames are shown by the host, not by is-active
             frame.classList.toggle('is-active', pid === id);
             // A document inside a display:none iframe is not rendered and gets no
             // rendering opportunities, so it cannot observe its own hiding — the
@@ -47,6 +152,7 @@
             } catch { /* frame not ready yet — its first fit reports a size anyway */ }
         }
         for (const [pid, icon] of icons) {
+            if (modalPanels.has(pid)) { continue; }   // the modal icon lights only while its overlay is open
             icon.classList.toggle('is-active', pid === id);
         }
         if (window.location.hash !== '#' + id) {
@@ -153,7 +259,13 @@
         const btn = document.createElement('button');
         btn.className = 'strip-icon' + (panel.placement === 'bottom' ? ' strip-placement-bottom' : '');
         btn.type = 'button';
-        btn.role = 'tab';
+        if (panel.presentation === 'modal') {
+            btn.role = 'button';
+            btn.setAttribute('aria-haspopup', 'dialog');
+            btn.setAttribute('aria-expanded', 'false');
+        } else {
+            btn.role = 'tab';
+        }
         btn.dataset.panel = panel.id;
         btn.setAttribute('aria-label', panel.label || panel.id);
         // Tooltip for every manifest entry — a panel with no label gets its id
@@ -180,7 +292,11 @@
         }
         btn.addEventListener('click', () => {
             if (panel.enabled === false) { return; }
-            selectPanel(panel.id);
+            if (panel.presentation === 'modal') {
+                toggleModal(panel.id);
+            } else {
+                selectPanel(panel.id);
+            }
         });
         return btn;
     }
@@ -448,58 +564,48 @@
             btn.addEventListener('click', () => {
                 const slug = t.name.replace(/[^A-Za-z0-9_-]/g, '_');
                 const popoutName = `sb-term-${slug}`;
-                const popoutUrl = `/terminals?solo=${encodeURIComponent(t.name)}`;
-                const features = 'width=900,height=700';
 
-                let popout = null;
-                try {
-                    popout = window.open(popoutUrl, popoutName, features);
-                } catch { /* ignore */ }
+                // If a solo pop-out for this terminal is already open, focus it — the
+                // open window is the stronger signal of intent than a peek.
+                let existing = null;
+                for (const win of Array.from(popoutWindows)) {
+                    if (win.closed) {
+                        popoutWindows.delete(win);
+                    } else if (win.name === popoutName) {
+                        existing = win;
+                    }
+                }
 
-                const fallbackToInCockpit = () => {
-                    selectPanel('terminals');
-                    const termFrame = frames.get('terminals');
+                const termFrame = frames.get('terminals');
+                if (existing) {
+                    // Clicking a lit entry IS the acknowledgement. This branch never
+                    // reaches the panel's peek arm, so without an explicit clear the
+                    // DONE light burns forever — the exact regression the old
+                    // clearTerminalBadge relay existed to prevent.
                     if (termFrame && termFrame.contentWindow) {
                         try {
                             termFrame.contentWindow.postMessage({
-                                type: 'focusTerminal',
+                                type: 'clearTerminalBadge',
                                 name: t.name
                             }, location.origin);
                         } catch { /* ignore */ }
                     }
-                };
-
-                if (!popout || popout.closed) {
-                    fallbackToInCockpit();
+                    try { existing.focus(); } catch { /* ignore */ }
                     return;
                 }
 
-                popoutWindows.add(popout);
-                // Clicking a lit entry IS the acknowledgement — the user has now been
-                // shown the terminal. The in-cockpit fallback clears the badge as a
-                // side effect of `focusTerminal`; the pop-out path reaches no such
-                // code, so without this the DONE light burns forever. Acknowledge-only:
-                // popping out must not rearrange the cockpit's panes.
-                const termFrame = frames.get('terminals');
+                // Otherwise peek it in the cockpit. Switch the panel FIRST — the strip
+                // is visible while other panels are active, so a peek alone would
+                // change a panel the user cannot see. The peek arm clears the badge.
+                selectPanel('terminals');
                 if (termFrame && termFrame.contentWindow) {
                     try {
                         termFrame.contentWindow.postMessage({
-                            type: 'clearTerminalBadge',
+                            type: 'peekTerminal',
                             name: t.name
                         }, location.origin);
                     } catch { /* ignore */ }
                 }
-                try { popout.focus(); } catch { /* ignore */ }
-
-                setTimeout(() => {
-                    try {
-                        if (!popout.closed && !popout.document.hasFocus()) {
-                            fallbackToInCockpit();
-                        }
-                    } catch {
-                        // Throw treated as focused (do nothing)
-                    }
-                }, 100);
             });
 
             container.appendChild(btn);
@@ -540,7 +646,15 @@
             const frame = buildFrame(panel);
             icons.set(panel.id, icon);
             frames.set(panel.id, frame);
-            content.appendChild(frame);
+            if (panel.presentation === 'modal') {
+                modalPanels.add(panel.id);
+                frame.className = 'modal-frame';
+                frame.addEventListener('load', () => wireModalFrameKeys(frame));
+                ensureModalHost();
+                modalDialog.appendChild(frame);
+            } else {
+                content.appendChild(frame);
+            }
             // Frames are position-independent (display-toggled, keyed by id); only the
             // ICON's rail position depends on placement.
             if (panel.placement === 'bottom') { bottomPanels.push(icon); } else { strip.appendChild(icon); }
@@ -574,8 +688,14 @@
         }
 
         const hash = window.location.hash.replace(/^#/, '');
-        const initial = (hash && frames.has(hash)) ? hash : defaultPanelId(manifest);
-        if (initial) { selectPanel(initial); }
+        if (hash && modalPanels.has(hash)) {
+            const base = defaultPanelId(manifest);
+            if (base) { selectPanel(base); }
+            openModal(hash);
+        } else {
+            const initial = (hash && frames.has(hash)) ? hash : defaultPanelId(manifest);
+            if (initial) { selectPanel(initial); }
+        }
     }
 
     function loadManifest() {
@@ -608,7 +728,31 @@
         } else if (data.type === 'terminalFleetState' && Array.isArray(data.terminals)) {
             if (event.origin !== location.origin) { return; }
             renderTerminalSection(data.terminals);
+        } else if (data.type === 'popoutTerminal' && typeof data.name === 'string') {
+            if (event.origin !== location.origin) { return; }
+            const slug = data.name.replace(/[^A-Za-z0-9_-]/g, '_');
+            const popoutName = `sb-term-${slug}`;
+            const popoutUrl = `/terminals?solo=${encodeURIComponent(data.name)}`;
+            const features = 'width=900,height=700';
+            let popout = null;
+            try {
+                popout = window.open(popoutUrl, popoutName, features);
+            } catch { /* ignore */ }
+            if (popout && !popout.closed) {
+                popoutWindows.add(popout);
+            } else {
+                const termFrame = frames.get('terminals');
+                if (termFrame && termFrame.contentWindow) {
+                    try {
+                        termFrame.contentWindow.postMessage({ type: 'popoutBlocked', name: data.name }, location.origin);
+                    } catch { /* ignore */ }
+                }
+            }
         }
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && openModalId) { closeModal(); }
     });
 
     // Hash deep-link changes (bookmarkable panels).

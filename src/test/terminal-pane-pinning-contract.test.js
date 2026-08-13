@@ -97,7 +97,7 @@ test('closeTerminal does not reference pinnedPanes — the pin clear is centrali
 // --------------------------------------------------------------- placement: pin-aware
 
 test('assignToFocusedPane consults pins before focus, and pins are inert in a one-pane grid', () => {
-    const fn = block(terminalsJs, 'function assignToFocusedPane(terminalName) {', 'function undoLastAssignment() {');
+    const fn = block(terminalsJs, 'function assignToFocusedPane(terminalName, opts = {}) {', 'function undoLastAssignment() {');
     // The pinsActive guard (rendered > 1) must exist and gate isOpen.
     assert.ok(
         /const pinsActive = rendered > 1;/.test(fn),
@@ -115,7 +115,7 @@ test('assignToFocusedPane consults pins before focus, and pins are inert in a on
 });
 
 test('the all-pinned branch emits a toast and returns without seating', () => {
-    const fn = block(terminalsJs, 'function assignToFocusedPane(terminalName) {', 'function undoLastAssignment() {');
+    const fn = block(terminalsJs, 'function assignToFocusedPane(terminalName, opts = {}) {', 'function undoLastAssignment() {');
     const toastAt = fn.indexOf("showPaneToast('All panes are pinned");
     const seatAt = fn.indexOf('paneAssignments[target] = terminalName');
     assert.ok(toastAt !== -1, 'the all-pinned branch must emit the toast');
@@ -128,7 +128,7 @@ test('the all-pinned branch emits a toast and returns without seating', () => {
 });
 
 test('the already-seated follow-branch returns before any pin logic mutates a slot', () => {
-    const fn = block(terminalsJs, 'function assignToFocusedPane(terminalName) {', 'function undoLastAssignment() {');
+    const fn = block(terminalsJs, 'function assignToFocusedPane(terminalName, opts = {}) {', 'function undoLastAssignment() {');
     const followAt = fn.indexOf('if (existingIndex !== -1 && existingIndex < rendered) {');
     const pinsActiveAt = fn.indexOf('const pinsActive = rendered > 1;');
     assert.ok(followAt !== -1, 'the follow-branch must exist');
@@ -152,7 +152,7 @@ test('vacating a parked slot vacates its pin — no pin left on an emptied slot'
     // rendered one). If that slot was pinned — pin in 3x3, shrink to 2h — the pin
     // outlives its occupant on a slot that renders no marker, and saveLayoutSettings
     // persists it. sanitize would heal it, but only on the next list refresh.
-    const fn = block(terminalsJs, 'function assignToFocusedPane(terminalName) {', 'function undoLastAssignment() {');
+    const fn = block(terminalsJs, 'function assignToFocusedPane(terminalName, opts = {}) {', 'function undoLastAssignment() {');
     assert.ok(
         /paneAssignments\[existingIndex\] = null;[\s\S]{0,120}?pinnedPanes\[existingIndex\] = false;/.test(fn),
         'clearing the old slot must clear its pin too — an empty pinned slot reserves a seat nothing can fill'

@@ -1,0 +1,40 @@
+# Finish the Dispatch-Path Extractions and Gate Them
+
+**Complexity:** 8
+
+## Goal
+
+Close out two extractions that shipped their mechanism but not their consolidation or their guard. `_advanceCards` exists but is reachable only for `CODED_AUTO`, so nineteen call sites still open-code the advance routine, its specific-target branch has never executed, and three different `_cliTriggersEnabled` rules are now live where two were before. Separately, the `apiOriginated` deletion landed across nine files but the ratchet its own plan named as a verification item never did. Both are cases of a previous pass declaring a scope fence and stopping inside it, and both fail silently: a re-pasted trigger call or a reintroduced surface flag produces no compile error and no test failure.
+
+## How the Subtasks Achieve This
+
+- **Finish the `advanceCards` Extraction**: routes the in-scope arms — `moveCardForward` / `moveCardBackwards`, `sendDispatchToCoder`, `sendDispatchSetToCoders`, the non-`CODED_AUTO` paths of `triggerAction` / `triggerBatchAction`, `moveSelected`, `moveAll`, `promptOnDrop` — through the one operation, exercising its specific-target and next-stage branches for the first time and killing the `'forward'` hardcode that is only invisible because that branch is dead. It first gives the operation a `dispatch?: boolean` option, without which the move-only affordances cannot be converted at all. It reconciles the three live `_cliTriggersEnabled` rules into one, closes the `triggerBatchAction` bypass divergence, and records which affordance changed; then widens `scripts/check-kanban-dispatch-callers.js` from five `CODED_AUTO`-scoped assertions into a per-file occurrence ratchet with a named, reasoned allowlist starting at a ceiling of 15.
+- **Dispatch-Surface Ratchet**: adds `scripts/check-dispatch-surface.js` enforcing **per-file exact occurrence counts** for `apiOriginated` — allowlisting a whole file would admit the very reintroduction the gate exists to exclude, and a plain zero-check false-positives on the five explanatory comments in shipped source. It also adds the one positional-arity assertion no existing test covers (`switchboard.triggerAgentFromKanban` in `extension.ts`), since deleting a dead slot produces no compile error (`executeCommand` is untyped through the command-registry seam) and silently slides `bypassTriggerGate` into the wrong position. The batch registrations' arity is already gated in both hosts by `dispatch-analysis-scope-contract.test.js`, so the guard references that test rather than duplicating it.
+
+<!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
+## Subtasks
+- [ ] [Finish the `advanceCards` Extraction — Seventeen Call Sites Still Open-Code It](../plans/finish-advance-cards-extraction.md) — **PLAN REVIEWED**
+- [ ] [Dispatch-Surface Ratchet — Stop `apiOriginated` / `allowPtyFleet` Growing Back](../plans/dispatch-surface-ratchet-guard.md) — **PLAN REVIEWED**
+<!-- END SUBTASKS -->
+
+## Dependencies & sequencing
+
+**No blocking order between the two** — they guard different identifiers and edit different scripts. The **Dispatch-Surface Ratchet** is complexity 3 and touches no provider file, so it parallelises freely and is the natural quick win; **Finish the `advanceCards` Extraction** is complexity 8 inside a ~13,000-line provider and wants a dedicated stream.
+
+**The non-negotiable both share: prove the gate red before trusting it.**
+- The advanceCards ratchet must **fail on the pre-conversion tree** at any ceiling below 15, with the starting direct-call count recorded in the completion summary. A ceiling authored from the post-conversion tree proves nothing.
+- The dispatch-surface ratchet must be shown to fail three ways: by reintroducing `apiOriginated?: boolean` at one call site (occurrence check), by adding a fourth occurrence *inside* an already-allowlisted file (this is what per-file counts buy over filename allowlisting), and by deleting a dead slot (arity check) — the last is the important one, because it fails while the occurrence count goes *down*.
+
+**⚠ `allowPtyFleet` is NOT part of the ratchet's zero-check.** It is a live, load-bearing API on the terminal-pool resolver — `TaskViewerProvider.getRoleTerminalSet` / `_getAliveAutobanTerminalRegistry` / the `isPtyRow` gate, plus the one unconditional `{ allowPtyFleet: true }` caller in `KanbanProvider` — and four contract tests assert those shapes are **present**. What the earlier deletion removed was `allowPtyFleet` *threaded as a caller-surface signal through the dispatch path*, not the resolver opt-in. The guard pins it to an exact count so growth is caught while the four legitimate sites survive; anyone who "improves" that count to zero breaks four tests and leaves the standalone host, where PTY is the only fleet, permanently empty.
+
+**Sequencing inside the advanceCards subtask is itself the plan's main risk control.** Settle the design decisions in writing before the first edit — that the operation takes a `dispatch?: boolean` (not a `kind` enum), which `_cliTriggersEnabled` rule wins, how `moveSelected` / `moveAll`'s **four-way** branch structure maps onto the operation's options, and whether `promptOnDrop` and `_distributePlannerDispatch` belong inside the operation at all. Deciding those mid-code produces an operation with a `kind` parameter and five branches: a fourth copy with better naming. Then write the characterisation tests, then convert one arm per commit, lowering the ceiling each time.
+
+**⚠ `moveCardForward` is the trap.** It is the smallest, most tempting first conversion, and it does not dispatch at HEAD — while the operation's specific-target branch dispatches unconditionally when the gate is open. Convert it before the `dispatch: false` option exists and every forward drag on every shipped install starts firing an agent. The option lands as commit 1, with no call-site changes.
+
+**Shared files — serialise:** `package.json` and `.github/workflows/integration-tests.yml`. Note the two subtasks do **not** collide on `package.json`: the ratchet subtask adds a new `dispatch-surface:check` entry, while the advanceCards subtask changes only the body of an already-wired script. Other plans in this batch also add gate steps to those two files (both subtasks of **Host Seam Audits**, and the fleet-seam plan's new contract test) — that is where the contention is.
+
+**⚠ Provider-file contention.** `KanbanProvider.ts` is edited by the advanceCards subtask across nineteen sites; the **Kanban Column Header** feature's fan-out plan adds a verb arm to the same file, and the **Dispatch-Analysis Pass** feature's staging plan rewrites `sendDispatchToCoder`, `sendToDispatch` / `sendToPlanned`, `toggleDispatchView` and `moveCardToColumn` in it. All three touch the dispatch arms. One agent stream per provider file — coordinate across features. The advanceCards plan additionally warns it must serialise against *Kanban Move Addressing and Honest Failure Reporting* (not in this feature) if that work is still in flight, since it changes `moveCardToColumn`'s signature.
+
+**Byte-compatibility:** every affordance must land cards in the same column as at HEAD except where a divergence is deliberately closed, and the `moveCards` / `moveCardsFailed` payload shapes and emission order are consumed by the webview's optimistic guard — normalising that order is required and is exactly the change that silently alters what the board renders mid-move. Two specific, intended shape changes must be recorded rather than absorbed: converting `moveCardForward` / `moveCardBackwards` makes them emit `moveCardsFailed` for the first time (they use the no-reason move variant today and fail silently), and the `triggerBatchAction` bypass fix makes an explicit `POST /kanban/dispatch` succeed for multi-card selections where it currently returns `'CLI triggers are disabled'`.
+
+**Line numbers in both plans were re-verified against HEAD (`3b3c6367`) on 2026-08-14** after ~200 lines of drift invalidated the previous set. Treat the tables in the plans as current; re-locate by symbol, not by line, if the file moves again.

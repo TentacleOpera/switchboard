@@ -109,5 +109,41 @@ test('the caret is reclaimed only when the reconcile actually took it', () => {
     );
 });
 
+test('the empty-slot placeholder is re-derived without destroying its children', () => {
+    const update = block('function updatePaneElement(paneEl, index) {', 'function resolveFlooredLayout()');
+    // The placeholder text changes with the lock ("Click a terminal to add it to
+    // this group" vs the free-composition string), so it must be re-derived every
+    // reconcile — panes are REUSED, and a slot that was empty before the lock
+    // would otherwise keep stale text forever.
+    assert.ok(
+        update.includes('Click a terminal to add it to this group'),
+        'an empty pane under a lock must invite the click that now fills it'
+    );
+    // ...but the placeholder also carries the `kanban mode` toggle button as a
+    // child. Assigning `.textContent` on the existing node replaces EVERY child,
+    // so the first reconcile after a pane emptied would permanently delete the
+    // only entry point to kanban pane mode — silently, for the life of the page.
+    const reDerive = update.slice(update.indexOf('Re-derive the placeholder text'));
+    assert.ok(
+        reDerive.length > 0,
+        'the re-derive branch must exist and be commented'
+    );
+    assert.ok(
+        !/existing\.textContent\s*=/.test(reDerive),
+        're-deriving the placeholder must not assign textContent — that deletes the kanban-mode toggle child'
+    );
+    assert.ok(
+        /nodeType === 3/.test(reDerive) && /nodeValue = label/.test(reDerive),
+        'the re-derive must update the leading text node only, leaving element children intact'
+    );
+    // The creation branch is what appends that toggle; if it stops, the assertion
+    // above is guarding nothing.
+    assert.ok(
+        update.includes("kanbanToggle.className = 'pane-mode-toggle'") &&
+        update.includes('emptySlot.appendChild(kanbanToggle)'),
+        'the empty slot must still offer the kanban-mode toggle'
+    );
+});
+
 console.log(failed === 0 ? '\nAll pane-grid reconcile contracts passed.' : `\n${failed} contract(s) failed.`);
 process.exit(failed === 0 ? 0 : 1);

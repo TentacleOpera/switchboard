@@ -195,7 +195,10 @@ arm updates the file and re-stamps `lastSyncedAt`:
                                 // falsely badge as `modified` — it has no unpushed edits.
                                 await this._cacheService.registerImportedTicket(
                                     msg.provider, msg.taskId, row.docName,
-                                    row.slugPrefix, row.filePath, row.url || ''
+                                    row.slugPrefix, row.filePath,
+                                    row.contentHash || '',   // 6th arg is contentHash, NOT url
+                                    undefined,               // workspaceId — let it resolve
+                                    row.url || undefined
                                 );
                             }
                         }
@@ -213,10 +216,20 @@ arm updates the file and re-stamps `lastSyncedAt`:
                     });
 ```
 
-> Verify `registerImportedTicket`'s signature and its `lastSyncedAt` behaviour before wiring it —
-> it is the same call the backfill at `src/services/TicketsPanelProvider.ts:2031` uses. If it does
-> not refresh `lastSyncedAt`, use whichever cache-service method does (the one the sync path calls
-> after a successful push).
+> **Signature verified (do not guess it again).**
+> `registerImportedTicket(sourceId, docId, docName, slugPrefix, filePath, contentHash, workspaceId?, url?)`
+> — `src/services/PlanningPanelCacheService.ts:458`. The 6th positional argument is **`contentHash`,
+> not `url`**; passing the URL there overwrites the row's content hash with a URL and drops the URL
+> entirely (`upsertImportedTicket` writes `content_hash = excluded.content_hash` and
+> `url = excluded.url`, `src/services/KanbanDatabase.ts:3414-3430`). Pass the row's existing
+> `contentHash` through unchanged and put the URL in the 8th slot, as above.
+>
+> `lastSyncedAt` **is** refreshed by this call — the upsert sets `last_synced_at = excluded.last_synced_at`
+> on conflict — so this is the right method for clearing the false `modified` badge. No separate
+> sync-path method is needed.
+>
+> `ImportedDocEntry` (`src/services/KanbanDatabase.ts:110-123`) carries `contentHash?` and `url?`,
+> so both fields are available on the `row` fetched from `getImportedTickets()`.
 
 ### 2. `src/webview/tickets.js` — invalidate caches and reload from files
 
@@ -272,8 +285,11 @@ the file lister directly gets the same sidebar with one fewer round-trip and no 
 
 ## Verification Plan
 
+Compilation and automated test execution are out of scope for this planning pass; the automated
+items below are the contract for whoever implements it.
+
 **Automated**
-1. `npm test` — the existing tickets suites must stay green, in particular
+1. The existing tickets suites must stay green, in particular
    `src/test/verb-engine-tickets-headless.test.js` (payload contract),
    `src/test/tickets-sidebar-list-scoping.test.js` (subtask/scope hiding rules) and
    `src/test/tickets-auto-refresh-on-file-change.test.js`.
@@ -298,3 +314,7 @@ the file lister directly gets the same sidebar with one fewer round-trip and no 
    list, the file has exactly one `parentId:` line, and it now appears under the new parent.
 8. Convert a ticket that has no local `.md` file. The modal closes, the status reads
    "Converted remotely; no local file to update", and no error is logged.
+
+## Review Findings
+
+Reviewed in place; implementation matches the plan, with four MAJOR fixes applied to `src/services/TicketsPanelProvider.ts`, `src/webview/tickets.js` and `src/test/verb-engine-tickets-headless.test.js`. (1) `_stampTicketParentIdInFile` used `String.replace(string, string)` with user file content as the replacement, so a `$&`/`` $` ``/`$'` anywhere in the frontmatter expanded and corrupted the file — now spliced by `slice`, with a function replacer for the in-place branch. (2) The LF-only fence regex missed CRLF files, sending them down the "no frontmatter" branch which prepended a *second* `---` block that shadowed `listId`/`status`/`priority` from the non-global readers — fence now matches `\r?\n`. (3) `localFileUpdated: false` conflated "never imported locally" with "write threw", so a read-only-FS failure reported "no local file to update"; a `localFileStampFailed` flag now drives the plan's distinct "local view may be stale" wording. (4) No tests shipped — six behavioural tests were added to the already-CI-wired `verb-engine-tickets-headless.test.js` covering all four file shapes plus the CRLF and `$` regressions, and the webview's `_drillDownSubtasks = null` was dropped because it flashed the full list and stranded the user with no "← Back" if the parent re-fetch failed. Verified: `npm run compile-tests` clean, `node --check src/webview/tickets.js` clean, 44/44 in `verb-engine-tickets` and all 8 CI-wired tickets suites green; `registerImportedTicket`'s positional contract (6th = contentHash, 8th = url) and the absolute-path resolution in `listImportedTickets` were both confirmed against source, so the false `modified` badge really is cleared.

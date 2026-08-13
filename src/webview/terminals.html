@@ -329,6 +329,13 @@
             background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
             border-color: var(--accent-teal);
         }
+        .terminal-item.is-peeked {
+            background: color-mix(in srgb, var(--accent-violet, #c586c0) 12%, transparent);
+            border-color: var(--accent-violet, #c586c0);
+        }
+        body.is-solo .item-peek-btn,
+        body.is-solo .btn-peek-dismiss,
+        body.is-solo .btn-popout-pane { display: none !important; }
         .item-info {
             display: flex;
             flex-direction: column;
@@ -387,6 +394,7 @@
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+            min-width: 0;
         }
         .item-role-row {
             display: flex;
@@ -645,6 +653,231 @@
             padding-left: 4px;
         }
 
+        /* Logical Groups tier */
+        .group-tier-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 5px 6px;
+            margin-bottom: 4px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            cursor: pointer;
+            border-left: 2px solid var(--accent-violet, #c586c0);
+        }
+        .group-tier-header.active {
+            color: var(--accent-violet, #c586c0);
+            background: color-mix(in srgb, var(--accent-violet, #c586c0) 8%, transparent);
+        }
+        .group-tier-header:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.06);
+        }
+        .group-new-row {
+            border-left-color: var(--border-color);
+            opacity: 0.85;
+        }
+        .group-tier-actions {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .group-tier-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 10px;
+            font-family: inherit;
+            cursor: pointer;
+            padding: 2px 4px;
+            border-radius: 2px;
+            text-transform: lowercase;
+        }
+        .group-tier-btn:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.08);
+        }
+        .group-tier-btn.is-danger:hover { color: #f85149; }
+        .terminal-item.is-selected {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+
+        /* Group tab strip — sits above the pane grid, below the toolbar.
+           Replaces the groups tier that used to live inside the sidebar.
+           One tab per group plus a leading "All" tab and a trailing "+".
+           Uses --accent-violet (the same accent the old group-tier-header
+           wore) so the group affordance keeps its colour identity. */
+        .group-tab-strip {
+            display: flex;
+            flex-direction: column;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+        }
+        .group-tab-row {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            padding: 4px 8px;
+            min-height: 30px;
+            flex-wrap: nowrap;
+            overflow: hidden;
+        }
+        .group-tab {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 8px;
+            font-size: 11px;
+            font-family: inherit;
+            font-weight: 600;
+            color: var(--text-secondary);
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 3px;
+            cursor: pointer;
+            white-space: nowrap;
+            flex-shrink: 0;
+            transition: all 0.15s;
+        }
+        .group-tab:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.06);
+        }
+        .group-tab.active {
+            color: var(--accent-violet, #c586c0);
+            border-color: var(--accent-violet, #c586c0);
+            background: color-mix(in srgb, var(--accent-violet, #c586c0) 8%, transparent);
+        }
+        .group-tab.active:hover {
+            background: color-mix(in srgb, var(--accent-violet, #c586c0) 12%, transparent);
+        }
+        .group-tab-count {
+            font-size: 9px;
+            font-weight: 700;
+            opacity: 0.7;
+        }
+        .group-tab-delete {
+            background: none;
+            border: none;
+            color: inherit;
+            font-size: 10px;
+            font-family: inherit;
+            cursor: pointer;
+            padding: 0 2px;
+            border-radius: 2px;
+            opacity: 0.5;
+            line-height: 1;
+        }
+        .group-tab-delete:hover {
+            opacity: 1;
+            color: #f85149;
+        }
+        .group-tab-add {
+            background: none;
+            border: 1px dashed var(--border-bright);
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-family: inherit;
+            padding: 2px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .group-tab-add:hover {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal);
+        }
+        .group-tab-overflow {
+            position: relative;
+            flex-shrink: 0;
+        }
+        .group-tab-overflow-btn {
+            background: none;
+            border: 1px solid transparent;
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-family: inherit;
+            padding: 3px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .group-tab-overflow-btn:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.06);
+        }
+        .group-tab-overflow-menu {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            z-index: 50;
+            min-width: 160px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-bright);
+            border-radius: 3px;
+            padding: 4px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .group-tab-overflow-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 4px 6px;
+            font-size: 11px;
+            font-family: inherit;
+            color: var(--text-secondary);
+            border-radius: 2px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .group-tab-overflow-item:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.06);
+        }
+        .group-tab-overflow-item.active {
+            color: var(--accent-violet, #c586c0);
+        }
+        .group-tab-overflow-divider {
+            height: 1px;
+            background: var(--border-color);
+            margin: 2px 0;
+        }
+        .group-tab-overflow-restore {
+            font-size: 10px;
+            color: var(--text-secondary);
+            padding: 4px 6px;
+            border-radius: 2px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .group-tab-overflow-restore:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.06);
+        }
+        /* Group membership chip on terminal rows. Replaces the nesting tier:
+           membership is legible inline without a tree level. Uses the same
+           --accent-violet the group affordance wears elsewhere. */
+        .item-group-chip {
+            font-size: 9px;
+            font-weight: 600;
+            padding: 0 4px;
+            border-radius: 2px;
+            margin-left: 4px;
+            color: var(--accent-violet, #c586c0);
+            background: color-mix(in srgb, var(--accent-violet, #c586c0) 12%, transparent);
+            white-space: nowrap;
+            max-width: 80px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            flex-shrink: 0;
+        }
+
         /* Grid container & Panes */
         .pane-grid {
             flex: 1;
@@ -657,8 +890,14 @@
             min-height: 0;
             box-sizing: border-box;
         }
-        .pane-grid.layout-1 { grid-template-columns: 1fr; grid-template-rows: 1fr; }
-        .pane-grid.layout-2h { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+        /* minmax(0, 1fr) on EVERY row track, not a bare `1fr`. `1fr` means
+           minmax(auto, 1fr): the auto minimum lets a row grow past the grid to fit
+           an over-tall pane, which reintroduces the clipped-and-unscrollable kanban
+           list in exactly the two layouts that were spelled differently from the
+           other five. This is the declaration in this plan that can actually change
+           pane HEIGHT — verify terminal mode in layout-1 and layout-2h specifically. */
+        .pane-grid.layout-1  { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr); }
+        .pane-grid.layout-2h { grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr); }
         .pane-grid.layout-2v { grid-template-columns: 1fr; grid-template-rows: repeat(2, minmax(0, 1fr)); }
         /* Layout keys are ROWS x COLUMNS, matching 2x3/3x3: `1x3` is ONE row of THREE
            columns. Do not flip these axes back — a single column of three stacked panes
@@ -667,6 +906,16 @@
         .pane-grid.layout-2x2 { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
         .pane-grid.layout-2x3 { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
         .pane-grid.layout-3x3 { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(3, minmax(0, 1fr)); }
+
+        /* Peek: hide all panes except the peeked one, which spans the whole grid. */
+        .pane-grid.is-peeking > .terminal-pane { display: none; }
+        /* display:flex, NOT grid — .terminal-pane is a flex column (header + content)
+           and switching its own display mode collapses that stacking. */
+        .pane-grid.is-peeking > .terminal-pane.is-peeked {
+            display: flex;
+            grid-column: 1 / -1;
+            grid-row: 1 / -1;
+        }
 
         .pane-grid.layout-2x3 .pane-header,
         .pane-grid.layout-3x3 .pane-header {
@@ -793,6 +1042,47 @@
             gap: 0;
         }
 
+        /* Dispatch-in-progress chip. Mirrors .pane-input-state's box so the two
+           cannot disagree on metrics; they are mutually exclusive by construction
+           (syncInputStateChip early-returns while .is-dispatching is set). */
+        .pane-dispatch-state {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 0.4px;
+            text-transform: lowercase;
+            padding: 0 4px;
+            border-radius: 2px;
+            flex-shrink: 0;
+            color: var(--accent-teal);
+        }
+        .pane-dispatch-state::before {
+            content: '';
+            width: 5px; height: 5px;
+            border-radius: 50%;
+            background: currentColor;
+            flex-shrink: 0;
+            animation: sb-dispatch-pulse 900ms ease-in-out infinite;
+        }
+        /* Dot-only in the two dense layouts, matching .pane-input-state.
+           Without this the 4px gap survives an empty label and the chip reserves
+           width for text that isTerseLayout() has already removed. */
+        .pane-grid.layout-2x3 .pane-dispatch-state,
+        .pane-grid.layout-3x3 .pane-dispatch-state {
+            padding: 0 2px;
+            gap: 0;
+        }
+        body.cyber-animation-disabled .pane-dispatch-state::before { animation: none; }
+        @media (prefers-reduced-motion: reduce) {
+            .pane-dispatch-state::before { animation: none; }
+        }
+        @keyframes sb-dispatch-pulse {
+            0%, 100% { opacity: 0.35; }
+            50%      { opacity: 1; }
+        }
+
         /* Pane-header actions use the same text-label treatment as the sidebar
            rows. They were two identically-styled single glyphs (⌫ and ⊟) sitting
            side by side, one of which sends /clear to the agent and the other of
@@ -802,12 +1092,14 @@
             gap: 2px;
             flex-shrink: 0;
         }
-        /* Also worn by the sidebar row's `clear` (.item-clear-btn). ONE bordered
-           small-button language for the panel: a box that reads as pressable at
-           10px on black, which .locate-btn does not. The row variant differs by a
-           single declaration (padding), which follows this block. */
+        /* Also worn by the sidebar row's `clear` (.item-clear-btn) and `peek`
+           (.item-peek-btn). ONE bordered small-button language for the panel: a
+           box that reads as pressable at 10px on black, which .locate-btn does
+           not. The row variants differ by a single declaration (padding), which
+           follows this block. */
         .btn-unassign-pane,
-        .item-clear-btn {
+        .item-clear-btn,
+        .item-peek-btn {
             background: transparent;
             border: 1px solid var(--border-color);
             color: var(--text-secondary);
@@ -822,16 +1114,66 @@
         }
         /* Roomier than the pane-header buttons: the sidebar row has the horizontal
            space the terse pane headers do not. */
-        .item-clear-btn { padding: 3px 8px; }
+        .item-clear-btn,
+        .item-peek-btn { padding: 3px 8px; }
         .btn-unassign-pane:hover:not(:disabled),
-        .item-clear-btn:hover:not(:disabled) {
+        .item-clear-btn:hover:not(:disabled),
+        .item-peek-btn:hover:not(:disabled) {
             color: var(--accent-teal);
             border-color: var(--accent-teal);
         }
         .btn-unassign-pane:disabled,
-        .item-clear-btn:disabled {
+        .item-clear-btn:disabled,
+        .item-peek-btn:disabled {
             opacity: 0.4;
             cursor: default;
+        }
+        /* The peek button in its `restore` state (the peeked terminal's own row)
+           reads from the same violet accent as the row marker
+           (.terminal-item.is-peeked) so the button and the row border agree.
+           Placed after the hover rule so the peeked colour holds even on hover —
+           the row's violet border is already the pressable signal. */
+        .terminal-item.is-peeked .item-peek-btn {
+            color: var(--accent-violet, #c586c0);
+            border-color: var(--accent-violet, #c586c0);
+        }
+        /* Brand mark in the pane header. Deliberately NOT .item-role-icon: that
+           class declares margin-right:4px (.item-role-icon rule), which stacks with
+           .pane-title's gap:6px (.pane-title rule) into a 10px lead gap, and it is
+           sidebar-semantic — the curtain teardown addresses
+           `.item-role-icon[data-terminal=…]` (scoped to listEl today, but the class
+           should not acquire a second meaning). This element carries NO
+           data-terminal for the same reason.
+           An <img>, not a CSS mask, for the same reason the sidebar uses one:
+           these are multi-hue brand marks whose baked-in fill IS the identity. */
+        .pane-brand-icon {
+            width: 14px;
+            height: 14px;
+            flex-shrink: 0;
+            align-self: center;
+            object-fit: contain;
+            opacity: 0.9;
+            pointer-events: none;
+        }
+        /* Class on the IMAGE, not on .terminal-pane: `is-exited` is a
+           .terminal-item (sidebar row) class only — set in renderTerminalRow — and
+           the pane element never receives it, so a `.terminal-pane.is-exited …`
+           selector would be dead. updatePaneElement stamps this directly, where
+           fleetItem.status is already in scope. */
+        .pane-brand-icon.is-exited { opacity: 0.45; }
+        /* Dense grids: the title ellipsises first by flex design, so shrink the
+           icon rather than drop it — at these densities the icon is the primary
+           identifier. Scoped to the three ELLIPSISING layouts
+           (.pane-grid.layout-1x3/2x3/3x3 .pane-title), not to isTerseLayout()'s
+           2x3/3x3 pair: isTerseLayout gates on header HEIGHT (which is what
+           collapses the input-state chip to a dot), while this is a column-WIDTH
+           concern, and 1x3's columns are as narrow as 2x3's — see the comment
+           above the .pane-grid.layout-1x3 .pane-title ellipsis rule. */
+        .pane-grid.layout-1x3 .pane-brand-icon,
+        .pane-grid.layout-2x3 .pane-brand-icon,
+        .pane-grid.layout-3x3 .pane-brand-icon {
+            width: 12px;
+            height: 12px;
         }
         .pane-index-chip {
             font-size: 9px;
@@ -942,14 +1284,52 @@
         .pane-badge.is-gap {
             background: var(--state-connecting);
         }
+        .pane-plan-title {
+            flex: 0 0 auto;
+            height: 18px;
+            line-height: 18px;
+            padding: 0 8px;
+            background: var(--panel-bg2);
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 10px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            user-select: none;
+        }
+        .pane-grid.layout-2x3 .pane-plan-title,
+        .pane-grid.layout-3x3 .pane-plan-title {
+            height: 16px;
+            line-height: 16px;
+            padding: 0 4px;
+            font-size: 9px;
+        }
         .pane-content {
             flex: 1;
+            /* LOAD-BEARING. A column flex item defaults to min-height:auto, i.e. its
+               content-based minimum, so without this .pane-content refuses to shrink
+               below the height of whatever is IN FLOW inside it. In kanban mode that
+               is a plain block list: the item grows past the pane, .terminal-pane's
+               overflow:hidden clips the tail, and .kanban-pane-list never overflows
+               its own box — so overflow-y:auto produces no scrollbar at all.
+               Every other link in this chain already declares it: .pane-grid,
+               .kanban-pane-body and .kanban-pane-list. This one was missed, and it
+               is the reason the kanban pane's card list cannot scroll.
+
+               Terminal mode is UNAFFECTED, structurally rather than incidentally:
+               .terminal-view-host and .startup-curtain are both position:absolute,
+               hence out of flow, hence excluded from min-height:auto's
+               content-based minimum — which therefore already computed to 0 here. The
+               only in-flow children this box ever has are .kanban-pane-body,
+               .kanban-pane-loading and .pane-empty-slot. */
+            min-height: 0;
             position: relative;
             /* The terminal rectangle is painted --term-surface by xterm, but the
-               8px .terminal-view-host gutter (terminals.html:359-367) fell through
-               to the pane's --panel-bg (#000000), framing every terminal in a hard
-               edge that read as chrome rather than as the typing surface. Carry the
-               surface colour into the gutter. */
+               8px .terminal-view-host gutter fell through to the pane's --panel-bg
+               (#000000), framing every terminal in a hard edge that read as chrome
+               rather than as the typing surface. Carry the surface colour into the
+               gutter. */
             background: var(--term-surface);
         }
         /* Drag-and-drop: highlight a terminal pane when a kanban card is dragged over it */
@@ -1121,6 +1501,13 @@
         .kanban-pane-row.is-feature {
             border-left: 3px solid var(--feature-accent, #7c3aed);
         }
+        .kanban-pane-row.selected {
+            border-color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2));
+        }
+        .kanban-pane-row.dragging {
+            opacity: 0.5;
+        }
         .kanban-pane-row-text {
             flex: 1;
             min-width: 0;
@@ -1175,6 +1562,16 @@
             text-overflow: ellipsis;
             max-width: 80px;
         }
+        .kanban-pane-column-chip {
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 0.4px;
+            padding: 0 3px;
+            border-radius: 2px;
+            color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 16%, transparent);
+            flex-shrink: 0;
+        }
         .kanban-pane-row-actions {
             display: flex;
             gap: 4px;
@@ -1194,7 +1591,8 @@
         }
         .kanban-pane-copy-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-teal) 15%, transparent); }
         .kanban-pane-copy-btn:disabled { opacity: 0.5; cursor: default; }
-        .kanban-pane-link-btn {
+        .kanban-pane-link-btn,
+        .kanban-pane-view-btn {
             background: transparent;
             border: 1px solid var(--border-color);
             color: var(--text-secondary);
@@ -1206,7 +1604,9 @@
             flex-shrink: 0;
             transition: border-color 0.15s, color 0.15s;
         }
-        .kanban-pane-link-btn:hover { border-color: var(--border-bright); color: var(--text-primary); }
+        .kanban-pane-link-btn:hover,
+        .kanban-pane-view-btn:hover { border-color: var(--border-bright); color: var(--text-primary); }
+        .kanban-pane-view-btn:disabled { opacity: 0.5; cursor: default; }
         .kanban-pane-column-picker,
         .kanban-pane-ws-project-picker {
             background: var(--panel-bg);
@@ -1312,6 +1712,18 @@
             display: none;
         }
         .layout-fallback-banner.visible { display: block; }
+        .banner-page-btn {
+            background: none;
+            border: 1px solid currentColor;
+            color: inherit;
+            font-family: inherit;
+            font-size: 10px;
+            padding: 0 6px;
+            margin-left: 6px;
+            border-radius: 2px;
+            cursor: pointer;
+        }
+        .banner-page-btn:disabled { opacity: 0.4; cursor: default; }
 
         /* Browser-only gap: without this a plain browser stops painting dark
            scrollbars and form controls on a black surface. Unscoped on purpose —
@@ -1393,6 +1805,41 @@
             background: color-mix(in srgb, var(--state-readonly, #e06c75) 12%, transparent);
         }
         .link-error[hidden] { display: none; }
+        .link-counter {
+            text-align: right;
+            font-size: 10px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+        .link-counter.is-over { color: var(--state-readonly, #e06c75); }
+        .link-standing-list {
+            margin-top: 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            max-height: 120px;
+            overflow-y: auto;
+        }
+        .link-standing-list[hidden] { display: none; }
+        .link-standing-item {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 6px 8px; font-size: 11px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .link-standing-item:last-child { border-bottom: none; }
+        .link-standing-item.dead { color: var(--text-secondary); opacity: 0.6; }
+        .link-standing-item .delete-btn {
+            background: transparent; border: none; color: var(--text-secondary);
+            cursor: pointer; font-size: 15px; padding: 0 2px;
+        }
+        .link-standing-item .delete-btn:hover { color: var(--state-readonly, #e06c75); }
+
+        .fill-grid-form {
+            display: flex; flex-direction: column; gap: 6px;
+            padding: 8px; border-bottom: 1px solid var(--border-color);
+        }
+        .fill-grid-form[hidden] { display: none; }
+        .fill-grid-actions { display: flex; gap: 6px; }
+        .fill-grid-actions .secondary-btn { flex: 1; }
 
         /* Scrollbar styling — same block as the sibling browser panels, plus
            -corner. The --vscode-* var is absent in a browser and falls through to
@@ -1455,7 +1902,8 @@
         }
         body.is-solo .terminals-sidebar,
         body.is-solo .layout-toolbar,
-        body.is-solo .layout-fallback-banner {
+        body.is-solo .layout-fallback-banner,
+        body.is-solo .group-tab-strip {
             display: none !important;
         }
         /* #empty-state is a full-height flex SIBLING of #pane-grid, and
@@ -1497,6 +1945,16 @@
         <div class="sidebar-ops">
             <button type="button" id="btn-open-all" class="secondary-btn is-teal w-full"
                     title="Open a terminal for every visible agent role">OPEN AGENT TERMINALS</button>
+            <button type="button" id="btn-fill-grid" class="secondary-btn w-full"
+                    title="Create a grid full of one role's agents">FILL GRID</button>
+            <form id="fill-grid-form" class="fill-grid-form" hidden>
+                <select id="fill-grid-role" class="link-select" required></select>
+                <select id="fill-grid-mode" class="link-select" required></select>
+                <div class="fill-grid-actions">
+                    <button type="button" id="fill-grid-cancel" class="secondary-btn">CANCEL</button>
+                    <button type="submit" id="fill-grid-confirm" class="secondary-btn is-teal">FILL</button>
+                </div>
+            </form>
             <button type="button" id="btn-clear-all" class="secondary-btn w-full"
                     title="Send /clear to every active terminal">CLEAR ALL TERMINALS</button>
             <button type="button" id="btn-save-group" class="secondary-btn w-full"
@@ -1537,6 +1995,7 @@
             Window too small for requested layout — using simpler layout floor.
         </div>
         <div id="pane-toast" class="pane-toast"><span id="pane-toast-text"></span><button type="button" id="pane-toast-undo">Undo</button></div>
+        <div id="group-tab-strip" class="group-tab-strip"></div>
         <div id="pane-grid" class="pane-grid layout-1"></div>
         <div id="empty-state" class="empty-state">
             No terminal selected. Use the + beside a workspace in the sidebar to spawn one.
@@ -1565,11 +2024,24 @@
                 <label class="link-field-label" for="link-child">Child — the terminal it will message</label>
                 <select id="link-child" class="link-select"></select>
 
+                <label class="link-field-label" for="link-mode">Mode</label>
+                <select id="link-mode" class="link-select">
+                    <option value="instant">Instant — deliver this message once, now</option>
+                    <option value="standing">Standing orders — append to every prompt sent to the parent</option>
+                </select>
+
+                <label class="link-field-label" for="link-preset">Instruction preset</label>
+                <select id="link-preset" class="link-select"></select>
+
                 <label class="link-field-label" for="link-message">Instruction</label>
                 <textarea id="link-message" class="link-message"
                           placeholder="e.g. hand over the context of this task to terminal 2"></textarea>
 
+                <div id="link-counter" class="link-counter"></div>
+
                 <div id="link-error" class="link-error" hidden></div>
+
+                <div id="link-standing-list" class="link-standing-list" hidden></div>
             </div>
             <div class="modal-footer">
                 <button type="button" id="link-cancel" class="secondary-btn">CANCEL</button>

@@ -1,5 +1,16 @@
 export type BuiltInAgentRole = 'lead' | 'coder' | 'intern' | 'reviewer' | 'tester' | 'planner' | 'analyst' | 'ticket_updater' | 'researcher';
 
+export interface DelegateDefinition {
+    role: string;
+    count?: number;
+    label?: string;
+    startupCommand?: string;
+    /** Whether this member is one-per-team ('per-team', default) or shared across heads of the same team ('shared'). */
+    scope?: 'per-team' | 'shared';
+    /** Relationship preset id — see src/services/linkPresets.ts. Defaults to 'reports-to-head'. */
+    relationship?: string;
+}
+
 export interface CustomAgentAddons {
     // Core
     gitProhibitionEnabled?: boolean;
@@ -36,6 +47,10 @@ export interface CustomAgentAddons {
     // to POST a notification to the LocalApiServer when the batch is done, which
     // triggers a second-pass dispatch to the Phone-a-Friend terminal.
     phoneAFriend?: boolean;
+    /** Per-originating-terminal target overrides for Phone-a-Friend. */
+    phoneAFriendTargets?: Record<string, string | null>;
+    /** Cost-routed delegate terminals spawned when this head agent opens. */
+    delegates?: DelegateDefinition[];
 
     // Design doc (planning feature)
 
@@ -276,6 +291,40 @@ export function parseCustomAgentAddons(raw: unknown): CustomAgentAddons | undefi
     }
     if (s.useWorktreesPerPlan === true) a.useWorktreesPerPlan = true;
     if (s.phoneAFriend === true) a.phoneAFriend = true;
+    if (s.phoneAFriendTargets && typeof s.phoneAFriendTargets === 'object' && !Array.isArray(s.phoneAFriendTargets)) {
+        const map: Record<string, string | null> = {};
+        for (const [key, value] of Object.entries(s.phoneAFriendTargets)) {
+            if (typeof key !== 'string' || !key.trim()) { continue; }
+            const k = key.trim();
+            if (value === null) {
+                map[k] = null;
+            } else if (typeof value === 'string' && value.trim()) {
+                const v = value.trim();
+                const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9_]/g, '');
+                if (norm(k).length > 0 && norm(k) === norm(v)) { continue; }
+                map[k] = v;
+            }
+        }
+        if (Object.keys(map).length > 0) { a.phoneAFriendTargets = map; }
+    }
+    if (Array.isArray(s.delegates)) {
+        const defs: DelegateDefinition[] = [];
+        for (const d of s.delegates) {
+            if (!d || typeof d !== 'object') { continue; }
+            const role = String((d as any).role || '').trim();
+            const startupCommand = (d as any).startupCommand ? String((d as any).startupCommand).trim() : undefined;
+            const label = (d as any).label ? String((d as any).label).trim() : undefined;
+            const count = typeof (d as any).count === 'number' ? Math.max(1, Math.min((d as any).count, 16)) : 1;
+            if (!role) { continue; }
+            defs.push({
+                role,
+                count,
+                ...(startupCommand ? { startupCommand } : {}),
+                ...(label ? { label } : {}),
+            });
+        }
+        if (defs.length > 0) { a.delegates = defs; }
+    }
 
     // Granular git policy — allowlist the enum values so custom-agent definitions
     // persist the user's selection across reloads (mirrors subagentPolicy above).

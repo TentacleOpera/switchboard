@@ -1227,6 +1227,19 @@
             margin-bottom: 0; /* Paragraphs inside list items: zero extra margin (li already spaced) */
         }
 
+        /* A blank line between bullets in the source is a deliberate sub-group break —
+           render it as one. Per-ITEM (not a <p> wrapper): `li p { margin-bottom: 0 }`
+           directly above would cancel a <p>-based gap, and a per-item class leaves a
+           tight list byte-for-byte unchanged. */
+        #markdown-preview .md-li-loose,
+        #markdown-preview-online .md-li-loose,
+        #markdown-preview-design .md-li-loose,
+        #stitch-html-markdown-preview .md-li-loose,
+        #kanban-preview-pane .md-li-loose,
+        #markdown-preview-tickets .md-li-loose {
+            margin-top: 0.65em;
+        }
+
         #markdown-preview pre,
         #markdown-preview-online pre,
         #markdown-preview-design pre,

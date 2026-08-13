@@ -40,6 +40,16 @@ export interface WorktreeRow {
     tier: string | null;
 }
 
+/** Row projected for live terminal-to-plan attribution. */
+export interface LiveDispatchAttributionRow {
+    planId: string;
+    topic: string;
+    dispatchedTerminal: string;
+    dispatchedAt: string;
+    featureId: string | null;
+    project: string | null;
+}
+
 export type KanbanPlanStatus = 'active' | 'archived' | 'completed' | 'deleted' | 'missing';
 
 export interface KanbanPlanRecord {
@@ -6299,30 +6309,28 @@ export class KanbanDatabase {
      */
     public async getFeatureWorkingStates(
         workspaceId: string,
-        timeoutMs: number
+        timeoutMs: number,
+        blockedTimeoutMs: number = 4 * 60 * 60 * 1000
     ): Promise<Map<string, { working: boolean; blocked: boolean }>> {
         const workingStates = new Map<string, { working: boolean; blocked: boolean }>();
         if (!(await this.ensureReady()) || !this._db || !workspaceId) return workingStates;
         const cutoff = new Date(Date.now() - timeoutMs).toISOString();
-        // V58: widen the age basis to MAX(dispatched_at, COALESCE(last_liveness_at,
-        // dispatched_at)) so the feature rollup agrees with its own subtask cards —
-        // a subtask spared by liveness at the card level must also read as working
-        // here, or the feature light goes dark while its children stay lit.
         const hardCapCutoff = new Date(Date.now() - 3 * timeoutMs).toISOString();
+        const blockedCutoff = new Date(Date.now() - blockedTimeoutMs).toISOString();
         const stmt = this._db.prepare(
             `SELECT feature_id AS featureId,
-                    MAX(dispatched_at IS NOT NULL
+                    MAX((dispatched_at IS NOT NULL
                          AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) >= ?
-                         AND dispatched_at >= ?) AS anyWorking,
+                         AND dispatched_at >= ?)
+                         OR (blocked_at IS NOT NULL AND blocked_at >= ?)) AS anyWorking,
                     MAX(blocked_at IS NOT NULL
                          AND dispatched_at IS NOT NULL
-                         AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) >= ?
-                         AND dispatched_at >= ?) AS anyBlocked
+                         AND blocked_at >= ?) AS anyBlocked
              FROM plans
              WHERE workspace_id = ? AND feature_id IS NOT NULL AND feature_id != ''
                AND status = 'active' AND is_feature = 0
              GROUP BY feature_id`,
-            [cutoff, hardCapCutoff, cutoff, hardCapCutoff, workspaceId]
+            [cutoff, hardCapCutoff, blockedCutoff, blockedCutoff, workspaceId]
         );
         try {
             while (stmt.step()) {
@@ -9867,6 +9875,43 @@ FROM plans
     }
 
     /**
+     * Bulk live-dispatch read for the fleet-list terminal→plan enrichment: every
+     * live-dispatched plan row for a workspace, newest first. One query, flat in
+     * terminal count. No join to worktrees, no `worktree_id` read, no `is_feature`
+     * predicate — the resolver and the panel need the same row shape.
+     */
+    public async getLiveDispatchAttribution(workspaceId: string): Promise<LiveDispatchAttributionRow[]> {
+        const out: LiveDispatchAttributionRow[] = [];
+        if (!(await this.ensureReady()) || !this._db || !workspaceId) return out;
+        const stmt = this._db.prepare(
+            `SELECT plan_id, topic, dispatched_terminal, dispatched_at, feature_id, project
+             FROM plans
+             WHERE workspace_id = ? AND status = 'active'
+               AND dispatched_at IS NOT NULL
+             ORDER BY dispatched_at DESC`,
+            [workspaceId]
+        );
+        try {
+            while (stmt.step()) {
+                const row = stmt.getAsObject();
+                out.push({
+                    planId: String(row.plan_id ?? ''),
+                    topic: String(row.topic ?? '').trim(),
+                    dispatchedTerminal: String(row.dispatched_terminal ?? '').trim(),
+                    dispatchedAt: String(row.dispatched_at ?? ''),
+                    featureId: row.feature_id ? String(row.feature_id) : null,
+                    project: row.project ? String(row.project) : null,
+                });
+            }
+        } catch (error) {
+            console.error('[KanbanDatabase] getLiveDispatchAttribution failed:', error);
+        } finally {
+            stmt.free();
+        }
+        return out;
+    }
+
+    /**
      * Activity-light timeout backstop. Widened (V58) to consult `last_liveness_at`
      * so a card whose agent is demonstrably still producing output is spared at the
      * timeout, with a `3 × maxAgeMs`-from-`dispatched_at` hard cap so a wedged
@@ -9891,25 +9936,27 @@ FROM plans
     public async clearStaleWorkingState(
         workspaceId: string,
         maxAgeMs: number,
-        opts?: { forceTerminals?: string[] }
+        opts?: { forceTerminals?: string[]; blockedTimeoutMs?: number }
     ): Promise<number> {
         if (!(await this.ensureReady()) || !this._db) return 0;
         const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
         const hardCapCutoff = new Date(Date.now() - 3 * maxAgeMs).toISOString();
+        const blockedTimeoutMs = opts?.blockedTimeoutMs ?? 4 * 60 * 60 * 1000;
+        const blockedCutoff = new Date(Date.now() - blockedTimeoutMs).toISOString();
         const forceTerminals = opts?.forceTerminals?.filter(n => !!n) ?? [];
         try {
             this._db.run('BEGIN');
-            // Basis = MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)).
-            // Clear when basis < cutoff (age) OR dispatched_at < hardCapCutoff (cap).
-            // The cap is a force-clear condition, not an exclusion — a capped row is
-            // cleared here, not skipped. SQLite's MAX over TEXT ISO timestamps sorts
-            // chronologically, matching the existing dispatched_at comparison.
+            // V59: blocked rows get their own retention. Clear non-blocked rows on
+            // the working age basis or hard cap; clear blocked rows only when
+            // blocked_at itself has aged out. With blocked_at NULL everywhere this
+            // reduces to the pre-V59 statement.
             this._db.run(
                 'UPDATE plans SET dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL ' +
-                'WHERE workspace_id = ? AND dispatched_at IS NOT NULL ' +
-                'AND (MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) < ? ' +
-                'OR dispatched_at < ?)',
-                [workspaceId, cutoff, hardCapCutoff]
+                'WHERE workspace_id = ? AND dispatched_at IS NOT NULL AND (' +
+                '  (blocked_at IS NULL AND (MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) < ? OR dispatched_at < ?))' +
+                '  OR (blocked_at IS NOT NULL AND blocked_at < ?)' +
+                ')',
+                [workspaceId, cutoff, hardCapCutoff, blockedCutoff]
             );
             let modified = this._db.getRowsModified();
             // Exited-terminal force-clear: dead agents clear immediately rather than
@@ -9937,13 +9984,13 @@ FROM plans
 
     /**
      * Persist the fleet's liveness heartbeat for the named terminals (V58). One
-     * UPDATE setting `last_liveness_at = ?` for rows whose `dispatched_terminal`
-     * is in the set AND whose `dispatched_at` is still set (a cleared row has no
-     * active turn to attribute liveness to). Called once per sweep tick — NOT per
-     * output flush — so this is ~1 write per live card per 10s, well within the
-     * sql.js WASM-heap budget. Rows with an empty `dispatched_terminal` are never
-     * updated: they have no liveness evidence and fall through to the blind timer.
-     * Returns the count of rows stamped.
+     * UPDATE setting `last_liveness_at = ?` and nulling `blocked_at` for rows whose
+     * `dispatched_terminal` is in the set AND whose `dispatched_at` is still set.
+     * Called once per sweep tick — NOT per output flush — so this is ~1 write per
+     * live card per 10s, well within the sql.js WASM-heap budget. Rows with an
+     * empty `dispatched_terminal` are never updated: they have no liveness
+     * evidence and fall through to the blind timer. Returns the count of rows
+     * stamped.
      */
     public async recordLiveness(workspaceId: string, terminalNames: string[], atIso: string): Promise<number> {
         if (!(await this.ensureReady()) || !this._db) return 0;
@@ -9952,7 +9999,7 @@ FROM plans
         try {
             const placeholders = names.map(() => '?').join(', ');
             this._db.run(
-                `UPDATE plans SET last_liveness_at = ? ` +
+                `UPDATE plans SET last_liveness_at = ?, blocked_at = NULL ` +
                 `WHERE workspace_id = ? AND dispatched_at IS NOT NULL ` +
                 `AND dispatched_terminal IN (${placeholders})`,
                 [atIso, workspaceId, ...names]

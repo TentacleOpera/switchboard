@@ -185,12 +185,46 @@ function testTicketsSubtaskEmbeddingContract() {
     // The pushes regex matches only content-bearing pushes (those with `content:` on
     // the same line), NOT error responses (success:false with no content field) —
     // error responses carry no display content and need no strip.
-    for (const [file, expected] of [['TicketsPanelProvider.ts', 2], ['PlanningPanelProvider.ts', 1]]) {
+    //
+    // TicketsPanelProvider dropped from 2 to 1 on 2026-08-11: the ticketFileChanged and
+    // localTicketFileRead producers were merged into ONE `_readTicketFilePayload` helper,
+    // so there is one literal strip call left and neither push carries an inline
+    // `content:` any more (both spread the helper's payload, which makes `pushes` 0 for
+    // that file). Lowering the number alone would gut the ratchet, so the choke point
+    // itself is pinned below instead.
+    for (const [file, expected] of [['TicketsPanelProvider.ts', 1], ['PlanningPanelProvider.ts', 1]]) {
         const src = fs.readFileSync(path.join(__dirname, '..', 'services', file), 'utf8');
         const pushes = (src.match(/type:\s*'(ticketFileChanged|localTicketFileRead)'.*content:/g) || []).length;
         const strips = (src.match(/stripImportedSubtasksBlock\(/g) || []).length;
         assert.strictEqual(strips, expected, `${file}: every display-content push must strip (bump expected if you added a stripped push)`);
         assert.ok(pushes <= expected, `${file}: a new display push needs a matching strip`);
+    }
+
+    // 14b. The consolidated choke point. With both producers sharing one builder, the
+    // count above no longer proves each producer strips — these do: the strip lives
+    // inside _readTicketFilePayload, and BOTH pushes get their content by spreading that
+    // helper's return. A future producer that assembles `content` itself satisfies
+    // neither assertion and must route through the helper (or add its own strip and bump
+    // `expected` above).
+    const provSrc = fs.readFileSync(path.join(__dirname, '..', 'services', 'TicketsPanelProvider.ts'), 'utf8');
+    const payloadIdx = provSrc.indexOf('private _readTicketFilePayload(');
+    assert.notStrictEqual(payloadIdx, -1, 'TicketsPanelProvider must expose the shared _readTicketFilePayload builder');
+    const payloadBody = provSrc.slice(payloadIdx, provSrc.indexOf('\n    private ', payloadIdx + 10));
+    assert.ok(
+        payloadBody.includes('stripImportedSubtasksBlock('),
+        '_readTicketFilePayload is the single display-content choke point — the strip must live inside it'
+    );
+    assert.ok(
+        payloadBody.includes('this._rewriteLocalImagePaths('),
+        '_readTicketFilePayload must also rewrite local image paths, or one producer would emit unservable relative asset URLs'
+    );
+    for (const pushType of ['ticketFileChanged', 'localTicketFileRead']) {
+        const re = new RegExp(`type:\\s*'${pushType}'[^}]*\\.\\.\\.payload`);
+        assert.match(
+            provSrc,
+            re,
+            `the ${pushType} push must spread _readTicketFilePayload's result, not assemble content itself`
+        );
     }
 
     // 15. Unit assertions on stripImportedSubtasksBlock — the shared display choke point.
@@ -519,6 +553,200 @@ function testTicketsSubtaskEmbeddingContract() {
     assert.strictEqual(
         /#images/.test(getListBody), false,
         'getAttachmentList must NOT fold the inline-image upload namespace into its provenance gate'
+    );
+
+    // ── 21. _resolveRecordedAsset: the inline-lookup fallback chain, EXECUTED. ──────
+    // §20's fake `self` supplies neither _resolveRecordedAsset nor _recordAttachment, so
+    // every fallback and the write-back are skipped there by the `typeof … === 'function'`
+    // guards — green by absence. These run the real bodies.
+    const tsc = require('typescript');
+    const transpileMethods = (names) => {
+        const bodies = names.map(n => {
+            const start = content.indexOf(`private ${n}(`);
+            assert.notStrictEqual(start, -1, `expected to find ${n}`);
+            return content.slice(start, content.indexOf('\n    }', start) + 6).replace(/^\s*private\s+/, '');
+        }).join('\n');
+        const src = `class Probe {\n    constructor(fs, path) { this.fs = fs; this.path = path; }\n${bodies}\n}\nmodule.exports = Probe;`;
+        const js = tsc.transpileModule(src, { compilerOptions: { target: tsc.ScriptTarget.ES2020 } }).outputText;
+        const mod = { exports: {} };
+        new Function('exports', 'module', 'fs', 'path', js)(mod.exports, mod, fsShim, path);
+        return mod.exports;
+    };
+    // The two methods reference the module-scope `fs`/`path`; inject them as free variables.
+    let fsShim = { existsSync: () => false };
+    const Probe = transpileMethods(['_normalizeAssetName', '_resolveRecordedAsset']);
+    const probe = new Probe();
+    const attDir = '/tmp/tickets/clickup/list/attachments';
+
+    // 21a. Id-from-URL, against the real shape on the install (plan test 3).
+    assert.strictEqual(
+        probe._resolveRecordedAsset(
+            { '72aa032b-015f-4a2e-b1a8-d26799aa3f31.png': `${attDir}/image-1786413138003.png` },
+            'https://t6909707.p.clickup-attachments.com/t6909707/72aa032b-015f-4a2e-b1a8-d26799aa3f31/image.png',
+            attDir
+        ),
+        `${attDir}/image-1786413138003.png`,
+        'the id segment + the last segment\'s extension must resolve an id-keyed record exactly'
+    );
+
+    // 21b. Id-from-URL with an extension-less last segment (plan test 4).
+    assert.strictEqual(
+        probe._resolveRecordedAsset(
+            { 'aaaa1111-2222-3333-4444-555566667777': `${attDir}/wireframe.png` },
+            'https://t6909707.p.clickup-attachments.com/t6909707/aaaa1111-2222-3333-4444-555566667777/record%20screen%20wireframe',
+            attDir
+        ),
+        `${attDir}/wireframe.png`,
+        'a ref with no extension on its last segment must fall back to the bare id segment'
+    );
+
+    // 21c. Mojibake-encoded narrow no-break space (plan test 5). BOTH encodings must
+    // resolve — a naive decodeURIComponent comparison passes the second and silently
+    // fails the first, which is the exact miss this fallback exists to close.
+    const nnbsp = `${attDir}/Screenshot 2026-07-16 at 11.55.42 am.png`;
+    for (const [label, enc] of [['latin-1 mojibake', '%C3%A2%C2%80%C2%AF'], ['correct utf-8', '%E2%80%AF']]) {
+        assert.strictEqual(
+            probe._resolveRecordedAsset(
+                { 'some-id.png': nnbsp },
+                `https://t6909707.p.clickup-attachments.com/t/x/Screenshot%202026-07-16%20at%2011.55.42${enc}am.png`,
+                attDir
+            ),
+            nnbsp,
+            `basename fallback must survive the ${label} form of U+202F`
+        );
+    }
+
+    // 21d. Ambiguity refused (plan test 6). Getting the WRONG screenshot inline is worse
+    // than keeping the CDN URL, so two candidates must resolve to none.
+    assert.strictEqual(
+        probe._resolveRecordedAsset(
+            { 'a.png': `${attDir}/image.png`, 'b.png': `${attDir}/sub/image.png` },
+            'https://t6909707.p.clickup-attachments.com/t/unknown-id/image.png',
+            attDir
+        ),
+        undefined,
+        'two index values sharing a basename must refuse to resolve rather than guess'
+    );
+
+    // 21e. Flat-path probe, and traversal refusal (plan test 7).
+    fsShim = { existsSync: (p) => p === path.join(attDir, 'shot.png') };
+    const Probe2 = transpileMethods(['_normalizeAssetName', '_resolveRecordedAsset']);
+    const probe2 = new Probe2();
+    assert.strictEqual(
+        probe2._resolveRecordedAsset({}, 'https://t6909707.p.clickup-attachments.com/t/x/shot.png', attDir),
+        path.join(attDir, 'shot.png'),
+        'an empty index must still adopt a file sitting at <dir>/<basename>'
+    );
+    let probed = [];
+    fsShim = { existsSync: (p) => { probed.push(p); return false; } };
+    const Probe3 = transpileMethods(['_normalizeAssetName', '_resolveRecordedAsset']);
+    new Probe3()._resolveRecordedAsset({}, 'https://t6909707.p.clickup-attachments.com/t/x/..%2F..%2F.ssh%2Fid_rsa', attDir);
+    for (const p of probed) {
+        assert.ok(
+            path.resolve(p).startsWith(path.resolve(attDir) + path.sep),
+            `the flat-path probe must never stat outside the attachments dir (probed ${p})`
+        );
+    }
+
+    // 21f. A malformed ref must fall through every branch without throwing (plan test 11).
+    assert.doesNotThrow(
+        () => new Probe3()._resolveRecordedAsset({ 'x.png': `${attDir}/x.png` },
+            'truncated — open the ticket for the full description', attDir),
+        'a non-URL ref must not throw out of the resolver'
+    );
+
+    // ── 22. Auto-download on import: the seams that decide whether it is safe. ──────
+    const hydrateBody = sliceBetween('private async _hydrateTicketAssets(', 'public async downloadAttachment(');
+    const fetchBody = sliceBetween('private async _fetchAssetToDisk(', 'private async _hydrateTicketAssets(');
+    const streamBody = sliceBetween('private async _streamHttpsToFile(', 'private async _fetchAssetToDisk(');
+
+    // 22a. Ordering at BOTH write sites: hydrate -> relocalise -> write. Hydrating after
+    // relocalisation downloads bytes the rewrite has already declined to use.
+    for (const [fnStart, fnEnd] of [
+        ['public async importTaskAsDocument(', 'private async _ticketAttachmentsDir'],
+        ['private async _writeTaskDocument(', 'private static readonly _DELETION_PROBE_CAP'],
+    ]) {
+        const body = sliceBetween(fnStart, fnEnd);
+        const hydrateIdx = body.indexOf('_hydrateTicketAssets(');
+        const relocalIdx = body.indexOf('_relocalizeInlineImages(');
+        assert.ok(hydrateIdx !== -1, `${fnStart} must hydrate assets — the bulk path is how the 69 unresolved refs arrived`);
+        assert.ok(hydrateIdx < relocalIdx, `${fnStart} must hydrate BEFORE relocalising, or the first import always misses`);
+    }
+
+    // 22b. The Linear token goes to uploads.linear.app and NOWHERE else, matched on the
+    // PARSED hostname. A substring test (`url.includes('.linear.app')`) hands the token to
+    // `https://evil.example/.linear.app/x.png` — reachable by anyone who can type into a
+    // ticket description once fetching is automatic.
+    assert.ok(
+        /hostname[\s\S]{0,160}[!=]==\s*'uploads\.linear\.app'/.test(fetchBody),
+        'the Linear auth test must compare a parsed hostname for equality with uploads.linear.app'
+    );
+    assert.strictEqual(
+        /includes\(\s*'\.?linear[-.]/.test(fetchBody), false,
+        'the Linear auth test must NOT be a substring match on the raw URL'
+    );
+
+    // 22c. The Authorization header must be dropped on a cross-origin redirect. This is a
+    // CORRECTNESS test, not only a security one: uploads.linear.app 302s to a pre-signed
+    // GCS URL, and GCS answers 400/403 to a request carrying a foreign auth header — so a
+    // "pass the headers through too" cleanup breaks every Linear image.
+    assert.ok(
+        /sameOrigin\s*\?\s*options\s*:\s*\{\}/.test(streamBody),
+        'redirect options must be dropped wholesale on a cross-origin hop, keeping only same-origin headers'
+    );
+
+    // 22d. Automatic fetches of description URLs are allowlisted. Descriptions are
+    // user-authored markdown; without this an author can point the importer at any host.
+    for (const host of ['clickup-attachments.com', 'uploads.linear.app']) {
+        assert.ok(hydrateBody.includes(host), `the description-sweep allowlist must include ${host}`);
+    }
+    assert.ok(
+        hydrateBody.indexOf('hostOk(') !== -1 && hydrateBody.indexOf('hostOk(') < hydrateBody.lastIndexOf('_fetchAssetToDisk('),
+        'the allowlist must gate the description sweep BEFORE the fetch, not after'
+    );
+
+    // 22e. No HEAD pre-flight: uploads.linear.app answers HEAD chunked with no
+    // content-length, so a pre-flight size check is an extra request AND unreliable.
+    assert.strictEqual(
+        /method:\s*'HEAD'/.test(streamBody + fetchBody), false,
+        'asset fetching must never issue a HEAD pre-flight — stream-and-count is the portable guard'
+    );
+    assert.ok(/received\s*>\s*maxBytes/.test(streamBody), 'the size cap must be enforced by a streaming byte counter');
+
+    // 22f. The kill switch, and the caps. A silent cap reads as "covered everything".
+    assert.ok(
+        /ticketsDownloadInlineImages\s*!==\s*false/.test(hydrateBody),
+        'an absent ticketsDownloadInlineImages key must mean ON — this ships default-ON by explicit PRD override'
+    );
+    for (const cap of ['_MAX_ASSETS_PER_TICKET', '_MAX_ASSET_BYTES', '_MAX_RUN_ASSET_FILES', '_MAX_RUN_ASSET_BYTES', '_ASSET_TIMEOUT_MS', '_ASSET_REDIRECT_HOPS']) {
+        assert.ok(content.includes(`readonly ${cap} =`), `${cap} must be a declared bound, not an inline literal`);
+    }
+
+    // 22g. Idempotence probe and inline rewrite must share ONE resolver. A hand-rolled
+    // probe that only checks the url key misses every id-keyed record on the install base
+    // and turns each background sync into a re-download-and-duplicate loop.
+    assert.ok(
+        hydrateBody.includes('this._resolveRecordedAsset('),
+        'the "already have this?" probe must call the same resolver the inline rewrite uses'
+    );
+    // Collision suffixes must be STABLE, never Date.now(): a timestamp suffix is what put
+    // seven copies of one screenshot in a single attachments directory.
+    assert.strictEqual(
+        /uniqueFilename[\s\S]{0,400}?Date\.now\(\)/.test(hydrateBody), false,
+        'the download collision suffix must be a stable digest, not a timestamp'
+    );
+
+    // 22h. The run budget must be opened and closed on EVERY importAllTasks exit. Leaking a
+    // spent budget onto the field makes the next single-ticket import silently download
+    // nothing, with no log line to explain it.
+    const runBudgetBody = sliceBetween('public async importAllTasks(', 'public async deleteTicket(');
+    const opens = (runBudgetBody.match(/_importRunBudget = \{/g) || []).length;
+    const closes = (runBudgetBody.match(/_importRunBudget = null/g) || []).length;
+    assert.strictEqual(opens, 1, 'the run budget must be opened exactly once, before the fast/slow path branch');
+    assert.strictEqual(closes, 2, 'both importAllTasks exits (fast path and slow path) must close the run budget');
+    assert.ok(
+        runBudgetBody.indexOf('_importRunBudget = {') < runBudgetBody.indexOf('for (const item of items)'),
+        'the run budget must be opened before the document fast path, or the slow path inherits a stale one'
     );
 
     console.log('tickets-subtask-embedding.test.js contract test PASSED');

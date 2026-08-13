@@ -4,10 +4,23 @@ import * as os from 'os';
 import * as path from 'path';
 import { KanbanDatabase, WorkspaceDatabaseMapping } from './KanbanDatabase';
 
+/**
+ * A mapping augmented with in-memory provenance and per-mapping enablement.
+ * These fields are attached at collection time in `buildMappingIndexFromDbs`
+ * and are NEVER written back to `workspace_mappings` — they exist so the
+ * call-site scope filter can tell a mapping authored in this repo from one
+ * scavenged out of an unrelated repo's DB, and so a disabled DB's mappings are
+ * not switched on by a sibling folder in the same VS Code window.
+ */
+type MappingWithProvenance = WorkspaceDatabaseMapping & {
+    sourceFolder?: string;
+    _enabled?: boolean;
+};
+
 // Module-level cache for mapping lookups
 let _mappingCache: Map<string, string> | null = null;
 let _mappingIndex: Map<string, string> | null = null;
-let _mappingsDocument: { enabled: boolean; mappings: WorkspaceDatabaseMapping[] } | null = null;
+let _mappingsDocument: { enabled: boolean; mappings: MappingWithProvenance[] } | null = null;
 
 function getCachedMapping(workspaceRoot: string): string | undefined {
     return _mappingCache?.get(workspaceRoot);
@@ -31,8 +44,7 @@ export function clearMappingCache(): void {
 
 export async function buildMappingIndexFromDbs(dbs: Map<string, KanbanDatabase>, outputChannel?: any): Promise<void> {
     const index = new Map<string, string>();
-    const allMappings: WorkspaceDatabaseMapping[] = [];
-    let anyEnabled = false;
+    const allMappings: MappingWithProvenance[] = [];
 
     const log = (msg: string) => {
         console.log(`[WorkspaceIdentityService] ${msg}`);
@@ -47,12 +59,34 @@ export async function buildMappingIndexFromDbs(dbs: Map<string, KanbanDatabase>,
             log(`DB at ${path.basename(parentPath)}: ready=${dbReady}, dbPath=${db.dbPath}`);
             const result = await db.getWorkspaceMappings();
             log(`DB at ${path.basename(parentPath)}: enabled=${result.enabled}, mappings=${result.mappings?.length ?? 0}`);
-            if (result.enabled && Array.isArray(result.mappings)) {
-                anyEnabled = true;
+            if (Array.isArray(result.mappings)) {
                 for (const mapping of result.mappings) {
-                    // Avoid duplicates in the combined list
-                    if (!allMappings.some(m => m.id === mapping.id)) {
-                        allMappings.push(mapping);
+                    // Avoid duplicates in the combined list. Provenance
+                    // (sourceFolder) determines which board a mapping belongs to
+                    // under the scope filter, so it must prefer an ENABLED source:
+                    // if a disabled foreign DB is iterated before the board's own
+                    // enabled DB and both carry the same mapping id, the disabled
+                    // DB's version would otherwise win on content AND sourceFolder,
+                    // and the board's own mapping would carry a foreign
+                    // sourceFolder — failing its own `source === boardRoot` scope
+                    // test. So: on collision, when the existing entry is disabled
+                    // and the incoming DB is enabled, replace the entry wholesale
+                    // (data + sourceFolder) and set _enabled true. When the
+                    // existing entry is already enabled, keep it and only OR the
+                    // enabled flag onto it (an enabled source's provenance is
+                    // authoritative).
+                    const existing = allMappings.find(m => m.id === mapping.id);
+                    if (existing) {
+                        if (result.enabled && !existing._enabled) {
+                            const idx = allMappings.indexOf(existing);
+                            allMappings[idx] = { ...mapping, sourceFolder: parentPath, _enabled: true };
+                            log(`Mapping id collision: '${mapping.id}' — replacing disabled entry (source ${existing.sourceFolder}) with enabled source (${parentPath})`);
+                        } else {
+                            if (result.enabled) { existing._enabled = true; }
+                            log(`Mapping id collision: '${mapping.id}' found in multiple DBs — keeping enabled provenance (${existing.sourceFolder}), ORing enabled flag`);
+                        }
+                    } else {
+                        allMappings.push({ ...mapping, sourceFolder: parentPath, _enabled: result.enabled });
                     }
                 }
             }
@@ -61,44 +95,147 @@ export async function buildMappingIndexFromDbs(dbs: Map<string, KanbanDatabase>,
         }
     }
 
-    // Now populate the index
-    if (anyEnabled) {
-        for (const mapping of allMappings) {
-            const parentEntry = mapping.parentFolder || (Array.isArray(mapping.workspaceFolders) && mapping.workspaceFolders.length > 0 ? mapping.workspaceFolders[0] : undefined);
-            if (!parentEntry) continue;
-            
-            const resolvedParent = path.resolve(parentEntry.startsWith('~') ? path.join(os.homedir(), parentEntry.slice(1)) : parentEntry);
+    // Populate the index per-mapping, gated on THAT mapping's enabled flag —
+    // not a single global `anyEnabled`. A disabled DB's mappings must not
+    // contribute path→parent entries just because a sibling DB is enabled.
+    for (const mapping of allMappings) {
+        if (!mapping._enabled) continue;
+        const parentEntry = mapping.parentFolder || (Array.isArray(mapping.workspaceFolders) && mapping.workspaceFolders.length > 0 ? mapping.workspaceFolders[0] : undefined);
+        if (!parentEntry) continue;
 
-            // Parent maps to itself
-            index.set(resolvedParent, resolvedParent);
+        const resolvedParent = path.resolve(parentEntry.startsWith('~') ? path.join(os.homedir(), parentEntry.slice(1)) : parentEntry);
 
-            // Children map to parent
-            if (Array.isArray(mapping.workspaceFolders)) {
-                for (const child of mapping.workspaceFolders) {
-                    const resolvedChild = path.resolve(child.startsWith('~') ? path.join(os.homedir(), child.slice(1)) : child);
-                    index.set(resolvedChild, resolvedParent);
-                }
+        // Parent maps to itself
+        index.set(resolvedParent, resolvedParent);
+
+        // Children map to parent
+        if (Array.isArray(mapping.workspaceFolders)) {
+            for (const child of mapping.workspaceFolders) {
+                const resolvedChild = path.resolve(child.startsWith('~') ? path.join(os.homedir(), child.slice(1)) : child);
+                index.set(resolvedChild, resolvedParent);
             }
-
         }
     }
 
+    // The aggregate enabled flag and the mappings list for existing callers
+    // (getMappingsFromIndex) contain only ENABLED mappings — matching the
+    // previous behaviour so the seven other consumers are untouched.
+    const enabledMappings = allMappings.filter(m => m._enabled);
+    const anyEnabled = enabledMappings.length > 0;
+
     _mappingIndex = index;
-    _mappingsDocument = { enabled: anyEnabled, mappings: allMappings };
-    
-    // Also update _mappingCache for compatibility
+    _mappingsDocument = { enabled: anyEnabled, mappings: enabledMappings };
+
+    // Also update _mappingCache for compatibility — a copy of the same index,
+    // built from the same per-mapping gate.
     _mappingCache = new Map(index);
-    
-    console.log(`[WorkspaceIdentityService] Built mapping index with ${index.size} mappings from DBs. Enabled: ${anyEnabled}`);
+
+    console.log(`[WorkspaceIdentityService] Built mapping index with ${index.size} entries from DBs. Enabled mappings: ${enabledMappings.length}/${allMappings.length}. Enabled: ${anyEnabled}`);
 }
 
 export function getMappingsFromIndex(): { enabled: boolean; mappings: WorkspaceDatabaseMapping[] } {
     if (_mappingsDocument) {
         return _mappingsDocument;
     }
-    
+
     // No index built yet — return empty defaults
     return { enabled: false, mappings: [] };
+}
+
+/**
+ * Expand a `~`-prefixed path and resolve it to an absolute path, matching the
+ * expansion used everywhere else in this module. Centralised here so the scope
+ * filter and the existence check expand identically to `resolveParentsForTerminals`.
+ */
+function expandAndResolve(p: string): string {
+    return path.resolve(p.startsWith('~') ? path.join(os.homedir(), p.slice(1)) : p);
+}
+
+/**
+ * Return the subset of the global mapping index that belongs to `boardRoot`'s
+ * board — i.e. mappings this board OWNS, not mappings scavenged from an
+ * unrelated repo's database that happens to be on disk in the same VS Code
+ * window.
+ *
+ * A mapping qualifies when ANY of:
+ *  - its `parentFolder` resolves to `boardRoot` (the board IS the parent);
+ *  - `boardRoot` appears in its `workspaceFolders` (the board is a child);
+ *  - its `sourceFolder` (provenance — the VS Code folder whose DB produced it)
+ *    resolves to `boardRoot` (the mapping came from this board's own database).
+ *
+ * Mappings whose `parentFolder` does not exist on disk are pruned and logged —
+ * a mapping pointing at a deleted/moved folder renders a permanent empty row
+ * nobody can act on. The database row is NOT deleted: the folder may be on a
+ * detached volume, and destroying user configuration to tidy a list is the
+ * wrong trade.
+ *
+ * Returns `{ enabled, mappings }` in the same shape as `getMappingsFromIndex`
+ * so it is a drop-in for `resolveParentsForTerminals` at the call site.
+ * `enabled` is derived from the scoped set: `false` when no scoped mappings
+ * survive the filter, which makes `resolveParentsForTerminals` fall back to the
+ * single `workspace-root` parent — the correct outcome for a board with no
+ * mappings of its own.
+ */
+export function getScopedMappingsForBoard(boardRoot: string): { enabled: boolean; mappings: WorkspaceDatabaseMapping[] } {
+    const doc = _mappingsDocument;
+    if (!doc || !doc.enabled || !Array.isArray(doc.mappings) || doc.mappings.length === 0) {
+        return { enabled: false, mappings: [] };
+    }
+
+    const resolvedBoardRoot = expandAndResolve(boardRoot);
+
+    // Scope: a mapping qualifies when it is reachable from this board's own
+    // workspace — parent, child, or source DB.
+    const scoped = doc.mappings.filter(m => {
+        const parent = m.parentFolder ? expandAndResolve(m.parentFolder) : null;
+        const folders = (m.workspaceFolders || []).map(expandAndResolve);
+        const source = (m as MappingWithProvenance).sourceFolder ? expandAndResolve((m as MappingWithProvenance).sourceFolder!) : null;
+        if (parent === resolvedBoardRoot) return true;
+        if (folders.includes(resolvedBoardRoot)) return true;
+        if (source === resolvedBoardRoot) return true;
+        return false;
+    });
+
+    // Prune mappings whose parentFolder does not exist on disk. Do NOT delete
+    // the row from the database — the folder may be on a detached volume.
+    const existing = scoped.filter(m => {
+        if (!m.parentFolder) return true; // nothing to check
+        const parent = expandAndResolve(m.parentFolder);
+        try {
+            if (!fs.existsSync(parent)) {
+                console.log(`[WorkspaceIdentityService] Pruning mapping '${m.id}' from sidebar — parentFolder does not exist: ${parent}`);
+                return false;
+            }
+        } catch {
+            // If the check itself fails, keep the mapping rather than pruning it
+            // — a transient FS error should not hide a real workspace.
+        }
+        return true;
+    });
+
+    return { enabled: existing.length > 0, mappings: existing };
+}
+
+/**
+ * Prune mappings whose `parentFolder` does not exist on disk. Used by the
+ * standalone host, which reads mappings from a single DB (no foreign-workspace
+ * scoping needed) but still benefits from the existence prune. The database
+ * row is NOT deleted — the folder may be on a detached volume.
+ */
+export function pruneNonExistentMappings(mappings: WorkspaceDatabaseMapping[]): WorkspaceDatabaseMapping[] {
+    return mappings.filter(m => {
+        if (!m.parentFolder) return true;
+        const parent = expandAndResolve(m.parentFolder);
+        try {
+            if (!fs.existsSync(parent)) {
+                console.log(`[WorkspaceIdentityService] Pruning mapping '${m.id}' from sidebar — parentFolder does not exist: ${parent}`);
+                return false;
+            }
+        } catch {
+            // If the check itself fails, keep the mapping.
+        }
+        return true;
+    });
 }
 
 export function resolveParentsForTerminals(

@@ -8,6 +8,14 @@ import type { LinearSyncService } from './LinearSyncService';
 import type { NotionFetchService } from './NotionFetchService';
 import { importPlanFiles } from './PlanFileImporter';
 import {
+    STANDING_ORDERS_CONFIG_KEY,
+    StandingOrder,
+    validateInstruction,
+    mutateStandingOrders,
+    makeStandingOrder,
+    MAX_ORDERS,
+} from './standingOrders';
+import {
     DEFAULT_KANBAN_COLUMNS,
     DISPLAY_MODE_COLUMNS,
     DISPLAY_ONLY_COLUMN_LABELS,
@@ -160,6 +168,12 @@ interface LocalApiServerOptions {
      * headless/test harnesses (returns 503).
      */
     kanbanVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
+    /**
+     * PTY terminal verb handler — dispatches terminal verbs (ptyCreate,
+     * ptySendPrompt, etc.) to the pty host. Returns the service method's
+     * result (every verb returns `{ success, ... }`). Optional — absent in
+     * headless/test harnesses (returns 503).
+     */
     terminalVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     /**
      * Names of currently registered, live terminal agents (dispatch targets).
@@ -227,6 +241,11 @@ interface LocalApiServerOptions {
      * Design asset serving may still be configured).
      */
     getPlanningAssetRoots?: (workspaceRoot: string) => string[];
+    /**
+     * Third allow-list source for `GET /design/asset` — the Tickets panel's configured
+     * ticket save folders. Mirrors the other two: absent is fine, present is unioned.
+     */
+    getTicketsAssetRoots?: (workspaceRoot: string) => string[];
     setupVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     allowSecretWritesOverHttp?: boolean;
     taskViewerVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
@@ -244,7 +263,7 @@ interface LocalApiServerOptions {
      * `originRole` lets the host resolve the originating coder's saved addons.
      * Optional — absent in headless/test harnesses.
      */
-    onPhoneAFriend?: (planFile: string, originRole?: string) => Promise<void>;
+    onPhoneAFriend?: (planFile: string, originRole?: string, originTerminal?: string, dispatchId?: string) => Promise<void>;
     /**
      * Research hand-off — reached by the planner agent's `curl` when its "advise
      * research if unsure" add-on has a research prompt to delegate. The host checks
@@ -357,7 +376,12 @@ interface LocalApiServerOptions {
          * the shell's icon strip renders. Data-driven so adding a panel route
          * later adds a strip icon with no shell code change. Optional.
          */
-        getPanelsManifest?: () => Array<{ id: string; label: string; icon: string; route: string; enabled: boolean }>;
+        getPanelsManifest?: () => Array<{
+            id: string; label: string; icon: string; route: string; enabled: boolean;
+            // Presentation markers pass straight through to /panels — declared here so
+            // the wire shape is visible at the boundary that serialises it.
+            placement?: string; presentation?: string;
+        }>;
         /**
          * Returns the HTML for a registered panel by id (used by the
          * `/board`, `/design`, `/setup` routes). Optional — when absent only
@@ -952,9 +976,10 @@ export class LocalApiServer {
 
             const getRoots = this._options.getDesignAssetRoots;
             const getPlanningRoots = this._options.getPlanningAssetRoots;
+            const getTicketsRoots = this._options.getTicketsAssetRoots;
             // 503 only when NO allow-list provider is wired at all — never fall back to a
-            // looser rule. Either provider alone is enough to answer for its own folders.
-            if (!getRoots && !getPlanningRoots) {
+            // looser rule. Any provider alone is enough to answer for its own folders.
+            if (!getRoots && !getPlanningRoots && !getTicketsRoots) {
                 deny(503, 'Local asset serving not configured');
                 return;
             }
@@ -974,7 +999,8 @@ export class LocalApiServer {
             for (const root of knownRoots) {
                 const folders = [
                     ...(getRoots?.(root) || []),
-                    ...(getPlanningRoots?.(root) || [])
+                    ...(getPlanningRoots?.(root) || []),
+                    ...(getTicketsRoots?.(root) || [])
                 ];
                 for (const folder of folders) {
                     if (!folder) continue;
@@ -1221,7 +1247,8 @@ export class LocalApiServer {
     public async performKanbanDispatch(
         workspaceRoot: string,
         ref: string,
-        rawColumn?: string
+        rawColumn?: string,
+        dispatchOptions?: { unattended?: boolean; targetTerminalOverride?: string }
     ): Promise<{ status: number; payload: any }> {
         const fail = (status: number, error: string): { status: number; payload: any } =>
             ({ status, payload: { success: false, error } });
@@ -1287,7 +1314,7 @@ export class LocalApiServer {
             // 4. Fire the exact arm a webview drag fires: it persists the move FIRST,
             //    then dispatches (the known move↔dispatch coupling order).
             const dispatchedAtBefore = record.dispatchedAt ?? null;
-            await kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, bypassTriggerGate: true }, workspaceRoot);
+            await kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, bypassTriggerGate: true, unattended: !!dispatchOptions?.unattended, targetTerminalOverride: dispatchOptions?.targetTerminalOverride }, workspaceRoot);
 
             // 5. Verify against the DB — report what happened, not what was requested.
             const after: any = await db.getPlanByPlanId(record.planId);
@@ -1855,6 +1882,7 @@ export class LocalApiServer {
             const rawBody = await this._parseJsonBody(req);
             const body: any = (rawBody && typeof rawBody === 'object') ? { ...rawBody } : {};
             delete body.type;
+
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
             const result = await terminalVerb(verb, body, workspaceRoot);
             const ok = !result || result.success !== false;
@@ -1864,6 +1892,116 @@ export class LocalApiServer {
             console.error(`[LocalApiServer] terminalVerb '${verb}' error:`, err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : `terminal verb '${verb}' failed` }));
+        }
+    }
+
+    /**
+     * POST /terminals/relay — deliver a message from one terminal to another
+     * without clearing the recipient's context.
+     *
+     * Body: { to: string, from: string, message: string }. Extra fields are
+     * accepted (permissive schema — only the three fields the route dereferences
+     * are required).
+     *
+     * Composed entirely from the existing `terminalVerb` seam, so it is
+     * host-agnostic by construction: the extension supplies `handlePtyVerb` and
+     * the standalone host supplies its own implementation, and this route never
+     * touches host-specific plumbing. Two seam calls:
+     *   1. `ptyListTerminals` → validate `to` and `from` against the live fleet.
+     *   2. `ptySendPrompt` with `clearBeforePrompt: false` HARDCODED — there is
+     *      no field to omit and no field to get wrong. A relay into a working
+     *      terminal must never reset it, so the capability does not exist on
+     *      this route. Passing the flag explicitly also means the extension's
+     *      omitted-field injection (which now defaults to false anyway) never
+     *      fires, making the endpoint immune independently of that default.
+     *
+     * Provenance: the delivered text is wrapped with a short header identifying
+     * the sending terminal, so the recipient — which has no idea the message is
+     * relayed — knows who is talking.
+     *
+     * Return contract (PRD #4): success carries the delivered target;
+     * every failure branch — unknown `to`, unknown `from`, delivery error, and
+     * the aggregate `catch` — returns `{success:false, error}`. No bare ack,
+     * no false success.
+     */
+    private async _handleTerminalsRelay(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        const terminalVerb = this._options.terminalVerb;
+        if (!terminalVerb) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'Terminal verb dispatch not available' }));
+            return;
+        }
+        try {
+            const rawBody = await this._parseJsonBody(req);
+            const body: any = (rawBody && typeof rawBody === 'object') ? rawBody : {};
+            // Permissive, field-accurate schema: require only the three fields
+            // this route dereferences. Extra fields are ignored, not rejected.
+            const to = typeof body.to === 'string' ? body.to.trim() : '';
+            const from = typeof body.from === 'string' ? body.from.trim() : '';
+            const message = typeof body.message === 'string' ? body.message : '';
+            if (!to || !from || !message) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: false,
+                    error: `Relay requires non-empty 'to', 'from' and 'message' (got to=${JSON.stringify(body.to)}, from=${JSON.stringify(body.from)}, message=${message ? '<present>' : '<empty>'})`
+                }));
+                return;
+            }
+
+            // Validate both ends against the live PTY fleet — NOT
+            // getRegisteredTerminals (which lists VS Code terminals, not the
+            // PTY fleet, and does not exist in the standalone host). The fleet
+            // is what ptyListTerminals returns.
+            const workspaceRoot = String(this._options.workspaceRoot || '').trim() || undefined;
+            const listed = await terminalVerb('ptyListTerminals', {}, workspaceRoot);
+            const fleet: any[] = []
+                .concat(Array.isArray(listed?.terminals) ? listed.terminals : [])
+                .concat(Array.isArray(listed?.hiddenTerminals) ? listed.hiddenTerminals : []);
+            const isActive = (name: string) => fleet.some(t => t && t.friendlyName === name && t.status === 'active');
+            if (!isActive(from)) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `Sender terminal '${from}' is not a live fleet terminal` }));
+                return;
+            }
+            if (!isActive(to)) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `Recipient terminal '${to}' is not a live fleet terminal` }));
+                return;
+            }
+
+            // Stamp provenance so the recipient knows who is talking — it has
+            // no idea the message was relayed. The header is short and
+            // delimited so the agent can separate it from the payload.
+            const wrapped =
+                `=== RELAYED MESSAGE FROM ${from} ===\n` +
+                `${message}\n` +
+                `=== END RELAYED MESSAGE ===`;
+
+            const delivered = await terminalVerb('ptySendPrompt', {
+                name: to,
+                data: wrapped,
+                // HARDCODED false — a relay into a working terminal must never
+                // reset it. There is no field for the caller to omit or get
+                // wrong; the capability simply does not exist on this route.
+                clearBeforePrompt: false
+            }, workspaceRoot);
+
+            if (!delivered || delivered.success === false) {
+                const err = (delivered && delivered.error) ? delivered.error : `Delivery to '${to}' failed`;
+                res.writeHead(502, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: err }));
+                return;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, delivered: to }));
+        } catch (err) {
+            console.error('[LocalApiServer] /terminals/relay error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'relay failed' }));
         }
     }
 
@@ -2127,6 +2265,8 @@ export class LocalApiServer {
             const body = await this._parseJsonBody(req);
             const planFile = String(body?.planFile || '').trim();
             const originRole = body?.originRole ? String(body.originRole).trim() : undefined;
+            const originTerminal = body?.originTerminal ? String(body.originTerminal).trim() : undefined;
+            const dispatchId = body?.dispatchId ? String(body.dispatchId).trim() : undefined;
             // Validate planFile: non-empty, relative, no traversal (the host only forwards
             // it into prompt text — never resolves it server-side).
             if (!planFile) {
@@ -2142,13 +2282,134 @@ export class LocalApiServer {
 
             // The callback handles the silent drop internally and MUST NOT throw on
             // "no terminal" — a throw here becomes a 500 and breaks the best-effort signal.
-            await onPhoneAFriend(planFile, originRole);
+            await onPhoneAFriend(planFile, originRole, originTerminal, dispatchId);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: true }));
         } catch (err) {
             console.error('[LocalApiServer] phoneAFriend error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'phoneAFriend failed' }));
+        }
+    }
+
+    /**
+     * GET /terminals/standing-orders — list active standing orders for the current
+     * workspace. Returns `{ success: true, available, orders }`; `available` is false
+     * when no kanban DB is reachable so the webview can gate the UI honestly.
+     */
+    private async _handleStandingOrdersList(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+
+        const db = await this._resolveDbForRoot();
+        if (!db) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, available: false, orders: [] }));
+            return;
+        }
+
+        try {
+            const orders = await db.getConfigJson(STANDING_ORDERS_CONFIG_KEY, []) as StandingOrder[];
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, available: true, orders }));
+        } catch (err) {
+            console.warn('[LocalApiServer] Failed to read standing orders:', err);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, available: false, orders: [] }));
+        }
+    }
+
+    /**
+     * POST /terminals/standing-orders — add or delete a standing order.
+     * Body: `{ action: 'add'|'delete', parent, child, instruction? }`.
+     * Validation and caps are server-side; the modal's counter is advisory only.
+     */
+    private async _handleStandingOrdersWrite(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+
+        const db = await this._resolveDbForRoot();
+        if (!db) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'Kanban database not available' }));
+            return;
+        }
+
+        let body: any;
+        try {
+            body = await this._parseJsonBody(req);
+        } catch (err) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'Invalid JSON body' }));
+            return;
+        }
+
+        const action = String(body?.action || '').trim();
+        if (action !== 'add' && action !== 'delete') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: "action must be 'add' or 'delete'" }));
+            return;
+        }
+
+        try {
+            if (action === 'add') {
+                const parent = typeof body?.parent === 'string' ? body.parent.trim() : '';
+                const child = typeof body?.child === 'string' ? body.child.trim() : '';
+                const instruction = typeof body?.instruction === 'string' ? body.instruction : '';
+                if (!parent || !child) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'parent and child are required' }));
+                    return;
+                }
+                if (parent === child) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: 'parent and child must be different terminals' }));
+                    return;
+                }
+                const instructionErr = validateInstruction(instruction);
+                if (instructionErr) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: instructionErr }));
+                    return;
+                }
+
+                let added: StandingOrder | undefined;
+                await mutateStandingOrders(db, async (orders) => {
+                    if (orders.length >= MAX_ORDERS) {
+                        throw new Error(`Standing order limit reached (${MAX_ORDERS})`);
+                    }
+                    added = makeStandingOrder(parent, child, instruction);
+                    return [...orders, added];
+                });
+
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, order: added }));
+                return;
+            }
+
+            // delete
+            const id = typeof body?.id === 'string' ? body.id.trim() : '';
+            if (!id) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'id is required for delete' }));
+                return;
+            }
+
+            await mutateStandingOrders(db, async (orders) => {
+                return orders.filter(o => o.id !== id);
+            });
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true }));
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error('[LocalApiServer] standing-orders write failed:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: message }));
         }
     }
 
@@ -2379,7 +2640,8 @@ export class LocalApiServer {
      * POST /oversight/start — start an attended oversight pass (queue resolved
      * once; two-lane engine runs on the native watcher signal). Body:
      * { workspaceRoot, queue: { planIds?[] | sourceColumn? }, targetColumn?,
-     *   stage?, reviewGate?, reviewColumn?, cooldownMs?, stuckThresholdMs? }.
+     *   stage?, reviewGate?, reviewColumn?, cooldownMs?, stuckThresholdMs?,
+     *   plannerConcurrency? }.
      * A second start while a pass is running returns the in-flight pass.
      * Refuses (409) while autoban/orchestration automation is armed.
      */
@@ -3625,6 +3887,12 @@ export class LocalApiServer {
                 await this._handleKanbanFeaturesAssign(req, res);
             } else if (pathname === '/kanban/features/reconcile' && req.method === 'POST') {
                 await this._handleKanbanReconcileFeatures(req, res);
+            } else if (pathname === '/terminals/standing-orders' && req.method === 'GET') {
+                await this._handleStandingOrdersList(req, res);
+            } else if (pathname === '/terminals/standing-orders' && req.method === 'POST') {
+                await this._handleStandingOrdersWrite(req, res);
+            } else if (pathname === '/terminals/relay' && req.method === 'POST') {
+                await this._handleTerminalsRelay(req, res);
             } else if (pathname.startsWith('/terminals/verb/') && req.method === 'POST') {
                 const verb = decodeURIComponent(pathname.slice('/terminals/verb/'.length));
                 await this._handleTerminalVerb(verb, req, res);

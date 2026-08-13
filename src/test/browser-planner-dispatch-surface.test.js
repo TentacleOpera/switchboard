@@ -140,6 +140,74 @@ function run() {
             'askAgentTask must NOT reference apiOriginated.');
     });
 
+    // ---- planner fan-out: the round-robin must SEE the terminals-pane fleet ----
+    // (planner-fanout-pty-fleet-awareness.md)
+
+    test('the PTY liveness widening is opt-in and OFF by default', () => {
+        assert.match(taskViewerSource,
+            /public async getRoleTerminalSet\(\s*role: string,\s*workspaceRoot: string,\s*opts\?: \{ allowPtyFleet\?: boolean \}/,
+            'getRoleTerminalSet must take an opts bag.');
+        assert.match(taskViewerSource,
+            /private async _getAliveAutobanTerminalRegistry\(\s*workspaceRoot: string,\s*opts\?: \{ allowPtyFleet\?: boolean \}/,
+            '_getAliveAutobanTerminalRegistry must take the same opts bag.');
+        // Default OFF: with the flag absent, the PTY branch is skipped entirely and the
+        // VS Code liveness test is not merely equivalent but literally unchanged, which
+        // is the byte-compatibility contract for the ~4,000 shipped installs.
+        assert.match(taskViewerSource,
+            /const isPtyRow = opts\?\.allowPtyFleet && this\._isFleetTerminalInfo\(info\);/,
+            'the PTY branch must be gated on opts.allowPtyFleet.');
+    });
+
+    test('a PTY row is alive iff its own status is not exited', () => {
+        const idx = taskViewerSource.indexOf('const isPtyRow = opts?.allowPtyFleet');
+        const branch = taskViewerSource.slice(idx, idx + 500);
+        assert.match(branch, /if \(info\.status === 'exited'\) \{ continue; \}/,
+            'an exited PTY row must be excluded from the pool in both modes.');
+        // Host-agnostic by construction: the test reads a persisted registry field, not a
+        // vscode.* surface and not the extension-only _ptyHostPort. A fix expressed
+        // against _ptyHostPort passes every extension-host test and leaves
+        // `npx switchboard` — where PTY is the ONLY fleet — exactly as broken.
+        assert.doesNotMatch(branch, /vscode\./, 'the widened branch must not read a vscode.* surface.');
+        assert.doesNotMatch(branch, /_ptyHostPort/, 'the widened branch must not key on the extension-only PTY port.');
+    });
+
+    test('backups are still filtered out of the widened pool', () => {
+        const idx = taskViewerSource.indexOf('public async getRoleTerminalSet(');
+        const body = taskViewerSource.slice(idx, idx + 1200);
+        assert.match(body, /!this\._isAutobanBackupTerminalInfo\(info\)/,
+            'the backup filter must still apply — a PTY row must not be mistaken for a backup, nor a backup admitted.');
+    });
+
+    test('the planner distribution reports failed buckets instead of claiming success', () => {
+        const idx = kanbanSource.indexOf('private async _distributePlannerDispatch(');
+        const body = kanbanSource.slice(idx, kanbanSource.indexOf('/** Get the next column ID', idx));
+        assert.match(body, /getRoleTerminalSet\('planner', workspaceRoot, \{ allowPtyFleet: true \}\)/,
+            'the pool resolution must admit the PTY fleet, or a grid of planners collapses onto one terminal.');
+        // Making the pool non-empty makes a previously-latent defect live: every bucket
+        // could reject and the board still claimed success, with the cards already moved.
+        assert.match(body, /const failedBuckets: string\[\] = \[\]/, 'failed buckets must be collected.');
+        assert.match(body, /failedBuckets\.length > 0[\s\S]*isError: true/,
+            'a failed bucket must produce an isError push, not only a console.error.');
+        // The moves are persisted BEFORE dispatch on purpose (optimistic UI); reporting
+        // is the fix, not rolling them back.
+        assert.doesNotMatch(body, /rollback|revertMove/, 'column moves must not be rolled back on bucket failure.');
+        // One resolution per dispatch: _getAliveAutobanTerminalRegistry is a Promise.all
+        // over PID resolution with a 1s per-terminal timeout.
+        assert.strictEqual((body.match(/getRoleTerminalSet\(/g) || []).length, 1,
+            'the terminal set must be resolved exactly once per dispatch.');
+    });
+
+    test('the rotation cursor advances once per batch, by plans.length', () => {
+        const idx = kanbanSource.indexOf('private async _distributePlannerDispatch(');
+        const body = kanbanSource.slice(idx, kanbanSource.indexOf('/** Get the next column ID', idx));
+        assert.strictEqual((body.match(/advancePlannerRotationCursor\(/g) || []).length, 1,
+            'exactly one cursor advance per batch, not one per plan.');
+        assert.match(body, /advancePlannerRotationCursor\(locationKey, plans\.length\)/,
+            'the advance is by plans.length — a skipped index in a round robin costs nothing.');
+        assert.match(body, /terminals\[\(cursor \+ i\) % terminals\.length\]/,
+            'buckets must be assigned from the persisted cursor, so a pool that grew resolves without reset.');
+    });
+
     console.log(`\nResult: ${passed} passed, ${failed} failed`);
     if (failed > 0) { process.exit(1); }
 }

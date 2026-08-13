@@ -1650,8 +1650,8 @@ export async function activate(context: vscode.ExtensionContext) {
     // parameter without removing the argument at all ~16 KanbanProvider call sites
     // in the same edit silently slides `bypassTriggerGate` into slot 6 and compiles
     // clean. Keep the slot, or convert BOTH commands to a trailing options object.
-    const triggerFromKanbanDisposable = registerSwitchboardCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string, _apiOriginated?: boolean, bypassTriggerGate?: boolean) => {
-        return await taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction, workspaceRoot, { targetTerminalOverride, persistColumnOnError: true, bypassTriggerGate: !!bypassTriggerGate } as any);
+    const triggerFromKanbanDisposable = registerSwitchboardCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string, _apiOriginated?: boolean, bypassTriggerGate?: boolean, unattended?: boolean) => {
+        return await taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction, workspaceRoot, { targetTerminalOverride, persistColumnOnError: true, bypassTriggerGate: !!bypassTriggerGate, unattended: !!unattended } as any);
     });
     context.subscriptions.push(triggerFromKanbanDisposable);
 
@@ -2062,10 +2062,17 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(importTaskAsDocumentDisposable);
 
-    const pushTicketEditsDisposable = vscode.commands.registerCommand('switchboard.pushTicketEdits', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; id: string }) => {
+    const pushTicketEditsDisposable = registerSwitchboardCommand('switchboard.pushTicketEdits', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; id: string }) => {
         return taskViewerProvider.pushTicketEdits(data.workspaceRoot, data);
     });
-    context.subscriptions.push(pushTicketEditsDisposable);
+    // Registered through registerSwitchboardCommand (not raw vscode.commands) so the
+    // host-agnostic SwitchboardCommandRegistry holds the handler — the standalone
+    // browser cockpit's registry-first command seam (hostSeams.ts:327-336) otherwise
+    // falls through to vscodeShim's no-op and Push dead-clicks (PRD contract #6).
+    const pushTicketEditsWithSubtasksDisposable = registerSwitchboardCommand('switchboard.pushTicketEditsWithSubtasks', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; id: string }) => {
+        return taskViewerProvider.pushTicketEditsWithSubtasks(data.workspaceRoot, data);
+    });
+    context.subscriptions.push(pushTicketEditsDisposable, pushTicketEditsWithSubtasksDisposable);
 
     const importAllTasksDisposable = vscode.commands.registerCommand('switchboard.importAllTasks', async (data: { workspaceRoot: string; provider: 'linear' | 'clickup'; ids?: string[]; listId?: string; projectId?: string; workspaceId?: string; page?: number; append?: boolean; importMode: 'plan' | 'document'; deltaSince?: number; deltaSinceIso?: string; includeClosed?: boolean; authoritative?: boolean }) => {
         return taskViewerProvider.importAllTasks(data.workspaceRoot, data);

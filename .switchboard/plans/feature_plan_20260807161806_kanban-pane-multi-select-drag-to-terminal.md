@@ -302,3 +302,7 @@ Both browser-platform questions this plan opened were settled by web research be
 ## User Review Required
 
 None.
+
+## Completion Report
+
+This subtask added per-pane `kanbanPaneSelection` with click toggling, cross-workspace guard, and signature-gated re-application in the row renderer. The `dragstart` payload now carries `planIds: ids`, the `drop` handler rejects bare arrays and posts `sessionIds: ids` to `promptSelected`, and `attributeDropDispatch` is called with the same `ids` array. Added `.selected` / `.dragging` CSS in `terminals.html` and cleared selection on column/workspace/mode changes.

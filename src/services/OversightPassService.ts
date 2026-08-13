@@ -75,6 +75,7 @@ interface OversightPassParams {
     reviewColumn: string;
     cooldownMs: number;
     stuckThresholdMs: number;
+    plannerConcurrency: number;
 }
 
 interface OversightPassState {
@@ -84,9 +85,9 @@ interface OversightPassState {
     params: OversightPassParams;
     queue: OversightQueueEntry[];
     inFlight: OversightInFlightCard[];
-    completed: Array<{ planId: string; topic: string; lane: OversightLane; durationMs: number; landedColumn: string }>;
+    completed: Array<{ planId: string; topic: string; lane: OversightLane; durationMs: number; landedColumn: string; hasOpenQuestions?: boolean }>;
     skipped: Array<{ planId: string; topic: string; reason: string }>;
-    plannerLane: { lastCompletionAtMs: number | null };
+    plannerLane: { lastCompletionAtMs: number | null; lastDispatchAtMs: number | null };
     state: 'running' | 'halted' | 'ended' | 'stopped';
     haltReason?: string;
 }
@@ -95,6 +96,8 @@ interface OversightPassRuntime {
     state: OversightPassState;
     stuckTimers: Map<string, NodeJS.Timeout>; // planId → timer
     cooldownTimer?: NodeJS.Timeout;
+    /** Serialises async rewrites of oversight-state.md. */
+    stateWrite: Promise<void>;
 }
 
 export interface OversightDispatchOutcome {
@@ -119,10 +122,14 @@ export interface OversightPassDeps {
      * (LocalApiServer.performKanbanDispatch) — called directly, never over HTTP.
      * targetColumn undefined ⇒ complexity auto-routing.
      */
-    dispatch: (workspaceRoot: string, planRef: string, targetColumn?: string) => Promise<OversightDispatchOutcome>;
+    dispatch: (workspaceRoot: string, planRef: string, targetColumn?: string, options?: { unattended?: boolean; targetTerminalOverride?: string }) => Promise<OversightDispatchOutcome>;
     getKanbanDatabase: (workspaceRoot: string) => Promise<any | null | undefined>;
     /** Target column's configured role — used to classify the planner lane. Optional. */
     resolveDispatchRole?: (workspaceRoot: string, targetColumn: string) => Promise<{ role: string | null }>;
+    /** Live terminals eligible for this role, used to clamp lane concurrency to the real pool. */
+    countEligibleTerminals?: (workspaceRoot: string, role: string) => Promise<number>;
+    /** Resolves the next hidden planner terminal for an unattended dispatch. */
+    resolvePlannerTerminal?: () => Promise<string | null>;
     /** True when the autoban/orchestration engine is armed — the pass refuses to start. */
     isAutomationArmed: () => boolean;
 }
@@ -209,7 +216,10 @@ export class OversightPassService implements vscode.Disposable {
             cooldownMs: Number.isFinite(body?.cooldownMs) && body.cooldownMs >= 0 ? Math.floor(body.cooldownMs) : DEFAULT_COOLDOWN_MS,
             stuckThresholdMs: Number.isFinite(body?.stuckThresholdMs) && body.stuckThresholdMs > 0
                 ? Math.floor(body.stuckThresholdMs)
-                : vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', 10 * 60 * 1000)
+                : vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', 10 * 60 * 1000),
+            plannerConcurrency: Number.isFinite(body?.plannerConcurrency) && body.plannerConcurrency >= 1
+                ? Math.floor(body.plannerConcurrency)
+                : 1
         };
 
         // Role of a fixed target column classifies the whole pass's lane.
@@ -293,10 +303,11 @@ export class OversightPassService implements vscode.Disposable {
                 inFlight: [],
                 completed: [],
                 skipped,
-                plannerLane: { lastCompletionAtMs: null },
+                plannerLane: { lastCompletionAtMs: null, lastDispatchAtMs: null },
                 state: 'running'
             },
-            stuckTimers: new Map()
+            stuckTimers: new Map(),
+            stateWrite: Promise.resolve()
         };
         this._passes.set(workspaceRoot, runtime);
 
@@ -363,7 +374,12 @@ export class OversightPassService implements vscode.Disposable {
             if (!parsed || parsed.state !== 'running') continue;
 
             parsed.workspaceRoot = workspaceRoot;
-            const runtime: OversightPassRuntime = { state: parsed, stuckTimers: new Map() };
+            parsed.params.plannerConcurrency = Number.isFinite(parsed.params?.plannerConcurrency) && parsed.params.plannerConcurrency >= 1
+                ? Math.floor(parsed.params.plannerConcurrency)
+                : 1;
+            if (!parsed.plannerLane) { parsed.plannerLane = { lastCompletionAtMs: null, lastDispatchAtMs: null }; }
+            parsed.plannerLane.lastDispatchAtMs = parsed.plannerLane.lastDispatchAtMs ?? null;
+            const runtime: OversightPassRuntime = { state: parsed, stuckTimers: new Map(), stateWrite: Promise.resolve() };
             this._passes.set(workspaceRoot, runtime);
             await this._appendLog(runtime, `pass ${parsed.passId} RESUMED after extension reactivation — ${parsed.inFlight.length} in flight, ${parsed.queue.length} queued`);
 
@@ -421,28 +437,44 @@ export class OversightPassService implements vscode.Disposable {
             if (idx >= 0) void this._dispatchEntry(runtime, idx);
         }
 
-        // Planner lane — overlaps the coding lane; ≥cooldown after the previous
-        // planner dispatch's COMPLETION signal (not its dispatch time).
-        if (!s.inFlight.some(c => c.lane === 'planner')) {
+        // Planner lane — fill up to the (clamped) concurrency limit, with cooldown
+        // as minimum spacing between dispatches, not a completion-gated barrier.
+        const plannerInFlight = s.inFlight.filter(c => c.lane === 'planner').length;
+        const slots = this._effectivePlannerSlots(s);
+        const now = Date.now();
+        for (let i = 0; i < slots - plannerInFlight; i++) {
             const idx = s.queue.findIndex(q => q.lane === 'planner');
-            if (idx >= 0) {
-                const last = s.plannerLane.lastCompletionAtMs;
-                const waitMs = last ? (last + s.params.cooldownMs) - Date.now() : 0;
-                if (waitMs <= 0) {
-                    void this._dispatchEntry(runtime, idx);
-                } else {
-                    if (runtime.cooldownTimer) clearTimeout(runtime.cooldownTimer);
-                    runtime.cooldownTimer = setTimeout(() => {
-                        runtime.cooldownTimer = undefined;
-                        this._pump(runtime);
-                    }, waitMs + 50);
-                }
+            if (idx < 0) break;
+            const last = s.plannerLane.lastDispatchAtMs;
+            const waitMs = last ? (last + s.params.cooldownMs) - now : 0;
+            if (waitMs > 0) {
+                if (runtime.cooldownTimer) clearTimeout(runtime.cooldownTimer);
+                runtime.cooldownTimer = setTimeout(() => {
+                    runtime.cooldownTimer = undefined;
+                    this._pump(runtime);
+                }, waitMs + 50);
+                break;
             }
+            s.plannerLane.lastDispatchAtMs = now;
+            void this._dispatchEntry(runtime, idx);
         }
 
         if (s.queue.length === 0 && s.inFlight.length === 0) {
             void this._endPass(runtime, 'queue drained');
         }
+    }
+
+    private _effectivePlannerSlots(s: OversightPassState): number {
+        const configured = s.params.plannerConcurrency;
+        if (!this._deps.countEligibleTerminals) return configured;
+        // Clamp to the live terminal pool so missing workers do not halt the whole pass.
+        // Fire-and-forget: a count failure is not fatal.
+        void this._deps.countEligibleTerminals(s.workspaceRoot, 'planner').then(count => {
+            if (count < configured) {
+                s.params.plannerConcurrency = Math.max(1, Math.min(configured, count));
+            }
+        }).catch(() => { /* keep configured value */ });
+        return s.params.plannerConcurrency;
     }
 
     private async _dispatchEntry(runtime: OversightPassRuntime, queueIndex: number): Promise<void> {
@@ -461,7 +493,12 @@ export class OversightPassService implements vscode.Disposable {
         s.inFlight.push(card);
         try {
             const target = entry.targetColumn === 'auto' ? undefined : entry.targetColumn;
-            const res = await this._deps.dispatch(s.workspaceRoot, entry.planId, target);
+            const dispatchOptions: { unattended: boolean; targetTerminalOverride?: string } = { unattended: true };
+            if (entry.lane === 'planner' && this._deps.resolvePlannerTerminal) {
+                const hiddenTerminal = await this._deps.resolvePlannerTerminal();
+                if (hiddenTerminal) dispatchOptions.targetTerminalOverride = hiddenTerminal;
+            }
+            const res = await this._deps.dispatch(s.workspaceRoot, entry.planId, target, dispatchOptions);
             if (!res?.payload?.success) {
                 await this._halt(runtime, `dispatch failed for "${entry.topic}": ${res?.payload?.error || `HTTP ${res?.status}`}`);
                 return;
@@ -514,7 +551,9 @@ export class OversightPassService implements vscode.Disposable {
             if (after?.kanbanColumn) landedColumn = after.kanbanColumn;
         } catch { /* landing column is best-effort */ }
         const durationMs = now - card.firstDispatchedAtMs;
-        s.completed.push({ planId: card.planId, topic: card.topic, lane: card.lane, durationMs, landedColumn });
+        const planFileAbs = path.resolve(s.workspaceRoot, card.planFile);
+        const hasOpenQuestions = this._hasOpenQuestions(planFileAbs);
+        s.completed.push({ planId: card.planId, topic: card.topic, lane: card.lane, durationMs, landedColumn, hasOpenQuestions });
         if (card.lane === 'planner') {
             // Cooldown is measured from the planner COMPLETION signal.
             s.plannerLane.lastCompletionAtMs = now;
@@ -534,13 +573,28 @@ export class OversightPassService implements vscode.Disposable {
         await this._writeState(runtime);
     }
 
+    private _hasOpenQuestions(planFileAbsolute: string): boolean {
+        try {
+            const raw = fs.readFileSync(planFileAbsolute, 'utf8');
+            const m = raw.match(/^## Outstanding Questions\s*$/m);
+            if (!m) return false;
+            const after = raw.slice(raw.indexOf(m[0]) + m[0].length);
+            // Present heading is only a signal when it has at least one bullet/item below it.
+            return /^\s*-\s+\[(?:user|research)\]/m.test(after);
+        } catch {
+            return false;
+        }
+    }
+
     private async _endPass(runtime: OversightPassRuntime, reason: string): Promise<void> {
         if (runtime.state.state !== 'running') return;
         this._clearTimers(runtime);
         runtime.state.state = 'ended';
         const s = runtime.state;
+        const open = s.completed.filter(c => c.hasOpenQuestions).map(c => c.topic);
+        const openSuffix = open.length > 0 ? `; open questions: ${open.join(', ')}` : '';
         // Final pass-summary line FIRST, then delete the state file (that order is the contract).
-        await this._appendLog(runtime, `pass ${s.passId} ENDED (${reason}) — ${s.completed.length} completed, ${s.skipped.length} skipped. ${s.completed.map(c => `"${c.topic}" ${Math.round(c.durationMs / 1000)}s → ${c.landedColumn}`).join('; ') || 'nothing dispatched'}`);
+        await this._appendLog(runtime, `pass ${s.passId} ENDED (${reason}) — ${s.completed.length} completed, ${s.skipped.length} skipped. ${s.completed.map(c => `"${c.topic}" ${Math.round(c.durationMs / 1000)}s → ${c.landedColumn}`).join('; ') || 'nothing dispatched'}${openSuffix}`);
         await this._deleteStateFile(runtime);
     }
 
@@ -569,7 +623,8 @@ export class OversightPassService implements vscode.Disposable {
 
     private _snapshot(runtime: OversightPassRuntime): any {
         const s = runtime.state;
-        const last = s.plannerLane.lastCompletionAtMs;
+        const lastCompletion = s.plannerLane.lastCompletionAtMs;
+        const lastDispatch = s.plannerLane.lastDispatchAtMs;
         return {
             passId: s.passId,
             state: s.state,
@@ -588,8 +643,9 @@ export class OversightPassService implements vscode.Disposable {
             })),
             plannerLane: {
                 cooldownMs: s.params.cooldownMs,
-                lastCompletionAt: last ? new Date(last).toISOString() : null,
-                readyAt: last ? new Date(last + s.params.cooldownMs).toISOString() : null
+                lastCompletionAt: lastCompletion ? new Date(lastCompletion).toISOString() : null,
+                readyAt: lastCompletion ? new Date(lastCompletion + s.params.cooldownMs).toISOString() : null,
+                lastDispatchAt: lastDispatch ? new Date(lastDispatch).toISOString() : null
             },
             completed: s.completed.map(c => ({ ...c, durationSeconds: Math.round(c.durationMs / 1000) })),
             skipped: s.skipped
@@ -599,6 +655,14 @@ export class OversightPassService implements vscode.Disposable {
     private async _writeState(runtime: OversightPassRuntime): Promise<void> {
         const s = runtime.state;
         const statePath = path.join(s.workspaceRoot, '.switchboard', STATE_FILE);
+        // Serialize concurrent state rewrites so a burst of completions does not interleave the file.
+        runtime.stateWrite = runtime.stateWrite.then(async () => {
+            await this._doWriteState(s, statePath);
+        });
+        await runtime.stateWrite;
+    }
+
+    private async _doWriteState(s: OversightPassState, statePath: string): Promise<void> {
         const lines = [
             '# Switchboard Oversight Pass — state',
             '',

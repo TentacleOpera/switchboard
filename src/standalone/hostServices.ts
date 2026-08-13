@@ -29,7 +29,7 @@ import { switchboardCommandRegistry } from '../services/commandRegistry';
  * is unavailable on some platforms — fall back to a flat watch, which covers the flat
  * ticket folders this seam is used for.
  */
-function createStandaloneFolderWatcher(
+export function createStandaloneFolderWatcher(
     folderPath: string,
     listener: (event: HostWatchEvent, filePath: string) => void
 ): HostWatchHandle {
@@ -44,6 +44,7 @@ function createStandaloneFolderWatcher(
     try {
         watcher = fs.watch(folderPath, { persistent: false, recursive: true }, emit);
     } catch {
+        console.warn(`[headless watcher] flat watch for ${folderPath}: recursive fs.watch failed (likely inotify exhaustion or an older Node runtime); asset changes under attachments/ will not refresh`);
         try {
             watcher = fs.watch(folderPath, { persistent: false }, emit);
         } catch (e) {

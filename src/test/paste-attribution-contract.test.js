@@ -91,6 +91,20 @@ test('attributePastedPrompt has a permissive schema in verbSchemas.ts', () => {
     assert.ok(verbSchemas.includes('planFiles:'), 'schema must allow planFiles');
 });
 
+// ---------------------------------------------------------------- drop dispatch attribution
+
+test('wireTerminalDropTarget defines attributeDropDispatch with array-shaped planIds', () => {
+    const dropBlock = block(terminalsJs, 'function wireTerminalDropTarget(', 'function createPaneElement(');
+    const attrFn = block(terminalsJs, 'function attributeDropDispatch(terminalName, planIds, workspaceRoot) {', "paneEl.addEventListener('dragover', (e) => {");
+    assert.ok(attrFn.includes('/kanban/verb/attributePastedPrompt'), 'attributeDropDispatch must POST to attributePastedPrompt');
+    assert.ok(attrFn.includes('planIds: ids,'), 'request body must send planIds as an array (ids)');
+    assert.ok(!attrFn.includes('planIds: [planId'), 'must not scalar-wrap planIds');
+    assert.ok((dropBlock.match(/attributeDropDispatch\(/g) || []).length >= 2, 'drop handler must call attributeDropDispatch in both branches');
+    const successIdx = dropBlock.indexOf('promptResult.success');
+    const callIdx = dropBlock.indexOf('attributeDropDispatch(', successIdx);
+    assert.ok(successIdx !== -1 && callIdx !== -1 && callIdx > successIdx, 'normal branch must call attributeDropDispatch after the promptResult.success guard');
+});
+
 // ---------------------------------------------------------------- summary
 
 console.log(`\nResults: ${passed} passed, ${failed} failed`);

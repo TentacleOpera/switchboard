@@ -324,6 +324,18 @@
           "maximum": 10000,
           "description": "Milliseconds to wait after sending /clear before dispatching the prompt. Only used when terminal.clearBeforePrompt is enabled. Non-paced (same-agent) dispatches use approximately 1/3 of this value."
         },
+        "switchboard.terminal.ptyClearBeforePromptDelay": {
+          "type": "number",
+          "default": 600,
+          "minimum": 0,
+          "maximum": 10000,
+          "description": "Milliseconds to wait after sending /clear before dispatching the prompt to a directly-owned PTY seat (the browser cockpit's terminal grid and the standalone host). Lower than terminal.clearBeforePromptDelay because a PTY write goes straight to the pty master fd with no clipboard round trip, focus acquisition or extension-host IPC. VS Code terminal seats continue to use terminal.clearBeforePromptDelay."
+        },
+        "switchboard.terminal.claudeInlineRendering": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run Claude CLI seats in the normal screen buffer so the terminal pane's own scrollbar and jump-to-latest work. Turn off to keep Claude's in-app scrolling and mouse support. Applies to newly created terminals only — environment is fixed when a seat spawns, so restart a seat after changing this."
+        },
         "switchboard.jules.autoSync": {
           "type": "boolean",
           "default": false,
@@ -568,6 +580,22 @@
           "minimum": 10000,
           "maximum": 600000,
           "description": "How recently (ms) a dispatched PTY terminal must have produced output for the activity-light sweep to spare its card past the timeout. Default 90s. Deliberately a separate knob from timeoutMs — one is 'how long we believe a silent agent', the other is 'how recently we must have heard from it'. Only applies to PTY-fleet seats; native vscode.Terminal seats degrade to the blind timeout. A hard cap of 3x timeoutMs (measured from dispatch) still clears a wedged agent whose terminal keeps repainting.",
+          "scope": "resource"
+        },
+        "switchboard.activityLight.turnEndSilenceMs": {
+          "type": "integer",
+          "default": 90000,
+          "minimum": 30000,
+          "maximum": 600000,
+          "description": "How long (ms) a dispatched PTY-fleet seat must be silent before the activity-light sweep treats the turn as ended. Default 90s. Only applies to PTY-fleet seats; native vscode.Terminal seats degrade to the blind timeout. Silence with a plan-file mtime advance is read as completion; silence without one is read as blocked. Effective threshold is max(livenessWindowMs, turnEndSilenceMs) because a seat inside the liveness window is spared before this test is reached.",
+          "scope": "resource"
+        },
+        "switchboard.activityLight.blockedTimeoutMs": {
+          "type": "integer",
+          "default": 14400000,
+          "minimum": 600000,
+          "maximum": 86400000,
+          "description": "How long (ms) a card stays visibly 'Waiting on you' after the agent goes quiet without a plan-file change. Default 4 hours. This is a wait on a human, not a machine, so it is deliberately much longer than timeoutMs. The card clears earlier if output resumes, the terminal exits, or the card is re-dispatched.",
           "scope": "resource"
         },
         "switchboard.boardStateExport": {
@@ -844,6 +872,7 @@
     "test:contract:tickets-cross-panel-scope": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/tickets-cross-panel-reply-scope.test.js",
     "test:contract:tickets-subtasks": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/tickets-subtask-embedding.test.js",
     "test:contract:tickets-auto-refresh": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/tickets-auto-refresh-on-file-change.test.js",
+    "test:contract:tickets-description-fallback": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/tickets-description-markdown-fallback.test.js",
     "test:contract:project-pin-fill": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/project-pin-apply-if-empty-contract.test.js",
     "test:contract:project-pin-resolve": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/project-pin-resolve-contract.test.js",
     "test:contract:memo-panel-style": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/memo-panel-style-contract.test.js",
@@ -870,6 +899,7 @@
     "publish:marketplace": "bash scripts/publish-marketplace.sh",
     "test:contract:vsix-packaging": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/vsix-packaging-contract.test.js",
     "test:contract:pty-route-surface": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-route-surface-contract.test.js",
+    "test:contract:pty-prompt-delivery-framing": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-prompt-delivery-framing.test.js",
     "test:contract:pty-dispatch-focus": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-dispatch-focus-contract.test.js",
     "test:contract:browser-planner-dispatch-surface": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/browser-planner-dispatch-surface.test.js",
     "test:contract:browser-stray-dispatch-surface": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/browser-stray-dispatch-surface.test.js",
@@ -884,6 +914,7 @@
     "test:contract:terminal-focus-affordance": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-focus-affordance-contract.test.js",
     "test:contract:terminal-chrome-not-in-buffer": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-chrome-not-in-buffer.test.js",
     "test:contract:shell-terminal-strip": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/shell-terminal-strip.test.js",
+    "test:contract:shell-modal-panel": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/shell-modal-panel-contract.test.js",
     "test:contract:terminal-pane-pinning": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-pane-pinning-contract.test.js",
     "test:contract:terminal-sidebar-groupings": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-sidebar-groupings-contract.test.js",
     "test:contract:terminal-open-all-seating": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-open-all-seating-contract.test.js",
@@ -893,11 +924,14 @@
     "test:contract:terminal-replay-gap": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-replay-gap-contract.test.js",
     "test:contract:terminal-operations-no-periodic-reopen": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-operations-no-periodic-reopen.test.js",
     "test:contract:multi-parent-terminals": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/multi-parent-terminals-contract.test.js",
+    "test:contract:terminal-plan-attribution": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-plan-attribution-contract.test.js",
     "test:contract:scheduled-jobs": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/scheduled-jobs-and-connections.test.js",
     "test:contract:spark-context-exporter": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/spark-context-exporter-contract.test.js",
     "test:contract:kanban-column-labels": "mocha --ui tdd --require ./src/test/bootstrap/sandboxStateHome.js out/test/kanban-auto-export.test.js --grep \"Column label parity\"",
     "test:contract:paste-attribution": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/paste-attribution-contract.test.js",
-    "test:contract:dispatch-analysis-scope": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/dispatch-analysis-scope-contract.test.js"
+    "test:contract:dispatch-analysis-scope": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/dispatch-analysis-scope-contract.test.js",
+    "test:contract:standing-orders-marker": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standing-orders-marker-contract.test.js",
+    "test:contract:link-presets-mirror": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/link-presets-mirror-contract.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",

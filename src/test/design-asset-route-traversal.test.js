@@ -169,6 +169,68 @@ async function main() {
         assert.strictEqual(res.statusCode, 503);
     });
 
+    // ── Tickets asset roots (getTicketsAssetRoots) ──
+    // getTicketsAssetRoots was public on TicketsPanelProvider and consulted by its OWN
+    // URL builder, but neither host passed it to this route — so a configured
+    // ticketSaveLocation had URLs happily emitted and then 403'd at fetch time. The
+    // existing coverage (verb-engine-tickets-headless.test.js) asserted the URL SHAPE and
+    // never fetched it, which is why it stayed green throughout. These fetch.
+    const ticketSaveDir = path.join(tmpRoot, 'ticket-store', 'clickup');
+    fs.mkdirSync(path.join(ticketSaveDir, 'space', 'list', 'attachments'), { recursive: true });
+    const ticketPng = path.join(ticketSaveDir, 'space', 'list', 'attachments', 'flow.png');
+    fs.writeFileSync(ticketPng, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d]));
+    // A sibling just OUTSIDE the configured root — the negative control. The widening
+    // must add exactly `<ticketSaveLocation>/<provider>`, never its parent.
+    const ticketSaveParent = path.dirname(ticketSaveDir);
+    const outsideTicketPng = path.join(ticketSaveParent, 'not-mine.png');
+    fs.writeFileSync(outsideTicketPng, 'TOP SECRET');
+
+    const ticketsOnly = {
+        workspaceRoot: wsRoot,
+        allRoots: [wsRoot],
+        getTicketsAssetRoots: (root) => (root === wsRoot ? [ticketSaveDir] : []),
+    };
+
+    await test('serves a ticket asset under a configured ticketSaveLocation', async () => {
+        const res = await call(q(wsRoot, ticketPng), ticketsOnly);
+        assert.strictEqual(res.statusCode, 200, `expected 200, got ${res.statusCode} — getTicketsAssetRoots is not wired into the route`);
+        assert.strictEqual(res.headers['Content-Type'], 'image/png');
+        assert.ok(Buffer.isBuffer(res.body) && res.body.length === 5);
+    });
+
+    await test('a sibling just outside the configured ticketSaveLocation still 403s', async () => {
+        const res = await call(q(wsRoot, outsideTicketPng), ticketsOnly);
+        assert.strictEqual(res.statusCode, 403);
+        assert.ok(!String(res.body).includes('TOP SECRET'));
+    });
+
+    await test('the tickets provider alone satisfies the 503 wiring guard', async () => {
+        // The guard is "no provider at all", not "no design provider" — a host that wires
+        // only Tickets must still serve, never answer 503.
+        const res = await call(q(wsRoot, ticketPng), ticketsOnly);
+        assert.notStrictEqual(res.statusCode, 503);
+    });
+
+    await test('all three root providers union rather than shadowing each other', async () => {
+        const allThree = {
+            workspaceRoot: wsRoot,
+            allRoots: [wsRoot],
+            getDesignAssetRoots: (root) => (root === wsRoot ? [imagesDir] : []),
+            getPlanningAssetRoots: () => [],
+            getTicketsAssetRoots: (root) => (root === wsRoot ? [ticketSaveDir] : []),
+        };
+        assert.strictEqual((await call(q(wsRoot, pngPath), allThree)).statusCode, 200);
+        assert.strictEqual((await call(q(wsRoot, ticketPng), allThree)).statusCode, 200);
+        assert.strictEqual((await call(q(wsRoot, outsidePath), allThree)).statusCode, 403);
+    });
+
+    await test('a version query param is inert — the route resolves only root and path', async () => {
+        // The cache-busting `&v=<mtime>` token the Tickets provider appends must not be
+        // read as part of the filename (the classic "server stats image.png?v=123" 404).
+        const res = await call(`${q(wsRoot, ticketPng)}&v=1754899200000`, ticketsOnly);
+        assert.strictEqual(res.statusCode, 200);
+    });
+
     await test('requires the path parameter', async () => {
         const res = await call(`root=${encodeURIComponent(wsRoot)}`);
         assert.strictEqual(res.statusCode, 400);

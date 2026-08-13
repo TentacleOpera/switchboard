@@ -197,6 +197,26 @@ curl -s -X POST "$BASE/oversight/stop" -H "Content-Type: application/json" -d '{
 
 ---
 
+## 4b. Prompt delivery (POST /terminals/verb/*) — attended coder driving
+
+When you are a head agent **driving a coder terminal** (dispatch a subtask, get called back,
+review the diff, resend a fix) — not running an unattended column sweep — use the
+prompt-delivery verb pair, not `/oversight/start`. The full contract lives in the
+**`terminal-coder-dispatch`** skill; the endpoints are:
+
+| Endpoint | Body | Purpose |
+|---|---|---|
+| `POST /terminals/verb/ptySendPrompt` | `{ name, data, clearBeforePrompt }` | Deliver a prompt to a named terminal. **Pass `clearBeforePrompt: false`** — omitting it wipes the coder's conversation before every send. Both hosts apply standing orders (the callback contract). |
+| `POST /terminals/verb/ptyListTerminals` | `{}` | Enumerate live terminals: `{ terminals: [...], hiddenTerminals: [...] }`. Copy `friendlyName` verbatim. |
+
+**When to use this vs `POST /oversight/start`:** oversight is the *unattended* engine — a
+deterministic column sweep with no agent watching, completion detected by plan-file mtime.
+Prompt delivery is the *attended* pattern — a reasoning agent drives one coder at a time,
+reviews the diff, and decides what to send next. They are different jobs; do not substitute
+one for the other.
+
+---
+
 ## 5. Comms (POST)
 
 ### `POST /orchestrator/request` — fleet agent → orchestrator

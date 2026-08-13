@@ -13,8 +13,8 @@ The Project panel is where you go to read a plan in full, and today it is both h
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Project panel goes out of sync with the kanban board after card moves](../plans/project-panel-kanban-sync-on-card-move.md) — **PLAN REVIEWED**
-- [ ] [Add View Button to Kanban-Mode Pane Cards in Terminals](../plans/feature_plan_20260807182931_kanban-pane-view-button.md) — **PLAN REVIEWED**
+- [ ] [Project panel goes out of sync with the kanban board after card moves](../plans/project-panel-kanban-sync-on-card-move.md) — **INTERN CODED**
+- [ ] [Add View Button to Kanban-Mode Pane Cards in Terminals](../plans/feature_plan_20260807182931_kanban-pane-view-button.md) — **INTERN CODED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -22,3 +22,7 @@ The Project panel is where you go to read a plan in full, and today it is both h
 **Ordered.** Land the sync fix first. The View button's entire value is arriving at a correct panel; shipping the route onto a stale panel makes the staleness far more visible than it is today, and turns a quiet cache bug into a reported one.
 
 Both subtasks reuse existing infrastructure rather than adding any: `reviewPlan` is already allowlisted in `KANBAN_VERBS` with a working `__viaHttp` push path, and the project panel already re-fetches on its own column-change path — it simply is not told about board-originated moves.
+
+## Completion Report
+
+Implemented both subtasks. Files changed: `src/services/TaskViewerProvider.ts` (widen `_planningPanelProvider` type and push `refreshKanbanPlans` from `refreshUI`), `src/services/KanbanProvider.ts` (push `refreshKanbanPlans` from `moveCardToColumnByPlanFileWithReason`), `src/standalone/bootstrap.ts` (broadcast `refreshKanbanPlans` from `pushFullState`), `src/webview/terminals.js` (add `view` button using `reviewPlan`), and `src/webview/terminals.html` (style the new button). No compile or test run requested; `npm run push-routing:check` and `npm run parity:check` both pass with no baseline drift.

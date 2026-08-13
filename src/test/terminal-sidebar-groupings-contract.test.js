@@ -1,9 +1,9 @@
 'use strict';
 
 /**
- * Contract tests for Terminal Sidebar Groupings — Saved Pane-Assignment Sets.
- * Static tests asserting the group store, switch, rename fixup, solo guard,
- * and corrupt-value resilience are present and correct in terminals.js.
+ * Contract tests for Terminal Sidebar Groupings — Logical Groups That Lock the View.
+ * Static tests asserting the new group model, persistence, load shape guard,
+ * lock semantics, and the contextual click split are present in terminals.js.
  */
 
 const fs = require('fs');
@@ -44,33 +44,45 @@ test('terminalGroups and activeGroupId are declared as module state', () => {
     );
 });
 
-test('groupsView flag is declared and defaults to true', () => {
+test('groupPrefs is declared for derived-group display preferences', () => {
     assert.ok(
-        /let groupsView = true;/.test(terminalsJs),
-        'groupsView must be declared and default to true so groups mode is the default when groups exist'
+        terminalsJs.includes('let groupPrefs = {'),
+        'groupPrefs must be declared'
+    );
+    assert.ok(
+        /threshold[^,]*,[^}]*hidden[^,]*,[^}]*pinned[^,]*,[^}]*orders/.test(terminalsJs),
+        'groupPrefs must contain threshold, hidden, pinned and orders'
     );
 });
 
-test('loadLayoutSettings loads terminalGroups with shape guard', () => {
+test('the legacy groupsView boolean is removed', () => {
+    assert.ok(
+        !/let groupsView = true;/.test(terminalsJs),
+        'groupsView must no longer be declared'
+    );
+});
+
+test('loadLayoutSettings loads terminalGroups with a widened shape guard', () => {
     const loadBlock = block(terminalsJs, 'async function loadLayoutSettings()', 'async function fetchTerminalList()');
     assert.ok(
         loadBlock.includes("loadSetting('terminals.groups', [])"),
         'loadLayoutSettings must load terminals.groups'
     );
     assert.ok(
-        loadBlock.includes('Array.isArray(savedGroups)'),
-        'loadLayoutSettings must guard against non-array terminals.groups'
+        loadBlock.includes("g.source === 'manual' || g.source === 'role' || g.source === 'worktree'"),
+        'loadLayoutSettings must accept new-shape group rows'
     );
     assert.ok(
-        loadBlock.includes("typeof g.id === 'string'") &&
-        loadBlock.includes("typeof g.name === 'string'") &&
-        loadBlock.includes('LAYOUT_MODES.includes(g.layout)') &&
-        loadBlock.includes('Array.isArray(g.assignments)'),
-        'loadLayoutSettings must validate per-element shape (id, name, layout, assignments)'
+        loadBlock.includes("source: 'manual'"),
+        'loadLayoutSettings must normalise legacy rows to manual groups'
+    );
+    assert.ok(
+        loadBlock.includes("loadSetting('terminals.groupPrefs'"),
+        'loadLayoutSettings must load groupPrefs'
     );
 });
 
-test('saveLayoutSettings persists groups, activeGroupId, and groupsView', () => {
+test('saveLayoutSettings persists groups, activeGroupId, and groupPrefs', () => {
     const saveBlock = block(terminalsJs, 'function saveLayoutSettings()', 'async function fetchTerminalList()');
     assert.ok(
         saveBlock.includes("saveSetting('terminals.groups', terminalGroups)"),
@@ -81,112 +93,630 @@ test('saveLayoutSettings persists groups, activeGroupId, and groupsView', () => 
         'saveLayoutSettings must persist activeGroupId'
     );
     assert.ok(
-        saveBlock.includes("saveSetting('terminals.groupsView', groupsView)"),
-        'saveLayoutSettings must persist groupsView'
+        saveBlock.includes("saveSetting('terminals.groupPrefs', groupPrefs)"),
+        'saveLayoutSettings must persist groupPrefs'
+    );
+    assert.ok(
+        !saveBlock.includes("saveSetting('terminals.groupsView'"),
+        'saveLayoutSettings must no longer persist groupsView'
+    );
+});
+
+// ---------------------------------------------------------------- derived groups
+
+test('derived groups are computed from role and worktree only', () => {
+    const derived = block(terminalsJs, 'function getDerivedGroups()', 'function getAllGroups()');
+    assert.ok(
+        derived.includes("source: 'role'"),
+        'getDerivedGroups must emit role groups'
+    );
+    assert.ok(
+        derived.includes("source: 'worktree'"),
+        'getDerivedGroups must emit worktree groups'
+    );
+    assert.ok(
+        !derived.includes("source: 'project'"),
+        'getDerivedGroups must not invent a project source'
+    );
+});
+
+test('derived groups respect threshold and hidden list', () => {
+    const derived = block(terminalsJs, 'function getDerivedGroups()', 'function getAllGroups()');
+    assert.ok(
+        derived.includes('groupPrefs.threshold'),
+        'getDerivedGroups must use the configured threshold'
+    );
+    assert.ok(
+        derived.includes('groupPrefs.hidden'),
+        'getDerivedGroups must filter out hidden ids'
     );
 });
 
 // ---------------------------------------------------------------- switchToGroup contracts
 
-test('switchToGroup routes through setLayoutMode (honours pane-size floor)', () => {
-    const fn = block(terminalsJs, 'function switchToGroup(', 'function renderGroupSidebar() {');
+test('switchToGroup routes through setLayoutMode and honours keepLock', () => {
+    const fn = block(terminalsJs, 'function switchToGroup(', 'function safeGroupIdForValue(');
+    // layoutForGroupSwitch, NOT the grow-only layoutForFleetCount: a group switch
+    // is a RESTORE and must be able to shrink the grid. Routing it through
+    // setLayoutMode keeps applyLayoutFloor's veto intact.
     assert.ok(
-        fn.includes('setLayoutMode(group.layout)'),
-        'switchToGroup must call setLayoutMode so the layout floor is honoured'
+        fn.includes('setLayoutMode(layoutForGroupSwitch(group), { keepLock: true })'),
+        'switchToGroup must route the group layout through setLayoutMode via the non-monotonic layoutForGroupSwitch, and keep the lock'
     );
     assert.ok(
-        fn.includes('paneAssignments = group.assignments.slice()'),
-        'switchToGroup must copy the group assignments into paneAssignments'
+        !/effectiveLayout\s*=/.test(fn),
+        'the lock path must never write effectiveLayout directly — that is the floor bypass'
     );
     assert.ok(
         fn.includes('activeGroupId = id'),
         'switchToGroup must set activeGroupId'
     );
-});
-
-test('switchToGroup no-ops in solo mode', () => {
-    const fn = block(terminalsJs, 'function switchToGroup(', 'function renderGroupSidebar() {');
+    const seat = block(terminalsJs, 'function seatActiveGroupPage() {', 'function safeGroupIdForValue(');
     assert.ok(
-        fn.includes('if (soloTerminalName) { return; }'),
-        'switchToGroup must no-op when soloTerminalName is set'
+        seat.includes('paneAssignments = assignments'),
+        'seatActiveGroupPage must write paneAssignments'
+    );
+    // Paging is keyed to RENDERED slots, not to nine: a 4-member group in a 2-slot
+    // viewport needs paging just as much as a 14-member group in a full one.
+    assert.ok(
+        seat.includes('getSlotCount(effectiveLayout)') && seat.includes('activeGroupPage * rendered'),
+        'the page slice must be keyed to getSlotCount(effectiveLayout)'
+    );
+    // A lock reseats slots; the pin invariant pinnedPanes[i] -> paneAssignments[i]
+    // must still hold after the swap.
+    assert.ok(
+        /pinnedPanes\[i\] && !paneAssignments\[i\]/.test(seat),
+        'a slot the group left empty must have its pin cleared, not left reserving nothing'
     );
 });
 
-test('switchToGroup sets groupsView to true (re-enters group mode from flat)', () => {
-    const fn = block(terminalsJs, 'function switchToGroup(', 'function renderGroupSidebar() {');
+test('the page index is transient — reset on lock change, clamped by the floor', () => {
+    const fn = block(terminalsJs, 'function switchToGroup(', 'function seatActiveGroupPage() {');
     assert.ok(
-        fn.includes('groupsView = true'),
-        'switchToGroup must set groupsView = true so the sidebar re-enters group mode'
+        /if \(!sameGroup \|\| !opts\.keepPage\) \{ activeGroupPage = 0; \}/.test(fn),
+        'moving the lock to a different group must reset the page — a group that reopens on page 3 looks empty'
+    );
+    const seat = block(terminalsJs, 'function seatActiveGroupPage() {', 'function safeGroupIdForValue(');
+    assert.ok(
+        seat.includes('if (activeGroupPage >= pageCount)'),
+        'the page must be re-clamped when the floor changes the rendered slot count'
+    );
+    assert.ok(
+        !/saveSetting\(['"]terminals\.activeGroupPage/.test(terminalsJs),
+        'the page index is a scroll position, not a preference — it must not be persisted'
     );
 });
 
-// ---------------------------------------------------------------- renderSidebarList mode branch
-
-test('renderSidebarList enters group mode only when groups exist, not solo, and groupsView is true', () => {
-    const render = block(terminalsJs, 'function renderSidebarList() {', 'function setLayoutMode(');
+test('the floor re-pages a locked group and the banner reports the shortfall', () => {
+    const fn = block(terminalsJs, 'function applyLayoutFloor(opts) {', 'Attempt schedule for the settle ladder');
     assert.ok(
-        render.includes('terminalGroups.length > 0 && !soloTerminalName && groupsView'),
-        'renderSidebarList must check groupsView before entering group mode'
+        fn.includes('if (activeGroupId) { seatActiveGroupPage(); }'),
+        'a changed rendered slot count must re-page the locked group'
+    );
+    assert.ok(fn.includes('banner-page-btn'), 'the paging control must sit alongside the shortfall message');
+});
+
+test('switchToGroup exits solo mode before locking', () => {
+    const fn = block(terminalsJs, 'function switchToGroup(', 'function safeGroupIdForValue(');
+    assert.ok(
+        fn.includes('document.body.classList.remove(\'is-solo\')'),
+        'switchToGroup must clear the is-solo CSS class'
     );
     assert.ok(
-        render.includes('renderGroupSidebar()'),
-        'renderSidebarList must call renderGroupSidebar when groups mode is active'
+        fn.includes('soloTerminalName = null'),
+        'switchToGroup must clear soloTerminalName'
     );
 });
 
-test('Show all terminals toggle sets groupsView=false, does NOT delete groups', () => {
-    const groupSidebar = block(terminalsJs, 'function renderGroupSidebar() {', 'function renderSidebarList() {');
+// ---------------------------------------------------------------- renderSidebarList hierarchy
+
+test('renderSidebarList renders the tab strip and is otherwise one workspace tree', () => {
+    const render = block(terminalsJs, 'function renderSidebarList() {', 'function syncLayoutPickerUI()');
     assert.ok(
-        groupSidebar.includes('groupsView = false'),
-        'Show all terminals must set groupsView = false, not delete groups'
+        render.includes('renderGroupTabStrip()'),
+        'renderSidebarList must render the group tab strip — one refresh cycle over fleetList, or the live member counts disagree with the tree'
     );
     assert.ok(
-        !groupSidebar.includes('terminalGroups = []'),
-        'Show all terminals must NOT wipe terminalGroups — that destroys saved groups'
+        !render.includes('groupsView'),
+        'renderSidebarList must not branch on a groupsView toggle'
+    );
+    // The sidebar is now ONE tree: Workspace → Terminal. The group slab, the
+    // "All terminals" row and the global "+ New terminal" row all moved to the
+    // strip or were deleted outright.
+    assert.ok(
+        !/function renderGroupSidebar\b/.test(terminalsJs),
+        'renderGroupSidebar must be gone — groups are a view mode on the tab strip, not a tree tier'
+    );
+    assert.ok(
+        !terminalsJs.includes("'+ New terminal'"),
+        'the global + New terminal row must be gone — every workspace and worktree header carries its own + with a defined target'
+    );
+    assert.ok(
+        !terminalsJs.includes('All terminals — free composition'),
+        'the All terminals row must be gone — the strip\'s All tab is that affordance now'
     );
 });
 
-test('flat mode offers a Show groups toggle when groups exist but groupsView is false', () => {
-    const render = block(terminalsJs, 'function renderSidebarList() {', 'function setLayoutMode(');
+test('the lock indicator and the clickable sidebar title are both retired', () => {
+    // updateLockIndicator wrote "<name> — locked" into .sidebar-title, duplicating
+    // what the active tab now shows directly. Its click handler was a third,
+    // unlabelled way to drop the lock, and the hover rule advertised it.
     assert.ok(
-        render.includes("'Show groups'"),
-        'flat mode must offer a Show groups toggle when groups exist but groupsView is false'
+        !/function updateLockIndicator\b/.test(terminalsJs),
+        'updateLockIndicator must be gone — the active tab is the lock indicator'
     );
     assert.ok(
-        /Show groups'[\s\S]*groupsView = true/.test(render),
-        'Show groups toggle must set groupsView = true'
+        !/\.sidebar-title:hover/.test(terminalsHtml),
+        'the .sidebar-title hover rule must be gone — nothing there is clickable any more'
+    );
+    assert.ok(
+        terminalsHtml.includes('<span class="sidebar-title">Agents</span>'),
+        'the sidebar title must read a static Agents'
     );
 });
 
-// ---------------------------------------------------------------- rename fixup
+test('the tab strip offers All, one tab per group, a delete on every tab, and a +', () => {
+    const strip = block(terminalsJs, 'function renderGroupTabStrip() {', 'function terminalNameSuffix(');
+    assert.ok(
+        strip.includes("allTab.textContent = 'All'"),
+        'the strip must render a leading All tab'
+    );
+    assert.ok(
+        strip.includes('clearGroupLock()'),
+        'the All tab must route at clearGroupLock — the single visible way to drop the lock'
+    );
+    assert.ok(
+        strip.includes('for (const g of groups)') && strip.includes('const groups = getAllGroups();'),
+        'the strip must derive its tabs from getAllGroups()'
+    );
+    // One verb on every source. deleteGroup itself branches; the tab does not.
+    assert.ok(
+        strip.includes('deleteGroup(g.id)') && !strip.includes("'hide'"),
+        'every tab must render one delete wired at deleteGroup — no source branch, no hide label'
+    );
+    assert.ok(
+        !/confirm\s*\(/.test(strip),
+        'no confirm gate — delete executes on the click (and confirm() is a silent no-op in a VS Code webview)'
+    );
+    // The active tab is inert: "leave this group" is the All tab, not a toggle
+    // hidden on the tab you are already looking at.
+    assert.ok(
+        /if \(activeGroupId === g\.id\) \{ return; \}/.test(strip),
+        'clicking the already-active tab must be inert, not a hidden clearGroupLock toggle'
+    );
+    assert.ok(
+        strip.includes("onNewTerminalClicked(undefined, addKey)") && strip.includes("'group:' +"),
+        "the strip's + must open the role picker with a group:<id> key"
+    );
+    assert.ok(
+        !terminalsJs.includes("'__groups__'"),
+        'the __groups__ picker key died with the slab'
+    );
+});
 
-test('renameTerminal fixups group assignments', () => {
+test('detach is gone from every group affordance', () => {
+    // Reported from UAT: it minted a duplicate manual group with a (detached)
+    // suffix, did not switch to it, and gave no feedback — a third meaning for a
+    // word this file already uses for the exit grace period and for DOM reparenting.
+    const strip = block(terminalsJs, 'function renderGroupTabStrip() {', 'function terminalNameSuffix(');
+    // Matches a rendered LABEL, not the substring — an explanatory comment that
+    // happens to say "detached" is not a button.
+    assert.ok(
+        !/(textContent|innerText|innerHTML)\s*=\s*['"`]\s*detach/i.test(strip) && !/['"`]detach['"`]/.test(strip),
+        'no group affordance may render detach, in any source'
+    );
+    // The handler minted a NEW manual group with a "(detached)" suffix holding the
+    // same terminals. Nothing may recreate that.
+    assert.ok(
+        !terminalsJs.includes('(detached)'),
+        'nothing may mint a "(detached)" duplicate group'
+    );
+    // Existing (detached) groups an operator already created are ordinary manual
+    // groups — no migration, no name special-casing, no sweep.
+    assert.ok(
+        !/detached/.test(block(terminalsJs, 'function deleteGroup(id) {', 'function clearGroupLock() {')),
+        'deletion must not special-case a (detached) name — those are ordinary manual groups'
+    );
+    // ...but the unrelated exited-terminal cleanup family must survive.
+    assert.ok(
+        terminalsJs.includes('armDetachTimer') && terminalsJs.includes('cancelDetachTimer'),
+        'the armDetachTimer / cancelDetachTimer family is unrelated and must be untouched'
+    );
+});
+
+test('the tab strip is attached BEFORE its overflow measurement', () => {
+    // offsetWidth/clientWidth are 0 on a detached node. Measuring the row while it
+    // was still unparented made availableWidth negative, so EVERY group tab was
+    // pushed into the » menu and the strip rendered as "All » +" in every fleet
+    // shape — the feature's headline surface, silently empty, with no error.
+    const strip = block(terminalsJs, 'function renderGroupTabStrip() {', 'function terminalNameSuffix(');
+    const attachAt = strip.indexOf('groupTabStripEl.appendChild(tabRow)');
+    const measureAt = strip.indexOf('tabRow.clientWidth');
+    assert.ok(attachAt !== -1, 'the strip must attach its tab row');
+    assert.ok(measureAt !== -1, 'the strip must measure available width for overflow');
+    assert.ok(
+        attachAt < measureAt,
+        'tabRow must be appended to the strip BEFORE any offsetWidth/clientWidth read, or every tab overflows'
+    );
+});
+
+test('group membership is legible on the row via a chip', () => {
+    assert.ok(
+        terminalsJs.includes("groupChip.className = 'item-group-chip'"),
+        'each terminal row must carry a group chip so membership survives the loss of the nesting tier'
+    );
+    assert.ok(
+        terminalsJs.includes('findGroupForTerminalName(item.friendlyName)'),
+        'the chip must resolve through the same function the lock path uses'
+    );
+    assert.ok(
+        terminalsHtml.includes('.item-group-chip'),
+        'the chip must be styled'
+    );
+});
+
+// ---------------------------------------------------------------- lock / compose split
+
+test('assignToFocusedPane drops the active group lock unless keepLock is passed', () => {
+    const fn = block(terminalsJs, 'function assignToFocusedPane(', 'function undoLastAssignment()');
+    assert.ok(
+        fn.includes('if (activeGroupId && !opts.keepLock) {'),
+        'assignToFocusedPane must still drop the lock by default, and only opt out on keepLock'
+    );
+    assert.ok(
+        fn.includes('activeGroupId = null;'),
+        'assignToFocusedPane must clear activeGroupId'
+    );
+    // Exactly ONE caller may pass keepLock: the locked free-slot fill. Everything
+    // else — drag-drop, inbound focusTerminal, locateTerminal — keeps dropping it.
+    const keepLockCallers = (terminalsJs.match(/assignToFocusedPane\([^)]*keepLock/g) || []).length;
+    assert.strictEqual(
+        keepLockCallers, 1,
+        'only handleLockedTerminalClick\'s free-slot branch may pass keepLock'
+    );
+    // dismissPeek must stay ABOVE the unlock block and must NOT be gated on
+    // keepLock — a deliberate seat is a selection, and selection ends the peek.
+    assert.ok(
+        fn.indexOf('dismissPeek()') !== -1 && fn.indexOf('dismissPeek()') < fn.indexOf('if (activeGroupId'),
+        'dismissPeek must run before the unlock block, ungated'
+    );
+});
+
+test('the locked free-slot precondition matches what assignToFocusedPane will accept', () => {
+    // The caller MUST guarantee a free slot before passing keepLock, because the
+    // callee's fallbacks end in "displace the focused pane" — which under a lock
+    // evicts a group member to seat a non-member. A precondition looser than the
+    // callee's own isOpen()/isFree() test is how that happens.
+    const fn = block(terminalsJs, 'function handleLockedTerminalClick(', 'function promoteGroupMember(');
+    assert.ok(
+        /const isFreeSlot = \(i\) => !paneAssignments\[i\] && paneModes\[i\] !== 'kanban' && \(!pinsActive \|\| !pinnedPanes\[i\]\)/.test(fn),
+        'the free-slot precondition must exclude kanban panes AND pinned panes, exactly as assignToFocusedPane does'
+    );
+    assert.ok(
+        fn.includes('addTerminalToActiveGroup(name)') &&
+        fn.indexOf('addTerminalToActiveGroup(name)') < fn.indexOf('assignToFocusedPane(name, { keepLock: true })'),
+        'membership must be written BEFORE seating — the next seatActiveGroupPage reconcile rebuilds paneAssignments from members and would evict the addition'
+    );
+});
+
+test('setLayoutMode drops the lock unless keepLock is set', () => {
+    const fn = block(terminalsJs, 'function setLayoutMode(', 'function locateTerminal(');
+    assert.ok(
+        fn.includes('if (activeGroupId && !opts.keepLock)'),
+        'setLayoutMode must exit the lock when keepLock is not set'
+    );
+});
+
+test('the layout picker authors the locked group\'s layout and re-pages it', () => {
+    // This is the ONLY way the operator can express "planners are 2x2". The three
+    // other setLayoutMode callers (growLayoutForFleet, switchToGroup,
+    // create-grid-for-role) must keep their current behaviour — weakening the
+    // shared !opts.keepLock guard instead would leave create-grid holding a lock
+    // it then fights with fillEmptyPanes().
+    const handler = block(terminalsJs, "const layoutBtns = document.querySelectorAll('.layout-picker .btn-layout');", 'const btnClearAll =');
+    assert.ok(
+        /groupPrefs\.layouts\[group\.id\] = requested/.test(handler),
+        'a derived group\'s picked layout must be stored in groupPrefs.layouts'
+    );
+    assert.ok(
+        /group\.layout = requested/.test(handler),
+        'a manual group\'s picked layout must be stored on the group object'
+    );
+    assert.ok(
+        /setLayoutMode\(requested, \{ keepLock \}\)/.test(handler),
+        'the picker must keep the lock rather than silently unlocking'
+    );
+    // setLayoutMode adopts the pick optimistically, so applyLayoutFloor's `changed`
+    // test is false and its own seatActiveGroupPage() does not fire. Without an
+    // explicit re-page, growing 2h -> 2x2 for a 4-member group reveals two empty
+    // panes the group already has members to fill.
+    assert.ok(
+        handler.indexOf('seatActiveGroupPage()') > handler.indexOf('setLayoutMode(requested'),
+        'the picker must re-page the locked group AFTER applying the layout'
+    );
+    // The grow-only resolver must keep its own callers and its ratchet.
+    const grow = block(terminalsJs, 'function growLayoutForFleet(count) {', 'async function loadSetting(');
+    assert.ok(
+        grow.includes('setLayoutMode(target);') && !grow.includes('keepLock'),
+        'growLayoutForFleet must keep dropping the lock — widening for a just-spawned fleet is not the operator authoring a group'
+    );
+    assert.ok(
+        /if \(count <= currentSlots\) \{ return currentLayout; \}/.test(
+            block(terminalsJs, 'function layoutForFleetCount(count) {', 'function smallestLayoutFitting(')
+        ),
+        'layoutForFleetCount must keep its grow-only ratchet — only the group-restore resolver may shrink'
+    );
+    assert.ok(
+        !/currentLayout/.test(block(terminalsJs, 'function smallestLayoutFitting(count) {', 'function growLayoutForFleet(')),
+        'smallestLayoutFitting must have NO currentLayout floor — that is the whole point of the split'
+    );
+});
+
+test('locateTerminal delegates to handleLockedTerminalClick while a group is locked', () => {
+    const row = block(terminalsJs, 'itemDiv.addEventListener(\'click\'', 'return itemDiv;\n    }');
+    assert.ok(
+        row.includes('handleLockedTerminalClick(name)'),
+        'row click must call handleLockedTerminalClick when a group is locked'
+    );
+    assert.ok(
+        row.includes('locateTerminal(name)'),
+        'row click must call locateTerminal when no group is locked'
+    );
+});
+
+test('handleLockedTerminalClick distinguishes same-group, cross-group, and unassigned', () => {
+    const fn = block(terminalsJs, 'function handleLockedTerminalClick(', 'function promoteGroupMember(');
+    assert.ok(
+        fn.includes('switchToGroup(group.id)'),
+        'handleLockedTerminalClick must switch to another group'
+    );
+    assert.ok(
+        fn.includes('focusPaneTerminal'),
+        'handleLockedTerminalClick must focus a visible member'
+    );
+    // The Unassigned pseudo-group is retired in all three call sites TOGETHER.
+    // Retiring it in only getAllGroups() leaves findGroupForTerminalName returning
+    // an id switchToGroup cannot resolve — a silent no-op on every ungrouped
+    // terminal clicked under a lock, which is the dead click this feature exists
+    // to remove, reintroduced.
+    const find = block(terminalsJs, 'function findGroupForTerminalName(name) {', 'function addTerminalToActiveGroup(');
+    assert.ok(
+        /return null;/.test(find) && !find.includes('getUnassignedGroup'),
+        'findGroupForTerminalName must return null for an ungrouped terminal, not a pseudo-group'
+    );
+    assert.ok(
+        !/function getUnassignedGroup\b/.test(terminalsJs),
+        'getUnassignedGroup must be deleted outright — do not leave it defined but dead'
+    );
+    assert.ok(
+        !terminalsJs.includes("'__unassigned__'") && !terminalsJs.includes("source === 'unassigned'"),
+        'no __unassigned__ id and no unassigned branch may remain anywhere'
+    );
+    // ...and the !group branch it makes live must not be a dead click either.
+    assert.ok(
+        fn.includes('if (!group) {') && fn.includes('locateTerminal(name)'),
+        'the now-live !group branch must seat the terminal rather than returning silently'
+    );
+    // Clicking a member you cannot see must show it — anything else is a dead click.
+    assert.ok(
+        fn.includes('promoteGroupMember(group, idxInGroup'),
+        'an off-screen member must be promoted into a visible slot'
+    );
+    const promote = block(terminalsJs, 'function promoteGroupMember(group, fromIndex, toIndex) {', 'function renderGroupTabStrip()');
+    assert.ok(
+        promote.includes('setGroupOrder(group, members)'),
+        'promotion IS composition — the new order must be persisted'
+    );
+});
+
+test('deleteGroup handles every source and re-seats when the deleted group was locked', () => {
+    const fn = block(terminalsJs, 'function deleteGroup(id) {', 'function clearGroupLock() {');
+    assert.ok(
+        fn.includes('terminalGroups.filter(g => g.id !== id)'),
+        'a manual group must be removed from the record'
+    );
+    assert.ok(
+        fn.includes('groupPrefs.hidden.push(id)'),
+        'a derived group must be suppressed via the SHIPPED groupPrefs.hidden key — renaming it would orphan every existing suppression'
+    );
+    assert.ok(
+        /delete groupPrefs\.orders\[id\]/.test(fn) && /groupPrefs\.pinned = groupPrefs\.pinned\.filter/.test(fn),
+        'a manual delete must prune its orders entry and its pinned id'
+    );
+    // Dropping the lock is not enough: without a re-seat the panes keep holding
+    // the departed group's terminals with the lock silently gone.
+    assert.ok(
+        fn.includes('clearGroupLock()'),
+        'deleting the LOCKED group must route through clearGroupLock so the grid re-seats from the live fleet'
+    );
+});
+
+test('clearGroupLock re-seats the grid instead of only repainting the sidebar', () => {
+    const fn = block(terminalsJs, 'function clearGroupLock() {', 'function saveSelectionAsGroup(');
+    assert.ok(
+        !/if \(!activeGroupId\) \{ return; \}/.test(fn),
+        'the early return must be gone — "All" from an already-unlocked state is a legitimate reset-my-composition gesture'
+    );
+    assert.ok(
+        fn.includes('paneAssignments = assignments'),
+        'clearGroupLock must actually re-seat, not just repaint the sidebar'
+    );
+    assert.ok(
+        fn.includes('smallestLayoutFitting('),
+        'the layout must resolve non-monotonically so it can SHRINK from the departed group\'s grid'
+    );
+    assert.ok(
+        /pinnedPanes\[i\]/.test(fn),
+        'pinned slots must keep their occupant across the re-seat'
+    );
+});
+
+test('per-group layouts and the extras overlay both survive the loader whitelist', () => {
+    // The loader rebuilds groupPrefs field-by-field and DROPS every key it does
+    // not name. Miss a key and the feature works all session and loses its state
+    // on reload — with no error anywhere. Both siblings edit the same two sites.
+    assert.ok(
+        /let groupPrefs = \{ threshold: 2, hidden: \[\], pinned: \[\], orders: \{\}, layouts: \{\}, extras: \{\} \}/.test(terminalsJs),
+        'the initialiser must carry both layouts and extras'
+    );
+    const loader = block(terminalsJs, "const savedGroupPrefs = await loadSetting('terminals.groupPrefs', null);", 'if (LAYOUT_MODES.includes(savedMode))');
+    assert.ok(
+        /layouts: savedLayouts/.test(loader) && /extras: savedExtras/.test(loader),
+        'the loader whitelist must name BOTH layouts and extras, or one sibling silently disables the other'
+    );
+    assert.ok(
+        loader.includes('LAYOUT_MODES.includes(v)'),
+        'stored layouts must be validated on read so a stale or hand-edited setting cannot inject an unknown layout id'
+    );
+    assert.ok(
+        /extras[\s\S]{0,400}filter\(name => typeof name === 'string'\)/.test(loader),
+        'extras values must be coerced to arrays of strings on read'
+    );
+});
+
+test('getGroupMembers counts one population — no delegate children, extras unioned live', () => {
+    const fn = block(terminalsJs, 'function getGroupMembers(group) {', 'function orderGroupMembers(');
+    // The role/worktree branches used to filter on status alone, so a delegate
+    // child inherited its head's role, joined the group, inflated the count, and
+    // — once layouts are persisted — inflated the restored grid by a pane per child.
+    const roleBranch = fn.slice(fn.indexOf("group.source === 'role'"));
+    assert.ok(
+        roleBranch.includes('!t.parentInstanceId'),
+        'the role branch must exclude delegate children, matching getDerivedGroups and the manual branch'
+    );
+    assert.ok(
+        fn.slice(fn.indexOf("group.source === 'worktree'")).includes('!t.parentInstanceId'),
+        'the worktree branch must exclude delegate children too'
+    );
+    assert.ok(
+        /groupPrefs\.extras\[group\.id\]/.test(fn) && /live\.has\(n\)/.test(fn),
+        'the extras union must be intersected with the live set explicitly, or a dead name gets seated'
+    );
+});
+
+test('a locked group survives a shrinking membership and hidden groups are recoverable', () => {
+    // A derived delete is recoverable and must say so — relabelled to match the
+    // new verb and relocated into the strip's overflow menu.
+    const render = block(terminalsJs, 'function renderGroupTabStrip() {', 'function terminalNameSuffix(');
+    assert.ok(
+        render.includes('deleted group') && render.includes('groupPrefs.hidden = []'),
+        'the strip must surface a count of deleted derived groups and a restore-all'
+    );
+    // A locked derived group whose membership drops below the threshold must NOT
+    // silently unlock — the alternative is the view snapping back with no gesture.
+    const seat = block(terminalsJs, 'function seatActiveGroupPage() {', 'function safeGroupIdForValue(');
+    assert.ok(
+        !/activeGroupId = null/.test(seat),
+        'the seating path must never drop the lock on its own'
+    );
+});
+
+// ---------------------------------------------------------------- role picker (regression)
+
+test('pickerState is declared as module state for state-driven rendering', () => {
+    assert.ok(/let pickerState = null;/.test(terminalsJs), 'pickerState is module state');
+    assert.ok(/let pickerOpening = null;/.test(terminalsJs), 'pickerOpening guards the in-flight double click');
+    assert.ok(/let rolePickerData = null;/.test(terminalsJs), 'rolePickerData caches the fetched roles');
+    assert.ok(/let pickerNeedsScroll = false;/.test(terminalsJs), 'the scroll flag is one-shot');
+});
+
+test('the strip owns the group:* picker key and reports it into pickerRendered', () => {
+    // renderSidebarList ends with `if (pickerState && !pickerRendered) { pickerState = null; }`.
+    // The strip's picker is mounted OUTSIDE listEl (that is the point of the strip),
+    // so unless the strip reports it, that line nulls pickerState on the very next
+    // 5-second fleet poll and the picker vanishes mid-choice. The innerHTML wipe is
+    // not what kills it; this line is.
+    const render = block(terminalsJs, 'function renderGroupTabStrip() {', 'function terminalNameSuffix(');
+    assert.ok(
+        !/pickerState\.key !== '__groups__'[\s\S]*pickerState = null/.test(render),
+        'the strip must not clear a non-group pickerState — that would kill every per-workspace +'
+    );
+    assert.ok(render.includes('pickerRendered = true;'), 'the strip must report a mounted picker');
+    const list = block(terminalsJs, 'function renderSidebarList() {', 'function syncLayoutPickerUI()');
+    assert.ok(
+        list.includes('if (renderGroupTabStrip()) { pickerRendered = true; }'),
+        'the caller must fold the strip into its pickerRendered bookkeeping'
+    );
+    // The propagation must be the SOLE signal: an unconditional "any group:* key
+    // counts as rendered" guard in renderSidebarList would make the garbage-collect
+    // unreachable for a key whose group has since been deleted, stranding it forever.
+    assert.ok(
+        !/startsWith\('group:'\)[\s\S]{0,120}pickerRendered = true/.test(list),
+        'renderSidebarList must not blanket-report group:* keys — the strip decides, after checking the group still resolves'
+    );
+    assert.ok(
+        render.includes('groupStillExists'),
+        'the strip must confirm the group still resolves before mounting, so a picker opened against a since-deleted group is garbage-collected'
+    );
+});
+
+test('the not-rendered clear appears after the parents loop, not inside it', () => {
+    const render = block(terminalsJs, 'function renderSidebarList() {', 'function syncLayoutPickerUI()');
+    assert.ok(
+        /if \(pickerState && !pickerRendered\) \{ pickerState = null; \}/.test(render),
+        'the sweep must survive the groups-tier rework'
+    );
+});
+
+test('the picker mounts into the owning group container, not a shared node', () => {
+    const render = block(terminalsJs, 'function renderSidebarList() {', 'function syncLayoutPickerUI()');
+    assert.ok(/parentDiv\.appendChild\(mountRolePicker/.test(render), 'workspace rows mount their own picker');
+    assert.ok(/wtDiv\.appendChild\(mountRolePicker/.test(render), 'worktree rows mount their own picker');
+});
+
+// ---------------------------------------------------------------- save / selection
+
+test('saveCurrentAsGroup creates a manual group from current pane members', () => {
+    const fn = block(terminalsJs, 'function saveCurrentAsGroup(', 'function deleteGroup(');
+    assert.ok(
+        fn.includes("source: 'manual'"),
+        'saveCurrentAsGroup must create manual groups'
+    );
+    assert.ok(
+        fn.includes('members: visible'),
+        'saveCurrentAsGroup must store pane members'
+    );
+});
+
+test('multi-select and group-selected affordances exist', () => {
+    const row = block(terminalsJs, 'function renderSidebarList() {', 'function syncLayoutPickerUI()');
+    assert.ok(
+        row.includes('selectedTerminalNames.size > 0'),
+        'renderSidebarList must detect an active selection'
+    );
+    assert.ok(
+        row.includes('saveSelectionAsGroup'),
+        'the selection UI must offer saveSelectionAsGroup'
+    );
+});
+
+// ---------------------------------------------------------------- rename and banner
+
+test('renameTerminal only fixups manual group members/order', () => {
     const renameBlock = block(terminalsJs, 'async function renameTerminal(', 'function beginInlineRename(');
     assert.ok(
-        renameBlock.includes('for (const g of terminalGroups)'),
-        'renameTerminal must iterate over terminalGroups'
+        renameBlock.includes("if (g.source !== 'manual') { continue; }"),
+        'renameTerminal must skip derived groups'
     );
     assert.ok(
-        /g\.assignments\[i\] === name/.test(renameBlock),
-        'renameTerminal must match the old name in group assignments'
-    );
-    assert.ok(
-        /g\.assignments\[i\] = next/.test(renameBlock),
-        'renameTerminal must update group assignments to the new name'
+        renameBlock.includes("'members', 'order'"),
+        'renameTerminal must touch the members and order arrays'
     );
 });
 
-// ---------------------------------------------------------------- solo guard
-
-test('saveSetting no-ops in solo mode (group persistence suppressed)', () => {
-    const saveSettingBlock = block(terminalsJs, 'async function saveSetting(', 'async function loadLayoutSettings()');
+test('applyLayoutFloor shows a group-aware shortfall banner', () => {
+    const fn = block(terminalsJs, 'function applyLayoutFloor(', '/** Attempt schedule');
     assert.ok(
-        saveSettingBlock.includes('if (soloTerminalName) { return; }'),
-        'saveSetting must return early when soloTerminalName is active — no terminals.groups write in solo'
+        fn.includes('activeGroupId ? getAllGroups().find'),
+        'applyLayoutFloor must look up the active group for banner text'
+    );
+    assert.ok(
+        fn.includes('Showing'),
+        'applyLayoutFloor must produce a showing-N-of-M message'
     );
 });
 
-// ---------------------------------------------------------------- SAVE AS GROUP control
+// ---------------------------------------------------------------- html contracts
 
 test('terminals.html includes the SAVE AS GROUP button', () => {
     assert.ok(
@@ -199,198 +729,14 @@ test('terminals.html includes the SAVE AS GROUP button', () => {
     );
 });
 
-test('saveCurrentAsGroup snapshots the rendered-length slice of paneAssignments', () => {
-    const fn = block(terminalsJs, 'function saveCurrentAsGroup(', 'function deleteGroup(');
+test('terminals.html styles the group tier and selected rows', () => {
     assert.ok(
-        fn.includes('paneAssignments.slice(0, getSlotCount(effectiveLayout))'),
-        'saveCurrentAsGroup must snapshot only the rendered-length slice, not invisible tail state'
+        terminalsHtml.includes('.group-tier-header'),
+        'terminals.html must contain .group-tier-header CSS'
     );
     assert.ok(
-        fn.includes('terminalGroups.push(group)'),
-        'saveCurrentAsGroup must push the new group onto terminalGroups'
-    );
-});
-
-// ---------------------------------------------------------------- deleteGroup
-
-test('deleteGroup removes the group and clears activeGroupId if it was active', () => {
-    const fn = block(terminalsJs, 'function deleteGroup(', 'function switchToGroup(');
-    assert.ok(
-        fn.includes('terminalGroups = terminalGroups.filter'),
-        'deleteGroup must filter out the group by id'
-    );
-    assert.ok(
-        fn.includes('if (activeGroupId === id) { activeGroupId = null; }'),
-        'deleteGroup must clear activeGroupId when the active group is deleted'
-    );
-});
-
-// ---------------------------------------------------------------- inline role picker
-
-test('pickerState is declared as module state for state-driven rendering', () => {
-    assert.ok(
-        /let pickerState = null;/.test(terminalsJs),
-        'pickerState must be declared as module-level state'
-    );
-    assert.ok(
-        /let pickerOpening = null;/.test(terminalsJs),
-        'pickerOpening must be declared as module-level state'
-    );
-    assert.ok(
-        /let rolePickerData = null;/.test(terminalsJs),
-        'rolePickerData must be declared as module-level state'
-    );
-    assert.ok(
-        /let pickerNeedsScroll = false;/.test(terminalsJs),
-        'pickerNeedsScroll must be declared as module-level state'
-    );
-});
-
-test('the picker renders from pickerState, never via getElementById(role-picker)', () => {
-    const render = block(terminalsJs, 'function renderSidebarList() {', 'function setLayoutMode(');
-    assert.ok(
-        render.includes('pickerState'),
-        'renderSidebarList must read pickerState to render the picker'
-    );
-    assert.ok(
-        !render.includes("getElementById('role-picker')"),
-        'renderSidebarList must NOT use getElementById(role-picker) — the static element is gone'
-    );
-    assert.ok(
-        render.includes('mountRolePicker('),
-        'renderSidebarList must mount the picker via mountRolePicker'
-    );
-});
-
-test('the picker is appended to the group container, not to .parent-group-items', () => {
-    const render = block(terminalsJs, 'function renderSidebarList() {', 'function setLayoutMode(');
-    // The parent picker is appended to parentDiv, between headerEl and itemsContainer.
-    assert.ok(
-        /parentDiv\.appendChild\(mountRolePicker/.test(render),
-        'parent picker must be appended to parentDiv, not to itemsContainer'
-    );
-    // The worktree picker is appended to wtDiv, between wtHeaderEl and wtItemsContainer.
-    assert.ok(
-        /wtDiv\.appendChild\(mountRolePicker/.test(render),
-        'worktree picker must be appended to wtDiv, not to wtItemsContainer'
-    );
-});
-
-test('the not-rendered clear appears after the parents loop, not inside it', () => {
-    const render = block(terminalsJs, 'function renderSidebarList() {', 'function setLayoutMode(');
-    assert.ok(
-        render.includes('if (pickerState && !pickerRendered)'),
-        'the not-rendered clear must be present'
-    );
-    // The clear must come after the parents loop closes — i.e. after the last
-    // listEl.appendChild(parentDiv) and before the Show groups block.
-    const clearIdx = render.indexOf('if (pickerState && !pickerRendered)');
-    const lastAppendIdx = render.lastIndexOf('listEl.appendChild(parentDiv)');
-    assert.ok(
-        clearIdx > lastAppendIdx,
-        'the not-rendered clear must come AFTER the parents loop, not inside it'
-    );
-});
-
-test('renderGroupSidebar offers a + New terminal row and clears a non-__groups__ key on entry', () => {
-    const groupSidebar = block(terminalsJs, 'function renderGroupSidebar() {', 'function renderSidebarList() {');
-    assert.ok(
-        groupSidebar.includes("'+ New terminal'"),
-        'renderGroupSidebar must offer a + New terminal row'
-    );
-    assert.ok(
-        groupSidebar.includes("onNewTerminalClicked(undefined, '__groups__')"),
-        'the + New terminal row must open the picker with the __groups__ key'
-    );
-    assert.ok(
-        groupSidebar.includes("pickerState.key !== '__groups__'"),
-        'renderGroupSidebar must clear a non-__groups__ picker key on entry'
-    );
-});
-
-test('onNewTerminalClicked claims a synchronous in-flight key before its await and re-checks after', () => {
-    const fn = block(terminalsJs, 'async function onNewTerminalClicked(', 'function buildRolePicker(');
-    const openingAssignIdx = fn.indexOf('pickerOpening = groupKey');
-    const awaitIdx = fn.indexOf('await fetchPtyVisibleRoles()');
-    const recheckIdx = fn.indexOf("if (pickerOpening !== groupKey)");
-    assert.ok(openingAssignIdx !== -1, 'pickerOpening must be assigned before the await');
-    assert.ok(awaitIdx !== -1, 'fetchPtyVisibleRoles must be awaited');
-    assert.ok(recheckIdx !== -1, 'pickerOpening must be re-checked after the await');
-    assert.ok(
-        openingAssignIdx < awaitIdx,
-        'pickerOpening must be claimed BEFORE the await'
-    );
-    assert.ok(
-        recheckIdx > awaitIdx,
-        'pickerOpening must be re-checked AFTER the await'
-    );
-});
-
-test('the picker mount path consumes a one-shot scroll flag, not scrolling on every render', () => {
-    const fn = block(terminalsJs, 'function mountRolePicker(', 'async function createTerminal(');
-    assert.ok(
-        fn.includes('pickerNeedsScroll'),
-        'mountRolePicker must consume the pickerNeedsScroll flag'
-    );
-    assert.ok(
-        fn.includes('pickerNeedsScroll = false'),
-        'mountRolePicker must reset the one-shot flag so poll re-renders do not scroll'
-    );
-    assert.ok(
-        fn.includes('scrollIntoView'),
-        'mountRolePicker must call scrollIntoView when the flag is set'
-    );
-});
-
-test('choosing a role closes the picker synchronously, not on the next incidental render', () => {
-    // Exact declaration marker: a bare `buildRolePicker(` also matches the prose
-    // reference in init()'s replacement comment ~3200 lines earlier.
-    const fn = block(terminalsJs, 'function buildRolePicker(targetSpec) {', 'function mountRolePicker(');
-    // Every handler that dismisses the picker must clear the state AND re-render.
-    // The static picker hid synchronously via `picker.hidden = true`; state-only
-    // clearing leaves the menu up until something else renders, and createTerminal's
-    // only re-render is behind `res.ok` — so a failed create leaves it up until the
-    // 5s fleet poll.
-    const dismissals = fn.match(/pickerState = null;/g) || [];
-    assert.ok(
-        dismissals.length >= 3,
-        'role, no-role and cancel handlers must all clear pickerState'
-    );
-    const renders = fn.match(/renderSidebarList\(\);/g) || [];
-    assert.ok(
-        renders.length >= dismissals.length,
-        'every pickerState clear in buildRolePicker must be followed by renderSidebarList() so the menu closes immediately'
-    );
-    assert.ok(
-        /pickerState = null;\s*\n\s*renderSidebarList\(\);\s*\n\s*createTerminal\(role,/.test(fn),
-        'the role button must close the picker BEFORE firing createTerminal'
-    );
-    assert.ok(
-        /pickerState = null;\s*\n\s*renderSidebarList\(\);\s*\n\s*createTerminal\(NO_ROLE,/.test(fn),
-        'the No role button must close the picker BEFORE firing createTerminal'
-    );
-});
-
-test('terminals.html no longer contains the static #role-picker or #btn-new-terminal', () => {
-    assert.ok(
-        !terminalsHtml.includes('id="btn-new-terminal"'),
-        'terminals.html must not contain the #btn-new-terminal button'
-    );
-    assert.ok(
-        !terminalsHtml.includes('id="role-picker"'),
-        'terminals.html must not contain the static #role-picker element'
-    );
-    assert.ok(
-        !terminalsHtml.includes('id="role-picker-cancel"'),
-        'terminals.html must not contain the static #role-picker-cancel button'
-    );
-    assert.ok(
-        !terminalsHtml.includes('.btn-new-terminal'),
-        'terminals.html must not contain the .btn-new-terminal CSS'
-    );
-    assert.ok(
-        terminalsHtml.includes('.role-picker.is-inline'),
-        'terminals.html must contain the .role-picker.is-inline CSS for the inline picker'
+        terminalsHtml.includes('.terminal-item.is-selected'),
+        'terminals.html must contain .terminal-item.is-selected CSS'
     );
 });
 

@@ -589,6 +589,36 @@
         return `<span class="ticket-sync-badge ticket-sync-pending">checking</span>`;
     }
 
+    // Subtask count for a sidebar card.
+    //
+    // Prefers the detail cache once populated: that array is what a drill-down
+    // actually lists, and it counts remote subtasks the user never imported.
+    // Falls back to the file-derived count from listLocalTicketFiles, which is
+    // what makes the chip visible BEFORE the ticket has ever been selected —
+    // the whole point of the affordance.
+    //
+    // Returns undefined when nothing is known — remote-list cards and drill-down
+    // subtask cards carry no count, and "unknown" must not render as "0".
+    function _ticketSubtaskCount(provider, id, fileCount) {
+        const cached = provider === 'linear' ? linearIssueDetailCache.get(id) : clickUpTaskDetailCache.get(id);
+        if (cached && cached.detailsFetched && Array.isArray(cached.subtasks)) {
+            return cached.subtasks.length;
+        }
+        return typeof fileCount === 'number' ? fileCount : undefined;
+    }
+
+    // The chip is BOTH the count display and the only drill-down affordance.
+    // Nothing renders for 0 or unknown — a "0 subtasks" chip on every leaf ticket
+    // is noise, unknown is not zero, and a chip that does nothing when clicked is
+    // worse than no chip.
+    // ASCII + an existing sb-icon mask class only: this panel's font stack has no
+    // symbol glyphs, so a decorative arrow would render as tofu.
+    function _ticketSubtaskChip(provider, id, fileCount) {
+        const n = _ticketSubtaskCount(provider, id, fileCount);
+        if (!n) { return ''; }
+        return `<span class="ticket-subtask-count" role="button" tabindex="0" data-subtask-count-provider="${escapeAttr(provider)}" data-subtask-count-ticket-id="${escapeAttr(id)}" title="Show ${n} subtask${n === 1 ? '' : 's'}"><span class="sb-icon sb-icon-sm sb-icon-chevron-right" aria-hidden="true"></span>${n}</span>`;
+    }
+
     // ── 2c: Priority popover dismiss + outside-click/ESC handlers ──
     function outsideClickPriorityClose(e) {
         const popover = document.getElementById('ticket-priority-popover');
@@ -638,19 +668,13 @@
         <div class="ticket-node${isSelected ? ' selected' : ''}" data-clickup-task-id="${escapeAttr(task.id)}">
             ${priorityDot}
             <div class="tickets-issue-title">${escapeHtml(task.title || task.name || task.identifier || task.id)}</div>
-            <div class="tickets-issue-meta ticket-status-row" data-edit-status data-provider="clickup" data-ticket-id="${escapeAttr(task.id)}">${escapeHtml(task.status || 'Unknown')}${syncBadge}</div>
+            <div class="tickets-issue-meta ticket-status-row" data-edit-status data-provider="clickup" data-ticket-id="${escapeAttr(task.id)}">${escapeHtml(task.status || 'Unknown')}${syncBadge}${_ticketSubtaskChip('clickup', task.id, task.subtaskCount)}</div>
             <div class="tickets-issue-meta ticket-edit-assignees" data-edit-assignees data-provider="clickup" data-ticket-id="${escapeAttr(task.id)}">${task.assignees && task.assignees.length ? escapeHtml(task.assignees.map(a => a.username || a.email).join(', ')) : 'Unassigned'}</div>
             <div class="card-actions">
                 <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(task.id)}" data-provider="clickup" title="Add to kanban">To kanban</button>
                 <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(task.id)}" data-provider="clickup" title="Link to ticket">Link</button>
                 ${openBtn}
-                <div class="overflow-menu" data-overflow-menu>
-                    <button type="button" class="card-icon-btn overflow-menu-trigger" data-overflow-trigger title="More actions"><span class="sb-icon sb-icon-sm sb-icon-overflow" aria-hidden="true"></span></button>
-                    <div class="overflow-menu-popover" data-overflow-popover>
-                        <button type="button" class="card-icon-btn overflow-menu-item" data-move-ticket-id="${escapeAttr(task.id)}" data-provider="clickup" title="Move to another list">Move</button>
-                        <button type="button" class="card-icon-btn overflow-menu-item" data-add-subtask-ticket-id="${escapeAttr(task.id)}" data-provider="clickup" title="Create a subtask under this ticket">+ Subtask</button>
-                    </div>
-                </div>
+                <button type="button" class="card-icon-btn" data-move-ticket-id="${escapeAttr(task.id)}" data-provider="clickup" title="Move to another list">Move</button>
             </div>
         </div>
         `;
@@ -672,20 +696,14 @@
         <div class="ticket-node${isSelected ? ' selected' : ''}" data-linear-issue-id="${escapeAttr(issue.id)}">
             ${priorityDot}
             <div class="tickets-issue-title">${escapeHtml(issue.title || issue.identifier || issue.id)}</div>
-            <div class="tickets-issue-meta ticket-status-row" data-edit-status data-provider="linear" data-ticket-id="${escapeAttr(issue.id)}">${escapeHtml(issue.state?.name || 'Unknown state')}${syncBadge}</div>
+            <div class="tickets-issue-meta ticket-status-row" data-edit-status data-provider="linear" data-ticket-id="${escapeAttr(issue.id)}">${escapeHtml(issue.state?.name || 'Unknown state')}${syncBadge}${_ticketSubtaskChip('linear', issue.id, issue.subtaskCount)}</div>
             <div class="tickets-issue-meta ticket-edit-assignees" data-edit-assignees data-provider="linear" data-ticket-id="${escapeAttr(issue.id)}">${escapeHtml(issue.assignee?.name || issue.assignee?.email || 'Unassigned')}</div>
             <div class="tickets-issue-meta">${escapeHtml((issue.description || '').trim().slice(0, 180) || 'No description provided.')}</div>
             <div class="card-actions">
                 <button type="button" class="card-icon-btn" data-import-plan-id="${escapeAttr(issue.id)}" data-provider="linear" title="Add to kanban">To kanban</button>
                 <button type="button" class="card-icon-btn" data-link-ticket-id="${escapeAttr(issue.id)}" data-provider="linear" title="Link to ticket">Link</button>
                 ${openBtn}
-                <div class="overflow-menu" data-overflow-menu>
-                    <button type="button" class="card-icon-btn overflow-menu-trigger" data-overflow-trigger title="More actions"><span class="sb-icon sb-icon-sm sb-icon-overflow" aria-hidden="true"></span></button>
-                    <div class="overflow-menu-popover" data-overflow-popover>
-                        <button type="button" class="card-icon-btn overflow-menu-item" data-move-ticket-id="${escapeAttr(issue.id)}" data-provider="linear" title="Move to another project">Move</button>
-                        <button type="button" class="card-icon-btn overflow-menu-item" data-add-subtask-ticket-id="${escapeAttr(issue.id)}" data-provider="linear" title="Create a subtask under this ticket">+ Subtask</button>
-                    </div>
-                </div>
+                <button type="button" class="card-icon-btn" data-move-ticket-id="${escapeAttr(issue.id)}" data-provider="linear" title="Move to another project">Move</button>
             </div>
         </div>
         `;
@@ -730,9 +748,9 @@
     // Header (and parent card) shown atop the sidebar when in subtask drill-down
     // mode. The parent's OWN card is rendered here — not just its title — so its
     // card actions (To kanban, Link, Open, Move) stay reachable while drilled into
-    // the subtask list. Clicking it re-selects the parent WITHOUT leaving drill-down
-    // (the card-click handler skips drill-down entry once _sidebarDrillDownParentId
-    // is set). The parent detail is guaranteed cached: _maybeEnterDrillDown only
+    // the subtask list. Clicking it re-selects the parent; no card click arms
+    // drill-down any more, so it stays in drill-down because _sidebarDrillDownParentId
+    // is already set. The parent detail is guaranteed cached: _maybeEnterDrillDown only
     // activates after details (incl. subtasks) have been fetched.
     function _renderDrillDownHeader(parentTitle, provider) {
         const parentId = _sidebarDrillDownParentId;
@@ -1536,6 +1554,31 @@
             if (btnConvertSubtask) btnConvertSubtask.style.display = '';
             if (btnToParent) btnToParent.style.display = 'none';
         }
+        // "Push + subtasks" is meaningful only on a parent that has LOCALLY-IMPORTED
+        // subtasks. A subtask has no children (edge case 2), and a parent with no
+        // local subtask files has nothing extra to push (edge case 1) — disable in
+        // both cases rather than hide, so the control stays a stable part of the bar.
+        //
+        // The gate MUST agree with the push: _localSubtaskIdsFor discovers children
+        // from LOCAL files carrying `parentId:` frontmatter, NOT from the remote
+        // subtask list. The detail cache's `subtasks` array is the REMOTE list, so
+        // gating on it would enable the button for a parent whose subtasks exist
+        // remotely but were never imported — the button would then push only the
+        // parent and report "1 pushed", silently degrading to the plain Push beside
+        // it. Use the file-derived count the sidebar card already carries
+        // (listLocalTicketFiles → subtaskCount, counted from parentId frontmatter),
+        // looked up on the card list — not _ticketSubtaskCount, which prefers the
+        // cache and would reintroduce the remote number.
+        const btnPushSubtasks = document.getElementById('btn-push-ticket-subtasks');
+        if (btnPushSubtasks) {
+            const id = lastIntegrationProvider === 'linear'
+                ? selectedLinearIssue?.issue?.id
+                : selectedClickUpIssue?.task?.id;
+            const list = lastIntegrationProvider === 'linear' ? linearProjectIssues : clickUpProjectIssues;
+            const card = id ? list.find(t => t.id === id) : null;
+            const localSubtaskCount = card ? (card.subtaskCount || 0) : 0;
+            btnPushSubtasks.disabled = !!(parentId) || localSubtaskCount === 0;
+        }
         // Recompute the meta-bar "⋯ More" trigger visibility: if every item inside
         // the popover is now hidden (e.g. minimal-capability provider), hide the
         // trigger too. Items live inside the popover DOM but keep their ids, so the
@@ -1850,8 +1893,18 @@
             }
             case 'a': return `[${inner()}](${node.getAttribute('href') || ''})`;
             case 'img': return `![${node.getAttribute('alt') || ''}](${node.getAttribute('src') || ''})`;
-            case 'ul': return Array.from(node.children).filter(c => c.tagName === 'LI').map(li => `- ${nodeToMarkdown(li).trim()}\n`).join('') + '\n';
-            case 'ol': return Array.from(node.children).filter(c => c.tagName === 'LI').map((li, i) => `${i + 1}. ${nodeToMarkdown(li).trim()}\n`).join('') + '\n';
+            case 'ul': case 'ol': {
+                const ordered = tag === 'ol';
+                const items = Array.from(node.children).filter(c => c.tagName === 'LI');
+                return items.map((li, i) => {
+                    const prefix = ordered ? `${i + 1}. ` : '- ';
+                    // A loose item carries its gap back out as a blank line, so a
+                    // render → serialise round trip is spacing-preserving. htmlToMarkdown's
+                    // /\n{3,}/ -> '\n\n' collapse is why this emits exactly one blank line.
+                    const gap = (i > 0 && li.classList.contains('md-li-loose')) ? '\n' : '';
+                    return `${gap}${prefix}${nodeToMarkdown(li).trim()}\n`;
+                }).join('') + '\n';
+            }
             case 'li': return inner();
             case 'blockquote': return inner().split('\n').map(l => `> ${l}`).join('\n') + '\n\n';
             case 'hr': return '---\n\n';
@@ -3001,6 +3054,7 @@
 
         document.getElementById('btn-edit-ticket').style.display = 'none';
         document.getElementById('btn-push-ticket').style.display = 'none';
+        document.getElementById('btn-push-ticket-subtasks').style.display = 'none';
         document.getElementById('btn-delete-ticket').style.display = 'none';
         document.getElementById('btn-save-ticket-edit').style.display = '';
         document.getElementById('btn-cancel-ticket-edit').style.display = '';
@@ -3086,6 +3140,7 @@
         _ticketsEditBackupHtml = null;
         document.getElementById('btn-edit-ticket').style.display = '';
         document.getElementById('btn-push-ticket').style.display = '';
+        document.getElementById('btn-push-ticket-subtasks').style.display = '';
         document.getElementById('btn-delete-ticket').style.display = '';
         document.getElementById('btn-save-ticket-edit').style.display = 'none';
         document.getElementById('btn-cancel-ticket-edit').style.display = 'none';
@@ -3321,7 +3376,12 @@
         if (selectedLinearIssue.renderedDescriptionHtml) {
             contentHtml += externalizeAnchors(selectedLinearIssue.renderedDescriptionHtml);
         } else {
-            contentHtml += `<p>${escapeHtml((issue.description || '').trim() || 'No description provided.').replace(/\n/g, '<br>')}</p>`;
+            const descSrc = (selectedLinearIssue.descriptionMarkdown || issue.description || '').trim();
+            if (descSrc) {
+                contentHtml += renderMarkdown(descSrc);
+            } else {
+                contentHtml += '<p>No description provided.</p>';
+            }
         }
 
         if (selectedLinearIssue.comments && selectedLinearIssue.comments.length > 0) {
@@ -3426,7 +3486,12 @@
         if (selectedClickUpIssue.renderedDescriptionHtml) {
             contentHtml += externalizeAnchors(selectedClickUpIssue.renderedDescriptionHtml);
         } else {
-            contentHtml += `<p>${escapeHtml((task.markdownDescription || task.description || '').trim() || 'No description provided.').replace(/\n/g, '<br>')}</p>`;
+            const descSrc = (selectedClickUpIssue.descriptionMarkdown || task.markdownDescription || task.description || '').trim();
+            if (descSrc) {
+                contentHtml += renderMarkdown(descSrc);
+            } else {
+                contentHtml += '<p>No description provided.</p>';
+            }
         }
 
         if (selectedClickUpIssue.comments && selectedClickUpIssue.comments.length > 0) {
@@ -4693,12 +4758,14 @@
             initOverflowMenus();
         }
 
-        // Card "Move" lives in a card's overflow popover. initOverflowMenus moves an
-        // open popover to <body> (it is position:fixed, so it must escape the
-        // sidebar's overflow:auto) — which takes it out of #tickets-issues-container
-        // and past that container's delegated card-click handler. Anything inside a
-        // popover therefore has to be caught at the document level or the click is
-        // swallowed and the control looks dead.
+        // Card "Move" is now a direct card button rather than an overflow-popover item,
+        // so it no longer NEEDS document-level delegation to escape the reparented
+        // popover. It stays here as the single owner of the action, independent of
+        // where a card is rendered (both card renderers and _renderDrillDownHeader's
+        // parent card currently paint into #tickets-issues-container). What stops the
+        // click also selecting the card is the early return for [data-move-ticket-id]
+        // in that container's handler — the container bubbles first, so the
+        // stopPropagation below cannot do it.
         document.addEventListener('click', (e) => {
             const moveTicketBtn = e.target.closest('[data-move-ticket-id]');
             if (!moveTicketBtn) return;
@@ -5150,6 +5217,19 @@
             vscode.postMessage({ type: 'pushTicket', provider, id, workspaceRoot: ticketsWorkspaceRoot });
         });
 
+        // Action bar: Push + subtasks — push the parent AND every locally-imported
+        // subtask, one remote record each. Disabled by _toggleSubtaskMetaButtons
+        // when the selected ticket is itself a subtask or has no subtasks.
+        document.getElementById('btn-push-ticket-subtasks')?.addEventListener('click', () => {
+            const provider = lastIntegrationProvider;
+            const id = provider === 'linear'
+                ? selectedLinearIssue?.issue.id
+                : selectedClickUpIssue?.task.id;
+            if (!id) return;
+            setTicketsLoadingState(true);
+            vscode.postMessage({ type: 'pushTicketWithSubtasks', provider, id, workspaceRoot: ticketsWorkspaceRoot });
+        });
+
         // Action bar: Delete — immediate, no confirm gate (repo rule: delete buttons delete)
         document.getElementById('btn-delete-ticket')?.addEventListener('click', () => {
             const provider = lastIntegrationProvider;
@@ -5368,6 +5448,30 @@ Instructions:
                 return;
             }
 
+            // Explicit drill-down request: the subtask-count chip on a card. This is
+            // the ONLY card-level path into the subtask list.
+            //
+            // Registered above the [data-edit-status] branch because the chip lives
+            // inside that row and that branch returns; and it does the selection
+            // itself rather than falling through, so the status-edit modal never
+            // opens. _selectTicketFromCard already posts the provider's detail-load
+            // message when the cache is cold, which is what the pending entry waits on.
+            const subtaskChip = e.target.closest('[data-subtask-count-ticket-id]');
+            if (subtaskChip) {
+                e.stopPropagation();
+                const chipId = subtaskChip.dataset.subtaskCountTicketId;
+                const chipProvider = subtaskChip.dataset.subtaskCountProvider;
+                if (chipId) {
+                    _resetSidebarDrillDown();
+                    _pendingDrillDownParentId = chipId;
+                    _selectTicketFromCard(chipProvider, chipId);
+                    // Enters synchronously if details are already cached; otherwise the
+                    // detail-loaded arm completes the entry when the response lands.
+                    _maybeEnterDrillDown(chipProvider, chipId);
+                }
+                return;
+            }
+
             // Editable status row on a sidebar card — select the clicked ticket then
             // open the status modal. Intercepted before the card-selection fallback so
             // the click does not also trigger bare-card selection / drill-down.
@@ -5442,10 +5546,15 @@ Instructions:
                 handleLinkToTicket(provider, id, linkTicketBtn);
                 return;
             }
-            // NOTE: Move is NOT handled here — it lives inside a card's overflow
-            // popover, which initOverflowMenus reparents to <body> on open, so its
-            // clicks never bubble through this container. See the document-level
-            // listener in initTicketsTab.
+            // Move is now a direct card button, so it bubbles through this container
+            // handler on its way to the document-level listener that owns it. Return
+            // here or the catch-all card branch below would also select the ticket and
+            // enter drill-down on every Move click. (Container bubbles before document,
+            // so the document listener's stopPropagation cannot prevent that.)
+            if (e.target.closest('[data-move-ticket-id]')) {
+                return;
+            }
+
             const openTicketBtn = e.target.closest('[data-open-ticket-url]');
             if (openTicketBtn) {
                 // The Open control is now an <a href>, so the VS Code webview's
@@ -5465,14 +5574,11 @@ Instructions:
             if (card) {
                 const linearId = card.dataset.linearIssueId;
                 const clickUpId = card.dataset.clickupTaskId;
-                // Drill-down intent: only when clicking from the NORMAL list (not when
-                // clicking a subtask card already inside drill-down). Enters synchronously
-                // if subtasks are already cached; otherwise the detail-loaded handler
-                // activates it once the subtask data arrives.
-                if (!_sidebarDrillDownParentId) {
-                    _pendingDrillDownParentId = clickUpId || linearId || null;
-                    _maybeEnterDrillDown(linearId ? 'linear' : 'clickup', linearId || clickUpId);
-                }
+                // Selecting a ticket loads it into the detail pane and NOTHING else.
+                // Drill-down is entered only by an explicit act — the subtask-count
+                // chip handled above, the inline subtask nav, or creating a subtask.
+                // Arming it here made every click on a parent silently replace the list
+                // the user was working down, a beat after the click, once details landed.
                 if (linearId) {
                     const cachedLinear = linearIssueDetailCache.get(linearId);
                     // Always read the local file fresh on selection — the local .md is the source of
@@ -5501,6 +5607,23 @@ Instructions:
 
             }
         });
+
+        // Subtask-count chip keyboard support: role="button" must respond to Enter/Space.
+        document.getElementById('tickets-issues-container')?.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') { return; }
+            const chip = e.target.closest('[data-subtask-count-ticket-id]');
+            if (!chip) { return; }
+            e.preventDefault();
+            const chipId = chip.dataset.subtaskCountTicketId;
+            const chipProvider = chip.dataset.subtaskCountProvider;
+            if (chipId) {
+                _resetSidebarDrillDown();
+                _pendingDrillDownParentId = chipId;
+                _selectTicketFromCard(chipProvider, chipId);
+                _maybeEnterDrillDown(chipProvider, chipId);
+            }
+        });
+
         // Create ticket button click
         document.getElementById('tickets-create')?.addEventListener('click', () => {
             _subtaskParent = null;
@@ -5681,33 +5804,6 @@ Instructions:
             const task = provider === 'linear' ? issue.issue : issue.task;
             const ticketId = task?.id;
             const ticketTitle = task?.title || task?.name || '';
-            openCreateSubtaskModal(provider, ticketId, ticketTitle);
-        });
-
-        // + Subtask overflow menu item on sidebar cards. Wired at document level because
-        // initOverflowMenus re-parents the open popover to <body>, so container-scoped
-        // delegation (like the card click handler) cannot catch the menu click.
-        document.addEventListener('click', (e) => {
-            const subtaskBtn = e.target.closest('[data-add-subtask-ticket-id]');
-            if (!subtaskBtn) return;
-            e.stopPropagation();
-            _closeAllOverflowPopovers(null); // dismiss the … More menu
-            const provider = subtaskBtn.dataset.provider;
-            const ticketId = subtaskBtn.dataset.addSubtaskTicketId;
-            // Resolve the title from the in-memory lists / drill-down subtasks / detail cache
-            // (mirrors the lookup in _selectTicketFromCard).
-            let ticketTitle = '';
-            if (provider === 'linear') {
-                const issue = linearProjectIssues.find(i => i.id === ticketId)
-                    || (_drillDownSubtasks && _drillDownSubtasks.find(s => s.id === ticketId))
-                    || (linearIssueDetailCache.get(ticketId) && linearIssueDetailCache.get(ticketId).issue);
-                ticketTitle = (issue && (issue.title || issue.identifier)) || '';
-            } else {
-                const task = clickUpProjectIssues.find(t => t.id === ticketId)
-                    || (_drillDownSubtasks && _drillDownSubtasks.find(s => s.id === ticketId))
-                    || (clickUpTaskDetailCache.get(ticketId) && clickUpTaskDetailCache.get(ticketId).task);
-                ticketTitle = (task && (task.title || task.name)) || '';
-            }
             openCreateSubtaskModal(provider, ticketId, ticketTitle);
         });
 
@@ -6770,6 +6866,62 @@ Instructions:
         }
     }
 
+    // True when the payload's ticket IS the currently selected one — i.e. the applier
+    // below has an object to patch. False means a first selection: the card-click handler
+    // only assigns selectedClickUpIssue/selectedLinearIssue when a detail-cache entry
+    // already exists, so on a ticket's first selection in a session the selection still
+    // points at the PREVIOUS ticket (or null). That case needs a from-scratch build, not
+    // a patch — see the localTicketFileRead arm.
+    function _isSelectedTicketPayload(message) {
+        return (message.provider === 'clickup' && selectedClickUpIssue?.task?.id === message.id)
+            || (message.provider === 'linear' && selectedLinearIssue?.issue?.id === message.id);
+    }
+
+    // Both 'ticketFileChanged' and 'localTicketFileRead' deliver the same payload shape
+    // ({ provider, id, title, content, rawContent }) — the provider builds them from one
+    // helper. Applying them through one function is what stops the two arms from drifting:
+    // the title bug fixed in one used to survive in the other.
+    // PATCHES ONLY — it never creates a selection. Returns true when something the detail
+    // pane actually renders changed.
+    function _applyTicketFilePayloadToSelected(message) {
+        if (ticketsEditMode) return false;
+        const isClickUp = message.provider === 'clickup' && selectedClickUpIssue?.task?.id === message.id;
+        const isLinear = message.provider === 'linear' && selectedLinearIssue?.issue?.id === message.id;
+        if (!isClickUp && !isLinear) return false;
+
+        const previewMarkdown = (message.content || '').replace(/^#[^\n]*\n?/, '').trim();
+        const editMarkdown = (message.rawContent || message.content || '').replace(/^#[^\n]*\n?/, '').trim();
+        const rendered = renderMarkdown(previewMarkdown);
+        const prev = isClickUp ? selectedClickUpIssue : selectedLinearIssue;
+        const prevTitle = isClickUp ? prev?.task?.title : prev?.issue?.title;
+        const nextTitle = message.title || prevTitle;
+
+        // Compare exactly what the renderers put in contentHtml: the <h1> and the body.
+        // An image swap shows up here because the &v= token is inside `rendered`.
+        if (rendered === prev?.renderedDescriptionHtml && nextTitle === prevTitle) return false;
+
+        if (isClickUp) {
+            selectedClickUpIssue = {
+                ...prev,
+                task: { ...prev.task, title: nextTitle, name: nextTitle },
+                renderedDescriptionHtml: rendered,
+                descriptionMarkdown: editMarkdown,
+                localDescription: true
+            };
+            clickUpTaskDetailCache.set(message.id, selectedClickUpIssue);
+        } else {
+            selectedLinearIssue = {
+                ...prev,
+                issue: { ...prev.issue, title: nextTitle },
+                renderedDescriptionHtml: rendered,
+                descriptionMarkdown: editMarkdown,
+                localDescription: true
+            };
+            linearIssueDetailCache.set(message.id, selectedLinearIssue);
+        }
+        return true;
+    }
+
     window.addEventListener('message', (event) => {
         const message = event.data;
         if (!message) return;
@@ -7275,7 +7427,14 @@ Instructions:
                 if (!message.success) {
                     showTicketsStatus(message.error || 'Failed to push edits', true);
                 } else {
-                    showTicketsStatus('Pushed to source ✓', false);
+                    // A batch ("Push + subtasks") reply carries pushed/skippedStale/
+                    // failed counts; a plain Push reply does not. Surface the batch
+                    // summary when present, otherwise the single-ticket confirmation.
+                    if (typeof message.pushed === 'number') {
+                        showTicketsStatus(message.message || `Push + subtasks: ${message.pushed} pushed.`, message.failed > 0);
+                    } else {
+                        showTicketsStatus('Pushed to source ✓', false);
+                    }
                     // Local now matches remote — refresh badges so it flips to synced.
                     _requestTicketSyncStatuses();
                 }
@@ -7457,12 +7616,20 @@ Instructions:
             case 'linearTaskDetailsLoaded': {
                 const _prevLinear = linearIssueDetailCache.get(message.issue.id);
                 const _keepLinearDesc = _prevLinear?.localDescription;
+                // Trimmed before rendering: renderMarkdown('\n') returns '<p><br></p>', which is
+                // truthy and would make the renderer take the host-HTML branch and paint an empty
+                // paragraph instead of the 'No description provided.' empty state. The renderers
+                // trim before their emptiness test; this must match.
+                const _linearSrc = (message.issue.description || '').trim();
                 selectedLinearIssue = {
                     issue: message.issue,
                     subtasks: message.subtasks || [],
                     comments: message.comments || [],
                     attachments: message.attachments || [],
-                    renderedDescriptionHtml: _keepLinearDesc ? _prevLinear.renderedDescriptionHtml : message.renderedDescriptionHtml,
+                    // The host's markdown renderer (markdown.api.render) is a VS Code built-in and
+                    // is unreachable in the standalone host, where it yields ''. Render locally
+                    // rather than letting the view fall back to escaped source text.
+                    renderedDescriptionHtml: _keepLinearDesc ? _prevLinear.renderedDescriptionHtml : (message.renderedDescriptionHtml || renderMarkdown(_linearSrc)),
                     descriptionMarkdown: _keepLinearDesc ? _prevLinear.descriptionMarkdown : (message.issue.description || ''),
                     localDescription: _keepLinearDesc || false,
                     // Marks that comments/attachments came from the API. The cache-hit
@@ -7483,12 +7650,19 @@ Instructions:
             case 'clickupTaskDetailsLoaded': {
                 const _prevClickUp = clickUpTaskDetailCache.get(message.task.id);
                 const _keepClickUpDesc = _prevClickUp?.localDescription;
+                // Trimmed for the same reason as the Linear arm above: a whitespace-only
+                // description must reach the renderers' empty-state branch, not render as
+                // a truthy '<p><br></p>'.
+                const _clickUpSrc = (message.task.markdownDescription || message.task.description || '').trim();
                 selectedClickUpIssue = {
                     task: message.task,
                     subtasks: message.subtasks || [],
                     comments: message.comments || [],
                     attachments: message.attachments || [],
-                    renderedDescriptionHtml: _keepClickUpDesc ? _prevClickUp.renderedDescriptionHtml : message.renderedDescriptionHtml,
+                    // The host's markdown renderer (markdown.api.render) is a VS Code built-in and
+                    // is unreachable in the standalone host, where it yields ''. Render locally
+                    // rather than letting the view fall back to escaped source text.
+                    renderedDescriptionHtml: _keepClickUpDesc ? _prevClickUp.renderedDescriptionHtml : (message.renderedDescriptionHtml || renderMarkdown(_clickUpSrc)),
                     descriptionMarkdown: _keepClickUpDesc ? _prevClickUp.descriptionMarkdown : (message.task.markdownDescription || message.task.description || ''),
                     localDescription: _keepClickUpDesc || false,
                     // Marks that comments/attachments came from the API. The cache-hit
@@ -7510,12 +7684,46 @@ Instructions:
                 const modal = document.getElementById('convert-subtask-modal');
                 if (modal) modal.style.display = 'none';
                 if (message.success) {
-                    showTicketsStatus('Converted to subtask ✓', false);
+                    // Three outcomes, not two: the stamp can fail (read-only FS) as well as
+                    // be skipped (ticket never imported locally). Only the failure leaves the
+                    // sidebar genuinely stale, so it gets its own wording.
+                    showTicketsStatus(
+                        message.localFileStampFailed
+                            ? 'Converted remotely; local view may be stale'
+                            : message.localFileUpdated === false
+                                ? 'Converted remotely; no local file to update'
+                                : 'Converted to subtask ✓',
+                        false
+                    );
+                    const cache = message.provider === 'clickup' ? clickUpTaskDetailCache : linearIssueDetailCache;
+                    // Both ends of the relationship are now stale: the parent's cached
+                    // `subtasks` array predates the new child, and the child's entry still
+                    // has no parent (so "To parent task" would stay hidden).
+                    cache.delete(message.taskId);
+                    cache.delete(message.parentId);
                     if (message.provider === 'clickup') {
-                        loadClickUpProject(true);
+                        if (selectedClickUpIssue?.task?.id === message.taskId) { selectedClickUpIssue = null; }
                     } else {
-                        loadLinearProject(true);
+                        if (selectedLinearIssue?.issue?.id === message.taskId) { selectedLinearIssue = null; }
                     }
+                    // Drill-down renders from its own array, which the cache delete above
+                    // does not touch. Re-fetch the parent so the sibling list gains the
+                    // new child instead of silently omitting it.
+                    if (_sidebarDrillDownParentId === message.parentId) {
+                        _pendingDrillDownParentId = message.parentId;
+                        // Do NOT null _drillDownSubtasks here. _isDrillDownActive gates on it,
+                        // so clearing it makes the synchronous renderTicketsTab() below repaint
+                        // the full list and the arriving details flip it back — a visible flash;
+                        // and if that fetch fails the user is stranded with a drill-down parent
+                        // set but no subtask list and no "← Back" header to escape it.
+                        // _maybeEnterDrillDown replaces the array wholesale when details land.
+                        if (message.provider === 'clickup') { loadClickUpTaskDetails(message.parentId); }
+                        else { loadLinearTaskDetails(message.parentId); }
+                    }
+                    // The sidebar is file-backed — list the files, do NOT re-pull the
+                    // remote project (that path repaints from the same local files anyway).
+                    loadLocalTicketFiles();
+                    renderTicketsTab();
                 } else {
                     console.error('Failed to convert to subtask:', message.error);
                     showTicketsStatus(message.error || 'Failed to convert ticket', true);
@@ -7586,7 +7794,8 @@ Instructions:
                         // Priority persisted in the ticket file frontmatter (backend reads it
                         // into { priority, color, orderindex }); pass it through so the
                         // file-backed sidebar renders the priority dot instead of "No priority".
-                        priority: t.priority || null
+                        priority: t.priority || null,
+                        subtaskCount: t.subtaskCount
                     }));
                     clickUpProjectStatus = 'loaded';
                     clickUpProjectMessage = '';
@@ -7598,7 +7807,8 @@ Instructions:
                         assignee: Array.isArray(t.assignees) && t.assignees.length ? { name: t.assignees[0] } : null,
                         description: '', filePath: t.filePath,
                         syncStatus: t.syncStatus ?? prevSync.get(t.id), url: t.url,
-                        dateCreated: t.dateCreated
+                        dateCreated: t.dateCreated,
+                        subtaskCount: t.subtaskCount
                     }));
                     linearProjectStatus = 'loaded';
                     linearProjectMessage = '';
@@ -7610,43 +7820,70 @@ Instructions:
             }
             case 'localTicketFileRead': {
                 if (!message.success) {
-                    // No local file — the card-click handler already dispatched a
-                    // parallel linearLoadTaskDetails / clickupLoadTaskDetails request.
-                    // Do NOT fire a redundant second fetch.
+                    // No local file. With subtasks now downloaded at fetch time this is a
+                    // rare fallback (offline, revoked token, or a cross-list subtask that
+                    // never arrived in any pull), not the common case. For a typed
+                    // `not-imported` miss, keep whatever the pane is already showing — the
+                    // card-click handler rendered the cached snapshot and dispatched a
+                    // parallel linearLoadTaskDetails / clickupLoadTaskDetails request whose
+                    // result is the live view. Do NOT blank the pane and do NOT fire a
+                    // redundant second fetch.
+                    if (message.reason === 'not-imported') {
+                        break;
+                    }
+                    // An untyped failure (genuine caller error) still breaks — transport.js
+                    // surfaces it as a toast; there is no payload to render here.
                     break;
                 }
-                // Strip leading H1 — the render function always prepends <h1>title</h1> itself
-                const editMarkdown = (message.rawContent || message.content || '').replace(/^#[^\n]*\n?/, '').trim();
-                const previewMarkdown = (message.content || '').replace(/^#[^\n]*\n?/, '').trim();
-                const rendered = renderMarkdown(previewMarkdown);
-                // Local file is the source of truth for description. localDescription: true
-                // prevents the API response from overwriting it when it arrives.
-                if (message.provider === 'clickup') {
-                    const existing = clickUpTaskDetailCache.get(message.id);
-                    selectedClickUpIssue = {
-                        task: existing?.task || { id: message.id, title: message.title, name: message.title, status: '', assignees: [] },
-                        subtasks: existing?.subtasks || [],
-                        comments: existing?.comments || [],
-                        attachments: existing?.attachments || [],
-                        renderedDescriptionHtml: rendered,
-                        descriptionMarkdown: editMarkdown,
-                        localDescription: true,
-                        detailsFetched: existing?.detailsFetched || false
-                    };
-                    clickUpTaskDetailCache.set(message.id, selectedClickUpIssue);
-                } else {
-                    const existing = linearIssueDetailCache.get(message.id);
-                    selectedLinearIssue = {
-                        issue: existing?.issue || { id: message.id, title: message.title, state: { name: '' }, assignee: null },
-                        subtasks: existing?.subtasks || [],
-                        comments: existing?.comments || [],
-                        attachments: existing?.attachments || [],
-                        renderedDescriptionHtml: rendered,
-                        descriptionMarkdown: editMarkdown,
-                        localDescription: true,
-                        detailsFetched: existing?.detailsFetched || false
-                    };
-                    linearIssueDetailCache.set(message.id, selectedLinearIssue);
+                if (_isSelectedTicketPayload(message)) {
+                    _applyTicketFilePayloadToSelected(message);
+                } else if (!ticketsEditMode) {
+                    // FIRST selection of this ticket — nothing to patch, so BUILD the
+                    // selected object. The applier deliberately only patches; without this
+                    // branch the pane keeps the previously selected ticket until the
+                    // parallel API fetch lands, and then shows the REMOTE description,
+                    // silently discarding unpushed local edits and the rewritten local
+                    // image URLs. localDescription: true is what stops the API response
+                    // from overwriting the file's content when it arrives.
+                    const editMarkdown = (message.rawContent || message.content || '').replace(/^#[^\n]*\n?/, '').trim();
+                    const previewMarkdown = (message.content || '').replace(/^#[^\n]*\n?/, '').trim();
+                    const rendered = renderMarkdown(previewMarkdown);
+                    // The file's H1 wins over any cached title. HEAD wrote
+                    // `existing?.task || {…title: message.title…}`, so whenever a cache
+                    // entry existed the `||` short-circuited and message.title was
+                    // discarded — the stale-heading half of the reported bug.
+                    const nextTitle = message.title;
+                    if (message.provider === 'clickup') {
+                        const existing = clickUpTaskDetailCache.get(message.id);
+                        selectedClickUpIssue = {
+                            task: existing?.task
+                                ? { ...existing.task, title: nextTitle || existing.task.title, name: nextTitle || existing.task.name }
+                                : { id: message.id, title: nextTitle, name: nextTitle, status: '', assignees: [] },
+                            subtasks: existing?.subtasks || [],
+                            comments: existing?.comments || [],
+                            attachments: existing?.attachments || [],
+                            renderedDescriptionHtml: rendered,
+                            descriptionMarkdown: editMarkdown,
+                            localDescription: true,
+                            detailsFetched: existing?.detailsFetched || false
+                        };
+                        clickUpTaskDetailCache.set(message.id, selectedClickUpIssue);
+                    } else {
+                        const existing = linearIssueDetailCache.get(message.id);
+                        selectedLinearIssue = {
+                            issue: existing?.issue
+                                ? { ...existing.issue, title: nextTitle || existing.issue.title }
+                                : { id: message.id, title: nextTitle, state: { name: '' }, assignee: null },
+                            subtasks: existing?.subtasks || [],
+                            comments: existing?.comments || [],
+                            attachments: existing?.attachments || [],
+                            renderedDescriptionHtml: rendered,
+                            descriptionMarkdown: editMarkdown,
+                            localDescription: true,
+                            detailsFetched: existing?.detailsFetched || false
+                        };
+                        linearIssueDetailCache.set(message.id, selectedLinearIssue);
+                    }
                 }
                 // Clear any stale error — the local description is already displayed,
                 // so a supplementary API failure is not a total failure.
@@ -7662,25 +7899,8 @@ Instructions:
                 // content = rewritten webview URIs (preview); rawContent = original local paths (edit/push).
                 const changedBodyMarkdown = (message.content || '').replace(/^#[^\n]*\n?/, '').trim();
                 const editBodyMarkdown = (message.rawContent || message.content || '').replace(/^#[^\n]*\n?/, '').trim();
-                if (isCurrentClickUp || isCurrentLinear) {
-                    const rendered = renderMarkdown(changedBodyMarkdown);
-                    let hasChanged = false;
-                    if (isCurrentClickUp) {
-                        if (selectedClickUpIssue?.renderedDescriptionHtml !== rendered) {
-                            selectedClickUpIssue = { ...selectedClickUpIssue, renderedDescriptionHtml: rendered, descriptionMarkdown: editBodyMarkdown };
-                            clickUpTaskDetailCache.set(changedId, selectedClickUpIssue);
-                            hasChanged = true;
-                        }
-                    } else {
-                        if (selectedLinearIssue?.renderedDescriptionHtml !== rendered) {
-                            selectedLinearIssue = { ...selectedLinearIssue, renderedDescriptionHtml: rendered, descriptionMarkdown: editBodyMarkdown };
-                            linearIssueDetailCache.set(changedId, selectedLinearIssue);
-                            hasChanged = true;
-                        }
-                    }
-                    if (hasChanged) {
-                        renderTicketsTab();
-                    }
+                if (_applyTicketFilePayloadToSelected(message)) {
+                    renderTicketsTab();
                 }
                 // Always update cache so next click shows fresh content.
                 // Skip when the changed ticket is the current selected one — the cache

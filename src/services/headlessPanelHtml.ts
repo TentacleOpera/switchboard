@@ -201,6 +201,7 @@ export function getBoardHtml(repoRoot: string, workspaceRoot: string, capabiliti
         '{{ICON_CLI_TRIGGERS}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-65.png`,
         '{{ICON_ULTRACODE}}': `${iconDir}/25-101-150 Sci-Fi Flat icons-102.png`,
         '{{ICON_GOAL}}': `${iconDir}/25-101-150 Sci-Fi Flat icons-139.png`,
+        '{{ICON_DRIVE}}': `${iconDir}/25-101-150 Sci-Fi Flat icons-110.png`,
         '{{ICON_PROMPT}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-22.png`,
         '{{ICON_55}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-55.png`,
         '{{ICON_85}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-85.png`,
@@ -482,6 +483,19 @@ export interface PanelManifestEntry {
      * behaviour.
      */
     placement?: 'bottom';
+    /**
+     * How the shell presents this panel. Omitted (or 'panel') = a full-area frame
+     * in #content, selected by the rail — the default for every panel.
+     * 'modal' = the frame is mounted in the shell's modal host and the rail icon
+     * TOGGLES an overlay above whatever panel is active, so the panel is reachable
+     * without losing the current screen.
+     *
+     * A marker rather than a separate manifest, for the same reason `placement`
+     * is: the shell stays data-driven and the route is unaffected either way —
+     * /memo continues to serve the full page for direct navigation and for the
+     * VS Code webview.
+     */
+    presentation?: 'panel' | 'modal';
 }
 
 export interface PanelAvailability {
@@ -504,7 +518,7 @@ export function getPanelsManifest(availability?: PanelAvailability): PanelManife
     return [
         { id: 'board', label: 'Board', icon: `${iconDir}/nav-board.svg`, route: '/board', enabled: true },
         { id: 'project', label: 'Project', icon: `${iconDir}/nav-project.svg`, route: '/project', enabled: true },
-        { id: 'memo', label: 'Memo', icon: `${iconDir}/nav-memo.svg`, route: '/memo', enabled: true },
+        { id: 'memo', label: 'Memo', icon: `${iconDir}/nav-memo.svg`, route: '/memo', enabled: true, presentation: 'modal' },
         { id: 'tickets', label: 'Tickets', icon: `${iconDir}/nav-tickets.svg`, route: '/tickets', enabled: ticketsEnabled },
         { id: 'planning', label: 'Artifacts', icon: `${iconDir}/nav-artifacts.svg`, route: '/planning', enabled: planningEnabled },
         { id: 'design', label: 'Design', icon: `${iconDir}/nav-design.svg`, route: '/design', enabled: designEnabled },

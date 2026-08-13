@@ -253,9 +253,18 @@ function renderMarkdown(markdown) {
         return null;
     };
 
-    // Build nested <ul>/<ol> HTML from a flat run of {indent, ordered, text}.
+    // Build nested <ul>/<ol> HTML from a flat run of {indent, ordered, text, looseBefore}.
     // Emits a single-line string with no internal \n so the \n-><br> mapping
     // below does not insert <br> between <li>s.
+    // Per-ITEM looseness, deliberately not CommonMark's all-or-nothing list-level
+    // rule: users type a blank line where they want THAT gap, and collapsing it to
+    // "the whole list is loose" erases the sub-grouping they were expressing.
+    // A <p>-wrapper shape is NOT used: `li p { margin-bottom: 0 }` already ships in
+    // all panel stylesheets and would silently cancel a <p>-based gap, so a
+    // per-item class is required. Output MUST stay a single line with no \n — the
+    // HTML_LIST sentinel is emitted into a \n-joined buffer whose \n are later
+    // mapped to <br>.
+    const liOpen = (item) => item.looseBefore ? '<li class="md-li-loose">' : '<li>';
     const buildListHtml = (run) => {
         let html = '';
         const stack = []; // { indent, ordered }
@@ -265,19 +274,19 @@ function renderMarkdown(markdown) {
                 html += `</li></${top.ordered ? 'ol' : 'ul'}>`;
             }
             if (stack.length === 0) {
-                html += `<${item.ordered ? 'ol' : 'ul'}><li>${item.text}`;
+                html += `<${item.ordered ? 'ol' : 'ul'}>${liOpen(item)}${item.text}`;
                 stack.push({ indent: item.indent, ordered: item.ordered });
             } else if (item.indent > stack[stack.length - 1].indent) {
-                html += `<${item.ordered ? 'ol' : 'ul'}><li>${item.text}`;
+                html += `<${item.ordered ? 'ol' : 'ul'}>${liOpen(item)}${item.text}`;
                 stack.push({ indent: item.indent, ordered: item.ordered });
             } else {
                 const top = stack[stack.length - 1];
                 if (item.ordered === top.ordered) {
-                    html += `</li><li>${item.text}`;
+                    html += `</li>${liOpen(item)}${item.text}`;
                 } else {
                     stack.pop();
                     html += `</li></${top.ordered ? 'ol' : 'ul'}>`;
-                    html += `<${item.ordered ? 'ol' : 'ul'}><li>${item.text}`;
+                    html += `<${item.ordered ? 'ol' : 'ul'}>${liOpen(item)}${item.text}`;
                     stack.push({ indent: item.indent, ordered: item.ordered });
                 }
             }
@@ -313,15 +322,17 @@ function renderMarkdown(markdown) {
         }
         // Collect a run of list lines, allowing blank lines between items (loose lists).
         const run = [];
-        run.push(firstMatch);
+        run.push({ ...firstMatch, looseBefore: false }); // first item never gets a leading gap
         k++;
+        let sawBlank = false;
         while (k < processedLines.length) {
             const cur = processedLines[k];
             if (typeof cur === 'string' && cur.trim().startsWith('```')) break;
             if (isSentinelLine(cur)) break;
             const m = matchListLine(cur);
             if (m) {
-                run.push(m);
+                run.push({ ...m, looseBefore: sawBlank });
+                sawBlank = false;
                 k++;
             } else if (typeof cur === 'string' && cur.trim() === '') {
                 // Blank line: continue run only if a subsequent list line exists.
@@ -335,6 +346,7 @@ function renderMarkdown(markdown) {
                     !isSentinelLine(processedLines[j]) &&
                     !(typeof processedLines[j] === 'string' && processedLines[j].trim().startsWith('```')) &&
                     matchListLine(processedLines[j])) {
+                    sawBlank = true; // remember the gap instead of dropping it
                     k = j;
                 } else {
                     break;

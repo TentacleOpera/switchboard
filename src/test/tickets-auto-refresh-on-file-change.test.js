@@ -14,6 +14,7 @@ function testTicketsAutoRefreshOnFileChange() {
     const ticketsJs = fs.readFileSync(path.join(__dirname, '../webview/tickets.js'), 'utf8');
     const providerTs = fs.readFileSync(path.join(__dirname, '../services/TicketsPanelProvider.ts'), 'utf8');
     const standaloneTs = fs.readFileSync(path.join(__dirname, '../standalone/hostServices.ts'), 'utf8');
+    const bootstrapTs = fs.readFileSync(path.join(__dirname, '../standalone/bootstrap.ts'), 'utf8');
 
     // ── Fault 3: a change to a NON-selected ticket must still reload the sidebar ──
     // This is the single highest-value assertion in the file. The pre-fix arm updated the
@@ -145,6 +146,125 @@ function testTicketsAutoRefreshOnFileChange() {
         standaloneTs,
         /if \(!fs\.existsSync\(fullPath\)\) \{ listener\('delete', fullPath\); return; \}/,
         "the standalone watcher must map a vanished path to the seam's 'delete' event"
+    );
+
+    // ── Standalone: the watcher must actually be WIRED, not merely implemented ──
+    // The three assertions above prove createStandaloneFolderWatcher is real. They were
+    // green for the entire period the browser cockpit received ZERO watcher events,
+    // because that function lived only inside createHeadlessHostSeams — a bundle the repo
+    // itself documents as NOT WIRED. Pin the composition root instead.
+    assert.match(
+        standaloneTs,
+        /export function createStandaloneFolderWatcher\(/,
+        'createStandaloneFolderWatcher must be exported so the standalone composition root can install it'
+    );
+    assert.match(
+        bootstrapTs,
+        /headlessSeams\.watcher\s*=\s*\{[\s\S]{0,200}?watchFolder:\s*createStandaloneFolderWatcher/,
+        'bootstrap must override headlessSeams.watcher.watchFolder with createStandaloneFolderWatcher — the vscodeShim createFileSystemWatcher is a no-op, so without this every standalone folder watcher arms cleanly and never fires'
+    );
+    assert.ok(
+        !/headlessSeams\.watcher\s*=\s*\{[\s\S]{0,200}?watchPattern:/.test(bootstrapTs),
+        'the override must stay scoped to watchFolder — replacing watchPattern/watchFile switches on unrelated subsystems with no test holding the line'
+    );
+    // Layer 2 of the two-layer completion contract (PRD #7): without the API server the
+    // provider has no port, _buildLocalAssetUrl returns undefined, and every ticket image
+    // in the browser cockpit renders as a broken icon.
+    assert.match(
+        bootstrapTs,
+        /ticketsProvider\.setApiServer\(server\)/,
+        'bootstrap must hand the Tickets provider the API server, or ticket images have no origin in the browser host'
+    );
+    assert.match(
+        bootstrapTs,
+        /getTicketsAssetRoots:\s*\(wsRoot: string\)\s*=>\s*ticketsProvider\.getTicketsAssetRoots\(wsRoot\)/,
+        "bootstrap must union the Tickets asset roots into the /design/asset allow-list, or a configured ticketSaveLocation 403s at fetch time"
+    );
+
+    // ── Backend: an image overwritten in place must refresh the ticket that embeds it ──
+    // An asset write changes no .md byte, so without a dedicated branch nothing even
+    // tries to refresh — the "images are always stale" half of the reported bug.
+    const assetIdx = providerTs.indexOf('private _handleTicketAssetEvent(');
+    assert.notStrictEqual(assetIdx, -1, 'TicketsPanelProvider must handle non-.md (asset) watcher events');
+    const assetBody = providerTs.slice(assetIdx, providerTs.indexOf('\n    private ', assetIdx + 10));
+    assert.match(
+        assetBody,
+        /TICKET_ASSET_EXTENSIONS\.has\(path\.extname\(assetPath\)\.toLowerCase\(\)\)/,
+        'asset events must be filtered to a servable image extension allow-list — a .DS_Store or .pdf event can never change what is rendered'
+    );
+    assert.match(
+        assetBody,
+        /path\.basename\(assetDir\)\.toLowerCase\(\) !== 'attachments'/,
+        'only assets under an attachments/ directory are resolvable back to a ticket'
+    );
+    // THE fan-out guard. _buildTicketDir groups a whole ClickUp list into one directory
+    // sharing one attachments/ folder, so a directory-wide replay would emit one push per
+    // ticket in the list — potentially hundreds — on every single image write.
+    assert.match(
+        assetBody,
+        /raw\.includes\(assetName\)/,
+        'asset->ticket resolution must be filtered by CONTENT REFERENCE, not directory-wide: tickets are stored many-per-directory'
+    );
+    assert.match(
+        assetBody,
+        /`asset:\$\{assetPath\}`/,
+        "the asset debounce key must be prefixed so an asset write cannot cancel a queued rename resolution keyed on the same .md path"
+    );
+
+    // ── Frontend: one shared applier, so a fix in one arm cannot skip the other ──
+    // The stale-heading bug existed independently in BOTH file-driven arms; patching only
+    // ticketFileChanged left "edit the title, exit edit mode" still showing the old H1.
+    const applierIdx = ticketsJs.indexOf('function _applyTicketFilePayloadToSelected(');
+    assert.notStrictEqual(applierIdx, -1, '_applyTicketFilePayloadToSelected must exist in tickets.js');
+    const applierBody = ticketsJs.slice(applierIdx, ticketsJs.indexOf('\n    window.addEventListener', applierIdx));
+    assert.match(
+        applierBody,
+        /if \(ticketsEditMode\) return false;/,
+        'the applier must never clobber a textarea the user is typing in'
+    );
+    assert.ok(
+        /title: nextTitle/.test(applierBody) && /issue: \{ \.\.\.prev\.issue, title: nextTitle \}/.test(applierBody),
+        "the applier must write the file's H1 onto the selected object — both detail renderers draw the heading from it"
+    );
+    assert.match(
+        applierBody,
+        /if \(rendered === prev\?\.renderedDescriptionHtml && nextTitle === prevTitle\) return false;/,
+        'the change signature must cover title AND body — a body-only compare suppresses the re-render on a retitle, and the version-token compare is what makes an image swap visible'
+    );
+    const readIdx = ticketsJs.indexOf("case 'localTicketFileRead':");
+    const readBody = ticketsJs.slice(readIdx, ticketsJs.indexOf("case 'ticketFileChanged':", readIdx));
+    assert.ok(
+        readBody.includes('_applyTicketFilePayloadToSelected(message)'),
+        'localTicketFileRead must route through the shared applier — it is the arm that runs on exit-from-edit'
+    );
+    // The applier PATCHES only. On a ticket's first selection the click handler has not
+    // assigned a selection (it only does so on a detail-cache hit), so without a
+    // from-scratch fallback the pane keeps the previous ticket and then shows the REMOTE
+    // description, discarding unpushed local edits and local image URLs.
+    assert.ok(
+        readBody.includes('_isSelectedTicketPayload(message)') && /selectedLinearIssue = \{/.test(readBody),
+        'localTicketFileRead must still BUILD the selected object when the payload is not for the already-selected ticket'
+    );
+    assert.match(
+        readBody,
+        /localDescription: true/,
+        'the from-scratch build must mark the description as local, or the API response overwrites the file content when it lands'
+    );
+
+    // ── Backend: the asset URL must be content-versioned ──
+    // Blink's per-Document image memory cache is consulted in the render process, before
+    // the request reaches the network stack, so Cache-Control: no-cache is never
+    // evaluated on an in-place image swap. A different URL string is the ONLY mechanism —
+    // and it is also the only thing the rendered-HTML equality guards can see.
+    // Do NOT "optimise" this away in favour of ETag/Last-Modified: validators only help
+    // once a request is issued, and no request is issued.
+    const urlIdx = providerTs.indexOf('private _buildLocalAssetUrl(');
+    assert.notStrictEqual(urlIdx, -1, '_buildLocalAssetUrl must exist in TicketsPanelProvider.ts');
+    const urlBody = providerTs.slice(urlIdx, providerTs.indexOf('\n    private ', urlIdx + 10));
+    assert.match(
+        urlBody,
+        /try \{ version = `&v=\$\{Math\.floor\(fs\.statSync\(realTarget\)\.mtimeMs\)\}`; \} catch/,
+        'the asset URL must carry an mtime version token, stat-ed on the realpathed target and try-wrapped so a vanished file degrades to no token rather than losing the image'
     );
 }
 

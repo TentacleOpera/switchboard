@@ -375,12 +375,21 @@
                         });
                     }
                     if (result && typeof result === 'object' && result.success === false) {
-                        const text = result.error || ('Action failed: ' + verb);
-                        console.warn('[transport] verb failed:', verb, text);
-                        if (STATUS_MESSAGE_PANELS[panel]) {
-                            dispatchMessage({ type: 'showStatusMessage', message: text, isError: true });
-                        } else {
-                            showTransportError(text);
+                        // A typed, EXPECTED miss (e.g. readLocalTicketFile for a subtask
+                        // whose file has not been downloaded yet) is not a transport
+                        // failure — the panel's own handler owns the recovery UI (it
+                        // falls back to the live view). Suppress the generic toast for
+                        // quiet-listed reasons, but still fall through to dispatchMessage
+                        // below so the typed body reaches its handler.
+                        const EXPECTED_QUIET = new Set(['not-imported']);
+                        if (!EXPECTED_QUIET.has(result.reason)) {
+                            const text = result.error || ('Action failed: ' + verb);
+                            console.warn('[transport] verb failed:', verb, text);
+                            if (STATUS_MESSAGE_PANELS[panel]) {
+                                dispatchMessage({ type: 'showStatusMessage', message: text, isError: true });
+                            } else {
+                                showTransportError(text);
+                            }
                         }
                         // A TYPED failure body is an ADDRESSED reply, not just a status
                         // line: the panel's own handler owns the recovery UI (e.g.

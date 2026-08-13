@@ -90,15 +90,72 @@ test('openAllTerminals grows conditionally on plannedTotal > liveCount', () => {
 });
 
 test('open-all loop arms the curtain BEFORE seating', () => {
-    const openAll = block('async function openAllTerminals() {', 'await fetchTerminalList();');
-    const armIdx = openAll.indexOf('armStartupCurtain(');
-    const seatIdx = openAll.indexOf("fillEmptyPanes({ persist: false })");
+    // The loop now lives in the shared createTerminalsForRole (open-all and Fill grid
+    // both use it), so the ordering contract is asserted where the loop actually is.
+    // Extraction must not weaken it: arm, THEN seat, because the seat's renderPaneGrid
+    // is what paints the curtain.
+    const loop = block('async function createTerminalsForRole(', 'async function openAllTerminals()');
+    const armIdx = loop.indexOf('armStartupCurtain(');
+    const hookIdx = loop.indexOf('if (onCreated) { onCreated(data.terminal); }');
     assert.ok(armIdx !== -1, 'armStartupCurtain must be called in the loop');
-    assert.ok(seatIdx !== -1, 'fillEmptyPanes({ persist: false }) must be called in the loop');
+    assert.ok(hookIdx !== -1, 'the per-terminal seat hook must be called in the loop');
     assert.ok(
-        armIdx < seatIdx,
-        'armStartupCurtain must precede fillEmptyPanes — the seat render paints the curtain'
+        armIdx < hookIdx,
+        'armStartupCurtain must precede the seat hook — the seat render paints the curtain'
     );
+    // ...and open-all must actually pass a seating hook, or the whole batch lands
+    // seconds later instead of each terminal appearing as it is born.
+    const openAll = block('async function openAllTerminals() {', 'await fetchTerminalList();');
+    assert.ok(
+        openAll.includes('createTerminalsForRole('),
+        'open-all must delegate to the shared creation loop, not fork it'
+    );
+    assert.ok(
+        openAll.includes('fillEmptyPanes({ persist: false })'),
+        'open-all must seat incrementally via the onCreated hook, with persist:false'
+    );
+});
+
+test('the creation loop is sequential, and sends no startup command of its own', () => {
+    const loop = block('async function createTerminalsForRole(', 'async function openAllTerminals()');
+    assert.ok(
+        /for \(let i = 0; i < count; i\+\+\) \{[\s\S]*await fetch\(/.test(loop),
+        'creations must be serialized — ptyFleetService.create() picks the next free ${role}-${n} off its own map, so concurrent creates for one role collide on a name'
+    );
+    assert.ok(
+        !/Promise\.all/.test(loop),
+        'no Promise.all: concurrency is a name collision, not just a startup-command race'
+    );
+    assert.ok(
+        !/startupCommand|sendRobustText|injectStartupCommand/.test(loop),
+        'the webview must not send the startup command — ptyFleetService.create() injects it and duplicating it launches each agent CLI twice'
+    );
+});
+
+test('Fill grid tops up from fleetList and routes its layout through setLayoutMode', () => {
+    const fill = block('async function fillGrid(role, mode) {', 'function fillEmptyPanes(');
+    assert.ok(
+        fill.includes('LAYOUTS[mode].slots'),
+        'the count must derive from LAYOUTS[mode].slots, not a second hardcoded slot table'
+    );
+    assert.ok(
+        fill.includes('LAYOUT_MODES.includes(mode)'),
+        'the mode must be validated against LAYOUT_MODES before indexing LAYOUTS'
+    );
+    assert.ok(
+        /t\.status !== 'exited' && t\.role === role/.test(fill),
+        'the existing count must come from live fleetList rows — the same list the UI renders'
+    );
+    assert.ok(
+        !/getRoleTerminalSet/.test(fill),
+        'the webview cannot call getRoleTerminalSet, and it cannot see PTY rows anyway'
+    );
+    assert.ok(fill.includes('if (need <= 0)'), 're-running a fill must be a no-op, not a fleet doubling');
+    assert.ok(
+        fill.includes('setLayoutMode(mode)') && !/effectiveLayout\s*=/.test(fill),
+        'the layout switch must go through setLayoutMode so applyLayoutFloor still applies'
+    );
+    assert.ok(!/\bconfirm\(/.test(fill), 'no confirm gate — window.confirm() is a silent no-op in a webview');
 });
 
 test('open-all tail persists once and toasts on unseated remainder', () => {
@@ -178,15 +235,16 @@ test('fillEmptyPanes accepts an options bag, skips kanban slots, and returns uns
 // ---------------------------------------------------------------- existing payload contract (re-asserted locally)
 
 test('open-all payload stays target-free and contains exactly one fetchTerminalList', () => {
-    const openAll = block('async function openAllTerminals() {', 'await fetchTerminalList();');
+    // The POST moved into the shared creation loop; the payload contract did not.
+    const loop = block('async function createTerminalsForRole(', 'async function openAllTerminals()');
     assert.ok(
-        /body: JSON\.stringify\(\{ role \}\)/.test(openAll),
+        /body: JSON\.stringify\(\{ role \}\)/.test(loop),
         'open-all must stay target-free — the proxy supplies the active parent'
     );
     // Exactly one await fetchTerminalList() in the whole function. Extract the full
     // function body to the next top-level function declaration.
     const fnStart = SRC.indexOf('async function openAllTerminals() {');
-    const fnEnd = SRC.indexOf('function fillEmptyPanes(', fnStart);
+    const fnEnd = SRC.indexOf('async function fillGrid(', fnStart);
     const fullFn = SRC.substring(fnStart, fnEnd);
     const count = (fullFn.match(/await fetchTerminalList\(\);/g) || []).length;
     assert.ok(

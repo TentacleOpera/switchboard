@@ -265,6 +265,14 @@ export class PlanIngestionEngine {
                 // Default 90s; a silent-but-live terminal falls through to the
                 // blind timeout once its heartbeat is older than this.
                 const livenessWindowMs = activityCfg.getNumber('livenessWindowMs', 90000);
+                // Turn-end silence: how long an active PTY seat must be quiet
+                // before the sweep treats the turn as ended. Kept separate from
+                // livenessWindowMs so a user can shrink the heartbeat window
+                // without arming a false completion trigger. Effective threshold
+                // is max(livenessWindowMs, turnEndSilenceMs) because the heartbeat
+                // branch runs first and spares any recently-active seat.
+                const turnEndSilenceMs = activityCfg.getNumber('turnEndSilenceMs', 90000);
+                const blockedTimeoutMs = activityCfg.getNumber('blockedTimeoutMs', 4 * 60 * 60 * 1000);
                 // Partition the fleet ONCE per tick (not per folder) — the fleet
                 // is process-global and the snapshot is cheap. A miss on the
                 // provider (fleet-less host) yields empty arrays and the sweep
@@ -288,6 +296,7 @@ export class PlanIngestionEngine {
                 const nowMs = Date.now();
                 const liveNames: string[] = [];
                 const forceTerminals: string[] = [];
+                const silentTerminals: string[] = [];
                 for (const entry of liveness) {
                     if (!entry.friendlyName) continue;
                     if (entry.status === 'exited') {
@@ -299,9 +308,13 @@ export class PlanIngestionEngine {
                         // Active AND recently produced output → stamp its heartbeat
                         // so the widened age basis keeps its card lit past timeout.
                         liveNames.push(entry.friendlyName);
+                    } else if (nowMs - entry.lastDataAt >= turnEndSilenceMs) {
+                        // Active but quiet longer than the turn-end threshold: the
+                        // strongest CLI-agnostic signal that a turn boundary may
+                        // have been reached. The branch is terminal — no seat can
+                        // be both heartbeat-stamped and silence-tested on one tick.
+                        silentTerminals.push(entry.friendlyName);
                     }
-                    // Active but silent longer than livenessWindowMs → no evidence;
-                    // falls through to the blind timer (do nothing here).
                 }
                 let recordedLiveness = 0;
                 const livenessIso = new Date(nowMs).toISOString();
@@ -324,7 +337,46 @@ export class PlanIngestionEngine {
                                 );
                             }
                         }
-                        const cleared = await db.clearStaleWorkingState(wsId, timeoutMs, { forceTerminals });
+                        if (silentTerminals.length > 0) {
+                            try {
+                                const worktrees = await db.getWorktrees();
+                                for (const terminalName of silentTerminals) {
+                                    const record = await db.getActiveDispatchedByTerminal(wsId, terminalName);
+                                    if (!record || !record.planFile || !record.dispatchedAt) continue;
+                                    const wtRow = worktrees.find(w => w.id === record.worktreeId);
+                                    const planRoot = wtRow ? wtRow.path : folder;
+                                    let completed = false;
+                                    try {
+                                        const stat = await fs.promises.stat(path.join(planRoot, record.planFile));
+                                        completed = stat.mtimeMs > Date.parse(record.dispatchedAt);
+                                    } catch (statErr) {
+                                        // Missing or unreadable plan file is no
+                                        // evidence of completion → conservative
+                                        // blocked. No need to log each file access.
+                                    }
+                                    if (completed) {
+                                        const transitioned = await db.clearWorkingState(record.planFile, wsId);
+                                        this._host.logger.appendLine(
+                                            `[GlobalPlanWatcher] Turn-end (plan file mtime advance) for ${terminalName}: ${record.planFile}` +
+                                            (transitioned ? '' : ' (already cleared)')
+                                        );
+                                        if (transitioned && this._onWorkingStateCleared) {
+                                            try { this._onWorkingStateCleared(record, folder); } catch (cbErr) {
+                                                this._host.logger.appendLine(`[GlobalPlanWatcher] onWorkingStateCleared callback failed: ${cbErr}`);
+                                            }
+                                        }
+                                    } else if (!record.blockedAt) {
+                                        await db.setBlockedState(record.planFile, wsId, livenessIso);
+                                        this._host.logger.appendLine(
+                                            `[GlobalPlanWatcher] Turn-end (silence) marked blocked for ${terminalName}: ${record.planFile}`
+                                        );
+                                    }
+                                }
+                            } catch (silenceErr) {
+                                this._host.logger.appendLine(`[GlobalPlanWatcher] silence sweep failed for ${folder}: ${silenceErr}`);
+                            }
+                        }
+                        const cleared = await db.clearStaleWorkingState(wsId, timeoutMs, { forceTerminals, blockedTimeoutMs });
                         if (cleared > 0) {
                             this._host.logger.appendLine(
                                 `[GlobalPlanWatcher] Activity-light timeout sweep cleared ${cleared} stale working card(s) in ${folder}` +

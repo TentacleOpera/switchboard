@@ -1261,6 +1261,18 @@
             margin-bottom: 0; /* Paragraphs inside list items: zero extra margin (li already spaced) */
         }
 
+        /* A blank line between bullets in the source is a deliberate sub-group break —
+           render it as one. Per-ITEM (not a <p> wrapper): `li p { margin-bottom: 0 }`
+           directly above would cancel a <p>-based gap, and a per-item class leaves a
+           tight list byte-for-byte unchanged. */
+        #markdown-preview .md-li-loose,
+        #markdown-preview-online .md-li-loose,
+        #markdown-preview-design .md-li-loose,
+        #kanban-preview-pane .md-li-loose,
+        #markdown-preview-tickets .md-li-loose {
+            margin-top: 0.65em;
+        }
+
         #markdown-preview pre,
         #markdown-preview-online pre,
         #markdown-preview-design pre,
@@ -3078,6 +3090,30 @@
             opacity: 0.5;
         }
 
+        .ticket-subtask-count {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            margin-left: 6px;
+            padding: 0 5px;
+            height: 15px;
+            border-radius: 7px;
+            border: 1px solid var(--border-color);
+            background: var(--panel-bg2, #1a1a2e);
+            color: var(--text-secondary);
+            font-size: 9px;
+            font-weight: 600;
+            line-height: 1;
+            vertical-align: middle;
+            cursor: pointer;
+        }
+
+        .ticket-subtask-count:hover,
+        .ticket-subtask-count:focus-visible {
+            border-color: var(--accent-teal);
+            color: var(--accent-teal);
+        }
+
         /* ── Ticket Detail Preview Pane ── */
         /* Matches #markdown-preview typography and spacing */
         #preview-pane-tickets {
@@ -4023,7 +4059,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             <button id="btn-edit-ticket" class="strip-btn">Edit</button>
                             <button id="btn-save-ticket-edit" class="strip-btn" style="display:none; background: var(--accent-teal); color: black;">Save</button>
                             <button id="btn-cancel-ticket-edit" class="strip-btn" style="display:none;">Cancel</button>
-                            <button id="btn-push-ticket" class="strip-btn">Push</button>
+                            <button id="btn-push-ticket" class="strip-btn"
+                                    title="Push this ticket's title and description to the remote. Subtasks are NOT included.">Push</button>
+                            <button id="btn-push-ticket-subtasks" class="strip-btn" disabled
+                                    title="Push this ticket AND every locally-imported subtask — each one's own title and description. The generated Subtasks checklist is never pushed.">Push + subtasks</button>
                             <button id="btn-comment-ticket" class="strip-btn">Comment</button>
                             <div class="overflow-menu" data-overflow-menu>
                                 <button type="button" class="strip-btn overflow-menu-trigger" data-overflow-trigger title="More actions">⋯ More</button>

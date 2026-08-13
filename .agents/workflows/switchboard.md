@@ -286,6 +286,14 @@ What would you like to do?
     two turns. Run it, then report the result once.
 - **Focus-code a single plan** — Dispatch with a single-plan feature or direct prompt.
 - **Dispatch a feature's coding** — `POST /kanban/orchestration/dispatch` with `{"workspaceRoot": "$ROOT", ...}`.
+- **Drive a feature through a coder terminal** — "implement this feature, use a terminal as a
+  coder", "send this plan to coder-1 and check their work". The head agent dispatches each
+  subtask to a named coder terminal, gets called back on completion, reviews the diff, and
+  resends a fix if it falls short — repeating per subtask. Enable the **`Drive`** toggle in the
+  control strip (beside Ultracode/Goal) to prepend the directive to feature dispatch prompts,
+  or follow the **`terminal-coder-dispatch`** skill directly. This is attended driving by a
+  reasoning agent — distinct from the unattended oversight pass (§6) and from fire-and-forget
+  kanban dispatch.
 
 ### Design & Artifacts *(secondary — under "More", expand only when picked)*
 - **Design panel / Stitch verbs** — `POST /design/verb/<name>` (e.g. `stitchGenerate`,

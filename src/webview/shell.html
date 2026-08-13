@@ -151,6 +151,56 @@
             display: none;
         }
         .panel-frame.is-active { display: block; }
+
+        /* Modal panel host — a panel presented as an overlay (manifest
+           presentation:'modal') rather than as the content area. Scoped inside
+           #content on purpose: the rail stays visible and clickable beside it,
+           and the body-level #tooltip-overlay (fixed, z-index 9999) still paints
+           above. The host is built by shell.js, never authored here — shell.html's
+           body markup is asserted to be exactly #strip / #content /
+           #tooltip-overlay. */
+        #modal-host { position: absolute; inset: 0; z-index: 10; display: none; }
+        #modal-host.is-open { display: block; }
+        #modal-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.62); }
+        #modal-dialog {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: min(820px, 92%);
+            height: min(700px, 88%);
+            background: var(--bg-elev);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+            overflow: hidden;
+            display: flex;
+        }
+        /* A modal frame is shown by its HOST, never by .is-active — selectPanel
+           skips modal ids for exactly this reason. */
+        .modal-frame {
+            flex: 1 1 auto;
+            width: 100%;
+            height: 100%;
+            border: none;
+            background: var(--bg);
+            display: block;
+        }
+        #modal-close {
+            position: absolute;
+            top: 6px; right: 8px;
+            z-index: 1;
+            width: 26px; height: 26px;
+            border: 1px solid transparent;
+            border-radius: 4px;
+            background: transparent;
+            color: var(--text-dim);
+            font-family: var(--font);
+            font-size: 18px;
+            line-height: 1;
+            cursor: pointer;
+        }
+        #modal-close:hover { background: var(--bg); color: var(--text); border-color: var(--border); }
+
         #strip-error {
             color: var(--text-dim);
             font-size: 11px;

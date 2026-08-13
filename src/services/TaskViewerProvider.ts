@@ -1,8 +1,18 @@
 
 import { HostSeams, HostWatchHandle, createVscodeHostSeams } from './hostSeams';
 import { BroadcastHub } from './broadcastHub';
+import { SURFACES } from './wsHub';
 import { TASKVIEWER_VERBS } from '../generated/verbAllowlist';
 import { validateVerbPayload } from './verbSchemas';
+import {
+    applyStandingOrders,
+    STANDING_ORDERS_CONFIG_KEY,
+    StandingOrder,
+    rewriteStandingOrdersForRename,
+    mutateStandingOrders,
+    makeStandingOrder,
+    MAX_ORDERS,
+} from './standingOrders';
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { getConstitutionPath } from './constitutionUtils';
@@ -21,12 +31,15 @@ import {
 import type { FSWatcher, Dirent, Stats } from 'fs';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import * as https from 'https';
 import { isPtyAvailable } from '../standalone/ptyBackend';
 // PtyFleetService is imported for purgePtyTerminals ONLY — the fleet itself, the
 // WebSocket gateway and the prompt-delivery helpers now live in the pty host child.
 // The extension is control plane: it never constructs a fleet and never sees
 // terminal bytes.
 import { PtyFleetService, PTY_IDE_NAME } from '../standalone/ptyFleetService';
+import { instantiateAgentGroupCore, InstantiateAgentGroupResult } from './agentGroupInstantiation';
+import { wireSpawnedTeam, findTeamForHeadRole } from './teamWiring';
 
 import * as cp from 'child_process';
 import { promisify } from 'util';
@@ -59,7 +72,8 @@ import {
     columnToPromptRole,
     resolveWorkingDir,
     normalizeNewlines,
-    PROJECT_LINE_DIRECTIVE
+    PROJECT_LINE_DIRECTIVE,
+    resolveDelegateIdentityForTerminal
 } from './agentPromptBuilder';
 import type { NotionFetchService } from './NotionFetchService';
 let NotionFetchServiceClass: any;
@@ -88,9 +102,10 @@ import { GlobalIntegrationConfigService, AgentGlobalKey, McpMonitorConfig, Sched
 import { MultiRepoScaffoldingService } from './MultiRepoScaffoldingService';
 import { KanbanDatabase, KanbanPlanRecord, WorkspaceDatabaseMapping } from './KanbanDatabase';
 import { matchWorktreePath } from './worktreeResolver';
+import { attributePlansToTerminals, type TerminalPlanAttribution } from './terminalPlanAttribution';
 import { KanbanMigration } from './KanbanMigration';
 import { WorkspaceExcludeService } from './WorkspaceExcludeService';
-import { ensureWorkspaceIdentity, resolveEffectiveWorkspaceRootFromMappings, getMappingsFromIndex, resolveParentsForTerminals } from './WorkspaceIdentityService';
+import { ensureWorkspaceIdentity, resolveEffectiveWorkspaceRootFromMappings, getMappingsFromIndex, getScopedMappingsForBoard, resolveParentsForTerminals } from './WorkspaceIdentityService';
 import { inferTopicFromPath, parsePlanMetadata } from './planMetadataUtils';
 import {
     type ClickUpAutomationRule,
@@ -222,6 +237,8 @@ type ConfiguredKanbanDispatchOptions = {
     bypassTriggerGate?: boolean;
     /** Resolved project scope for the dispatch-analysis pass (null = all, '__unassigned__' = unpinned, else project name). Threaded from the dispatchAnalyze arm through to generateUnifiedPrompt's overrides. */
     analysisScope?: string | null;
+    /** When true, the dispatched improver is running unattended and must not ask in chat. */
+    unattended?: boolean;
 };
 
 type ClickUpSetupColumnState = {
@@ -314,6 +331,40 @@ type BrainRunSheetMetadata = {
     updatedAt?: string;
 };
 
+/**
+ * PTY clear-settle delay resolution. Falls back to an EXPLICITLY SET legacy
+ * terminal.clearBeforePromptDelay before the new default, so an operator who
+ * tuned that key to steer PTY dispatch before this key existed keeps their
+ * value. `inspect()` (not `get()`) is what distinguishes "operator set 2000"
+ * from "contributed default is 2000" — get() cannot tell them apart, which is
+ * the same trap that made the naive version of this change inert.
+ *
+ * `!== undefined`, NEVER a truthy check. Both keys declare `minimum: 0`, and an
+ * operator who deliberately sets 0 (no settle at all — a fast local CLI) would be
+ * read as "unset" by `if (value)` and silently given 600 instead. Same trap for a
+ * legacy 0. This is the documented inspect() gotcha for falsy scope values.
+ *
+ * Consequence of the legacy fallback: KanbanProvider's
+ * updateClearTerminalBeforePromptDelay persists terminal.clearBeforePromptDelay
+ * at global scope via updateConfigGlobal. On any install where the operator ever
+ * moved that slider, inspect().globalValue is set, the legacy branch fires, and
+ * those installs get their old value on the PTY path instead of 600. This is a
+ * deliberate respect-operator-intent decision — the alternative (ignoring the
+ * legacy key) would silently change the delay for every operator who ever
+ * touched the slider.
+ */
+function explicitScopeValue<T>(i: { globalValue?: T; workspaceValue?: T; workspaceFolderValue?: T } | undefined): T | undefined {
+    return i?.workspaceFolderValue ?? i?.workspaceValue ?? i?.globalValue;
+}
+
+function resolvePtyClearDelay(cfg: vscode.WorkspaceConfiguration): number {
+    const scoped = explicitScopeValue(cfg.inspect<number>('terminal.ptyClearBeforePromptDelay'));
+    if (scoped !== undefined) { return scoped; }
+    const legacy = explicitScopeValue(cfg.inspect<number>('terminal.clearBeforePromptDelay'));
+    if (legacy !== undefined) { return legacy; }
+    return cfg.get<number>('terminal.ptyClearBeforePromptDelay', 600);
+}
+
 export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     private async _handleMessage(message: any): Promise<any> {
@@ -361,12 +412,41 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * the child directly, which is the entire point of the child existing (35.21 ms
      * p50 in-process vs 0.24 ms out).
      */
-    private async _ptyHostVerb(verb: string, payload: any): Promise<any> {
+    private async _ptyHostVerb(verb: string, payload: any, signal?: AbortSignal): Promise<any> {
         if (!this._ptyHostChild || !this._ptyHostPort) {
             return { success: false, error: 'PTY host unavailable on this platform/installation' };
         }
+
+        // Append standing-orders block at the sole extension-host chokepoint. This
+        // covers the HTTP terminals rail, the browser cockpit, and all internal
+        // fleet dispatches, because they all route through _ptyHostVerb.
+        if (verb === 'ptySendPrompt' && payload?.standingOrders !== false && typeof payload?.data === 'string') {
+            try {
+                const db = await this._getKanbanDb(this._getWorkspaceRoot() || '');
+                const orders = db ? await db.getConfigJson<StandingOrder[]>(STANDING_ORDERS_CONFIG_KEY, []) : [];
+                if (orders.length > 0) {
+                    const listed = await this._ptyHostVerb('ptyListTerminals', {});
+                    const live = new Set<string>(
+                        (listed?.terminals || [])
+                            .filter((t: any) => t.status === 'active')
+                            .map((t: any) => t.friendlyName)
+                    );
+                    payload = { ...payload, data: applyStandingOrders(payload.data, payload.name, orders, live) };
+                }
+            } catch (err) {
+                console.warn('[TaskViewerProvider] Standing-orders append failed:', err);
+            }
+        }
+
         const http = require('http');
         const port = this._ptyHostPort;
+        // An aborted join (the parent's curl died) must tear down the proxied
+        // request to the pty host so the held slot is freed and the child process
+        // is not pinned open by a dead forwarder. Wires up both the raw-binary
+        // and JSON branches; an already-aborted signal rejects synchronously.
+        const abortedError = (): { success: false; error: string } =>
+            ({ success: false, error: 'Client disconnected' });
+        if (signal?.aborted) { return abortedError(); }
         try {
             // ptyPasteImage carries a raw Buffer that does not survive
             // JSON.stringify/parse — forward it as application/octet-stream with
@@ -392,6 +472,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         res.on('end', () => resolve(body));
                     });
                     req.on('error', reject);
+                    const onAbort = () => { try { req.destroy(); } catch { /* idempotent */ } reject(new Error('Client disconnected')); };
+                    if (signal) {
+                        if (signal.aborted) { onAbort(); }
+                        else { signal.addEventListener('abort', onAbort, { once: true }); }
+                    }
                     req.end(payload.imageBuffer);
                 });
                 return JSON.parse(result);
@@ -409,6 +494,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     res.on('end', () => resolve(body));
                 });
                 req.on('error', reject);
+                const onAbort = () => { try { req.destroy(); } catch { /* idempotent */ } reject(new Error('Client disconnected')); };
+                if (signal) {
+                    if (signal.aborted) { onAbort(); }
+                    else { signal.addEventListener('abort', onAbort, { once: true }); }
+                }
                 req.end(JSON.stringify(payload || {}));
             });
             const result = JSON.parse(resData);
@@ -569,6 +659,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _ptyHostChild?: import('child_process').ChildProcess;
     private _ptyHostPort?: number;
     /**
+     * Instance handle on `_startLocalApiServer`'s `updateMirrorRegistry` closure.
+     * `runtime.terminals` is the shared registry every other surface reads for PTY
+     * terminals, and in the extension host NOTHING else writes it — the pty-host
+     * child constructs its fleet without a KanbanDatabase (`ptyHost.ts`), so
+     * `PtyFleetService.updateRegistryState()` no-ops there. Any code path that
+     * creates a terminal WITHOUT going through `handlePtyVerb` must call this, or
+     * the terminals it made are invisible to the registry.
+     */
+    private _updatePtyMirrorRegistry?: (db: any) => Promise<void>;
+    /**
      * Set once a spawned child dies WITHOUT ever completing its handshake — a
      * node-pty load failure, a missing dist/standalone/ptyHost.js, a broken install.
      * `_startLocalApiServer` is re-entrant (the liveness watchdog calls it on every
@@ -587,6 +687,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * ptyListTerminals, so this stays fresh exactly when browser terminals matter.
      */
     private _ptyTerminalNames: string[] = [];
+    /** Hidden PTY fleet names (active only), used for unattended improver dispatch. */
+    private _ptyHiddenTerminalNames: string[] = [];
+    private _unattendedPlannerCursor = 0;
 
     /**
      * Liveness snapshot cache (all statuses), refreshed from the same
@@ -711,7 +814,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _setupPanelProvider?: SetupPanelProvider;
     private _ticketsPanelProvider?: { postMessage?(message: any): void; handleServiceVerb(verb: string, payload: any): Promise<any> };
     private _designPanelProvider?: { postMessage(message: any): void; handleServiceVerb(verb: string, payload: any): Promise<any>; getDesignAssetRoots?(workspaceRoot: string): string[] };
-    private _planningPanelProvider?: { postMessage(message: any): void; handleServiceVerb(verb: string, payload: any): Promise<any> };
+    private _planningPanelProvider?: { postMessage(message: any): void; postMessageToProjectWebview?(message: any): void; handleServiceVerb(verb: string, payload: any): Promise<any> };
     private _kanbanDbs = new Map<string, KanbanDatabase>();
     private _lastKanbanDbWarnings = new Map<string, string | null>();
     private _lastPlanIngestionValidationWarning: string | null = null;
@@ -728,8 +831,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _oversightPass: OversightPassService | null = null;
     // Phone-a-Friend dispatch serialization guard — a single in-flight promise that
     // prevents interleaved /clear + prompt sequences when multiple POSTs arrive
-    // near-simultaneously at batch end. Keyed on the one phone-a-friend terminal.
-    private _phoneAFriendInFlight: Promise<void> | null = null;
+    // near-simultaneously at batch end. Keyed on the resolved target terminal.
+    private _phoneAFriendInFlight = new Map<string, Promise<void>>();
     private _isMigratingSettings: boolean = false;
 
     // Last-accessed tracking for background prefetch
@@ -838,12 +941,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // The dispatch dep is the SAME internal code path POST /kanban/dispatch
         // uses (performKanbanDispatch), called in-process — never over HTTP.
         this._oversightPass = new OversightPassService({
-            dispatch: async (wsRoot, planRef, targetColumn) => {
+            dispatch: async (wsRoot, planRef, targetColumn, options) => {
                 if (!this._localApiServer) {
                     return { status: 503, payload: { success: false, error: 'Local API server not started' } };
                 }
-                return this._localApiServer.performKanbanDispatch(wsRoot, planRef, targetColumn);
+                return this._localApiServer.performKanbanDispatch(wsRoot, planRef, targetColumn, options);
             },
+            countEligibleTerminals: async (wsRoot, role) => {
+                if (role === 'planner' && this._ptyHiddenTerminalNames.length > 0) {
+                    return this._ptyHiddenTerminalNames.length;
+                }
+                const { terminals } = await this.getRoleTerminalSet(role, wsRoot);
+                return terminals.length;
+            },
+            resolvePlannerTerminal: async () => this.getUnattendedPlannerTerminal(),
             getKanbanDatabase: async (wsRoot) => this._getKanbanDb(wsRoot),
             resolveDispatchRole: async (wsRoot, targetColumn) => {
                 if (!this._kanbanProvider) return { role: null };
@@ -1960,6 +2071,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     this._ptyHostChild = undefined;
                     this._ptyHostPort = undefined;
                     this._ptyTerminalNames = [];
+                    this._ptyHiddenTerminalNames = [];
                 });
                 await new Promise<void>((resolve) => {
                     child.stdout.on('data', (data: Buffer) => {
@@ -2026,9 +2138,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
         };
 
+        this._updatePtyMirrorRegistry = updateMirrorRegistry;
+
         // Verb forwards to the child. Same guard shape and same `PTY host unavailable`
         // error the in-process arms returned, so callers see no contract change.
-        const handlePtyVerb = async (verb: string, payload: any, root?: string): Promise<any> => {
+        const handlePtyVerb = async (verb: string, payload: any, root?: string, signal?: AbortSignal): Promise<any> => {
             if (verb === 'ptyVisibleRoles') {
                 const roles = await GlobalIntegrationConfigService.getPtyVisibleRoles();
                 return { success: true, ...roles };
@@ -2040,6 +2154,58 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (payload.parentRoot && !payload.cwd && !payload.worktreePath) {
                     payload = { ...payload, cwd: payload.parentRoot };
                     delete payload.parentRoot;
+                }
+                // Delegate definitions are HOST-resolved, never caller-supplied. Each
+                // one carries a shell command the host runs in the user's tree, so an
+                // `if (!payload.delegates)` guard let any caller holding the API token
+                // (every pty child is handed one) hand us its own. Overwrite
+                // unconditionally, and drop a wire-supplied startupCommand for the
+                // parent terminal for the same reason.
+                const role = payload.role || 'coder';
+                const roleConfig: any = this.getRoleConfig(`roleConfig_${role}`);
+                payload = { ...payload, delegates: Array.isArray(roleConfig?.addons?.delegates) ? roleConfig.addons.delegates : [] };
+                delete payload.startupCommand;
+                // Host-resolved, like `delegates` above: the pty child (ptyHost.ts)
+                // runs in a separate process with no vscode API, so a config read
+                // inside PtyFleetService would reach the standalone host only and
+                // leave every extension-host seat unfixed. A BOOLEAN only — never
+                // free-form env off the wire (every pty child holds an API token).
+                payload = {
+                    ...payload,
+                    claudeInlineRendering: vscode.workspace
+                        .getConfiguration('switchboard')
+                        .get<boolean>('terminal.claudeInlineRendering', true)
+                };
+                // Auto-start: if this is an UNPARENTED terminal whose role heads
+                // a team, spawn that team's members alongside it. The recursion
+                // guard is !payload.parentInstanceId && !payload._isTeamMember —
+                // members are parented by construction (spawnDelegates passes
+                // parent.agentInstanceId, ptyFleetService.ts:358), so they cannot
+                // trigger. A SHARED member is unparented by construction, so it
+                // carries _isTeamMember: true to suppress the trigger — without
+                // this flag, a shared member whose role heads another team would
+                // spawn that team recursively. A member whose role happens to
+                // head another team joins the team that spawned it and starts
+                // nothing of its own.
+                //
+                // The team's members override role-config delegates: one team
+                // per head role is the constraint, and the team definition IS
+                // the configuration. The head is created first by
+                // ptyCreateTerminal; spawnDelegates is best-effort (returns
+                // {children, error}), so a cap refusal does not prevent the
+                // head from starting. Wiring (standing orders + group
+                // registration) fires in the post-create hook below, which
+                // fires because result.delegates is non-empty.
+                if (!payload.parentInstanceId && !payload._isTeamMember) {
+                    try {
+                        const db = await this._getKanbanDb(root || effectiveRoot);
+                        if (db) {
+                            const team = await findTeamForHeadRole(db, role);
+                            if (team && Array.isArray(team.members) && team.members.length > 0) {
+                                payload = { ...payload, delegates: team.members, teamName: team.name };
+                            }
+                        }
+                    } catch { /* DB not ready — proceed without auto-start */ }
                 }
                 if (!payload.cwd && !payload.worktreePath) {
                     const selected = this._kanbanProvider?.getCurrentWorkspaceRoot();
@@ -2058,32 +2224,137 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     }
                 }
             }
-            // Inject config defaults for ptySendPrompt when the caller didn't pass
-            // them. The ptyHost.ts child defaults clearBeforePrompt to false, but an
-            // HTTP caller (e.g. the terminal kanban drag-drop) that omits the field
-            // should get the config default (true) — matching _tryFleetDeliveryForRole's
-            // explicit config read and the standalone host's getPromptDeliveryOptions().
-            if (verb === 'ptySendPrompt' && payload && payload.clearBeforePrompt === undefined) {
+            // Same host-side resolution for ptyCreateBatch: the pty child cannot
+            // read vscode.workspace.getConfiguration, so batch-created seats would
+            // be left on the old behaviour without this. A BOOLEAN only — see the
+            // ptyCreateTerminal block above for the security reasoning.
+            if (verb === 'ptyCreateBatch' && payload) {
                 payload = {
                     ...payload,
-                    clearBeforePrompt: vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true),
-                    clearBeforePromptDelayMs: payload.clearBeforePromptDelayMs ?? vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 2000)
+                    claudeInlineRendering: vscode.workspace
+                        .getConfiguration('switchboard')
+                        .get<boolean>('terminal.claudeInlineRendering', true)
                 };
             }
-            const result = await this._ptyHostVerb(verb, payload);
-            if (['ptyCreateTerminal', 'ptyCloseTerminal', 'ptyRenameTerminal'].includes(verb)) {
+            // Inject the clear-before-prompt DELAY default for ptySendPrompt when
+            // the caller didn't pass it. The clearBeforePrompt flag itself is NOT
+            // injected on the omitted-field path: the ptyHost.ts child already
+            // defaults it to false (ptyPromptDelivery.ts:27 — `if (opts?.clearBeforePrompt)`),
+            // and an absent field meaning /clear is fail-dangerous for a relay into
+            // a mid-task terminal. Callers that genuinely want a clean context
+            // (the kanban dispatch paths, _attemptDirectTerminalPush, phone-a-friend)
+            // read the config explicitly and pass the value, so they are unaffected.
+            // The switchboard.terminal.clearBeforePrompt setting keeps its meaning
+            // for the paths that read it directly — this changes only what an
+            // UNSPECIFIED field means, from true to false.
+            //
+            // clearBeforePromptFromConfig is the explicit opt-in for callers that
+            // CANNOT read the config themselves (the webview drop path): it means
+            // "resolve the config default for me." It is honoured here and in
+            // bootstrap.ts's ptySendPrompt case, and stripped before it reaches the
+            // child so the delivery layer never sees it. An operator who set the
+            // config to false gets false; one who left it at default gets true.
+            if (verb === 'ptySendPrompt' && payload) {
+                if (payload.clearBeforePromptFromConfig === true && payload.clearBeforePrompt === undefined) {
+                    payload = {
+                        ...payload,
+                        clearBeforePrompt: vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true),
+                        clearBeforePromptDelayMs: payload.clearBeforePromptDelayMs ?? resolvePtyClearDelay(vscode.workspace.getConfiguration('switchboard'))
+                    };
+                    delete payload.clearBeforePromptFromConfig;
+                } else if (payload.clearBeforePrompt === undefined) {
+                    payload = {
+                        ...payload,
+                        clearBeforePromptDelayMs: payload.clearBeforePromptDelayMs ?? resolvePtyClearDelay(vscode.workspace.getConfiguration('switchboard'))
+                    };
+                }
+            }
+            const result = await this._ptyHostVerb(verb, payload, signal);
+            if (['ptyCreateTerminal', 'ptyCreateBatch', 'ptyCloseTerminal', 'ptyRenameTerminal'].includes(verb)) {
                 const db = await this._getKanbanDb(root || effectiveRoot);
                 void updateMirrorRegistry(db);
+                if (verb === 'ptyRenameTerminal' && result && result.success !== false && db) {
+                    void rewriteStandingOrdersForRename(db, payload.name, payload.alias)
+                        .catch((err: any) => console.warn('[TaskViewerProvider] Standing-orders rename rewrite failed:', err));
+                }
+                // Wire the team (standing orders + group registration) for a
+                // ptyCreateTerminal that produced children. Runs HERE, not in
+                // spawnDelegates: the extension-host fleet lives in a pty-host
+                // child process constructed without a KanbanDatabase
+                // (ptyHost.ts:43), so wiring placed there works under npx and
+                // silently no-ops on the shipped extension. Awaited so the
+                // create response implies wiring is done — a child that
+                // receives its first prompt before its order is installed gets
+                // no standing-orders block. ptyCreateTerminal only: a batch
+                // create has no head/child relationship to express.
+                if (verb === 'ptyCreateTerminal' && result && result.success !== false
+                    && Array.isArray(result.delegates) && result.delegates.length > 0 && db) {
+                    const headName = result.terminal?.friendlyName;
+                    if (headName) {
+                        try {
+                            const wired = await wireSpawnedTeam({ db, headName, children: result.delegates, members: Array.isArray(payload.delegates) ? payload.delegates : undefined });
+                            if (!wired.ok) {
+                                // Surface the wiring error on the verb result;
+                                // do not fail the create — terminals are real.
+                                result.wiringError = wired.error;
+                            } else {
+                                // Push a refresh so an open panel reloads
+                                // terminals.groups before its next whole-array
+                                // save can clobber the backend-registered group.
+                                this._broadcaster?.push({ type: 'terminalsGroupsChanged' }, SURFACES.terminals);
+                            }
+                        } catch (err: any) {
+                            console.warn('[TaskViewerProvider] Team wiring error:', err);
+                            result.wiringError = err?.message || String(err);
+                        }
+                    }
+                }
             }
             if (verb === 'ptyListTerminals' && result && result.success !== false && Array.isArray(result.terminals)) {
-                const cfg = getMappingsFromIndex();
+                this._ptyTerminalNames = (result.terminals || [])
+                    .filter((t: any) => t.status === 'active')
+                    .map((t: any) => t.friendlyName);
+                this._ptyHiddenTerminalNames = (result.hiddenTerminals || [])
+                    .filter((t: any) => t.status === 'active')
+                    .map((t: any) => t.friendlyName);
                 const fallback = root || effectiveRoot;
+                // Scope the mapping set to THIS board's own workspaces before
+                // resolving parents. The global index (getMappingsFromIndex)
+                // merges every discovered DB in the VS Code window — including
+                // unrelated repos that happen to have a kanban.db on disk — so
+                // using it here made foreign repos appear as top-level parent
+                // rows in the terminals sidebar. getScopedMappingsForBoard
+                // filters to mappings this board owns (parent, child, or source
+                // DB matches the board root) and prunes non-existent folders.
+                // The other seven getMappingsFromIndex consumers are
+                // intentionally left on the unscoped accessor.
+                const cfg = getScopedMappingsForBoard(fallback);
                 const { parents, parentMap } = resolveParentsForTerminals(cfg, fallback, result.terminals);
+                let planMap = new Map<string, TerminalPlanAttribution>();
+                try {
+                    const db = await this._getKanbanDb(fallback);
+                    const wsId = await this._getWorkspaceIdForRoot(fallback);
+                    if (db && wsId) {
+                        planMap = attributePlansToTerminals(
+                            await db.getLiveDispatchAttribution(wsId),
+                            await db.getWorktrees(),
+                            result.terminals
+                        );
+                    }
+                } catch (e) {
+                    console.error('[TaskViewerProvider] plan attribution for ptyListTerminals failed:', e);
+                }
                 result.parents = parents;
-                result.terminals = result.terminals.map((t: any) => ({
+                const plan = (arr: any[]) => arr.map((t: any) => ({
                     ...t,
                     parentRoot: parentMap.get(t.cwd) ?? null,
+                    planId: planMap.get(t.friendlyName)?.planId ?? null,
+                    planTitle: planMap.get(t.friendlyName)?.planTitle ?? null,
                 }));
+                result.terminals = plan(result.terminals);
+                if (Array.isArray(result.hiddenTerminals)) {
+                    result.hiddenTerminals = plan(result.hiddenTerminals);
+                }
             }
             return result;
         };
@@ -2100,7 +2371,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // Retrieve from VS Code SecretStorage - returns empty string if not set
                 return await this._context.secrets.get('switchboard.apiToken') || '';
             },
-            terminalVerb: (verb: string, payload: any, wsRoot?: string) => handlePtyVerb(verb, payload, wsRoot),
+            terminalVerb: (verb: string, payload: any, wsRoot?: string, signal?: AbortSignal) => handlePtyVerb(verb, payload, wsRoot, signal),
             allRoots: allRoots,
             getRegisteredTerminals: () => {
                 // Live dispatch targets only — a disposed terminal lingers in the
@@ -2327,6 +2598,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 this._designPanelProvider?.getDesignAssetRoots?.(wsRoot) ?? [],
             getPlanningAssetRoots: (wsRoot: string) =>
                 (this._planningPanelProvider as any)?.getPlanningAssetRoots?.(wsRoot) ?? [],
+            getTicketsAssetRoots: (wsRoot: string) =>
+                (this._ticketsPanelProvider as any)?.getTicketsAssetRoots?.(wsRoot) ?? [],
             setupVerb: async (verb, payload, wsRoot) => {
                 if (!this._setupPanelProvider) {
                     return { success: false, error: 'Setup provider not available' };
@@ -2474,11 +2747,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     },
                 };
             })(),
-            onPhoneAFriend: async (planFile: string, originRole?: string) => {
+            onPhoneAFriend: async (planFile: string, originRole?: string, originTerminal?: string, dispatchId?: string) => {
                 // Route the coder's batch-end POST to the Phone-a-Friend terminal dispatch.
                 // The callback handles the silent drop internally and MUST NOT throw on
                 // "no terminal" (a throw becomes a 500 and breaks the best-effort signal).
-                await this._dispatchPhoneAFriend(planFile, originRole || 'coder');
+                await this._dispatchPhoneAFriend(planFile, originRole || 'coder', originTerminal, dispatchId);
             },
             onDispatchResearch: async (workspaceRoot: string, prompt: string) => {
                 // Route the planner's "advise research if unsure" hand-off to an active
@@ -2687,6 +2960,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      */
     public getLocalApiServerPort(): number {
         return this._localApiServer?.getPort() ?? 0;
+    }
+
+    /** Public accessor for the LocalApiServer session token. Plumbed into the parent-side
+     * delegate directive's curl Authorization header at prompt-build time. Returns an
+     * empty string when the user has not configured a token (the directive then omits
+     * the Authorization header, matching the empty-token runtime path).
+     */
+    public async getApiToken(): Promise<string> {
+        if (!this._context) { return ''; }
+        return await this._context.secrets.get('switchboard.apiToken') || '';
     }
 
     /** Whether a PTY host is connected — used by panel providers for host-derived creation policy. */
@@ -3756,7 +4039,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    public setPlanningPanelProvider(provider: { postMessage(message: any): void; handleServiceVerb(verb: string, payload: any): Promise<any> }) {
+    public setPlanningPanelProvider(provider: { postMessage(message: any): void; postMessageToProjectWebview?(message: any): void; handleServiceVerb(verb: string, payload: any): Promise<any> }) {
         this._planningPanelProvider = provider;
         if (this._localApiServer && typeof (provider as any).setApiServer === 'function') {
             (provider as any).setApiServer(this._localApiServer);
@@ -4476,6 +4759,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             this._refreshRunSheets(workspaceRoot),
             this._refreshConfigurationState()
         ]);
+        // Keep the Project panel's Kanban Plans cache in sync with board moves.
+        // Card moves touch only plans.kanban_column in the DB — no plan file changes —
+        // so the panel's file watcher never fires and its cache goes stale silently.
+        // postMessageToProjectWebview (NOT postMessage): refreshKanbanPlans is handled
+        // only by project.js:433; planning.js has no handler for it. The planning
+        // panel's Kanban tab still refreshes, because the resulting fetchKanbanPlans
+        // replies through _postToBothPanels. project.js debounces at 200ms, so a burst
+        // of refreshUI calls collapses into a single fetch.
+        this._planningPanelProvider?.postMessageToProjectWebview?.({ type: 'refreshKanbanPlans' });
     }
 
     public sendLoadingState(loading: boolean) {
@@ -4689,21 +4981,54 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * sequences in the one terminal. Silent drop (with diagnostics log) when no terminal is
      * running — MUST NOT throw (a throw becomes a 500 and breaks the best-effort signal).
      */
-    private async _dispatchPhoneAFriend(planFile: string, originRole: string): Promise<void> {
-        // Serialize: chain behind any in-flight dispatch, then become the in-flight one.
-        const prev = this._phoneAFriendInFlight;
+    private async _dispatchPhoneAFriend(planFile: string, originRole: string, originTerminal?: string, dispatchId?: string): Promise<void> {
+        const resolvedWorkspaceRoot = this._resolveWorkspaceRoot('');
+        if (!resolvedWorkspaceRoot) {
+            this._apiServerDiagnosticsChannel.appendLine(`[Phone-a-Friend] POST received for ${planFile}, no workspace root, dropped.`);
+            return;
+        }
+
+        // Resolve the Phone-a-Friend terminal name from per-instance overrides,
+        // falling back to the role default, then the workspace singleton.
+        const roleConfig: any = this.getRoleConfig(`roleConfig_${originRole}`);
+        const targetOverride = typeof originTerminal === 'string' && originTerminal
+            ? roleConfig?.addons?.phoneAFriendTargets?.[originTerminal]
+            : undefined;
+        let agentName: string;
+        if (targetOverride === null) {
+            // The one reachable "none". Absent key means inherit, NOT off.
+            this._apiServerDiagnosticsChannel.appendLine(`[Phone-a-Friend] origin=${originTerminal || '<unknown>'} role=${originRole} target=none (explicit off), dropped.`);
+            return;
+        } else if (typeof targetOverride === 'string' && targetOverride.trim()) {
+            agentName = targetOverride.trim();
+        } else {
+            // No override → the workspace singleton, exactly as before, INCLUDING the
+            // literal-name fallback. Two compatibility rules live here:
+            //  - `|| 'Phone-a-Friend'`: _getAgentNameForRole returns falsy when the
+            //    role has no saved mapping, and the shipped path then matched an open
+            //    terminal literally named "Phone-a-Friend". Dropping it silently
+            //    unwired every install that never set a mapping.
+            //  - No `addons.phoneAFriend === true` gate: the flag governs whether the
+            //    DIRECTIVE is emitted, and never governed dispatch. Gating here breaks
+            //    in-flight prompts built before this change, which hardcode
+            //    `originRole:"coder"` even when the addon lives on lead/intern.
+            agentName = (await this._getAgentNameForRole('phone_a_friend', resolvedWorkspaceRoot)) || 'Phone-a-Friend';
+        }
+        const targetKey = this._normalizeAgentKey(this._stripIdeSuffix(agentName)) || agentName;
+
+        // Guard self-dispatch: a terminal must not be told to review its own work.
+        const originKey = this._normalizeAgentKey(this._stripIdeSuffix(originTerminal || '')) || '';
+        if (targetKey && originKey && targetKey === originKey) {
+            this._apiServerDiagnosticsChannel.appendLine(`[Phone-a-Friend] origin=${originTerminal || '<unknown>'} target=${agentName} — self-dispatch refused.`);
+            return;
+        }
+
+        // Serialize dispatches to the same target; different targets run concurrently.
+        const prev = this._phoneAFriendInFlight.get(targetKey);
         const run = (async () => {
             if (prev) { try { await prev; } catch { /* prior dispatch failure is isolated */ } }
-            const resolvedWorkspaceRoot = this._resolveWorkspaceRoot('');
-            if (!resolvedWorkspaceRoot) {
-                this._apiServerDiagnosticsChannel.appendLine(`[Phone-a-Friend] POST received for ${planFile}, no workspace root, dropped.`);
-                return;
-            }
 
-            // Resolve the Phone-a-Friend terminal name via state.json role mapping.
-            const agentName = await this._getAgentNameForRole('phone_a_friend', resolvedWorkspaceRoot) || 'Phone-a-Friend';
             const suffixedKey = this._suffixedName(agentName);
-
             let terminal: vscode.Terminal | undefined;
             if (this._registeredTerminals) {
                 terminal = this._registeredTerminals.get(agentName) || this._registeredTerminals.get(suffixedKey);
@@ -4716,8 +5041,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
 
             if (!terminal || terminal.exitStatus !== undefined) {
-                // Silent drop — log so a misconfigured workspace (addon on, no terminal) is diagnosable.
-                this._apiServerDiagnosticsChannel.appendLine(`[Phone-a-Friend] POST received for ${planFile}, no terminal running, dropped.`);
+                this._apiServerDiagnosticsChannel.appendLine(`[Phone-a-Friend] origin=${originTerminal || '<unknown>'} target=${agentName} — no terminal running, dropped.`);
                 return;
             }
 
@@ -4738,23 +5062,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }
             }
 
-            // Build the second-pass coder prompt. No Stage Complete marker (continuation,
-            // not a stage transition). The originRole is informational — the phone-a-friend
-            // agent receives prompts from the host, not the prompts tab, so it does not
-            // inherit the coder's addons here (it has its own DEFAULT_ROLE_CONFIG entry).
-            const prompt = `Read ${planFile} — this plan was just coded by another agent (origin role: ${originRole}). Assume the implementation contains hidden bugs. Check the code against the plan, find and fix any issues you discover. Do NOT append a Stage Complete marker — you are a second-pass continuation, not a stage transition. GIT POLICY: stay on the current branch — do not switch or create branches, do not push to shared branches, and do not force-push. When done, summarize the bugs you found and the fixes you applied.`;
+            const prompt = `Read ${planFile} — this plan was just coded by another agent (origin role: ${originRole}, originTerminal: ${originTerminal || 'unknown'}, dispatch: ${dispatchId || 'none'}). Assume the implementation contains hidden bugs. Check the code against the plan, find and fix any issues you discover. Do NOT append a Stage Complete marker — you are a second-pass continuation, not a stage transition. GIT POLICY: stay on the current branch — do not switch or create branches, do not push to shared branches, and do not force-push. When done, summarize the bugs you found and the fixes you applied.`;
 
             const sendLockKey = this._normalizeAgentKey(this._stripIdeSuffix(terminal.name || agentName)) || agentName;
             await withTerminalSendLock(sendLockKey, async () => {
                 await sendRobustText(terminal!, normalizeNewlines(prompt), true);
             });
         })();
-        this._phoneAFriendInFlight = run;
+
+        this._phoneAFriendInFlight.set(targetKey, run);
         try {
             await run;
         } finally {
-            if (this._phoneAFriendInFlight === run) {
-                this._phoneAFriendInFlight = null;
+            if (this._phoneAFriendInFlight.get(targetKey) === run) {
+                this._phoneAFriendInFlight.delete(targetKey);
             }
         }
     }
@@ -4953,6 +5274,7 @@ Each plan file must include:
             workspaceRoot: resolvedWorkspaceRoot,
             targetTerminalOverride: options.targetTerminalOverride,
             persistColumnOnError: true,
+            unattended: options.unattended,
         };
 
         if (options.dragDropMode === 'prompt') {
@@ -5061,7 +5383,7 @@ Each plan file must include:
             return false;
         }
 
-        const prompt = await this._kanbanProvider.generateUnifiedPrompt(role, validPlans, resolvedWorkspaceRoot, { instruction: options.instruction });
+        const prompt = await this._kanbanProvider.generateUnifiedPrompt(role, validPlans, resolvedWorkspaceRoot, { instruction: options.instruction, unattended: options?.unattended });
         const messagePayload = this._appendAdditionalInstructions(prompt, undefined, options.additionalInstructions);
 
         await this._seams().clipboard.writeText(messagePayload);
@@ -5524,7 +5846,8 @@ Each plan file must include:
         const allSameTarget = groups.every(g => g.targetAgent === groups[0].targetAgent);
 
         const dispatchToGroup = async (group: typeof groups[0], unsentLabels?: string[]): Promise<boolean> => {
-            const prompt = await this._kanbanProvider!.generateUnifiedPrompt(role, group.plans, resolvedWorkspaceRoot, { instruction, analysisScope: options?.analysisScope });
+            const delegateOptions = await this._resolveDelegateIdentityForTarget(group.targetAgent, role) ?? {};
+            const prompt = await this._kanbanProvider!.generateUnifiedPrompt(role, group.plans, resolvedWorkspaceRoot, { instruction, analysisScope: options?.analysisScope, originTerminal: group.targetAgent, ...delegateOptions, unattended: options?.unattended });
             const finalPrompt = this._appendAdditionalInstructions(prompt, undefined, options?.additionalInstructions);
 
             // Persist this group's cards before dispatch (immediate UI feedback).
@@ -5691,8 +6014,12 @@ Each plan file must include:
      * therefore yields the same key regardless of how many Switchboard workspaces
      * dispatch to it — which is what the persistent rotation cursor keys off.
      */
-    public async getRoleTerminalSet(role: string, workspaceRoot: string): Promise<{ terminals: string[]; locationKey: string }> {
-        const aliveTerminals = await this._getAliveAutobanTerminalRegistry(workspaceRoot);
+    public async getRoleTerminalSet(
+        role: string,
+        workspaceRoot: string,
+        opts?: { allowPtyFleet?: boolean }
+    ): Promise<{ terminals: string[]; locationKey: string }> {
+        const aliveTerminals = await this._getAliveAutobanTerminalRegistry(workspaceRoot, opts);
         const normalizedRole = this._normalizeAutobanPoolRole(role);
         const entries = Object.entries(aliveTerminals)
             .filter(([, info]) => this._normalizeAgentKey((info as any)?.role) === normalizedRole)
@@ -5715,6 +6042,20 @@ Each plan file must include:
             locationKey = terminals.join('|');
         }
         return { terminals, locationKey };
+    }
+
+    /** Picks the next active hidden planner PTY for an unattended dispatch. */
+    public getUnattendedPlannerTerminal(): string | null {
+        const hidden = this._ptyHiddenTerminalNames.filter(name => {
+            const normalized = this._normalizeAgentKey(this._stripIdeSuffix(name));
+            return normalized && normalized.startsWith('planner');
+        });
+        // Broader fallback: any hidden terminal whose role looks like an improver.
+        const pool = hidden.length > 0 ? hidden : this._ptyHiddenTerminalNames;
+        if (pool.length === 0) return null;
+        const picked = pool[this._unattendedPlannerCursor % pool.length];
+        this._unattendedPlannerCursor = (this._unattendedPlannerCursor + 1) % pool.length;
+        return picked;
     }
 
     /**
@@ -8480,6 +8821,35 @@ Each plan file must include:
     }
 
     /**
+     * Resolve a terminal display name to the delegate-identity fields that the parent
+     * directive needs. This is a no-op for agents with no delegate definitions and for
+     * VS Code terminals, so the overwhelmingly common case costs zero extra round-trips.
+     * Failure is non-fatal: an unresolvable identity simply omits the delegate block.
+     */
+    private async _resolveDelegateIdentityForTarget(
+        displayName: string | undefined,
+        role: string,
+        terminals?: any[]
+    ): Promise<{ agentInstanceId: string; delegateChildren: string[] } | undefined> {
+        if (!displayName || !this._ptyHostPort) { return undefined; }
+        const roleConfig = this._readRoleConfigScoped(role) as any;
+        if (!Array.isArray(roleConfig?.addons?.delegates) || roleConfig.addons.delegates.length === 0) {
+            return undefined;
+        }
+        if (terminals) {
+            return resolveDelegateIdentityForTerminal(displayName, terminals);
+        }
+        try {
+            const res = await this._ptyHostVerb('ptyListTerminals', {});
+            if (!res?.success || !Array.isArray(res.terminals)) { return undefined; }
+            return resolveDelegateIdentityForTerminal(displayName, res.terminals);
+        } catch (err) {
+            console.warn('[TaskViewerProvider] Delegate identity lookup failed:', err);
+            return undefined;
+        }
+    }
+
+    /**
      * Resolves a terminal name by matching worktree path AND role against the state
      * file's `terminals` map. Fleet terminals (purpose:'pty') are eligible alongside
      * VS Code terminals, and ties are broken by {@link _pickTerminalCandidate}
@@ -8619,7 +8989,10 @@ Each plan file must include:
         return this._readTerminalRegistryState(root);
     }
 
-    private async _getAliveAutobanTerminalRegistry(workspaceRoot: string): Promise<Record<string, any>> {
+    private async _getAliveAutobanTerminalRegistry(
+        workspaceRoot: string,
+        opts?: { allowPtyFleet?: boolean }
+    ): Promise<Record<string, any>> {
         const terminalsMap = await this._readTerminalRegistryState(workspaceRoot);
         const activeTerminals = vscode.window.terminals;
         const activeNames = new Set<string>();
@@ -8649,6 +9022,21 @@ Each plan file must include:
 
         for (const [name, rawInfo] of Object.entries(terminalsMap)) {
             const info = { ...(rawInfo as any) };
+
+            // PTY fleet rows are maintained by their own writer; when the caller asks
+            // for them, their own `status` is the liveness authority. See the matching
+            // single-dispatch workaround at _resolveAgentTerminalForPlan (8379-8404).
+            const isPtyRow = opts?.allowPtyFleet && this._isFleetTerminalInfo(info);
+            if (isPtyRow) {
+                if (info.status === 'exited') { continue; }
+                aliveTerminals[name] = {
+                    ...info,
+                    alive: true,
+                    _isPty: true
+                };
+                continue;
+            }
+
             const friendlyName = typeof info.friendlyName === 'string' ? info.friendlyName : name;
             const nameMatch = activeNames.has(name) || activeNames.has(friendlyName);
             const pidMatch = activePids.has(info.pid) || activePids.has(info.childPid);
@@ -8694,6 +9082,7 @@ Each plan file must include:
         return Object.entries(aliveTerminals)
             .filter(([, info]) => this._normalizeAgentKey((info as any)?.role) === normalizedRole)
             .filter(([, info]) => includeBackups || !this._isAutobanBackupTerminalInfo(info))
+            .filter(([, info]) => !info?.hidden)
             .map(([name]) => name)
             .sort((a, b) => a.localeCompare(b));
     }
@@ -10589,6 +10978,17 @@ Each plan file must include:
                 this._postSidebarConfigurationState(resolvedWorkspaceRoot),
                 this.postSetupPanelState(resolvedWorkspaceRoot)
             ]);
+            // Broadcast on the terminals surface so open terminals panels
+            // refetch their agentNames cache. This handler is the shared write
+            // path for setup.html, implementation.html, and SetupPanelProvider
+            // — none of which route through KanbanProvider._saveStartupCommands.
+            // An existing role's command edit does not introduce a new role, so
+            // the fleet-poll guard (terminals.js) cannot catch it. Carry no
+            // payload; the receiver refetches rather than trusting a pushed
+            // map. A broadcast failure must not fail the save.
+            try {
+                this._broadcaster?.mirrorToWs(SURFACES.terminals, { type: 'startupCommandsChanged' }, 'startupCommandsChanged');
+            } catch { /* broadcast failure must not fail the save */ }
             this._postSharedWebviewMessage({ type: 'saveStartupCommandsResult', success: true });
         } catch (error) {
             this._postSharedWebviewMessage({ type: 'saveStartupCommandsResult', success: false });
@@ -10781,6 +11181,56 @@ Each plan file must include:
                 // ignore
             }
         }
+    }
+
+    /**
+     * Instantiate an agent group: create the head terminal with host-resolved
+     * delegate members (workers parented to the head), then install one standing
+     * order per worker carrying the callback contract. Follows the delegates
+     * precedent — the arm calls `_ptyHostVerb('ptyCreateTerminal', …)` directly,
+     * below the `handlePtyVerb` wrapper, so the group's host-resolved `delegates`
+     * are preserved (the wrapper overwrites them from role config). The
+     * wire-supplied `startupCommand`/`delegates` guards on the HTTP rail stay
+     * intact; this is trusted host-side code.
+     */
+    public async instantiateAgentGroup(group: any, workspaceRoot: string): Promise<InstantiateAgentGroupResult> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return { success: false, error: 'No workspace root resolved' };
+        }
+        if (!this._ptyHostPort) {
+            return { success: false, error: 'PTY host unavailable on this platform/installation' };
+        }
+        const db = await this._getKanbanDb(resolvedRoot);
+        if (!db || !(await db.ensureReady())) {
+            return { success: false, error: 'Kanban DB not ready' };
+        }
+
+        return instantiateAgentGroupCore({
+            db,
+            group,
+            cwd: resolvedRoot,
+            liveDelegateCount: async () => {
+                const listed = await this._ptyHostVerb('ptyListTerminals', {});
+                if (!listed?.success) { return 0; }
+                return [...(listed.terminals || []), ...(listed.hiddenTerminals || [])]
+                    .filter((t: any) => t.parentInstanceId && t.status === 'active').length;
+            },
+            // Calling _ptyHostVerb directly (not handlePtyVerb) preserves our
+            // delegates — the wrapper overwrites them from roleConfig. The pty host
+            // passes `undefined` as the head's startupCommand (hardcoded in
+            // ptyHost.ts), so the head uses its role's configured command; members'
+            // startupCommands flow through spawnDelegates -> create().
+            createHeadWithDelegates: (spec) => this._ptyHostVerb('ptyCreateTerminal', {
+                role: spec.role,
+                name: spec.name,
+                cwd: spec.cwd,
+                delegates: spec.delegates,
+            }),
+            // Bypassing handlePtyVerb also skips its post-create hook, which is the
+            // sole writer of the `runtime.terminals` registry mirror in this host.
+            onCreated: () => { void this._updatePtyMirrorRegistry?.(db); },
+        });
     }
 
     public async handleSaveDefaultPromptOverrides(data: any): Promise<void> {
@@ -11828,7 +12278,8 @@ Each plan file must include:
                             try {
                                 renderedDescriptionHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', descriptionMd) || '';
                             } catch {
-                                // Fallback handled natively by the frontend if renderedDescriptionHtml is empty
+                                // markdown.api.render is a VS Code built-in and is unavailable on hosts
+                                // without it (e.g. standalone). The webview renders the source markdown itself.
                                 renderedDescriptionHtml = '';
                             }
 
@@ -12233,7 +12684,8 @@ Each plan file must include:
                             try {
                                 renderedDescriptionHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', descriptionMd) || '';
                             } catch {
-                                // Fallback handled natively by the frontend if renderedDescriptionHtml is empty
+                                // markdown.api.render is a VS Code built-in and is unavailable on hosts
+                                // without it (e.g. standalone). The webview renders the source markdown itself.
                                 renderedDescriptionHtml = '';
                             }
 
@@ -13111,10 +13563,18 @@ What would you like to find?`;
                         // a PTY at all in the extension host: PTYs live in the pty host
                         // child, not in _registeredTerminals and not in the HostTerminal
                         // seam, so every browser "send to terminal" failed as "not found
-                        // or not local". ptyWrite (not ptySendPrompt) is the right verb
-                        // here — this arm mirrors the old `sendText(input, true)`, a bare
-                        // line submit with no bracketed-paste framing and, per the note
-                        // below, deliberately no clearBeforePrompt side effect.
+                        // or not local".
+                        //
+                        // Content-aware delivery (not a wholesale verb swap): the four
+                        // shipped callers all send `/clear` — a single-line slash command.
+                        // A raw ptyWrite is correct for that (a bare line submit, no
+                        // bracketed-paste framing, no clearBeforePrompt side effect).
+                        // Everything else is a prompt: route through ptySendPrompt, which
+                        // owns bracketed-paste framing, 256-byte chunking, the per-terminal
+                        // lock, and the confirm CR — and which applies standing orders (the
+                        // callback contract). Switching the branch wholesale would paste a
+                        // standing-orders block into every `/clear`; the content rule keeps
+                        // the shipped callers byte-identical.
                         if (this._ptyHostPort) {
                             const normalized = this._normalizeAgentKey(this._stripIdeSuffix(name));
                             const res = await this._ptyHostVerb('ptyListTerminals', {});
@@ -13122,8 +13582,35 @@ What would you like to find?`;
                                 const target = res.terminals.find((t: any) => t.friendlyName === name)
                                     || res.terminals.find((t: any) => this._normalizeAgentKey(this._stripIdeSuffix(t.friendlyName)) === normalized);
                                 if (target && target.status === 'active') {
-                                    const writeRes = await this._ptyHostVerb('ptyWrite', { name: target.friendlyName, data: input + '\r' });
-                                    if (writeRes?.success) return { success: true };
+                                    // Control string: single line (no \n) starting with `/`.
+                                    // Keeps the four shipped `/clear` callers byte-for-byte.
+                                    const isControlString = !input.includes('\n') && input.trimStart().startsWith('/');
+                                    let ptyRes: any;
+                                    if (isControlString) {
+                                        ptyRes = await this._ptyHostVerb('ptyWrite', { name: target.friendlyName, data: input + '\r' });
+                                    } else {
+                                        // Prompt path: ptySendPrompt owns framing, chunking,
+                                        // the lock, and the confirm CR. clearBeforePrompt is
+                                        // pinned false — sendToTerminal has never cleared,
+                                        // and an explicit false survives a future refactor
+                                        // that reroutes through handlePtyVerb (which injects
+                                        // the config default of true when the field is absent).
+                                        // Standing orders apply unless the caller opts out.
+                                        const promptPayload: any = { name: target.friendlyName, data: input, clearBeforePrompt: false };
+                                        if (data.standingOrders === false) { promptPayload.standingOrders = false; }
+                                        ptyRes = await this._ptyHostVerb('ptySendPrompt', promptPayload);
+                                    }
+                                    if (ptyRes?.success) {
+                                        console.log(`[TaskViewer] sendToTerminal: sent to '${name}' (len: ${input.length}, path: ${isControlString ? 'control' : 'prompt'})`);
+                                        return { success: true };
+                                    }
+                                    // Delivery failed on a found, active terminal. Return
+                                    // the real error instead of falling through to the
+                                    // registered-terminal lookup, which would misdescribe a
+                                    // delivery fault as "not found or not local".
+                                    const ptyError = ptyRes?.error || 'delivery failed';
+                                    console.error(`[TaskViewer] sendToTerminal: delivery to '${name}' failed: ${ptyError}`);
+                                    return { success: false, error: ptyError };
                                 }
                             }
                         }
@@ -18565,10 +19052,50 @@ What would you like to find?`;
                 state.terminals[terminalName].alias = alias.trim() || undefined;
             }
         });
+        await this._migratePhoneAFriendTargetsOnRename(terminalName, alias);
         // Optimistic UI: post refresh immediately so the sidebar shows the new name
         // without waiting for the async _refreshTerminalStatuses to complete.
         this.postMessage({ type: 'refresh' });
         this._refreshTerminalStatuses();
+    }
+
+    private async _migratePhoneAFriendTargetsOnRename(oldName: string, newName: string): Promise<void> {
+        if (!oldName || !newName || oldName === newName) { return; }
+        const roleNames = new Set<string>();
+        for (const key of this._context.globalState.keys()) {
+            if (key.startsWith('switchboard.prompts.roleConfig_')) { roleNames.add(key.replace('switchboard.prompts.roleConfig_', '')); }
+        }
+        for (const key of this._context.workspaceState.keys()) {
+            if (key.startsWith('switchboard.prompts.roleConfig_')) { roleNames.add(key.replace('switchboard.prompts.roleConfig_', '')); }
+        }
+        try {
+            const customAgents = await this.getCustomAgents();
+            for (const a of customAgents) { roleNames.add(a.role); }
+        } catch { /* ignore */ }
+        for (const role of roleNames) {
+            const cfg: any = this.getRoleConfig(`roleConfig_${role}`) as any;
+            if (!cfg?.addons?.phoneAFriendTargets) { continue; }
+            const targets = cfg.addons.phoneAFriendTargets as Record<string, string | null>;
+            let dirty = false;
+            // Origin side: the map is keyed on the originating terminal's name.
+            if (Object.prototype.hasOwnProperty.call(targets, oldName)) {
+                targets[newName] = targets[oldName];
+                delete targets[oldName];
+                dirty = true;
+            }
+            // Target side: the VALUES are terminal names too. Renaming the friend
+            // itself detached every override pointing at it, which reads as
+            // "Phone-a-Friend stopped working" with nothing in the config to see.
+            for (const [origin, value] of Object.entries(targets)) {
+                if (typeof value === 'string' && value === oldName) {
+                    targets[origin] = newName;
+                    dirty = true;
+                }
+            }
+            if (dirty) {
+                await this.saveRoleConfig(`roleConfig_${role}`, cfg);
+            }
+        }
     }
 
     private async _registerAllTerminals() {
@@ -19162,7 +19689,7 @@ What would you like to find?`;
                         // per-process state, and two dispatches racing from here would
                         // otherwise splice into each other's chunked pastes.
                         const clearBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
-                        const clearDelay = vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 2000);
+                        const clearDelay = resolvePtyClearDelay(vscode.workspace.getConfiguration('switchboard'));
                         const writeRes = await this._ptyHostVerb('ptySendPrompt', {
                             name: target.friendlyName,
                             data: payload,
@@ -19495,15 +20022,22 @@ What would you like to find?`;
             dispatchPlans[0].workingDir = options.workingDirectory;
         }
 
+        const delegateOptions = await this._resolveDelegateIdentityForTarget(targetAgent, role) ?? {};
+
         if (role === 'planner') {
             const plannerInstruction = (baseInstruction === 'improve-plan' || baseInstruction === 'enhance' || baseInstruction === 'dispatch-analysis') ? baseInstruction : undefined;
             messagePayload = await this._kanbanProvider.generateUnifiedPrompt('planner', dispatchPlans, effectiveWorkspaceRoot, {
                 instruction: plannerInstruction,
-                gitProhibitionEnabled
+                originTerminal: targetAgent,
+                ...delegateOptions,
+                gitProhibitionEnabled,
+                unattended: options?.unattended
             });
         } else if (role === 'reviewer') {
             messagePayload = await this._kanbanProvider.generateUnifiedPrompt('reviewer', dispatchPlans, effectiveWorkspaceRoot, {
                 instruction: baseInstruction,
+                originTerminal: targetAgent,
+                ...delegateOptions,
                 gitProhibitionEnabled
             });
             messageMetadata.phase_gate = {
@@ -19517,12 +20051,16 @@ What would you like to find?`;
                 return false;
             }
             messagePayload = await this._kanbanProvider.generateUnifiedPrompt('tester', dispatchPlans, effectiveWorkspaceRoot, {
+                originTerminal: targetAgent,
+                ...delegateOptions,
                 gitProhibitionEnabled
             });
             messageMetadata.phase_gate = { enforce_persona: 'tester' };
         } else if (role === 'lead') {
             messagePayload = await this._kanbanProvider.generateUnifiedPrompt('lead', dispatchPlans, effectiveWorkspaceRoot, {
                 includeInlineChallenge,
+                originTerminal: targetAgent,
+                ...delegateOptions,
                 gitProhibitionEnabled
             });
             messageMetadata.phase_gate = { enforce_persona: 'lead' };
@@ -19530,16 +20068,23 @@ What would you like to find?`;
             messagePayload = await this._kanbanProvider.generateUnifiedPrompt('coder', dispatchPlans, effectiveWorkspaceRoot, {
                 instruction: baseInstruction,
                 includeInlineChallenge,
+                originTerminal: targetAgent,
+                ...delegateOptions,
                 gitProhibitionEnabled
             });
         } else if (role === 'intern') {
             messagePayload = await this._kanbanProvider.generateUnifiedPrompt('intern', dispatchPlans, effectiveWorkspaceRoot, {
                 instruction: baseInstruction,
                 includeInlineChallenge,
+                originTerminal: targetAgent,
+                ...delegateOptions,
                 gitProhibitionEnabled
             });
         } else if (customAgent || role.startsWith('custom_agent_')) {
-            messagePayload = await this._kanbanProvider.generateUnifiedPrompt(role, dispatchPlans, effectiveWorkspaceRoot);
+            messagePayload = await this._kanbanProvider.generateUnifiedPrompt(role, dispatchPlans, effectiveWorkspaceRoot, {
+                originTerminal: targetAgent,
+                ...delegateOptions,
+            });
         } else {
             clearDispatchLock();
             this._seams().ui.showErrorMessage(`Unknown role: ${role}`);
@@ -21837,6 +22382,7 @@ What would you like to find?`;
             this._ptyHostChild = undefined;
             this._ptyHostPort = undefined;
             this._ptyTerminalNames = [];
+            this._ptyHiddenTerminalNames = [];
         }
         this._apiServerDiagnosticsChannelInstance?.dispose();
         void this._stopLocalApiServer();
@@ -21859,6 +22405,7 @@ What would you like to find?`;
             let title = '';
             let content = '';
             let issue: any = null;
+            let attachments: any[] = [];
             let ticketUrl: string | undefined;
             if (provider === 'linear') {
                 const linear = this._getLinearService(resolvedRoot);
@@ -21903,6 +22450,9 @@ What would you like to find?`;
                     const rawSubtasks = node.subtasks.map((st: any) => st.issue);
                     content += this._buildSubtasksSection('linear', rawSubtasks);
                 }
+                if (!preFetchedTask) {
+                    attachments = await linear.getAttachments(id);
+                }
             } else {
                 const clickUp = this._getClickUpService(resolvedRoot);
                 let clickUpTask: any;
@@ -21918,6 +22468,7 @@ What would you like to find?`;
                     }
                     clickUpTask = details.task;
                     subtasks = includeSubtasks && details.subtasks ? details.subtasks : [];
+                    attachments = details.attachments || [];
                 }
                 title = clickUpTask.name || id;
                 ticketUrl = clickUpTask.url;
@@ -21958,6 +22509,17 @@ What would you like to find?`;
             const slug = this._slugify(title);
             const filename = `${provider}_${id}_${slug}.md`;
             const filePath = path.join(targetDir, filename);
+
+            // Download any attachments and inline description images before relocalisation.
+            await this._hydrateTicketAssets({
+                resolvedRoot,
+                provider,
+                id,
+                dir: path.join(targetDir, 'attachments'),
+                key: `${provider}_${id}`,
+                attachments,
+                body: content
+            });
 
             // Map any hosted inline image URLs back to the local files they were uploaded
             // from, so a refetch keeps the local .md renderable. The remote still holds the
@@ -22125,15 +22687,31 @@ What would you like to find?`;
      * every legacy download on the install base lost its Open/Reveal buttons.
      */
     private static readonly _ATTACHMENT_INDEX_FILE = '_attachments.json';
+    private static readonly _MAX_ASSET_BYTES = 25 * 1024 * 1024;
+    private static readonly _MAX_ASSETS_PER_TICKET = 20;
+    private static readonly _MAX_RUN_ASSET_FILES = 200;
+    private static readonly _MAX_RUN_ASSET_BYTES = 200 * 1024 * 1024;
+    private static readonly _ASSET_TIMEOUT_MS = 30000;
+    private static readonly _ASSET_MAX_RETRIES = 2;
+    private static readonly _ASSET_REDIRECT_HOPS = 3;
+    private _importRunBudget: { files: number; bytes: number; capped: boolean } | null = null;
+    // The kill switch is read ONCE per import run, not once per ticket: loadGlobal() is an
+    // uncached disk read + JSON.parse, and the bulk path runs it inside a for…of over every
+    // ticket in the list, on a repeating background timer. Cleared with the run budget.
+    private _importRunConfigCache: boolean | undefined = undefined;
 
     private _readAttachmentIndex(dir: string): Record<string, Record<string, string>> {
         try { return JSON.parse(fs.readFileSync(path.join(dir, TaskViewerProvider._ATTACHMENT_INDEX_FILE), 'utf8')); }
         catch { return {}; }
     }
 
-    private _recordAttachment(dir: string, key: string, assetKey: string, filePath: string): void {
+    private _recordAttachment(dir: string, key: string, assetKey: string | Record<string, string>, filePath?: string): void {
         const idx = this._readAttachmentIndex(dir);
-        idx[key] = { ...(idx[key] || {}), [assetKey]: filePath };
+        if (typeof assetKey === 'string') {
+            idx[key] = { ...(idx[key] || {}), [assetKey]: filePath! };
+        } else {
+            idx[key] = { ...(idx[key] || {}), ...assetKey };
+        }
         try {
             // mkdir first. The push path derives this directory from the ticket document,
             // and a ticket that never downloaded an attachment has no `attachments/`
@@ -22211,6 +22789,92 @@ What would you like to find?`;
     }
 
     /**
+     * Normalise an attachment filename for comparison or filesystem lookup.
+     * Repairs the common Latin-1 mojibake of narrow no-break space (U+202F) and
+     * its siblings back to the intended code point, applies NFC, and optionally
+     * folds whitespace variants to a plain space for name comparison.
+     */
+    private _normalizeAssetName(name: string, foldSpaces = false): string {
+        name = name
+            .replace(/\u00E2\u0080\u00AF/g, '\u202F')
+            .replace(/\u00E2\u0080\u0087/g, '\u2007')
+            .replace(/\u00C2\u00A0/g, '\u00A0');
+        name = name.normalize('NFC');
+        if (foldSpaces) {
+            name = name.replace(/[\u202F\u00A0\u2007]/g, ' ');
+        }
+        return name;
+    }
+
+    /**
+     * Resolve the absolute local path for an inline image URL from the recorded
+     * attachment index, using id-from-URL, unique basename, and flat-path
+     * fallbacks. Returns undefined when no confident local match exists.
+     */
+    private _resolveRecordedAsset(index: Record<string, string>, rawSrc: string, dir: string): string | undefined {
+        // 2.1 — Id-from-URL: for ClickUp the attachment id is the second-to-last
+        // pathname segment and the extension lives on the last.
+        try {
+            const u = new URL(rawSrc);
+            const segs = u.pathname.split('/').filter(Boolean);
+            if (segs.length >= 2) {
+                const idSeg = decodeURIComponent(segs[segs.length - 2]);
+                const fileSeg = decodeURIComponent(segs[segs.length - 1]);
+                const ext = path.extname(fileSeg);
+                const candidates: string[] = [];
+                if (ext) {
+                    candidates.push(idSeg + ext, idSeg);
+                } else {
+                    candidates.push(idSeg);
+                }
+                for (const cand of candidates) {
+                    if (index[cand]) { return index[cand]; }
+                }
+            }
+        } catch {
+            // malformed URL, skip
+        }
+
+        // 2.2 — Unique basename match (Unicode-normalised).
+        try {
+            const u = new URL(rawSrc);
+            const rawSeg = u.pathname.split('/').filter(Boolean).pop() || '';
+            const want = this._normalizeAssetName(decodeURIComponent(rawSeg), true);
+            const values = Object.values(index);
+            let match: string | undefined;
+            let matchCount = 0;
+            for (const v of values) {
+                if (this._normalizeAssetName(path.basename(v), true) === want) {
+                    match = v;
+                    matchCount++;
+                    if (matchCount > 1) { break; }
+                }
+            }
+            if (matchCount === 1) { return match; }
+        } catch {
+            // malformed or un-decodable, skip
+        }
+
+        // 2.3 — Flat-path probe.
+        try {
+            const u = new URL(rawSrc);
+            const rawSeg = u.pathname.split('/').filter(Boolean).pop() || '';
+            let name = this._normalizeAssetName(decodeURIComponent(rawSeg), false);
+            name = name.replace(/[\/\\]/g, '_');
+            const candidate = path.join(dir, name);
+            const resolvedDir = path.resolve(dir);
+            const resolvedCand = path.resolve(candidate);
+            if (resolvedCand.startsWith(resolvedDir + path.sep) || resolvedCand === resolvedDir) {
+                if (fs.existsSync(resolvedCand)) { return resolvedCand; }
+            }
+        } catch {
+            // malformed or un-decodable, skip
+        }
+
+        return undefined;
+    }
+
+    /**
      * Rewrite inline image refs in an imported body back to the local files they were
      * uploaded from.
      *
@@ -22232,18 +22896,72 @@ What would you like to find?`;
         // are stored apart only so getAttachmentList's legacy fallback can still tell
         // "this ticket has recorded downloads" from "this ticket has recorded uploads".
         const index = { ...(all[key] || {}), ...(all[`${key}#images`] || {}) };
-        if (Object.keys(index).length === 0) { return content; }
-        return content.replace(/!\[[^\]]*\]\(([^)]+)\)/g, (match, rawSrc) => {
+        // NO early return on an empty index. The sidecar is a CACHE, never a GATE: it
+        // records what THIS extension downloaded, so a file that arrived any other way
+        // (an older version, a push, a hand-drop) has no row and used to disqualify the
+        // whole ticket. Observed 2026-08-12 on clickup_86d3y200v — five inline images
+        // sitting in the ticket directory under their exact CDN basenames, all six refs
+        // emitted as CDN URLs, because the sidecar had no row for that ticket. Disk truth
+        // outranks bookkeeping; the probe below answers from the filesystem.
+        // NO TypeScript-only syntax anywhere in this function body — no type annotations,
+        // no `as` casts, no `!` assertions. tickets-subtask-embedding §20 executes this body
+        // via `new Function` on the RAW .ts source, so a single annotation here is a
+        // SyntaxError that reds a CI-wired gate (it did, 2026-08-12: `const repairs:
+        // Record<string, string>`). `Object.create(null)` types as `any` without one, and
+        // `|| undefined` widens `abs` to `string | undefined` without a cast.
+        const repairs = Object.create(null);
+        const result = content.replace(/!\[[^\]]*\]\(([^)]+)\)/g, (match, rawSrc) => {
             // Look up by the STABLE asset key, not the raw URL. Both providers re-sign
             // asset URLs (ClickUp pre-signed with a 60-minute TTL; Linear signed on
             // request), so the query string differs between the push that recorded the
             // mapping and the import that reads it. `_assetKey` drops the query.
-            const abs = index[this._assetKey(undefined, String(rawSrc).trim())];
-            if (!abs || !fs.existsSync(abs)) { return match; }      // moved/deleted -> keep the CDN URL
+            const raw = String(rawSrc).trim();
+            const urlKey = this._assetKey(undefined, raw);
+            let abs = index[urlKey] || undefined;
+            if (!abs && typeof this._resolveRecordedAsset === 'function') {
+                abs = this._resolveRecordedAsset(index, raw, dir);
+            }
+            if (!abs || !fs.existsSync(abs)) {
+                // The sidecar answered with nothing, or with a path that is no longer on
+                // disk (deleted, moved, or recorded on a machine with a different layout).
+                // Ask the FILESYSTEM before giving up and emitting a CDN URL. Both providers
+                // name the CDN URL's last path segment after the original upload, so
+                // `.../<uuid>/flow-1-home-card.png` is `flow-1-home-card.png` on disk.
+                // Probe the attachments dir AND the ticket dir itself: an asset pushed from
+                // a local file lives next to the .md, not under attachments/ — which is why
+                // _resolveRecordedAsset's flat-path probe (attachments/ only) could not see
+                // those five files on clickup_86d3y200v either.
+                let probed;
+                try {
+                    const u = new URL(raw);
+                    if (u.protocol === 'https:' || u.protocol === 'http:') {
+                        const seg = u.pathname.split('/').filter(Boolean).pop() || '';
+                        let name;
+                        try { name = decodeURIComponent(seg); } catch (e) { name = seg; }
+                        name = name.replace(/[\/\\]/g, '_');
+                        if (name) {
+                            const roots = [dir, path.dirname(targetFilePath)];
+                            for (const root of roots) {
+                                const cand = path.join(root, name);
+                                if (fs.existsSync(cand)) { probed = cand; break; }
+                            }
+                        }
+                    }
+                } catch (e) { /* data: uri or malformed ref — keep it as-is */ }
+                if (probed) { abs = probed; }
+            }
+            if (!abs || !fs.existsSync(abs)) { return match; }      // nothing local -> keep the CDN URL
             const rel = path.relative(path.dirname(targetFilePath), abs);
             if (rel.startsWith('..') || path.isAbsolute(rel)) { return match; }  // outside the ticket dir -> keep
+            if (urlKey && abs !== index[urlKey]) {
+                repairs[urlKey] = abs;
+            }
             return match.replace(rawSrc, rel.split(path.sep).join('/'));
         });
+        if (Object.keys(repairs).length > 0 && typeof this._recordAttachment === 'function') {
+            this._recordAttachment(dir, key, repairs);
+        }
+        return result;
     }
 
     public async pushTicketEdits(
@@ -22436,6 +23154,126 @@ What would you like to find?`;
         } catch (error) {
             return { success: false, error: error instanceof Error ? error.message : String(error) };
         }
+    }
+
+    /**
+     * Push a parent AND every locally-imported subtask, one remote record each.
+     *
+     * Sequential and per-id on purpose:
+     *  - each id re-runs pushTicketEdits' own staleness guard, so a stale child is
+     *    SKIPPED rather than overwritten (push is a full description replacement);
+     *  - each id derives its own attachments sidecar from its own file path;
+     *  - N parallel pushes would be up to 3N remote calls at once — a 429 magnet.
+     *
+     * The generated `## Subtasks` checklist is still withheld from every description
+     * (stripAppendedBlocksForPush). This pushes each subtask's OWN body, not the index.
+     *
+     * `pushTicketEdits` already restamps via `registerImportedTicket` on its own
+     * success path (TaskViewerProvider.ts:23086), so this wrapper does NOT add a
+     * second restamp — that would double-stamp the file and is the trap documented
+     * at 23483-23486.
+     */
+    public async pushTicketEditsWithSubtasks(
+        workspaceRoot: string,
+        data: { provider: 'linear' | 'clickup'; id: string }
+    ): Promise<{ success: boolean; pushed: number; skippedStale: number; failed: number; message: string; error?: string }> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return { success: false, pushed: 0, skippedStale: 0, failed: 0, message: '', error: 'No workspace open.' };
+        }
+        const { provider, id } = data;
+
+        // Parent first, then children. If the parent push is refused as stale, still
+        // attempt the children — they are independent records (edge case 8).
+        const childIds = await this._localSubtaskIdsFor(resolvedRoot, provider, id);
+        const ids = [id, ...childIds];
+        let pushed = 0, skippedStale = 0, failed = 0;
+        const failures: string[] = [];
+
+        for (const target of ids) {
+            const r = await this.pushTicketEdits(resolvedRoot, { provider, id: target });
+            if (r.success) {
+                pushed++;
+            } else if (r.stale) {
+                // `stale` is declared on pushTicketEdits' return type (22913). The two
+                // hard-failure returns (unverifiable remote / no timestamp) are
+                // `success: false` WITHOUT `stale` and must count as failures, not skips.
+                skippedStale++;
+            } else {
+                failed++;
+                failures.push(`${target}: ${r.error || 'unknown'}`);
+            }
+        }
+
+        const parts = [`${pushed} pushed`];
+        if (skippedStale > 0) { parts.push(`${skippedStale} skipped (remote changed — Refetch, then push again)`); }
+        if (failed > 0) { parts.push(`${failed} failed`); }
+        return {
+            success: failed === 0,
+            pushed, skippedStale, failed,
+            message: `Push + subtasks: ${parts.join(', ')}.`,
+            error: failed > 0 ? failures.slice(0, 3).join('; ') : undefined
+        };
+    }
+
+    /**
+     * Local subtask ids for a parent: files carrying `parentId: <id>` frontmatter.
+     *
+     * Source of truth is the frontmatter written unconditionally by
+     * `_buildLinearImportPlanContent` (7596) and `_buildClickUpImportPlanContent`
+     * (7870) — NOT the parent's `## Subtasks` checklist, which lists remote subtasks
+     * the user may never have imported (edge case 5). A subtask with no local file
+     * has nothing to push and is correctly absent here.
+     *
+     * Reuses the regex/frontmatter convention from `TicketsPanelProvider._scanLocalTicketFiles`
+     * (436) without reaching across providers: the scan is private to this class and
+     * resolves the parent's directory through the same `_findTicketDocument` resolver
+     * `pushTicketEdits` uses, so a path-shape mismatch cannot make a present file look
+     * absent (edge case 10).
+     */
+    private async _localSubtaskIdsFor(
+        resolvedRoot: string, provider: 'linear' | 'clickup', parentId: string
+    ): Promise<string[]> {
+        const parentFile = await this._findTicketDocument(resolvedRoot, provider, parentId);
+        if (!parentFile) { return []; }
+        const dir = path.dirname(parentFile);
+        const out: string[] = [];
+        // Anchor the filename prefix to THIS provider: a linear file whose
+        // parentId happened to match a clickup parent id would otherwise be
+        // collected and pushed against the wrong provider. Id collision across
+        // providers is implausible, but the regex is the cheap, correct guard.
+        const nameRe = new RegExp(`^${provider}_([^_]+)_.+\\.md$`);
+        const parentIdRe = /^parentId:\s*(.+)$/m;
+        const walk = (d: string) => {
+            let entries: import('fs').Dirent[];
+            try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+            for (const entry of entries) {
+                const full = path.join(d, entry.name);
+                if (entry.isDirectory()) {
+                    walk(full);
+                } else if (entry.isFile() && entry.name.endsWith('.md')) {
+                    const m = entry.name.match(nameRe);
+                    if (!m) { continue; }
+                    const candidateId = m[1];
+                    if (candidateId === parentId) { continue; } // the parent itself
+                    try {
+                        const content = fs.readFileSync(full, 'utf8');
+                        const fm = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+                        if (!fm) { continue; }
+                        const pm = fm[1].match(parentIdRe);
+                        if (pm && pm[1].trim() === parentId) {
+                            out.push(candidateId);
+                        }
+                    } catch { /* unreadable file — skip */ }
+                }
+            }
+        };
+        walk(dir);
+        // De-dup: a grandchild whose parent is also a child would be discovered once
+        // per directory walk; the push loop iterates ids, so duplicates mean duplicate
+        // remote calls. The parentId frontmatter points at the immediate parent only,
+        // so this is defensive rather than expected.
+        return Array.from(new Set(out));
     }
 
     private _stripFrontmatter(content: string): string {
@@ -22801,6 +23639,18 @@ What would you like to find?`;
             const filename = `${provider}_${id}_${slug}.md`;
             const filePath = path.join(targetDir, filename);
 
+            // Download inline description images on the bulk path (no per-ticket detail call).
+            await this._hydrateTicketAssets({
+                resolvedRoot,
+                provider,
+                id,
+                dir: path.join(targetDir, 'attachments'),
+                key: `${provider}_${id}`,
+                attachments: [],
+                body: content,
+                isBulk: true
+            });
+
             // Map any hosted inline image URLs back to the local files they were uploaded
             // from, so a refetch keeps the local .md renderable. The remote still holds the
             // hosted URL — only the local copy is relocalised.
@@ -23077,6 +23927,13 @@ What would you like to find?`;
             return { success: false, successCount: 0, failCount: 0, errors: [{ id: 'all', error: 'No workspace open.' }] };
         }
         const { provider, ids, listId, projectId, page = 1, append = false, importMode, deltaSince, deltaSinceIso, includeClosed = false, authoritative = false } = data;
+
+        // Per-RUN asset budget, opened here so BOTH paths share it and every exit closes it.
+        // Opening it inside the document fast path (and closing it only on the slow path)
+        // leaked a spent budget onto the field: the next single-ticket import read a stale
+        // `capped: true` and silently downloaded nothing, with no log line to say why.
+        this._importRunBudget = { files: 0, bytes: 0, capped: false };
+        this._importRunConfigCache = undefined;
         const isDelta = deltaSince !== undefined || deltaSinceIso !== undefined;
 
         let successCount = 0;
@@ -23162,13 +24019,14 @@ What would you like to find?`;
 
             const resolutionFailed = provider === 'linear' && (items as any).resolutionFailed;
 
-            // Progressive import: only TOP-LEVEL tickets become files. Subtasks are
-            // embedded into their parent's file when the parent is opened (importTask-
-            // AsDocument with includeSubtasks) — they are never listed as separate
-            // sidebar entries. Done/closed (Linear: completed/canceled) tickets are
-            // excluded unless includeClosed is set (the user switched the status filter
-            // to a closed status). This is what keeps a ~15-ticket list from ballooning
-            // into hundreds of files.
+            // Every ticket the fetch returns becomes a local file, subtasks included: the
+            // payload already carries them (`subtasks=true` on the list pull), so this costs
+            // no extra API calls. Subtasks are written with `parentId:` frontmatter, which is
+            // what keeps them out of the sidebar's flat list (TicketsPanelProvider skipSubtasks
+            // / hiddenBySubtask) while still giving them a file to open, edit and push.
+            // Done/closed (Linear: completed/canceled) TOP-LEVEL tickets are excluded unless
+            // includeClosed is set; subtasks are written regardless of status (edge case 1:
+            // the parent's checklist renders closed subtasks, so every one must be clickable).
             const _isSubtask = (it: any): boolean => !!it?.parentId;
             const _isClosed = (it: any): boolean => {
                 if (provider === 'clickup') {
@@ -23204,6 +24062,10 @@ What would you like to find?`;
             // they still exist remotely — contradicting the plan's guarantee that
             // "closed tasks ARE included in the query response and will NOT be swept."
             const rawRemoteIds = new Set<string>(items.map((t: any) => String(t?.id || '')).filter(Boolean));
+            // Capture subtasks BEFORE the filter reassignment below — `items.filter` would
+            // otherwise read the already-filtered (subtask-free) array and always be empty.
+            // All subtasks are captured regardless of closed status (see edge case 1).
+            const subtaskItems = items.filter(_isSubtask);
             items = items.filter(it => !_isSubtask(it) && (includeClosed || !_isClosed(it)));
 
             // Keep-set for the cleanup prune below (top-level tickets we're importing).
@@ -23266,6 +24128,42 @@ What would you like to find?`;
                 }
             }
 
+            // Subtasks of tickets we are importing. Same conflict guard as the parent
+            // loop: without it a background delta silently clobbers a subtask the user is
+            // editing. Subtasks pass an empty subtasks argument (the 5th parameter of
+            // _writeTaskDocument, default []) — no recursion, and no `## Subtasks` section
+            // on a subtask's own file. Only subtasks whose parent survived the top-level
+            // filter are written here; orphan groups (parent absent from `items`, the
+            // normal delta case) are handled below.
+            const writtenTopLevel = new Set<string>(items.map(it => String(it?.id || '')).filter(Boolean));
+            for (const sub of subtaskItems) {
+                const sid = String(sub?.id || '');
+                const pid = String(sub?.parentId || '');
+                if (!sid || !writtenTopLevel.has(pid)) { continue; } // orphan group, handled below
+                if (!authoritative && sid) {
+                    const slugPrefix = `${provider}_${sid}`;
+                    const dbEntry = dbTickets.find(t => t.slugPrefix === slugPrefix);
+                    if (dbEntry && dbEntry.filePath && dbEntry.lastSyncedAt) {
+                        try {
+                            const fileMtime = fs.statSync(dbEntry.filePath).mtimeMs;
+                            const lastSyncMs = new Date(dbEntry.lastSyncedAt).getTime();
+                            // 1s grace — same as the parent loop (see comment above).
+                            if (fileMtime > lastSyncMs + 1000) {
+                                skippedModified++;
+                                continue;
+                            }
+                        } catch { /* file may not exist yet — proceed with import */ }
+                    }
+                }
+                const res = await this._writeTaskDocument(resolvedRoot, provider, sub, targetDir, []);
+                if (res.success) {
+                    successCount++;
+                } else {
+                    failCount++;
+                    errors.push({ id: sid, error: res.error || 'Failed to write document' });
+                }
+            }
+
             // Orphan subtask groups. `date_updated_gt` filters at the RECORD level, so a
             // changed subtask arrives with `parent` populated while its unchanged parent is
             // omitted from `items` entirely — the normal case for a subtask edit, not an
@@ -23278,6 +24176,49 @@ What would you like to find?`;
                     if (!parentId || keepIds.has(parentId)) { continue; }
                     try {
                         const parentFile = await this._findTicketDocument(resolvedRoot, provider, parentId);
+
+                        // Subtask files FIRST, and deliberately NOT behind the two guards
+                        // below. Those guards protect the parent's `## Subtasks` checklist —
+                        // a missing parent file or a parent with no section yet says nothing
+                        // about whether the subtask itself should land on disk. Putting these
+                        // writes after them reproduces the original bug on the delta path,
+                        // which is the normal way a subtask edit arrives (date_updated_gt
+                        // filters at the record level, so the unchanged parent is absent from
+                        // `items`). The targetDir fallback keeps a subtask with an unlocatable
+                        // parent in the list directory rather than dropping it — not lost, just
+                        // not yet navigable until a later full pull writes the parent.
+                        const subDir = parentFile ? path.dirname(parentFile) : targetDir;
+                        for (const s of group) {
+                            const sid = String(s?.id || '');
+                            if (!sid) { continue; }
+                            if (!authoritative && sid) {
+                                const slugPrefix = `${provider}_${sid}`;
+                                const dbEntry = dbTickets.find(t => t.slugPrefix === slugPrefix);
+                                if (dbEntry && dbEntry.filePath && dbEntry.lastSyncedAt) {
+                                    try {
+                                        const fileMtime = fs.statSync(dbEntry.filePath).mtimeMs;
+                                        const lastSyncMs = new Date(dbEntry.lastSyncedAt).getTime();
+                                        if (fileMtime > lastSyncMs + 1000) {
+                                            skippedModified++;
+                                            continue;
+                                        }
+                                    } catch { /* file may not exist yet — proceed with import */ }
+                                }
+                            }
+                            // Same accounting as the in-loop subtask writes above: an
+                            // orphan-group write is a real write, and a failure here was
+                            // previously swallowed — invisible in the result counts.
+                            const r = await this._writeTaskDocument(resolvedRoot, provider, s, subDir, []);
+                            if (r.success) {
+                                successCount++;
+                            } else {
+                                failCount++;
+                                errors.push({ id: sid, error: r.error || 'Failed to write document' });
+                            }
+                        }
+
+                        // Existing checklist-merge logic, guards untouched from here. The
+                        // guards below protect the parent's `## Subtasks` section only.
                         if (!parentFile || !fs.existsSync(parentFile)) { continue; }
                         const parentContent = fs.readFileSync(parentFile, 'utf8');
                         const headingIdx = parentContent.indexOf(TaskViewerProvider._SUBTASKS_HEADING);
@@ -23317,13 +24258,36 @@ What would you like to find?`;
                 }
             }
 
+            // Subtask files are real files now, and the prune deletes anything not in
+            // keepIds. Seeded from subtaskItems (the PAYLOAD) — deliberately NOT from
+            // the set of ids whose write succeeded. Parents are keyed on payload presence (keepIds is built
+            // from `items` at 23890 regardless of whether _writeTaskDocument succeeded),
+            // so a parent hitting a transient write error is spared by the prune; keying
+            // subtask keeps on write success would create an asymmetry where a subtask
+            // with the identical failure has its pre-existing file unlinked and its DB
+            // row deleted — data loss escalating a transient error. subtaskItems is a
+            // superset of both write loops (both derive from the same pre-filter items
+            // array), it includes closed subtasks so edge case 1 still holds, and a
+            // subtask absent from the payload is NOT in this set and is still correctly
+            // pruned. The conflict-guard skip path is not at risk: the prune already
+            // spares locally-modified files (mtime > last_synced_at) at 24117, so a
+            // skippedModified subtask is preserved regardless. Added here (immediately
+            // before the prune) rather than at the keepIds construction above so the
+            // orphan-subtask block's view of keepIds as "the top-level set" stays
+            // unchanged — it tests parentId values only, which mixing the two
+            // populations would not break, but keeping them separate is clearer.
+            for (const sub of subtaskItems) {
+                const sid = String(sub?.id || '');
+                if (sid) { keepIds.add(sid); }
+            }
+
             // Cleanup prune (full imports only — a delta pull has no full picture of
             // the list, so it must never delete). Removes files in the list directory
-            // that are NOT in the keep-set: subtasks, and done/closed tickets (when
-            // includeClosed is false). This is what reconciles the on-disk files back
-            // down to the ~15 top-level open tickets and clears the legacy over-import.
-            // Locally-modified files (mtime > last_synced_at) are preserved — never
-            // destroy unpushed local edits.
+            // that are NOT in the keep-set: done/closed top-level tickets (when
+            // includeClosed is false) and any leftover files whose ticket dropped off
+            // the remote. Subtask files ARE in the keep-set now and are spared. Locally-
+            // modified files (mtime > last_synced_at) are preserved — never destroy
+            // unpushed local edits.
             let pruned = 0;
             if (!isDelta && targetDir && fetchIsAuthoritative) {
                 try {
@@ -23483,6 +24447,8 @@ What would you like to find?`;
                 }
             }
 
+            this._importRunBudget = null;
+            this._importRunConfigCache = undefined;
             return {
                 success: true, successCount, failCount, errors, deletedCount,
                 ...(skippedModified > 0 ? { skippedModified } : {}),
@@ -23574,6 +24540,8 @@ What would you like to find?`;
             await this._syncFilesAndRefreshRunSheets(effectiveRoot);
         }
 
+        this._importRunBudget = null;
+        this._importRunConfigCache = undefined;
         return { success: true, successCount, failCount, errors };
     }
 
@@ -23904,6 +24872,428 @@ What would you like to find?`;
         }
     }
 
+    private async _streamHttpsToFile(
+        url: string,
+        options: https.RequestOptions,
+        dest: string,
+        timeoutMs: number,
+        maxBytes: number,
+        hop: number
+    ): Promise<void> {
+        if (hop > TaskViewerProvider._ASSET_REDIRECT_HOPS) {
+            throw new Error('Too many redirects');
+        }
+        const parsedUrl = new URL(url);
+        if (parsedUrl.protocol !== 'https:') {
+            throw new Error('Refusing non-https asset URL');
+        }
+
+        const res: any = await new Promise<any>((resolve, reject) => {
+            const req = https.get(parsedUrl, options, (r: any) => resolve(r));
+            req.setTimeout(timeoutMs, () => {
+                req.destroy(new Error('Asset download timeout'));
+            });
+            req.on('error', (err: any) => reject(err));
+        });
+
+        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+            res.destroy();
+            const nextUrl = new URL(res.headers.location, url).toString();
+            const sameOrigin = (() => {
+                try { return new URL(nextUrl).origin === parsedUrl.origin; }
+                catch { return false; }
+            })();
+            const nextOptions: https.RequestOptions = sameOrigin ? options : {};
+            return this._streamHttpsToFile(nextUrl, nextOptions, dest, timeoutMs, maxBytes, hop + 1);
+        }
+
+        if (res.statusCode !== 200) {
+            res.destroy();
+            const err: any = new Error(`Failed to download asset: status ${res.statusCode}`);
+            err.statusCode = res.statusCode;
+            throw err;
+        }
+
+        const contentLength = res.headers['content-length'] ? Number(res.headers['content-length']) : undefined;
+        if (contentLength !== undefined && Number.isFinite(contentLength) && contentLength > maxBytes) {
+            res.destroy();
+            throw new Error(`Asset content-length exceeds cap: ${contentLength} bytes`);
+        }
+
+        const contentType = String(res.headers['content-type'] || '').toLowerCase();
+        if (contentType.includes('text/html')) {
+            res.destroy();
+            throw new Error('Skipping HTML response');
+        }
+
+        const fileStream = fs.createWriteStream(dest);
+        let received = 0;
+        return new Promise<void>((resolve, reject) => {
+            const fail = (e: any) => {
+                try { fileStream.destroy(); } catch {}
+                try { if (fs.existsSync(dest)) { fs.unlinkSync(dest); } } catch {}
+                reject(e);
+            };
+
+            res.on('data', (chunk: Buffer) => {
+                received += chunk.length;
+                if (received > maxBytes) {
+                    res.destroy();
+                    fail(new Error('Asset stream exceeded size cap'));
+                    return;
+                }
+                if (!fileStream.write(chunk)) {
+                    res.pause();
+                    fileStream.once('drain', () => res.resume());
+                }
+            });
+            res.on('end', () => { fileStream.end(); });
+            res.on('error', (err: any) => fail(err));
+
+            fileStream.on('finish', () => { resolve(); });
+            fileStream.on('error', (err: any) => fail(err));
+        });
+    }
+
+    /**
+     * Identify an image file from its magic bytes and return the matching extension
+     * (including the leading dot), or undefined if it is not a recognised image.
+     *
+     * Needed because provider CDNs serve description/comment images under URLs with no
+     * extension at all — ClickUp names a comment attachment after the user's caption, e.g.
+     * `.../<uuid>/record screen wireframe`. The bytes download fine; without an extension
+     * the webview cannot infer a mime type and renders a broken image.
+     */
+    private _sniffImageExtension(filePath: string): string | undefined {
+        let fd: number | undefined;
+        try {
+            const buf = Buffer.alloc(16);
+            fd = fs.openSync(filePath, 'r');
+            const read = fs.readSync(fd, buf, 0, 16, 0);
+            if (read < 4) { return undefined; }
+            if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) { return '.png'; }
+            if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) { return '.jpg'; }
+            if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38) { return '.gif'; }
+            if (read >= 12 && buf.slice(0, 4).toString('latin1') === 'RIFF' && buf.slice(8, 12).toString('latin1') === 'WEBP') { return '.webp'; }
+            if (buf[0] === 0x42 && buf[1] === 0x4d) { return '.bmp'; }
+            const head = buf.slice(0, read).toString('latin1').trimStart();
+            if (head.startsWith('<svg') || head.startsWith('<?xml')) { return '.svg'; }
+            return undefined;
+        } catch {
+            return undefined;
+        } finally {
+            if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* ignore */ } }
+        }
+    }
+
+    private async _fetchAssetToDisk(
+        url: string,
+        dir: string,
+        filename: string,
+        provider: 'linear' | 'clickup',
+        opts?: { maxBytes?: number; timeoutMs?: number; maxRetries?: number }
+    ): Promise<string | undefined> {
+        const maxBytes = opts?.maxBytes ?? TaskViewerProvider._MAX_ASSET_BYTES;
+        const timeoutMs = opts?.timeoutMs ?? TaskViewerProvider._ASSET_TIMEOUT_MS;
+        const maxRetries = opts?.maxRetries ?? TaskViewerProvider._ASSET_MAX_RETRIES;
+
+        const resolvedDir = path.resolve(dir);
+        const resolvedBaseFolder = path.resolve(path.dirname(dir));
+        if (!resolvedDir.startsWith(resolvedBaseFolder + path.sep) && resolvedDir !== resolvedBaseFolder) {
+            throw new Error('Path traversal detected.');
+        }
+        fs.mkdirSync(resolvedDir, { recursive: true });
+
+        let safeFilename = filename.replace(/[\/\\]/g, '_');
+        if (!safeFilename) { safeFilename = `asset-${Date.now()}`; }
+
+        const targetFilePath = path.join(resolvedDir, safeFilename);
+        // Containment on the FINAL path, not just on the directory. The directory check above
+        // compares `dir` against its own dirname and is therefore always true — it proves
+        // nothing. The filename is remote-controlled (a provider `filename`/`title` field, or
+        // the last path segment of a description URL); separator stripping alone still lets
+        // `..` resolve to the parent. Reject rather than sanitise-and-hope.
+        if (path.resolve(targetFilePath) !== path.join(resolvedDir, safeFilename) ||
+            !path.resolve(targetFilePath).startsWith(resolvedDir + path.sep)) {
+            throw new Error('Refusing asset filename that escapes the attachments directory.');
+        }
+        const tempFilePath = `${targetFilePath}.part`;
+
+        const token = provider === 'linear' ? await this._context.secrets.get('switchboard.linear.apiToken') : undefined;
+        const authForHost = (u: string): string | undefined => {
+            try {
+                const h = new URL(u).hostname.toLowerCase();
+                if (h !== 'uploads.linear.app' || !token) { return undefined; }
+                if (token.startsWith('Bearer ')) { return token; }
+                return token.includes('.') ? `Bearer ${token}` : token;
+            } catch { return undefined; }
+        };
+
+        const initialOptions: https.RequestOptions = {};
+        const auth = authForHost(url);
+        if (auth) { initialOptions.headers = { 'Authorization': auth }; }
+
+        let attempt = 0;
+        while (true) {
+            attempt++;
+            try {
+                if (fs.existsSync(tempFilePath)) { try { fs.unlinkSync(tempFilePath); } catch {} }
+                await this._streamHttpsToFile(url, initialOptions, tempFilePath, timeoutMs, maxBytes, 0);
+                fs.renameSync(tempFilePath, targetFilePath);
+                const st = fs.statSync(targetFilePath);
+                if (st.size > maxBytes) {
+                    fs.unlinkSync(targetFilePath);
+                    throw new Error(`Asset exceeded size cap (${st.size} > ${maxBytes})`);
+                }
+                return targetFilePath;
+            } catch (err: any) {
+                if (fs.existsSync(tempFilePath)) { try { fs.unlinkSync(tempFilePath); } catch {} }
+                const status = err?.statusCode;
+                const retryable = (status === 429 || (status && status >= 500));
+                if (retryable && attempt <= maxRetries) {
+                    const jitter = 0.8 + Math.random() * 0.4;
+                    const delay = Math.pow(2, attempt - 1) * 1000 * jitter;
+                    await new Promise(r => setTimeout(r, delay));
+                    continue;
+                }
+                throw err;
+            }
+        }
+    }
+
+    private async _hydrateTicketAssets(args: {
+        resolvedRoot: string;
+        provider: 'linear' | 'clickup';
+        id: string;
+        dir: string;
+        key: string;
+        attachments: any[];
+        body: string;
+        isBulk?: boolean;
+    }): Promise<void> {
+        const { provider, id, dir, key, attachments, body, isBulk } = args;
+        // Absent key means ON — this ships default-ON as an explicit PRD contract #2 override
+        // (see the plan's User Review Required §2), so only an explicit `false` disables it.
+        // Cached for the duration of a BULK run only; a single-ticket import re-reads, so
+        // flipping the switch takes effect on the very next import rather than the next
+        // Import All.
+        let enabled: boolean;
+        if (this._importRunBudget && this._importRunConfigCache !== undefined) {
+            enabled = this._importRunConfigCache;
+        } else {
+            const globalConfig = await GlobalIntegrationConfigService.loadGlobal();
+            enabled = globalConfig.ticketsDownloadInlineImages !== false;
+            if (this._importRunBudget) { this._importRunConfigCache = enabled; }
+        }
+        if (!enabled) { return; }
+
+        const perTicketMax = TaskViewerProvider._MAX_ASSETS_PER_TICKET;
+        const perFileMax = TaskViewerProvider._MAX_ASSET_BYTES;
+
+        const existingAll = this._readAttachmentIndex(dir);
+        const existing: Record<string, string> = { ...(existingAll[key] || {}), ...(existingAll[`${key}#images`] || {}) };
+        const records: Record<string, string> = {};
+
+        const runBudget = this._importRunBudget;
+        const wouldRunCap = (): boolean => {
+            if (!runBudget) { return false; }
+            if (runBudget.capped) { return true; }
+            if (runBudget.files >= TaskViewerProvider._MAX_RUN_ASSET_FILES) { return true; }
+            if (runBudget.bytes >= TaskViewerProvider._MAX_RUN_ASSET_BYTES) { return true; }
+            return false;
+        };
+
+        const deriveFilename = (att: any): string => {
+            let filename = att.filename || att.title || att.name || '';
+            if (!filename && att.url) {
+                try { filename = path.basename(new URL(att.url).pathname); } catch {}
+            }
+            if (!filename) { filename = `attachment-${Date.now()}`; }
+            return filename.replace(/[\/\\]/g, '_');
+        };
+
+        /**
+         * Disambiguate a filename that is already taken by a DIFFERENT asset.
+         *
+         * ClickUp names every image pasted into a description `image.png`, so a ticket with
+         * two pasted screenshots derives the same filename twice. Without this, the second
+         * fetch overwrites the first on disk, and — worse — the flat-path probe inside
+         * `_resolveRecordedAsset` then reports "already have it" for the second URL and
+         * relocalises BOTH refs to the FIRST image. A confident wrong screenshot inline is
+         * the failure mode both plans rank above leaving the CDN URL alone.
+         *
+         * The suffix is a hash of the asset key, NOT `Date.now()`: a timestamp suffix is what
+         * manufactured a fresh copy on every sync (7 copies of one screenshot on this
+         * install). A stable suffix means a re-run lands on the same name and stays idempotent.
+         */
+        const uniqueFilename = (filename: string, assetKey: string): string => {
+            const target = path.join(dir, filename);
+            const claimedByAnother = Object.entries({ ...existing, ...records })
+                .some(([k, v]) => k !== assetKey && path.resolve(v) === path.resolve(target));
+            if (!claimedByAnother && !fs.existsSync(target)) { return filename; }
+            const parsed = path.parse(filename);
+            const digest = crypto.createHash('sha1').update(assetKey).digest('hex').slice(0, 8);
+            return `${parsed.name}-${digest}${parsed.ext}`;
+        };
+
+        const findExisting = (raw: string): string | undefined => {
+            const urlKey = this._assetKey(undefined, raw);
+            const p = records[urlKey] || existing[urlKey];
+            if (p && fs.existsSync(p)) { return p; }
+            const merged = { ...existing, ...records };
+            const resolved = this._resolveRecordedAsset(merged, raw, dir);
+            if (resolved && fs.existsSync(resolved)) { return resolved; }
+            return undefined;
+        };
+
+        let downloaded = 0;
+        let failed = 0;
+        let skipped = 0;
+        let runCapped = false;
+
+        for (const att of (attachments || [])) {
+            if (downloaded >= perTicketMax) { skipped++; continue; }
+            if (runCapped) { skipped++; continue; }
+            const url = String(att.url || '');
+            if (!url) { continue; }
+            let parsed: URL | undefined;
+            try { parsed = new URL(url); } catch { continue; }
+            if (parsed.protocol !== 'https:') { skipped++; continue; }
+            const existingPath = findExisting(url);
+            if (existingPath) { skipped++; continue; }
+            if (wouldRunCap()) { runCapped = true; continue; }
+            try {
+                const filename = uniqueFilename(deriveFilename(att), this._assetKey(att.id, url));
+                const filePath = await this._fetchAssetToDisk(url, dir, filename, provider, { maxBytes: perFileMax });
+                if (filePath) {
+                    const assetKey = this._assetKey(att.id, url);
+                    records[assetKey] = filePath;
+                    const urlKey = this._assetKey(undefined, url);
+                    if (urlKey !== assetKey) { records[urlKey] = filePath; }
+                    downloaded++;
+                    if (runBudget) { runBudget.files++; runBudget.bytes += fs.statSync(filePath).size; }
+                } else {
+                    failed++;
+                }
+            } catch (e: any) {
+                failed++;
+                if (e?.message) { console.warn('[TaskViewerProvider] asset fetch failed:', url, e.message); }
+            }
+        }
+
+        const imageExts = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp']);
+        const allowedHosts = [
+            '.clickup-attachments.com',
+            'attachments-public.clickup.com',
+            'attachments.clickup.com',
+            'attachments2.clickup.com',
+            'uploads.linear.app',
+            'public.linear.app'
+        ];
+        const hostOk = (hostname: string): boolean => {
+            return allowedHosts.some(rule => {
+                // A rule starting with `*.` OR a bare `.` is a SUFFIX rule. Handling only
+                // `*.` left `.clickup-attachments.com` falling through to `hostname === rule`
+                // — a string no hostname can ever equal — so that entry matched NOTHING and
+                // every ClickUp inline image was silently host-rejected. ClickUp serves
+                // description images from a per-workspace subdomain
+                // (t6909707.p.clickup-attachments.com), which matches none of the exact
+                // hosts either, so Refetch downloaded zero description images on every
+                // install while attachment downloads (not host-gated) kept working and
+                // masked it. The leading dot is load-bearing: it pins the match to a
+                // subdomain boundary so `evilclickup-attachments.com` still fails.
+                if (rule.startsWith('*.')) { return hostname.endsWith(rule.slice(1)); }
+                if (rule.startsWith('.')) { return hostname.endsWith(rule); }
+                return hostname === rule;
+            });
+        };
+
+        const seen = new Set<string>();
+        const re = /!\[[^\]]*\]\(([^)]+)\)/g;
+        let match: RegExpExecArray | null;
+        while ((match = re.exec(body)) !== null) {
+            // Parse, fetch and KEY the raw ref — never a decodeURIComponent'd copy of it.
+            // `_relocalizeInlineImages` keys on the raw markdown ref, so keying the decoded
+            // form here makes probe and rewrite disagree the moment a filename contains a
+            // percent-encoded `#`, `?` or `/`: the record is written under a key the rewrite
+            // never asks for (so the image never relocalises) and the probe misses forever
+            // (so every background sync re-downloads it). Decoding is for the on-disk
+            // filename and the extension test only.
+            const raw = String(match[1]).trim();
+            if (!raw.startsWith('https://')) { continue; }
+            let u: URL | undefined;
+            try { u = new URL(raw); } catch { continue; }
+            if (u.protocol !== 'https:') { continue; }
+            const decodedPath = (() => { try { return decodeURIComponent(u.pathname); } catch { return u.pathname; } })();
+            const ext = path.extname(decodedPath).toLowerCase();
+            // Host FIRST, extension second. ClickUp names a comment attachment after the
+            // user's caption, so its URL often has NO extension at all
+            // (`.../<uuid>/record screen wireframe`, served as image/png). Screening on
+            // `imageExts` alone dropped every one of those on a bare `continue` that did not
+            // even reach the `skipped` counter — invisible in the log line, and permanent:
+            // no number of Refetches would ever pull them. An extensionless ref from an
+            // allowlisted provider CDN is admitted here and typed from its magic bytes once
+            // downloaded. A ref from anywhere else still needs a real image extension.
+            const isProviderCdn = hostOk(u.hostname.toLowerCase());
+            if (!imageExts.has(ext) && !(ext === '' && isProviderCdn)) { continue; }
+            if (seen.has(raw)) { continue; }
+            seen.add(raw);
+            if (downloaded >= perTicketMax) { skipped++; break; }
+            if (runCapped) { skipped++; break; }
+            const existingPath = findExisting(raw);
+            if (existingPath) { continue; }
+            if (!isProviderCdn) { skipped++; continue; }
+            if (wouldRunCap()) { runCapped = true; continue; }
+            try {
+                const urlKeyForName = this._assetKey(undefined, raw);
+                const baseName = path.basename(decodedPath).replace(/[\/\\]/g, '_') || `image-${Date.now()}`;
+                const filename = uniqueFilename(baseName, urlKeyForName);
+                let filePath = await this._fetchAssetToDisk(raw, dir, filename, provider, { maxBytes: perFileMax });
+                // An extensionless download gets its real extension from its magic bytes.
+                // The webview serves these by relative path and the mime type is inferred
+                // from the extension, so an extensionless PNG renders as a broken image even
+                // though the bytes are perfect. Sniffing beats the Content-Type header:
+                // ClickUp returns application/octet-stream for some comment attachments.
+                if (filePath && ext === '') {
+                    const sniffed = this._sniffImageExtension(filePath);
+                    if (sniffed) {
+                        const renamed = `${filePath}${sniffed}`;
+                        try {
+                            if (!fs.existsSync(renamed)) { fs.renameSync(filePath, renamed); }
+                            filePath = renamed;
+                        } catch (e: any) {
+                            // Keep the extensionless copy rather than lose the download.
+                            console.warn('[TaskViewerProvider] could not add extension to asset:', filePath, e?.message);
+                        }
+                    }
+                }
+                if (filePath) {
+                    records[urlKeyForName] = filePath;
+                    downloaded++;
+                    if (runBudget) { runBudget.files++; runBudget.bytes += fs.statSync(filePath).size; }
+                } else {
+                    failed++;
+                }
+            } catch (e: any) {
+                failed++;
+                if (e?.message) { console.warn('[TaskViewerProvider] description image fetch failed:', raw, e.message); }
+            }
+        }
+
+        if (Object.keys(records).length > 0) {
+            this._recordAttachment(dir, key, records);
+        }
+
+        if (runCapped && runBudget && !runBudget.capped) {
+            runBudget.capped = true;
+            console.warn(`[TaskViewerProvider] ${provider} ${id}: run-level asset cap reached, skipping remaining fetches this import.`);
+        }
+
+        if (downloaded || failed || skipped) {
+            console.log(`[TaskViewerProvider] hydrated assets for ${key}: ${downloaded} downloaded, ${failed} failed, ${skipped} skipped/duplicates${isBulk ? ' (bulk path, description images only)' : ''}`);
+        }
+    }
+
     public async downloadAttachment(
         workspaceRoot: string,
         data: { provider: 'linear' | 'clickup'; url: string; filename: string; ticketId: string; ticketTitle: string; attachmentId?: string }
@@ -23943,52 +25333,25 @@ What would you like to find?`;
                 targetFilePath = path.join(resolvedTargetDir, finalFilename);
             }
 
-            const headers: Record<string, string> = {};
-            const isLinearAsset = url.includes('.linear.app') || url.includes('linear-asset');
-            if (provider === 'linear' && isLinearAsset) {
-                const token = await this._context.secrets.get('switchboard.linear.apiToken');
-                if (token) {
-                    headers['Authorization'] = token;
-                }
+            const fetched = await this._fetchAssetToDisk(url, resolvedTargetDir, finalFilename, provider);
+            if (!fetched) {
+                return { success: false, error: 'Attachment download was skipped (oversize or disallowed).' };
             }
+            targetFilePath = fetched;
 
-            const https = require('https');
-            await new Promise<void>((resolve, reject) => {
-                const requestOptions = {
-                    headers
-                };
-                https.get(url, requestOptions, (res: any) => {
-                    if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                        https.get(res.headers.location, (redirectRes: any) => {
-                            if (redirectRes.statusCode !== 200) {
-                                reject(new Error(`Failed to download attachment: status ${redirectRes.statusCode}`));
-                                return;
-                            }
-                            const fileStream = fs.createWriteStream(targetFilePath);
-                            redirectRes.pipe(fileStream);
-                            fileStream.on('finish', () => {
-                                fileStream.close();
-                                resolve();
-                            });
-                            fileStream.on('error', (err: any) => reject(err));
-                        }).on('error', (err: any) => reject(err));
-                        return;
-                    }
-                    if (res.statusCode !== 200) {
-                        reject(new Error(`Failed to download attachment: status ${res.statusCode}`));
-                        return;
-                    }
-                    const fileStream = fs.createWriteStream(targetFilePath);
-                    res.pipe(fileStream);
-                    fileStream.on('finish', () => {
-                        fileStream.close();
-                        resolve();
-                    });
-                    fileStream.on('error', (err: any) => reject(err));
-                }).on('error', (err: any) => reject(err));
+            // ONE read-modify-write for both keys. The two readers hold different inputs —
+            // getAttachmentList has the provider's attachment object and keys by id;
+            // _relocalizeInlineImages has only a markdown URL — so neither can produce the
+            // other's key and the record must carry both. Written in a single cycle because
+            // _recordAttachment is unlocked read-modify-write and delta sync can overlap a
+            // manual download of the same ticket.
+            // Computed-key literal, not two calls: an attachment with no id collapses to one
+            // key naturally, and §19 slices this body for the literal `_recordAttachment(…
+            // _assetKey(…` pattern — do not hoist the key computation out of the call.
+            this._recordAttachment(resolvedTargetDir, `${provider}_${ticketId}`, {
+                [this._assetKey(attachmentId, url)]: targetFilePath,
+                [this._assetKey(undefined, url)]: targetFilePath
             });
-
-            this._recordAttachment(resolvedTargetDir, `${provider}_${ticketId}`, this._assetKey(attachmentId, url), targetFilePath);
             return { success: true, filePath: targetFilePath };
         } catch (error) {
             return { success: false, error: error instanceof Error ? error.message : String(error) };

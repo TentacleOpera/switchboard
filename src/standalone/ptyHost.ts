@@ -71,15 +71,64 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                     payload.role || 'coder',
                     payload.name,
                     payload.cwd,
-                    payload.worktreePath
+                    payload.worktreePath,
+                    payload.parentInstanceId,
+                    undefined,
+                    {
+                        hidden: payload.hidden === true,
+                        // Boolean off the wire, resolved by whichever host proxied us.
+                        // Defaults to true if absent so a caller that predates this
+                        // field still gets the fixed behaviour.
+                        claudeInlineRendering: payload.claudeInlineRendering !== false
+                    }
+                    // No `startupCommand` from the wire. The per-child command is an
+                    // arbitrary shell line the host executes in the user's tree; it
+                    // comes from the Agents tab via the delegate definition and is
+                    // passed in-process by spawnDelegates. Honouring a caller-supplied
+                    // one turns this verb into a command-execution endpoint reachable
+                    // by anything holding the API token — which every pty child is
+                    // handed by design (SWITCHBOARD_API_TOKEN).
                 );
+                const rawDelegates = Array.isArray(payload.delegates) ? payload.delegates : [];
+                const spawned = rawDelegates.length > 0
+                    ? await fleet.spawnDelegates(terminal, rawDelegates, { teamName: payload.teamName })
+                    : { children: [], error: undefined as string | undefined };
                 return {
                     success: true,
                     terminal: {
                         friendlyName: terminal.friendlyName,
+                        agentInstanceId: terminal.agentInstanceId,
+                        parentInstanceId: terminal.parentInstanceId,
                         role: terminal.role,
-                        status: terminal.status
-                    }
+                        status: terminal.status,
+                        hidden: terminal.hidden === true
+                    },
+                    delegates: spawned.children.map(t => ({
+                        friendlyName: t.friendlyName,
+                        agentInstanceId: t.agentInstanceId,
+                        role: t.role,
+                        status: t.status
+                    })),
+                    ...(spawned.error ? { delegateError: spawned.error } : {})
+                };
+            }
+            case 'ptyCreateBatch': {
+                const result = await fleet.createBatch(
+                    Array.isArray(payload.allocation) ? payload.allocation : [],
+                    payload.hidden === true,
+                    payload.cwd,
+                    payload.worktreePath,
+                    // Boolean off the wire, resolved by whichever host proxied us.
+                    // Defaults to true if absent so a caller that predates this
+                    // field still gets the fixed behaviour.
+                    payload.claudeInlineRendering !== false
+                );
+                return {
+                    success: result.success,
+                    created: result.created,
+                    failed: result.failed,
+                    estimatedDurationMs: result.estimatedDurationMs,
+                    ...(result.error ? { error: result.error } : {})
                 };
             }
             case 'ptyCloseTerminal': {
@@ -87,28 +136,26 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                 return { success: ok };
             }
             case 'ptyListTerminals': {
-                // `terminals` stays EXACTLY the live-handle projection it has always
-                // been (plus V58's `lastDataAt`). Tombstones ride a SIBLING
-                // `liveness` key instead of being appended to `terminals`:
-                // terminals.js assigns `fleetList = data.terminals` unfiltered and
-                // renders every entry, so a tombstone in that array makes an
-                // operator-closed terminal reappear as a permanent ghost row in the
-                // sidebar, keeps its pane slot alive through
-                // `sanitizePaneAssignments`, and reads as live in
-                // `checkSoloNotFound`. The extension host reads `liveness` for the
-                // activity-light force-clear; every existing consumer is untouched.
+                // Hidden terminals ride a SIBLING `hiddenTerminals` key, just like
+                // `liveness`. The rendered `terminals` array stays the safe projection
+                // it has always been — every consumer that selects by role reads it.
+                const all = fleet.list();
+                const project = (terminals: any[]) => terminals.map(t => ({
+                    friendlyName: t.friendlyName,
+                    agentInstanceId: t.agentInstanceId,
+                    parentInstanceId: t.parentInstanceId,
+                    role: t.role,
+                    status: t.status,
+                    pid: t.pty.pid,
+                    startTime: t.startTime,
+                    worktreePath: t.worktreePath,
+                    cwd: t.cwd,
+                    lastDataAt: t.lastDataAt,
+                }));
                 return {
                     success: true,
-                    terminals: fleet.list().map(t => ({
-                        friendlyName: t.friendlyName,
-                        role: t.role,
-                        status: t.status,
-                        pid: t.pty.pid,
-                        startTime: t.startTime,
-                        worktreePath: t.worktreePath,
-                        cwd: t.cwd,
-                        lastDataAt: t.lastDataAt,
-                    })),
+                    terminals: project(all.filter(t => !t.hidden)),
+                    hiddenTerminals: project(all.filter(t => t.hidden)),
                     liveness: fleet.getLiveness(),
                 };
             }

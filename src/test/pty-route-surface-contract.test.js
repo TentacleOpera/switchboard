@@ -214,7 +214,10 @@ function post(port, pathname, body) {
         // TerminalWsGateway here puts every frame straight back on the contended loop.
         const src = fs.readFileSync(path.join(REPO_ROOT, 'src', 'services', 'TaskViewerProvider.ts'), 'utf8');
         assert.ok(
-            /_ptyHostVerb\s*\(\s*verb\s*,\s*payload\s*\)/.test(src),
+            // Arity-tolerant: the contract is "forwards through _ptyHostVerb", not
+            // an exact parameter count — the assertions below still pin the real
+            // invariants.
+            /_ptyHostVerb\s*\(\s*verb\s*,\s*payload\s*[,)]/.test(src),
             'the extension-host terminalVerb arm must forward through _ptyHostVerb (HTTP to the child), not serve verbs locally.'
         );
         assert.ok(
@@ -309,7 +312,13 @@ function post(port, pathname, body) {
         const bootstrap = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'bootstrap.ts'), 'utf8');
         const armStart = bootstrap.indexOf(`case 'ptySendPrompt'`);
         assert.ok(armStart !== -1, "bootstrap.ts must serve a 'ptySendPrompt' arm");
-        const arm = bootstrap.slice(armStart, armStart + 2000);
+        // Slice to the NEXT case label, not a fixed byte count. A magic window
+        // silently starts testing the wrong text the moment the arm grows — which
+        // is exactly what happened when the omitted-field default was documented:
+        // the explanatory comment pushed the assertion's target past 2000 chars
+        // and the gate went red on unchanged, correct behaviour.
+        const nextCase = bootstrap.indexOf(`\n                case '`, armStart + 1);
+        const arm = bootstrap.slice(armStart, nextCase === -1 ? armStart + 4000 : nextCase);
         assert.ok(
             /payload\.clearBeforePrompt/.test(arm),
             'the standalone ptySendPrompt arm must READ payload.clearBeforePrompt — passing '

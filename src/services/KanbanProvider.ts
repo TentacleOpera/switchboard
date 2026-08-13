@@ -31,6 +31,7 @@ import { SURFACES } from './wsHub';
 import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveWithRetention';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
+import { migrateAgentGroups, SEEDED_AGENT_GROUP } from './teamWiring';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
 import { KANBAN_VERBS } from '../generated/verbAllowlist';
 import { createVscodeHostSeams, type HostSeams } from './hostSeams';
@@ -71,6 +72,7 @@ import { matchWorktreePath } from './worktreeResolver';
  */
 const ULTRACODE_FEATURE_PREFIX = 'This is a feature with multiple subtasks. Activate your ultracode workflow.';
 const GOAL_FEATURE_PREFIX = '/goal';
+const DRIVE_FEATURE_PREFIX = 'This feature is to be driven through a coder terminal. Read and follow .agents/skills/terminal-coder-dispatch/SKILL.md.';
 
 /**
  * Schedules a fire-and-forget write of the kanban state section to the plan file.
@@ -164,7 +166,8 @@ function isWorkingState(
     dispatchedAt: string | null | undefined,
     timeoutMs: number,
     lastLivenessAt?: string | null,
-    blockedAt?: string | null
+    blockedAt?: string | null,
+    blockedTimeoutMs: number = 4 * 60 * 60 * 1000
 ): { working: boolean; blocked: boolean } {
     if (!dispatchedAt) return { working: false, blocked: false };
     const ts = Date.parse(dispatchedAt);
@@ -177,10 +180,13 @@ function isWorkingState(
     // Widened basis: take the more recent of dispatched_at and the heartbeat.
     const livenessTs = lastLivenessAt ? Date.parse(lastLivenessAt) : NaN;
     const basis = Number.isFinite(livenessTs) && (livenessTs as number) > ts ? (livenessTs as number) : ts;
-    const working = withinHardCap && (now - basis) < timeoutMs;
-    // Blocked: the agent reported itself blocked AND the card is still in its
-    // working window (otherwise it's just done — a cleared card is not blocked).
-    const blocked = working && !!blockedAt;
+    // Blocked is a wait on a human — it gets its own retention measured from
+    // blocked_at, not from the output-derived working basis (which freezes the
+    // moment the agent goes quiet). With blockedAt null the blocked term is
+    // false and `working` reduces to the pre-V59 expression.
+    const blockedTs = blockedAt ? Date.parse(blockedAt) : NaN;
+    const blocked = Number.isFinite(blockedTs) && (now - (blockedTs as number)) < blockedTimeoutMs;
+    const working = blocked || (withinHardCap && (now - basis) < timeoutMs);
     return { working, blocked };
 }
 
@@ -207,6 +213,11 @@ export class KanbanProvider implements vscode.Disposable {
     private _metadataDebounceTimers = new Map<string, NodeJS.Timeout>();
     private _cliTriggersEnabled: boolean;
     private _dynamicComplexityRoutingEnabled: boolean;
+    /** Board view toggle: collapse the coder columns into the synthetic AUTOCODE
+     *  bucket. Host-side so surfaces other than the board webview (the terminals
+     *  kanban pane) can render the same column set — it was previously webview-only
+     *  state, which no other surface could read. */
+    private _collapseCodersEnabled: boolean;
     private _lastColumnsSignature: string | null = null;
     private _lastWorkspaceSelectionSignature: string | null = null;
     private _autobanState?: AutobanConfigState;
@@ -280,6 +291,21 @@ export class KanbanProvider implements vscode.Disposable {
     private _pendingRootRecovery = false;
     private _rootRecoveryTimer?: NodeJS.Timeout;
     private _rootRecoveryDisposables: vscode.Disposable[] = [];
+
+    /**
+     * Host seam for agent-group instantiation. The extension host reaches its pty
+     * fleet through a child process (`TaskViewerProvider._ptyHostPort`); standalone
+     * owns the fleet IN-PROCESS and never sets that port, because it runs with
+     * `suppressLocalApiServer = true`. Without this seam the standalone board would
+     * fall through to the TaskViewer arm and refuse with "PTY host unavailable" —
+     * a host that has the fleet, the db and the token telling the user it has no
+     * terminals. Standalone registers its own creator in `bootstrap.ts`; when
+     * nothing is registered the TaskViewer arm is used, which is the editor path.
+     */
+    private _agentGroupInstantiator?: (group: any, workspaceRoot: string) => Promise<any>;
+    public setAgentGroupInstantiator(fn: (group: any, workspaceRoot: string) => Promise<any>) {
+        this._agentGroupInstantiator = fn;
+    }
 
     public setTaskViewerProvider(provider: TaskViewerProvider) {
         this._taskViewerProvider = provider;
@@ -446,6 +472,10 @@ export class KanbanProvider implements vscode.Disposable {
         this._columnDragDropModes = this._getScopedSetting<Record<string, 'cli' | 'prompt' | 'disabled'>>('kanban.columnDragDropModes', {});
         this._routingMapConfig = this._getScopedSetting<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null);
         this._allowUnknownComplexityAutoMove = this._getScopedSetting<boolean>('kanban.allowUnknownComplexityAutoMove', true);
+        // Default true — matches the board webview's own pre-existing default, so an
+        // install that never had this persisted (every install before this key shipped)
+        // keeps the collapsed view it already had.
+        this._collapseCodersEnabled = this._getScopedSetting<boolean>('kanban.collapseCodersEnabled', true);
         this._clearTerminalBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
         this._clearTerminalBeforePromptDelay = Math.min(Math.max(
             vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 2000),
@@ -809,6 +839,7 @@ export class KanbanProvider implements vscode.Disposable {
         this._columnDragDropModes = this._getScopedSetting<Record<string, 'cli' | 'prompt' | 'disabled'>>('kanban.columnDragDropModes', {});
         this._routingMapConfig = this._getScopedSetting<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null);
         this._allowUnknownComplexityAutoMove = this._getScopedSetting<boolean>('kanban.allowUnknownComplexityAutoMove', true);
+        this._collapseCodersEnabled = this._getScopedSetting<boolean>('kanban.collapseCodersEnabled', true);
         this._kanbanOrderOverrides = this._sanitizeKanbanOrderOverrides(
             this._getScopedSetting<Record<string, number>>('kanban.orderOverrides', {})
         );
@@ -953,6 +984,10 @@ export class KanbanProvider implements vscode.Disposable {
 
     public get dynamicComplexityRoutingEnabled(): boolean {
         return this._dynamicComplexityRoutingEnabled;
+    }
+
+    public get collapseCodersEnabled(): boolean {
+        return this._collapseCodersEnabled;
     }
 
     private _getWorkspaceRoots(): string[] {
@@ -1148,7 +1183,8 @@ export class KanbanProvider implements vscode.Disposable {
                 ? await db.getCompletedPlansFilteredByProject(wsId, null, repoScope)
                 : await db.getCompletedPlans(wsId);
             const timeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
-            const cards = await this._buildBoardCards(db, wsId, root, activeRows, completedRows, timeoutMs);
+            const blockedTimeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('blockedTimeoutMs', 4 * 60 * 60 * 1000);
+            const cards = await this._buildBoardCards(db, wsId, root, activeRows, completedRows, timeoutMs, blockedTimeoutMs);
             // Columns must reflect the user's CONFIGURED + filtered set (mirror the editor
             // refresh path) — NOT the raw built-in DEFAULT_KANBAN_COLUMNS, which shows
             // columns for agents the user hasn't configured.
@@ -1182,6 +1218,10 @@ export class KanbanProvider implements vscode.Disposable {
             const cpStatus = this.getControlPlaneSelectionStatus(root);
             const projectContextEnabled = await this._resolveProjectContextEnabled(root);
 
+            const coderTerminalCount = this._taskViewerProvider
+                ? (await this._taskViewerProvider.getAliveRoleTerminalNames('coder', root)).length
+                : 0;
+
             // Every entry carries its surface so wsHub can filter the connect-time
             // resync per connection (see SURFACES / PANEL_SURFACES). Tag AS BUILT, not
             // by post-processing the assembled array — the autoban entries below are
@@ -1208,7 +1248,7 @@ export class KanbanProvider implements vscode.Disposable {
                     projectContextEnabled,
                 },
                 { type: 'cliTriggersState', enabled: cliEnabled, surface: SURFACES.kanban },
-                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, showingDispatch: this._showingDispatch, dispatchAnalyzeAvailable: true, routingConfig, featureWorktrees, surface: SURFACES.kanban },
+                { type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, showingDispatch: this._showingDispatch, dispatchAnalyzeAvailable: true, coderTerminalCount, routingConfig, featureWorktrees, surface: SURFACES.kanban },
                 // Automation tab state rides the connect-time resync too, so the tab is
                 // populated even before its on-open getAutobanConfig verb returns.
                 // Omitted entirely when the sidebar hasn't relayed a state yet — pushing
@@ -1850,6 +1890,7 @@ export class KanbanProvider implements vscode.Disposable {
         activeRows: KanbanPlanRecord[],
         completedRows: KanbanPlanRecord[],
         timeoutMs: number,
+        blockedTimeoutMs: number = 4 * 60 * 60 * 1000,
         existsCache?: Map<string, boolean>
     ): Promise<KanbanCard[]> {
         const activeRowsFiltered = this._filterGhostPlans(activeRows, workspaceRoot, existsCache);
@@ -1861,14 +1902,14 @@ export class KanbanProvider implements vscode.Disposable {
         // any assigned project while the board shows "__unassigned__") are excluded and
         // every feature renders "0 SUBTASKS". See getSubtaskCountsByFeature.
         const subtaskCountMap = typeof db.getSubtaskCountsByFeature === 'function' ? await db.getSubtaskCountsByFeature(workspaceId) : new Map();
-        const featureWorkingMap = typeof db.getFeatureWorkingStates === 'function' ? await db.getFeatureWorkingStates(workspaceId, timeoutMs) : new Map<string, { working: boolean; blocked: boolean }>();
+        const featureWorkingMap = typeof db.getFeatureWorkingStates === 'function' ? await db.getFeatureWorkingStates(workspaceId, timeoutMs, blockedTimeoutMs) : new Map<string, { working: boolean; blocked: boolean }>();
 
         // Build cards directly from DB rows — no _resolveWorkspaceRoot that could return null
         const cards: KanbanCard[] = activeRowsFiltered.map(row => {
             const featureState = row.isFeature ? featureWorkingMap.get(row.planId) : undefined;
             const cardState = row.isFeature
                 ? { working: featureState?.working ?? false, blocked: featureState?.blocked ?? false }
-                : isWorkingState(row.dispatchedAt, timeoutMs, row.lastLivenessAt, row.blockedAt);
+                : isWorkingState(row.dispatchedAt, timeoutMs, row.lastLivenessAt, row.blockedAt, blockedTimeoutMs);
             return {
                 planId: row.planId,
                 sessionId: row.sessionId,
@@ -1985,7 +2026,8 @@ export class KanbanProvider implements vscode.Disposable {
             // Build cards via the shared row→card pipeline (also used by the browser WS
             // resync in getFullStateMessages) so the editor and browser cannot drift.
             const timeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
-            const cards = await this._buildBoardCards(db, workspaceId ?? '', resolvedWorkspaceRoot, activeRows, completedRows, timeoutMs, ghostExistsCache);
+            const blockedTimeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('blockedTimeoutMs', 4 * 60 * 60 * 1000);
+            const cards = await this._buildBoardCards(db, workspaceId ?? '', resolvedWorkspaceRoot, activeRows, completedRows, timeoutMs, blockedTimeoutMs, ghostExistsCache);
 
             this._lastCards = cards;
 
@@ -2063,6 +2105,9 @@ export class KanbanProvider implements vscode.Disposable {
                 && snapshotHash === this._lastBoardSnapshotHash;
             this._lastBoardSnapshotKey = snapshotKey;
             this._lastBoardSnapshotHash = snapshotHash;
+            const coderTerminalCount = this._taskViewerProvider
+                ? (await this._taskViewerProvider.getAliveRoleTerminalNames('coder', resolvedWorkspaceRoot)).length
+                : 0;
             if (!snapshotUnchanged) {
                 this.postMessage((scope: string | null | undefined) => ({
                     type: 'updateBoard',
@@ -2071,6 +2116,7 @@ export class KanbanProvider implements vscode.Disposable {
                     showingBacklog: this._showingBacklog,
                     showingDispatch: this._showingDispatch,
                     dispatchAnalyzeAvailable: true,
+                    coderTerminalCount,
                     routingConfig: this._routingMapForScope(scope),
                     featureWorktrees
                 }));
@@ -2097,6 +2143,10 @@ export class KanbanProvider implements vscode.Disposable {
             this.postMessage({
                 type: 'allowUnknownComplexityAutoMoveState',
                 enabled: this._allowUnknownComplexityAutoMove
+            });
+            this.postMessage({
+                type: 'collapseCodersState',
+                enabled: this._collapseCodersEnabled
             });
             this.postMessage({
                 type: 'clearTerminalBeforePromptState',
@@ -3493,16 +3543,18 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 // project/repo filter. See getSubtaskCountsByFeature.
                 const subtaskCountMap2 = await db.getSubtaskCountsByFeature(workspaceId);
                 const timeoutMs2 = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
+                const blockedTimeoutMs2 = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('blockedTimeoutMs', 4 * 60 * 60 * 1000);
                 const featureWorkingMap2 = await db.getFeatureWorkingStates(
                     workspaceId,
-                    timeoutMs2
+                    timeoutMs2,
+                    blockedTimeoutMs2
                 );
 
                 cards = activeRows.map(row => {
                     const featureState2 = row.isFeature ? featureWorkingMap2.get(row.planId) : undefined;
                     const cardState2 = row.isFeature
                         ? { working: featureState2?.working ?? false, blocked: featureState2?.blocked ?? false }
-                        : isWorkingState(row.dispatchedAt, timeoutMs2, row.lastLivenessAt, row.blockedAt);
+                        : isWorkingState(row.dispatchedAt, timeoutMs2, row.lastLivenessAt, row.blockedAt, blockedTimeoutMs2);
                     return {
                         planId: row.planId,
                         sessionId: row.sessionId,
@@ -3604,6 +3656,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const featureWorktrees = allWorktrees
                 .filter(w => w.feature_id !== null && w.status === 'active')
                 .reduce((acc, w) => { acc[w.feature_id!] = { branch: w.branch, path: w.path, id: w.id }; return acc; }, {} as Record<string, { branch: string; path: string; id: number }>);
+            const coderTerminalCount = this._taskViewerProvider
+                ? (await this._taskViewerProvider.getAliveRoleTerminalNames('coder', resolvedWorkspaceRoot)).length
+                : 0;
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'updateBoard',
                 cards,
@@ -3611,6 +3666,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 showingBacklog: this._showingBacklog,
                 showingDispatch: this._showingDispatch,
                 dispatchAnalyzeAvailable: true,
+                coderTerminalCount,
                 routingConfig: this._routingMapForScope(scope),
                 featureWorktrees
             }));
@@ -3623,6 +3679,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             this.postMessage({
                 type: 'allowUnknownComplexityAutoMoveState',
                 enabled: this._allowUnknownComplexityAutoMove
+            });
+            this.postMessage({
+                type: 'collapseCodersState',
+                enabled: this._collapseCodersEnabled
             });
             this.postMessage({
                 type: 'clearTerminalBeforePromptState',
@@ -3699,6 +3759,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
 
             let featureWorkingMap3 = new Map<string, { working: boolean; blocked: boolean }>();
             const timeoutMs3 = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
+            const blockedTimeoutMs3 = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('blockedTimeoutMs', 4 * 60 * 60 * 1000);
             try {
                 const db = KanbanDatabase.forWorkspace(resolvedWorkspaceRoot);
                 await db.ensureReady();
@@ -3706,7 +3767,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 if (wsId) {
                     featureWorkingMap3 = await db.getFeatureWorkingStates(
                         wsId,
-                        timeoutMs3
+                        timeoutMs3,
+                        blockedTimeoutMs3
                     );
                 }
             } catch (err) {
@@ -3717,7 +3779,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 const featureState3 = row.isFeature ? featureWorkingMap3.get(row.planId) : undefined;
                 const cardState3 = row.isFeature
                     ? { working: featureState3?.working ?? false, blocked: featureState3?.blocked ?? false }
-                    : isWorkingState(row.dispatchedAt, timeoutMs3, row.lastLivenessAt, row.blockedAt);
+                    : isWorkingState(row.dispatchedAt, timeoutMs3, row.lastLivenessAt, row.blockedAt, blockedTimeoutMs3);
                 return {
                     planId: row.planId,
                     sessionId: row.sessionId,
@@ -3792,6 +3854,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 this._lastWorkspaceSelectionSignature = nextSelectionSignature;
             }
             this._lastCards = cards;
+            const coderTerminalCount = this._taskViewerProvider
+                ? (await this._taskViewerProvider.getAliveRoleTerminalNames('coder', resolvedWorkspaceRoot)).length
+                : 0;
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'updateBoard',
                 cards,
@@ -3799,6 +3864,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 showingBacklog: this._showingBacklog,
                 showingDispatch: this._showingDispatch,
                 dispatchAnalyzeAvailable: true,
+                coderTerminalCount,
                 routingConfig: this._routingMapForScope(scope)
             }));
             this.postMessage((scope: string | null | undefined) => ({
@@ -3810,6 +3876,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             this.postMessage({
                 type: 'allowUnknownComplexityAutoMoveState',
                 enabled: this._allowUnknownComplexityAutoMove
+            });
+            this.postMessage({
+                type: 'collapseCodersState',
+                enabled: this._collapseCodersEnabled
             });
             this.postMessage({ type: 'updateAgentNames', agentNames });
             this.postMessage({ type: 'visibleAgents', agents: visibleAgents });
@@ -4253,13 +4323,16 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         const db = this._getKanbanDb(workspaceRoot);
         let ultracode = false;
         let goal = false;
+        let drive = false;
         if (db && await db.ensureReady()) {
             const ucRaw = await db.getConfig('feature_ultracode_enabled');
             const goalRaw = await db.getConfig('feature_goal_enabled');
+            const driveRaw = await db.getConfig('feature_drive_enabled');
             if (ucRaw !== null && goalRaw !== null) {
                 // New keys already present — use them directly
                 ultracode = ucRaw === 'true';
                 goal = goalRaw === 'true';
+                drive = driveRaw === 'true';
             } else {
                 // Migration needed: either first load or partial-write crash recovery.
                 // The legacy tri-state key is the source of truth.
@@ -4269,9 +4342,99 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 // Persist migrated values so future loads skip this branch
                 await db.setConfig('feature_ultracode_enabled', ultracode ? 'true' : 'false');
                 await db.setConfig('feature_goal_enabled', goal ? 'true' : 'false');
+                // Drive has no legacy equivalent — defaults to false.
+                await db.setConfig('feature_drive_enabled', 'false');
             }
         }
-        this.postMessage({ type: 'featureWorkflowModeState', ultracode, goal });
+        this.postMessage({ type: 'featureWorkflowModeState', ultracode, goal, drive });
+    }
+
+    // ── Agent Groups ──────────────────────────────────────────────────────────
+    // Persisted at the `terminals.agentGroups` DB config key (sibling of
+    // `terminals.standingOrders`). Seeded once when the key is absent — never
+    // re-seeded (a user who deletes the built-in gets an empty array persisted,
+    // not a missing key, so the next load does not re-seed it).
+
+    private static readonly AGENT_GROUPS_CONFIG_KEY = 'terminals.agentGroups';
+
+    // SEEDED_AGENT_GROUP and the migration converter (migrateAgentGroups)
+    // live in teamWiring.ts — the host-agnostic module both hosts import.
+    // The converter runs in findTeamForHeadRole's read path so it is
+    // impossible for the auto-start trigger to observe un-migrated data,
+    // even on an install that has never opened the TEAMS tab. KanbanProvider
+    // imports them here to seed and to persist the converted shape when the
+    // board asks for groups.
+
+    /**
+     * Serialises read-modify-write cycles on the agent-groups key through a
+     * module-level promise chain, exactly as `mutateStandingOrders` does for its
+     * sibling key. `setConfigJson` is async, so two concurrent saves (a double
+     * click, or two cockpit windows on one workspace) would otherwise interleave
+     * read → modify → write and silently drop one group. The seeding write goes
+     * through here too, so a first-load seed cannot race a delete.
+     */
+    private static _agentGroupsWriteChain: Promise<unknown> = Promise.resolve();
+    private async _mutateAgentGroups(
+        workspaceRoot: string,
+        mutator: (groups: any[] | null) => any[] | null
+    ): Promise<any[]> {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) {
+            throw new Error('Kanban DB not ready');
+        }
+        const p = KanbanProvider._agentGroupsWriteChain.then(async () => {
+            const raw = await db.getConfigJson<any[]>(KanbanProvider.AGENT_GROUPS_CONFIG_KEY, null as any);
+            const current = raw === null ? null : (Array.isArray(raw) ? raw : []);
+            const next = mutator(current);
+            // `null` from the mutator means "no write needed" — the read result stands.
+            if (next === null) { return current ?? []; }
+            await db.setConfigJson(KanbanProvider.AGENT_GROUPS_CONFIG_KEY, next);
+            return next;
+        });
+        KanbanProvider._agentGroupsWriteChain = p.catch(() => {});
+        return p;
+    }
+
+    private async _loadAgentGroups(workspaceRoot: string): Promise<any[]> {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) { return []; }
+        // Key absent → seed the built-in once, then persist it so a delete
+        // (which writes `[]`) is not overwritten on the next load.
+        // Key present → run the migration converter (neutralise old seed,
+        // add scope/relationship defaults, resolve head-role collisions).
+        // Both happen inside the mutator so they are serialised against
+        // concurrent saves and a second window's converter.
+        //
+        // The converter itself lives in teamWiring.ts and also runs in
+        // findTeamForHeadRole's read path — so even if the TEAMS tab is
+        // never opened, the auto-start trigger sees converted data.
+        return this._mutateAgentGroups(workspaceRoot, (groups) => {
+            if (groups === null) {
+                // Key absent — seed the new member-less starter.
+                return [SEEDED_AGENT_GROUP];
+            }
+            // Key present — run the migration converter. Returns null when
+            // nothing changed (already converted), so a no-op activation does
+            // not touch the key.
+            return migrateAgentGroups(groups);
+        });
+    }
+
+    private async _saveAgentGroup(workspaceRoot: string, group: any): Promise<void> {
+        await this._mutateAgentGroups(workspaceRoot, (groups) => {
+            const next = [...(groups ?? [])];
+            const idx = next.findIndex(g => g.id === group.id);
+            if (idx >= 0) { next[idx] = group; }
+            else { next.push(group); }
+            return next;
+        });
+    }
+
+    private async _deleteAgentGroup(workspaceRoot: string, groupId: string): Promise<void> {
+        // Persist the filtered array — even if empty — so a deleted built-in
+        // stays deleted (absent = re-seed; present-and-empty = user deleted all).
+        await this._mutateAgentGroups(workspaceRoot, (groups) =>
+            (groups ?? []).filter(g => g.id !== groupId));
     }
 
     private async _getDefaultPromptOverrides(
@@ -4595,11 +4758,13 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         if (!db || !(await db.ensureReady())) return '';
         const ultracode = (await db.getConfig('feature_ultracode_enabled')) === 'true';
         const goal = (await db.getConfig('feature_goal_enabled')) === 'true';
-        if (!goal && !ultracode) return '';
+        const drive = (await db.getConfig('feature_drive_enabled')) === 'true';
+        if (!goal && !ultracode && !drive) return '';
         let prefix = '';
         // /goal must be position-zero for the host to parse it as a slash command.
         if (goal) { prefix += `${GOAL_FEATURE_PREFIX}\n`; }
         if (ultracode) { prefix += `${ULTRACODE_FEATURE_PREFIX}\n\n`; }
+        if (drive) { prefix += `${DRIVE_FEATURE_PREFIX}\n\n`; }
         return prefix;
     }
 
@@ -4714,8 +4879,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             // Append the directive here (Option A port, same as generateUnifiedPrompt's
             // built-in path) or the checkbox is a dead control.
             const customApiPort = this._taskViewerProvider?.getLocalApiServerPort() ?? 0;
+            // Omitted, not placeholdered — see the note on PHONE_A_FRIEND_DIRECTIVE.
+            // SWITCHBOARD_TERMINAL is a pty-child env var and is never set in this process.
+            const customPhoneAFriendOriginTerminal = (overrides as any)?.originTerminal as string | undefined;
+            const customPhoneAFriendDispatchId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
             const customPhoneSuffix = (mergedAddons.phoneAFriend && customApiPort)
-                ? `\n\n${PHONE_A_FRIEND_DIRECTIVE(customApiPort)}`
+                ? `\n\n${PHONE_A_FRIEND_DIRECTIVE(customApiPort, role, customPhoneAFriendOriginTerminal, customPhoneAFriendDispatchId)}`
                 : '';
             const primaryPlan = plans[0];
             if (primaryPlan?.isFeature && mergedAddons.applyFeatureDirectives === true) {
@@ -4788,6 +4957,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             // worktree CWDs don't read the port file (which lives only in the main workspace
             // root's .switchboard/). 0 when the server isn't running → directive omitted.
             apiPort: this._taskViewerProvider?.getLocalApiServerPort() ?? 0,
+            // §Delegate — plumb the LocalApiServer session token at build time so the
+            // delegate directive's curls can authenticate. Empty when no token is set.
+            apiToken: await this._taskViewerProvider?.getApiToken() ?? '',
             workflowFilePathEnabled: promptsConfig.workflowFilePathEnabledByRole?.[role] ?? false,
             workflowFilePath: promptsConfig.workflowFilePathByRole?.[role] || '',
             featureUseSubagentsEnabled: promptsConfig.featureUseSubagentsByRole?.[role] ?? false,
@@ -5656,7 +5828,16 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
         // Enumerate live, non-backup planner terminals plus a stable location key
         // for this physical terminal set (worktree path / repo root). The key drives
         // the persistent rotation cursor so sequential moves keep rotating.
-        const { terminals, locationKey } = await tvp.getRoleTerminalSet('planner', workspaceRoot);
+        // allowPtyFleet is unconditional, NOT gated on a caller-surface flag. That is
+        // the host-derived policy the rest of the dispatch path already follows: when a
+        // PTY fleet exists it IS the authoritative terminal set, so _resolveAgentTerminalForPlan
+        // prefers it for the single-target case too (see the note there) and
+        // _dispatchExecuteMessage delivers to it from any surface. Leaving the pool
+        // resolver blind to PTY rows is what collapsed a whole grid of planners onto one
+        // terminal; gating it on an apiOriginated flag would restore that for the sidebar
+        // and would also leave the standalone host — where PTY is the ONLY fleet —
+        // permanently empty.
+        const { terminals, locationKey } = await tvp.getRoleTerminalSet('planner', workspaceRoot, { allowPtyFleet: true });
         if (terminals.length === 0) {
             // No live planner terminals — fall back to single trigger via default resolution
             const movedIds: string[] = [];
@@ -5757,10 +5938,14 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 )
             )
         );
+        const failedBuckets: string[] = [];
         bucketResults.forEach((r, i) => {
-            if (r.status === 'rejected') {
-                const terminalName = bucketEntries[i][0];
-                console.error(`[KanbanProvider] Distribute dispatch to '${terminalName}' failed:`, r.reason);
+            const terminalName = bucketEntries[i][0];
+            const failed = r.status === 'rejected' || (r.status === 'fulfilled' && r.value !== true);
+            if (failed) {
+                console.error(`[KanbanProvider] Distribute dispatch to '${terminalName}' failed:`,
+                    r.status === 'rejected' ? r.reason : 'returned false');
+                failedBuckets.push(terminalName);
             }
         });
 
@@ -5770,11 +5955,19 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
         const limitSuffix = limit && ordered.length > terminals.length
             ? ` (${ordered.length - terminals.length} plan(s) held — limit ON)`
             : '';
-        this.postMessage({
-            type: 'showStatusMessage',
-            message: `Distributed ${dispatchedIds.length} plan(s) across ${terminals.length} planner terminal(s).${limitSuffix}`,
-            isError: false
-        });
+        if (failedBuckets.length > 0) {
+            this.postMessage({
+                type: 'showStatusMessage',
+                message: `Distributed ${dispatchedIds.length} plan(s) across ${terminals.length} planner terminal(s); ${failedBuckets.length} bucket(s) failed: ${failedBuckets.join(', ')}.${limitSuffix}`,
+                isError: true
+            });
+        } else {
+            this.postMessage({
+                type: 'showStatusMessage',
+                message: `Distributed ${dispatchedIds.length} plan(s) across ${terminals.length} planner terminal(s).${limitSuffix}`,
+                isError: false
+            });
+        }
     }
 
     /** Get the next column ID in the pipeline, or null for the last column. */
@@ -7031,6 +7224,13 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                     }
                 }
                 await this._refreshBoard(workspaceRoot);
+                // Panel-independent Project-panel sync. _refreshBoard early-returns when
+                // the board webview is closed (line 3353), so the refreshUI-driven push
+                // never fires for POST /kanban/move, remote-control, autoban, or cascade
+                // moves made while the board is not open. Pushing here covers those.
+                // When the board IS open both hooks fire for one move; project.js's 200ms
+                // debounce (project.js:433-439) collapses them into a single fetch.
+                this._planningPanelProvider?.postMessageToProjectWebview({ type: 'refreshKanbanPlans' });
             }
             return outcome;
         } catch (err) {
@@ -7606,6 +7806,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
         // through vscode config here (matching the four board builders' callers);
         // this builder is extension-host-only (KanbanProvider is the VS Code host).
         const timeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
+        const blockedTimeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('blockedTimeoutMs', 4 * 60 * 60 * 1000);
         const cards: KanbanCard[] = [];
         for (const sid of sessionIds) {
             let plan = await db.getPlanBySessionId(sid);
@@ -7626,7 +7827,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                     project: plan.project || '',
                     isFeature: !!plan.isFeature,
                     featureId: plan.featureId || undefined,
-                    ...isWorkingState(plan.dispatchedAt, timeoutMs, plan.lastLivenessAt, plan.blockedAt)
+                    ...isWorkingState(plan.dispatchedAt, timeoutMs, plan.lastLivenessAt, plan.blockedAt, blockedTimeoutMs)
                 });
             }
         }
@@ -8433,7 +8634,8 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                             instruction,
                             workspaceRoot: workspaceRoot || undefined,
                             targetTerminalOverride,
-                            bypassTriggerGate: !!msg?.bypassTriggerGate
+                            bypassTriggerGate: !!msg?.bypassTriggerGate,
+                            unattended: !!msg?.unattended
                         });
                         if (dispatched && plannerCursorLocationKey && tvp) {
                             await tvp.advancePlannerRotationCursor(plannerCursorLocationKey, 1);
@@ -8508,7 +8710,9 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                         // which advances after Promise.allSettled, not before).
                         let plannerCursorLocationKey: string | undefined;
                         const tvp = this._taskViewerProvider;
-                        if (role === 'planner' && workspaceRoot && tvp) {
+                        if (msg?.targetTerminalOverride) {
+                            targetTerminalOverride = msg.targetTerminalOverride;
+                        } else if (role === 'planner' && workspaceRoot && tvp) {
                             const { terminals, locationKey } = await tvp.getRoleTerminalSet('planner', workspaceRoot);
                             if (terminals.length > 0) {
                                 const cursor = tvp.getPlannerRotationCursor(locationKey);
@@ -8518,7 +8722,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                         }
                         // Trailing arg is the per-surface fleet discriminator — see the
                         // custom-user branch above and ConfiguredKanbanDispatchOptions.
-                        const dispatched = await this._seams().commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot, targetTerminalOverride, undefined, !!msg?.bypassTriggerGate);
+                        const dispatched = await this._seams().commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot, targetTerminalOverride, undefined, !!msg?.bypassTriggerGate, !!msg?.unattended);
                         if (dispatched && workspaceRoot) {
                             // Advance the rotation cursor AFTER successful dispatch so a failed dispatch
                             // doesn't skip a terminal (consistent with _distributePlannerDispatch).
@@ -8816,26 +9020,30 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                 await this._updateScopedSetting('kanban.cliTriggersEnabled', this._cliTriggersEnabled);
                 return { success: true, enabled: this._cliTriggersEnabled };
             case 'setFeatureWorkflowMode': {
-                // New shape: { ultracode: boolean, goal: boolean }
+                // New shape: { ultracode: boolean, goal: boolean, drive: boolean }
                 // Legacy shape: { mode: 'none'|'ultracode'|'goal' } — tolerated for back-compat
                 let ultracode: boolean;
                 let goal: boolean;
+                let drive: boolean;
                 if (typeof msg.ultracode === 'boolean') {
                     ultracode = msg.ultracode;
                     goal = !!msg.goal;
+                    drive = !!msg.drive;
                 } else {
                     const mode = String(msg.mode || 'none');
                     ultracode = mode === 'ultracode';
                     goal = mode === 'goal';
+                    drive = false;
                 }
                 const wsRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const db = wsRoot ? this._getKanbanDb(wsRoot) : undefined;
                 if (db && await db.ensureReady()) {
                     await db.setConfig('feature_ultracode_enabled', ultracode ? 'true' : 'false');
                     await db.setConfig('feature_goal_enabled', goal ? 'true' : 'false');
+                    await db.setConfig('feature_drive_enabled', drive ? 'true' : 'false');
                 }
-                this.postMessage({ type: 'featureWorkflowModeState', ultracode, goal });
-                return { success: true, ultracode, goal };
+                this.postMessage({ type: 'featureWorkflowModeState', ultracode, goal, drive });
+                return { success: true, ultracode, goal, drive };
             }
             case 'toggleDynamicComplexityRouting':
                 this._dynamicComplexityRoutingEnabled = !!msg.enabled;
@@ -8849,6 +9057,22 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                     console.error('[KanbanProvider] Failed to persist dynamicComplexityRoutingEnabled:', err);
                 }
                 return { success: true, enabled: this._dynamicComplexityRoutingEnabled };
+            case 'toggleCollapseCoders':
+                this._collapseCodersEnabled = !!msg.enabled;
+                this._markConfigDirty();
+                try {
+                    await this._updateScopedSetting(
+                        'kanban.collapseCodersEnabled',
+                        this._collapseCodersEnabled
+                    );
+                } catch (err) {
+                    console.error('[KanbanProvider] Failed to persist collapseCodersEnabled:', err);
+                }
+                // Broadcast, not a reply: the terminals kanban pane renders the same
+                // column set and must drop/adopt the AUTOCODE option the moment the
+                // board toggles, not on its next 30s structure poll.
+                this.postMessage({ type: 'collapseCodersState', enabled: this._collapseCodersEnabled });
+                return { success: true, enabled: this._collapseCodersEnabled };
             case 'toggleAllowUnknownComplexityAutoMove':
                 this._allowUnknownComplexityAutoMove = !!msg.enabled;
                 this._markConfigDirty();
@@ -10324,15 +10548,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 this.refresh();
                 return { success: true, sessionId: resolvedSessionId };
             }
-            case 'sendToDispatch': {
-                const resolvedRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (!resolvedRoot) return { success: false, error: 'No workspace root resolved' };
-                const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
-                if (!resolvedSessionId) return { success: false, error: 'Could not resolve session id' };
-                await this.moveCardToColumn(resolvedRoot, resolvedSessionId, 'DISPATCH');
-                this.refresh();
-                return { success: true, sessionId: resolvedSessionId };
-            }
             case 'sendToPlanned': {
                 const resolvedRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!resolvedRoot) return { success: false, error: 'No workspace root resolved' };
@@ -10475,6 +10690,81 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     `Sent ${dispatchMovedCount} plan(s) from Dispatch to coder: ${dispatchMovedParts.join(', ')}.${dispatchSkippedSuffix}`
                 );
                 return { success: true, sent: dispatchMovedCount, skipped: dispatchSkipped, failures: dispatchFailures };
+            }
+            case 'sendDispatchSetToCoders': {
+                // Fan the entire Dispatch staging set out to complexity-routed coder
+                // terminals. Re-reads the set from the latest board state inside the
+                // handler so a card dragged out between render and press is skipped,
+                // not dispatched.
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
+                if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
+                const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                if (['lead', 'coder', 'intern'].every(r => visibleAgents[r] === false)) {
+                    void this._seams().ui.showErrorMessage('No coding agent is currently enabled. Enable a coding agent in Setup or move manually.');
+                    return { success: false, error: 'No coding agent is currently enabled.' };
+                }
+                const dispatchCards = (this._lastCards || []).filter(
+                    c => c.workspaceRoot === workspaceRoot && c.column === 'DISPATCH' && !c.featureId
+                );
+                if (dispatchCards.length === 0) {
+                    return { success: false, error: 'No plans in Dispatch' };
+                }
+                const dispatchIds = dispatchCards.map(c => this._cardId(c));
+                const { filtered: knownIds, skippedCount: dispatchSkipped } =
+                    this._filterUnknownComplexitySessions(dispatchIds);
+                if (knownIds.length === 0) {
+                    this._notifySkippedUnknownComplexity(dispatchSkipped, 0);
+                    return { success: false, error: 'All dispatch plans have unknown complexity' };
+                }
+                const dispatchGroups = await this._partitionByComplexityRoute(workspaceRoot, knownIds);
+                const dispatchFailures: { id: string; sourceColumn: string; reason: string }[] = [];
+                const dispatchMovedParts: string[] = [];
+                let dispatchMovedCount = 0;
+                for (const [role, sids] of dispatchGroups) {
+                    if (sids.length === 0) { continue; }
+                    let targetCol: string;
+                    try {
+                        targetCol = this._targetColumnForDispatchRole(role, visibleAgents);
+                    } catch (e) {
+                        for (const sid of sids) { dispatchFailures.push({ id: sid, sourceColumn: 'DISPATCH', reason: (e as Error).message }); }
+                        continue;
+                    }
+                    const dispatchRole = this._columnToRole(targetCol) || role;
+                    const movedSids: string[] = [];
+                    const dispatchSids: string[] = [];
+                    for (const sid of sids) {
+                        const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, targetCol);
+                        if (outcome.ok) {
+                            await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
+                            const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                            movedSids.push(...cascadeIds);
+                            dispatchSids.push(sid);
+                        } else {
+                            dispatchFailures.push({ id: sid, sourceColumn: 'DISPATCH', reason: outcome.detail });
+                        }
+                    }
+                    if (movedSids.length > 0) {
+                        this.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
+                    }
+                    if (this._cliTriggersEnabled && dispatchSids.length > 0) {
+                        if (dispatchSids.length === 1) {
+                            await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot, undefined);
+                        } else {
+                            await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot, undefined);
+                        }
+                    }
+                    dispatchMovedCount += dispatchSids.length;
+                    dispatchMovedParts.push(`${dispatchSids.length} → ${targetCol}`);
+                }
+                if (dispatchFailures.length > 0) {
+                    this.postMessage({ type: 'moveCardsFailed', failures: dispatchFailures });
+                }
+                const dispatchSkippedSuffix = dispatchSkipped > 0 ? ` (${dispatchSkipped} skipped — unknown complexity)` : '';
+                const failureSuffix = dispatchFailures.length > 0 ? `; ${dispatchFailures.length} failed` : '';
+                const message = `Sent ${dispatchMovedCount} plan(s) from Dispatch to coder: ${dispatchMovedParts.join(', ')}.${dispatchSkippedSuffix}${failureSuffix}`;
+                this.postMessage({ type: 'showStatusMessage', message, isError: false });
+                void this._seams().ui.showInformationMessage(message);
+                return { success: dispatchFailures.length === 0, sent: dispatchMovedCount, skipped: dispatchSkipped, failures: dispatchFailures };
             }
             case 'importFromClipboard':
                 await this._seams().commands.executeCommand('switchboard.importPlanFromClipboard', msg.markdownText);
@@ -10728,6 +11018,16 @@ ${FOCUS_DIRECTIVE}`;
                 // short-circuited by the O(1) early-out — otherwise the
                 // kanban board's agent-name labels go stale until a DB write.
                 this._markConfigDirty();
+                // Broadcast on the terminals surface so open terminals panels
+                // refetch their agentNames cache. An existing role's command
+                // edit does not introduce a new role, so the fleet-poll guard
+                // (terminals.js:1501) cannot catch it. Carry no payload; the
+                // receiver refetches rather than trusting a pushed map, which
+                // keeps one derivation of the labels. A broadcast failure must
+                // not fail the save.
+                try {
+                    this._broadcaster?.mirrorToWs(SURFACES.terminals, { type: 'startupCommandsChanged' }, 'startupCommandsChanged');
+                } catch { /* broadcast failure must not fail the save */ }
                 return { success: true };
             }
 
@@ -10998,8 +11298,12 @@ ${FOCUS_DIRECTIVE}`;
                 }
                 const structure = await this._taskViewerProvider.handleGetKanbanStructure(workspaceRoot);
                 const customColumns = await this._taskViewerProvider.handleGetCustomKanbanColumns(workspaceRoot);
-                this.postMessage({ type: 'kanbanStructure', structure, customColumns });
-                return { success: true, structure, customColumns };
+                this.postMessage({ type: 'kanbanStructure', structure, customColumns, collapseCoders: this._collapseCodersEnabled });
+                // collapseCoders rides along on the return, not just the push: the
+                // terminals kanban pane reads this verb over HTTP and has to decide
+                // which columns its picker offers. Carrying it here means no second
+                // round-trip for a flag that is only ever needed with the structure.
+                return { success: true, structure, customColumns, collapseCoders: this._collapseCodersEnabled };
             }
             case 'getBoardCards': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
@@ -11024,8 +11328,9 @@ ${FOCUS_DIRECTIVE}`;
                     ? await db.getCompletedPlansFilteredByProject(wsId, null, repoScope)
                     : await db.getCompletedPlans(wsId);
                 const timeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
+                const blockedTimeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('blockedTimeoutMs', 4 * 60 * 60 * 1000);
                 // Canonical pipeline — same as getFullStateMessages (line 1094).
-                const cards = await this._buildBoardCards(db, wsId, workspaceRoot, activeRows, completedRows, timeoutMs);
+                const cards = await this._buildBoardCards(db, wsId, workspaceRoot, activeRows, completedRows, timeoutMs, blockedTimeoutMs);
                 // Optional column filter (narrow to one column for the kanban-mode pane).
                 const column = typeof msg.column === 'string' ? msg.column : null;
                 let filtered = column ? cards.filter(c => c.column === column) : cards;
@@ -11068,7 +11373,7 @@ ${FOCUS_DIRECTIVE}`;
                 await this._taskViewerProvider.handleUpdateKanbanStructure(msg.sequence, workspaceRoot);
                 const structure = await this._taskViewerProvider.handleGetKanbanStructure(workspaceRoot);
                 const customColumns = await this._taskViewerProvider.handleGetCustomKanbanColumns(workspaceRoot);
-                this.postMessage({ type: 'kanbanStructure', structure, customColumns });
+                this.postMessage({ type: 'kanbanStructure', structure, customColumns, collapseCoders: this._collapseCodersEnabled });
                 return { success: true, structure, customColumns };
             }
             case 'saveKanbanColumn': {
@@ -11079,7 +11384,7 @@ ${FOCUS_DIRECTIVE}`;
                 await this._taskViewerProvider.handleSaveKanbanColumn(msg.column, workspaceRoot);
                 const structure = await this._taskViewerProvider.handleGetKanbanStructure(workspaceRoot);
                 const customColumns = await this._taskViewerProvider.handleGetCustomKanbanColumns(workspaceRoot);
-                this.postMessage({ type: 'kanbanStructure', structure, customColumns });
+                this.postMessage({ type: 'kanbanStructure', structure, customColumns, collapseCoders: this._collapseCodersEnabled });
                 await this._seams().commands.executeCommand('switchboard.refreshUI');
                 return { success: true, structure, customColumns };
             }
@@ -11091,7 +11396,7 @@ ${FOCUS_DIRECTIVE}`;
                 await this._taskViewerProvider.handleDeleteKanbanColumn(msg.id, workspaceRoot);
                 const structure = await this._taskViewerProvider.handleGetKanbanStructure(workspaceRoot);
                 const customColumns = await this._taskViewerProvider.handleGetCustomKanbanColumns(workspaceRoot);
-                this.postMessage({ type: 'kanbanStructure', structure, customColumns });
+                this.postMessage({ type: 'kanbanStructure', structure, customColumns, collapseCoders: this._collapseCodersEnabled });
                 await this._seams().commands.executeCommand('switchboard.refreshUI');
                 return { success: true, structure, customColumns };
             }
@@ -11103,7 +11408,7 @@ ${FOCUS_DIRECTIVE}`;
                 await this._taskViewerProvider.handleRestoreKanbanDefaults(workspaceRoot);
                 const structure = await this._taskViewerProvider.handleGetKanbanStructure(workspaceRoot);
                 const customColumns = await this._taskViewerProvider.handleGetCustomKanbanColumns(workspaceRoot);
-                this.postMessage({ type: 'kanbanStructure', structure, customColumns });
+                this.postMessage({ type: 'kanbanStructure', structure, customColumns, collapseCoders: this._collapseCodersEnabled });
                 await this._seams().commands.executeCommand('switchboard.refreshUI');
                 return { success: true, structure, customColumns };
             }
@@ -11115,7 +11420,7 @@ ${FOCUS_DIRECTIVE}`;
                 await this._taskViewerProvider.handleToggleKanbanColumnVisibility(msg.id, msg.visible, workspaceRoot);
                 const structure = await this._taskViewerProvider.handleGetKanbanStructure(workspaceRoot);
                 const customColumns = await this._taskViewerProvider.handleGetCustomKanbanColumns(workspaceRoot);
-                this.postMessage({ type: 'kanbanStructure', structure, customColumns });
+                this.postMessage({ type: 'kanbanStructure', structure, customColumns, collapseCoders: this._collapseCodersEnabled });
                 await this._seams().commands.executeCommand('switchboard.refreshUI');
                 return { success: true, structure, customColumns };
             }
@@ -11198,6 +11503,51 @@ ${FOCUS_DIRECTIVE}`;
                 } catch {
                     this.postMessage({ type: 'customAgents', customAgents: [], workspaceRoot });
                     return { success: false, customAgents: [] };
+                }
+            }
+            case 'getAgentGroups': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    this.postMessage({ type: 'agentGroups', groups: [], workspaceRoot });
+                    return { success: false, groups: [], error: 'No workspace root resolved' };
+                }
+                try {
+                    const groups = await this._loadAgentGroups(workspaceRoot);
+                    this.postMessage({ type: 'agentGroups', groups, workspaceRoot });
+                    return { success: true, groups };
+                } catch (e: any) {
+                    this.postMessage({ type: 'agentGroups', groups: [], workspaceRoot });
+                    return { success: false, groups: [], error: e?.message || 'Failed to load agent groups' };
+                }
+            }
+            case 'saveAgentGroup': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || !msg.group || typeof msg.group !== 'object') {
+                    this.postMessage({ type: 'saveAgentGroupResult', success: false, error: 'Missing group data or workspace' });
+                    return { success: false, error: 'Missing group data or workspace' };
+                }
+                try {
+                    await this._saveAgentGroup(workspaceRoot, msg.group);
+                    this.postMessage({ type: 'saveAgentGroupResult', success: true });
+                    return { success: true };
+                } catch (e: any) {
+                    this.postMessage({ type: 'saveAgentGroupResult', success: false, error: e?.message || 'Failed to save agent group' });
+                    return { success: false, error: e?.message || 'Failed to save agent group' };
+                }
+            }
+            case 'deleteAgentGroup': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || typeof msg.groupId !== 'string') {
+                    this.postMessage({ type: 'deleteAgentGroupResult', success: false, error: 'Missing group ID or workspace' });
+                    return { success: false, error: 'Missing group ID or workspace' };
+                }
+                try {
+                    await this._deleteAgentGroup(workspaceRoot, msg.groupId);
+                    this.postMessage({ type: 'deleteAgentGroupResult', success: true });
+                    return { success: true };
+                } catch (e: any) {
+                    this.postMessage({ type: 'deleteAgentGroupResult', success: false, error: e?.message || 'Failed to delete agent group' });
+                    return { success: false, error: e?.message || 'Failed to delete agent group' };
                 }
             }
             case 'getUATData': {
@@ -12036,6 +12386,7 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
             '{{ICON_CLI_TRIGGERS}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-65.png')).toString(),
             '{{ICON_ULTRACODE}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-101-150 Sci-Fi Flat icons-102.png')).toString(),
             '{{ICON_GOAL}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-101-150 Sci-Fi Flat icons-139.png')).toString(),
+            '{{ICON_DRIVE}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-101-150 Sci-Fi Flat icons-110.png')).toString(),
             '{{ICON_PROMPT}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-22.png')).toString(),
             '{{ICON_55}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-55.png')).toString(),
             '{{ICON_85}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-85.png')).toString(),

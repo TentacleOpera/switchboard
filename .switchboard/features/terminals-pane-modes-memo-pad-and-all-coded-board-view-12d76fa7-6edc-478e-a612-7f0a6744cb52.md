@@ -29,9 +29,13 @@ The problem they share is reach: the cockpit's two most useful surfaces are each
 - **Reconciled shared surfaces:** none remain. The two plans have a disjoint file set, so there is nothing left to reconcile.
 - **Prerequisites / guards:** the extension (or `npx switchboard`) must be running so the panels can reach `/kanban/verb/*` and `/memo/verb/*` — all already-wired verbs. No new verb, no `protocol-catalog.json` regeneration (`/panels` is already catalogued as a GET route; the catalog records routes, not response fields), no new setting, no default-OFF flag, and no migration: the panel manifest is computed per request and never persisted, and `terminals.kanbanPaneColumn` degrades harmlessly on an older build.
 
+## Review Findings
+
+Reviewer pass 2026-08-11 over both subtasks, in-place, no worktree. One CRITICAL in the ALL CODED half — the `CODED_AUTO` collapse-reset (`terminals.js:4076`) could not distinguish "the coder union collapsed" from "the structure has not loaded yet", so it wiped and re-persisted the operator's saved aggregate selection on every reload; fixed by gating on a populated `kanbanColumnsCache`, plus a MAJOR in the same block (stale aggregate rows left under the new heading, and the compensating refetch swallowed by the in-flight guard). One MAJOR each in the memo half — the new `shell-modal-panel-contract.test.js` was red on arrival (`/\.remove\(/` matched `classList.remove`) and was invoked by nothing, so it was repaired and wired into `package.json` + `.github/workflows/integration-tests.yml`. Files changed by the review: `src/webview/terminals.js`, `src/test/shell-modal-panel-contract.test.js`, `src/test/browser-kanban-pane-order.test.js`, `package.json`, `.github/workflows/integration-tests.yml`. Validation: 13 contract suites green (shell-modal 6/6, shell-terminal-strip 40/40, browser-kanban-pane-order 9/9) and `tsc --noEmit` clean apart from 5 pre-existing TS2835 dynamic-import errors present verbatim at HEAD; two memo suites (`memo-browser-clear-and-copy`, `memo-panel-workspace-binding`) are red at HEAD on `memo.js` / the `memoGeneratePrompt` arm, neither of which this feature touches.
+
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Open the Memo as a Shell Modal Instead of a Full-Screen Panel](../plans/feature_plan_20260807090100_terminals-pane-memo-mode.md) — **PLAN REVIEWED**
-- [ ] [Add an "All Coded" Aggregate Option to the Terminals Kanban-Pane Column Picker](../plans/feature_plan_20260807090200_terminals-kanban-pane-all-coded-aggregate-column.md) — **PLAN REVIEWED**
+- [ ] [Open the Memo as a Shell Modal Instead of a Full-Screen Panel](../plans/feature_plan_20260807090100_terminals-pane-memo-mode.md) — **CODE REVIEWED**
+- [ ] [Add an "All Coded" Aggregate Option to the Terminals Kanban-Pane Column Picker](../plans/feature_plan_20260807090200_terminals-kanban-pane-all-coded-aggregate-column.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 

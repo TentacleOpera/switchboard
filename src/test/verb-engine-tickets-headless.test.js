@@ -455,6 +455,122 @@ async function main() {
         assert.strictEqual(result.attachments[0].webviewUri, undefined, 'only image extensions get an inline preview URL');
     });
 
+    // ── Asset versioning + asset→ticket resolution (stale-image fix) ────────
+    //
+    // These INVOKE the code rather than asserting the shape of a string. The shape-only
+    // assertions above this block were green for the whole period a configured
+    // ticketSaveLocation 403'd at fetch time, which is the exact false-green this plan set
+    // out to close — so anything load-bearing here has to execute.
+
+    await test('_buildLocalAssetUrl carries an mtime version token, and it CHANGES when the bytes do', async () => {
+        // Without a differing URL, Blink's per-Document image cache short-circuits inside
+        // the render process before Cache-Control is ever evaluated, and every rendered-HTML
+        // equality guard on this path concludes "nothing changed". The token is the sole
+        // mechanism — do not replace it with ETag/Last-Modified.
+        const dir = path.join(tmpRoot, '.switchboard', 'tickets', 'clickup', 'v-list', 'attachments');
+        fs.mkdirSync(dir, { recursive: true });
+        const img = path.join(dir, 'versioned.png');
+        fs.writeFileSync(img, 'v1');
+
+        const { provider } = buildHeadlessTicketsProvider(tmpRoot);
+        provider._apiServer = { getPort: () => 45999 };
+
+        const first = provider._buildLocalAssetUrl(img);
+        assert.ok(first, 'an asset inside an allowed root must produce a URL');
+        assert.match(first, /&v=\d+$/, `the URL must end in an mtime token (got ${first})`);
+
+        // Force a distinct mtime rather than relying on filesystem granularity.
+        fs.writeFileSync(img, 'v2-longer');
+        const bumped = Math.floor(Date.now()) + 5000;
+        fs.utimesSync(img, new Date(bumped), new Date(bumped));
+        const second = provider._buildLocalAssetUrl(img);
+        assert.notStrictEqual(second, first, 'an in-place image overwrite must change the URL string');
+        assert.strictEqual(
+            second.replace(/&v=\d+$/, ''),
+            first.replace(/&v=\d+$/, ''),
+            'only the version token may differ — the root/path pair must be identical'
+        );
+    });
+
+    await test('_buildLocalAssetUrl still denies a path outside every allowed root', async () => {
+        const outside = path.join(tmpRoot, 'not-a-ticket-folder', 'x.png');
+        fs.mkdirSync(path.dirname(outside), { recursive: true });
+        fs.writeFileSync(outside, 'x');
+        const { provider } = buildHeadlessTicketsProvider(tmpRoot);
+        provider._apiServer = { getPort: () => 45999 };
+        assert.strictEqual(provider._buildLocalAssetUrl(outside), undefined, 'the allow-list guard must be unchanged by the version token');
+    });
+
+    await test('_handleTicketAssetEvent emits ONLY for tickets that reference the changed asset', async () => {
+        // THE fan-out guard. _buildTicketDir groups an entire list into one directory
+        // sharing one attachments/ folder, so a directory-wide replay would emit one push
+        // per ticket in the list — potentially hundreds — on every single image write.
+        const listDir = path.join(tmpRoot, '.switchboard', 'tickets', 'clickup', 'fanout-list');
+        const attachDir = path.join(listDir, 'attachments');
+        fs.mkdirSync(attachDir, { recursive: true });
+        const img = path.join(attachDir, 'flow.png');
+        fs.writeFileSync(img, 'png');
+        fs.writeFileSync(path.join(listDir, 'clickup_owner_the-owner.md'), '# The owner\n\n![](attachments/flow.png)\n');
+        fs.writeFileSync(path.join(listDir, 'clickup_bystander_no-image.md'), '# Bystander\n\nno images here\n');
+        fs.writeFileSync(path.join(listDir, 'clickup_other_other-image.md'), '# Other\n\n![](attachments/unrelated.png)\n');
+        fs.writeFileSync(path.join(listDir, 'notes.md'), '# Not a ticket file\n\n![](attachments/flow.png)\n');
+
+        const { provider, pushes } = buildHeadlessTicketsProvider(tmpRoot);
+        provider._apiServer = { getPort: () => 45999 };
+        provider._handleTicketAssetEvent(img);
+        await new Promise(r => setTimeout(r, 450));   // clears the 300ms debounce
+
+        const changed = pushes.filter(p => p.type === 'ticketFileChanged');
+        assert.strictEqual(changed.length, 1, `exactly one ticket references flow.png — got ${changed.length} pushes: ${changed.map(c => c.id).join(', ')}`);
+        assert.strictEqual(changed[0].id, 'owner');
+        assert.strictEqual(changed[0].provider, 'clickup');
+        assert.strictEqual(changed[0].title, 'The owner', 'the payload must carry the H1 so the webview can fix a stale heading');
+        assert.ok(
+            changed[0].content.includes('/design/asset?') && /&v=\d+/.test(changed[0].content),
+            'the replayed content must be rewritten to a versioned asset URL, or the image cannot refresh'
+        );
+    });
+
+    await test('_handleTicketAssetEvent ignores non-images, non-attachments dirs, and unservable extensions', async () => {
+        const listDir = path.join(tmpRoot, '.switchboard', 'tickets', 'clickup', 'ignore-list');
+        const attachDir = path.join(listDir, 'attachments');
+        fs.mkdirSync(attachDir, { recursive: true });
+        fs.writeFileSync(path.join(listDir, 'clickup_ig1_a.md'), '# Ig1\n\n![](attachments/doc.pdf)\n![](loose.png)\n.DS_Store\n');
+        for (const f of [path.join(attachDir, 'doc.pdf'), path.join(attachDir, '.DS_Store'), path.join(listDir, 'loose.png')]) {
+            fs.writeFileSync(f, 'x');
+        }
+
+        const { provider, pushes } = buildHeadlessTicketsProvider(tmpRoot);
+        provider._apiServer = { getPort: () => 45999 };
+        provider._handleTicketAssetEvent(path.join(attachDir, 'doc.pdf'));      // unservable extension
+        provider._handleTicketAssetEvent(path.join(attachDir, '.DS_Store'));    // editor/OS litter
+        provider._handleTicketAssetEvent(path.join(listDir, 'loose.png'));      // image, but not under attachments/
+        await new Promise(r => setTimeout(r, 450));
+
+        assert.strictEqual(
+            pushes.filter(p => p.type === 'ticketFileChanged').length,
+            0,
+            'an event that can never change what is rendered must not produce a push'
+        );
+    });
+
+    await test('_handleTicketAssetEvent keys its debounce distinctly from the .md rename path', async () => {
+        // A shared key would let an asset write cancel a queued rename resolution for the
+        // same path, dropping the card that the rename was about to restore.
+        const listDir = path.join(tmpRoot, '.switchboard', 'tickets', 'clickup', 'key-list');
+        const attachDir = path.join(listDir, 'attachments');
+        fs.mkdirSync(attachDir, { recursive: true });
+        const img = path.join(attachDir, 'k.png');
+        fs.writeFileSync(img, 'png');
+        const { provider } = buildHeadlessTicketsProvider(tmpRoot);
+        provider._apiServer = { getPort: () => 45999 };
+        provider._handleTicketAssetEvent(img);
+        const keys = [...provider._ticketsViewWatcherDebounces.keys()];
+        assert.deepStrictEqual(keys, [`asset:${img}`], `asset events must use an asset:-prefixed key (got ${JSON.stringify(keys)})`);
+        for (const t of provider._ticketsViewWatcherDebounces.values()) { clearTimeout(t); }
+        provider._ticketsViewWatcherDebounces.clear();
+    });
+
     await test('loadTicketComments RETURNS in-body ticketCommentsLoaded via command seam and keeps push additive', async () => {
         const { provider, pushes } = buildHeadlessTicketsProvider(tmpRoot, {
             commandResults: {
@@ -595,7 +711,106 @@ async function main() {
         }
     });
 
+    // ── convertToSubtask: local .md parentId stamping ───────────────────────
+    // _stampTicketParentIdInFile is a destructive write to a user-visible file that
+    // may hold unpushed edits, so the body must come out byte-identical in every
+    // shape and the key must never be duplicated (the readers use a non-global match).
+
+    const stampDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-tickets-stamp-'));
+
+    /** Run the stamp against a temp file and hand back what landed on disk. */
+    function stamp(name, content, parentId) {
+        const { provider } = buildHeadlessTicketsProvider(tmpRoot);
+        const file = path.join(stampDir, name);
+        if (content !== null) { fs.writeFileSync(file, content, 'utf8'); }
+        try {
+            const updated = provider._stampTicketParentIdInFile(file, parentId);
+            return { updated, after: content === null ? null : fs.readFileSync(file, 'utf8') };
+        } finally {
+            provider.dispose();
+        }
+    }
+
+    await test('stamp: frontmatter without parentId gains the key, body byte-identical', async () => {
+        const body = '\n# Ticket title\n\nSome unpushed local edit.\n';
+        const { updated, after } = stamp('a.md', `---\nlistId: 900\nstatus: open\n---${body}`, 'PARENT1');
+        assert.strictEqual(updated, true);
+        assert.match(after, /^---\nlistId: 900\nstatus: open\nparentId: PARENT1\n---/);
+        assert.strictEqual(after.slice(after.indexOf('\n---') + 4), body, 'body must not be re-serialised');
+    });
+
+    await test('stamp: existing parentId is replaced in place, never duplicated', async () => {
+        const { updated, after } = stamp('b.md', '---\nparentId: OLD\nlistId: 900\n---\n# T\n', 'NEW');
+        assert.strictEqual(updated, true);
+        assert.strictEqual((after.match(/^parentId:/gm) || []).length, 1, 'exactly one parentId key');
+        assert.match(after, /^parentId: NEW$/m);
+        assert.strictEqual(/OLD/.test(after), false);
+    });
+
+    await test('stamp: file with no frontmatter block gets one prepended', async () => {
+        const body = '# Legacy import\n\nNo frontmatter here.\n';
+        const { updated, after } = stamp('c.md', body, 'PARENT2');
+        assert.strictEqual(updated, true);
+        assert.strictEqual(after, `---\nparentId: PARENT2\n---\n${body}`);
+    });
+
+    await test('stamp: CRLF frontmatter is patched, not shadowed by a second --- block', async () => {
+        // An LF-only fence match would fall to the "no frontmatter" branch and prepend a
+        // SECOND block, hiding listId/status from the (non-global) readers behind it.
+        const { updated, after } = stamp('d.md', '---\r\nlistId: 900\r\nstatus: open\r\n---\r\n# T\r\n', 'PARENT3');
+        assert.strictEqual(updated, true);
+        assert.strictEqual((after.match(/^---$/gm) || []).length, 2, 'exactly one frontmatter block');
+        assert.match(after, /^parentId: PARENT3$/m);
+        assert.match(after, /listId: 900/);
+    });
+
+    await test('stamp: `$` in frontmatter survives (no String.replace expansion)', async () => {
+        // `$&` in a replace() replacement string expands to the whole match — silent
+        // corruption of any ticket whose frontmatter carries a dollar sign.
+        const { updated, after } = stamp('e.md', "---\ntitle: Fix $& and $` handling\n---\n# T\n", 'PARENT4');
+        assert.strictEqual(updated, true);
+        assert.match(after, /^title: Fix \$& and \$` handling$/m, 'frontmatter must round-trip verbatim');
+        assert.match(after, /^parentId: PARENT4$/m);
+    });
+
+    await test('stamp: missing file returns false and does not throw', async () => {
+        const { updated } = stamp('does-not-exist.md', null, 'PARENT5');
+        assert.strictEqual(updated, false, 'a ticket that was never imported locally is not an error');
+    });
+
+    // ── Subtask-count source: _scanLocalTicketFiles must expose parentId ────
+    // The scan-fallback tally in listLocalTicketFiles counts from this field; without
+    // it the count is silently absent for anyone whose DB rows are missing — exactly
+    // the situation the fallback exists for.
+
+    await test('scan fallback emits parentId, and skipSubtasks still filters on it', async () => {
+        const { provider } = buildHeadlessTicketsProvider(tmpRoot);
+        const scanDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-tickets-scan-'));
+        try {
+            fs.writeFileSync(path.join(scanDir, 'clickup_P1_parent.md'), '---\nlistId: 900\n---\n# Parent\n');
+            fs.writeFileSync(path.join(scanDir, 'clickup_C1_child.md'), '---\nlistId: 900\nparentId: P1\n---\n# Child\n');
+            fs.writeFileSync(path.join(scanDir, 'clickup_C2_child.md'), '---\nlistId: 901\nparentId: P1\n---\n# Child2\n');
+
+            const all = [];
+            provider._scanLocalTicketFiles(scanDir, 'clickup', all);
+            assert.strictEqual(all.length, 3);
+            const counts = new Map();
+            for (const t of all) { if (t.parentId) { counts.set(t.parentId, (counts.get(t.parentId) || 0) + 1); } }
+            // Out-of-scope child (listId 901) still counts — the tally runs before both filters.
+            assert.strictEqual(counts.get('P1'), 2, 'both children must be credited to P1');
+
+            const listed = [];
+            provider._scanLocalTicketFiles(scanDir, 'clickup', listed, { skipSubtasks: true });
+            assert.deepStrictEqual(listed.map(t => t.id), ['P1'], 'children stay hidden from the top-level list');
+        } finally {
+            try { fs.rmSync(scanDir, { recursive: true, force: true }); } catch {}
+            provider.dispose();
+        }
+    });
+
     // ── Cleanup ─────────────────────────────────────────────────────────────
+
+    try { fs.rmSync(stampDir, { recursive: true, force: true }); } catch {}
 
     try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch {}
     try { fs.rmSync(seededRoot, { recursive: true, force: true }); } catch {}

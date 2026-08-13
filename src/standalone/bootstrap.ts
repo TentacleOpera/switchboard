@@ -6,7 +6,7 @@ import * as path from 'path';
 import { URL } from 'url';
 import { KanbanDatabase } from '../services/KanbanDatabase';
 import { LocalApiServer } from '../services/LocalApiServer';
-import { resolveParentsForTerminals } from '../services/WorkspaceIdentityService';
+import { resolveParentsForTerminals, pruneNonExistentMappings } from '../services/WorkspaceIdentityService';
 import { DEFAULT_KANBAN_COLUMNS } from '../services/agentConfig';
 import {
     buildAnalysisScopeLine,
@@ -16,7 +16,7 @@ import {
     SKIP_COMPILATION_DIRECTIVE,
     SKIP_TESTS_DIRECTIVE,
 } from '../services/agentPromptBuilder';
-import { StandaloneHostPathConfigProvider, createStandaloneHostSecrets } from './hostServices';
+import { StandaloneHostPathConfigProvider, createStandaloneHostSecrets, createStandaloneFolderWatcher } from './hostServices';
 import {
     getShellHtml as sharedGetShellHtml,
     getBoardHtml as sharedGetBoardHtml,
@@ -28,6 +28,7 @@ import {
 } from '../services/headlessPanelHtml';
 import { PlanIngestionEngine } from '../services/PlanIngestionEngine';
 import { matchWorktreePath } from '../services/worktreeResolver';
+import { attributePlansToTerminals, type TerminalPlanAttribution } from '../services/terminalPlanAttribution';
 import { createStandalonePlanIngestionHost, readPlanScannerCustomSourceDirs } from './planIngestionHost';
 import { PtyFleetService, PTY_IDE_NAME } from './ptyFleetService';
 import { isPtyAvailable } from './ptyBackend';
@@ -35,6 +36,14 @@ import { SURFACES } from '../services/wsHub';
 import { GlobalIntegrationConfigService } from '../services/GlobalIntegrationConfigService';
 import { TerminalWsGateway } from './terminalWsGateway';
 import { sendPromptToPty, clearPty, modelPty } from './ptyPromptDelivery';
+import {
+    applyStandingOrders,
+    STANDING_ORDERS_CONFIG_KEY,
+    StandingOrder,
+    rewriteStandingOrdersForRename,
+} from '../services/standingOrders';
+import { instantiateAgentGroupCore } from '../services/agentGroupInstantiation';
+import { wireSpawnedTeam, findTeamForHeadRole } from '../services/teamWiring';
 
 import { ClickUpSyncService } from '../services/ClickUpSyncService';
 import { LinearSyncService } from '../services/LinearSyncService';
@@ -186,11 +195,52 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
      * `switchboard.`-prefixed form and the env override. Pointing them at the db
      * would read a key nothing ever writes in standalone, silently pinning
      * clear-before-prompt on and making the board's toggle inert.
+     *
+     * The delay uses terminal.ptyClearBeforePromptDelay (default 600ms), falling
+     * back to an explicitly-set terminal.clearBeforePromptDelay before the 600ms
+     * default — the same respect-operator-intent rule as resolvePtyClearDelay in
+     * TaskViewerProvider. The standalone config provider has no contributed-default
+     * trap (it reads .switchboard/config.json and env vars, not package.json), so
+     * getConfigNumber with a NaN sentinel distinguishes "set" from "unset",
+     * including an explicit 0. See resolvePtyClearDelay for the
+     * KanbanProvider.updateClearTerminalBeforePromptDelay consequence.
      */
+    const resolveStandalonePtyClearDelay = (): number => {
+        const ptyDelay = configProvider.getConfigNumber('terminal.ptyClearBeforePromptDelay', Number.NaN);
+        if (!Number.isNaN(ptyDelay)) { return ptyDelay; }
+        const legacyDelay = configProvider.getConfigNumber('terminal.clearBeforePromptDelay', Number.NaN);
+        if (!Number.isNaN(legacyDelay)) { return legacyDelay; }
+        return 600;
+    };
+
     const getPromptDeliveryOptions = () => ({
         clearBeforePrompt: configProvider.getConfigBoolean('terminal.clearBeforePrompt', true),
-        clearBeforePromptDelayMs: configProvider.getConfigNumber('terminal.clearBeforePromptDelay', 2000),
+        clearBeforePromptDelayMs: resolveStandalonePtyClearDelay(),
     });
+
+    /**
+     * Sole standalone chokepoint for prompt delivery. Every `sendPromptToPty` call
+     * in this host is replaced with `deliverPrompt` so standing orders are appended
+     * consistently across the terminals rail, board dispatch, and memo send-to-planner.
+     */
+    const deliverPrompt = async (
+        handle: any,
+        text: string,
+        opts: any,
+        applyOrders = true
+    ): Promise<void> => {
+        let out = text;
+        if (applyOrders) {
+            try {
+                const orders = await db.getConfigJson<StandingOrder[]>(STANDING_ORDERS_CONFIG_KEY, []);
+                if (orders.length > 0) {
+                    const live = new Set(ptyFleetService.listActive().map(t => t.friendlyName));
+                    out = applyStandingOrders(text, handle.friendlyName, orders, live);
+                }
+            } catch { /* a degraded prompt beats a lost dispatch */ }
+        }
+        await sendPromptToPty(handle, out, opts);
+    };
 
     const secrets = createStandaloneHostSecrets(workspaceRoot);
     const db = KanbanDatabase.forWorkspace(workspaceRoot);
@@ -313,6 +363,12 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                     server.broadcastWs(msg.type, msg, msg.surface);
                 }
             }
+            // The Project panel reads plan columns from its own kanban.db query, not
+            // from updateBoard. Tell it to re-fetch whenever the board state is pushed
+            // — the standalone equivalent of the extension host's refreshUI hook.
+            // project.js:433 debounces this at 200ms; PANEL_SURFACES deliberately omits
+            // 'project' (wsHub.ts) so the undeclared browser Project panel receives it.
+            server.broadcastWs('refreshKanbanPlans', { type: 'refreshKanbanPlans', surface: SURFACES.project }, SURFACES.project);
             server.broadcastWs(themeEntry.type, themeEntry, themeEntry.surface);
         } catch (err) {
             console.error('[bootstrap] pushFullState failed:', err);
@@ -601,6 +657,15 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
 
 
     const headlessSeams: HostSeams = createVscodeHostSeams(workspaceRoot, secretStorage as any);
+    // vscodeShim.createFileSystemWatcher is a no-op, so VscodeHostFileWatcher.watchFolder
+    // attaches nothing under standalone — the Tickets display watcher arms cleanly and then
+    // never fires. Swap in the real fs.watch implementation. watchPattern/watchFile stay
+    // stubbed: they have no standalone consumer and turning them on would change unrelated
+    // subsystems without a test holding the line (same scoping as createHeadlessHostSeams).
+    headlessSeams.watcher = {
+        ...headlessSeams.watcher,
+        watchFolder: createStandaloneFolderWatcher
+    };
     const headlessBroadcaster = new BroadcastHub({ webview: null, apiServer: null, headless: true });
     const panelStateStore = new PanelStateStore(headlessContext.globalState, 'standalone');
 
@@ -794,6 +859,16 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         ));
     switchboardCommandRegistry.register('switchboard.downloadAttachment', async (data: any) =>
         await taskViewerProvider.downloadAttachment(data.workspaceRoot || workspaceRoot, data));
+    // Push. Registered ONLY in extension.ts before this change (line 2065), so the
+    // standalone host's registry-first command seam fell through to vscodeShim's
+    // no-op and Push dead-clicked in the browser cockpit — the same contract #6
+    // defect as the attachments pair above. Both the single-ticket push and the
+    // new "Push + subtasks" batch must be bridged here, or shipping the new button
+    // adds a SECOND dead control next to the first.
+    switchboardCommandRegistry.register('switchboard.pushTicketEdits', async (data: any) =>
+        taskViewerProvider.pushTicketEdits(data.workspaceRoot || workspaceRoot, data));
+    switchboardCommandRegistry.register('switchboard.pushTicketEditsWithSubtasks', async (data: any) =>
+        taskViewerProvider.pushTicketEditsWithSubtasks(data.workspaceRoot || workspaceRoot, data));
 
     const moveSessionsToColumn = async (sessionIds: string[], targetColumn: string) => {
         for (const sid of sessionIds) {
@@ -1060,8 +1135,80 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // the boot root and reports success. Same UI, same behaviour required.
                     const targetCwd = payload.cwd
                         || (!payload.worktreePath && payload.parentRoot ? payload.parentRoot : undefined);
-                    const terminal = await ptyFleetService.create(payload.role || 'coder', payload.name, targetCwd, payload.worktreePath);
-                    return { success: true, terminal: { friendlyName: terminal.friendlyName, role: terminal.role, status: terminal.status } };
+                    // Delegate definitions are HOST-resolved, never caller-supplied —
+                    // mirror TaskViewerProvider.handlePtyVerb exactly. Each delegate
+                    // carries a shell command the host runs in the user's tree, so an
+                    // `if (!payload.delegates)` guard let any caller holding the API
+                    // token (every pty child is handed one) hand us its own. Overwrite
+                    // unconditionally, and drop a wire-supplied startupCommand for the
+                    // parent terminal for the same reason.
+                    const roleConfig = kanbanProvider.getScopedRoleConfig(payload.role || 'coder');
+                    payload = { ...payload, delegates: Array.isArray(roleConfig?.addons?.delegates) ? roleConfig.addons.delegates : [] };
+                    delete payload.startupCommand;
+                    // Auto-start: if this is an UNPARENTED terminal whose role
+                    // heads a team, spawn that team's members alongside it. The
+                    // recursion guard is !payload.parentInstanceId &&
+                    // !payload._isTeamMember — members are parented by
+                    // construction (spawnDelegates passes
+                    // parent.agentInstanceId, ptyFleetService.ts:358), so they
+                    // cannot trigger. A SHARED member is unparented by
+                    // construction, so it carries _isTeamMember: true to
+                    // suppress the trigger — without this flag, a shared member
+                    // whose role heads another team would spawn that team
+                    // recursively. The team's members override role-config
+                    // delegates: one team per head role is the constraint. The
+                    // head is created first; spawnDelegates is best-effort, so
+                    // a cap refusal does not prevent the head from starting.
+                    if (!payload.parentInstanceId && !payload._isTeamMember) {
+                        const team = await findTeamForHeadRole(db, payload.role || 'coder');
+                        if (team && Array.isArray(team.members) && team.members.length > 0) {
+                            payload = { ...payload, delegates: team.members, teamName: team.name };
+                        }
+                    }
+                    const terminal = await ptyFleetService.create(payload.role || 'coder', payload.name, targetCwd, payload.worktreePath, payload.parentInstanceId, undefined, {
+                        hidden: payload.hidden === true,
+                        // HOST-resolved, never from the wire — see CreateOptions.
+                        claudeInlineRendering: configProvider.getConfigBoolean('terminal.claudeInlineRendering', true)
+                    });
+                    const rawDelegates = Array.isArray(payload.delegates) ? payload.delegates : [];
+                    const spawned = rawDelegates.length > 0
+                        ? await ptyFleetService.spawnDelegates(terminal, rawDelegates, { teamName: payload.teamName })
+                        : { children: [], error: undefined as string | undefined };
+                    // Wire the team (standing orders + group registration) when
+                    // children were created. Runs in the host that holds the DB,
+                    // not in spawnDelegates — the standalone twin of the
+                    // extension host's post-create hook. Awaited so the create
+                    // response implies wiring is done.
+                    let wiringError: string | undefined;
+                    if (spawned.children.length > 0) {
+                        const wired = await wireSpawnedTeam({ db, headName: terminal.friendlyName, children: spawned.children, members: rawDelegates });
+                        if (!wired.ok) {
+                            wiringError = wired.error;
+                        } else {
+                            // Push a refresh so open panels reload terminals.groups
+                            // before their next whole-array save can clobber it.
+                            try { server.broadcastWs('terminalsGroupsChanged', { type: 'terminalsGroupsChanged' }, SURFACES.terminals); } catch { /* broadcast failure must not fail the create */ }
+                        }
+                    }
+                    return { success: true, terminal: { friendlyName: terminal.friendlyName, agentInstanceId: terminal.agentInstanceId, parentInstanceId: terminal.parentInstanceId, role: terminal.role, status: terminal.status, hidden: terminal.hidden === true }, delegates: spawned.children.map(t => ({ friendlyName: t.friendlyName, agentInstanceId: t.agentInstanceId, role: t.role, status: t.status, hidden: t.hidden === true })), ...(spawned.error ? { delegateError: spawned.error } : {}), ...(wiringError ? { wiringError } : {}) };
+                }
+
+                case 'ptyCreateBatch': {
+                    const result = await ptyFleetService.createBatch(
+                        Array.isArray(payload.allocation) ? payload.allocation : [],
+                        payload.hidden === true,
+                        payload.cwd,
+                        payload.worktreePath,
+                        // HOST-resolved, never from the wire — see CreateOptions.
+                        configProvider.getConfigBoolean('terminal.claudeInlineRendering', true)
+                    );
+                    return {
+                        success: result.success,
+                        created: result.created,
+                        failed: result.failed,
+                        estimatedDurationMs: result.estimatedDurationMs,
+                        ...(result.error ? { error: result.error } : {})
+                    };
                 }
 
                 case 'ptyCloseTerminal': {
@@ -1070,8 +1217,13 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 }
 
                 case 'ptyListTerminals': {
-                    const liveTerminals = ptyFleetService.list().map(t => ({
+                    const all = ptyFleetService.list();
+                    const visible = all.filter(t => !t.hidden);
+                    const hidden = all.filter(t => t.hidden);
+                    const projectTerminals = (terminals: any[]) => terminals.map(t => ({
                         friendlyName: t.friendlyName,
+                        agentInstanceId: t.agentInstanceId,
+                        parentInstanceId: t.parentInstanceId,
                         role: t.role,
                         status: t.status,
                         pid: t.pty.pid,
@@ -1080,6 +1232,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         cwd: t.cwd,
                         lastDataAt: t.lastDataAt,
                     }));
+                    const liveTerminals = projectTerminals(visible);
                     // `terminals` stays EXACTLY the live-handle projection it has
                     // always been (plus V58's `lastDataAt`). recentlyClosed
                     // tombstones ride a SIBLING `liveness` key — never appended to
@@ -1092,14 +1245,40 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // parity with the ptyHost arm.
                     const rawTerminals = liveTerminals;
                     const dbMappings = await db.getWorkspaceMappings();
-                    const { parents, parentMap } = resolveParentsForTerminals(dbMappings, root, rawTerminals);
+                    // Prune mappings whose parentFolder does not exist on disk.
+                    // Standalone reads from a single DB (no foreign-workspace
+                    // scoping needed — the multi-DB merge that causes the
+                    // extension host's sidebar bug does not happen here), but a
+                    // mapping pointing at a deleted/moved folder still renders a
+                    // permanent empty row. The DB row is NOT deleted.
+                    const prunedMappings = {
+                        enabled: dbMappings.enabled,
+                        mappings: pruneNonExistentMappings(dbMappings.mappings || [])
+                    };
+                    const { parents, parentMap } = resolveParentsForTerminals(prunedMappings, root, rawTerminals);
+                    let planMap = new Map<string, TerminalPlanAttribution>();
+                    try {
+                        const wsId = await getWorkspaceId();
+                        if (wsId) {
+                            planMap = attributePlansToTerminals(
+                                await db.getLiveDispatchAttribution(wsId),
+                                await db.getWorktrees(),
+                                rawTerminals
+                            );
+                        }
+                    } catch (e) {
+                        console.error('[bootstrap] plan attribution for ptyListTerminals failed:', e);
+                    }
                     const terminals = rawTerminals.map(t => ({
                         ...t,
                         parentRoot: parentMap.get(t.cwd) ?? null,
+                        planId: planMap.get(t.friendlyName)?.planId ?? null,
+                        planTitle: planMap.get(t.friendlyName)?.planTitle ?? null,
                     }));
                     return {
                         success: true,
                         terminals,
+                        hiddenTerminals: projectTerminals(hidden),
                         parents,
                         liveness: ptyFleetService.getLiveness(),
                     };
@@ -1107,6 +1286,13 @@ Read the current content above. Deepen the problem analysis, verify every file p
 
                 case 'ptyRenameTerminal': {
                     const ok = ptyFleetService.rename(payload.name, payload.alias);
+                    if (ok) {
+                        try {
+                            await rewriteStandingOrdersForRename(db, payload.name, payload.alias);
+                        } catch (err) {
+                            console.warn('[bootstrap] Standing-orders rename rewrite failed:', err);
+                        }
+                    }
                     return { success: ok };
                 }
 
@@ -1128,27 +1314,41 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // Same pipeline as ptyHost.ts's ptySendPrompt: sendPromptToPty
                     // owns bracketed-paste framing, chunked writes, /clear before
                     // prompt, and the confirm CR for CLI agents. An explicit
-                    // clearBeforePrompt / clearBeforePromptDelayMs in the payload wins;
-                    // the config default (getPromptDeliveryOptions, default true/2000ms)
-                    // applies only when the field is absent — matching the precedence
-                    // TaskViewerProvider.ts (inject the default only when the field is
-                    // undefined) and ptyHost.ts already implement. Strictly a superset
-                    // of the previous behaviour: every existing caller (the kanban
-                    // drag-drop, and the triggerAction paths) omits the field and keeps
-                    // the config default unchanged.
+                    // clearBeforePrompt / clearBeforePromptDelayMs in the payload wins.
+                    // When clearBeforePrompt is OMITTED it defaults to false — NOT the
+                    // config default — because an absent field meaning /clear is
+                    // fail-dangerous for a relay into a mid-task terminal. The delivery
+                    // layer itself already treats an absent field as false
+                    // (ptyPromptDelivery.ts:27 — `if (opts?.clearBeforePrompt)`); this
+                    // host now converges on that behaviour instead of injecting the
+                    // config default (true) over the top of it. Callers that genuinely
+                    // want a clean context (the kanban dispatch paths) read the config
+                    // explicitly and pass the value, so they are unaffected. The delay
+                    // default (getPromptDeliveryOptions) still applies when omitted —
+                    // matching TaskViewerProvider.ts, which injects only the delay on
+                    // the omitted-field path.
+                    //
+                    // clearBeforePromptFromConfig is the explicit opt-in for callers
+                    // that CANNOT read the config themselves (the webview drop path):
+                    // it means "resolve the config default for me." Honoured here and
+                    // in TaskViewerProvider's injection block, stripped before
+                    // deliverPrompt so the delivery layer never sees it. An operator
+                    // who set the config to false gets false; one who left it at
+                    // default gets true.
                     const handle = ptyFleetService.get(payload.name);
                     if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
                     if (handle.status !== 'active') { return { success: false, error: `Terminal ${payload.name} is not active` }; }
                     try {
                         const deliveryDefaults = getPromptDeliveryOptions();
-                        await sendPromptToPty(handle, payload.data || '', {
-                            clearBeforePrompt: typeof payload.clearBeforePrompt === 'boolean'
-                                ? payload.clearBeforePrompt
-                                : deliveryDefaults.clearBeforePrompt,
+                        const resolvedClear = typeof payload.clearBeforePrompt === 'boolean'
+                            ? payload.clearBeforePrompt
+                            : (payload.clearBeforePromptFromConfig === true ? deliveryDefaults.clearBeforePrompt : false);
+                        await deliverPrompt(handle, payload.data || '', {
+                            clearBeforePrompt: resolvedClear,
                             clearBeforePromptDelayMs: typeof payload.clearBeforePromptDelayMs === 'number'
                                 ? payload.clearBeforePromptDelayMs
                                 : deliveryDefaults.clearBeforePromptDelayMs,
-                        });
+                        }, payload.standingOrders !== false);
                         return { success: true };
                     } catch (err) {
                         return { success: false, error: err instanceof Error ? err.message : String(err) };
@@ -1304,7 +1504,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         terminal = await ptyFleetService.create(targetRole, overrideName, matchedWtPath || root, matchedWtPath);
                     }
 
-                    await sendPromptToPty(terminal, prompt, getPromptDeliveryOptions());
+                    await deliverPrompt(terminal, prompt, getPromptDeliveryOptions());
 
                     for (const rec of records) {
                         if (!rec.planFile) { continue; }
@@ -1332,14 +1532,39 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 }
 
                 case 'sendToTerminal': {
-                    const { terminalName, text } = payload;
-                    let handle = ptyFleetService.get(terminalName);
-                    if (!handle) {
-                        const role = payload.role || 'coder';
-                        handle = await ptyFleetService.create(role, terminalName, root);
+                    // Accept both payload shapes: the extension host's { name, input }
+                    // and standalone's legacy { terminalName, text }. Additive; no
+                    // existing caller breaks.
+                    const name = payload.name ?? payload.terminalName;
+                    const text = payload.input ?? payload.text ?? '';
+                    if (typeof name !== 'string' || !name.trim()) {
+                        return { success: false, error: 'invalid terminal name' };
                     }
-                    await sendPromptToPty(handle, text || '', getPromptDeliveryOptions());
-                    return { success: true };
+                    let handle = ptyFleetService.get(name);
+                    let created = false;
+                    if (!handle) {
+                        // Auto-create on missing name is the existing standalone contract.
+                        // Surface it via `created: true` so a driving agent can detect that
+                        // it is talking to a terminal it just spawned, not its coder.
+                        try {
+                            const role = payload.role || 'coder';
+                            handle = await ptyFleetService.create(role, name, root);
+                            created = true;
+                        } catch (err) {
+                            return { success: false, error: `Failed to create terminal '${name}': ${err instanceof Error ? err.message : String(err)}` };
+                        }
+                    }
+                    // Content rule (mirrors the extension host): single-line leading-slash
+                    // stays a bare submit — the four shipped callers all send `/clear`.
+                    // Everything else goes through deliverPrompt with clearBeforePrompt
+                    // pinned false; sendToTerminal has never cleared, and getPromptDeliveryOptions()
+                    // would inject the config default of true, wiping the coder's context.
+                    if (!text.includes('\n') && text.trimStart().startsWith('/')) {
+                        handle.write(text + '\r');
+                    } else {
+                        await deliverPrompt(handle, text, { clearBeforePrompt: false }, payload.standingOrders !== false);
+                    }
+                    return { success: true, ...(created ? { created: true, terminalName: handle.friendlyName } : {}) };
                 }
 
                 default:
@@ -1447,7 +1672,7 @@ Each plan file must include:
                     if (!plannerTerminal) {
                         plannerTerminal = await ptyFleetService.create('planner', undefined, root);
                     }
-                    await sendPromptToPty(plannerTerminal, prompt, getPromptDeliveryOptions());
+                    await deliverPrompt(plannerTerminal, prompt, getPromptDeliveryOptions());
                     const mp = memoPath(root);
                     await fs.promises.writeFile(mp, '', 'utf8');
                     return {
@@ -1515,6 +1740,59 @@ Each plan file must include:
     // engine treats an unset provider as "no evidence", so the window before this
     // line is the fleet-less contract, not a gap.
     ingestionEngine.setTerminalLivenessProvider(() => ptyFleetService.getLiveness());
+
+    // Agent-group instantiation, standalone edition. The TaskViewer arm guards on
+    // `_ptyHostPort`, which only exists in the extension host (its fleet lives in a
+    // child process); standalone runs with `suppressLocalApiServer = true`, so that
+    // port is never assigned and the arm would refuse with "PTY host unavailable"
+    // on a host that owns the fleet outright. Register the in-process creator here,
+    // after ptyFleetService exists — `setAgentGroupInstantiator` takes precedence
+    // over the TaskViewer arm.
+    //
+    // Creation goes straight to the fleet, deliberately BELOW handlePtyVerb: the
+    // wrapper overwrites `delegates` from role config, which would silently discard
+    // the group's members and their per-member startup commands. The wire-facing
+    // guard in handlePtyVerb is untouched — it exists to stop the WIRE supplying a
+    // launch command, and this is a definition the user authored in the Agents tab.
+    kanbanProvider.setAgentGroupInstantiator(async (group: any, groupRoot: string) => {
+        if (!ptyReady) {
+            return { success: false, error: 'PTY terminals are unavailable: the optional node-pty module could not be loaded on this machine.' };
+        }
+        return instantiateAgentGroupCore({
+            db,
+            group,
+            cwd: groupRoot || workspaceRoot,
+            liveDelegateCount: async () =>
+                ptyFleetService.listActive().filter(t => t.parentInstanceId).length,
+            createHeadWithDelegates: async (spec) => {
+                try {
+                    const head = await ptyFleetService.create(
+                        spec.role, spec.name, spec.cwd, undefined, undefined, undefined, {}
+                    );
+                    const spawned = spec.delegates.length > 0
+                        ? await ptyFleetService.spawnDelegates(head, spec.delegates, { teamName: group?.name })
+                        : { children: [], error: undefined as string | undefined };
+                    return {
+                        success: true,
+                        terminal: { friendlyName: head.friendlyName, agentInstanceId: head.agentInstanceId },
+                        delegates: spawned.children.map(t => ({
+                            friendlyName: t.friendlyName,
+                            agentInstanceId: t.agentInstanceId,
+                            role: t.role,
+                            status: t.status,
+                        })),
+                        ...(spawned.error ? { delegateError: spawned.error } : {}),
+                    };
+                } catch (err) {
+                    return { success: false, error: err instanceof Error ? err.message : String(err) };
+                }
+            },
+            // No registry hook: PtyFleetService here was constructed WITH the db, so
+            // create()/spawnDelegates() already drive updateRegistryState() themselves.
+            // (The extension host's child fleet has no db, which is why that host
+            // needs an explicit mirror write.)
+        });
+    });
     // Awaited here, well before `server.start()` below: a ghost `purpose:'pty'`
     // entry from a previous run would otherwise satisfy /kanban/dispatch's
     // no-live-terminal pre-flight and route work at a dead pid.
@@ -1589,6 +1867,7 @@ Each plan file must include:
             designProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),
         getDesignAssetRoots: (wsRoot: string) => designProvider.getDesignAssetRoots(wsRoot),
         getPlanningAssetRoots: (wsRoot: string) => planningProvider.getPlanningAssetRoots(wsRoot),
+        getTicketsAssetRoots: (wsRoot: string) => ticketsProvider.getTicketsAssetRoots(wsRoot),
         setupVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
             setupProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),
         ticketsVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
@@ -1662,6 +1941,11 @@ Each plan file must include:
     taskViewerProvider.setApiServer(server);
     planningProvider.setApiServer(server);
     kanbanProvider.setApiServer(server);
+    // Tickets was missing. Without it _apiServer stays undefined, _buildLocalAssetUrl
+    // returns undefined for want of a port, and _rewriteLocalImagePaths falls through to
+    // `if (!this._panel) return match` — leaving relative attachments/ paths that 404 in a
+    // browser tab. Every ticket image in the browser cockpit is a broken icon today.
+    ticketsProvider.setApiServer(server);
     const port = await server.start();
 
     // Write the discovery port file for external skills/scripts

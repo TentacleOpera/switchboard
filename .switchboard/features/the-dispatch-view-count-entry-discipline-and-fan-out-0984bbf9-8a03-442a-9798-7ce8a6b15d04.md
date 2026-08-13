@@ -14,9 +14,9 @@ DISPATCH is a display mode of the Planned column that is supposed to mean these 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Send the Dispatch Set to Coders, with Terminal Provisioning](../plans/dispatcher-auto-send-to-coder-terminals.md) — **PLAN REVIEWED**
-- [ ] [The DISPATCH toggle on the Planned column shows how many plans are staged](../plans/feature_plan_20260808120100_dispatch-toggle-staged-count-badge.md) — **PLAN REVIEWED**
-- [ ] [Remove the Manual "Move to Dispatch" Button from Planned Column Cards](../plans/feature_plan_20260808120000_remove-manual-send-to-dispatch-button-from-planned-cards.md) — **PLAN REVIEWED**
+- [ ] [Send the Dispatch Set to Coders, with Terminal Provisioning](../plans/dispatcher-auto-send-to-coder-terminals.md) — **INTERN CODED**
+- [ ] [The DISPATCH toggle on the Planned column shows how many plans are staged](../plans/feature_plan_20260808120100_dispatch-toggle-staged-count-badge.md) — **INTERN CODED**
+- [ ] [Remove the Manual "Move to Dispatch" Button from Planned Column Cards](../plans/feature_plan_20260808120000_remove-manual-send-to-dispatch-button-from-planned-cards.md) — **INTERN CODED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -28,3 +28,7 @@ The fan-out subtask is independent and can run in parallel with either, but its 
 **Known-red baseline:** `node scripts/generate-protocol-catalog.js` already exits 1 (drift detected) at HEAD. Capture that baseline before editing so the post-regeneration diff is attributable. Never hand-edit the generated catalog or allowlist; run `npm run catalog:generate`.
 
 Scope note: this feature covers the **manual** Dispatch view only. Autoban pools and rotation are deliberately out of scope.
+
+## Completion Report
+
+Implemented the three subtasks: the DISPATCH toggle now shows a live staged-plan count, the manual per-card "Move to Dispatch" button and `sendToDispatch` verb have been removed, and the Dispatch view gained a "Send all to coders" fan-out button with an alive-coder terminal count and a `+` terminal stepper. Files changed: `src/webview/kanban.html`, `src/services/KanbanProvider.ts`, and the regenerated `src/generated/verbAllowlist.ts` and `protocol-catalog.json`. The `coderTerminalCount` is now pushed in every `updateBoard` payload and `npm run catalog:generate` plus `npm run parity:check` both pass; no issues encountered.

@@ -1,7 +1,7 @@
 {
   "generator": "ClaudeCodeMirrorService",
   "version": "1.7.13",
-  "generatedAt": "2026-08-11T00:35:41.945Z",
+  "generatedAt": "2026-08-13T23:30:21.193Z",
   "skills": [
     {
       "source": "workflows/switchboard.md",
@@ -37,6 +37,11 @@
       "source": "skills/accuracy",
       "name": "accuracy",
       "relPath": ".claude/skills/accuracy/SKILL.md"
+    },
+    {
+      "source": "skills/terminal-coder-dispatch",
+      "name": "terminal-coder-dispatch",
+      "relPath": ".claude/skills/terminal-coder-dispatch/SKILL.md"
     },
     {
       "source": "skills/improve-remote-plan",
@@ -147,6 +152,11 @@
       "source": "skills/switchboard-orchestration",
       "name": "switchboard-orchestration",
       "relPath": ".claude/skills/switchboard-orchestration/SKILL.md"
+    },
+    {
+      "source": "skills/delegates",
+      "name": "delegates",
+      "relPath": ".claude/skills/delegates/SKILL.md"
     },
     {
       "source": "skills/archive",

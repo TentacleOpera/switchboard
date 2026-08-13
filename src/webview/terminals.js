@@ -24,6 +24,14 @@
     // paneAssignments' documented no-trim design so a kanban-mode slot's mode
     // and chosen column survive a shrink-grow round trip.
     let paneModes = [];
+    // Structural fingerprint of the last renderPaneGrid() pass — layout, the rendered
+    // slice of paneAssignments/paneModes, and the peek target. renderPaneGrid runs on
+    // every 5 s fleet poll and on every badge change, and the overwhelming majority of
+    // those reconciles change NOTHING structural. The renderer-resync latch must arm
+    // only on a real transition; arming it on every reconcile turns the poll into a
+    // permanent full-repaint-per-visible-pane heartbeat (the poll's own
+    // applyLayoutFloor() -> batchFitVisiblePanes() consumes the flag ~2 frames later).
+    let lastGridStructureKey = null;
     // Per-slot chosen kanban column id (only meaningful when paneModes[i]==='kanban').
     let kanbanPaneColumn = [];
     // Per-slot chosen workspace root for the kanban pane. Defaults to the first
@@ -40,8 +48,25 @@
     let kanbanPaneProjectsCache = {};
     // index -> cards[] cache populated by the poll loop.
     let kanbanPaneCards = {};
+    // index -> Set of selected plan ids for that pane's kanban list.
+    // Per-pane, not global: two panes can render different columns/workspaces at
+    // once, and a shared set would let a drag in pane A carry pane B's ids.
+    // Deliberately NOT persisted via saveLayoutSettings — transient UI state, and
+    // persisting it would need a migration for the shipped install base.
+    let kanbanPaneSelection = {};
+    function paneSelection(index) {
+        if (!kanbanPaneSelection[index]) { kanbanPaneSelection[index] = new Set(); }
+        return kanbanPaneSelection[index];
+    }
+    function clearPaneSelection(index) {
+        kanbanPaneSelection[index] = new Set();
+    }
     // Cached flat ordered column list from getKanbanStructure.
     let kanbanColumnsCache = [];
+    // The board's "collapse coder columns" toggle, carried on the same
+    // getKanbanStructure response. Mirrors kanban.html's own default (true) so the
+    // pre-structure paint offers the same column set the board would.
+    let kanbanCollapseCoders = true;
     // role -> column order for sidebar terminal sorting. Empty cache means first
     // paint: fall back to a static mirror of DEFAULT_KANBAN_COLUMNS. The live
     // structure replaces this wholesale when it lands (never merged).
@@ -59,14 +84,21 @@
     // kanban.html reads at startup.
     let initialWorkspaceRoot = undefined;
 
-    // Named, switchable seating snapshots. Each group is a (layout, assignments)
-    // captured at save time. assignments is a [name|null] array length-aligned with
-    // the group's layout slot count. Names are terminal friendlyNames — the fleet
-    // has no stable id, so renameTerminal must fixup group assignments the same way
-    // it fixes the live paneAssignments.
-    let terminalGroups = []; // [{ id, name, layout, assignments }]
-    let activeGroupId = null; // which group is currently seated, or null for "none/unsaved"
-    let groupsView = true; // when groups exist + !solo, true → group sidebar, false → flat list
+    // Named, switchable logical groups. Manual groups keep an explicit member list;
+    // derived groups (role / worktree) compute membership live from fleetList. A group
+    // carries an optional desired layout and a member order used to choose what renders
+    // when the pane-size floor leaves fewer slots than members.
+    let terminalGroups = []; // [{ id, name, source, value?, layout, members, order }]
+    let activeGroupId = null; // which group is currently locked, or null for "composing"
+    let activeGroupPage = 0; // transient: which page of the active group is showing
+    let selectedTerminalNames = new Set(); // multi-select in the sidebar
+    let restoredLockOnLoad = false; // one-shot: re-seat the locked group after first fleet fetch
+
+    // Display preferences for derived groups: threshold, hidden ids, pinned ids,
+    // per-group member order, per-group stored layouts, and per-group extras
+    // (terminals added to a derived group via the locked-group empty-pane fill).
+    // One object under one key to avoid a spray of saveSetting calls.
+    let groupPrefs = { threshold: 2, hidden: [], pinned: [], orders: {}, layouts: {}, extras: {} };
 
     /**
      * Which group header the role picker is currently open under.
@@ -100,6 +132,7 @@
     let pickerNeedsScroll = false;
 
     let soloTerminalName = null;
+    let peekTerminalName = null;
     let hasFetchedList = false;
     try {
         const urlParams = new URLSearchParams(location.search);
@@ -131,6 +164,11 @@
      *  `done` light (postFleetStateToShell), so a gap recorded there would report a
      *  finished agent. */
     const terminalReplayGaps = new Set();
+    // terminalName -> count of ptySendPrompt requests currently in flight.
+    // A COUNT, not a boolean: withTerminalLock (ptyPromptDelivery.ts withTerminalLock)
+    // serialises concurrent sends to one terminal, so the first response can land
+    // while a second is still queued — a boolean would clear the chip early.
+    const dispatchInFlight = new Map();
     // name -> { quietTimer, noOutputTimer, hardTimer, sawLiveOutput }. Module-level,
     // NOT on the terminalsMap entry: a curtain is armed at ptyCreateTerminal time, and
     // the entry does not exist until the pane has a rendered box (see whenRendered).
@@ -153,6 +191,7 @@
     const emptyStateEl = document.getElementById('empty-state');
     // `btnNew` is gone with #btn-new-terminal — spawning is per-group now.
     const paneGridEl = document.getElementById('pane-grid');
+    const groupTabStripEl = document.getElementById('group-tab-strip');
     const toastContainerEl = document.getElementById('toast-container');
     const fallbackBannerEl = document.getElementById('layout-fallback-banner');
 
@@ -712,6 +751,12 @@
         // #btn-new-terminal and the static #role-picker-cancel are gone: the picker
         // is built per group by buildRolePicker(), and its Cancel carries its own
         // listener. Nothing global to bind.
+        //
+        // The .sidebar-title click handler that silently called clearGroupLock()
+        // is gone too: it was a third, unlabelled way to drop the lock, and with
+        // updateLockIndicator removed the title no longer changes on lock/unlock
+        // so there was nothing suggesting it was clickable. The "All" tab in the
+        // group tab strip is the single, visible way to drop the lock now.
 
         const btnNewWindow = document.getElementById('btn-new-window');
         if (btnNewWindow) {
@@ -752,7 +797,39 @@
             btn.addEventListener('click', () => {
                 const requested = btn.getAttribute('data-layout');
                 if (requested) {
-                    setLayoutMode(requested);
+                    // A layout-picker click while a group is locked stores the
+                    // new layout against that group and keeps the lock, rather
+                    // than silently unlocking. This is the only way the operator
+                    // can author "planners are 2×2". The keepLock + storeForActiveGroup
+                    // options are on THIS call site only — the other three
+                    // setLayoutMode callers (growLayoutForFleet, switchToGroup,
+                    // create-grid-for-role) are unchanged and still drop the lock
+                    // or keep it via their own paths.
+                    const keepLock = !!activeGroupId;
+                    if (keepLock) {
+                        const group = getAllGroups().find(g => g.id === activeGroupId);
+                        if (group && group.source !== 'manual') {
+                            // Derived groups store their layout in groupPrefs.layouts;
+                            // manual groups carry it on the group object, which
+                            // setLayoutMode does not touch. Persist it here so the
+                            // choice survives a switch away and back.
+                            if (!groupPrefs.layouts) { groupPrefs.layouts = {}; }
+                            groupPrefs.layouts[group.id] = requested;
+                        } else if (group && group.source === 'manual') {
+                            group.layout = requested;
+                        }
+                    }
+                    setLayoutMode(requested, { keepLock });
+                    if (keepLock) {
+                        // Re-page the locked group against the NEW slot count.
+                        // setLayoutMode adopts the pick optimistically, so
+                        // applyLayoutFloor's `changed` test is false and its
+                        // seatActiveGroupPage() call does not fire — growing
+                        // 2h → 2x2 for a 4-member group would otherwise reveal
+                        // two empty panes the group already has members to fill.
+                        // Same ordering as switchToGroup: layout first, then seat.
+                        seatActiveGroupPage();
+                    }
                     saveLayoutSettings();
                 }
             });
@@ -779,6 +856,76 @@
             });
         }
 
+        const btnFillGrid = document.getElementById('btn-fill-grid');
+        const fillGridForm = document.getElementById('fill-grid-form');
+        const fillGridRole = document.getElementById('fill-grid-role');
+        const fillGridMode = document.getElementById('fill-grid-mode');
+        const fillGridCancel = document.getElementById('fill-grid-cancel');
+        const fillGridConfirm = document.getElementById('fill-grid-confirm');
+        if (btnFillGrid && fillGridForm && fillGridRole && fillGridMode) {
+            btnFillGrid.addEventListener('click', async () => {
+                const data = await fetchPtyVisibleRoles();
+                const visible = data.visibleAgents;
+                const hasCommand = data.hasCommand;
+                const SYSTEM_ROLES = new Set(['orchestrator', 'mcp_monitor']);
+                const roles = Object.keys(visible)
+                    .filter(k => visible[k] !== false && !SYSTEM_ROLES.has(k))
+                    .sort((a, b) => {
+                        const aOrder = roleOrderMap[a];
+                        const bOrder = roleOrderMap[b];
+                        if (aOrder !== undefined && bOrder !== undefined) { return aOrder - bOrder; }
+                        if (aOrder !== undefined) { return -1; }
+                        if (bOrder !== undefined) { return 1; }
+                        return (a || '\uFFFF').localeCompare(b || '\uFFFF');
+                    });
+
+                fillGridRole.innerHTML = '';
+                for (const role of roles) {
+                    const meta = BUILT_IN_AGENT_LABELS.find(r => r.key === role);
+                    const label = meta ? meta.label : role;
+                    const opt = document.createElement('option');
+                    opt.value = role;
+                    opt.textContent = label + (hasCommand[role] ? '' : ' (plain shell)');
+                    fillGridRole.appendChild(opt);
+                }
+
+                fillGridMode.innerHTML = '';
+                for (const mode of LAYOUT_MODES) {
+                    const opt = document.createElement('option');
+                    opt.value = mode;
+                    opt.textContent = `${mode} — ${LAYOUTS[mode].slots} agent${LAYOUTS[mode].slots === 1 ? '' : 's'}`;
+                    fillGridMode.appendChild(opt);
+                }
+                fillGridMode.value = currentLayout;
+
+                btnFillGrid.hidden = true;
+                fillGridForm.hidden = false;
+            });
+
+            if (fillGridCancel) {
+                fillGridCancel.addEventListener('click', () => {
+                    fillGridForm.hidden = true;
+                    btnFillGrid.hidden = false;
+                });
+            }
+
+            fillGridForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const role = fillGridRole.value;
+                const mode = fillGridMode.value;
+                fillGridConfirm.disabled = true;
+                fillGridConfirm.textContent = 'FILLING…';
+                try {
+                    await fillGrid(role, mode);
+                } finally {
+                    fillGridConfirm.disabled = false;
+                    fillGridConfirm.textContent = 'FILL';
+                    fillGridForm.hidden = true;
+                    btnFillGrid.hidden = false;
+                }
+            });
+        }
+
         const btnSaveGroup = document.getElementById('btn-save-group');
         if (btnSaveGroup) {
             btnSaveGroup.addEventListener('click', () => {
@@ -790,7 +937,12 @@
                 btnSaveGroup.replaceWith(input);
                 input.focus();
 
+                // One-shot: Enter fires finish AND then blurs the (now detached) input,
+                // which would run finish a second time and save a duplicate group.
+                let done = false;
                 const finish = (save) => {
+                    if (done) { return; }
+                    done = true;
                     const name = input.value.trim();
                     input.replaceWith(btnSaveGroup);
                     if (save && name) {
@@ -863,6 +1015,35 @@
                     postFleetStateToShell();
                 }
                 terminalReplayGaps.delete(message.name);
+            } else if (message.type === 'peekTerminal' && typeof message.name === 'string') {
+                if (event.origin !== location.origin) { return; }
+                if (peekTerminalName === message.name) {
+                    dismissPeek();
+                } else {
+                    peekTerminal(message.name);
+                }
+            } else if (message.type === 'popoutBlocked' && typeof message.name === 'string') {
+                if (event.origin !== location.origin) { return; }
+                showPaneToast(`Popup blocked — could not open ${message.name} in a new window.`);
+            } else if (message.type === 'startupCommandsChanged') {
+                // The startup commands were saved (possibly from another panel
+                // or surface — setup.html, implementation.html, or the Agents
+                // tab). Refetch the agentNames cache so labels and brand icons
+                // update without a panel reload. Debounced against the
+                // cockpit's 6× fan-out. No origin guard: this arrives via the
+                // wsHub broadcast rail (like terminalsChanged), not from a
+                // foreign frame.
+                debouncedRefreshAgentNames();
+            } else if (message.type === 'terminalsGroupsChanged') {
+                // The backend registered a new terminals group (teamWiring.ts).
+                // Re-read terminals.groups and merge by id — a reload that
+                // arrives mid-drag must not discard an in-flight local edit, so
+                // new groups are added but existing ones keep their local
+                // (possibly unsaved) state. Without this, the next pane drag
+                // writes a stale whole-array save and the backend-registered
+                // group vanishes with no error anywhere. No origin guard: this
+                // arrives via the wsHub broadcast rail (like terminalsChanged).
+                reloadTerminalGroups();
             } else if (message.type === 'panelVisibility' && typeof message.visible === 'boolean') {
                 if (event.origin !== location.origin) { return; }
                 // The shell hides a panel by setting display:none on its IFRAME. This
@@ -895,6 +1076,13 @@
                     // waited for a frame could be beaten by a release that fires first
                     // and drops a now-visible pane to canvas.
                     for (const entry of terminalsMap.values()) { cancelRendererRelease(entry); }
+                    // Cockpit-only backstop: refetch agentNames on reveal so a
+                    // command edit made in another window or a missed push is
+                    // caught on return. Coalesces with any pending push-driven
+                    // refetch via the same debounce. No-op in the VS Code panel
+                    // — panelVisibility is not emitted there; the save-push is
+                    // what covers that host.
+                    debouncedRefreshAgentNames();
                     // rAF, not a direct call: the display flip and this message can land
                     // in the same task, and a frame callback is by definition only
                     // delivered once the document is actually being rendered.
@@ -920,6 +1108,16 @@
         // Reordering columns in Setup never reaches this panel directly. Focus is the
         // moment the operator comes back, so refetch the structure then (throttle bypassed).
         window.addEventListener('focus', () => fetchKanbanColumnStructure(true));
+
+        // Esc dismisses a peek, unless the caret is inside the peeked terminal —
+        // then the key belongs to the program running there.
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape' || !peekTerminalName) { return; }
+            const peekedPane = paneGridEl.querySelector('.terminal-pane.is-peeked');
+            if (peekedPane && peekedPane.contains(document.activeElement)) { return; }
+            e.preventDefault();
+            dismissPeek();
+        });
 
         // Renderer repair on visibility regain. While the document is hidden rAF is
         // fully suspended (0 Hz on every desktop engine) but the BATCH_FALLBACK_MS
@@ -976,6 +1174,35 @@
                 if (name) { startFitLadder(name); }
             }
         });
+
+        // Pane focus change (pane click, tab, sidebar) can also leave the canvas
+        // stale. Use DOM focusin/focusout on the grid, not xterm's term.onFocus,
+        // which the vendored public class does not expose. The affected pane is
+        // found by its host container, because the actual target is xterm's hidden
+        // textarea.
+        if (paneGridEl) {
+            const flagPaneForResync = (e) => {
+                const host = e.target instanceof Element
+                    ? e.target.closest('.terminal-view-host')
+                    : null;
+                if (!host) { return; }
+                // Focus moved WITHIN this pane (xterm's own textarea <-> screen, or a
+                // link handler stealing and returning it). The pane never lost focus,
+                // so there is nothing to repair — and without this the pair of
+                // focusout+focusin restarts the same terminal's ladder twice.
+                const other = e.relatedTarget;
+                if (other instanceof Element && host.contains(other)) { return; }
+                for (const [name, entry] of terminalsMap) {
+                    if (entry.container !== host) { continue; }
+                    if (entry.disposed || !entry.term) { return; }
+                    entry.needsRendererResync = true;
+                    startFitLadder(name);
+                    return;
+                }
+            };
+            paneGridEl.addEventListener('focusin', flagPaneForResync);
+            paneGridEl.addEventListener('focusout', flagPaneForResync);
+        }
 
         fetchKanbanColumnStructure(true);
 
@@ -1113,6 +1340,23 @@
     }
 
     /**
+     * Smallest layout that seats `count` terminals, with NO currentLayout floor.
+     *
+     * The non-ratcheting sibling of layoutForFleetCount: a group switch is a
+     * restore, and a restore must be able to go down. Walks LAYOUT_GROW_ORDER
+     * (slot-ascending) and returns the first rung whose slot count is >= count.
+     * '2v' is deliberately absent from LAYOUT_GROW_ORDER (see its comment) so a
+     * stacked pair is never auto-picked — a stored '2v' is honoured by the
+     * stored-layout branch of layoutForGroupSwitch, not by this fallback.
+     */
+    function smallestLayoutFitting(count) {
+        for (const mode of LAYOUT_GROW_ORDER) {
+            if (LAYOUTS[mode].slots >= count) { return mode; }
+        }
+        return '3x3';
+    }
+
+    /**
      * Widen the grid so a just-created fleet has somewhere to sit.
      *
      * setLayoutMode() does NOT persist (the picker's click handler calls
@@ -1169,17 +1413,63 @@
         const savedKanbanWs = await loadSetting('terminals.kanbanPaneWorkspace', []);
         const savedKanbanProj = await loadSetting('terminals.kanbanPaneProject', []);
 
+        // LINK_PRESETS is declared ~6000 lines below, but this function is only
+        // called from init() after the whole IIFE body has run top to bottom.
+        const savedPreset = await loadSetting('terminals.linkPreset', LINK_PRESETS[0].id);
+        linkPreset = LINK_PRESETS.some(p => p.id === savedPreset) ? savedPreset : LINK_PRESETS[0].id;
+
+        const savedLinkMode = await loadSetting('terminals.linkMode', 'instant');
+        linkMode = ['instant', 'standing'].includes(savedLinkMode) ? savedLinkMode : 'instant';
+
         const savedGroups = await loadSetting('terminals.groups', []);
         if (Array.isArray(savedGroups)) {
             terminalGroups = savedGroups.filter(g =>
                 g && typeof g.id === 'string' && typeof g.name === 'string' &&
-                LAYOUT_MODES.includes(g.layout) && Array.isArray(g.assignments)
-            );
+                LAYOUT_MODES.includes(g.layout)
+            ).map(g => {
+                if (g.source === 'manual' || g.source === 'role' || g.source === 'worktree') {
+                    return g;
+                }
+                // Legacy dev-build snapshot: a (layout, assignments) row becomes a manual
+                // group whose members/order are the saved assignments with holes removed.
+                if (Array.isArray(g.assignments)) {
+                    const members = g.assignments.filter(Boolean);
+                    return { id: g.id, name: g.name, source: 'manual', layout: g.layout, members, order: members };
+                }
+                return null;
+            }).filter(Boolean);
         }
         const savedActive = await loadSetting('terminals.activeGroupId', null);
         activeGroupId = (typeof savedActive === 'string' || savedActive === null) ? savedActive : null;
-        const savedGroupsView = await loadSetting('terminals.groupsView', true);
-        groupsView = savedGroupsView !== false;
+
+        const savedGroupPrefs = await loadSetting('terminals.groupPrefs', null);
+        if (savedGroupPrefs && typeof savedGroupPrefs === 'object') {
+            // Validate stored layouts against LAYOUT_MODES so a hand-edited or
+            // stale setting cannot inject an unknown layout id.
+            const savedLayouts = (savedGroupPrefs.layouts && typeof savedGroupPrefs.layouts === 'object')
+                ? Object.fromEntries(
+                    Object.entries(savedGroupPrefs.layouts)
+                        .filter(([_, v]) => typeof v === 'string' && LAYOUT_MODES.includes(v))
+                )
+                : {};
+            // Coerce each extras value to an array of strings — an install with
+            // no stored extras must load to {} and behave exactly as today.
+            const savedExtras = (savedGroupPrefs.extras && typeof savedGroupPrefs.extras === 'object')
+                ? Object.fromEntries(
+                    Object.entries(savedGroupPrefs.extras)
+                        .filter(([_, v]) => Array.isArray(v))
+                        .map(([k, v]) => [k, v.filter(name => typeof name === 'string')])
+                )
+                : {};
+            groupPrefs = {
+                threshold: Number(savedGroupPrefs.threshold) > 1 ? Math.floor(savedGroupPrefs.threshold) : 2,
+                hidden: Array.isArray(savedGroupPrefs.hidden) ? savedGroupPrefs.hidden.filter(id => typeof id === 'string') : [],
+                pinned: Array.isArray(savedGroupPrefs.pinned) ? savedGroupPrefs.pinned.filter(id => typeof id === 'string') : [],
+                orders: (savedGroupPrefs.orders && typeof savedGroupPrefs.orders === 'object') ? savedGroupPrefs.orders : {},
+                layouts: savedLayouts,
+                extras: savedExtras
+            };
+        }
 
         if (LAYOUT_MODES.includes(savedMode)) {
             currentLayout = savedMode;
@@ -1219,7 +1509,42 @@
         saveSetting('terminals.kanbanPaneProject', kanbanPaneProject);
         saveSetting('terminals.groups', terminalGroups);
         saveSetting('terminals.activeGroupId', activeGroupId);
-        saveSetting('terminals.groupsView', groupsView);
+        saveSetting('terminals.groupPrefs', groupPrefs);
+    }
+
+    /**
+     * Re-read `terminals.groups` from the DB and merge by id into the in-memory
+     * `terminalGroups`. Called on the `terminalsGroupsChanged` push from
+     * teamWiring.ts, so a backend-registered group appears in an open panel
+     * before the panel's next whole-array save can clobber it.
+     *
+     * Merge, not replace: a reload that arrives mid-drag must not discard an
+     * in-flight local edit. New groups (ids not yet in memory) are added;
+     * existing ones keep their local state — the backend only adds, never
+     * modifies (idempotency: skip existing group id in teamWiring.ts).
+     */
+    async function reloadTerminalGroups() {
+        try {
+            const savedGroups = await loadSetting('terminals.groups', []);
+            if (!Array.isArray(savedGroups)) { return; }
+            const validated = savedGroups.filter(g =>
+                g && typeof g.id === 'string' && typeof g.name === 'string' &&
+                LAYOUT_MODES.includes(g.layout) &&
+                (g.source === 'manual' || g.source === 'role' || g.source === 'worktree')
+            );
+            const existingIds = new Set(terminalGroups.map(g => g.id));
+            let added = false;
+            for (const g of validated) {
+                if (!existingIds.has(g.id)) {
+                    terminalGroups.push(g);
+                    added = true;
+                }
+            }
+            if (added) {
+                renderSidebarList();
+                renderGroupTabStrip();
+            }
+        } catch { /* ignore — the next fleet poll will pick it up */ }
     }
 
     async function fetchTerminalList() {
@@ -1242,12 +1567,17 @@
                     if (fleetList.some(t => t.role && !(t.role in agentNames))) {
                         await fetchAgentNames();
                     }
+                    if (!restoredLockOnLoad && activeGroupId) {
+                        restoredLockOnLoad = true;
+                        switchToGroup(activeGroupId, { noSave: true });
+                    }
                     sanitizePaneAssignments();
                     renderSidebarList();
                     renderPaneGrid();
                     // First paint is also the first chance to measure the grid, so the
                     // floor is evaluated here rather than only on a later resize.
                     applyLayoutFloor();
+                    await fetchStandingOrders();
                     postFleetStateToShell();
                     checkSoloNotFound();
                     return;
@@ -1516,6 +1846,13 @@
             }
         }
 
+        // Drop stale dispatch-in-flight entries: a terminal that died mid-dispatch
+        // will never send its completion response, so its refcount would strand
+        // and the chip would never clear.
+        for (const name of Array.from(dispatchInFlight.keys())) {
+            if (!liveNames.has(name)) { dispatchInFlight.delete(name); }
+        }
+
         // Pin expiry. Deliberately NOT folded into the drop loop above: closeTerminal()
         // nulls its own slots BEFORE this refresh lands (the same reason the undo
         // invalidation below cannot rely on the drop loop either), so a pin whose terminal
@@ -1545,12 +1882,19 @@
         if (activeTerminalName && !liveNames.has(activeTerminalName)) {
             activeTerminalName = null;
         }
+        if (peekTerminalName && !liveNames.has(peekTerminalName)) {
+            peekTerminalName = null;
+        }
 
         // Seed pane 0 on FIRST load only. Re-seeding on every list refresh would undo a
         // deliberate pane clear the moment any terminalsChanged broadcast arrived.
+        // The gate stays exactly `!initialAssignmentDone && fleetList.length > 0` —
+        // solo pre-sets initialAssignmentDone to true and terminal-solo-popout-contract
+        // asserts that literal shape. The lock guard nests INSIDE it: a locked group
+        // owns the pane assignments, so seeding pane 0 would fight the lock.
         if (!initialAssignmentDone && fleetList.length > 0) {
             initialAssignmentDone = true;
-            if (!paneAssignments.some(name => name !== null)) {
+            if (!activeGroupId && !paneAssignments.some(name => name !== null)) {
                 paneAssignments[0] = fleetList[0].friendlyName;
                 activeTerminalName = fleetList[0].friendlyName;
             }
@@ -1655,10 +1999,14 @@
         const itemDiv = document.createElement('div');
         const paneIndex = paneAssignments.indexOf(item.friendlyName);
         const isFocused = activeTerminalName === item.friendlyName;
+        const isPeeked = peekTerminalName === item.friendlyName;
+        const isSelected = selectedTerminalNames.has(item.friendlyName);
         itemDiv.className = 'terminal-item'
             + (isFocused ? ' active' : '')
             + (paneIndex !== -1 ? ' assigned' : '')
-            + (item.status === 'exited' ? ' is-exited' : '');
+            + (item.status === 'exited' ? ' is-exited' : '')
+            + (isPeeked ? ' is-peeked' : '')
+            + (isSelected ? ' is-selected' : '');
 
         const info = document.createElement('div');
         info.className = 'item-info';
@@ -1715,6 +2063,31 @@
             ? `${item.friendlyName}${exitedSuffix} · ${item.role}`
             : item.role;
         roleRow.appendChild(roleEl);
+
+        // Group membership chip — shows which group claims this terminal, so
+        // membership is legible without a nesting tier in the sidebar tree.
+        // Uses the same findGroupForTerminalName resolution the lock path
+        // uses. A terminal in no group (null after Unassigned retirement)
+        // shows no chip.
+        //
+        // Overlap semantics: with the extras overlay, a terminal can be a
+        // member of multiple groups simultaneously (e.g. a coder added to
+        // Planners as an extra is also a derived member of Coders). The chip
+        // shows the FIRST claimant — findGroupForTerminalName returns manual
+        // groups first, then derived groups in getDerivedGroups() order. This
+        // is an intentional simplification: the chip names one group, not all,
+        // and the tab strip's per-group member count is the authoritative view
+        // for overlap. Collecting all claimants was considered and rejected —
+        // it would make the chip's width unpredictable and the row's layout
+        // unstable on every poll.
+        const claimingGroup = findGroupForTerminalName(item.friendlyName);
+        if (claimingGroup) {
+            const groupChip = document.createElement('span');
+            groupChip.className = 'item-group-chip';
+            groupChip.textContent = claimingGroup.name;
+            groupChip.title = `Member of ${claimingGroup.name}`;
+            roleRow.appendChild(groupChip);
+        }
 
         // Rename now lives NEXT TO the thing it renames. It was a `rename` word in a
         // strip of lookalike 10px links below the row, displaced from its object; the
@@ -1799,6 +2172,21 @@
         // `rename` moved to the pencil beside the name, leaving `clear` — which is
         // the strip's highest-frequency action and now wears a weight to match.
 
+        const peekBtn = document.createElement('button');
+        peekBtn.type = 'button';
+        peekBtn.className = 'item-peek-btn';
+        peekBtn.textContent = isPeeked ? 'restore' : 'peek';
+        peekBtn.title = isPeeked ? 'Restore the grid' : 'Full-pane view this terminal';
+        peekBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (peekTerminalName === item.friendlyName) {
+                dismissPeek();
+            } else {
+                peekTerminal(item.friendlyName);
+            }
+        });
+        actions.appendChild(peekBtn);
+
         const clearBtn = document.createElement('button');
         clearBtn.type = 'button';
         // NOT .locate-btn: that style is borderless, 10px, opacity 0.7 — near
@@ -1826,8 +2214,22 @@
         itemDiv.appendChild(topRow);
         itemDiv.appendChild(actions);
 
-        itemDiv.addEventListener('click', () => {
-            locateTerminal(item.friendlyName);
+        itemDiv.addEventListener('click', (e) => {
+            const name = item.friendlyName;
+            if (e.shiftKey || e.ctrlKey || e.metaKey) {
+                e.stopPropagation();
+                toggleTerminalSelection(name);
+                return;
+            }
+            if (selectedTerminalNames.size > 0) {
+                selectedTerminalNames.clear();
+                renderSidebarList();
+            }
+            if (activeGroupId) {
+                handleLockedTerminalClick(name);
+            } else {
+                locateTerminal(name);
+            }
         });
 
         return itemDiv;
@@ -1835,111 +2237,755 @@
 
     function saveCurrentAsGroup(name) {
         const id = 'grp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+        const visible = paneAssignments.slice(0, getSlotCount(effectiveLayout)).filter(Boolean);
         const group = {
             id,
             name: (name || '').trim() || `Group ${terminalGroups.length + 1}`,
+            source: 'manual',
             layout: currentLayout,
-            assignments: paneAssignments.slice(0, getSlotCount(effectiveLayout))
+            members: visible,
+            order: visible
         };
         terminalGroups.push(group);
-        activeGroupId = id;
-        groupsView = true;
         saveLayoutSettings();
-        renderSidebarList();
+        switchToGroup(id);
     }
 
+    /**
+     * Delete a group, whatever its source. One verb, one meaning from the
+     * operator's perspective; what it stores differs by source:
+     *
+     *   manual    → remove from terminalGroups; prune groupPrefs.orders[id]
+     *               and groupPrefs.pinned (the record is gone, so its ordering
+     *               and pin are dead state).
+     *   derived   → suppress via groupPrefs.hidden (the shipped key — no new
+     *               groupPrefs field). Orders/pinned are left intact so a
+     *               restore returns the operator's member ordering.
+     *
+     * If the deleted group is the locked one, route through clearGroupLock()
+     * so the grid re-seats from the live fleet rather than stranding the
+     * departed group's terminals in their panes. clearGroupLock() drops the
+     * lock, re-seats, and re-renders — so no separate renderSidebarList() is
+     * needed on that path.
+     */
     function deleteGroup(id) {
-        terminalGroups = terminalGroups.filter(g => g.id !== id);
-        if (activeGroupId === id) { activeGroupId = null; }
+        const group = getAllGroups().find(g => g.id === id);
+        const wasLocked = activeGroupId === id;
+
+        if (group && group.source === 'manual') {
+            terminalGroups = terminalGroups.filter(g => g.id !== id);
+            // Prune dead state for a manual group: its ordering and pin are
+            // meaningless once the record is gone.
+            if (groupPrefs.orders && groupPrefs.orders[id]) {
+                delete groupPrefs.orders[id];
+            }
+            if (Array.isArray(groupPrefs.pinned)) {
+                groupPrefs.pinned = groupPrefs.pinned.filter(pid => pid !== id);
+            }
+        } else if (group) {
+            // Derived group (role/worktree): suppress, don't destroy.
+            // groupPrefs.hidden is the shipped key — no new groupPrefs field.
+            if (!groupPrefs.hidden.includes(id)) {
+                groupPrefs.hidden.push(id);
+            }
+        } else {
+            return;
+        }
+
+        if (wasLocked) {
+            // clearGroupLock drops the lock, re-seats from the full live fleet
+            // honouring pins, and re-renders. It also calls saveLayoutSettings.
+            clearGroupLock();
+        } else {
+            saveLayoutSettings();
+            renderSidebarList();
+        }
+    }
+
+    /**
+     * Drop the group lock and re-seat the grid from the full live fleet.
+     *
+     * Formerly this only dropped the lock and repainted the sidebar, leaving
+     * paneAssignments exactly as the departed group left them — the "All
+     * terminals" affordance read as dead because, on screen, it was. Now it
+     * performs a real seating pass: pinned slots keep their occupant, remaining
+     * slots fill in compareTerminals order, and the layout resolves via
+     * smallestLayoutFitting (non-monotonic, so it can shrink).
+     *
+     * The early return on `!activeGroupId` is removed: clicking "All" from an
+     * already-unlocked state is a legitimate "reset my composition" gesture and
+     * must do the seating pass.
+     */
+    function clearGroupLock() {
+        activeGroupId = null;
+        activeGroupPage = 0;
+
+        // Re-seat from the full live fleet (no delegate children), honouring pins.
+        const live = fleetList
+            .filter(t => t.status !== 'exited' && !t.parentInstanceId)
+            .sort(compareTerminals);
+        const liveNames = live.map(t => t.friendlyName);
+        const maxSlots = getMaxSlotCount();
+        const assignments = new Array(maxSlots).fill(null);
+
+        // Pinned slots keep their occupant if it is still live.
+        for (let i = 0; i < pinnedPanes.length && i < maxSlots; i++) {
+            if (pinnedPanes[i]) {
+                const occupant = paneAssignments[i];
+                if (occupant && liveNames.includes(occupant)) {
+                    assignments[i] = occupant;
+                } else {
+                    pinnedPanes[i] = false;
+                }
+            }
+        }
+
+        // Fill remaining slots in compareTerminals order.
+        const seated = new Set(assignments.filter(Boolean));
+        let fillIdx = 0;
+        for (const name of liveNames) {
+            if (seated.has(name)) { continue; }
+            while (fillIdx < maxSlots && assignments[fillIdx] !== null) { fillIdx++; }
+            if (fillIdx >= maxSlots) { break; }
+            assignments[fillIdx] = name;
+            fillIdx++;
+        }
+
+        paneAssignments = assignments;
+
+        // Resolve the layout: smallest grid that fits the live count, capped at
+        // the largest rung. Non-monotonic, so it can shrink from the departed
+        // group's layout.
+        const targetLayout = smallestLayoutFitting(liveNames.length);
+        currentLayout = targetLayout;
+        effectiveLayout = targetLayout;
+
+        syncLayoutPickerUI();
+        sanitizePaneAssignments();
+        renderPaneGrid();
+        applyLayoutFloor();
+
         saveLayoutSettings();
         renderSidebarList();
     }
 
-    function switchToGroup(id) {
-        if (soloTerminalName) { return; }
-        const group = terminalGroups.find(g => g.id === id);
+    function saveSelectionAsGroup(name) {
+        const id = 'grp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+        const members = Array.from(selectedTerminalNames);
+        const group = {
+            id,
+            name: (name || '').trim() || `Group ${terminalGroups.length + 1}`,
+            source: 'manual',
+            layout: layoutForFleetCount(members.length),
+            members,
+            order: members
+        };
+        terminalGroups.push(group);
+        selectedTerminalNames.clear();
+        saveLayoutSettings();
+        renderSidebarList();
+    }
+
+    function toggleTerminalSelection(name) {
+        if (selectedTerminalNames.has(name)) {
+            selectedTerminalNames.delete(name);
+        } else {
+            selectedTerminalNames.add(name);
+        }
+        renderSidebarList();
+    }
+
+    function switchToGroup(id, opts = {}) {
+        // Rule 1: switching groups is a deliberate selection — the most
+        // reachable peek-trap route (the UAT report's exact case). The peeked
+        // terminal is almost certainly not a member of the new group, so
+        // seatActiveGroupPage would rebuild paneAssignments without it and the
+        // grid would go fully blank. Cancelling here ends the peek and lets the
+        // switch's own render show the new group. dismissPeek early-returns when
+        // no peek is active.
+        dismissPeek();
+        if (soloTerminalName) {
+            document.body.classList.remove('is-solo');
+            soloTerminalName = null;
+            const soloStatusEl = document.getElementById('solo-status');
+            if (soloStatusEl) { soloStatusEl.style.display = 'none'; }
+        }
+        const group = getAllGroups().find(g => g.id === id);
         if (!group) { return; }
-        paneAssignments = group.assignments.slice();
+        const sameGroup = activeGroupId === id;
         activeGroupId = id;
-        groupsView = true;
-        setLayoutMode(group.layout);
+        // The page index is a scroll position, not a preference: it resets whenever
+        // the lock moves to a different group. seatActiveGroupPage() re-clamps it
+        // against the floored slot count, which covers a resize mid-lock.
+        if (!sameGroup || !opts.keepPage) { activeGroupPage = 0; }
+        // Route the layout through setLayoutMode so applyLayoutFloor still wins over
+        // the group's desire; only then is the rendered slot count known. Uses
+        // layoutForGroupSwitch (non-monotonic) so a 2-member group restores to 2h
+        // even if the previous group was 2x2 — the grow-only layoutForFleetCount
+        // would inherit the prior group's grid.
+        setLayoutMode(layoutForGroupSwitch(group), { keepLock: true });
+        seatActiveGroupPage();
+        if (!opts.noSave) {
+            saveLayoutSettings();
+        }
+        renderSidebarList();
+    }
+
+    /**
+     * Seat the current page of the locked group into the rendered slots. Split out
+     * of switchToGroup because the floor can change the rendered slot count after
+     * the lock is taken (window resize), and the seating has to be recomputed
+     * against the NEW count rather than the group's desired one.
+     */
+    function seatActiveGroupPage() {
+        const group = activeGroupId ? getAllGroups().find(g => g.id === activeGroupId) : null;
+        if (!group) { return; }
+        const members = getGroupMembers(group);
+        const rendered = Math.max(1, getSlotCount(effectiveLayout));
+        const pageCount = Math.max(1, Math.ceil(members.length / rendered));
+        if (activeGroupPage >= pageCount) { activeGroupPage = pageCount - 1; }
+        if (activeGroupPage < 0) { activeGroupPage = 0; }
+        const start = activeGroupPage * rendered;
+        const assignments = members.slice(start, start + rendered);
+        while (assignments.length < getMaxSlotCount()) {
+            assignments.push(null);
+        }
+        paneAssignments = assignments;
+        // A lock reseats slots but must not break `pinnedPanes[i] → paneAssignments[i]`.
+        // Pins on slots the group left empty are cleared here rather than waiting for
+        // the next sanitizePaneAssignments poll, which is what enforces it elsewhere.
+        for (let i = 0; i < pinnedPanes.length; i++) {
+            if (pinnedPanes[i] && !paneAssignments[i]) { pinnedPanes[i] = false; }
+        }
+        renderPaneGrid();
+    }
+
+    function safeGroupIdForValue(source, value) {
+        const encoded = encodeURIComponent(String(value || '')).replace(/[^a-zA-Z0-9_]/g, '_');
+        return 'dg_' + source + '_' + encoded;
+    }
+
+    function getDerivedGroups() {
+        const threshold = groupPrefs.threshold;
+        const hidden = new Set(groupPrefs.hidden);
+        const live = fleetList.filter(t => t.status !== 'exited' && !t.parentInstanceId);
+        const roleMap = new Map();
+        const worktreeMap = new Map();
+        for (const t of live) {
+            if (t.role) { roleMap.set(t.role, (roleMap.get(t.role) || 0) + 1); }
+            if (t.worktreePath) { worktreeMap.set(t.worktreePath, (worktreeMap.get(t.worktreePath) || 0) + 1); }
+        }
+        const derived = [];
+        for (const [role, count] of roleMap) {
+            if (count >= threshold) {
+                derived.push({
+                    id: safeGroupIdForValue('role', role),
+                    name: (role.charAt(0).toUpperCase() + role.slice(1)) + 's',
+                    source: 'role',
+                    value: role
+                });
+            }
+        }
+        for (const [wt, count] of worktreeMap) {
+            if (count >= threshold) {
+                const parts = String(wt).replace(/\\/g, '/').split('/').filter(Boolean);
+                const basename = parts.length > 0 ? parts[parts.length - 1] : wt;
+                derived.push({
+                    id: safeGroupIdForValue('worktree', wt),
+                    name: basename,
+                    source: 'worktree',
+                    value: wt
+                });
+            }
+        }
+        return derived.filter(g => !hidden.has(g.id));
+    }
+
+    function getAllGroups() {
+        // The Unassigned pseudo-group is retired — it was a computed remainder
+        // with no identity to delete, and leaving it in getAllGroups while
+        // removing it from findGroupForTerminalName produced a dead click for
+        // every ungrouped terminal under a lock. Ungrouped terminals now render
+        // as ordinary rows under their workspace, not gathered into a bucket.
+        return sortGroups([...terminalGroups, ...getDerivedGroups()]);
+    }
+
+    function sortGroups(groups) {
+        const pinned = new Set(groupPrefs.pinned);
+        return groups.slice().sort((a, b) => {
+            const ap = pinned.has(a.id) ? 0 : 1;
+            const bp = pinned.has(b.id) ? 0 : 1;
+            if (ap !== bp) { return ap - bp; }
+            if (a.source !== 'manual' && b.source === 'manual') { return 1; }
+            if (a.source === 'manual' && b.source !== 'manual') { return -1; }
+            return String(a.name || '').localeCompare(String(b.name || ''));
+        });
+    }
+
+    function getGroupMembers(group) {
+        if (!group) { return []; }
+        // Liveness only. The parentage clause that used to live here answered a
+        // DIFFERENT question — "should this terminal be gathered automatically?" —
+        // and applying it to `manual` made a group discard the very names it was
+        // registered with. A team registers head + children explicitly
+        // (teamWiring.ts); members are parented by construction
+        // (ptyFleetService.ts:358), so the old set resolved every team to its head
+        // alone, with no error anywhere. The role/worktree branches below still
+        // exclude children — they are queries, and this is a membership list.
+        const live = new Set(fleetList.filter(t => t.status !== 'exited').map(t => t.friendlyName));
+        let names = [];
+        if (group.source === 'manual') {
+            const order = Array.isArray(group.order) ? group.order : (Array.isArray(group.members) ? group.members : []);
+            names = order.filter(n => live.has(n));
+            for (const n of (group.members || [])) {
+                if (live.has(n) && !names.includes(n)) { names.push(n); }
+            }
+        } else if (group.source === 'role') {
+            names = fleetList.filter(t => t.status !== 'exited' && !t.parentInstanceId && t.role === group.value).map(t => t.friendlyName);
+        } else if (group.source === 'worktree') {
+            names = fleetList.filter(t => t.status !== 'exited' && !t.parentInstanceId && t.worktreePath === group.value).map(t => t.friendlyName);
+        }
+        // Extras overlay: terminals added to a derived group via the
+        // locked-group empty-pane fill. Manual groups append to their own
+        // members array, so no overlay is needed for them. The extras union
+        // is intersected with the live set explicitly — the role and worktree
+        // branches inline the child-excluding predicate rather than reading
+        // the live Set, so filtering is not automatic here. A dead name in
+        // extras would otherwise be seated into a pane.
+        if (group.source !== 'manual' && groupPrefs.extras) {
+            const extra = groupPrefs.extras[group.id];
+            if (Array.isArray(extra)) {
+                for (const n of extra) {
+                    if (live.has(n) && !names.includes(n)) { names.push(n); }
+                }
+            }
+        }
+        // The 'unassigned' source branch is gone — nothing constructs that
+        // group any more, and the branch recursed over every group to compute
+        // a complement on every call from the render loop.
+        return orderGroupMembers(group, names);
+    }
+
+    function orderGroupMembers(group, liveNames) {
+        const saved = (groupPrefs.orders && groupPrefs.orders[group.id]) || [];
+        const ordered = [];
+        const remaining = [...liveNames];
+        for (const n of saved) {
+            if (remaining.includes(n)) {
+                ordered.push(n);
+                remaining.splice(remaining.indexOf(n), 1);
+            }
+        }
+        const byName = new Map(fleetList.map(t => [t.friendlyName, t]));
+        remaining.sort((a, b) => compareTerminals(byName.get(a), byName.get(b)));
+        return ordered.concat(remaining);
+    }
+
+    function setGroupOrder(group, order) {
+        if (!groupPrefs.orders) { groupPrefs.orders = {}; }
+        groupPrefs.orders[group.id] = order;
         saveLayoutSettings();
     }
 
-    function renderGroupSidebar() {
-        // renderSidebarList early-returns into this function, so the not-rendered
-        // clear at the end of the parents loop never runs in groups view. A
-        // `parent:*` / `worktree:*` key would otherwise survive the switch and make
-        // the next `+` click back in flat view toggle instead of open.
-        if (pickerState && pickerState.key !== '__groups__') { pickerState = null; }
+    /**
+     * Read a group's stored layout. Manual groups carry it on the group object
+     * (group.layout); derived groups carry it in groupPrefs.layouts[id]. Returns
+     * null when no layout has been stored for the group.
+     */
+    function getStoredGroupLayout(group) {
+        if (group.source === 'manual' && group.layout && LAYOUT_MODES.includes(group.layout)) {
+            return group.layout;
+        }
+        const stored = groupPrefs.layouts && groupPrefs.layouts[group.id];
+        if (typeof stored === 'string' && LAYOUT_MODES.includes(stored)) {
+            return stored;
+        }
+        return null;
+    }
+
+    /**
+     * Layout resolver for group switching — free to move in BOTH directions,
+     * unlike layoutForFleetCount which is grow-only. A group switch is a
+     * restore, and a restore must be able to go down.
+     *
+     * Read order: stored layout (manual .layout, else groupPrefs.layouts[id])
+     * → fall back to smallestLayoutFitting (non-monotonic). Only switchToGroup
+     * calls this; the grow-only layoutForFleetCount is untouched so nothing
+     * else inherits the non-monotonic behaviour.
+     */
+    function layoutForGroupSwitch(group) {
+        const stored = getStoredGroupLayout(group);
+        if (stored && LAYOUT_MODES.includes(stored)) { return stored; }
+        return smallestLayoutFitting(getGroupMembers(group).length);
+    }
+
+    function findGroupForTerminalName(name) {
         for (const g of terminalGroups) {
-            const row = document.createElement('div');
-            row.className = 'worktree-group-header' + (g.id === activeGroupId ? ' active' : '');
-            row.title = g.name;
+            if (getGroupMembers(g).includes(name)) { return g; }
+        }
+        for (const g of getDerivedGroups()) {
+            if (getGroupMembers(g).includes(name)) { return g; }
+        }
+        // No unassigned fallback — the pseudo-group is retired. Returns null
+        // for ungrouped terminals, which makes handleLockedTerminalClick's
+        // !group branch live (drop the lock and seat the terminal).
+        return null;
+    }
 
-            const titleArea = document.createElement('div');
-            titleArea.className = 'worktree-title-area';
+    /**
+     * Add a terminal to the active group's membership. For manual groups,
+     * appends to the group's own members array. For derived groups, appends
+     * to groupPrefs.extras[id] — the overlay that unions with the computed
+     * membership in getGroupMembers. Must be called BEFORE seating so the
+     * next seatActiveGroupPage reconcile (triggered by a window resize or
+     * group switch) does not evict the addition.
+     */
+    function addTerminalToActiveGroup(name) {
+        const group = getAllGroups().find(g => g.id === activeGroupId);
+        if (!group) { return; }
+        if (group.source === 'manual') {
+            if (!group.members) { group.members = []; }
+            if (!group.members.includes(name)) { group.members.push(name); }
+            if (Array.isArray(group.order) && !group.order.includes(name)) { group.order.push(name); }
+        } else {
+            if (!groupPrefs.extras) { groupPrefs.extras = {}; }
+            if (!Array.isArray(groupPrefs.extras[activeGroupId])) { groupPrefs.extras[activeGroupId] = []; }
+            if (!groupPrefs.extras[activeGroupId].includes(name)) { groupPrefs.extras[activeGroupId].push(name); }
+        }
+        saveLayoutSettings();
+    }
 
-            const nameEl = document.createElement('span');
-            nameEl.className = 'worktree-name';
-            nameEl.textContent = g.name;
+    function handleLockedTerminalClick(name) {
+        // Rule 1: a locked sidebar row click is a deliberate selection. The
+        // focus-in-place branch below (same group, already seated) returns
+        // without reaching assignToFocusedPane or switchToGroup, so without
+        // this cancel the peek survives and the newly-focused terminal stays
+        // display:none — the exact UAT repro (peek planner-1, click planner-2
+        // in the same locked group). The other two branches cancel downstream
+        // (locateTerminal → assignToFocusedPane, switchToGroup) and dismissPeek
+        // early-returns on the second call, so this costs nothing extra there.
+        // The peekTerminal caller is safe: peekTerminalName still holds the
+        // PREVIOUS peek at this point, so this clears the old one, not the new.
+        dismissPeek();
+        const group = findGroupForTerminalName(name);
+        const rendered = Math.max(1, getSlotCount(effectiveLayout));
 
-            const activeCount = g.assignments.filter(Boolean).length;
-            const countEl = document.createElement('span');
-            countEl.className = 'worktree-count';
-            countEl.textContent = `${activeCount} terminal${activeCount === 1 ? '' : 's'}`;
+        // Free-slot fill: if there is a genuinely empty rendered pane, a click
+        // on a non-member (whether claimed by another group or by no group at
+        // all) means "seat it HERE and make it a member" — not "switch to its
+        // group". This is the fix for the reported defect: empty panes under a
+        // lock were unfillable because every click was intercepted as a mode
+        // change. The terminal is added to the active group's membership BEFORE
+        // seating, so the next seatActiveGroupPage reconcile does not evict it.
+        // The caller guarantees a free slot exists before passing keepLock,
+        // because assignToFocusedPane's displacement fallbacks would otherwise
+        // evict a group member to seat a non-member.
+        // Mirrors assignToFocusedPane's `isOpen(i) && isFree(i)` exactly, pins
+        // included: that function refuses to seat into a pinned slot when
+        // rendered > 1, so a precondition that counted one as free would send
+        // it down the displacement fallbacks and evict a group member under the
+        // lock — the one outcome the keepLock contract forbids.
+        const pinsActive = rendered > 1;
+        const isFreeSlot = (i) => !paneAssignments[i] && paneModes[i] !== 'kanban' && (!pinsActive || !pinnedPanes[i]);
+        let hasFreeSlot = false;
+        for (let i = 0; i < rendered; i++) {
+            if (isFreeSlot(i)) { hasFreeSlot = true; break; }
+        }
 
-            titleArea.appendChild(nameEl);
-            titleArea.appendChild(countEl);
+        if (hasFreeSlot) {
+            const isMemberOfActive = group && group.id === activeGroupId;
+            if (!isMemberOfActive) {
+                // Add to the active group first, then seat with keepLock.
+                addTerminalToActiveGroup(name);
+                assignToFocusedPane(name, { keepLock: true });
+                return;
+            }
+        }
 
-            const switchBtn = document.createElement('button');
-            switchBtn.className = 'locate-btn';
-            switchBtn.textContent = 'switch';
-            switchBtn.title = 'Seat this group';
-            switchBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                switchToGroup(g.id);
-            });
+        // No free slot, or the terminal is already a member of the active
+        // group — fall through to the existing behaviour.
+        if (!group) {
+            // No group claims it at all, and no free slot to add it — drop the
+            // lock and seat it, so the click is never dead. This branch is now
+            // live for every ungrouped terminal clicked under a lock (the
+            // Unassigned pseudo-group was retired by the deletion plan, so
+            // findGroupForTerminalName returns null instead of a fallback).
+            activeGroupId = null;
+            activeGroupPage = 0;
+            saveLayoutSettings();
+            locateTerminal(name);
+            return;
+        }
+        if (group.id !== activeGroupId) {
+            // Belongs to another group, and no free slot in the active group —
+            // switch to its group. The tab strip is the deliberate switch
+            // affordance; a sidebar click with no free slot falls back to it.
+            switchToGroup(group.id);
+            return;
+        }
+        const members = getGroupMembers(group);
+        const idxInGroup = members.indexOf(name);
+        if (idxInGroup < 0) { return; }
+        // Visibility is decided by the pane grid, not by the member index: with paging
+        // a member at index 11 can be on screen and a member at index 2 can be off it.
+        const paneIndex = paneAssignments.indexOf(name);
+        if (paneIndex !== -1 && paneIndex < rendered) {
+            activeTerminalName = name;
+            focusPaneTerminal(paneIndex);
+            renderSidebarList();
+            return;
+        }
+        // Off-screen member: promote it into the LAST rendered slot of the current
+        // page, so the pane the user was already reading is the least likely to go.
+        promoteGroupMember(group, idxInGroup, activeGroupPage * rendered + rendered - 1);
+    }
 
+    function promoteGroupMember(group, fromIndex, toIndex) {
+        const members = getGroupMembers(group);
+        if (fromIndex < 0 || fromIndex >= members.length) { return; }
+        if (toIndex < 0) { toIndex = 0; }
+        if (toIndex >= members.length) { toIndex = members.length - 1; }
+        const [name] = members.splice(fromIndex, 1);
+        members.splice(toIndex, 0, name);
+        setGroupOrder(group, members);
+        switchToGroup(activeGroupId, { keepPage: true });
+    }
+
+    /**
+     * Render the group tab strip above the pane grid. Replaces the old sidebar
+     * groups tier (renderGroupSidebar). One tab per group plus a leading "All"
+     * tab and a trailing "+". Returns true when it mounted the role picker, so
+     * the caller's `pickerRendered` bookkeeping covers the strip's picker too.
+     *
+     * The strip is rendered from renderSidebarList() — NOT on its own timer —
+     * because the tab labels carry live member counts and two independent
+     * refresh cycles over the same fleetList would disagree visibly.
+     *
+     * The picker for a `group:*` key is mounted INSIDE the strip element (which
+     * lives outside `listEl`), so the `listEl.innerHTML = ''` wipe on every
+     * fleet poll does not destroy it. The `pickerRendered = true` guard at the
+     * bottom of renderSidebarList prevents the garbage-collect line from
+     * nulling `pickerState` for `group:*` keys.
+     */
+    function renderGroupTabStrip() {
+        if (!groupTabStripEl || soloTerminalName) { return false; }
+        groupTabStripEl.innerHTML = '';
+
+        const tabRow = document.createElement('div');
+        tabRow.className = 'group-tab-row';
+
+        // "All" tab — active when no group is locked. Clicking it drops the lock.
+        // Clicking the already-active "All" tab is inert (no-op).
+        const allTab = document.createElement('button');
+        allTab.type = 'button';
+        allTab.className = 'group-tab' + (activeGroupId ? '' : ' active');
+        allTab.textContent = 'All';
+        allTab.title = activeGroupId ? 'Drop the lock and return to free composition' : 'Free composition mode';
+        allTab.addEventListener('click', () => {
+            // No !activeGroupId guard: clicking "All" from an already-unlocked
+            // state is a legitimate "reset my composition" gesture and
+            // clearGroupLock now performs a real seating pass in both cases.
+            clearGroupLock();
+        });
+        tabRow.appendChild(allTab);
+
+        // Group tabs — one per group from getAllGroups() in sortGroups order.
+        const groups = getAllGroups();
+        const groupTabEls = [];
+        for (const g of groups) {
+            const isActive = g.id === activeGroupId;
+            const tab = document.createElement('div');
+            tab.className = 'group-tab' + (isActive ? ' active' : '');
+            tab.title = g.name;
+            tab.dataset.groupId = g.id;
+
+            const nameSpan = document.createElement('span');
+            nameSpan.textContent = g.name;
+            tab.appendChild(nameSpan);
+
+            const members = getGroupMembers(g);
+            const countSpan = document.createElement('span');
+            countSpan.className = 'group-tab-count';
+            countSpan.textContent = String(members.length);
+            tab.appendChild(countSpan);
+
+            // Delete affordance — every tab. One verb, one handler: deleteGroup
+            // handles all sources (manual → remove record + prune state;
+            // derived → suppress via groupPrefs.hidden). If the deleted group
+            // is the locked one, deleteGroup routes through clearGroupLock to
+            // re-seat the grid. No confirm gate — per CLAUDE.md, delete
+            // executes immediately on click.
             const delBtn = document.createElement('button');
-            delBtn.className = 'locate-btn is-danger';
-            delBtn.textContent = 'delete';
+            delBtn.type = 'button';
+            delBtn.className = 'group-tab-delete';
+            delBtn.textContent = '×';
             delBtn.title = 'Delete this group';
+            delBtn.setAttribute('aria-label', `Delete ${g.name}`);
             delBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 deleteGroup(g.id);
             });
+            tab.appendChild(delBtn);
 
-            row.appendChild(titleArea);
-            row.appendChild(switchBtn);
-            row.appendChild(delBtn);
-            row.addEventListener('click', () => switchToGroup(g.id));
+            // Click: the active tab is inert. "Leave this group" is the "All"
+            // tab sitting to the left — it must not inherit the old row's
+            // toggle-to-clear behaviour.
+            tab.addEventListener('click', () => {
+                if (activeGroupId === g.id) { return; }
+                switchToGroup(g.id);
+            });
 
-            listEl.appendChild(row);
+            groupTabEls.push({ el: tab, group: g });
+            tabRow.appendChild(tab);
         }
 
-        const allRow = document.createElement('div');
-        allRow.className = 'worktree-group-header';
-        allRow.textContent = 'Show all terminals';
-        allRow.style.opacity = '0.75';
-        allRow.addEventListener('click', () => {
-            groupsView = false;
-            saveLayoutSettings();
-            renderSidebarList();
+        // "+" button — opens the role picker scoped to the active group's
+        // context. Uses a `group:<id>` key so pickerState keeps it alive
+        // across fleet polls (the pickerRendered guard below covers it).
+        const addBtn = document.createElement('button');
+        addBtn.type = 'button';
+        addBtn.className = 'group-tab-add';
+        addBtn.textContent = '+';
+        addBtn.title = 'New terminal in active group context';
+        const addKey = 'group:' + (activeGroupId || '__all__');
+        addBtn.addEventListener('click', () => {
+            onNewTerminalClicked(undefined, addKey);
         });
-        listEl.appendChild(allRow);
+        tabRow.appendChild(addBtn);
 
-        const newRow = document.createElement('div');
-        newRow.className = 'worktree-group-header';
-        newRow.textContent = '+ New terminal';
-        newRow.addEventListener('click', () => onNewTerminalClicked(undefined, '__groups__'));
-        listEl.appendChild(newRow);
-        // Mandatory, not cosmetic: groups view has no per-group `+` at all, so
-        // without this row, deleting #btn-new-terminal leaves the view with zero
-        // spawn paths — the dead end the PRD's capability-gating contract forbids.
-        if (pickerState && pickerState.key === '__groups__') {
-            listEl.appendChild(mountRolePicker(pickerState.targetSpec));
+        // Attach BEFORE measuring. offsetWidth/clientWidth are 0 on a detached
+        // node, so measuring here while tabRow was still unparented made
+        // availableWidth negative and pushed EVERY group tab into the overflow
+        // menu — the strip rendered as "All » +" with no tabs at all, in every
+        // fleet shape. The overflow pass below removes children from tabRow,
+        // which works identically whether it is attached or not.
+        groupTabStripEl.appendChild(tabRow);
+
+        // Overflow: past the strip's width, surplus tabs collapse into a »
+        // menu. Realistic counts are small (derived groups only materialise
+        // at groupPrefs.threshold members), so this is a guard, not the
+        // common path. The » menu also carries the "N hidden groups — show
+        // all" entry that used to live in the sidebar.
+        const hasHiddenGroups = Array.isArray(groupPrefs.hidden) && groupPrefs.hidden.length > 0;
+        if (groupTabEls.length > 0 || hasHiddenGroups) {
+            // Reading offsetWidth forces a synchronous layout, so the
+            // measurements are accurate before we remove anything.
+            const stripWidth = tabRow.clientWidth;
+            const addBtnWidth = addBtn.offsetWidth;
+            const overflowReserved = 36;
+            const availableWidth = stripWidth - addBtnWidth - overflowReserved;
+
+            let usedWidth = allTab.offsetWidth + 2;
+            const overflowing = [];
+            for (const item of groupTabEls) {
+                const w = item.el.offsetWidth + 2;
+                if (usedWidth + w <= availableWidth) {
+                    usedWidth += w;
+                } else {
+                    overflowing.push(item);
+                }
+            }
+
+            if (overflowing.length > 0 || hasHiddenGroups) {
+                for (const item of overflowing) {
+                    if (item.el.parentNode === tabRow) {
+                        tabRow.removeChild(item.el);
+                    }
+                }
+
+                const overflowContainer = document.createElement('div');
+                overflowContainer.className = 'group-tab-overflow';
+
+                const overflowBtn = document.createElement('button');
+                overflowBtn.type = 'button';
+                overflowBtn.className = 'group-tab-overflow-btn';
+                overflowBtn.textContent = '»';
+                overflowBtn.title = 'More groups';
+                overflowContainer.appendChild(overflowBtn);
+
+                const menu = document.createElement('div');
+                menu.className = 'group-tab-overflow-menu';
+                menu.style.display = 'none';
+
+                for (const item of overflowing) {
+                    const g = item.group;
+                    const menuItem = document.createElement('div');
+                    menuItem.className = 'group-tab-overflow-item' + (g.id === activeGroupId ? ' active' : '');
+                    const nameSpan = document.createElement('span');
+                    nameSpan.textContent = g.name;
+                    const countSpan = document.createElement('span');
+                    countSpan.className = 'group-tab-count';
+                    countSpan.textContent = String(getGroupMembers(g).length);
+                    menuItem.appendChild(nameSpan);
+                    menuItem.appendChild(countSpan);
+                    menuItem.addEventListener('click', () => {
+                        if (activeGroupId !== g.id) { switchToGroup(g.id); }
+                        menu.style.display = 'none';
+                    });
+                    menu.appendChild(menuItem);
+                }
+
+                if (overflowing.length > 0 && hasHiddenGroups) {
+                    const divider = document.createElement('div');
+                    divider.className = 'group-tab-overflow-divider';
+                    menu.appendChild(divider);
+                }
+
+                if (hasHiddenGroups) {
+                    const restoreItem = document.createElement('div');
+                    restoreItem.className = 'group-tab-overflow-restore';
+                    restoreItem.textContent = `${groupPrefs.hidden.length} deleted group${groupPrefs.hidden.length === 1 ? '' : 's'} — restore all`;
+                    restoreItem.title = 'Restore every deleted derived group';
+                    restoreItem.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        groupPrefs.hidden = [];
+                        saveLayoutSettings();
+                        renderSidebarList();
+                    });
+                    menu.appendChild(restoreItem);
+                }
+
+                overflowBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    menu.style.display = menu.style.display === 'none' ? 'flex' : 'none';
+                });
+
+                // Close on outside click — one-shot listener.
+                document.addEventListener('click', function closeOverflow(ev) {
+                    if (!overflowContainer.contains(ev.target)) {
+                        menu.style.display = 'none';
+                        document.removeEventListener('click', closeOverflow);
+                    }
+                });
+
+                overflowContainer.appendChild(menu);
+                tabRow.insertBefore(overflowContainer, addBtn);
+            }
         }
+
+        // Picker for `group:*` key — mounted in the strip, outside listEl,
+        // so the innerHTML wipe does not destroy it mid-choice. The key is
+        // `group:<id>` (or `group:__all__` for the no-group-locked case).
+        // Before mounting, confirm the group the picker was opened against
+        // still exists: this plan puts a working delete on every tab, so an
+        // operator can open the + on a group and then delete that group. If
+        // the group is gone, do not mount — return false so the
+        // garbage-collect at the bottom of renderSidebarList nulls the
+        // stale pickerState. `__all__` always resolves (it is the no-group
+        // sentinel, not a real group id).
+        let pickerRendered = false;
+        if (pickerState && pickerState.key && String(pickerState.key).startsWith('group:')) {
+            const pickerGroupId = String(pickerState.key).slice('group:'.length);
+            const groupStillExists = pickerGroupId === '__all__'
+                || getAllGroups().some(g => g.id === pickerGroupId);
+            if (groupStillExists) {
+                const picker = mountRolePicker(pickerState.targetSpec);
+                groupTabStripEl.appendChild(picker);
+                pickerRendered = true;
+            }
+        }
+
+        return pickerRendered;
     }
 
     /** Extract a trailing -N from a terminal name for numeric ordering. Renamed
@@ -2008,9 +3054,69 @@
             paneGridEl.style.display = 'grid';
         }
 
-        if (terminalGroups.length > 0 && !soloTerminalName && groupsView) {
-            renderGroupSidebar();
-            return;
+        if (selectedTerminalNames.size > 0) {
+            const selRow = document.createElement('div');
+            selRow.className = 'group-tier-header';
+            const selTitle = document.createElement('span');
+            selTitle.className = 'worktree-name';
+            selTitle.textContent = `${selectedTerminalNames.size} selected`;
+            const groupBtn = document.createElement('button');
+            groupBtn.className = 'group-tier-btn';
+            groupBtn.textContent = 'group';
+            groupBtn.title = 'Save selection as a manual group';
+            groupBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const input = document.createElement('input');
+                input.className = 'item-name-input';
+                input.placeholder = 'Group name';
+                input.style.width = '100%';
+                input.style.marginTop = '8px';
+                selRow.replaceWith(input);
+                input.focus();
+                // One-shot for the same Enter-then-blur double-commit reason as the
+                // SAVE AS GROUP input above.
+                let done = false;
+                const finish = (save) => {
+                    if (done) { return; }
+                    done = true;
+                    const name = input.value.trim();
+                    input.replaceWith(selRow);
+                    if (save && name) {
+                        saveSelectionAsGroup(name);
+                    } else {
+                        selectedTerminalNames.clear();
+                        renderSidebarList();
+                    }
+                };
+                input.addEventListener('keydown', (ev) => {
+                    if (ev.key === 'Enter') { finish(true); }
+                    if (ev.key === 'Escape') { finish(false); }
+                });
+                input.addEventListener('blur', () => finish(true));
+            });
+            const clearBtn = document.createElement('button');
+            clearBtn.className = 'group-tier-btn';
+            clearBtn.textContent = 'clear';
+            clearBtn.title = 'Clear selection';
+            clearBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                selectedTerminalNames.clear();
+                renderSidebarList();
+            });
+            const actions = document.createElement('div');
+            actions.className = 'group-tier-actions';
+            actions.appendChild(groupBtn);
+            actions.appendChild(clearBtn);
+            selRow.appendChild(selTitle);
+            selRow.appendChild(actions);
+            listEl.appendChild(selRow);
+        }
+
+        // Render the group tab strip (above the pane grid, outside listEl).
+        // The strip's picker uses a `group:*` key; the guard at the bottom
+        // of this function prevents the garbage-collect from nulling it.
+        if (!soloTerminalName) {
+            if (renderGroupTabStrip()) { pickerRendered = true; }
         }
 
         let parents = Array.isArray(parentsList) ? [...parentsList] : [];
@@ -2251,21 +3357,20 @@
         // pruned). Clearing here keeps the next `+` click from toggling a picker
         // nobody can see. AFTER the loop, not inside it: inside, the first group
         // that is not the owner would clear the state on every single render.
+        //
+        // The tab strip's `group:*` picker is mounted OUTSIDE listEl (in the strip
+        // element above the pane grid), so the workspace-tree loop above never
+        // encounters it. But renderGroupTabStrip() at :2755 already propagates
+        // its own return value into pickerRendered — it returns true only when it
+        // actually mounted the picker, and it refuses to mount when the group no
+        // longer exists. That return value is the authoritative signal; no extra
+        // guard is needed here, and an unconditional one would make the
+        // garbage-collect unreachable for stale group: keys.
         if (pickerState && !pickerRendered) { pickerState = null; }
 
-        // When groups exist but the operator toggled to flat mode, offer the way back.
-        if (terminalGroups.length > 0 && !soloTerminalName && !groupsView) {
-            const groupsRow = document.createElement('div');
-            groupsRow.className = 'worktree-group-header';
-            groupsRow.textContent = 'Show groups';
-            groupsRow.style.opacity = '0.75';
-            groupsRow.addEventListener('click', () => {
-                groupsView = true;
-                saveLayoutSettings();
-                renderSidebarList();
-            });
-            listEl.appendChild(groupsRow);
-        }
+        // The group tab strip is rendered above the pane grid (outside listEl);
+        // the sidebar is now one clean workspace→terminal tree. There is no
+        // separate 'Show groups' view toggle.
     }
 
     /**
@@ -2285,8 +3390,15 @@
         });
     }
 
-    function setLayoutMode(mode) {
+    function setLayoutMode(mode, opts = {}) {
         if (!LAYOUT_MODES.includes(mode)) return;
+        // A deliberate layout/composer gesture exits a locked group unless the lock
+        // itself is the one asking for the layout (switchToGroup passes keepLock).
+        if (activeGroupId && !opts.keepLock) {
+            activeGroupId = null;
+            activeGroupPage = 0;
+            saveLayoutSettings();
+        }
         currentLayout = mode;
         // Adopt the pick optimistically so the render below is the ONLY render on the
         // common (fits-fine) path — applyLayoutFloor then re-renders only if the new
@@ -2318,7 +3430,26 @@
         }
     }
 
-    function assignToFocusedPane(terminalName) {
+    function assignToFocusedPane(terminalName, opts = {}) {
+        // Rule 1: a deliberate composer seat is a selection, and selecting any
+        // terminal other than the peeked one ends the peek. This covers
+        // locateTerminal (sidebar row click), drag-drop onto a pane, and the
+        // inbound focusTerminal message. dismissPeek early-returns when no peek
+        // is active, so the no-peek path — almost every call — pays nothing.
+        // NOTE: dismissPeek is ABOVE the unlock block and must stay there — do
+        // not reorder or gate it on opts.keepLock. The double dismissPeek from
+        // handleLockedTerminalClick is harmless (it early-returns).
+        dismissPeek();
+        // A deliberate composer seat exits a locked group and keeps the panes as
+        // they are until this assignment is applied — UNLESS the caller passed
+        // keepLock (only handleLockedTerminalClick's free-slot branch does).
+        // The caller MUST guarantee a free slot exists before passing keepLock,
+        // because the displacement fallbacks below end in "displace the focused
+        // pane", which under a lock would evict a group member to seat a non-member.
+        if (activeGroupId && !opts.keepLock) {
+            activeGroupId = null;
+            activeGroupPage = 0;
+        }
         const rendered = getSlotCount(effectiveLayout);
         if (focusedPaneIndex < 0 || focusedPaneIndex >= rendered) {
             focusedPaneIndex = 0;
@@ -2566,7 +3697,9 @@
      */
     function syncInputStateChip(paneEl, titleEl, state) {
         let chip = paneEl.querySelector('.pane-input-state');
-        if (state.key === 'live') {
+        // The dispatch chip owns this corner while it is up. Two chips in a
+        // 3x3 header ellipsise the terminal name away entirely.
+        if (state.key === 'live' || paneEl.classList.contains('is-dispatching')) {
             if (chip) { chip.remove(); }
             return;
         }
@@ -2582,6 +3715,60 @@
         // terminal name. Dot only there, title attribute carries the meaning.
         chip.textContent = isTerseLayout() ? '' : state.label;
         chip.title = state.label;
+    }
+
+    /** Single writer for the dispatch chip, same contract as syncInputStateChip:
+     *  creates, updates AND removes, because both call sites are routinely handed
+     *  a pane with no chip to repaint. */
+    function syncDispatchChip(paneEl, titleEl, active) {
+        let chip = paneEl.querySelector('.pane-dispatch-state');
+        if (!active) {
+            if (chip) { chip.remove(); }
+            paneEl.classList.remove('is-dispatching');
+            return;
+        }
+        paneEl.classList.add('is-dispatching');
+        if (!chip) {
+            const host = titleEl || paneEl.querySelector('.pane-title');
+            if (!host) { return; }
+            chip = document.createElement('span');
+            chip.className = 'pane-dispatch-state';
+            host.appendChild(chip);
+        }
+        // Terse layouts get the animated dot alone — isTerseLayout(), not an inline
+        // copy of the layout list, for the same reason syncInputStateChip uses it.
+        chip.textContent = isTerseLayout() ? '' : 'dispatching…';
+        chip.title = 'Clearing the agent and pasting the prompt';
+    }
+
+    function beginDispatchIndicator(name) {
+        dispatchInFlight.set(name, (dispatchInFlight.get(name) || 0) + 1);
+        refreshDispatchState(name);
+    }
+
+    function endDispatchIndicator(name) {
+        const next = (dispatchInFlight.get(name) || 1) - 1;
+        if (next <= 0) { dispatchInFlight.delete(name); } else { dispatchInFlight.set(name, next); }
+        refreshDispatchState(name);
+    }
+
+    /** Repaint the dispatch chip for `name`, then hand the header back to the
+     *  input-state chip. Never renderPaneGrid() — a grid rebuild reparents live
+     *  xterm DOM, which updatePaneElement's invariant forbids for a purely visual
+     *  change.
+     *
+     *  The refreshInputState() tail is NOT optional. syncInputStateChip early-returns
+     *  while .is-dispatching is set, so when a dispatch ends, removing the dispatch
+     *  chip leaves the header with NO chip at all — the connecting / read-only /
+     *  paste-queued states stay invisible until the next 5s poll or socket
+     *  transition. refreshInputState re-derives and repaints them immediately. */
+    function refreshDispatchState(name) {
+        const paneIndex = paneAssignments.indexOf(name);
+        if (paneIndex < 0) { return; }
+        const paneEl = paneGridEl && paneGridEl.querySelector(`.terminal-pane[data-pane-index="${paneIndex}"]`);
+        if (!paneEl) { return; }
+        syncDispatchChip(paneEl, paneEl.querySelector('.pane-title'), dispatchInFlight.has(name));
+        refreshInputState(name);
     }
 
     /* A dropped keystroke updates the header chip and NOTHING ELSE.
@@ -2740,9 +3927,168 @@
         } else {
             stopKanbanPoll();
         }
+
+        // Any structural grid change (add, layout change, reassign, peek) can leave
+        // previously-painted panes with stale glyphs. The next batchFitVisiblePanes
+        // run from the structural call sites consumes these flags.
+        //
+        // Gated on an actual structural DELTA, not on "renderPaneGrid ran". This
+        // function is also the badge/gap re-render and the 5 s fleet poll's repaint,
+        // and that poll ends in applyLayoutFloor() -> batchFitVisiblePanes(), which
+        // starts a ladder for every seated pane. Flagging unconditionally would make
+        // every poll consume the flag and fire resyncPaneRenderer + a scrollbar
+        // overflowY toggle on every visible pane, forever — nine full repaints every
+        // five seconds on a 3x3, which is precisely the "once per transition"
+        // property the boolean latch exists to guarantee.
+        // JSON, not join() — a renamed terminal may contain the separator, and an
+        // aliased key would silently skip a real transition.
+        const structureKey = JSON.stringify([
+            effectiveLayout,
+            paneAssignments.slice(0, slotCount),
+            paneModes.slice(0, slotCount),
+            peekTerminalName || null
+        ]);
+        if (structureKey !== lastGridStructureKey) {
+            lastGridStructureKey = structureKey;
+            for (let i = 0; i < slotCount; i++) {
+                const name = paneAssignments[i];
+                if (!name) { continue; }
+                const entry = terminalsMap.get(name);
+                if (!entry || entry.disposed || !entry.term) { continue; }
+                entry.needsRendererResync = true;
+            }
+        }
+
+        applyPeekClasses();
+    }
+
+    function applyPeekClasses() {
+        if (!paneGridEl) { return; }
+        let isPeeking = Boolean(peekTerminalName);
+        // Rule 2 — the invariant: if a peek is active but the peeked terminal is
+        // not seated in any RENDERED pane, the grid would go fully blank (every
+        // pane display:none, none .is-peeked). This happens via involuntary
+        // writers — seatActiveGroupPage on a floor change (window resize),
+        // sanitizePaneAssignments on a fleet poll — that reseat without knowing
+        // about peek. Clear the state and drop the class in this same pass so
+        // the grid returns to normal. Do NOT call afterPeekTransition() here:
+        // applyPeekClasses is called from inside renderPaneGrid and
+        // applyLayoutFloor, and re-entering the render would recurse. The
+        // caller's own render finishes this frame; the stale `restore` label on
+        // the sidebar row is corrected by the next poll. This also subsumes the
+        // exit-only guard in the list-refresh path (peeked terminal exited).
+        if (isPeeking) {
+            const rendered = getSlotCount(effectiveLayout);
+            let seated = false;
+            for (let i = 0; i < rendered; i++) {
+                if (paneAssignments[i] === peekTerminalName) { seated = true; break; }
+            }
+            if (!seated) {
+                peekTerminalName = null;
+                isPeeking = false;
+            }
+        }
+        paneGridEl.classList.toggle('is-peeking', isPeeking);
+        for (let i = 0; i < paneGridEl.children.length; i++) {
+            const paneEl = paneGridEl.children[i];
+            const isPeeked = isPeeking && paneAssignments[i] === peekTerminalName;
+            paneEl.classList.toggle('is-peeked', isPeeked);
+        }
+    }
+
+    /**
+     * Re-render the surfaces that read peekTerminalName but are NOT rebuilt by
+     * applyPeekClasses: the sidebar row marker/label and the pane header's
+     * Restore / Pop out visibility (set in updatePaneElement). Then run the fit
+     * ladder — on BOTH transitions, because the panes that were display:none
+     * measured zero and only converge once they are visible again.
+     */
+    function afterPeekTransition() {
+        renderSidebarList();
+        renderPaneGrid();
+        batchFitVisiblePanes();
+    }
+
+    function dismissPeek() {
+        if (!peekTerminalName) { return; }
+        peekTerminalName = null;
+        applyPeekClasses();
+        afterPeekTransition();
+    }
+
+    function peekTerminal(name) {
+        if (soloTerminalName || !name) { return; }
+        // Clear the badge FIRST, before any path that can early-return: the peek
+        // IS the acknowledgement, and every return below would otherwise leave the
+        // DONE light burning forever (see the clearTerminalBadge note in shell.js).
+        if (terminalBadges.has(name)) {
+            terminalBadges.delete(name);
+            terminalReplayGaps.delete(name);
+            renderSidebarList();
+            postFleetStateToShell();
+        }
+        if (paneAssignments.indexOf(name) === -1) {
+            // ORDERING IS LOAD-BEARING with Rule 1 in place: handleLockedTerminalClick
+            // and locateTerminal both call dismissPeek() now. peekTerminalName is still
+            // null (or names the PREVIOUS peek) at this point, so the seat's dismissPeek
+            // clears the old peek — not the one we are about to set. The assignment
+            // `peekTerminalName = name` MUST stay below this block. Moving it above
+            // would let the seat's own dismissPeek() cancel the new peek mid-flight,
+            // leaving the terminal seated but not peeked.
+            if (activeGroupId) {
+                handleLockedTerminalClick(name);
+            } else {
+                locateTerminal(name);
+            }
+        }
+        const index = paneAssignments.indexOf(name);
+        if (index === -1) { return; }
+        peekTerminalName = name;
+        applyPeekClasses();
+        afterPeekTransition();
+        // Deliberately NOT focusPaneTerminal(index): a peek is a glance, and taking
+        // the caret would both move focusedPaneIndex behind the user's back and put
+        // the caret inside the peeked terminal — which is exactly the state in which
+        // the Esc exit stands down. The user clicks into the pane if they want it.
     }
 
     function wireTerminalDropTarget(paneEl, paneIndex) {
+        /**
+         * Stamp active-agent tracking for plans delivered to a PTY by drag-drop.
+         *
+         * The paste-attribution path in term.onData cannot see this delivery: both drop
+         * branches write to the PTY from outside xterm (server-side ptySendPrompt, or a
+         * raw ws.send), and term.onData fires only for locally typed/pasted input. So the
+         * drop has to attribute itself. Same verb, same writer (attributePasteDispatch),
+         * same deliberately-narrow column set — dispatched_agent / dispatched_terminal /
+         * dispatched_at, never routed_to or dispatched_ide.
+         *
+         * planIds is an ARRAY on purpose: a multi-select drag dispatches N plans in one
+         * prompt, and attributePastedPrompt already attributes each id independently.
+         * A single-id signature here would light exactly one of N activity pips.
+         *
+         * workspaceRoot only steers the EXTENSION host (it orders rootsToSearch); the
+         * standalone bootstrap overrides it with the server's own root.
+         */
+        function attributeDropDispatch(terminalName, planIds, workspaceRoot) {
+            const ids = (Array.isArray(planIds) ? planIds : [planIds]).filter(Boolean).map(String);
+            if (ids.length === 0) { return; }
+            const role = fleetList.find(t => t.friendlyName === terminalName)?.role || '';
+            fetch('/kanban/verb/attributePastedPrompt', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    terminalName,
+                    role,
+                    planIds: ids,
+                    planFiles: [],
+                    workspaceRoot
+                })
+            }).catch(err => {
+                console.warn('[Terminals] drop attribution failed:', err);
+            });
+        }
+
         paneEl.addEventListener('dragover', (e) => {
             if (!Array.from(e.dataTransfer.types || []).includes('application/json')) return;
             if (paneModes[paneIndex] === 'kanban' || !paneAssignments[paneIndex]) return;
@@ -2764,8 +4110,17 @@
             if (!raw) return;
             let dragData;
             try { dragData = JSON.parse(raw); } catch { return; }
+            // kanban.html puts a BARE ARRAY of ids on application/json for its own
+            // card drags. That payload carries no column, so promptSelected could never
+            // be built from it — reject cleanly rather than POST sessionIds:[undefined].
+            if (!dragData || Array.isArray(dragData) || typeof dragData !== 'object') { return; }
 
-            const { planId, sessionId, column, workspaceRoot, sourcePaneIndex } = dragData;
+            const { planId, sessionId, planIds, column, workspaceRoot, sourcePaneIndex } = dragData;
+            // Accept both shapes: the multi payload (planIds) and the legacy single one.
+            const ids = (Array.isArray(planIds) && planIds.length > 0)
+                ? planIds.filter(Boolean).map(String)
+                : [planId || sessionId].filter(Boolean).map(String);
+            if (ids.length === 0) { return; }
 
             const targetName = paneAssignments[paneIndex];
             if (!targetName || paneModes[paneIndex] === 'kanban') {
@@ -2790,7 +4145,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         column,
-                        sessionIds: [planId || sessionId],
+                        sessionIds: ids,
                         workspaceRoot
                     })
                 });
@@ -2809,30 +4164,54 @@
                 if (e.shiftKey) {
                     // Shift-drop: paste the prompt without submitting (bracketed-paste
                     // framing prevents line-by-line execution). The operator can review
-                    // and press Enter manually.
-                    entry.ws.send(encodeInputFrame('\x1b[200~' + promptText + '\x1b[201~'));
+                    // and press Enter manually. This path bypasses both hosts, so the
+                    // standing-orders block must be applied client-side.
+                    const withOrders = applyStandingOrdersClient(promptText, targetName, standingOrders, liveNameSet());
+                    entry.ws.send(encodeInputFrame('\x1b[200~' + withOrders + '\x1b[201~'));
+                    attributeDropDispatch(targetName, ids, workspaceRoot);
                 } else {
                     // Normal drop: use the server-side ptySendPrompt verb, which handles
                     // /clear before prompt, bracketed-paste framing, chunked writes, and
                     // the confirm Enter key for CLI agents — the same pipeline the kanban
                     // board's drag-drop uses via triggerAction → sendPromptToPty.
-                    const promptRes = await fetch('/terminals/verb/ptySendPrompt', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            name: targetName,
-                            data: promptText
-                        })
-                    });
-                    const promptResult = await promptRes.json();
-                    if (!promptResult.success) {
-                        showPaneToast('Failed to send prompt: ' + (promptResult.error || 'unknown'));
+                    //
+                    // clearBeforePromptFromConfig: true asks the host to resolve the
+                    // switchboard.terminal.clearBeforePrompt config default for this
+                    // delivery. The webview cannot read that setting (loadSetting only
+                    // reads terminals.* DB keys), and a fresh task dropped on a terminal
+                    // genuinely wants a clean context — so the drop path opts in rather
+                    // than leaving the field absent (which now defaults to false). An
+                    // operator who set the config to false gets false; the destructive
+                    // direction is never taken implicitly.
+                    beginDispatchIndicator(targetName);
+                    let promptResult;
+                    try {
+                        const promptRes = await fetch('/terminals/verb/ptySendPrompt', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                name: targetName,
+                                data: promptText,
+                                clearBeforePromptFromConfig: true
+                            })
+                        });
+                        promptResult = await promptRes.json();
+                    } finally {
+                        // finally, not the success path: a rejected fetch must not
+                        // strand the chip, and the failure toast below must never
+                        // appear beside a live "dispatching…".
+                        endDispatchIndicator(targetName);
+                    }
+                    if (!promptResult || !promptResult.success) {
+                        showPaneToast('Failed to send prompt: ' + ((promptResult && promptResult.error) || 'unknown'));
                         return;
                     }
+                    attributeDropDispatch(targetName, ids, workspaceRoot);
                 }
 
-                if (sourcePaneIndex !== undefined && sourcePaneIndex !== paneIndex) {
-                    fetchBoardCardsForPane(sourcePaneIndex);
+                if (sourcePaneIndex !== undefined) {
+                    clearPaneSelection(sourcePaneIndex);
+                    if (sourcePaneIndex !== paneIndex) { fetchBoardCardsForPane(sourcePaneIndex); }
                 }
             } catch (err) {
                 showPaneToast('Drag-to-terminal failed: ' + (err.message || String(err)));
@@ -2920,6 +4299,27 @@
             paneAssignments[index] = null;
             pinnedPanes[index] = false; // an empty pinned seat reserves a slot nothing can fill
             dismissStartupCurtain(targetName);
+            // Removing a member: while a group is locked, unassigning a pane
+            // also removes that terminal from the group's membership. For
+            // derived groups, this means removing from groupPrefs.extras (a
+            // derived member — one the group computes — cannot be removed this
+            // way; unassigning it vacates the pane and the terminal remains a
+            // member). For manual groups, removes from the group's members
+            // array. Suppressing a derived member is a different feature and
+            // is not in scope.
+            if (activeGroupId) {
+                const group = getAllGroups().find(g => g.id === activeGroupId);
+                if (group) {
+                    if (group.source !== 'manual' && groupPrefs.extras && Array.isArray(groupPrefs.extras[activeGroupId])) {
+                        groupPrefs.extras[activeGroupId] = groupPrefs.extras[activeGroupId].filter(n => n !== targetName);
+                    } else if (group.source === 'manual' && Array.isArray(group.members)) {
+                        group.members = group.members.filter(n => n !== targetName);
+                        if (Array.isArray(group.order)) {
+                            group.order = group.order.filter(n => n !== targetName);
+                        }
+                    }
+                }
+            }
             saveLayoutSettings();
             renderPaneGrid();
             renderSidebarList();
@@ -2942,7 +4342,30 @@
             renderPaneGrid();
         });
 
+        const peekDismissBtn = document.createElement('button');
+        peekDismissBtn.className = 'btn-unassign-pane btn-peek-dismiss';
+        peekDismissBtn.textContent = 'Restore';
+        peekDismissBtn.title = 'Dismiss the peek and restore the grid';
+        peekDismissBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            dismissPeek();
+        });
+
+        const popoutBtn = document.createElement('button');
+        popoutBtn.className = 'btn-unassign-pane btn-popout-pane';
+        popoutBtn.textContent = 'Pop out';
+        popoutBtn.title = 'Open this terminal in its own window';
+        popoutBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const targetName = paneAssignments[index];
+            if (!targetName) { return; }
+            if (peekTerminalName) { dismissPeek(); }
+            window.parent.postMessage({ type: 'popoutTerminal', name: targetName }, location.origin);
+        });
+
         actionsEl.appendChild(pinBtn);
+        actionsEl.appendChild(peekDismissBtn);
+        actionsEl.appendChild(popoutBtn);
         actionsEl.appendChild(paneClearBtn);
         actionsEl.appendChild(paneModelBtn);
         actionsEl.appendChild(unassignBtn);
@@ -2950,6 +4373,11 @@
         headerEl.appendChild(titleEl);
         headerEl.appendChild(actionsEl);
         paneEl.appendChild(headerEl);
+
+        const planEl = document.createElement('div');
+        planEl.className = 'pane-plan-title';
+        planEl.style.display = 'none';
+        paneEl.appendChild(planEl);
 
         const contentEl = document.createElement('div');
         contentEl.className = 'pane-content';
@@ -2973,9 +4401,31 @@
                 if (curtainEl) { curtainEl.remove(); }
                 return;
             }
+            // Empty-pane affordance under a lock: clicking the empty-slot
+            // placeholder (not the kanban toggle button inside it) opens the
+            // role picker scoped to the active group. Reuses the strip's
+            // `group:<id>` picker key so renderGroupTabStrip reports it and
+            // it survives the 5-second fleet-poll garbage-collect. The picker
+            // appears in the strip, not in the pane header — but the empty
+            // pane's text invites the click and the picker is functional.
+            // No parallel picker mechanism is built.
+            // Excludes kanban-mode panes: .kanban-pane-empty carries
+            // .pane-empty-slot too, and firing a spawn picker on a working
+            // board control would hijack the kanban empty state. The seating
+            // logic (isFreeSlot) already excludes kanban panes; this gate
+            // matches it.
+            if (target.classList.contains('pane-empty-slot')
+                    && !target.classList.contains('kanban-pane-empty')
+                    && activeGroupId
+                    && paneModes[index] !== 'kanban') {
+                e.stopPropagation();
+                onNewTerminalClicked(undefined, 'group:' + activeGroupId);
+                return;
+            }
             if (!target.classList.contains('pane-mode-toggle')) { return; }
             e.stopPropagation();
             paneModes[index] = 'kanban';
+            clearPaneSelection(index);
             if (!kanbanPaneColumn[index]) { kanbanPaneColumn[index] = 'CREATED'; }
             if (!kanbanPaneWorkspace[index]) { kanbanPaneWorkspace[index] = defaultKanbanWorkspace(); }
             saveLayoutSettings();
@@ -3054,14 +4504,43 @@
 
         titleEl.textContent = '';
         if (assignedName) {
+            const fleetItem = fleetList.find(t => t.friendlyName === assignedName);
+            const agentLabel = agentLabelForRole(fleetItem && fleetItem.role);
+
+            // Brand mark first — the same identifier the sidebar rows
+            // (renderTerminalRow), the shell rail (postFleetStateToShell) and the
+            // startup curtain (renderStartupCurtain) already show, resolved through
+            // the same two helpers so all four surfaces cannot disagree.
+            // `|| 'default'` on BOTH calls mirrors renderStartupCurtain: an
+            // unrecognised label still gets a mark, and a host that never stamped
+            // the dataset attributes gets no <img> at all rather than a broken one.
+            const brandKey = brandIconForCliLabel(agentLabel) || 'default';
+            const brandUri = brandIconUri(brandKey) || brandIconUri('default');
+            if (brandUri) {
+                const brandImg = document.createElement('img');
+                brandImg.className = 'pane-brand-icon';
+                brandImg.src = brandUri;
+                // alt='' + aria-hidden: the pane's aria-label below already carries
+                // the agent label and handle. A brand name here double-announces.
+                brandImg.alt = '';
+                brandImg.setAttribute('aria-hidden', 'true');
+                brandImg.dataset.brand = brandKey;
+                // Dimmed, not dropped — same treatment the sidebar gives an exited
+                // row. Stamped here rather than via a `.terminal-pane.is-exited`
+                // rule: the pane element never carries that class (it is a
+                // .terminal-item class, set in renderTerminalRow).
+                if (fleetItem && fleetItem.status === 'exited') {
+                    brandImg.classList.add('is-exited');
+                }
+                // NO data-terminal stamp — see the CSS comment.
+                titleEl.appendChild(brandImg);
+            }
+
             const idxEl = document.createElement('span');
             const isPinned = Boolean(pinnedPanes[index]);
             idxEl.className = 'pane-index-chip' + (isPinned ? ' is-pinned' : '');
             idxEl.textContent = isPinned ? `📌P${index + 1}` : `P${index + 1}`;
             titleEl.appendChild(idxEl);
-
-            const fleetItem = fleetList.find(t => t.friendlyName === assignedName);
-            const agentLabel = agentLabelForRole(fleetItem && fleetItem.role);
 
             // The agent name was absent from the pane header entirely. Terse layouts
             // (2x3/3x3) get the label alone — those headers already abbreviate the action
@@ -3109,22 +4588,48 @@
             // transitions nudge it out-of-band via refreshInputState.
             const state = resolveInputState(assignedName);
             paneEl.classList.add(`is-input-${state.key}`);
+            // Dispatch chip FIRST: syncInputStateChip early-returns while
+            // .is-dispatching is set, and panes are reused, so a stale class from a
+            // finished dispatch (or from the pane's previous occupant) would
+            // suppress the input chip for a whole poll cycle if the order were
+            // reversed. DOM order does not matter — the two are mutually exclusive.
+            syncDispatchChip(paneEl, titleEl, dispatchInFlight.has(assignedName));
             syncInputStateChip(paneEl, titleEl, state);
+
+            const planEl = paneEl.querySelector('.pane-plan-title');
+            const planTitle = ((fleetItem && fleetItem.planTitle) || '').trim();
+            if (planTitle) {
+                planEl.textContent = planTitle;
+                planEl.title = planTitle;
+                planEl.style.display = '';
+            } else {
+                planEl.textContent = '';
+                planEl.removeAttribute('title');
+                planEl.style.display = 'none';
+            }
         } else {
             titleEl.textContent = `Pane ${index + 1} (Empty)`;
+            const planEl = paneEl.querySelector('.pane-plan-title');
+            if (planEl) {
+                planEl.textContent = '';
+                planEl.removeAttribute('title');
+                planEl.style.display = 'none';
+            }
         }
 
         // Labels are re-derived every reconcile so a layout change can never leave
         // a stale word on a reused button. Indexed, not destructured: the buttons
         // share a class name, so there is no selector that tells them apart, and
         // children[] is the honest read.
-        // children[0] = pin, [1] = clear, [2] = model, [3] = hide, [4] = mode (order set in
-        // createPaneElement).
+        // children[0] = pin, [1] = peek dismiss, [2] = pop out, [3] = clear,
+        // [4] = model, [5] = hide, [6] = mode (order set in createPaneElement).
         const pinBtn = actionsEl.children[0];
-        const clearBtn = actionsEl.children[1];
-        const modelBtn = actionsEl.children[2];
-        const hideBtn = actionsEl.children[3];
-        const modeBtn = actionsEl.children[4];
+        const peekDismissBtn = actionsEl.children[1];
+        const popoutBtn = actionsEl.children[2];
+        const clearBtn = actionsEl.children[3];
+        const modelBtn = actionsEl.children[4];
+        const hideBtn = actionsEl.children[5];
+        const modeBtn = actionsEl.children[6];
         clearBtn.textContent = 'clear';
         modelBtn.textContent = 'model';
         hideBtn.textContent = 'hide';
@@ -3137,6 +4642,8 @@
         modelBtn.style.display = '';
         hideBtn.style.display = '';
         modeBtn.style.display = 'none';
+        peekDismissBtn.style.display = '';
+        popoutBtn.style.display = '';
 
         // Pin toggle: text labels (not emoji) to match clear/hide treatment; state
         // carried by colour via .btn-pin-pane.is-pinned and by aria-pressed.
@@ -3156,6 +4663,17 @@
         // block rather than omitting it.
         actionsEl.style.display = assignedName ? '' : 'none';
 
+        // Peek dismiss only on the currently peeked pane; pop-out only on a real,
+        // non-solo, terminal-mode pane, and not when the pane is being peeked.
+        const isSoloPanel = document.body.classList.contains('is-solo');
+        if (assignedName) {
+            peekDismissBtn.style.display = (peekTerminalName === assignedName && !isSoloPanel) ? '' : 'none';
+            popoutBtn.style.display = (peekTerminalName !== assignedName && !isSoloPanel && paneModes[index] === 'terminal') ? '' : 'none';
+        } else {
+            peekDismissBtn.style.display = 'none';
+            popoutBtn.style.display = 'none';
+        }
+
         if (assignedName) {
             const placeholder = contentEl.querySelector('.pane-empty-slot');
             if (placeholder) { contentEl.removeChild(placeholder); }
@@ -3168,6 +4686,8 @@
                     contentEl.appendChild(entry.container);
                     refreshTerminalScrollbar(entry);   // same-size re-parent
                                                       // leaves the scroll area stale
+                    entry.needsRendererResync = true;
+                    startFitLadder(entry.name);
                 }
                 entry.container.classList.add('active');
             }
@@ -3196,7 +4716,15 @@
             contentEl.textContent = '';
             const emptySlot = document.createElement('div');
             emptySlot.className = 'pane-empty-slot';
-            emptySlot.textContent = 'Click terminal in sidebar to assign';
+            // Under a lock, the empty pane is fillable: clicking a sidebar
+            // terminal seats it here and makes it a group member. The text
+            // invites that click. Without a lock, the text is the standard
+            // free-composition instruction.
+            if (activeGroupId) {
+                emptySlot.textContent = 'Click a terminal to add it to this group';
+            } else {
+                emptySlot.textContent = 'Click terminal in sidebar to assign';
+            }
             // Kanban-mode toggle: repurpose this dead slot as a live kanban column
             // viewer. Suppressed in solo mode (one pinned terminal, no grid) and in
             // a single-slot grid (no surplus slot to repurpose).
@@ -3212,6 +4740,31 @@
                 emptySlot.appendChild(kanbanToggle);
             }
             contentEl.appendChild(emptySlot);
+        } else {
+            // Re-derive the placeholder text on every reconcile for an existing
+            // non-kanban empty slot. Panes persist across a group switch, so a
+            // slot that was empty before the lock keeps stale text unless it is
+            // re-derived here — the same rule the header buttons follow at
+            // :4409. Kanban empty slots (.kanban-pane-empty) carry their own
+            // text and are left alone.
+            const existing = contentEl.querySelector('.pane-empty-slot:not(.kanban-pane-empty)');
+            if (existing) {
+                const label = activeGroupId
+                    ? 'Click a terminal to add it to this group'
+                    : 'Click terminal in sidebar to assign';
+                // Update the leading TEXT NODE, never `existing.textContent`.
+                // Assigning textContent replaces EVERY child — including the
+                // `kanban mode` toggle button the creation branch appends — so
+                // the first reconcile after a pane emptied would permanently
+                // delete the only entry point to kanban pane mode, for the life
+                // of the page (panes are reused, not rebuilt).
+                const firstText = Array.from(existing.childNodes).find(n => n.nodeType === 3);
+                if (firstText) {
+                    firstText.nodeValue = label;
+                } else {
+                    existing.insertBefore(document.createTextNode(label), existing.firstChild);
+                }
+            }
         }
     }
 
@@ -3238,7 +4791,7 @@
     }
 
     /** Merge getKanbanStructure's `structure` (built-in + custom, ordered) into a
-     *  flat {id,label,role} list for the column picker and the sidebar ordering
+     *  flat {id,label,role,kind} list for the column picker and the sidebar ordering
      *  key. `customColumns` is the user-editable subset already folded into
      *  `structure`, so it is not re-merged here — re-merging would duplicate custom rows. */
     function buildColumnList(structure, customColumns) {
@@ -3246,7 +4799,18 @@
         if (Array.isArray(structure)) {
             for (const item of structure) {
                 if (item && item.id) {
-                    list.push({ id: item.id, label: item.label || item.id, role: item.role || null, order: Number(item.order) || 0 });
+                    list.push({
+                        id: item.id,
+                        label: item.label || item.id,
+                        role: item.role || null,
+                        // kind is what identifies a coder column ('coded'). Sourced from
+                        // the live structure (TaskViewerProvider._buildSetupKanbanStructure
+                        // passes it through, TaskViewerProvider.ts:3860), so a custom coded
+                        // column joins the ALL CODED union automatically instead of being
+                        // silently excluded.
+                        kind: item.kind || null,
+                        order: Number(item.order) || 0
+                    });
                 }
             }
         }
@@ -3345,27 +4909,132 @@
         return ws.length > 0 ? ws[0].root : undefined;
     }
 
+    /** Synthetic, DISPLAY-ONLY column id for the coder aggregate. Matches the id the
+     *  board uses for its collapsed bucket (kanban.html:4216-4222) so both surfaces
+     *  name the same concept. It is NOT a stored column: it exists nowhere in
+     *  src/services/*.ts, and the server refuses AUTOCODE as a column ref on purpose
+     *  (LocalApiServer.ts:1139-1152 — a many→one label must never resolve by picking
+     *  one of its backing columns), so this id must never be sent as getBoardCards'
+     *  `column`. getBoardCards compares columns with a literal `===`, so sending it
+     *  returns an EMPTY list rather than an error. */
+    const AGGREGATE_CODED_ID = 'CODED_AUTO';
+    /** Title case, not the board's literal 'AUTOCODE'. Same name, different casing
+     *  convention: the board's `.column-name` is `text-transform: uppercase`, so its
+     *  labels are stored title-case ('New', 'Planned', 'Lead Coder') and SHOUTED by
+     *  CSS. This picker is a plain <select> with no transform, so a caps string here
+     *  would be the one shouting option among title-case neighbours. */
+    const AGGREGATE_CODED_LABEL = 'Autocode';
+
+    /** The real column ids the aggregate covers, from the live structure. Empty
+     *  until the first getKanbanStructure lands — which is why the aggregate option
+     *  is only offered once the cache is populated. */
+    function codedColumnIds() {
+        return kanbanColumnsCache.filter(c => c.kind === 'coded').map(c => c.id);
+    }
+
+    /** Human label for a chosen picker value, synthetic id included. */
+    function columnLabelForId(id) {
+        if (id === AGGREGATE_CODED_ID) { return AGGREGATE_CODED_LABEL; }
+        const hit = kanbanColumnsCache.find(c => c.id === id);
+        return hit ? hit.label : (id || '—');
+    }
+
     /** Render a kanban column viewer into a pane slot (replaces the terminal
      *  viewport). The pane header carries a combined workspace/project picker + a
      *  column picker + a "Terminal" toggle to switch back to terminal mode; the
      *  body lists plan rows with "Copy Prompt" (advance is implied) and "Link" buttons. */
     function renderKanbanPane(paneEl, index) {
         paneEl.classList.remove('is-input-live', 'is-input-connecting', 'is-input-readonly', 'is-input-queued');
+        const planEl = paneEl.querySelector('.pane-plan-title');
+        if (planEl) {
+            planEl.style.display = 'none';
+            planEl.textContent = '';
+            planEl.removeAttribute('title');
+        }
         const titleEl = paneEl.querySelector('.pane-title');
         const actionsEl = paneEl.querySelector('.pane-actions');
         const contentEl = paneEl.querySelector('.pane-content');
 
-        const chosen = kanbanPaneColumn[index];
+        let chosen = kanbanPaneColumn[index];
         const chosenWs = kanbanPaneWorkspace[index];
         const chosenProj = kanbanPaneProject[index] || '';
         const projects = kanbanPaneProjectsCache[index] || [];
+
+        const coded = codedColumnIds();
+        // Offered on exactly the board's terms (kanban.html renderColumns): the coder
+        // columns collapse into the aggregate when the board's collapse toggle is on
+        // and there is at least one coder column to collapse. NOT `coded.length > 1` —
+        // the board collapses a single coder column too, and since the aggregate
+        // REPLACES the columns it covers rather than sitting alongside them, a
+        // one-column union is not a duplicate option.
+        //
+        // Gated on a POPULATED cache, not on coded.length alone: codedColumnIds() is
+        // ALSO empty before the first getKanbanStructure lands, which is the state of
+        // every first paint (kanbanColumnsCache starts [] and updatePaneElement renders
+        // panes long before the async structure fetch resolves). Without this guard a
+        // persisted CODED_AUTO was rewritten to CREATED and saveLayoutSettings()
+        // PERSISTED the clobber on every reload — and the pre-structure label fallback
+        // below, whose only purpose is to label CODED_AUTO, could never be reached.
+        const structureLanded = kanbanColumnsCache.length > 0;
+        const aggregateOffered = structureLanded && kanbanCollapseCoders && coded.length > 0;
+
+        // Keep the pane's selection inside the offered set. Both directions matter,
+        // because the board's collapse toggle can flip either way underneath a pane:
+        //   - aggregate withdrawn (toggle off, or every coder column hidden in Setup)
+        //     → fall to the first coder column, or CREATED when none survive.
+        //   - aggregate adopted while a pane sits on an individual coder column → that
+        //     column is no longer offered, so follow it into the bucket.
+        let snapTo = null;
+        if (structureLanded && chosen === AGGREGATE_CODED_ID && !aggregateOffered) {
+            snapTo = coded[0] || 'CREATED';
+        } else if (aggregateOffered && coded.includes(chosen)) {
+            snapTo = AGGREGATE_CODED_ID;
+        }
+        if (snapTo) {
+            kanbanPaneColumn[index] = snapTo;
+            chosen = snapTo;
+            // Drop the old rows: they belong to a column set this pane no longer
+            // shows, so leaving them renders cards under the wrong heading. Same
+            // reasoning as the picker's own change handler.
+            kanbanPaneCards[index] = [];
+            saveLayoutSettings();
+            // Deferred: this render can be running INSIDE fetchBoardCardsForPane's
+            // response handler (it re-renders the pane before its `finally` clears the
+            // guard), where a direct call is swallowed by kanbanFetchInFlight and the
+            // pane would sit empty until the next 5s tick.
+            setTimeout(() => fetchBoardCardsForPane(index), 0);
+        }
+
         // Before the first getKanbanStructure lands the cache is empty. Fall back to
         // the chosen id so the picker is never a blank <select> the operator cannot
         // read — it is repopulated in place once the structure arrives.
-        const columns = (kanbanColumnsCache.length > 0)
+        const liveColumns = structureLanded
             ? kanbanColumnsCache
-            : (chosen ? [{ id: chosen, label: chosen }] : []);
-        const pickerSig = columns.map(c => `${c.id} ${c.label}`).join('');
+            // Pre-structure fallback: label the synthetic id properly instead of
+            // printing the raw 'CODED_AUTO' at the operator.
+            : (chosen ? [{ id: chosen, label: columnLabelForId(chosen) }] : []);
+
+        // Substituted in place, never appended. Mirrors kanban.html renderColumns():
+        // drop the coder columns, add the synthetic one carrying the FIRST coder
+        // column's order, re-sort. That keeps the bucket in the pipeline position the
+        // coder columns occupied (between Planned and Reviewed) instead of stranding
+        // it past Completed at the tail of the list.
+        const columns = aggregateOffered
+            ? liveColumns
+                .filter(c => c.kind !== 'coded')
+                .concat([{
+                    id: AGGREGATE_CODED_ID,
+                    label: AGGREGATE_CODED_LABEL,
+                    kind: 'coded',
+                    order: kanbanColumnsCache.find(c => c.kind === 'coded')?.order || 180,
+                    aggregate: true
+                }])
+                .sort((a, b) => (a.order || 0) - (b.order || 0))
+            : liveColumns;
+
+        // pickerSig must move when the union changes, or hiding a coder agent in Setup
+        // leaves a stale option set on screen.
+        const pickerSig = columns.map(c => `${c.id} ${c.label}`).join('') + '|' + coded.join(',');
         const workspaces = buildWorkspaceList();
         const wsSig = workspaces.map(w => `${w.root} ${w.label}`).join('');
         const projSig = projects.join('|');
@@ -3426,6 +5095,7 @@
                     kanbanPaneWorkspace[index] = ws;
                     kanbanPaneProject[index] = proj || '';
                     kanbanPaneCards[index] = [];
+                    clearPaneSelection(index);
                     if (wsChanged) {
                         kanbanPaneProjectsCache[index] = [];
                     }
@@ -3443,6 +5113,9 @@
                 const opt = document.createElement('option');
                 opt.value = col.id;
                 opt.textContent = col.label;
+                if (col.aggregate) {
+                    opt.title = `Union of ${coded.join(' + ')} — the board's AUTOCODE bucket`;
+                }
                 picker.appendChild(opt);
             }
             const pickerEl = picker;
@@ -3451,6 +5124,7 @@
                 // Drop the old column's cards so the pane cannot show them under the
                 // new column's heading while the fetch is in flight.
                 kanbanPaneCards[index] = [];
+                clearPaneSelection(index);
                 saveLayoutSettings();
                 fetchBoardCardsForPane(index);
             });
@@ -3465,7 +5139,7 @@
         // never className or onclick — so updatePaneElement can restore them when this
         // slot goes back to terminal mode.
         actionsEl.style.display = '';
-        const modeBtn = actionsEl.children[4];
+        const modeBtn = actionsEl.children[6];
         for (let i = 0; i < actionsEl.children.length; i++) {
             actionsEl.children[i].style.display = (actionsEl.children[i] === modeBtn) ? '' : 'none';
         }
@@ -3479,7 +5153,7 @@
         const cards = [...(kanbanPaneCards[index] || [])].sort(compareCardsByRecency);
         const hasFetched = index in kanbanPaneCards;
         const bodySig = `${chosenWs || ''} ${chosenProj || ''} ${chosen || ''} ${hasFetched ? '1' : '0'}`
-            + cards.map(c => `${c.planId || c.sessionId || ''} ${c.topic || c.title || ''} ${c.complexity || ''} ${c.working ? 'w' : ''} ${c.project || ''} ${c.isFeature ? 'f' : ''} ${c.subtaskCount || 0}`).join('');
+            + cards.map(c => `${c.planId || c.sessionId || ''} ${c.topic || c.title || ''} ${c.complexity || ''} ${c.working ? 'w' : ''} ${c.project || ''} ${c.isFeature ? 'f' : ''} ${c.subtaskCount || 0} ${c.column || ''}`).join('');
         if (contentEl.dataset.kanbanSig === bodySig) { return; }
         contentEl.dataset.kanbanSig = bodySig;
 
@@ -3498,7 +5172,7 @@
             // already present, so an untagged kanban empty state left the pane stuck on
             // "No plans in …" with no way back once the mode flipped.
             empty.className = 'pane-empty-slot kanban-pane-empty';
-            empty.textContent = `No plans in ${kanbanPaneColumn[index] || '—'}`;
+            empty.textContent = `No plans in ${columnLabelForId(kanbanPaneColumn[index])}`;
             contentEl.appendChild(empty);
             return;
         }
@@ -3526,6 +5200,9 @@
             if (card.working) { row.classList.add('is-working'); }
             if (card.isFeature) { row.classList.add('is-feature'); }
 
+            const rowId = card.planId || card.sessionId || '';
+            row.dataset.planId = rowId;
+
             // Make the row draggable so it can be dropped into a terminal pane.
             row.draggable = true;
             row.addEventListener('dragstart', (e) => {
@@ -3534,16 +5211,76 @@
                     e.preventDefault();
                     return;
                 }
+
+                // If the dragged row is part of a multi-selection, carry the whole set.
+                // Filter against the rendered card list so a card that left the column
+                // between selection and drag is not transferred as a stale id — the
+                // pane's analogue of kanban.html's getSelectedInRenderedContainer.
+                const sel = paneSelection(index);
+                const rendered = new Set((kanbanPaneCards[index] || [])
+                    .map(c => c.planId || c.sessionId).filter(Boolean));
+                let ids = [rowId].filter(Boolean);
+                if (rowId && sel.has(rowId) && sel.size > 1) {
+                    const live = Array.from(sel).filter(id => rendered.has(id));
+                    if (live.length > 1 && live.includes(rowId)) { ids = live; }
+                }
+
                 const dragData = {
-                    planId: card.planId || '',
-                    sessionId: card.sessionId || '',
+                    planId: card.planId || '',      // kept for payload back-compat
+                    sessionId: card.sessionId || '', // kept for payload back-compat
+                    planIds: ids,                    // NEW — the authoritative set
                     column: card.column || '',
                     workspaceRoot: card.workspaceRoot || kanbanPaneWorkspace[index],
                     sourcePaneIndex: index
                 };
                 e.dataTransfer.effectAllowed = 'copy';
                 e.dataTransfer.setData('application/json', JSON.stringify(dragData));
-                e.dataTransfer.setData('text/plain', card.topic || card.title || card.planId || '');
+                e.dataTransfer.setData('text/plain', ids.length > 1
+                    ? `${ids.length} plans`
+                    : (card.topic || card.title || card.planId || ''));
+                ids.forEach(id => {
+                    const el = list.querySelector(`.kanban-pane-row[data-plan-id="${CSS.escape(id)}"]`);
+                    if (el) { el.classList.add('dragging'); }
+                });
+            });
+            row.addEventListener('dragend', () => {
+                list.querySelectorAll('.kanban-pane-row.dragging')
+                    .forEach(el => el.classList.remove('dragging'));
+            });
+
+            const sel = paneSelection(index);
+            // Re-apply after the signature-gated rebuild: the 5s poll wipes contentEl
+            // and reconstructs every row, so the class cannot be the source of truth.
+            // Mirrors kanban.html:6613.
+            if (rowId && sel.has(rowId)) { row.classList.add('selected'); }
+
+            row.addEventListener('click', (e) => {
+                // Never swallow the row's own buttons — the same guard the board uses
+                // (kanban.html:6561). The buttons also stopPropagation, but that does
+                // not cover a click landing on .kanban-pane-row-actions padding.
+                if (e.target.closest('button')) { return; }
+                if (!rowId) { return; }
+                if (sel.has(rowId)) {
+                    sel.delete(rowId);
+                    row.classList.remove('selected');
+                    return;
+                }
+                // Cross-workspace guard, mirroring kanban.html:6580 — a mixed-root
+                // sessionIds array is filtered to one root by KanbanProvider.ts:9431
+                // and the rest are silently dropped.
+                const incomingRoot = card.workspaceRoot || kanbanPaneWorkspace[index] || '';
+                const cards = kanbanPaneCards[index] || [];
+                const mixed = Array.from(sel).some(id => {
+                    const other = cards.find(c => (c.planId || c.sessionId) === id);
+                    return other && (other.workspaceRoot || kanbanPaneWorkspace[index] || '') !== incomingRoot;
+                });
+                if (mixed) {
+                    sel.clear();
+                    list.querySelectorAll('.kanban-pane-row.selected')
+                        .forEach(el => el.classList.remove('selected'));
+                }
+                sel.add(rowId);
+                row.classList.add('selected');
             });
 
             const rowText = document.createElement('div');
@@ -3589,6 +5326,16 @@
                 proj.title = card.project;
                 meta.appendChild(proj);
             }
+            // In aggregate mode the list merges three columns, so each row must say which
+            // one it is in — otherwise the operator cannot tell lead work from intern work,
+            // and the chip is the only thing that distinguishes them.
+            if (chosen === AGGREGATE_CODED_ID && card.column) {
+                const colChip = document.createElement('span');
+                colChip.className = 'kanban-pane-column-chip';
+                colChip.textContent = columnLabelForId(card.column);
+                colChip.title = card.column;
+                meta.appendChild(colChip);
+            }
             rowText.appendChild(meta);
             row.appendChild(rowText);
 
@@ -3614,6 +5361,54 @@
                 } catch { /* ignore */ }
             });
             btnGroup.appendChild(linkBtn);
+
+            const viewBtn = document.createElement('button');
+            viewBtn.className = 'kanban-pane-view-btn';
+            viewBtn.textContent = 'view';
+            viewBtn.title = 'Open this plan in the Project panel';
+            viewBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                // The label is `view`; the VERB is `reviewPlan` — the same one the board's
+                // review button posts (kanban.html:6620-6643). Do NOT "correct" this to
+                // `viewPlan`: that kanban-surface verb was deliberately deleted (it opened a
+                // markdown preview) and its removal is pinned by
+                // src/test/kanban-view-plan-removal-regression.test.js.
+                viewBtn.disabled = true;
+                let ok = false;
+                try {
+                    const res = await fetch('/kanban/verb/reviewPlan', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            sessionId: card.sessionId || '',
+                            planId: card.planId || '',
+                            planFile: card.planFile || '',
+                            workspaceRoot: card.workspaceRoot || kanbanPaneWorkspace[index],
+                            project: card.project || '',
+                            column: card.column || '',
+                            isFeature: card.isFeature || false
+                        })
+                    });
+                    const data = await res.json();
+                    ok = data && data.success === true;
+                } catch { /* ok stays false */ }
+                if (!ok) {
+                    // Do not switch: the Project panel received no selection, so jumping there
+                    // would show a stale entry and read as "opened the wrong plan".
+                    viewBtn.textContent = 'Failed';
+                    setTimeout(() => { viewBtn.disabled = false; viewBtn.textContent = 'view'; }, 2000);
+                    return;
+                }
+                viewBtn.disabled = false;
+                // Shell-only move: panels are same-origin iframes and the shell owns the switch.
+                // transport.js:349 posts {type:'switchPanel'} to window.parent, so this is a
+                // no-op in a bare /terminals tab (and unreachable in a solo popout, where the
+                // pane grid — and therefore this button — does not exist).
+                if (typeof window.__switchboardSwitchPanel === 'function') {
+                    window.__switchboardSwitchPanel('project');
+                }
+            });
+            btnGroup.appendChild(viewBtn);
 
             const copyBtn = document.createElement('button');
             copyBtn.className = 'kanban-pane-copy-btn';
@@ -3646,6 +5441,7 @@
                             copyBtn.textContent = 'Copy failed';
                         }
                         // Refresh this pane's list (the card advanced out).
+                        paneSelection(index).delete(card.planId || card.sessionId || '');
                         fetchBoardCardsForPane(index);
                     } else {
                         copyBtn.textContent = 'Failed';
@@ -3678,6 +5474,7 @@
         // If the focused pane is already kanban, toggle it back to terminal.
         if (paneModes[targetIndex] === 'kanban') {
             paneModes[targetIndex] = 'terminal';
+            clearPaneSelection(targetIndex);
             saveLayoutSettings();
             renderPaneGrid();
             return;
@@ -3690,6 +5487,7 @@
             pinnedPanes[targetIndex] = false;
         }
         paneModes[targetIndex] = 'kanban';
+        clearPaneSelection(targetIndex);
         if (!kanbanPaneColumn[targetIndex]) { kanbanPaneColumn[targetIndex] = 'CREATED'; }
         if (!kanbanPaneWorkspace[targetIndex]) { kanbanPaneWorkspace[targetIndex] = defaultKanbanWorkspace(); }
         if (!kanbanPaneProject[targetIndex]) { kanbanPaneProject[targetIndex] = ''; }
@@ -3741,6 +5539,10 @@
             const structData = await structRes.json();
             if (structData && structData.success) {
                 kanbanColumnsCache = buildColumnList(structData.structure, structData.customColumns);
+                // `!== false` not `!!`: an older host that predates the flag omits it,
+                // and the board's default is ON — treating undefined as OFF would strip
+                // AUTOCODE from a board that is showing it.
+                kanbanCollapseCoders = structData.collapseCoders !== false;
                 recomputeRoleOrderMap();
                 renderSidebarList();
             }
@@ -3775,15 +5577,29 @@
         try {
             const wsRoot = kanbanPaneWorkspace[index];
             const proj = kanbanPaneProject[index] || '';
+            const isAggregate = col === AGGREGATE_CODED_ID;
+            // The aggregate omits `column` entirely rather than sending CODED_AUTO.
+            // getBoardCards' filter is a literal `c.column === column` compare
+            // (KanbanProvider.ts:10670), so sending the synthetic id returns an EMPTY
+            // list — indistinguishable from "nothing is out for coding". Server-side
+            // repo-scope, feature roll-up and project filters are per-card predicates
+            // independent of the column filter, so an unfiltered fetch inherits them
+            // unchanged.
+            const body = { workspaceRoot: wsRoot, project: proj };
+            if (!isAggregate) { body.column = col; }
             const res = await fetch('/kanban/verb/getBoardCards', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ column: col, workspaceRoot: wsRoot, project: proj })
+                body: JSON.stringify(body)
             });
             const data = await res.json();
             // Re-check the column: the operator can change the picker while this is
             // in flight, and the response describes the column we ASKED for.
             if (data.success && kanbanPaneColumn[index] === col) {
-                kanbanPaneCards[index] = data.cards;
+                const all = Array.isArray(data.cards) ? data.cards : [];
+                const codedNow = codedColumnIds();
+                kanbanPaneCards[index] = isAggregate
+                    ? all.filter(c => codedNow.includes(c.column))
+                    : all;
                 if (Array.isArray(data.projects)) {
                     kanbanPaneProjectsCache[index] = data.projects;
                 }
@@ -3809,14 +5625,53 @@
         const changed = resolved !== effectiveLayout;
         effectiveLayout = resolved;
 
-        fallbackBannerEl.classList.toggle('visible', effectiveLayout !== currentLayout);
+        const activeGroup = activeGroupId ? getAllGroups().find(g => g.id === activeGroupId) : null;
+        const members = activeGroup ? getGroupMembers(activeGroup).length : 0;
+        const rendered = getSlotCount(effectiveLayout);
+        const shortfall = activeGroup && members > rendered;
+        const floored = effectiveLayout !== currentLayout;
+        fallbackBannerEl.classList.toggle('visible', floored || !!shortfall);
+        fallbackBannerEl.textContent = '';
+        if (activeGroup && shortfall) {
+            // Inside a lock the useful message is the shortfall, not "your layout was
+            // reduced" — and paging is the remedy, so it sits in the same place.
+            // Paging is keyed to RENDERED slots, not to nine.
+            const pageCount = Math.max(1, Math.ceil(members / rendered));
+            const start = activeGroupPage * rendered;
+            const label = document.createElement('span');
+            label.textContent =
+                `Showing ${start + 1}–${Math.min(start + rendered, members)} of ${members} — ${activeGroup.name} `;
+            fallbackBannerEl.appendChild(label);
+            const mkPage = (text, delta, disabled) => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'banner-page-btn';
+                b.textContent = text;
+                b.disabled = disabled;
+                b.addEventListener('click', () => {
+                    activeGroupPage += delta;
+                    seatActiveGroupPage();
+                    applyLayoutFloor({ fit: false });
+                    batchFitVisiblePanes();
+                });
+                return b;
+            };
+            fallbackBannerEl.appendChild(mkPage('‹ prev', -1, activeGroupPage <= 0));
+            fallbackBannerEl.appendChild(mkPage('next ›', 1, activeGroupPage >= pageCount - 1));
+        } else if (floored) {
+            fallbackBannerEl.textContent = 'Window too small for requested layout — using simpler layout floor.';
+        }
 
         if (changed) {
+            // The floor moved the rendered slot count: a locked group must re-page
+            // against the new count instead of leaving stale seats behind.
+            if (activeGroupId) { seatActiveGroupPage(); }
             renderPaneGrid();
             batchFitVisiblePanes();
             return;
         }
         paneGridEl.className = `pane-grid layout-${effectiveLayout}`;
+        applyPeekClasses();
         if (fit) { batchFitVisiblePanes(); }
     }
 
@@ -4181,6 +6036,22 @@
     }
 
     /**
+     * Debounced refetch + re-render for the startupCommandsChanged push and
+     * the panelVisibility → visible backstop. The browser cockpit fans one
+     * broadcast out to every panel frame (~6×), so an un-debounced handler
+     * would issue six identical getStartupCommands calls per save. A
+     * trailing-edge debounce is correct: the last push carries the same
+     * information as the first, and the value is already written before any
+     * of them are sent. fetchAgentNames swallows failures, so a failed
+     * refetch leaves the previous map in place — never blanks the sidebar.
+     */
+    const debouncedRefreshAgentNames = debounce(async () => {
+        await fetchAgentNames();
+        renderSidebarList();
+        renderPaneGrid();
+    }, 200);
+
+    /**
      * The agent CLI label for a role, or '' when there isn’t one.
      *
      * Handles the three no-label cases: the map is empty (fetchAgentNames swallows
@@ -4465,6 +6336,47 @@
     }
 
     /**
+     * Create `count` terminals of one role, sequentially, without seating them.
+     * Mirrors the inner loop of openAllTerminals so both paths use the same naming,
+     * startup-curtain arming, and adoption logic. Returns the number actually created.
+     */
+    async function createTerminalsForRole(role, count, hasStartupCommand, onCreated) {
+        let created = 0;
+        for (let i = 0; i < count; i++) {
+            try {
+                const res = await fetch('/terminals/verb/ptyCreateTerminal', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ role })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data && data.success) {
+                        created++;
+                        if (data.terminal) {
+                            if (!fleetList.some(t => t.friendlyName === data.terminal.friendlyName)) {
+                                fleetList.push(data.terminal);
+                            }
+                            // Arm BEFORE the pane exists or the curtain paints one reconcile late.
+                            armStartupCurtain(data.terminal.friendlyName, hasStartupCommand);
+                            // Per-terminal hook, AFTER the arm: open-all seats here so
+                            // each terminal appears as it is born instead of the whole
+                            // batch landing seconds later, and the seat's renderPaneGrid()
+                            // is what paints the curtain. Do not flip this order.
+                            if (onCreated) { onCreated(data.terminal); }
+                        }
+                    } else if (data && data.error) {
+                        console.warn(`[Terminals] createTerminalsForRole: ${role} rejected:`, data.error);
+                    }
+                }
+            } catch (err) {
+                console.warn(`[Terminals] createTerminalsForRole: failed to create ${role}:`, err);
+            }
+        }
+        return created;
+    }
+
+    /**
      * "Open all" — the browser counterpart of switchboard.createAgentGrid.
      *
      * Only ever tops up: a role that already has enough live terminals is left
@@ -4520,46 +6432,16 @@
         let created = 0;
         for (const [role, count] of wanted.entries()) {
             const missing = count - (liveByRole.get(role) || 0);
-            // Sequential, not Promise.all: ptyFleetService.create() picks the next
-            // free `${role}-${n}` name off its own map, so concurrent creates for
-            // the same role can settle on the same name.
-            for (let i = 0; i < missing; i++) {
-                try {
-                    const res = await fetch('/terminals/verb/ptyCreateTerminal', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ role })
-                    });
-                    if (res.ok) {
-                        const data = await res.json();
-                        if (data && data.success) {
-                            created++;
-                            if (data.terminal) {
-                                // Adopt the new terminal into fleetList immediately.
-                                // fillEmptyPanes() reads fleetList, and for a role with
-                                // no startup command this response can beat the
-                                // terminalsChanged refetch. Partial projection
-                                // ({friendlyName, role, status}) is safe here only
-                                // because open-all posts no cwd/worktreePath — see the
-                                // Edge-Case audit before reusing this elsewhere.
-                                if (!fleetList.some(t => t.friendlyName === data.terminal.friendlyName)) {
-                                    fleetList.push(data.terminal);
-                                }
-                                // Arm BEFORE seating, so the seat's renderPaneGrid() is
-                                // what paints the curtain. Do not flip this order.
-                                armStartupCurtain(data.terminal.friendlyName, hasCommand[role] === true);
-                                // Seat NOW, so each terminal appears as it is born
-                                // instead of the whole batch landing seconds later.
-                                // persist:false — saveLayoutSettings() is 11 POSTs and
-                                // the single call below covers the whole batch.
-                                fillEmptyPanes({ persist: false });
-                            }
-                        }
-                        else if (data && data.error) { console.warn(`[Terminals] Open all: ${role} rejected:`, data.error); }
-                    }
-                } catch (err) {
-                    console.warn(`[Terminals] Open all: failed to create ${role}:`, err);
-                }
+            if (missing > 0) {
+                // Sequential per role: ptyFleetService.create() picks the next free
+                // `${role}-${n}` name, so concurrent creates for the same role can
+                // settle on the same name. The onCreated hook seats each terminal as it
+                // is born; persist:false because saveLayoutSettings() is 11 POSTs and
+                // the single call in the tail covers the whole batch.
+                created += await createTerminalsForRole(
+                    role, missing, hasCommand[role] === true,
+                    () => { fillEmptyPanes({ persist: false }); }
+                );
             }
         }
 
@@ -4580,6 +6462,41 @@
                 // actually about.
                 showPaneToast(`${unseated} terminal${unseated === 1 ? '' : 's'} could not be seated — open from the sidebar or pick a larger layout.`);
             }
+        }
+    }
+
+    /**
+     * Create enough terminals of `role` to fill `mode`'s slot count, then seat them.
+     * Counts existing live terminals of that role from fleetList so re-running is a
+     * no-op. The layout is switched first so the created terminals have somewhere to
+     * sit, then they are created sequentially and the panes are filled once at the end.
+     */
+    async function fillGrid(role, mode) {
+        if (!role || !LAYOUT_MODES.includes(mode)) {
+            console.warn('[Terminals] Fill grid: bad role or mode', role, mode);
+            return;
+        }
+        const slots = LAYOUTS[mode].slots;
+
+        // Count live instances of this role from the same list the UI renders.
+        let liveCount = 0;
+        for (const t of fleetList) {
+            if (t.status !== 'exited' && t.role === role) { liveCount++; }
+        }
+        const need = slots - liveCount;
+        if (need <= 0) {
+            showPaneToast(`${role} already has ${liveCount} live terminal${liveCount === 1 ? '' : 's'} — no grid to fill.`);
+            return;
+        }
+
+        const { hasCommand } = await fetchPtyVisibleRoles();
+        initialAssignmentDone = true;
+        setLayoutMode(mode);
+        await createTerminalsForRole(role, need, hasCommand[role] === true);
+        await fetchTerminalList();
+        const unseated = fillEmptyPanes();
+        if (unseated > 0) {
+            showPaneToast(`${unseated} terminal${unseated === 1 ? '' : 's'} could not be seated — choose a larger grid.`);
         }
     }
 
@@ -4669,11 +6586,18 @@
                     if (paneAssignments[i] === name) { paneAssignments[i] = next; }
                 }
                 for (const g of terminalGroups) {
-                    for (let i = 0; i < g.assignments.length; i++) {
-                        if (g.assignments[i] === name) { g.assignments[i] = next; }
+                    if (g.source !== 'manual') { continue; }
+                    for (const key of ['members', 'order']) {
+                        const arr = g[key];
+                        if (Array.isArray(arr)) {
+                            for (let i = 0; i < arr.length; i++) {
+                                if (arr[i] === name) { arr[i] = next; }
+                            }
+                        }
                     }
                 }
                 if (activeTerminalName === name) { activeTerminalName = next; }
+                if (peekTerminalName === name) { peekTerminalName = next; }
                 // The undo snapshot must follow the rename too. Left alone it holds the
                 // OLD name, which sanitizePaneAssignments cannot see (the live slots now
                 // carry the new one), so Undo would restore a name with no session.
@@ -5960,10 +7884,9 @@
             renderPaneGrid();
             postFleetStateToShell();
 
-            const isKnown = fleetList.some(t => t.friendlyName === targetTerm);
-            if (!isKnown) {
-                fetchTerminalList();
-            }
+            // Unconditional refetch: the completion clear has nulled dispatched_at,
+            // so this retires the plan strip in the same beat as the DONE badge.
+            fetchTerminalList();
         }
 
         // The in-panel toast is the ONLY completion notice. There was a native
@@ -6076,6 +7999,145 @@
     // instructing the parent agent to do it, because the parent holds the
     // context worth handing over. See the plan file for the full rationale.
 
+    // Client mirror of the link-preset vocabulary. Keep these in sync with
+    // src/services/linkPresets.ts — the contract test
+    // (src/test/link-presets-mirror-contract.test.js) enforces that the two
+    // copies have identical ids, labels, templates and directions.
+    /**
+     * Link-up instruction presets. The point of each one is to be a BETTER
+     * instruction than what an operator types in a hurry: it states the
+     * relationship, what triggers a hand-off, and that the parent keeps working —
+     * the three things a terse "you're the researcher" leaves out and the agent
+     * therefore gets wrong.
+     *
+     * Ordered by expected use. The first entry is the default, so the modal opens
+     * send-ready.
+     *
+     * `label` is STATIC — see the Superseded callout in this plan. The child's real
+     * name appears in the resolved text, which is where it is load-bearing; the
+     * adjacent #link-child select already names it before the operator picks.
+     *
+     * `direction` is load-bearing: 'member-receives' means the order is installed
+     * ON the member ABOUT the head; 'head-receives' means ON the head ABOUT the
+     * member. Inferring it is how the orientation gets flipped silently.
+     *
+     * Single-quoted concatenation, NOT template literals: preset prose must never be
+     * evaluated, and `{child}` / `{parent}` are substituted by resolvePreset().
+     */
+    const LINK_PRESETS = [
+        {
+            id: 'researcher',
+            label: 'Researcher — it researches for me',
+            direction: 'head-receives',
+            template:
+                '{child} is your researcher. When you hit a question that needs external sources, ' +
+                'documentation or API details you do not already have, hand it to {child} with enough ' +
+                'context to work standalone — it cannot see your conversation. Keep working on what you ' +
+                'can while it runs, and fold its answer in when it comes back. Do not block on it.'
+        },
+        {
+            id: 'reviewer',
+            label: 'Reviewer — it reviews my work',
+            direction: 'head-receives',
+            template:
+                '{child} is your reviewer. When you finish a self-contained unit of work, hand {child} ' +
+                'a summary of what changed and which files — it cannot see your conversation, so make ' +
+                'the summary stand on its own — and ask it to review before you move on to the next ' +
+                'unit. Address what it raises rather than deferring it.'
+        },
+        {
+            id: 'tester',
+            label: 'Tester — it verifies my work',
+            direction: 'head-receives',
+            template:
+                '{child} is your tester. When a change is ready to verify, hand {child} what you changed ' +
+                'and what the expected behaviour is — it cannot see your conversation, so state both ' +
+                'explicitly — and let it run the checks. Treat a failure it reports as your work to fix, ' +
+                'not its.'
+        },
+        {
+            id: 'handoff',
+            label: 'Hand off — give it my context',
+            direction: 'head-receives',
+            template:
+                'Hand over the full context of what you are working on to {child}: the goal, what you have ' +
+                'done so far, what is left, and any decisions or dead ends that matter. {child} has no ' +
+                'visibility into your conversation, so write it to be picked up cold.'
+        },
+        {
+            id: 'second-opinion',
+            label: 'Second opinion — ask it before I decide',
+            direction: 'head-receives',
+            template:
+                'Before you commit to an approach on anything non-trivial, put it to {child} as a second ' +
+                'opinion: state the approach, the alternatives you rejected and why. Weigh what comes back ' +
+                'on the merits — {child} is not the decision-maker, you are.'
+        },
+        {
+            id: 'reports-to-head',
+            label: 'Reports to me — it works what I hand it',
+            direction: 'member-receives',
+            template:
+                'it is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with ' +
+                '{"name":"<that terminal>","data":"<your report>","clearBeforePrompt":false} against the port in ' +
+                '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.'
+        },
+        { id: 'custom', label: 'Custom…', direction: 'head-receives', template: '' }
+    ];
+
+    /** The persisted last-used preset id, resolved once in loadLayoutSettings(). */
+    let linkPreset = LINK_PRESETS[0].id;
+    let presetDirty = false;
+
+    // Client mirror of the standing-orders resolver. Keep these in sync with
+    // src/services/standingOrders.ts — the marker string is the contract that
+    // prevents double-blocking when a prompt is processed by both client and host.
+    const STANDING_ORDERS_MARKER = '=== STANDING ORDERS ===';
+    const MAX_BLOCK_CHARS = 4000;
+    const MAX_INSTRUCTION_CHARS = 2000;
+    let linkMode = 'instant';
+    let standingOrders = [];
+    let standingOrdersAvailable = false;
+
+    function resolvePreset(id, parentName, childName) {
+        const preset = LINK_PRESETS.find(p => p.id === id);
+        if (!preset || !preset.template) { return ''; }
+        return preset.template
+            .replace(/\{child\}/g, childName || 'the other terminal')
+            .replace(/\{parent\}/g, parentName || 'this terminal');
+    }
+
+    /** Build the preset options once. The option text is static, so there is no
+     *  reason to rebuild this on a parent/child change. */
+    function buildPresetOptions() {
+        const sel = document.getElementById('link-preset');
+        if (!sel) { return; }
+        sel.innerHTML = '';
+        for (const p of LINK_PRESETS) {
+            const opt = document.createElement('option');
+            opt.value = p.id;
+            opt.textContent = p.label;
+            sel.appendChild(opt);
+        }
+    }
+
+    /** Re-resolve the instruction text. `force` = an explicit preset selection, which
+     *  always wins over the operator's edits; otherwise a dirty box is left alone. */
+    function applyPresetToMessage(force) {
+        const presetSel = document.getElementById('link-preset');
+        const messageEl = document.getElementById('link-message');
+        const parentSel = document.getElementById('link-parent');
+        const childSel = document.getElementById('link-child');
+        if (!presetSel || !messageEl || !parentSel || !childSel) { return; }
+        if (presetDirty && !force) { return; }
+        messageEl.value = resolvePreset(presetSel.value, parentSel.value, childSel.value);
+        // A programmatic .value assignment does NOT fire `input`, so this neither
+        // trips presetDirty nor reaches the listener at :7594 — hence the explicit
+        // reset and the explicit syncSendEnabled().
+        presetDirty = false;
+        syncSendEnabled();
+    }
+
     /**
      * Resolve the parent the modal should open on. The focused pane is the
      * operator's notion of "the selected terminal", but setFocusedPane only writes
@@ -6126,6 +8188,7 @@
         const prevChild = childSel.value;
         const live = fleetList.filter(t => t.status === 'active' && t.friendlyName !== parentName);
         fillTerminalSelect(childSel, live, prevChild);
+        applyPresetToMessage(false);
     }
 
     function setLinkError(msg) {
@@ -6138,27 +8201,123 @@
     function syncSendEnabled() {
         const msg = document.getElementById('link-message');
         const sendBtn = document.getElementById('link-send');
+        const counterEl = document.getElementById('link-counter');
         if (!msg || !sendBtn) { return; }
         sendBtn.disabled = !msg.value.trim();
+        sendBtn.textContent = linkMode === 'standing' ? 'SAVE' : 'SEND';
+        if (counterEl) {
+            const len = msg.value.length;
+            counterEl.textContent = `${len} / ${MAX_INSTRUCTION_CHARS}`;
+            counterEl.classList.toggle('is-over', len > MAX_INSTRUCTION_CHARS);
+        }
     }
 
-    function openLinkModal() {
+    function liveNameSet() {
+        return new Set(fleetList.filter(t => t.status === 'active').map(t => t.friendlyName));
+    }
+
+    /** Client-side mirror of `applyStandingOrders` from `src/services/standingOrders.ts`. */
+    function applyStandingOrdersClient(prompt, targetName, orders, liveNames) {
+        if (!prompt || prompt.includes(STANDING_ORDERS_MARKER)) { return prompt; }
+        const mine = orders.filter(o => o.parent === targetName && liveNames.has(o.child));
+        if (mine.length === 0) { return prompt; }
+
+        let block = '\n\n' + STANDING_ORDERS_MARKER + '\n';
+        for (const o of mine) {
+            block += `- Regarding terminal "${o.child}": ${o.instruction}\n`;
+        }
+        block += 'These apply to everything you do in this terminal until told otherwise.\n';
+        if (block.length > MAX_BLOCK_CHARS) {
+            block = block.slice(0, MAX_BLOCK_CHARS) + '\n…[standing orders truncated]\n';
+        }
+        return prompt + block;
+    }
+
+    async function fetchStandingOrders() {
+        try {
+            const res = await fetch('/terminals/standing-orders', { method: 'GET' });
+            if (res.ok) {
+                const data = await res.json();
+                if (data && data.success) {
+                    standingOrders = Array.isArray(data.orders) ? data.orders : [];
+                    standingOrdersAvailable = !!data.available;
+                    return;
+                }
+            }
+        } catch (err) {
+            console.warn('[Terminals] Failed to fetch standing orders:', err);
+        }
+        standingOrders = [];
+        standingOrdersAvailable = false;
+    }
+
+    function syncModeAvailability(sel) {
+        if (!sel) { return; }
+        const standingOpt = sel.querySelector('option[value="standing"]');
+        if (standingOpt) { standingOpt.disabled = !standingOrdersAvailable; }
+        if (!standingOrdersAvailable && sel.value === 'standing') {
+            sel.value = 'instant';
+        }
+    }
+
+    function renderStandingList() {
+        const list = document.getElementById('link-standing-list');
+        if (!list) { return; }
+        if (standingOrders.length === 0 || !standingOrdersAvailable) {
+            list.hidden = true;
+            list.innerHTML = '';
+            return;
+        }
+        const live = liveNameSet();
+        list.innerHTML = '';
+        for (const o of standingOrders) {
+            const item = document.createElement('div');
+            item.className = 'link-standing-item' + (live.has(o.child) ? '' : ' dead');
+            item.dataset.id = o.id;
+            const text = document.createElement('span');
+            text.textContent = `${o.parent} ← ${o.child}: ${o.instruction}`;
+            const del = document.createElement('button');
+            del.type = 'button';
+            del.className = 'delete-btn';
+            del.textContent = '×';
+            del.title = 'Delete standing order';
+            item.appendChild(text);
+            item.appendChild(del);
+            list.appendChild(item);
+        }
+        list.hidden = false;
+    }
+
+    async function openLinkModal() {
         const live = fleetList.filter(t => t.status === 'active');
         if (live.length < 2) { showPaneToast('Need at least two live terminals to link'); return; }
 
         const modal = document.getElementById('link-modal');
         const parentSel = document.getElementById('link-parent');
+        const childSel = document.getElementById('link-child');
+        const modeSel = document.getElementById('link-mode');
         const messageEl = document.getElementById('link-message');
-        if (!modal || !parentSel || !messageEl) { return; }
+        const presetSel = document.getElementById('link-preset');
+        if (!modal || !parentSel || !childSel || !modeSel || !messageEl || !presetSel) { return; }
 
         fillTerminalSelect(parentSel, live, defaultLinkParent());
-        syncChildOptions();          // excludes whatever parent resolved to
-        messageEl.value = '';
-        setLinkError(null);
+        syncChildOptions();
+
+        // Fetch the management list and gate the standing-orders mode if the store
+        // is not reachable (e.g. solo popout, headless, or no DB).
+        await fetchStandingOrders();
+        modeSel.value = linkMode;
+        syncModeAvailability(modeSel);
+        renderStandingList();
+
+        presetDirty = false;
+        presetSel.value = linkPreset; // options already exist — built once in wireLinkModal
+        applyPresetToMessage(true);  // fills the box; SEND is live on open
         syncSendEnabled();
+        setLinkError(null);
 
         modal.hidden = false;
-        messageEl.focus();           // the instruction is the only thing left to supply
+        presetSel.focus();           // the preset is now the primary control; Tab reaches the box
     }
 
     /**
@@ -6178,13 +8337,25 @@
 
     /**
      * Build the relay prompt. Two parts, in this order:
-     *   1. the operator's instruction verbatim, delimited;
-     *   2. a concrete recipe for reaching childName over the Switchboard API.
+     *   1. the operator's instruction verbatim, delimited — it is the point of
+     *      the message and comes first so the agent reads it before the recipe;
+     *   2. a single curl against the /terminals/relay endpoint.
+     *
+     * The prompt is an instruction, not an API tutorial. The old recipe handed
+     * the agent a /tmp heredoc, a python3 JSON builder, a clearBeforePrompt
+     * lecture and a 401 note — transport mechanics the agent should never see,
+     * and a loaded gun (clearBeforePrompt) it had to reproduce faithfully or
+     * silently arm a context wipe. /terminals/relay removes all of that: the
+     * endpoint takes {to, from, message}, hardcodes clearBeforePrompt:false so
+     * the capability to clear the recipient does not exist on the route, stamps
+     * provenance itself, and validates both ends against the live fleet. The
+     * agent can produce the call correctly in one attempt.
      *
      * The API base is taken from location.origin — this page IS served by the
-     * LocalApiServer that owns /terminals/verb/, so it is guaranteed correct
-     * without a port-file read. PTY_HOST_ORIGIN is a DIFFERENT server (the pty
-     * host child) and must not be used here.
+     * LocalApiServer that owns /terminals/relay (the same server that owns
+     * /terminals/verb/), so it is guaranteed correct without a port-file read.
+     * PTY_HOST_ORIGIN is a DIFFERENT server (the pty host child) and must not be
+     * used here.
      *
      * The auth token is NOT interpolated: it reaches the shell as
      * $SWITCHBOARD_API_TOKEN (see the ptyFleetService change) so the secret
@@ -6209,27 +8380,14 @@
             message,
             `---`,
             ``,
-            `To deliver a message to ${childName}, POST it to the Switchboard API.`,
-            `Write the message to a file and let python3 build the JSON — never`,
-            `hand-escape quotes or newlines into a shell string:`,
+            `To deliver this to ${childName}, run:`,
             ``,
-            `cat > /tmp/sb-relay-msg.txt <<'SBMSG'`,
-            `<the message you want ${childName} to receive — say who you are and what`,
-            `you are handing over, since the recipient has no idea this came from you>`,
-            `SBMSG`,
-            ``,
-            `python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1], "data": open(sys.argv[2]).read(), "clearBeforePrompt": False}))' ${JSON.stringify(childName)} /tmp/sb-relay-msg.txt > /tmp/sb-relay.json`,
-            ``,
-            `curl -s -X POST "${api}/terminals/verb/ptySendPrompt" \\`,
+            `curl -s -X POST "${api}/terminals/relay" \\`,
             `  -H "Content-Type: application/json" \\`,
             `  -H "Authorization: Bearer $SWITCHBOARD_API_TOKEN" \\`,
-            `  --data @/tmp/sb-relay.json`,
+            `  -d '{"to":${JSON.stringify(childName)},"from":${JSON.stringify(parentName)},"message":"<the operator instruction above, verbatim>"}'`,
             ``,
-            `A successful call returns {"success":true}. Keep "clearBeforePrompt" false`,
-            `unless you deliberately want to reset ${childName}'s context first — true`,
-            `sends /clear and destroys whatever that agent was holding.`,
-            `If you get 401, this terminal predates the API-token injection; tell the`,
-            `operator to restart it.`,
+            `For a long or multi-line message, use a heredoc to build the JSON body instead of hand-escaping it into the -d string.`,
             ``,
             `Carry out the operator instruction now.`,
         ].join('\n');
@@ -6246,45 +8404,69 @@
         setLinkError(null);
 
         // Re-validate BOTH ends: the modal may have sat open while the fleet changed.
-        // ptySendPrompt checks the parent handle, but the child is only a name inside
-        // the prompt text — nothing downstream would catch a dead one.
         const live = (n) => fleetList.some(t => t.friendlyName === n && t.status === 'active');
         if (!live(parentName)) { setLinkError(`${parentName} is no longer live`); return; }
         if (!live(childName)) { setLinkError(`${childName} is no longer live`); return; }
 
-        // Hold SEND down for the duration of the post. withTerminalLock serialises
-        // concurrent deliveries so a double-click cannot INTERLEAVE two pastes — but
-        // it does not dedupe them: both land, and the parent agent relays twice.
         const sendBtn = document.getElementById('link-send');
         if (sendBtn) { sendBtn.disabled = true; }
         try {
-            // Relative URL + default credentials:'same-origin' — this is the idiom every
-            // other verb call in this file uses. It is what carries the HttpOnly
-            // sb_session cookie that _checkAuth accepts under standalone.
-            const res = await fetch('/terminals/verb/ptySendPrompt', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    name: parentName,
-                    data: buildLinkPrompt(parentName, childName, message),
-                    // EXPLICIT false. Omitting this applies the config default (true)
-                    // in BOTH hosts — TaskViewerProvider and bootstrap — which writes
-                    // /clear to the PARENT and destroys the very context it is being
-                    // asked to hand over.
-                    clearBeforePrompt: false
-                })
-            });
-            const data = await res.json();
-            if (!data.success) { setLinkError('Link failed: ' + (data.error || 'unknown')); return; }
-            // Close first, THEN toast: the modal out-stacks .toast-container (z 200 vs
-            // 100), so a toast raised while it is open would be painted behind it.
-            document.getElementById('link-modal').hidden = true;
-            showPaneToast(`Instructed ${parentName} to message ${childName}`);
+            if (linkMode === 'standing') {
+                const res = await fetch('/terminals/standing-orders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'add', parent: parentName, child: childName, instruction: message })
+                });
+                const data = await res.json();
+                if (!data.success) { setLinkError('Save failed: ' + (data.error || 'unknown')); return; }
+                await fetchStandingOrders();
+                renderStandingList();
+                document.getElementById('link-message').value = '';
+                showPaneToast(`Standing order saved for ${parentName}`);
+            } else {
+                // This hop is panel → PARENT (delivering the relay instruction to
+                // the parent agent), NOT panel → child. /terminals/relay is the
+                // parent → child hop that the parent agent will make itself (per
+                // buildLinkPrompt). The panel is not a fleet terminal, so
+                // /terminals/relay's `from`-validation and provenance stamp do
+                // not apply here — this is an instruction to the parent, so
+                // ptySendPrompt is the correct route. Routing the panel's own
+                // send through /terminals/relay would conflate the two hops and
+                // reject the call (the panel is not in the fleet).
+                //
+                // Relative URL + default credentials:'same-origin' — this is the idiom every
+                // other verb call in this file uses. It is what carries the HttpOnly
+                // sb_session cookie that _checkAuth accepts under standalone.
+                const res = await fetch('/terminals/verb/ptySendPrompt', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: parentName,
+                        data: buildLinkPrompt(parentName, childName, message),
+                        // EXPLICIT false. The omitted-field default is now false
+                        // in BOTH hosts (TaskViewerProvider and bootstrap), so
+                        // omitting would be safe — but explicit beats inherited
+                        // on a destructive flag: a future refactor that reroutes
+                        // this send must not silently arm a /clear on the PARENT
+                        // and destroy the very context it is being asked to hand
+                        // over.
+                        clearBeforePrompt: false,
+                        // Link-up instructions must not themselves carry the parent's
+                        // standing-orders block, or the agent would see its own orders
+                        // quoted back inside the relay message.
+                        standingOrders: false
+                    })
+                });
+                const data = await res.json();
+                if (!data.success) { setLinkError('Link failed: ' + (data.error || 'unknown')); return; }
+                // Close first, THEN toast: the modal out-stacks .toast-container (z 200 vs
+                // 100), so a toast raised while it is open would be painted behind it.
+                document.getElementById('link-modal').hidden = true;
+                showPaneToast(`Instructed ${parentName} to message ${childName}`);
+            }
         } catch (err) {
             setLinkError('Link failed: ' + (err.message || String(err)));
         } finally {
-            // Re-derive rather than blanket-enable: an empty instruction must stay
-            // disabled. On success the modal is already closed, so this is a no-op.
             syncSendEnabled();
         }
     }
@@ -6301,7 +8483,10 @@
         const cancelBtn = document.getElementById('link-cancel');
         const sendBtn = document.getElementById('link-send');
         const parentSel = document.getElementById('link-parent');
+        const childSel = document.getElementById('link-child');
+        const modeSel = document.getElementById('link-mode');
         const messageEl = document.getElementById('link-message');
+        const standingList = document.getElementById('link-standing-list');
         const closeModal = () => {
             const modal = document.getElementById('link-modal');
             if (modal) { modal.hidden = true; }
@@ -6310,12 +8495,57 @@
         if (cancelBtn) { cancelBtn.addEventListener('click', closeModal); }
         if (sendBtn) { sendBtn.addEventListener('click', sendLinkMessage); }
         if (parentSel) { parentSel.addEventListener('change', syncChildOptions); }
+        for (const el of [messageEl, modeSel, childSel]) {
+            if (el) { el.addEventListener('keydown', (e) => { e.stopPropagation(); }); }
+        }
         if (messageEl) {
-            messageEl.addEventListener('input', syncSendEnabled);
-            // xterm eats keystrokes — every text input in this panel calls
-            // stopPropagation() on keydown so the terminal viewport does not claim
-            // the event. Same treatment as beginInlineRename's input.
-            messageEl.addEventListener('keydown', (e) => { e.stopPropagation(); });
+            messageEl.addEventListener('input', () => { presetDirty = true; syncSendEnabled(); });
+        }
+        if (modeSel) {
+            modeSel.addEventListener('change', () => {
+                if (!standingOrdersAvailable && modeSel.value === 'standing') {
+                    setLinkError('Standing orders are not available in this context');
+                    modeSel.value = 'instant';
+                } else {
+                    setLinkError(null);
+                    linkMode = modeSel.value;
+                    saveSetting('terminals.linkMode', linkMode);
+                }
+                syncSendEnabled();
+            });
+        }
+        buildPresetOptions();            // static options; the DOM is parsed by now
+        const presetSel = document.getElementById('link-preset');
+        if (presetSel) {
+            presetSel.addEventListener('change', () => {
+                linkPreset = presetSel.value;
+                applyPresetToMessage(true);
+                saveSetting('terminals.linkPreset', linkPreset);
+                if (presetSel.value === 'custom') { document.getElementById('link-message').focus(); }
+            });
+        }
+        if (standingList) {
+            standingList.addEventListener('click', async (e) => {
+                const btn = e.target.closest('.delete-btn');
+                if (!btn) { return; }
+                const item = btn.closest('.link-standing-item');
+                if (!item) { return; }
+                const id = item.dataset.id;
+                if (!id) { return; }
+                try {
+                    const res = await fetch('/terminals/standing-orders', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ action: 'delete', id })
+                    });
+                    const data = await res.json();
+                    if (!data.success) { setLinkError('Delete failed: ' + (data.error || 'unknown')); return; }
+                    await fetchStandingOrders();
+                    renderStandingList();
+                } catch (err) {
+                    setLinkError('Delete failed: ' + (err.message || String(err)));
+                }
+            });
         }
         document.addEventListener('keydown', (e) => {
             const modal = document.getElementById('link-modal');

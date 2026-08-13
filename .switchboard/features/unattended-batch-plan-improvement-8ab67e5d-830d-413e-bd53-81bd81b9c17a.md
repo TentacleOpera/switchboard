@@ -18,9 +18,9 @@ What remains genuinely missing is narrower and sharper: terminals that are live 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Hidden, Batched Terminal Creation with Mixed-Provider Allocation](../plans/hidden-terminal-create-and-provider-mix.md) — **PLAN REVIEWED**
-- [ ] [Unattended Improver Contract: Outstanding Questions and Single-File Scope](../plans/improver-prompt-and-planner-lifecycle.md) — **PLAN REVIEWED**
-- [ ] [Parallel Planner Lane in the Oversight Pass](../plans/plan-update-notifies-planner.md) — **PLAN REVIEWED**
+- [ ] [Hidden, Batched Terminal Creation with Mixed-Provider Allocation](../plans/hidden-terminal-create-and-provider-mix.md) — **CODER CODED**
+- [ ] [Unattended Improver Contract: Outstanding Questions and Single-File Scope](../plans/improver-prompt-and-planner-lifecycle.md) — **CODER CODED**
+- [ ] [Parallel Planner Lane in the Oversight Pass](../plans/plan-update-notifies-planner.md) — **CODER CODED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -56,3 +56,7 @@ Verified every landmark all three plans cited. Corrections applied, each recorde
 Two hazards none of the three plans identified were added: hidden terminals remaining *selectable* by six role-matching dispatch call sites plus autoban's pool resolver, and the completion-gated cooldown silently re-serialising a parallel planner lane after its first N cards.
 
 **Resource research (settled — do not re-open).** The one uncertainty that could not be answered from the code was researched and closed; findings are recorded in `hidden-terminal-create-and-provider-mix.md` under `## Resolved Assumptions`. Headline: a 32-worker batch is safe with wide margin (one master FD per PTY against a 256-FD soft limit under `launchd`), sequential creation is confirmed correct and costs **~24 seconds** for 32 workers, and the real ceiling is **host RAM** — 32 agent CLIs are 160 MB-1.6 GB, not the ~10 MB the parent process spends. Research also surfaced that macOS caps *system-wide* PTYs at 511 and that Claude Desktop and Gemini CLI have documented leaks into that same pool, so batch creation can fail for reasons outside Switchboard — which is why the batch verb now classifies `pty-pool-exhausted` / `fd-limit` / `spawn-failed` separately instead of returning one opaque error.
+
+## Implementation completion summary
+
+Implemented all three subtasks. Added `## Outstanding Questions` to the `improve-plan` skill and `## Unattended runs` overrides so unattended improvers record questions in the plan file instead of chat; updated `switchboard-contracts` and `agentPromptBuilder.ts` so planner dispatches tagged `unattended: true` append a single-file scope contract. Extended `OversightPassService` with `plannerConcurrency`, live-terminal clamping, dispatch-spacing cooldown, `hasOpenQuestions` detection and serialised state writes; updated `switchboard-orchestration` and `LocalApiServer` documentation. Added `hidden` flag and `ptyCreateBatch` verb across `PtyFleetService`, `ptyHost.ts`, `bootstrap.ts` and the extension proxy; gated `autoban` and visible-agent picker roles to ignore system-managed improver roles. Files changed include `.agents/skills/improve-plan/SKILL.md`, `.agents/skills/switchboard-contracts/SKILL.md`, `.agents/skills/switchboard-orchestration/SKILL.md`, `src/services/agentPromptBuilder.ts`, `src/services/OversightPassService.ts`, `src/services/LocalApiServer.ts`, `src/services/TaskViewerProvider.ts`, `src/services/KanbanProvider.ts`, `src/services/GlobalIntegrationConfigService.ts`, `src/extension.ts`, `src/standalone/ptyFleetService.ts`, `src/standalone/ptyHost.ts` and `src/standalone/bootstrap.ts`. The full terminal allocation payload and autoban target-terminal override wiring for hidden workers remain as follow-up refinements.

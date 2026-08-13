@@ -77,6 +77,26 @@ time a managing agent needed them.
    placeholder like `<project>`. Source: workspace-detection + plan-pinning rules in the
    Switchboard protocol (see `AGENTS.md` "Plan Project Pinning").
 
+9. **A message delivered to an idle agent terminal starts a turn.** This is the callback
+   mechanism for attended coder driving: the head agent's turn ends after it dispatches a
+   subtask, and a new turn begins when the coder's completion message arrives at its prompt.
+   No join, no poll, no batch — the delivered text *is* the turn. Continuity is carried by
+   the head agent's own conversation context, which persists across turns by construction.
+   Source: `src/standalone/ptyPromptDelivery.ts` (bracketed-paste delivery to a PTY) +
+   `src/services/standingOrders.ts` (the durable instruction that carries the "report back"
+   contract). Orientation matters and is easy to get backwards: an order's `parent` is the
+   terminal that **receives** the block, `child` is the terminal it is **about**. A coder is
+   told to report back by an order whose `parent` is the *coder*. See the
+   `terminal-coder-dispatch` skill for the full procedure.
+
+10. **Prompt delivery clears the recipient's context by default.** Both hosts inject the
+    config default `switchboard.terminal.clearBeforePrompt` (default `true`) when the caller
+    omits the field — the extension's `handlePtyVerb` and standalone's `getPromptDeliveryOptions()`
+    both do this. A driving agent that forgets `clearBeforePrompt: false` wipes the coder's
+    conversation before every dispatch, destroying the context that makes iterative correction
+    work. The caller's responsibility, not the host's. Source: `TaskViewerProvider.ts`
+    (`handlePtyVerb` config-default injection) + `bootstrap.ts` (`getPromptDeliveryOptions`).
+
 ## When to consult this skill
 
 - You are a managing/orchestrating agent unsure *why* a card did or did not move.

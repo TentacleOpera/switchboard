@@ -207,7 +207,7 @@ test('create() does not infer "worktree" from "cwd is not the boot root"', () =>
 });
 
 test('the proxy resolves the active parent through the KanbanProvider wrapper', () => {
-    const arm = block(taskViewerTs, "if (verb === 'ptyCreateTerminal' && payload) {", 'const result = await this._ptyHostVerb(verb, payload)');
+    const arm = block(taskViewerTs, "if (verb === 'ptyCreateTerminal' && payload) {", 'const result = await this._ptyHostVerb(verb, payload');
     assert.ok(
         /_kanbanProvider\?\.resolveEffectiveWorkspaceRoot\(selected\)/.test(arm),
         'must call the wrapper (it honours kanban.controlPlaneRoot first), not the bare mappings resolver — '
@@ -217,13 +217,13 @@ test('the proxy resolves the active parent through the KanbanProvider wrapper', 
 });
 
 test('the proxy only injects a cwd when the caller named no target', () => {
-    const arm = block(taskViewerTs, "if (verb === 'ptyCreateTerminal' && payload) {", 'const result = await this._ptyHostVerb(verb, payload)');
+    const arm = block(taskViewerTs, "if (verb === 'ptyCreateTerminal' && payload) {", 'const result = await this._ptyHostVerb(verb, payload');
     const guards = arm.match(/!payload\.cwd\s*&&\s*!payload\.worktreePath/g) || [];
     assert.ok(guards.length >= 2, 'both the parentRoot translation and the active-parent injection must be gated on an absent target');
 });
 
 test('the proxy translates parentRoot into cwd and strips it before forwarding', () => {
-    const arm = block(taskViewerTs, "if (verb === 'ptyCreateTerminal' && payload) {", 'const result = await this._ptyHostVerb(verb, payload)');
+    const arm = block(taskViewerTs, "if (verb === 'ptyCreateTerminal' && payload) {", 'const result = await this._ptyHostVerb(verb, payload');
     assert.ok(/cwd:\s*payload\.parentRoot/.test(arm), 'parentRoot must become a cwd — the child never learns the concept');
     assert.ok(/delete payload\.parentRoot/.test(arm), 'parentRoot must not reach the child');
     assert.ok(/payload = \{ \.\.\.payload/.test(arm), 'the payload must be copied, not mutated in the caller');
@@ -254,8 +254,12 @@ test('the per-parent + posts parentRoot and never a cwd', () => {
 });
 
 test('OPEN AGENT TERMINALS still posts no target, so the proxy fills it in', () => {
+    // The POST moved into the shared createTerminalsForRole loop (open-all and Fill
+    // grid both drive it); the target-free payload contract did not move with it.
+    const loop = block(terminalsJs, 'async function createTerminalsForRole(', 'async function openAllTerminals()');
+    assert.ok(/body: JSON\.stringify\(\{ role \}\)/.test(loop), 'open-all must stay target-free — the proxy supplies the active parent');
     const openAll = block(terminalsJs, 'async function openAllTerminals() {', 'await fetchTerminalList();');
-    assert.ok(/body: JSON\.stringify\(\{ role \}\)/.test(openAll), 'open-all must stay target-free — the proxy supplies the active parent');
+    assert.ok(/createTerminalsForRole\(/.test(openAll), 'open-all must drive that shared loop rather than forking its own POST');
 });
 
 test('an unattributed terminal only folds into a sole SYNTHETIC parent', () => {

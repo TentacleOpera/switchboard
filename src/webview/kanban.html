@@ -2750,6 +2750,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
     <div class="shared-tab-bar">
         <button class="shared-tab-btn active" data-tab="kanban">KANBAN</button>
         <button class="shared-tab-btn" data-tab="agents">AGENTS</button>
+        <button class="shared-tab-btn" data-tab="teams">TEAMS</button>
         <button class="shared-tab-btn" data-tab="prompts">PROMPTS</button>
         <button class="shared-tab-btn" data-tab="automation">AUTOMATION</button>
         <button class="shared-tab-btn" data-tab="worktrees">WORKTREES</button>
@@ -2796,6 +2797,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             </button>
             <button class="strip-icon-btn is-off" id="btn-feature-goal" data-tooltip="Feature workflow: prepend /goal slash command to feature prompts">
                 <img src="{{ICON_GOAL}}" alt="Goal">
+            </button>
+            <button class="strip-icon-btn is-off" id="btn-feature-drive" data-tooltip="Feature workflow: drive subtasks through a coder terminal (dispatch, callback, review, resend)">
+                <img src="{{ICON_DRIVE}}" alt="Drive">
             </button>
             <button class="strip-icon-btn is-off" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">
                 <img src="{{ICON_COLLAPSE_CODERS}}" alt="Collapse Coders">
@@ -3077,6 +3081,75 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             </div>
           </div>
           <button id="agents-tab-btn-add-custom-agent" class="strip-btn" style="width:100%; margin-top:8px;">ADD CUSTOM AGENT</button>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Teams Tab Content -->
+    <div id="teams-tab-content" class="shared-tab-content">
+      <div style="padding:12px; overflow-y:auto; height:100%;">
+
+        <!-- Team Types Gallery -->
+        <div class="db-subsection" id="teams-gallery-subsection">
+          <div class="subsection-header"><span>Team Types</span></div>
+          <div style="font-size:11px; color:var(--text-secondary); margin-bottom:8px;">
+            Adopt a working arrangement, then edit it. A team starts when its head role starts — no instantiate button.
+          </div>
+          <div id="teams-gallery" style="display:flex; flex-direction:column; gap:6px;"></div>
+        </div>
+
+        <!-- Your Teams -->
+        <div class="db-subsection" id="agent-groups-subsection">
+          <div class="subsection-header"><span>Your Teams</span></div>
+          <div style="font-size:11px; color:var(--text-secondary); margin-bottom:8px;">
+            Define a named team once — members, roles, counts, which one leads. Starting the head role
+            spawns the team wired: workers parented to the head, standing orders installed, a group
+            registered in the terminals tab. Each terminal is a running agent CLI; keep counts single-digit.
+            Editing a definition affects the next start, not already-running terminals.
+          </div>
+          <div id="agent-groups-list" style="display:flex; flex-direction:column; gap:6px;"></div>
+          <div id="agent-groups-error" style="min-height:0px; color: var(--accent-red); font-size: 11px; margin-top: 4px;"></div>
+          <div id="agent-groups-inline-form" class="agents-tab-inline-form hidden">
+            <div class="agents-tab-inline-form-title" id="agent-groups-form-title">New Team</div>
+            <label class="modal-label" for="agent-groups-name">Team name</label>
+            <input id="agent-groups-name" class="modal-input" type="text" placeholder="e.g. Feature Implementation">
+            <label class="modal-label" for="agent-groups-head-role">Head role</label>
+            <select id="agent-groups-head-role" class="modal-input">
+              <option value="lead">Lead</option>
+              <option value="coder">Coder</option>
+              <option value="planner">Planner</option>
+              <option value="reviewer">Reviewer</option>
+              <option value="intern">Intern</option>
+              <option value="tester">Tester</option>
+              <option value="analyst">Analyst</option>
+              <option value="researcher">Researcher</option>
+            </select>
+            <div style="font-size:11px; font-weight:600; margin-top:10px; margin-bottom:4px;">Members</div>
+            <div id="agent-groups-members" style="display:flex; flex-direction:column; gap:4px;"></div>
+            <button id="agent-groups-add-member" class="strip-btn" style="width:100%; margin-top:6px;">ADD MEMBER</button>
+            <div style="font-size:11px; color:var(--text-secondary); margin-top:8px;">
+              Every member reports to the head. Closing the head closes its own members; shared members stay.
+            </div>
+            <div class="flex gap-2" style="margin-top: 10px;">
+              <button id="agent-groups-btn-save" class="modal-btn-primary">SAVE TEAM</button>
+              <button id="agent-groups-btn-cancel" class="modal-btn-secondary">CANCEL</button>
+            </div>
+          </div>
+          <button id="agent-groups-btn-add" class="strip-btn" style="width:100%; margin-top:8px;">ADD TEAM</button>
+        </div>
+
+        <!-- Delegation & Phone-a-Friend -->
+        <div class="db-subsection" id="delegation-subsection">
+          <div class="subsection-header"><span>Delegation &amp; Phone-a-Friend</span></div>
+          <div style="font-size:11px; color:var(--text-secondary); margin-bottom:8px;">
+            Configure per-role delegate children and per-instance Phone-a-Friend overrides. Saved to role config.
+          </div>
+          <div class="startup-row" style="gap:8px; margin-bottom:8px;">
+            <label style="min-width:70px;">Role</label>
+            <select id="delegation-role-select" style="flex:1;"></select>
+          </div>
+          <div id="delegation-panels" style="display:flex; flex-direction:column; gap:8px;"></div>
         </div>
 
       </div>
@@ -3987,6 +4060,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let agentsTabCustomAgents = [];
         let agentsTabEditingAgentId = null;
 
+        // Agent Groups state
+        let agentsTabAgentGroups = [];
+        let agentsTabEditingGroupId = null;
+
         function agentsTabSanitizeCustomAgentId(value) {
           const normalized = String(value || '')
             .toLowerCase()
@@ -4131,12 +4208,561 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         document.getElementById('agents-tab-btn-cancel-custom-agent')?.addEventListener('click', agentsTabHideInlineForm);
 
+        // Teams (Agent Groups) event listeners
+        document.getElementById('agent-groups-btn-add')?.addEventListener('click', () => {
+            teamsTabShowGroupForm(null);
+        });
+        document.getElementById('agent-groups-btn-save')?.addEventListener('click', teamsTabSaveAgentGroup);
+        document.getElementById('agent-groups-btn-cancel')?.addEventListener('click', teamsTabHideGroupForm);
+        document.getElementById('agent-groups-add-member')?.addEventListener('click', () => {
+            const membersDiv = document.getElementById('agent-groups-members');
+            if (membersDiv) {
+                membersDiv.appendChild(teamsTabAgentGroupMemberRow({ role: 'coder', count: 1, scope: 'per-team', relationship: 'reports-to-head' }));
+            }
+        });
+
+        let currentDelegationRole = 'coder';
+
+        function agentsTabPopulateRoleSelect() {
+            const select = document.getElementById('delegation-role-select');
+            if (!select) { return; }
+            select.innerHTML = '';
+            for (const role of ROLE_KEYS) {
+                const option = document.createElement('option');
+                option.value = role;
+                option.textContent = role;
+                if (role === currentDelegationRole) { option.selected = true; }
+                select.appendChild(option);
+            }
+            select.onchange = (e) => { currentDelegationRole = e.target.value; agentsTabRenderDelegationPanel(currentDelegationRole); };
+        }
+
+        function agentsTabEnsureRoleConfig(role) {
+            if (!roleConfigs[role]) { roleConfigs[role] = { prompt: '', addons: {} }; }
+            if (!roleConfigs[role].addons) { roleConfigs[role].addons = {}; }
+            return roleConfigs[role];
+        }
+
+        function agentsTabRenderDelegationPanel(role) {
+            const container = document.getElementById('delegation-panels');
+            if (!container) { return; }
+            const cfg = agentsTabEnsureRoleConfig(role);
+            container.innerHTML = '';
+
+            const phoneSection = document.createElement('div');
+            phoneSection.className = 'db-subsection';
+            phoneSection.style.padding = '8px';
+            phoneSection.innerHTML = '<div style="font-weight:600; font-size:11px; margin-bottom:6px;">Phone-a-Friend targets</div>';
+            const targetList = document.createElement('div');
+            targetList.style.display = 'flex'; targetList.style.flexDirection = 'column'; targetList.style.gap = '4px';
+            // Materialise the map on the config, not just locally — ADD TARGET and the
+            // row editors both write through `cfg.addons.phoneAFriendTargets`, and a
+            // local `|| {}` left it undefined so the first click threw and the control
+            // did nothing at all.
+            if (!cfg.addons.phoneAFriendTargets || typeof cfg.addons.phoneAFriendTargets !== 'object') {
+                cfg.addons.phoneAFriendTargets = {};
+            }
+            const targets = cfg.addons.phoneAFriendTargets;
+            for (const [origin, target] of Object.entries(targets)) {
+                targetList.appendChild(agentsTabPhoneRow(role, origin, target));
+            }
+            const addBtn = document.createElement('button');
+            addBtn.className = 'strip-btn'; addBtn.style.width = '100%'; addBtn.style.marginTop = '6px'; addBtn.textContent = 'ADD TARGET';
+            addBtn.addEventListener('click', () => {
+                const cur = agentsTabEnsureRoleConfig(role).addons;
+                if (!cur.phoneAFriendTargets || typeof cur.phoneAFriendTargets !== 'object') { cur.phoneAFriendTargets = {}; }
+                cur.phoneAFriendTargets[''] = '';
+                saveRoleConfig(role);
+                agentsTabRenderDelegationPanel(role);
+            });
+            phoneSection.appendChild(targetList);
+            phoneSection.appendChild(addBtn);
+            container.appendChild(phoneSection);
+
+            const delSection = document.createElement('div');
+            delSection.className = 'db-subsection';
+            delSection.style.padding = '8px';
+            let hostCaps = {};
+            try { hostCaps = JSON.parse((document.body.dataset.hostCapabilities || '').replace(/&quot;/g, '"')); } catch { /* ignore */ }
+            if (hostCaps.terminalFleet === false) {
+                const addDel = document.createElement('button');
+                addDel.className = 'strip-btn'; addDel.style.width = '100%'; addDel.style.marginTop = '6px'; addDel.textContent = 'ADD DELEGATE';
+                addDel.disabled = true;
+                addDel.title = 'PTY host unavailable on this platform/installation';
+                delSection.innerHTML = '<div style="font-weight:600; font-size:11px; margin-bottom:6px;">Delegate children</div><div style="color:#888;font-size:11px;">PTY host unavailable on this platform/installation — delegate children cannot be configured.</div>';
+                delSection.appendChild(addDel);
+                container.appendChild(delSection);
+                return;
+            }
+            delSection.innerHTML = '<div style="font-weight:600; font-size:11px; margin-bottom:6px;">Delegate children</div>';
+            const delList = document.createElement('div');
+            delList.style.display = 'flex'; delList.style.flexDirection = 'column'; delList.style.gap = '4px';
+            const delegates = cfg.addons.delegates || [];
+            for (const d of delegates) {
+                delList.appendChild(agentsTabDelegateRow(role, d));
+            }
+            const addDel = document.createElement('button');
+            addDel.className = 'strip-btn'; addDel.style.width = '100%'; addDel.style.marginTop = '6px'; addDel.textContent = 'ADD DELEGATE';
+            addDel.addEventListener('click', () => {
+                agentsTabEnsureRoleConfig(role).addons.delegates = delegates;
+                delegates.push({ role: 'intern', count: 1, label: '', startupCommand: '' });
+                saveRoleConfig(role);
+                agentsTabRenderDelegationPanel(role);
+            });
+            delSection.appendChild(delList);
+            delSection.appendChild(addDel);
+            container.appendChild(delSection);
+        }
+
+        function agentsTabPhoneRow(role, origin, target) {
+            const row = document.createElement('div');
+            row.className = 'startup-row';
+            row.style.gap = '4px';
+            row.innerHTML = '<input type="text" placeholder="origin terminal" style="flex:1;"><select style="width:80px;"><option value="target">target</option><option value="off">off</option></select><input type="text" placeholder="target terminal" style="flex:1;"><button class="strip-btn" style="padding:2px 8px;">×</button>';
+            const [originInput, modeSelect, targetInput, delBtn] = row.querySelectorAll('input, select, button');
+            originInput.value = origin;
+            targetInput.value = target === null ? '' : (typeof target === 'string' ? target : '');
+            modeSelect.value = target === null ? 'off' : 'target';
+            targetInput.style.display = target === null ? 'none' : '';
+
+            function save() {
+                const cfg = agentsTabEnsureRoleConfig(role);
+                if (!cfg.addons.phoneAFriendTargets || typeof cfg.addons.phoneAFriendTargets !== 'object') { cfg.addons.phoneAFriendTargets = {}; }
+                const t = cfg.addons.phoneAFriendTargets;
+                const newOrigin = originInput.value.trim();
+                if (newOrigin !== origin) { delete t[origin]; }
+                const newTarget = modeSelect.value === 'off' ? null : targetInput.value.trim();
+                t[newOrigin] = newTarget;
+                saveRoleConfig(role);
+            }
+            originInput.addEventListener('blur', save);
+            modeSelect.addEventListener('change', () => { targetInput.style.display = modeSelect.value === 'off' ? 'none' : ''; save(); });
+            targetInput.addEventListener('blur', save);
+            delBtn.addEventListener('click', () => {
+                const cfg = agentsTabEnsureRoleConfig(role);
+                delete cfg.addons.phoneAFriendTargets[origin];
+                saveRoleConfig(role);
+                agentsTabRenderDelegationPanel(role);
+            });
+            return row;
+        }
+
+        function agentsTabDelegateRow(role, d) {
+            const row = document.createElement('div');
+            row.className = 'startup-row';
+            row.style.flexWrap = 'wrap';
+            row.style.gap = '4px';
+            row.innerHTML = '<input type="text" placeholder="role" style="flex:1; min-width:60px;"><input type="number" min="1" max="10" style="width:50px;"><input type="text" placeholder="label" style="flex:1; min-width:60px;"><input type="text" placeholder="startup command" style="flex:2; min-width:120px;"><button class="strip-btn" style="padding:2px 8px;">×</button>';
+            const [roleIn, countIn, labelIn, cmdIn, delBtn] = row.children;
+            roleIn.value = d.role || '';
+            countIn.value = d.count ?? 1;
+            labelIn.value = d.label || '';
+            cmdIn.value = d.startupCommand || '';
+
+            function save() {
+                d.role = roleIn.value.trim() || 'intern';
+                d.count = parseInt(countIn.value, 10) || 1;
+                d.label = labelIn.value.trim();
+                d.startupCommand = cmdIn.value.trim();
+                saveRoleConfig(role);
+            }
+            [roleIn, countIn, labelIn, cmdIn].forEach(el => el.addEventListener('blur', save));
+            delBtn.addEventListener('click', () => {
+                const cfg = agentsTabEnsureRoleConfig(role);
+                cfg.addons.delegates = (cfg.addons.delegates || []).filter(x => x !== d);
+                saveRoleConfig(role);
+                agentsTabRenderDelegationPanel(role);
+            });
+            return row;
+        }
+
+        // ── Teams (Agent Groups) ───────────────────────────────────────────────────
+        // Moved from AGENTS to TEAMS. The agentsTab* prefix is retained for the
+        // state variables (agentsTabAgentGroups, agentsTabEditingGroupId) because
+        // the message handler at 'agentGroups' writes them — renaming the
+        // variables would require changing every reference including the message
+        // pump. The functions are renamed to teamsTab* to match their DOM home.
+
+        /**
+         * Shipped team types — static definitions rendered on every install.
+         * The gallery forks a copy into the workspace's own teams on USE; the
+         * shipped definition is never mutated.
+         *
+         * `scope` and `relationship` are the fields from the previous subtask.
+         * `relationship` values are LINK_PRESETS ids (src/services/linkPresets.ts,
+         * mirrored in terminals.js). `custom` is excluded — it is a UI sentinel
+         * with an empty template, not a relationship.
+         */
+        const SHIPPED_TEAM_TYPES = [
+            {
+                name: 'Feature team',
+                headRole: 'lead',
+                members: [
+                    { role: 'coder', count: 3, scope: 'per-team', relationship: 'reports-to-head' },
+                    { role: 'reviewer', count: 1, scope: 'shared', relationship: 'reviewer' }
+                ],
+                purpose: 'Works a feature\'s subtasks one at a time.'
+            },
+            {
+                name: 'Planning team',
+                headRole: 'planner',
+                members: [
+                    { role: 'researcher', count: 1, scope: 'shared', relationship: 'researcher' }
+                ],
+                purpose: 'Turns tickets and ideas into plans.'
+            },
+            {
+                name: 'Solo coder',
+                headRole: 'coder',
+                members: [],
+                purpose: 'No lead — a cheap second pair of eyes at batch end. Phone-a-Friend fires from role config.'
+            },
+            {
+                name: 'Review team',
+                headRole: 'reviewer',
+                members: [
+                    { role: 'tester', count: 1, scope: 'per-team', relationship: 'tester' }
+                ],
+                purpose: 'Verifies finished work before it ships.'
+            }
+        ];
+
+        /**
+         * Relationship presets for the member editor dropdown.
+         * Mirrors LINK_PRESETS in terminals.js / src/services/linkPresets.ts,
+         * excluding `custom` (empty template, not a valid relationship for a member).
+         * The contract test (link-presets-mirror-contract.test.js) guards the
+         * full list; this is the subset the dropdown offers.
+         */
+        const MEMBER_RELATIONSHIP_PRESETS = [
+            { id: 'reports-to-head', label: 'Reports to me' },
+            { id: 'researcher', label: 'Researcher' },
+            { id: 'reviewer', label: 'Reviewer' },
+            { id: 'tester', label: 'Tester' },
+            { id: 'handoff', label: 'Hand off' },
+            { id: 'second-opinion', label: 'Second opinion' }
+        ];
+
+        function teamsTabRenderGallery() {
+            const container = document.getElementById('teams-gallery');
+            if (!container) return;
+            container.innerHTML = '';
+            // Claimed head roles from adopted teams — one type per head role.
+            // Unassigned teams do not claim their head role (they are not active).
+            const claimedRoles = new Set(agentsTabAgentGroups.filter(g => !g.unassigned).map(g => g.headRole));
+            for (const type of SHIPPED_TEAM_TYPES) {
+                container.appendChild(teamsTabGalleryCard(type, claimedRoles));
+            }
+            // Custom team card — any head role, any members.
+            container.appendChild(teamsTabCustomCard(claimedRoles));
+        }
+
+        function teamsTabGalleryCard(type, claimedRoles) {
+            const card = document.createElement('div');
+            card.className = 'agents-tab-custom-agent-item';
+            card.style.flexWrap = 'wrap';
+            const claimed = claimedRoles.has(type.headRole);
+            const claimer = claimed ? agentsTabAgentGroups.find(g => g.headRole === type.headRole) : null;
+            const memberSummary = (type.members || [])
+                .map(m => `${m.count || 1}× ${m.role}${m.scope === 'shared' ? ' (shared)' : ''}`)
+                .join(', ') || 'head only';
+            const headDiv = document.createElement('div');
+            headDiv.className = 'agents-tab-custom-agent-item-name';
+            headDiv.textContent = type.name;
+            const detailDiv = document.createElement('div');
+            detailDiv.className = 'agents-tab-custom-agent-item-command';
+            detailDiv.style.flexBasis = '100%';
+            detailDiv.textContent = `head: ${type.headRole} · ${memberSummary} — ${type.purpose}`;
+            const actions = document.createElement('div');
+            actions.className = 'agents-tab-custom-agent-item-actions';
+            if (claimed) {
+                const note = document.createElement('span');
+                note.style.fontSize = '10px';
+                note.style.color = 'var(--text-secondary)';
+                note.textContent = `head role claimed by "${claimer?.name || type.headRole}"`;
+                actions.appendChild(note);
+            } else {
+                const useBtn = document.createElement('button');
+                useBtn.className = 'agents-tab-custom-agent-item-btn';
+                useBtn.textContent = 'USE';
+                useBtn.addEventListener('click', () => {
+                    // Fork the shipped definition into the workspace's own teams.
+                    const forked = {
+                        id: 'group-' + type.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Date.now().toString(36),
+                        name: type.name,
+                        headRole: type.headRole,
+                        members: (type.members || []).map(m => ({ ...m }))
+                    };
+                    agentsTabAgentGroups.push(forked);
+                    teamsTabRenderAgentGroups();
+                    teamsTabRenderGallery();
+                    postKanbanMessage({ type: 'saveAgentGroup', group: forked });
+                    // Open the editor on the forked copy so the operator can tweak it.
+                    teamsTabShowGroupForm(forked);
+                });
+                actions.appendChild(useBtn);
+            }
+            card.appendChild(headDiv);
+            card.appendChild(actions);
+            card.appendChild(detailDiv);
+            return card;
+        }
+
+        function teamsTabCustomCard(claimedRoles) {
+            const card = document.createElement('div');
+            card.className = 'agents-tab-custom-agent-item';
+            card.style.flexWrap = 'wrap';
+            const headDiv = document.createElement('div');
+            headDiv.className = 'agents-tab-custom-agent-item-name';
+            headDiv.textContent = 'Custom team';
+            const detailDiv = document.createElement('div');
+            detailDiv.className = 'agents-tab-custom-agent-item-command';
+            detailDiv.style.flexBasis = '100%';
+            detailDiv.textContent = 'Any head role, any members.';
+            const actions = document.createElement('div');
+            actions.className = 'agents-tab-custom-agent-item-actions';
+            const useBtn = document.createElement('button');
+            useBtn.className = 'agents-tab-custom-agent-item-btn';
+            useBtn.textContent = 'USE';
+            useBtn.addEventListener('click', () => {
+                teamsTabShowGroupForm(null);
+            });
+            actions.appendChild(useBtn);
+            card.appendChild(headDiv);
+            card.appendChild(actions);
+            card.appendChild(detailDiv);
+            return card;
+        }
+
+        function teamsTabRenderAgentGroups() {
+            const container = document.getElementById('agent-groups-list');
+            if (!container) return;
+            container.innerHTML = '';
+            if (agentsTabAgentGroups.length === 0) {
+                container.innerHTML = '<div style="font-size:11px; color:var(--text-secondary); padding:4px 0;">No teams adopted. Use a type above or click "ADD TEAM".</div>';
+                return;
+            }
+            for (const group of agentsTabAgentGroups) {
+                container.appendChild(teamsTabAgentGroupRow(group));
+            }
+        }
+
+        function teamsTabAgentGroupRow(group) {
+            const row = document.createElement('div');
+            row.className = 'agents-tab-custom-agent-item';
+            row.style.flexWrap = 'wrap';
+            const members = group.members || [];
+            const memberSummary = members
+                .map(m => `${m.count || 1}× ${m.role}${m.scope === 'shared' ? ' (shared)' : ''}`)
+                .join(', ') || 'no members yet';
+            const nameDiv = document.createElement('div');
+            nameDiv.className = 'agents-tab-custom-agent-item-name';
+            nameDiv.textContent = group.name;
+            const detailDiv = document.createElement('div');
+            detailDiv.className = 'agents-tab-custom-agent-item-command';
+            detailDiv.style.flexBasis = '100%';
+            detailDiv.textContent = `head: ${group.headRole} · ${memberSummary}`;
+            // Unassigned team: show the collision reason and no auto-start.
+            if (group.unassigned) {
+                const unassignedDiv = document.createElement('div');
+                unassignedDiv.style.flexBasis = '100%';
+                unassignedDiv.style.fontSize = '10px';
+                unassignedDiv.style.color = 'var(--accent-red)';
+                unassignedDiv.textContent = group.unassignedReason || 'Unassigned — head role claimed by another team. Edit to choose a different head role.';
+                row.appendChild(unassignedDiv);
+            }
+            // Member-less starter: show the explanatory copy.
+            if (members.length === 0 && !group.unassigned) {
+                const hintDiv = document.createElement('div');
+                hintDiv.style.flexBasis = '100%';
+                hintDiv.style.fontSize = '10px';
+                hintDiv.style.color = 'var(--text-secondary)';
+                hintDiv.textContent = 'This team does nothing until you add a member. Add one and every '
+                    + group.headRole + ' you start will bring it along, already told what it is there for.';
+                row.appendChild(hintDiv);
+            }
+            const actions = document.createElement('div');
+            actions.className = 'agents-tab-custom-agent-item-actions';
+            const editBtn = document.createElement('button');
+            editBtn.className = 'agents-tab-custom-agent-item-btn';
+            editBtn.textContent = 'EDIT';
+            editBtn.addEventListener('click', () => teamsTabShowGroupForm(group));
+            const delBtn = document.createElement('button');
+            delBtn.className = 'agents-tab-custom-agent-item-btn delete';
+            delBtn.textContent = '×';
+            delBtn.addEventListener('click', () => {
+                // Delete immediately — no confirmation dialog (hard project rule).
+                agentsTabAgentGroups = agentsTabAgentGroups.filter(g => g.id !== group.id);
+                teamsTabRenderAgentGroups();
+                teamsTabRenderGallery();
+                postKanbanMessage({ type: 'deleteAgentGroup', groupId: group.id });
+            });
+            actions.appendChild(editBtn);
+            actions.appendChild(delBtn);
+            row.appendChild(nameDiv);
+            row.appendChild(actions);
+            row.appendChild(detailDiv);
+            return row;
+        }
+
+        function teamsTabAgentGroupMemberRow(member) {
+            // Member editor row: role, count, scope, relationship.
+            // No per-member label or command — the tab composes roles, it never
+            // configures them. label and startupCommand remain on the stored
+            // DelegateDefinition shape and are preserved on write.
+            const row = document.createElement('div');
+            row.className = 'startup-row';
+            row.style.flexWrap = 'wrap';
+            row.style.gap = '4px';
+
+            const roleIn = document.createElement('input');
+            roleIn.type = 'text'; roleIn.placeholder = 'role';
+            roleIn.style.flex = '1'; roleIn.style.minWidth = '60px';
+            roleIn.value = member.role || '';
+
+            const countIn = document.createElement('input');
+            countIn.type = 'number'; countIn.min = '1'; countIn.max = '8';
+            countIn.style.width = '50px';
+            countIn.value = member.count ?? 1;
+
+            const scopeSel = document.createElement('select');
+            scopeSel.style.width = '90px';
+            scopeSel.innerHTML = '<option value="per-team">per-team</option><option value="shared">shared</option>';
+            scopeSel.value = member.scope || 'per-team';
+
+            const relSel = document.createElement('select');
+            relSel.style.flex = '1'; relSel.style.minWidth = '100px';
+            for (const p of MEMBER_RELATIONSHIP_PRESETS) {
+                const opt = document.createElement('option');
+                opt.value = p.id; opt.textContent = p.label;
+                relSel.appendChild(opt);
+            }
+            relSel.value = member.relationship || 'reports-to-head';
+
+            const delBtn = document.createElement('button');
+            delBtn.className = 'strip-btn';
+            delBtn.style.padding = '2px 8px';
+            delBtn.textContent = '×';
+
+            row.appendChild(roleIn);
+            row.appendChild(countIn);
+            row.appendChild(scopeSel);
+            row.appendChild(relSel);
+            row.appendChild(delBtn);
+
+            function save() {
+                member.role = roleIn.value.trim() || 'coder';
+                member.count = parseInt(countIn.value, 10) || 1;
+                member.scope = scopeSel.value;
+                member.relationship = relSel.value;
+            }
+            [roleIn, countIn].forEach(el => el.addEventListener('blur', save));
+            [scopeSel, relSel].forEach(el => el.addEventListener('change', save));
+            delBtn.addEventListener('click', () => {
+                const membersDiv = document.getElementById('agent-groups-members');
+                if (membersDiv) { membersDiv.removeChild(row); }
+            });
+            return row;
+        }
+
+        function teamsTabShowGroupForm(group) {
+            agentsTabEditingGroupId = group ? group.id : null;
+            document.getElementById('agent-groups-form-title').textContent = group ? `Edit: ${group.name}` : 'New Team';
+            document.getElementById('agent-groups-name').value = group?.name || '';
+            // Disable claimed head roles in the dropdown — one type per head role.
+            const headSel = document.getElementById('agent-groups-head-role');
+            const claimedRoles = new Set(agentsTabAgentGroups
+                .filter(g => g.id !== group?.id && !g.unassigned)
+                .map(g => g.headRole));
+            for (const opt of headSel.options) {
+                opt.disabled = claimedRoles.has(opt.value);
+                opt.textContent = opt.value.charAt(0).toUpperCase() + opt.value.slice(1) + (claimedRoles.has(opt.value) ? ' (claimed)' : '');
+            }
+            headSel.value = group?.headRole || 'lead';
+            const membersDiv = document.getElementById('agent-groups-members');
+            if (!membersDiv) return;
+            membersDiv.innerHTML = '';
+            const members = group ? (group.members || []).map(m => ({ ...m })) : [];
+            if (members.length === 0 && !group) {
+                members.push({ role: 'coder', count: 1, scope: 'per-team', relationship: 'reports-to-head' });
+            }
+            for (const m of members) {
+                membersDiv.appendChild(teamsTabAgentGroupMemberRow(m));
+            }
+            document.getElementById('agent-groups-error').textContent = '';
+            document.getElementById('agent-groups-inline-form').classList.remove('hidden');
+            setTimeout(() => document.getElementById('agent-groups-name').focus(), 0);
+        }
+
+        function teamsTabHideGroupForm() {
+            agentsTabEditingGroupId = null;
+            document.getElementById('agent-groups-inline-form').classList.add('hidden');
+            document.getElementById('agent-groups-error').textContent = '';
+        }
+
+        function teamsTabSaveAgentGroup() {
+            const name = document.getElementById('agent-groups-name').value.trim();
+            if (!name) {
+                document.getElementById('agent-groups-error').textContent = 'Team name is required.';
+                return;
+            }
+            const headRole = document.getElementById('agent-groups-head-role').value || 'lead';
+            // Read members from the DOM rows. The member row has 2 inputs (role,
+            // count) and 2 selects (scope, relationship). label and startupCommand
+            // are preserved from the existing definition if present — the editor
+            // does not expose them, but dropping them on save would destroy
+            // configuration the migration plan explicitly preserves.
+            const membersDiv = document.getElementById('agent-groups-members');
+            const members = [];
+            if (membersDiv) {
+                const rows = membersDiv.querySelectorAll('.startup-row');
+                // Find the existing member definitions to preserve label/startupCommand.
+                const existing = agentsTabEditingGroupId
+                    ? (agentsTabAgentGroups.find(g => g.id === agentsTabEditingGroupId)?.members || [])
+                    : [];
+                for (const r of rows) {
+                    const inputs = r.querySelectorAll('input');
+                    const selects = r.querySelectorAll('select');
+                    if (inputs.length >= 2 && selects.length >= 2) {
+                        const role = inputs[0].value.trim() || 'coder';
+                        const count = parseInt(inputs[1].value, 10) || 1;
+                        const scope = selects[0].value;
+                        const relationship = selects[1].value;
+                        // Preserve label/startupCommand from the existing definition
+                        // if this role was present before the edit.
+                        const prev = existing.find(m => m.role === role);
+                        members.push({
+                            role, count, scope, relationship,
+                            ...(prev?.label ? { label: prev.label } : {}),
+                            ...(prev?.startupCommand ? { startupCommand: prev.startupCommand } : {}),
+                        });
+                    }
+                }
+            }
+            const id = agentsTabEditingGroupId || ('group-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Date.now().toString(36));
+            // Do not carry over unassigned/unassignedReason — the migration
+            // re-evaluates collisions on next load. If the operator changed
+            // the head role to a free one, the team becomes active.
+            const group = { id, name, headRole, members };
+            // Replace or append
+            const idx = agentsTabAgentGroups.findIndex(g => g.id === id);
+            if (idx >= 0) { agentsTabAgentGroups[idx] = group; }
+            else { agentsTabAgentGroups.push(group); }
+            teamsTabRenderAgentGroups();
+            teamsTabRenderGallery();
+            teamsTabHideGroupForm();
+            postKanbanMessage({ type: 'saveAgentGroup', group });
+        }
+
         function agentsTabCollectConfig() {
           const commands = {}, visibleAgents = {};
-          document.querySelectorAll('#agents-tab-content input[type="text"][data-role]').forEach(i => {
+          // The Agent Visibility & CLI Commands section lives in #agents-tab-content;
+          // the Delegation section moved to #teams-tab-content. Query both containers
+          // so a moved control with data-role is still collected.
+          document.querySelectorAll('#agents-tab-content input[type="text"][data-role], #teams-tab-content input[type="text"][data-role]').forEach(i => {
             if (i.dataset.role) commands[i.dataset.role] = i.value.trim();
           });
-          document.querySelectorAll('#agents-tab-content .agents-tab-visible-toggle').forEach(cb => {
+          document.querySelectorAll('#agents-tab-content .agents-tab-visible-toggle, #teams-tab-content .agents-tab-visible-toggle').forEach(cb => {
             if (cb.dataset.role) visibleAgents[cb.dataset.role] = cb.checked;
           });
           return {
@@ -4150,11 +4776,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           vscode.postMessage({ type: 'saveStartupCommands', ...agentsTabCollectConfig() });
         }
 
-        // Autosave on checkbox change or text blur
-        document.querySelectorAll('#agents-tab-content input[type="checkbox"]').forEach(cb => {
+        // Autosave on checkbox change or text blur.
+        // Bind over both #agents-tab-content and #teams-tab-content — the
+        // Delegation section moved to TEAMS, and a moved control that renders
+        // correctly can still be silently dropped from the collector if the
+        // selector stays scoped to AGENTS alone.
+        document.querySelectorAll('#agents-tab-content input[type="checkbox"], #teams-tab-content input[type="checkbox"]').forEach(cb => {
           cb.addEventListener('change', agentsTabSaveConfig);
         });
-        document.querySelectorAll('#agents-tab-content input[type="text"][data-role]').forEach(i => {
+        document.querySelectorAll('#agents-tab-content input[type="text"][data-role], #teams-tab-content input[type="text"][data-role]').forEach(i => {
           i.addEventListener('blur', agentsTabSaveConfig);
         });
         document.getElementById('agents-tab-planner-terminal-count')?.addEventListener('change', agentsTabSaveConfig);
@@ -4616,6 +5246,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   postKanbanMessage({ type: 'getCustomAgents' });
                 }
 
+                // Hydrate TEAMS tab when activated — agent groups, gallery,
+                // delegation panel and role configs all moved here from AGENTS.
+                if (tabName === 'teams') {
+                  postKanbanMessage({ type: 'getAgentGroups' });
+                  loadRoleConfigs();
+                  agentsTabPopulateRoleSelect();
+                  agentsTabRenderDelegationPanel(currentDelegationRole);
+                  teamsTabRenderGallery();
+                }
+
 
 
                 // Hydrate UAT tab when activated
@@ -5074,12 +5714,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
         }
 
-        // Feature workflow toggles: independently toggleable (both can be active at once)
+        // Feature workflow toggles: independently toggleable (all three can be active at once)
         let featureUltracodeEnabled = false;
         let featureGoalEnabled = false;
+        let featureDriveEnabled = false;
         function updateFeatureWorkflowToggleUi() {
             const ucBtn = document.getElementById('btn-feature-ultracode');
             const goalBtn = document.getElementById('btn-feature-goal');
+            const driveBtn = document.getElementById('btn-feature-drive');
             if (ucBtn) {
                 ucBtn.classList.toggle('is-active', featureUltracodeEnabled);
                 ucBtn.classList.toggle('is-off', !featureUltracodeEnabled);
@@ -5088,11 +5730,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 goalBtn.classList.toggle('is-active', featureGoalEnabled);
                 goalBtn.classList.toggle('is-off', !featureGoalEnabled);
             }
+            if (driveBtn) {
+                driveBtn.classList.toggle('is-active', featureDriveEnabled);
+                driveBtn.classList.toggle('is-off', !featureDriveEnabled);
+            }
         }
         function toggleFeatureUltracode() {
             featureUltracodeEnabled = !featureUltracodeEnabled;
             updateFeatureWorkflowToggleUi();
-            postKanbanMessage({ type: 'setFeatureWorkflowMode', ultracode: featureUltracodeEnabled, goal: featureGoalEnabled });
+            postKanbanMessage({ type: 'setFeatureWorkflowMode', ultracode: featureUltracodeEnabled, goal: featureGoalEnabled, drive: featureDriveEnabled });
             if (featureUltracodeEnabled) { fireUltracodeBlast(); }
         }
 
@@ -5116,7 +5762,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         function toggleFeatureGoal() {
             featureGoalEnabled = !featureGoalEnabled;
             updateFeatureWorkflowToggleUi();
-            postKanbanMessage({ type: 'setFeatureWorkflowMode', ultracode: featureUltracodeEnabled, goal: featureGoalEnabled });
+            postKanbanMessage({ type: 'setFeatureWorkflowMode', ultracode: featureUltracodeEnabled, goal: featureGoalEnabled, drive: featureDriveEnabled });
+        }
+
+        function toggleFeatureDrive() {
+            featureDriveEnabled = !featureDriveEnabled;
+            updateFeatureWorkflowToggleUi();
+            postKanbanMessage({ type: 'setFeatureWorkflowMode', ultracode: featureUltracodeEnabled, goal: featureGoalEnabled, drive: featureDriveEnabled });
         }
 
         function updateComplexityRoutingToggleUi() {
@@ -5124,6 +5776,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (toggle) {
                 toggle.classList.toggle('is-active', !!dynamicComplexityRoutingEnabled);
                 toggle.classList.toggle('is-off', !dynamicComplexityRoutingEnabled);
+            }
+        }
+
+        /** Note the inverted classes: the button reads as "coder columns expanded",
+         *  so it is `is-active` when collapsing is OFF. Preserved from the original
+         *  inline handler — do not "fix" it to match the flag name. */
+        function updateCollapseCodersToggleUi() {
+            const btn = document.getElementById('btn-collapse-coders');
+            if (btn) {
+                btn.classList.toggle('is-active', !collapseCodersEnabled);
+                btn.classList.toggle('is-off', collapseCodersEnabled);
             }
         }
 
@@ -5364,6 +6027,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 renderBoard(currentCards);
                 lastBoardSignature = buildBoardSignature(currentCards);
             }
+            updateDispatchToggleCount();
+            updateDispatchViewInfo();
         }
 
         /** Get all selected session IDs within a specific column. */
@@ -5720,10 +6385,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                                <img src="${ICON_MOVE_SELECTED}" alt="Send to Coder">
                            </button>`
                         : '';
-                    buttonArea = `<div class="column-button-area">
+                    const dispatchStagedNow = (isPlanReviewed && showingDispatch) ? dispatchStagedCount() : 0;
+                    const dispatchViewControls = (isPlanReviewed && showingDispatch)
+                        ? `<span id="dispatch-view-info" class="dispatch-view-info" style="font-size:11px; margin-right:auto; color:var(--vscode-descriptionForeground);">0 plans · 0 coder terminals</span>
+                           <button class="column-icon-btn" id="btn-add-coder-terminal" data-action="addCoderTerminal" data-column="${escapeAttr(def.id)}" data-tooltip="Add a coder terminal"${dispatchAnalyzeAvailable ? '' : ' disabled'} style="font-size:12px; width:22px;">+</button>
+                           <button class="column-icon-btn" id="btn-send-dispatch-set" data-action="sendDispatchSetToCoders" data-column="${escapeAttr(def.id)}" data-tooltip="Send all staged plans to complexity-routed coders" style="width:auto; padding:0 8px; font-size:10px;"${(dispatchStagedNow === 0 || !dispatchAnalyzeAvailable) ? ' disabled' : ''}>Send all to coders</button>`
+                        : '';
+                    buttonArea = `<div class="column-button-area" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
                         ${pipelineButtons}
                         ${analyzeBtn}
                         ${sendDispatchBtn}
+                        ${dispatchViewControls}
                         ${julesBtn}
                         ${copyDispatchPromptBtn}
                         ${featureAddBtn}
@@ -5757,6 +6429,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             document.getElementById('btn-toggle-dispatch')?.addEventListener('click', () => {
                 postKanbanMessage({ type: 'toggleDispatchView' });
             });
+            updateDispatchToggleCount();
+            updateDispatchViewInfo();
 
             document.getElementById('btn-add-plan')?.addEventListener('click', () => {
                 const btn = document.getElementById('btn-add-plan');
@@ -5837,7 +6511,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         nextColSource = visibleCodedIds[visibleCodedIds.length - 1] || 'CODER CODED';
                     }
                     const nextCol = getNextColumn(nextColSource);
-                    if (!nextCol && action !== 'julesSelected' && action !== 'copyDispatchPromptSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed' && action !== 'addBlankFeature' && action !== 'dispatchAnalyze' && action !== 'sendDispatchToCoder') return;
+                    if (!nextCol && action !== 'julesSelected' && action !== 'copyDispatchPromptSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed' && action !== 'addBlankFeature' && action !== 'dispatchAnalyze' && action !== 'sendDispatchToCoder' && action !== 'addCoderTerminal' && action !== 'sendDispatchSetToCoders') return;
 
                     switch (action) {
                         case 'moveSelected': {
@@ -5957,6 +6631,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             if (ids.length === 0) return;
                             postKanbanMessage({ type: 'sendDispatchToCoder', sessionIds: ids, workspaceRoot: getActiveWorkspaceRoot() });
                             ids.forEach(id => selectedCards.delete(id));
+                            break;
+                        }
+                        case 'addCoderTerminal': {
+                            if (!dispatchAnalyzeAvailable) return;
+                            postKanbanMessage({ type: 'addAutobanTerminal', role: 'coder' });
+                            break;
+                        }
+                        case 'sendDispatchSetToCoders': {
+                            if (!dispatchAnalyzeAvailable) return;
+                            postKanbanMessage({ type: 'sendDispatchSetToCoders', workspaceRoot: getActiveWorkspaceRoot() });
                             break;
                         }
                         case 'addBlankFeature': {
@@ -6420,10 +7104,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             return counts;
         }
 
-        // Lightweight count-only refresh: updates column count badges from the
-        // unfiltered allCards cache without rebuilding card DOM. Used when the
-        // filtered board signature is unchanged but allCards changed (e.g. a card
-        // added to a hidden project) so occupancy counts stay accurate.
+        // Lightweight count-only refresh: updates column count badges AND the
+        // DISPATCH toggle label from the unfiltered allCards cache without
+        // rebuilding card DOM. Used when the filtered board signature is unchanged
+        // but allCards changed (e.g. a card added to a hidden project) so
+        // occupancy counts and the staged-plan badge stay accurate.
         function refreshColumnCounts() {
             const counts = computeColumnOccupancy(allCards.length ? allCards : currentCards);
             if (collapseCodersEnabled) {
@@ -6438,6 +7123,46 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const countEl = document.getElementById('count-' + col);
                 if (countEl) countEl.textContent = String(counts[col] || 0);
             });
+            updateDispatchToggleCount();
+        }
+
+        // Staged-plan count for the DISPATCH toggle on the Planned column header.
+        // Derived from currentCards, which is ALREADY project-filtered at every
+        // assignment (:6427, :7887, :8962) — do not re-apply applyBoardProjectFilter.
+        // Read BEFORE renderBoard's `card.column !== 'DISPATCH'` strip (:6383, :6472),
+        // which is why this cannot come from displayCards or computeColumnOccupancy.
+        // `!card.featureId` mirrors the board's subtask roll-up contract (:6388, :6481):
+        // a staged feature is ONE card in the Dispatch view, not one-plus-its-subtasks.
+        function dispatchStagedCount() {
+            if (!Array.isArray(currentCards)) return 0;
+            return currentCards.filter(c => c.column === 'DISPATCH' && !c.featureId).length;
+        }
+
+        // The header shell (renderColumns) is NOT rebuilt on a board refresh, so the
+        // toggle's label has to be patchable in place. Both the template at :5600 and
+        // every refresh path go through this.
+        function updateDispatchToggleCount() {
+            const btn = document.getElementById('btn-toggle-dispatch');
+            if (!btn) return;                       // Planned column not rendered (or collapsed away)
+            const n = showingDispatch ? 0 : dispatchStagedCount();
+            btn.textContent = showingDispatch ? 'PLANNED' : (n ? `DISPATCH ${n}` : 'DISPATCH');
+            btn.setAttribute('data-tooltip', showingDispatch
+                ? 'Switch to Planned view'
+                : (n ? `Switch to Dispatch view — ${n} plan${n === 1 ? '' : 's'} staged` : 'Switch to Dispatch view'));
+        }
+
+        // Patch the Dispatch view control text: staged-plan vs alive-coder count.
+        // Called from renderColumns (first paint / view toggle) and renderBoard (refresh).
+        function updateDispatchViewInfo() {
+            const info = document.getElementById('dispatch-view-info');
+            const sendBtn = document.getElementById('btn-send-dispatch-set');
+            const addBtn = document.getElementById('btn-add-coder-terminal');
+            if (!info) return;
+            const n = dispatchStagedCount();
+            const m = lastCoderTerminalCount;
+            info.textContent = `${n} plan${n === 1 ? '' : 's'} · ${m} coder terminal${m === 1 ? '' : 's'}`;
+            if (sendBtn) sendBtn.disabled = !(n > 0 && dispatchAnalyzeAvailable);
+            if (addBtn) addBtn.disabled = !dispatchAnalyzeAvailable;
         }
 
         function renderBoard(cards, justFinishedIds = new Set()) {
@@ -6576,6 +7301,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     container.innerHTML = sortedItems.map(card => createCardHtml(card)).join('');
                 }
             });
+
+            updateDispatchToggleCount();
+            updateDispatchViewInfo();
 
             // Attach card-level event listeners
             document.querySelectorAll('.kanban-card').forEach(el => {
@@ -6837,12 +7565,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 });
             });
 
-            document.querySelectorAll('.send-to-dispatch-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    postKanbanMessage({ type: 'sendToDispatch', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
-                });
-            });
-
             document.querySelectorAll('.send-to-planned-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
                     postKanbanMessage({ type: 'sendToPlanned', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
@@ -7001,19 +7723,21 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     : '';
             }
 
+            // Dispatch is an agent-led decision: cards enter DISPATCH via the Analyze button
+            // (planner + dispatch-analysis skill) or, as a deliberate operator override, a drag
+            // inside the Dispatch view. There is deliberately NO per-card "Move to Dispatch"
+            // button — a one-click move carries no parallel-safety analysis, which is the only
+            // thing membership in DISPATCH is supposed to mean. The `→ Planned` arm is the exit
+            // direction and stays.
             const backlogActionBtn = (!isCompleted && card.column === 'CREATED' && !showingBacklog)
                 ? `<button class="card-btn icon-btn send-to-backlog-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move to Backlog">
                        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v9M4.5 8.5L8 12l3.5-3.5"/></svg>
                    </button>`
                 : (!isCompleted && showingBacklog && card.column === 'BACKLOG')
                     ? `<button class="card-btn send-to-new-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move back to New">→ New</button>`
-                    : (!isCompleted && card.column === 'PLAN REVIEWED' && !showingDispatch)
-                        ? `<button class="card-btn icon-btn send-to-dispatch-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move to Dispatch">
-                               <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v9M4.5 8.5L8 12l3.5-3.5"/></svg>
-                           </button>`
-                        : (!isCompleted && showingDispatch && card.column === 'DISPATCH')
-                            ? `<button class="card-btn send-to-planned-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move back to Planned">→ Planned</button>`
-                            : '';
+                    : (!isCompleted && showingDispatch && card.column === 'DISPATCH')
+                        ? `<button class="card-btn send-to-planned-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move back to Planned">→ Planned</button>`
+                        : '';
 
             const featureClass = card.isFeature ? ' feature-card' : '';
             const featureBadge = ''; // Badge removed; feature identity shown via purple border + meta line
@@ -7212,6 +7936,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // without node-pty). Defaults true so the extension host (which always has a
         // terminal) enables the button before the first board push arrives.
         let dispatchAnalyzeAvailable = true;
+        // Alive coder-terminal count, pushed in updateBoard for the Dispatch view header.
+        let lastCoderTerminalCount = 0;
 
         // Drag & Drop handlers
         let draggedSessionId = null;
@@ -7906,6 +8632,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (typeof msg.dispatchAnalyzeAvailable !== 'undefined') {
                         dispatchAnalyzeAvailable = msg.dispatchAnalyzeAvailable === true;
                     }
+                    if (typeof msg.coderTerminalCount === 'number') {
+                        lastCoderTerminalCount = msg.coderTerminalCount;
+                    }
                     if (msg.routingConfig) {
                         routingMapConfig = msg.routingConfig;
                         updateRoutingMapButtonIndicator();
@@ -8216,10 +8945,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (typeof msg.ultracode === 'boolean') {
                         featureUltracodeEnabled = msg.ultracode;
                         featureGoalEnabled = !!msg.goal;
+                        featureDriveEnabled = !!msg.drive;
                     } else {
                         // Legacy fallback: translate tri-state mode to booleans
                         featureUltracodeEnabled = msg.mode === 'ultracode';
                         featureGoalEnabled = msg.mode === 'goal';
+                        featureDriveEnabled = false;
                     }
                     updateFeatureWorkflowToggleUi();
                     break;
@@ -8231,6 +8962,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     allowUnknownComplexityAutoMove = msg.enabled !== false;
                     updateUnknownComplexityToggleUi();
                     break;
+                case 'collapseCodersState': {
+                    const next = msg.enabled !== false;
+                    if (next === collapseCodersEnabled) { break; }
+                    collapseCodersEnabled = next;
+                    // Keep the local mirror in step so the pre-hydration paint on the
+                    // next reload matches what the host will send.
+                    saveWebviewState();
+                    updateCollapseCodersToggleUi();
+                    renderColumns();
+                    renderBoard(currentCards);
+                    updateAllColumnAgents();
+                    break;
+                }
                 case 'clearTerminalBeforePromptState':
                     clearTerminalBeforePrompt = msg.enabled !== false;
                     if (msg.delay !== undefined) {
@@ -8619,6 +9363,27 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   }
                   break;
                 }
+                case 'agentGroups': {
+                  agentsTabAgentGroups = msg.groups || [];
+                  teamsTabRenderAgentGroups();
+                  teamsTabRenderGallery();
+                  break;
+                }
+                case 'saveAgentGroupResult': {
+                  if (msg.success) {
+                    postKanbanMessage({ type: 'getAgentGroups' });
+                  } else {
+                    document.getElementById('agent-groups-error').textContent = msg.error || 'Failed to save agent group';
+                  }
+                  break;
+                }
+                case 'deleteAgentGroupResult': {
+                  if (!msg.success) {
+                    document.getElementById('agent-groups-error').textContent = msg.error || 'Failed to delete agent group';
+                    postKanbanMessage({ type: 'getAgentGroups' });
+                  }
+                  break;
+                }
                 case 'kanbanStructure': {
                     // TWO producers emit this type with DIFFERENT shapes: KanbanProvider
                     // sends {structure, customColumns} (ours), while the Setup panel's
@@ -9001,6 +9766,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         });
         document.getElementById('btn-feature-ultracode')?.addEventListener('click', toggleFeatureUltracode);
         document.getElementById('btn-feature-goal')?.addEventListener('click', toggleFeatureGoal);
+        document.getElementById('btn-feature-drive')?.addEventListener('click', toggleFeatureDrive);
         document.getElementById('workspace-override-toggle')?.addEventListener('change', (e) => {
             postKanbanMessage({ type: 'setWorkspaceOverride', enabled: !!e.target?.checked });
         });
@@ -9314,22 +10080,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // Collapse coders toggle button
         document.getElementById('btn-collapse-coders')?.addEventListener('click', () => {
             collapseCodersEnabled = !collapseCodersEnabled;
-            const btn = document.getElementById('btn-collapse-coders');
-            if (btn) {
-                btn.classList.toggle('is-active', !collapseCodersEnabled);
-                btn.classList.toggle('is-off', collapseCodersEnabled);
-            }
+            updateCollapseCodersToggleUi();
             saveWebviewState();
+            // Persist host-side too. vscode.getState() is per-webview, so the terminals
+            // kanban pane — which renders the same column set — could not see this
+            // toggle at all. The host write-through is what makes AUTOCODE appear and
+            // disappear on both surfaces together.
+            postKanbanMessage({ type: 'toggleCollapseCoders', enabled: collapseCodersEnabled });
             renderColumns();
             renderBoard(currentCards);
             updateAllColumnAgents();
         });
         // Restore visual active state from saved toggle state
-        const btnCollapse = document.getElementById('btn-collapse-coders');
-        if (btnCollapse) {
-            btnCollapse.classList.toggle('is-active', !collapseCodersEnabled);
-            btnCollapse.classList.toggle('is-off', collapseCodersEnabled);
-        }
+        updateCollapseCodersToggleUi();
 
         // Chat copy prompt button (sub-bar global action)
         document.getElementById('btn-chat-copy-prompt')?.addEventListener('click', () => {

@@ -1,8 +1,23 @@
 import type { ExtendedTerminalHandle } from './ptyFleetService';
 
-const CLI_AGENT_REGEX = /copilot|gemini|agy|claude|windsurf|cursor|cortex/i;
 const CHUNK_SIZE = 256;
-const CHUNK_DELAY_MS = 30;
+// 30ms was inherited from the VS Code sendText path, where each chunk crosses an
+// IPC boundary. handle.write() goes straight to the pty master fd — the only
+// thing being paced here is the CLI's stdin reader, which keeps up at 8ms.
+const CHUNK_DELAY_MS = 8;
+// Settle windows. These pace a DIRECTLY-owned pty, not vscode.Terminal.sendText:
+// there is no clipboard round trip, no focus acquisition, no extension-host IPC.
+// See terminalUtils.ts (PRE_PASTE_SETTLE_MS / POST_PASTE_SETTLE_MS) for the
+// indirect path's (already reduced) constants. The indirect path keeps 2000ms
+// via terminal.clearBeforePromptDelay — do NOT unify the two, they are different
+// physics on the same-named operation.
+const DEFAULT_CLEAR_SETTLE_MS = 600;   // was 2000 — covers the CLI's /clear re-render
+const SUBMIT_SETTLE_MS = 40;           // was 100 — small settle before Enter
+// The confirm Enter waits on the CLI's own re-render of the pasted text, not on
+// anything owning the pty master fd accelerates — so it stays at 200ms, the value
+// that demonstrably submits claude seats today. The chunk/submit writes above go
+// straight to the master fd and were cut to 8ms/40ms; this delay is different physics.
+const CONFIRM_ENTER_DELAY_MS = 200;
 
 const sendLocks = new Map<string, Promise<void>>();
 
@@ -26,30 +41,62 @@ export async function sendPromptToPty(
     return withTerminalLock(handle.name, async () => {
         if (opts?.clearBeforePrompt) {
             handle.write('/clear\r');
-            const delay = opts.clearBeforePromptDelayMs ?? 2000;
+            const delay = opts.clearBeforePromptDelayMs ?? DEFAULT_CLEAR_SETTLE_MS;
             await new Promise(r => setTimeout(r, Math.min(10000, Math.max(0, delay))));
         }
 
-        // Bracketed-paste framing
-        const framed = `\x1b[200~${text}\x1b[201~`;
-        
-        // Chunked write
-        for (let i = 0; i < framed.length; i += CHUNK_SIZE) {
-            const chunk = framed.slice(i, i + CHUNK_SIZE);
-            handle.write(chunk);
-            if (i + CHUNK_SIZE < framed.length) {
+        // PORTED VERBATIM from _sendRobustTextBackground (src/services/terminalUtils.ts:241-258),
+        // the VS Code path that has delivered prompts of arbitrary size to raw-mode agent CLIs
+        // since 2026-07-20 (cf8846b0). That function is the reference implementation for prompt
+        // delivery over a raw stdin: it needs no vscode API, so it ports to any host that can
+        // write bytes to a terminal. Two rules it encodes, both load-bearing:
+        //   1. The bracketed-paste markers are their OWN writes. Chunking the FRAMED string
+        //      splits \x1b[201~ across a 30 ms gap whenever (6 + text.length) % 256 lands in
+        //      the last five bytes — the 6 is the open marker \x1b[200~'s own width, which
+        //      precedes the payload in the framed string and offsets the close marker's start;
+        //      equivalently text.length % 256 ∈ [245,249]. The TUI never leaves paste mode and
+        //      every later byte — \r, Ctrl-U, the next prompt — is absorbed as literal text.
+        //   2. On this path a second \r is load-bearing. The old CLI_AGENT_REGEX gave
+        //      allowlisted seats a confirm Enter and everyone else one; claude was allowlisted
+        //      and submits reliably, devin was not and shows the pasted text land in the input
+        //      field unsent — so the second CR below is UNCONDITIONAL: no regex, no allowlist,
+        //      no role check, no CLI detection. Why one \r is enough on the clipboard branch in
+        //      terminalUtils.ts (which pastes, sends ONE Enter, and returns — no confirm Enter
+        //      for anyone, claude included, and that path ships) but not here is still open —
+        //      but one theory is REFUTED by measurement, so do not revive it. Measured
+        //      2026-08-14 with scripts/capture-cli-modes.js: it is NOT that we frame blind.
+        //      BOTH CLIs enable bracketed paste at startup — claude emits ?2004h (after ?1049h
+        //      alt-screen and mouse 1000/1002/1003/1006), devin emits ?2004h FIRST, on the
+        //      normal screen, no mouse, synchronized output (?2026). The markers written below
+        //      are honoured on both seats, so "devin's escape parser swallows an unnegotiated
+        //      marker and eats the CR behind it" cannot explain the split.
+        //      What survives: this path settles SUBMIT_SETTLE_MS (40ms) before the Enter where
+        //      the clipboard branch settles ~400ms (POST_PASTE_SETTLE_MS + NEWLINE_DELAY), and
+        //      the devin observation was made AFTER that constant was cut 100 -> 40. Nobody has
+        //      tested devin at 100ms with a SINGLE CR — do that before treating the second CR as
+        //      load-bearing. If it still needs two at a long settle, the next candidate is
+        //      post-paste Enter semantics: a TUI that treats the first Enter after a bracketed
+        //      paste as newline rather than submit needs two at any delay. The prior
+        //      gate (CLI_AGENT_REGEX) was a static name match standing in for a runtime question:
+        //      it tested handle.name and handle.role, which carry no CLI identity for role-named
+        //      seats, and it silently omitted 13 of the 19 CLIs in CLI_BRAND_ICON_KEYS. A stray
+        //      Enter into a plain shell prints a blank prompt line — visible, user-fixable, and
+        //      not worth a detection mechanism that will always be a static list pretending to
+        //      be a runtime probe.
+        // If a third host ever needs this, port that function again. Do not write a new one.
+        handle.write('\x1b[200~');
+        for (let i = 0; i < text.length; i += CHUNK_SIZE) {
+            handle.write(text.slice(i, i + CHUNK_SIZE));
+            if (i + CHUNK_SIZE < text.length) {
                 await new Promise(r => setTimeout(r, CHUNK_DELAY_MS));
             }
         }
-
-        await new Promise(r => setTimeout(r, 100));
+        handle.write('\x1b[201~');
+        await new Promise(r => setTimeout(r, SUBMIT_SETTLE_MS));
         handle.write('\r');
-
-        // Second confirm \r for interactive CLI agents
-        if (CLI_AGENT_REGEX.test(handle.name) || CLI_AGENT_REGEX.test(handle.role)) {
-            await new Promise(r => setTimeout(r, 200));
-            handle.write('\r');
-        }
+        // Confirm Enter — see rule 2 above. Unconditional by design.
+        await new Promise(r => setTimeout(r, CONFIRM_ENTER_DELAY_MS));
+        handle.write('\r');
     });
 }
 

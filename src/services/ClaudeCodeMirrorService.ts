@@ -75,6 +75,13 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
         source: 'skills/accuracy', name: 'accuracy', invocation: 'no-user',
         descriptionFallback: 'Implement with high accuracy and self-review (invest effort up front to minimize rework)'
     },
+    // terminal-coder-dispatch — attended coder-driving contract (directive-triggered via
+    // the Drive feature-workflow toggle, not user-typed). Documents ptySendPrompt dispatch,
+    // standing-order callback, diff review, and bounded resend.
+    {
+        source: 'skills/terminal-coder-dispatch', name: 'terminal-coder-dispatch', invocation: 'no-user',
+        descriptionFallback: 'Drive a feature\'s subtasks through a coder terminal — dispatch, callback, review, resend. The attended long-running single-coder pattern.'
+    },
 
     // --- Remote-session skills (default: user-invokable) ---
     {

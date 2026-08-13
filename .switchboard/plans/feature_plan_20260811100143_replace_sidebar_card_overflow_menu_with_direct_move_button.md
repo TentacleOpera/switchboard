@@ -54,10 +54,13 @@ one click.
 - **Event-ordering change.** Today Move lives in a popover reparented to `<body>`, so the only
   listener that sees its click is the document-level one. As a plain in-card button it sits inside
   `#tickets-issues-container`, whose delegated listener (`src/webview/tickets.js:5361`ff) bubbles
-  **first** and ends with a catch-all card branch (`:5464`) that selects the ticket and enters
-  subtask drill-down. Without an explicit early return, clicking Move would select and drill the
-  card *and* open the Move modal. The document listener's `e.stopPropagation()` cannot prevent
-  this — document is the last hop in the bubble chain, so the container handler has already run.
+  **first** and ends with a catch-all card branch (`:5464`) that selects the ticket. Without an
+  explicit early return, clicking Move would select the card *and* open the Move modal. The
+  document listener's `e.stopPropagation()` cannot prevent this — document is the last hop in the
+  bubble chain, so the container handler has already run.
+  (That catch-all branch also enters subtask drill-down today. The sibling subtask "Subtask-count
+  chip on Tickets sidebar cards…" removes that arming. Either way the early return below is
+  required — this plan does not depend on which lands first.)
 - **Two cards can render the same ticket at once.** In drill-down mode the parent's card is
   re-rendered inside the header (`_renderDrillDownHeader`, `src/webview/tickets.js:737-751`) by
   calling the same renderer. Both copies get the new Move button; both must work.
@@ -88,6 +91,13 @@ one click.
 - After this change, `data-add-subtask-ticket-id` has zero emitters (verified: the only two are the
   card renderers at `src/webview/tickets.js:651` and `:686`), so its document-level listener at
   `src/webview/tickets.js:5687-5712` becomes dead code.
+
+**Shared surface with a sibling subtask.** This plan edits the `card-actions` row of
+`_renderClickUpTicketCard` / `_renderLinearTicketCard`; the "Subtask-count chip" subtask edits the
+`tickets-issue-meta ticket-status-row` line of the same two functions, and adds a branch to the
+same `#tickets-issues-container` delegated listener. Different lines, no logical conflict — but
+same file, so **serialise the two: one agent stream at a time** and merge before starting the
+other. Neither depends on the other's behaviour.
 
 **Not a migration concern:** this is presentation-only. No persisted state, settings key or file
 format changes, so no migration is needed for existing installs.
@@ -163,9 +173,12 @@ meta-bar menus — **do not delete them.**
 
 ## Verification Plan
 
+Compilation and automated test execution are out of scope for this planning pass; the automated
+items below are the contract for whoever implements it.
+
 **Automated**
-1. `npm test` — full suite green (stash-verify against HEAD first to separate pre-existing failures
-   from new ones).
+1. Full suite green (stash-verify against HEAD first to separate pre-existing failures from new
+   ones).
 2. `grep -rn "data-add-subtask-ticket-id" src/` returns no hits outside tests.
 3. `grep -n "overflow-menu" src/webview/tickets.js` returns no hits inside `_renderClickUpTicketCard`
    or `_renderLinearTicketCard`.
@@ -187,3 +200,7 @@ meta-bar menus — **do not delete them.**
     selected ticket. Open the meta-bar overflow menu — unchanged.
 11. Narrow the sidebar to its minimum width. The four buttons wrap onto a second line; nothing is
     clipped or horizontally scrolled.
+
+## Review Findings
+
+Implementation matches the plan: both card renderers now emit a direct `Move` button with no `overflow-menu`, the container handler early-returns on `[data-move-ticket-id]` before the catch-all card branch, and the dead `+ Subtask` document listener is gone — `grep -rn "data-add-subtask-ticket-id" src/` returns zero hits, and `_closeAllOverflowPopovers` is still used elsewhere so nothing is orphaned. One MAJOR fix applied to `src/webview/tickets.js`: the rewritten comment on the document-level Move listener replaced one false claim with another, asserting the drill-down parent card renders *outside* `#tickets-issues-container` — it does not, `_renderDrillDownHeader`'s output is concatenated into `issuesContainer.innerHTML` at `:1109` and `:1188`; the comment now states the real reason the listener stays at document level and names the container early return as what prevents double-handling. Contract assertions were added to the CI-wired `tickets-sidebar-list-scoping.test.js` covering the absent overflow menu, the two Move emitters, the zero `data-add-subtask-ticket-id` emitters, and the early return's position relative to the card branch. Remaining risk is cosmetic only: `src/webview/planning.js:7944`/`:7978` still render the old ⋯ card menu for that panel's ticket list, so the two panels now differ — out of this plan's scope. Verified: `node --check` clean, `tickets-sidebar-scoping`, `tickets-link-to-ticket` and `panel-runtime-surface` all pass.

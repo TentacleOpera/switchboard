@@ -230,6 +230,94 @@ function testTicketsSidebarListScoping() {
         /prevSync/.test(listArm) && /_requestTicketSyncStatuses\(\)/.test(listArm),
         'the local-file rebuild must preserve known statuses and re-request the unknown ones'
     );
+
+    // ── Subtask-count chip + explicit drill-down (feature 25086852) ─────────
+
+    // Assertion 16: the child tally is a FIRST pass. The main loop emits parents as it
+    // walks, so a parent visited before its children would ship a count of zero.
+    const tallyIdx = providerListLocalBody.indexOf('const subtaskCounts = new Map<string, number>()');
+    const mainLoopIdx = providerListLocalBody.indexOf('for (const dbT of dbTickets) {\n                                if (dbT.sourceId === provider) {');
+    assert.notStrictEqual(tallyIdx, -1, 'listLocalTicketFiles must build a subtaskCounts map');
+    assert.notStrictEqual(mainLoopIdx, -1, 'listLocalTicketFiles main emit loop must exist');
+    assert.ok(tallyIdx < mainLoopIdx, 'the subtaskCounts tally must complete BEFORE the emit loop');
+    assert.ok(
+        /subtaskCount: subtaskCounts\.get\(ticketId\) \|\| 0/.test(providerListLocalBody),
+        'the DB-backed push must carry subtaskCount, keyed by the same id the card uses'
+    );
+
+    // Assertion 17: the scan fallback tallies from an UNFILTERED scan — the filtered one
+    // drops children (skipSubtasks) before they can be counted.
+    assert.ok(
+        /_scanLocalTicketFiles\(dir, provider, allForCounting\)/.test(providerListLocalBody),
+        'the fallback must scan unfiltered to tally children'
+    );
+    assert.ok(
+        /t\.subtaskCount = fallbackCounts\.get\(t\.id\) \|\| 0/.test(providerListLocalBody),
+        'the fallback must stamp subtaskCount onto the listed tickets'
+    );
+
+    // Assertion 18: both webview mapping arms carry the field through, or the chip never
+    // renders regardless of what the backend counted.
+    assert.strictEqual(
+        (listArm.match(/subtaskCount: t\.subtaskCount/g) || []).length, 2,
+        'both the ClickUp and Linear mapping arms must carry subtaskCount'
+    );
+
+    // Assertion 19: selecting a card must NOT arm drill-down. That implicit arming is the
+    // bug — it replaced the list the user was working down, a beat after the click.
+    const containerHandlerIdx = ticketsJs.indexOf("document.getElementById('tickets-issues-container')?.addEventListener('click'");
+    assert.notStrictEqual(containerHandlerIdx, -1, 'the delegated card-click handler must exist');
+    // Bound at the keydown registration, not at #tickets-create: the chip's Enter/Space
+    // handler legitimately arms _pendingDrillDownParentId, and a window that swallows it
+    // would fail assertion 19 for the wrong reason.
+    const containerHandler = ticketsJs.slice(containerHandlerIdx, ticketsJs.indexOf("addEventListener('keydown'", containerHandlerIdx));
+    const cardFallbackIdx = containerHandler.indexOf("const card = e.target.closest('[data-linear-issue-id], [data-clickup-task-id]')");
+    assert.notStrictEqual(cardFallbackIdx, -1, 'the catch-all card branch must exist');
+    assert.strictEqual(
+        /_pendingDrillDownParentId\s*=/.test(containerHandler.slice(cardFallbackIdx)), false,
+        'the catch-all card branch must not arm _pendingDrillDownParentId — selection is not navigation'
+    );
+
+    // Assertion 20: the chip branch must be registered ABOVE the [data-edit-status] branch.
+    // The chip lives inside that row and that branch selects, opens the status modal and
+    // returns — so a chip below it is swallowed and opens the wrong modal.
+    const chipIdx = containerHandler.indexOf("e.target.closest('[data-subtask-count-ticket-id]')");
+    const editStatusIdx = containerHandler.indexOf("e.target.closest('[data-edit-status]')");
+    assert.notStrictEqual(chipIdx, -1, 'the subtask-count chip branch must exist');
+    assert.notStrictEqual(editStatusIdx, -1, 'the [data-edit-status] branch must exist');
+    assert.ok(chipIdx < editStatusIdx, 'the chip branch must be registered above the [data-edit-status] branch');
+
+    // Assertion 21: _maybeEnterDrillDown's pending-id guard is now load-bearing — it is the
+    // only thing stopping the detail-loaded arms from drilling on an ordinary selection.
+    assert.ok(
+        /if \(!id \|\| _pendingDrillDownParentId !== id\) return;/.test(ticketsJs),
+        '_maybeEnterDrillDown must keep its _pendingDrillDownParentId guard'
+    );
+
+    // Assertion 22: Move is a direct card button; the card renderers carry no overflow menu
+    // and nothing emits the dead + Subtask attribute any more.
+    const clickUpCardIdx = ticketsJs.indexOf('function _renderClickUpTicketCard');
+    const linearCardEnd = ticketsJs.indexOf('function _ticketsEmptyStateCopy', clickUpCardIdx);
+    const cardRenderers = ticketsJs.slice(clickUpCardIdx, linearCardEnd);
+    assert.strictEqual(
+        /overflow-menu/.test(cardRenderers), false,
+        'sidebar ticket cards must not render an overflow menu'
+    );
+    assert.strictEqual(
+        (cardRenderers.match(/data-move-ticket-id/g) || []).length, 2,
+        'both card renderers must render a direct Move button'
+    );
+    assert.strictEqual(
+        /data-add-subtask-ticket-id/.test(ticketsJs), false,
+        'the card + Subtask duplicate is gone; the control-strip #btn-add-subtask is the route'
+    );
+
+    // Assertion 23: a Move click must early-return before the catch-all card branch, or it
+    // also selects the ticket (the container bubbles before the document-level listener,
+    // so that listener\'s stopPropagation cannot prevent it).
+    const moveGuardIdx = containerHandler.indexOf("e.target.closest('[data-move-ticket-id]')");
+    assert.notStrictEqual(moveGuardIdx, -1, 'the container handler must early-return on a Move click');
+    assert.ok(moveGuardIdx < cardFallbackIdx, 'the Move early return must precede the catch-all card branch');
 }
 
 if (require.main === module) {

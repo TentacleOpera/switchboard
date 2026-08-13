@@ -171,3 +171,7 @@ None. Every claim in this plan was confirmed by reading the code at HEAD (`termi
 ## User Review Required
 
 None.
+
+## Completion Report
+
+This subtask landed `attributeDropDispatch` inside `wireTerminalDropTarget`, stamping `dispatched_at` / `dispatched_agent` / `dispatched_terminal` via the already-existing `attributePastedPrompt` verb after both the Shift raw-WebSocket and the normal `ptySendPrompt` success paths. The helper takes an array of plan ids so the later multi-select subtask lights every dispatched activity pip.

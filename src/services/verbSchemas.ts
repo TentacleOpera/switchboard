@@ -1085,6 +1085,13 @@ const TICKETS_VERB_SCHEMAS: Record<string, VerbSchema> = {
             id: { type: 'string', required: true },
         },
     },
+    pushTicketWithSubtasks: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            provider: { type: 'string', required: true },
+            id: { type: 'string', required: true },
+        },
+    },
     // ── 2e: comment manager, mention autocomplete and attachment schemas
     //    moved from PLANNING_VERB_SCHEMAS. ──
     postTicketComment: {
@@ -1234,6 +1241,7 @@ export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
             name: { type: 'string', required: true },
             input: { type: 'string', required: true },
             paced: { type: 'boolean' },
+            standingOrders: { type: 'boolean' },
         },
     },
     ready: {},

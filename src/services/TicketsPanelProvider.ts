@@ -60,6 +60,7 @@ export class TicketsPanelProvider {
     /** Root the display watcher is currently armed for, and the folders it actually attached to. */
     private _ticketsViewWatcherRoot: string | undefined;
     private _ticketsViewWatcherFolders: string[] = [];
+    private _ticketsViewNativeWatchers: fs.FSWatcher[] = [];
     private _cacheService: any | undefined;
     private _ticketsCurrentSelection: Map<string, { provider: string; listId?: string; projectId?: string }> = new Map();
     // ── Tickets auto-sync engine (moved from PlanningPanelProvider). The 45s
@@ -82,6 +83,10 @@ export class TicketsPanelProvider {
     // ── 2d: move-targets cache for fetchMoveTargets (TTL-bounded, per provider) ──
     private _moveTargetsCache = new Map<string, { at: number; targets: Array<{ id: string; name: string; path: string }> }>();
     private static readonly MOVE_TARGETS_TTL_MS = 60_000;
+    /** Exactly LocalApiServer.DESIGN_ASSET_EXTENSIONS — anything outside it cannot be served, so
+     *  watching it produces an event that can never change what is rendered. */
+    private static readonly TICKET_ASSET_EXTENSIONS =
+        new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico', '.avif']);
     // ── Plan 4: TaskViewerProvider reference for the ClickUp/Linear config verb
     //    handlers moved out of SetupPanelProvider. The handlers delegate to the
     //    same TaskViewerProvider methods Setup did — the integration config is a
@@ -452,9 +457,50 @@ export class TicketsPanelProvider {
                 if (!dateCreated) {
                     try { dateCreated = nfs.statSync(fullPath).mtime.toISOString(); } catch {}
                 }
-                out.push({ id, title, status: kanbanColumn || '', filePath: fullPath, url: '', dateCreated, assignees, priority });
+                out.push({ id, title, status: kanbanColumn || '', filePath: fullPath, url: '', dateCreated, assignees, priority, parentId });
             }
         }
+    }
+
+    /**
+     * Writes/updates the `parentId:` frontmatter key on a ticket's local .md file.
+     *
+     * The Tickets sidebar is file-backed and hides any ticket whose file carries a
+     * `parentId:` (listLocalTicketFiles / _scanLocalTicketFiles). convertToSubtask only
+     * mutates the remote, so without this the converted ticket stays visible as a
+     * top-level card forever.
+     *
+     * Splices a single line — never re-serialises the body — because the file may hold
+     * unpushed user edits.
+     *
+     * Returns false when there was no local file to update (not an error).
+     */
+    private _stampTicketParentIdInFile(filePath: string, parentId: string): boolean {
+        if (!filePath || !fs.existsSync(filePath)) { return false; }
+        const content = fs.readFileSync(filePath, 'utf8');
+        // `\r?\n` on the fences: a CRLF-normalised file misses an LF-only match, falls
+        // to the no-frontmatter branch below and gets a SECOND `---` block prepended
+        // above its real one. The readers use a non-global match, so every other key
+        // (listId, status, priority) would then be invisible behind the new block.
+        const fm = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+        // Splice by slice, never String.replace(string, string): the replacement is
+        // user file content and replace() expands `$&` / `$'` / `` $` `` / `$1` inside
+        // it, silently corrupting any ticket whose frontmatter contains a `$`.
+        const body = fm ? content.slice(fm[0].length) : content;
+        let block: string;
+        if (!fm) {
+            // Legacy import with no frontmatter block — create one.
+            block = `---\nparentId: ${parentId}\n---\n`;
+        } else if (/^parentId:\s*.+$/m.test(fm[1])) {
+            // Re-parenting an existing subtask: replace in place, never append a
+            // second key. Function replacer, same `$`-expansion reason as above.
+            const patched = fm[1].replace(/^parentId:\s*.+$/m, () => `parentId: ${parentId}`);
+            block = `---\n${patched}\n---`;
+        } else {
+            block = `---\n${fm[1]}\nparentId: ${parentId}\n---`;
+        }
+        fs.writeFileSync(filePath, block + body, 'utf8');
+        return true;
     }
 
     public getTicketsAssetRoots(workspaceRoot: string): string[] {
@@ -497,7 +543,16 @@ export class TicketsPanelProvider {
         );
         if (!isAllowed) { return undefined; }
         const root = this._getWorkspaceRoot() || '';
-        return `http://127.0.0.1:${port}/design/asset?root=${encodeURIComponent(root)}&path=${encodeURIComponent(realTarget)}`;
+        // Cache-busting version token. Without it the URL is byte-identical after an
+        // image is overwritten in place, so every downstream equality check (the
+        // ticketFileChanged hasChanged guard, the _lastTickets*DetailContentHtml memo)
+        // concludes "nothing changed" and the live <img> node is never recreated.
+        // The route ignores unknown query params, so this is inert server-side.
+        // stat on realTarget, not absPath — the allow-list already realpathed, and a
+        // symlinked tickets tree would ENOENT on the pre-realpath path.
+        let version = '';
+        try { version = `&v=${Math.floor(fs.statSync(realTarget).mtimeMs)}`; } catch { /* best effort */ }
+        return `http://127.0.0.1:${port}/design/asset?root=${encodeURIComponent(root)}&path=${encodeURIComponent(realTarget)}${version}`;
     }
 
     private _rewriteLocalImagePaths(markdown: string, baseDir: string): string {
@@ -519,7 +574,10 @@ export class TicketsPanelProvider {
                 if (!this._panel) { return match; }
                 const webviewUri = this._panel.webview.asWebviewUri(vscode.Uri.file(absPath));
                 if (!webviewUri) { return match; }
-                return `![${alt}](${webviewUri.toString()})`;
+                const uri = webviewUri.toString();
+                let v = '';
+                try { v = `${uri.includes('?') ? '&' : '?'}v=${Math.floor(fs.statSync(absPath).mtimeMs)}`; } catch { /* best effort */ }
+                return `![${alt}](${uri}${v})`;
             } catch {
                 return match;
             }
@@ -587,34 +645,15 @@ export class TicketsPanelProvider {
             try { this._ticketsViewWatcher.dispose(); } catch { }
             this._ticketsViewWatcher = undefined;
         }
+        for (const w of this._ticketsViewNativeWatchers) { try { w.close(); } catch { } }
+        this._ticketsViewNativeWatchers = [];
         for (const t of this._ticketsViewWatcherDebounces.values()) { clearTimeout(t); }
         this._ticketsViewWatcherDebounces.clear();
 
         const watchFolders = this._resolveTicketsWatchFolders(workspaceRoot);
 
         const handleTicketFileEvent = (filePath: string) => {
-            const fileName = path.basename(filePath);
-            const match = fileName.match(TICKET_FILE_NAME_RE);
-            if (!match) { return; }
-            const [, provider, id] = match;
-
-            const key = filePath;
-            const existing = this._ticketsViewWatcherDebounces.get(key);
-            if (existing) { clearTimeout(existing); }
-            this._ticketsViewWatcherDebounces.set(key, setTimeout(() => {
-                this._ticketsViewWatcherDebounces.delete(key);
-                try {
-                    const nfs = require('fs') as typeof import('fs');
-                    const raw = nfs.readFileSync(filePath, 'utf8');
-                    const content = raw.replace(/^---\n[\s\S]*?\n---\n?/, '').trim();
-                    const h1 = content.match(/^#\s+(.+)$/m);
-                    const title = h1 ? h1[1].trim() : id;
-                    const displayContent = this._rewriteLocalImagePaths(
-                        stripImportedSubtasksBlock(content), path.dirname(filePath)
-                    );
-                    this.postMessageToWebview({ type: 'ticketFileChanged', provider, id, title, content: displayContent, rawContent: content });
-                } catch { }
-            }, 300));
+            this._emitTicketFileChanged(filePath);
         };
 
         // A rename arrives as delete(old) + create(new), and ticket files ARE renamed
@@ -650,7 +689,10 @@ export class TicketsPanelProvider {
         for (const folder of watchFolders) {
             if (!fs.existsSync(folder)) { continue; }
             const watcher = this._seams().watcher.watchFolder(folder, (event, filePath) => {
-                if (!filePath.endsWith('.md')) { return; }
+                if (!filePath.endsWith('.md')) {
+                    this._handleTicketAssetEvent(filePath);
+                    return;
+                }
                 if (event === 'delete') {
                     handleTicketFileDelete(filePath);
                     return;
@@ -659,6 +701,12 @@ export class TicketsPanelProvider {
             });
             watchers.push(watcher);
             attachedFolders.push(folder);
+            this._setupNativeFolderWatchFallback(folder, this._ticketsViewNativeWatchers, (filePath) => {
+                if (filePath === null) { this._handleTicketsViewRescan(folder); return; }
+                if (!filePath.endsWith('.md')) { this._handleTicketAssetEvent(filePath); return; }
+                if (!fs.existsSync(filePath)) { handleTicketFileDelete(filePath); return; }
+                handleTicketFileEvent(filePath);
+            });
         }
         this._ticketsViewWatcherRoot = workspaceRoot;
         this._ticketsViewWatcherFolders = attachedFolders;
@@ -667,6 +715,135 @@ export class TicketsPanelProvider {
             dispose: () => watchers.forEach(w => { try { w.dispose(); } catch { } })
         };
         this._disposables.push(this._ticketsViewWatcher);
+    }
+
+    private _readTicketFilePayload(filePath: string, provider: string, id: string): { title: string; content: string; rawContent: string } | null {
+        try {
+            const raw = fs.readFileSync(filePath, 'utf8');
+            const content = raw.replace(/^---\n[\s\S]*?\n---\n?/, '').trim();
+            const h1 = content.match(/^#\s+(.+)$/m);
+            const title = h1 ? h1[1].trim() : id;
+            const displayContent = this._rewriteLocalImagePaths(
+                stripImportedSubtasksBlock(content), path.dirname(filePath)
+            );
+            return { title, content: displayContent, rawContent: content };
+        } catch { return null; }
+    }
+
+    private _emitTicketFileChanged(filePath: string): void {
+        const fileName = path.basename(filePath);
+        const match = fileName.match(TICKET_FILE_NAME_RE);
+        if (!match) { return; }
+        const [, provider, id] = match;
+        const payload = this._readTicketFilePayload(filePath, provider, id);
+        if (!payload) { return; }
+        this.postMessageToWebview({ type: 'ticketFileChanged', provider, id, ...payload });
+    }
+
+    /** An image overwritten in place changes no .md byte, so the ticket that embeds it
+     *  would never refresh. Map the asset back to the ticket files that actually reference
+     *  it and replay the normal change path for each — that regenerates displayContent with
+     *  a fresh &v= token.
+     *
+     *  Reference-filtered, NOT directory-wide: _buildTicketDir groups a whole list into one
+     *  directory sharing one attachments/ folder, so a directory-wide replay would emit one
+     *  push per ticket in the list on every image write.
+     *
+     *  Debounce key is prefixed so an asset write can never cancel a queued rename
+     *  resolution keyed on the same .md path. */
+    private _handleTicketAssetEvent(assetPath: string): void {
+        if (!TicketsPanelProvider.TICKET_ASSET_EXTENSIONS.has(path.extname(assetPath).toLowerCase())) { return; }
+        const assetDir = path.dirname(assetPath);
+        if (path.basename(assetDir).toLowerCase() !== 'attachments') { return; }
+        const ticketDir = path.dirname(assetDir);
+        const assetName = path.basename(assetPath);
+        const key = `asset:${assetPath}`;
+        const existing = this._ticketsViewWatcherDebounces.get(key);
+        if (existing) { clearTimeout(existing); }
+        this._ticketsViewWatcherDebounces.set(key, setTimeout(() => {
+            this._ticketsViewWatcherDebounces.delete(key);
+            let entries: string[] = [];
+            try { entries = fs.readdirSync(ticketDir); } catch { return; }
+            for (const entry of entries) {
+                if (!TICKET_FILE_NAME_RE.test(entry)) { continue; }
+                const full = path.join(ticketDir, entry);
+                let raw = '';
+                try { raw = fs.readFileSync(full, 'utf8'); } catch { continue; }
+                if (!raw.includes(assetName)) { continue; }
+                this._emitTicketFileChanged(full);
+            }
+        }, 300));
+    }
+
+    /** macOS FSEvents can drop filenames under burst I/O. Rescan the folder tree for
+     *  ticket .md files and emit a normal change for each. */
+    private _handleTicketsViewRescan(folder: string): void {
+        const key = `rescan:${folder}`;
+        const existing = this._ticketsViewWatcherDebounces.get(key);
+        if (existing) { clearTimeout(existing); }
+        this._ticketsViewWatcherDebounces.set(key, setTimeout(() => {
+            this._ticketsViewWatcherDebounces.delete(key);
+            const queue: string[] = [folder];
+            while (queue.length) {
+                const dir = queue.pop()!;
+                if (path.basename(dir).toLowerCase() === 'attachments') { continue; }
+                let entries: string[] = [];
+                try { entries = fs.readdirSync(dir); } catch { continue; }
+                for (const entry of entries) {
+                    const full = path.join(dir, entry);
+                    try {
+                        const stat = fs.statSync(full);
+                        if (stat.isDirectory()) {
+                            queue.push(full);
+                        } else if (TICKET_FILE_NAME_RE.test(entry)) {
+                            this._emitTicketFileChanged(full);
+                        }
+                    } catch {}
+                }
+            }
+        }, 300));
+    }
+
+    /** Ported in shape from DesignPanelProvider's native fallback, scoped to Tickets.
+     *  Passes `null` through to the consumer for FSEvents-dropped bursts so the provider
+     *  can rescan. Skips in-workspace folders and warns on Linux for parity with other
+     *  fallbacks pending a repo-wide re-qualification. */
+    private _setupNativeFolderWatchFallback(
+        folderPath: string,
+        watchersArray: fs.FSWatcher[],
+        onFile: (filePath: string | null) => void
+    ): void {
+        const roots = this._getWorkspaceRoots();
+        const insideWorkspace = roots.some(r => folderPath === r || folderPath.startsWith(r + path.sep));
+        if (insideWorkspace) return;
+
+        if (process.platform === 'linux') {
+            console.warn(
+                `[TicketsPanelProvider] fs.watch recursive fallback skipped on Linux for '${folderPath}' — out-of-workspace external writes may not refresh. Kept for parity with other fallbacks pending a repo-wide re-qualification.`
+            );
+            return;
+        }
+
+        try {
+            const watcher = fs.watch(folderPath, { recursive: true }, (_eventType, filename) => {
+                if (!filename) {
+                    onFile(null);
+                    return;
+                }
+                const fullPath = path.join(folderPath, filename.toString());
+                try {
+                    onFile(fullPath);
+                } catch (e) {
+                    console.error('[TicketsPanelProvider] native folder watch callback failed:', e);
+                }
+            });
+            watcher.on('error', (err) => {
+                console.error(`[TicketsPanelProvider] fs.watch error for '${folderPath}':`, err);
+            });
+            watchersArray.push(watcher);
+        } catch (e) {
+            console.error(`[TicketsPanelProvider] fs.watch fallback failed for '${folderPath}':`, e);
+        }
     }
 
     // ── 2b infrastructure: host seams, local folder service, auto-sync ──
@@ -961,7 +1138,30 @@ export class TicketsPanelProvider {
                     // asWebviewUri still returns a URL, but the webview refuses to load
                     // it — a silent fall back to the generic sans stack, which is not
                     // distinguishable from "the font-face rule is missing".
-                    vscode.Uri.file(path.join(this._context.extensionPath, 'designs'))
+                    vscode.Uri.file(path.join(this._context.extensionPath, 'designs')),
+                    // Ticket asset folders. Exactly the same trap as `designs` above, one
+                    // asset class over: _rewriteLocalImagePaths' SECOND route is
+                    // `webview.asWebviewUri(<local image>)`, and without these roots that
+                    // route returns a perfectly well-formed URI the webview then refuses
+                    // to load — a broken <img>, no error anywhere.
+                    //
+                    // That fallback is not cold code. The FIRST route
+                    // (_buildLocalAssetUrl → http://127.0.0.1:<port>/design/asset) is
+                    // gated on `this._apiServer?.getPort?.()`, and setApiServer's own
+                    // docstring records that the provider-registration and server-created
+                    // handshakes race ("either can happen first"). Open a ticket inside
+                    // that window and route 1 returns undefined, route 2 is dead, and the
+                    // images stay broken until something triggers a re-read. Carrying
+                    // these roots makes route 2 work, so the race stops being visible.
+                    //
+                    // Reuses getTicketsAssetRoots — the SAME allow-list the loopback route
+                    // enforces — so the two routes can never disagree about which folders
+                    // are legitimate. PlanningPanelProvider carries the equivalent roots;
+                    // extracting this panel dropped them.
+                    ...this._getWorkspaceRoots()
+                        .flatMap(root => this.getTicketsAssetRoots(root))
+                        .filter((v, i, a) => a.indexOf(v) === i)
+                        .map(folder => vscode.Uri.file(folder))
                 ]
             }
         );
@@ -2050,6 +2250,28 @@ export class TicketsPanelProvider {
                             let hiddenBySubtask = 0;
                             let hiddenByScope = 0;
 
+                            // First pass: tally children per parent. Must complete before any
+                            // ticket is pushed — the main loop emits parents as it walks, so a
+                            // parent seen before its children would ship a count of zero.
+                            // Runs before BOTH the subtask filter and the scope filter so an
+                            // out-of-scope child still counts toward its parent.
+                            const subtaskCounts = new Map<string, number>();
+                            for (const dbT of dbTickets) {
+                                if (dbT.sourceId !== provider) { continue; }
+                                if (!fs.existsSync(dbT.filePath)) { continue; }
+                                try {
+                                    const content = fs.readFileSync(dbT.filePath, 'utf8');
+                                    const fm = content.match(/^---\n([\s\S]*?)\n---/);
+                                    if (!fm) { continue; }
+                                    const pm = fm[1].match(/^parentId:\s*(.+)$/m);
+                                    if (!pm) { continue; }
+                                    const pid = pm[1].trim();
+                                    if (pid) {
+                                        subtaskCounts.set(pid, (subtaskCounts.get(pid) || 0) + 1);
+                                    }
+                                } catch { /* unreadable file contributes nothing */ }
+                            }
+
                             for (const dbT of dbTickets) {
                                 if (dbT.sourceId === provider) {
                                     totalCandidates++;
@@ -2103,8 +2325,9 @@ export class TicketsPanelProvider {
                                         hiddenByScope++;
                                         continue;
                                     }
+                                    const ticketId = dbT.remoteDocId || dbT.slugPrefix.replace(`${provider}_`, '');
                                     tickets.push({
-                                        id: dbT.remoteDocId || dbT.slugPrefix.replace(`${provider}_`, ''),
+                                        id: ticketId,
                                         title: dbT.docName,
                                         status: clickStatus || kanbanColumn || '',
                                         filePath: dbT.filePath,
@@ -2113,7 +2336,10 @@ export class TicketsPanelProvider {
                                         url: dbT.url || '',
                                         dateCreated,
                                         assignees,
-                                        priority
+                                        priority,
+                                        // Locally-imported children only. 0 is meaningful ("no
+                                        // subtasks"); the webview renders nothing for 0.
+                                        subtaskCount: subtaskCounts.get(ticketId) || 0
                                     });
                                 }
                             }
@@ -2128,9 +2354,20 @@ export class TicketsPanelProvider {
                 }
 
                 if (tickets.length === 0) {
+                    // Unfiltered scan first, purely to tally children per parent — the
+                    // filtered scan below drops them before they can be counted.
+                    const allForCounting: any[] = [];
+                    for (const dir of ticketDirs) {
+                        this._scanLocalTicketFiles(dir, provider, allForCounting);
+                    }
+                    const fallbackCounts = new Map<string, number>();
+                    for (const t of allForCounting) {
+                        if (t.parentId) { fallbackCounts.set(t.parentId, (fallbackCounts.get(t.parentId) || 0) + 1); }
+                    }
                     for (const dir of ticketDirs) {
                         this._scanLocalTicketFiles(dir, provider, tickets, { scopeId, skipSubtasks: true });
                     }
+                    for (const t of tickets) { t.subtaskCount = fallbackCounts.get(t.id) || 0; }
                     if (scopeId && tickets.length === 0) {
                         const probe: any[] = [];
                         for (const dir of ticketDirs) {
@@ -2184,33 +2421,28 @@ export class TicketsPanelProvider {
                 const provider = msg.provider as 'clickup' | 'linear';
                 const id = msg.id;
                 if (!workspaceRoot || !provider || !id) {
-                    const res = { type: 'localTicketFileRead', provider, id, success: false };
+                    // Genuine caller/programming error — NOT 'not-imported'. A missing id
+                    // warrants a visible toast, so this arm carries a plain error and no
+                    // quiet-listed reason.
+                    const res = { type: 'localTicketFileRead', provider, id, success: false, error: 'readLocalTicketFile: missing workspaceRoot, provider, or id' };
                     this.postMessageToWebview(res);
                     return { ...res, success: false };
                 }
                 const filePath = await this._findTicketFilePath(workspaceRoot, provider, id);
                 if (!filePath) {
-                    const res = { type: 'localTicketFileRead', provider, id, success: false };
+                    const res = { type: 'localTicketFileRead', provider, id, success: false, reason: 'not-imported', error: `No local file for ${id} yet — showing the live view. Refetch the list to download it.` };
                     this.postMessageToWebview(res);
                     return { ...res, success: false };
                 }
-                try {
-                    const raw = fs.readFileSync(filePath, 'utf8');
-                    const content = raw.replace(/^---\n[\s\S]*?\n---\n?/, '').trim();
-                    const h1 = content.match(/^#\s+(.+)$/m);
-                    const title = h1 ? h1[1].trim() : id;
-                    const displayContent = this._rewriteLocalImagePaths(
-                        stripImportedSubtasksBlock(content),
-                        path.dirname(filePath)
-                    );
-                    const res = { type: 'localTicketFileRead', provider, id, success: true, title, content: displayContent, rawContent: content };
-                    this.postMessageToWebview(res);
-                    return { ...res, success: true };
-                } catch {
-                    const res = { type: 'localTicketFileRead', provider, id, success: false };
+                const payload = this._readTicketFilePayload(filePath, provider, id);
+                if (!payload) {
+                    const res = { type: 'localTicketFileRead', provider, id, success: false, reason: 'not-imported', error: `Local file for ${id} exists but could not be read — showing the live view. Refetch the list to restore it.` };
                     this.postMessageToWebview(res);
                     return { ...res, success: false };
                 }
+                const res = { type: 'localTicketFileRead', provider, id, success: true, ...payload };
+                this.postMessageToWebview(res);
+                return { ...res, success: true };
             }
 
             // ── 2d: ticket detail + mutation verbs moved from PlanningPanelProvider ──
@@ -2266,6 +2498,8 @@ export class TicketsPanelProvider {
                     try {
                         renderedDescriptionHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', descriptionMd) || '';
                     } catch {
+                        // markdown.api.render is a VS Code built-in and is unavailable on hosts
+                        // without it (e.g. standalone). The webview renders the source markdown itself.
                         renderedDescriptionHtml = '';
                     }
 
@@ -2330,6 +2564,8 @@ export class TicketsPanelProvider {
                     try {
                         renderedDescriptionHtml = await this._seams().commands.executeCommand<string>('markdown.api.render', descriptionMd) || '';
                     } catch {
+                        // markdown.api.render is a VS Code built-in and is unavailable on hosts
+                        // without it (e.g. standalone). The webview renders the source markdown itself.
                         renderedDescriptionHtml = '';
                     }
 
@@ -2769,6 +3005,58 @@ export class TicketsPanelProvider {
                 }
                 break;
             }
+            case 'pushTicketWithSubtasks': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const { provider, id } = msg;
+                try {
+                    const result: any = await this._seams().commands.executeCommand(
+                        'switchboard.pushTicketEditsWithSubtasks',
+                        { workspaceRoot, provider, id }
+                    );
+                    // The command seam swallows exceptions and returns undefined on a
+                    // miss (hostSeams.ts:327-336), which is indistinguishable from
+                    // "not registered". Default every count and treat a wholly-absent
+                    // result as a failure with a distinct message — otherwise a
+                    // mis-registration reads to the user as "0 pushed, 0 failed".
+                    if (!result?.success) {
+                        this._seams().ui.showErrorMessage(
+                            `Push to ${provider} incomplete: ${result?.error || 'unknown error'}`
+                        );
+                    }
+                    const res = {
+                        type: 'pushTicketResult' as const,
+                        id,
+                        workspaceRoot,
+                        success: !!result?.success,
+                        pushed: result?.pushed ?? 0,
+                        skippedStale: result?.skippedStale ?? 0,
+                        failed: result?.failed ?? 0,
+                        message: result?.message,
+                        error: result?.error
+                    };
+                    this.postMessageToWebview(res);
+                    // Return the body (PRD contract #4): an HTTP caller gets the
+                    // counts, not just the webview. Unlike the pushTicket arm above,
+                    // which ends in `break`, this arm returns.
+                    return { ...res, success: !!result?.success };
+                } catch (error) {
+                    const errMsg = error instanceof Error ? error.message : String(error);
+                    this._seams().ui.showErrorMessage(`Push to ${provider} failed: ${errMsg}`);
+                    const res = {
+                        type: 'pushTicketResult' as const,
+                        id,
+                        workspaceRoot,
+                        success: false,
+                        pushed: 0,
+                        skippedStale: 0,
+                        failed: 0,
+                        message: '',
+                        error: errMsg
+                    };
+                    this.postMessageToWebview(res);
+                    return { ...res, success: false };
+                }
+            }
             case 'deleteTicketConfirmed': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const { provider, id } = msg;
@@ -2977,12 +3265,48 @@ export class TicketsPanelProvider {
                     } else {
                         throw new Error(`Unknown provider: ${msg.provider}`);
                     }
+                    // The remote is now correct. Mirror the parent into the local .md so the
+                    // file-backed sidebar hides it as a subtask on the next list. Without this
+                    // the sidebar refreshes but reads unchanged data — the reported bug.
+                    let localFileUpdated = false;
+                    // Distinct from `!localFileUpdated`: that also means "this ticket was
+                    // never imported locally", which is normal. A throw here is a real
+                    // failure (read-only FS, permissions) and the sidebar IS now stale —
+                    // the webview must say so instead of claiming there was no file.
+                    let localFileStampFailed = false;
+                    try {
+                        if (!this._cacheService) {
+                            this._cacheService = this._adapterFactories.getCacheService(workspaceRoot);
+                        }
+                        const imported = await this._cacheService.getImportedTickets();
+                        const row = imported.find((t: any) => t.slugPrefix === `${msg.provider}_${msg.taskId}`);
+                        if (row?.filePath) {
+                            localFileUpdated = this._stampTicketParentIdInFile(row.filePath, msg.parentId);
+                            if (localFileUpdated) {
+                                // The rewrite bumps mtime. syncStatus is derived from
+                                // mtime vs lastSyncedAt, so without this the ticket would
+                                // falsely badge as `modified` — it has no unpushed edits.
+                                await this._cacheService.registerImportedTicket(
+                                    msg.provider, msg.taskId, row.docName,
+                                    row.slugPrefix, row.filePath,
+                                    row.contentHash || '',
+                                    undefined,
+                                    row.url || undefined
+                                );
+                            }
+                        }
+                    } catch (err) {
+                        localFileStampFailed = true;
+                        console.error('[TicketsPanelProvider] convertToSubtask: local file stamp failed:', err);
+                    }
                     this.postMessageToWebview({
                         type: 'subtaskConverted',
                         success: true,
                         provider: msg.provider,
                         taskId: msg.taskId,
                         parentId: msg.parentId,
+                        localFileUpdated,
+                        localFileStampFailed,
                         workspaceRoot
                     });
                 } catch (error) {
@@ -3982,6 +4306,8 @@ export class TicketsPanelProvider {
             try { this._ticketsViewWatcher.dispose(); } catch { }
             this._ticketsViewWatcher = undefined;
         }
+        for (const w of this._ticketsViewNativeWatchers) { try { w.close(); } catch { } }
+        this._ticketsViewNativeWatchers = [];
         for (const t of this._ticketsViewWatcherDebounces.values()) { clearTimeout(t); }
         this._ticketsViewWatcherDebounces.clear();
         this._ticketsViewWatcherRoot = undefined;

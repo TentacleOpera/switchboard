@@ -1,8 +1,15 @@
+import * as crypto from 'crypto';
 import { EventEmitter } from 'events';
 import type { TerminalHandle } from '../services/hostSeams';
 import { PtyTerminalBackend } from './ptyBackend';
 import { GlobalIntegrationConfigService } from '../services/GlobalIntegrationConfigService';
 import type { KanbanDatabase } from '../services/KanbanDatabase';
+import type { DelegateDefinition } from '../services/agentConfig';
+
+/** Delegate children one head agent may co-launch. A pty is a process, not a row. */
+export const MAX_DELEGATES_PER_PARENT = 8;
+/** Delegate ptys alive across every head agent in this fleet. */
+export const MAX_LIVE_DELEGATE_PTYS = 32;
 
 export const SHELL_READINESS_DELAY_MS = 750;
 export const SIGTERM_GRACE_MS = 3000;
@@ -21,19 +28,33 @@ export interface FleetTerminalInfo {
     startTime: string;
     worktreePath?: string;
     cwd?: string;
+    hidden?: boolean;
     ideName: string;
     purpose: string;
+    agentInstanceId: string;
+    parentInstanceId?: string | null;
 }
 
 export interface ExtendedTerminalHandle extends TerminalHandle {
     pty: import('node-pty').IPty;
     role: string;
     friendlyName: string;
+    agentInstanceId: string;
+    parentInstanceId?: string | null;
     startTime: string;
     status: 'active' | 'exited';
     worktreePath?: string;
     cwd: string;
     exitCode?: number;
+    hidden?: boolean;
+    /**
+     * Internal: marks a terminal spawned by spawnDelegates as a team member,
+     * suppressing auto-start triggering. A shared member is unparented by
+     * construction and would otherwise pass the auto-start recursion guard
+     * (`!parentInstanceId`). Both hosts' handlePtyVerb read this flag so the
+     * guard becomes `!parentInstanceId && !_isTeamMember`.
+     */
+    _isTeamMember?: boolean;
     /**
      * Heartbeat timestamp (ms epoch) of the most recent PTY output byte. Stamped
      * from a fleet-owned `onData` subscription created in `create()` — independent
@@ -49,6 +70,33 @@ export interface FleetLivenessEntry {
     friendlyName: string;
     lastDataAt: number;
     status: 'active' | 'exited';
+}
+
+export interface CreateOptions {
+    /** When true, the terminal is excluded from render lists and role-based dispatch pools. */
+    hidden?: boolean;
+    /**
+     * Internal: marks a terminal spawned by spawnDelegates as a team member,
+     * suppressing auto-start triggering. A shared member is unparented by
+     * construction and would otherwise pass the auto-start recursion guard
+     * (`!parentInstanceId`). This flag is the explicit non-triggering signal
+     * the plan requires rather than relying on parentage alone.
+     */
+    _isTeamMember?: boolean;
+    /**
+     * Render Claude CLI inline in the normal screen buffer instead of the alternate
+     * one, so the terminal PANE's own scrollbar and jump-to-latest pill work.
+     *
+     * A BOOLEAN, never an env map: this arrives from an HTTP payload, and every pty
+     * child holds an API token, so accepting free-form environment here would let any
+     * caller inject arbitrary variables into a spawned shell. The two concrete
+     * variables are fixed literals in create(). Same reasoning that makes `delegates`
+     * and `startupCommand` host-resolved rather than caller-supplied.
+     *
+     * Resolved HOST-side because this service is also constructed inside ptyHost.ts's
+     * child process, which has no vscode API and no configProvider.
+     */
+    claudeInlineRendering?: boolean;
 }
 
 export type FleetChangeEvent = 
@@ -137,7 +185,7 @@ export class PtyFleetService {
         };
     }
 
-    public async create(role: string, friendlyName?: string, cwd?: string, worktreePath?: string): Promise<ExtendedTerminalHandle> {
+    public async create(role: string, friendlyName?: string, cwd?: string, worktreePath?: string, parentInstanceId?: string | null, startupCommand?: string, opts?: CreateOptions): Promise<ExtendedTerminalHandle> {
         let name = friendlyName || `${role}-1`;
         let counter = 1;
         while (this.terminals.has(name)) {
@@ -146,6 +194,7 @@ export class PtyFleetService {
         }
 
         const effectiveCwd = cwd || worktreePath || this.workspaceRoot;
+        const agentInstanceId = crypto.randomUUID();
         // Expose the seat's own identity AND the API credential to whatever runs
         // in it. The token is an ENV VAR, never prompt text: a token pasted into a
         // terminal lands in the agent's scrollback and its conversation history.
@@ -158,12 +207,47 @@ export class PtyFleetService {
         // environment and the shell launches with no PATH/HOME/SHELL.
         const switchboardEnv: Record<string, string> = {
             SWITCHBOARD_TERMINAL: name,
+            SWITCHBOARD_AGENT_INSTANCE_ID: agentInstanceId,
             ...(this.apiToken ? { SWITCHBOARD_API_TOKEN: this.apiToken } : {}),
         };
+        // Claude Code enters the ALTERNATE SCREEN (\x1b[?1049h) and grabs mouse
+        // reporting (\x1b[?1000h ?1002h ?1003h ?1006h) the moment its REPL starts.
+        // Measured on a node-pty master, not inferred.
+        //
+        // The alt buffer has no scrollback in xterm.js, so the pane gets no scrollbar
+        // and attachJumpToLatest's `baseY - viewportY` is pinned at 0 — the
+        // "↓ latest" pill can never become visible. Mouse reporting then routes the
+        // wheel to the app and disables xterm's SelectionService; that half is
+        // already documented above REARMABLE_DEC_MODES as the "stuck, can't scroll,
+        // can't deselect" report.
+        //
+        // These two env vars make the CLI render inline in the normal buffer instead.
+        // Verified: with both set the startup stream contains no ?1049h and no mouse
+        // modes. We do NOT filter the bytes client-side — that would desync xterm's
+        // parser from the app's own belief about its screen state (see applyServerModes).
+        //
+        // Set UNCONDITIONALLY when enabled, not gated on the seat's role: a seat
+        // spawns a SHELL, and `claude` is started later by a startup command or by
+        // the operator, so there is no reliable role→CLI fact at this point. Other
+        // CLIs ignore unrecognised CLAUDE_CODE_* variables.
+        const claudeEnvDefaults: Record<string, string> = opts?.claudeInlineRendering
+            ? {
+                CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN: '1',
+                CLAUDE_CODE_DISABLE_MOUSE: '1',
+            }
+            : {};
         const rawHandle = this.backend.create({
             name,
             cwd: effectiveCwd,
-            env: { ...process.env, ...switchboardEnv } as Record<string, string>,
+            // Spread order is load-bearing THREE times over:
+            //   1. claudeEnvDefaults FIRST — these are DEFAULTS. An operator who has
+            //      already exported either variable keeps their own value, per
+            //      variable, because process.env overwrites this layer.
+            //   2. process.env SECOND and MANDATORY — ptyBackend.ts does
+            //      `options.env || process.env`, so a partial map replaces the WHOLE
+            //      environment and the shell launches with no PATH/HOME/SHELL.
+            //   3. switchboardEnv LAST so the seat identity always wins.
+            env: { ...claudeEnvDefaults, ...process.env, ...switchboardEnv } as Record<string, string>,
         });
 
         const startTime = new Date().toISOString();
@@ -172,10 +256,14 @@ export class PtyFleetService {
             name,
             role,
             friendlyName: name,
+            agentInstanceId,
+            parentInstanceId,
             startTime,
             status: 'active',
             worktreePath: worktreePath || undefined,
             cwd: effectiveCwd,
+            hidden: opts?.hidden === true,
+            _isTeamMember: opts?._isTeamMember === true,
             // Initialise the heartbeat to creation time so a freshly-spawned shell
             // that has not yet emitted its banner still reads as "just heard from".
             lastDataAt: Date.now(),
@@ -206,7 +294,7 @@ export class PtyFleetService {
         this.updateRegistryState();
         this.emitter.emit('change', { type: 'created', terminal: handle });
 
-        await this.injectStartupCommand(handle, role);
+        await this.injectStartupCommand(handle, role, startupCommand);
 
         return handle;
     }
@@ -222,10 +310,13 @@ export class PtyFleetService {
      * mechanism, so it lit the board for one CLI and silently left every other
      * agent on the timeout path.
      */
-    private async injectStartupCommand(handle: ExtendedTerminalHandle, role: string): Promise<void> {
+    private async injectStartupCommand(handle: ExtendedTerminalHandle, role: string, startupCommand?: string): Promise<void> {
         try {
-            const commands = await GlobalIntegrationConfigService.getAgentStartupCommands() || {};
-            const cmd = commands[role];
+            let cmd = startupCommand;
+            if (!cmd) {
+                const commands = await GlobalIntegrationConfigService.getAgentStartupCommands() || {};
+                cmd = commands[role];
+            }
             if (!cmd) { return; }
             await new Promise(resolve => setTimeout(resolve, SHELL_READINESS_DELAY_MS));
             if (handle.status === 'active') {
@@ -279,9 +370,240 @@ export class PtyFleetService {
         return this.terminals.get(name);
     }
 
+    public getByAgentInstanceId(id: string): ExtendedTerminalHandle | undefined {
+        for (const t of this.terminals.values()) {
+            if (t.agentInstanceId === id) { return t; }
+        }
+        return undefined;
+    }
+
+    public listChildren(parentId: string): ExtendedTerminalHandle[] {
+        return Array.from(this.terminals.values()).filter(t => t.parentInstanceId === parentId);
+    }
+
+    /**
+     * Co-launch a head agent's declared delegate children as unattached ptys.
+     *
+     * Caps are checked BEFORE the first spawn so a rejected batch never leaves a
+     * partial subtree, and the reason is returned rather than thrown: a throw here
+     * would fail the whole `ptyCreateTerminal` call after the parent already exists,
+     * leaving a phantom pane in the grid.
+     *
+     * `scope: 'shared'` members are reused, not respawned: if a live instance
+     * named `${teamName}-${role}` already exists, it is returned in the children
+     * array without spawning. The reuse check is serialised per (teamName, role)
+     * so two heads starting concurrently do not both spawn. A shared member is
+     * spawned unparented (no `parentInstanceId`), which puts it outside both
+     * delegate caps, outside `liveDelegateCount()`, and outside head-owned
+     * teardown — all deliberate, all stated in the plan. It carries
+     * `_isTeamMember: true` to suppress the auto-start recursion guard.
+     */
+    public async spawnDelegates(
+        parent: ExtendedTerminalHandle,
+        definitions: DelegateDefinition[],
+        opts?: { teamName?: string }
+    ): Promise<{ children: ExtendedTerminalHandle[]; error?: string }> {
+        // Per-team (parented) delegates count against caps. Shared members are
+        // unparented and outside both caps — their count is bounded by the
+        // number of team definitions, not by head starts.
+        const perTeamRequested = definitions
+            .filter(d => d.scope !== 'shared')
+            .reduce((n, d) => n + Math.max(1, Math.min(d.count || 1, MAX_DELEGATES_PER_PARENT)), 0);
+        if (perTeamRequested > MAX_DELEGATES_PER_PARENT) {
+            return { children: [], error: `Delegate cap: ${perTeamRequested} requested, ${MAX_DELEGATES_PER_PARENT} allowed per head agent` };
+        }
+        const liveDelegates = Array.from(this.terminals.values()).filter(t => t.parentInstanceId).length;
+        if (liveDelegates + perTeamRequested > MAX_LIVE_DELEGATE_PTYS) {
+            return { children: [], error: `Delegate cap: ${liveDelegates} live, ${perTeamRequested} requested, ${MAX_LIVE_DELEGATE_PTYS} allowed in total` };
+        }
+
+        const children: ExtendedTerminalHandle[] = [];
+        for (const d of definitions) {
+            const count = Math.max(1, Math.min(d.count || 1, MAX_DELEGATES_PER_PARENT));
+
+            if (d.scope === 'shared') {
+                // Shared member: reuse a live instance or spawn unparented.
+                // Name from the team definition so the reuse lookup has a
+                // stable key and two teams' shared members are distinguishable.
+                const teamName = opts?.teamName || 'team';
+                const sharedBaseName = `${teamName}-${d.label || d.role}`;
+                for (let i = 0; i < count; i++) {
+                    const suffix = count > 1 ? `-${i + 1}` : '';
+                    const sharedName = `${sharedBaseName}${suffix}`;
+                    // Serialise the reuse check per (teamName, role) so two
+                    // heads starting concurrently do not both spawn. The chain
+                    // is per-name, not global — different shared members do
+                    // not block each other.
+                    try {
+                        const existing = await this._sharedMemberChain(sharedName, async () => {
+                            // Check for a live instance with this name.
+                            const live = this.listActive().find(t => t.friendlyName === sharedName);
+                            if (live) { return live; }
+                            // No live instance — spawn unparented.
+                            return this.create(
+                                d.role,
+                                sharedName,
+                                parent.cwd,
+                                parent.worktreePath,
+                                undefined, // unparented — no parentInstanceId
+                                d.startupCommand,
+                                { _isTeamMember: true }
+                            );
+                        });
+                        children.push(existing);
+                    } catch (err) {
+                        // Same best-effort contract as the per-team branch below:
+                        // the head and any already-spawned siblings are real and
+                        // stay. Letting this throw would reject the whole
+                        // ptyCreateTerminal AFTER the head pty exists — the
+                        // phantom-pane failure the caps comment above exists to
+                        // prevent.
+                        return {
+                            children,
+                            error: `Shared member '${sharedName}' failed to spawn: ${err instanceof Error ? err.message : String(err)}`
+                        };
+                    }
+                }
+                continue;
+            }
+
+            // Per-team member: parented to the head, as today.
+            for (let i = 0; i < count; i++) {
+                // Distinct per index. create()'s collision counter falls back to
+                // `${role}-${n}` — NOT `${friendlyName}-${n}` — so handing it the same
+                // base name twice drops the parent qualification off every child after
+                // the first and lets two head agents' children collide.
+                const suffix = count > 1 ? `-${i + 1}` : '';
+                const baseName = `${parent.friendlyName}-${d.label || d.role}${suffix}`;
+                try {
+                    children.push(await this.create(
+                        d.role,
+                        baseName,
+                        parent.cwd,
+                        parent.worktreePath,
+                        parent.agentInstanceId,
+                        d.startupCommand,
+                        { _isTeamMember: true }
+                    ));
+                } catch (err) {
+                    // Best-effort with a report: the parent and any already-spawned
+                    // siblings are real and stay. The caller surfaces the reason.
+                    return {
+                        children,
+                        error: `Delegate '${baseName}' failed to spawn: ${err instanceof Error ? err.message : String(err)}`
+                    };
+                }
+            }
+        }
+        return { children };
+    }
+
+    /**
+     * Per-name promise chain serialising shared-member reuse checks. Two heads
+     * starting concurrently and wanting the same shared researcher must not
+     * both read "no live instance" and both spawn — the check-and-spawn is
+     * atomic per name.
+     */
+    private _sharedMemberChains = new Map<string, Promise<unknown>>();
+
+    private async _sharedMemberChain<T>(name: string, fn: () => Promise<T>): Promise<T> {
+        const chain = this._sharedMemberChains.get(name) || Promise.resolve();
+        const p = chain.then(() => fn());
+        const guarded = p.catch(() => {});
+        this._sharedMemberChains.set(name, guarded);
+        try {
+            return await p;
+        } finally {
+            // Clean up completed chains to avoid unbounded map growth — but ONLY
+            // when we are still the tail. An unconditional delete here dropped a
+            // chain a LATER caller had already extended, so the caller after that
+            // found no chain, started from Promise.resolve() and ran its
+            // check-and-spawn concurrently with the pending one. That is exactly
+            // the duplicate-shared-member race the serialisation exists to
+            // prevent (eight planners started simultaneously, two researchers).
+            if (this._sharedMemberChains.get(name) === guarded) {
+                this._sharedMemberChains.delete(name);
+            }
+        }
+    }
+
+    public async createBatch(
+        allocation: Array<{ role: string; count: number }>,
+        hidden: boolean,
+        cwd?: string,
+        worktreePath?: string,
+        claudeInlineRendering?: boolean
+    ): Promise<{ success: boolean; created: Array<{ friendlyName: string; role: string; hidden: boolean }>; failed: Array<{ role: string; reason: string; kind: string }>; error?: string; estimatedDurationMs: number }> {
+        const MAX_BATCH = 32;
+        const created: Array<{ friendlyName: string; role: string; hidden: boolean }> = [];
+        const failed: Array<{ role: string; reason: string; kind: string }> = [];
+
+        if (!Array.isArray(allocation) || allocation.length === 0) {
+            return { success: false, created, failed, error: 'allocation must be a non-empty array', estimatedDurationMs: 0 };
+        }
+
+        let total = 0;
+        for (const a of allocation) {
+            const count = Number(a?.count);
+            if (!Number.isInteger(count) || count < 1) {
+                return { success: false, created, failed, error: `count for role '${a?.role}' is not a positive integer`, estimatedDurationMs: 0 };
+            }
+            total += count;
+        }
+        if (total > MAX_BATCH) {
+            return { success: false, created, failed, error: `batch cap: ${total} requested, ${MAX_BATCH} allowed`, estimatedDurationMs: 0 };
+        }
+
+        const commands = await GlobalIntegrationConfigService.getAgentStartupCommands() || {};
+        for (const a of allocation) {
+            if (typeof a.role !== 'string' || !commands[a.role]) {
+                return { success: false, created, failed, error: `no startup command for role '${a.role || ''}'`, estimatedDurationMs: 0 };
+            }
+        }
+
+        let abortResource = false;
+        for (const a of allocation) {
+            for (let i = 0; i < a.count; i++) {
+                if (abortResource) {
+                    failed.push({ role: a.role, reason: 'aborted after earlier resource failure', kind: 'aborted' });
+                    continue;
+                }
+                try {
+                    const t = await this.create(a.role, undefined, cwd, worktreePath, null, undefined, { hidden, claudeInlineRendering });
+                    created.push({ friendlyName: t.friendlyName, role: t.role, hidden: t.hidden === true });
+                } catch (err: any) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    let kind = 'unknown';
+                    if (/posix_openpt failed: Device not configured|No space left on device/i.test(msg)) kind = 'pty-pool-exhausted';
+                    else if (/posix_openpt failed: Too many open files|File table overflow/i.test(msg)) kind = 'fd-limit';
+                    else if (/posix_spawnp failed|spawn-helper ENOENT/i.test(msg)) kind = 'spawn-failed';
+                    failed.push({ role: a.role, reason: msg, kind });
+                    if (kind === 'pty-pool-exhausted' || kind === 'fd-limit') {
+                        abortResource = true;
+                    }
+                }
+            }
+        }
+
+        const success = created.length > 0 && failed.length === 0;
+        return {
+            success,
+            created,
+            failed,
+            estimatedDurationMs: total * SHELL_READINESS_DELAY_MS,
+            ...(failed.length > 0 && created.length === 0 ? { error: failed.map(f => `${f.role}: ${f.reason}`).join('; ') } : {})
+        };
+    }
+
     public kill(name: string): boolean {
         const handle = this.terminals.get(name);
         if (!handle) return false;
+        // Tear the delegate subtree down with its head agent. Without this the
+        // children keep running as orphan processes nothing lists or reaps.
+        const children = this.listChildren(handle.agentInstanceId);
+        if (children.length > 0) {
+            for (const child of children) { this.kill(child.friendlyName); }
+        }
         this.terminals.delete(name);
         try {
             handle.kill();
@@ -338,8 +660,11 @@ export class PtyFleetService {
                     startTime: t.startTime,
                     worktreePath: t.worktreePath,
                     cwd: t.cwd,
+                    hidden: t.hidden === true,
                     ideName: PTY_IDE_NAME,
                     purpose: 'pty',
+                    agentInstanceId: t.agentInstanceId,
+                    parentInstanceId: t.parentInstanceId,
                 } satisfies FleetTerminalInfo;
             }
             await db.setConfigJson('runtime.terminals', terminalMap);

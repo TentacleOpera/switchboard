@@ -75,6 +75,17 @@ jobs:
       - name: PTY route surface contract (/terminals/verb only, nothing in the generated surface)
         run: npm run test:contract:pty-route-surface
 
+      # Prompt delivery frames the payload with bracketed-paste markers. Chunking the
+      # FRAMED string splits the 6-byte close marker across a chunk boundary whenever
+      # text.length % 256 lands in [245,249] — the TUI never leaves paste mode and every
+      # later byte (\r, Ctrl-U, the next prompt) is swallowed as literal text. That bug
+      # returned success:true on every send, so only a length-parameterised guard catches
+      # it; a fixed-length smoke send passes against the broken code. The pty* verbs sit
+      # outside the generated verb surface, so verb-returns/parity/push-routing are all
+      # structurally blind here — this is the only gate on that path.
+      - name: PTY prompt delivery framing (whole paste markers at the stranding lengths)
+        run: npm run test:contract:pty-prompt-delivery-framing
+
       # A browser-originated dispatch that correctly lands in a PTY terminal must not
       # also raise a VS Code "Terminal not found" toast. The pre-dispatch focus call is
       # a VS Code-only reveal; a PTY is invisible to it, so the miss warns — reading as
@@ -109,6 +120,20 @@ jobs:
       # blocked, which silently produces terminals that render but never stream).
       - name: Terminal token transport contract (gateway auth + CSP-legal injection)
         run: npm run test:contract:terminal-token-transport
+
+      # The delegate join contract (`/delegates/dispatch|await|result` +
+      # DelegateManager) was retired; its contract test went with it, so the step
+      # that ran it is gone too. `spawnDelegates`, parentage and the caps survive
+      # and are covered by the pty-route-surface and multi-parent contracts.
+      #
+      # Two cross-boundary mirrors are held in sync ONLY by these tests — a
+      # keep-in-sync comment alone already failed once for the standing-orders
+      # marker. Both are cheap source-level greps.
+      - name: Standing-orders marker mirror (standingOrders.ts ≡ terminals.js literal)
+        run: npm run test:contract:standing-orders-marker
+
+      - name: Link presets mirror (linkPresets.ts ≡ LINK_PRESETS in terminals.js)
+        run: npm run test:contract:link-presets-mirror
 
       # PtyFleetService.rename mutates handle.name IN PLACE, so the gateway's onData
       # closure switches to the new name while every name-keyed map is still filed
@@ -308,6 +333,15 @@ jobs:
       - name: Tickets auto-refresh on local file change contract
         run: npm run test:contract:tickets-auto-refresh
 
+      # markdown.api.render is a VS Code built-in, so renderedDescriptionHtml comes back
+      # empty in the standalone host and the description used to degrade to escaped source
+      # text. Pins both halves of the fix (ingestion normalisation + the renderers' middle
+      # branch) plus the two guards: localDescription must stay false (else the first render
+      # is pinned forever) and the ingested source must be trimmed (renderMarkdown('\n') is
+      # truthy and would paint an empty paragraph over the empty state).
+      - name: Ticket description markdown-fallback contract
+        run: npm run test:contract:tickets-description-fallback
+
       - name: Project pin apply-if-empty contract (fill, no-move, subtask-skip)
         run: npm run test:contract:project-pin-fill
 
@@ -456,6 +490,13 @@ jobs:
       # badge clear leaves the completion light burning after the click.
       - name: Shell terminal strip contract (light precedence, bottom anchor, badge clear)
         run: npm run test:contract:shell-terminal-strip
+
+      # Modal-presented panels (Memo). Every failure here is silent in the browser:
+      # a partial selectPanel interception activates a frame parented to the modal
+      # host and paints a BLANK content area rather than erroring, and a close path
+      # that destroys the frame eats unsaved memo text with no diagnostic.
+      - name: Shell modal panel contract (selectPanel interception, frame survival)
+        run: npm run test:contract:shell-modal-panel
 
       - name: Terminal pane pinning contract
         run: npm run test:contract:terminal-pane-pinning

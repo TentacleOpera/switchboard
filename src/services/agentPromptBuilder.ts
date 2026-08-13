@@ -199,6 +199,10 @@ export interface PromptBuilderOptions {
     phoneAFriendEnabled?: boolean;
     /** The LocalApiServer port, interpolated into the Phone-a-Friend directive's curl URL. Plumbed at build time (Option A) so worktree CWDs don't need to read the port file. */
     apiPort?: number;
+    /** Terminal name reported by the Phone-a-Friend directive. Falls back to the SWITCHBOARD_TERMINAL env var or 'unknown'. */
+    originTerminal?: string;
+    /** Correlation id for the Phone-a-Friend POST. */
+    dispatchId?: string;
     /** When true (default), include batchExecutionRules and FOCUS_DIRECTIVE. When false, omit them. */
     switchboardSafeguardsEnabled?: boolean;
     /**
@@ -254,6 +258,8 @@ export interface PromptBuilderOptions {
     workflowFilePathEnabled?: boolean;
     /** Path to the workflow file for non-planner roles. */
     workflowFilePath?: string;
+    /** When true, the planner improver is running unattended — it must not ask in chat and must touch exactly one plan file. */
+    unattended?: boolean;
     /** When true, uses parallel sub-agent instruction for feature dispatches. */
     featureUseSubagentsEnabled?: boolean;
     /** When true, injects strict no-subagent prohibition directive for feature dispatches. */
@@ -325,6 +331,12 @@ export interface PromptBuilderOptions {
     destinationColumn?: string;
     /** Resolved project scope for the dispatch-analysis pass: `undefined` = never threaded (no `PROJECT=` line at all), `null`/`''` = all projects, `'__unassigned__'` = unpinned only, else a specific project name. See {@link buildAnalysisScopeLine}. */
     analysisScope?: string | null;
+    /** The session token written to SWITCHBOARD_API_TOKEN for pty children. */
+    apiToken?: string;
+    /** This terminal's opaque `agentInstanceId` (minted by the pty fleet). Interpolated into the dispatch payload as `parentInstanceId`. */
+    agentInstanceId?: string;
+    /** The `agentInstanceId`s of this terminal's co-launched delegate children, if any. Empty/undefined → no directive. */
+    delegateChildren?: string[];
 }
 
 /**
@@ -631,6 +643,10 @@ export function buildGitPolicyBlock(opts: {
     return `GIT POLICY: ${clauses.join(' ')}`;
 }
 
+function freshDispatchId(): string {
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 /**
  * Phone-a-Friend directive — appended to coder/lead/intern prompts when the
  * `phoneAFriend` addon is enabled. Tells the agent to POST a notification to the
@@ -640,8 +656,60 @@ export function buildGitPolicyBlock(opts: {
  * root's .switchboard/). The directive is mandatory for the agent, but a missing
  * Phone-a-Friend terminal is silently dropped by the host (non-fatal).
  */
-export const PHONE_A_FRIEND_DIRECTIVE = (port: number) =>
-  `PHONE-A-FRIEND: When you have finished coding ALL plans in this batch, you MUST notify the Phone-a-Friend agent ONCE by running:\ncurl -s -X POST http://127.0.0.1:${port}/phone-a-friend -H "Content-Type: application/json" -d '{"planFile":"<PLAN_FILE_PATH>","originRole":"coder"}'\nReplace <PLAN_FILE_PATH> with the relative path of the LAST plan file you completed. Send exactly one request per batch (not one per plan). This is a required step — if the Phone-a-Friend agent is not running, the request will still succeed silently, but you must send it regardless. (Requires the Phone-a-Friend agent configured in the Agents tab.)`;
+/**
+ * `originTerminal` is OMITTED when the builder does not know it, never filled with a
+ * placeholder. The host resolves a per-instance override by exact terminal name, so a
+ * literal `"unknown"` does not degrade to role resolution — it becomes a real map key
+ * that every agent shares, which is worse than the role ambiguity this replaces. An
+ * absent field is the documented backward-compatible payload (older prompts never had
+ * it) and falls through to role → singleton resolution.
+ */
+export const PHONE_A_FRIEND_DIRECTIVE = (port: number, originRole: string, originTerminal: string | undefined, dispatchId: string) => {
+  const fields = [
+    `"planFile":"<PLAN_FILE_PATH>"`,
+    `"originRole":"${originRole}"`,
+    ...(originTerminal ? [`"originTerminal":"${originTerminal}"`] : []),
+    `"dispatchId":"${dispatchId}"`,
+  ].join(',');
+  return `PHONE-A-FRIEND: When you have finished coding ALL plans in this batch, you MUST notify the Phone-a-Friend agent ONCE by running:\ncurl -s -X POST http://127.0.0.1:${port}/phone-a-friend -H "Content-Type: application/json" -d '{${fields}}'\nReplace <PLAN_FILE_PATH> with the relative path of the LAST plan file you completed. Send exactly one request per batch (not one per plan). This is a required step — if the Phone-a-Friend agent is not running, the request will still succeed silently, but you must send it regardless. (Requires the Phone-a-Friend agent configured in the Agents tab.)`;
+};
+
+/**
+ * Parent-side delegate notice — emitted only for terminals that have delegate
+ * children co-launched by the host. A one-line statement that the head has N
+ * child terminals and that each will report to it when it finishes. No port,
+ * no token, no curl, no join protocol — the dispatch/join contract was retired.
+ */
+export const DELEGATE_PARENT_NOTICE = (
+  agentInstanceId: string,
+  childFriendlyNames: string[]
+): string => {
+  return `DELEGATE PARENT: You have ${childFriendlyNames.length} delegate child terminal${childFriendlyNames.length === 1 ? '' : 's'} co-launched by the host. Your children are: ${childFriendlyNames.join(', ')}. Each child will report to you when it finishes its work.`;
+};
+
+/**
+ * Resolve a terminal display name to the delegate-identity fields needed by
+ * `DELEGATE_PARENT_NOTICE`. Given the live `ptyListTerminals` payload, find
+ * the row whose `friendlyName` matches `displayName`, then collect the
+ * `friendlyName`s of all rows whose `parentInstanceId` equals that row's
+ * `agentInstanceId`. Returns `undefined` when the display name is missing, the
+ * host is absent, or the terminal has no delegate children — callers must omit
+ * the notice rather than emit an empty one.
+ */
+export function resolveDelegateIdentityForTerminal(
+    displayName: string | undefined,
+    terminals: any[]
+): { agentInstanceId: string; delegateChildren: string[] } | undefined {
+    if (!displayName || !Array.isArray(terminals)) { return undefined; }
+    const parent = terminals.find((t: any) => t && t.friendlyName === displayName);
+    if (!parent || !parent.agentInstanceId) { return undefined; }
+    const children = terminals.filter((t: any) => t && t.parentInstanceId === parent.agentInstanceId);
+    if (children.length === 0) { return undefined; }
+    return {
+        agentInstanceId: parent.agentInstanceId,
+        delegateChildren: children.map((t: any) => t.friendlyName).filter(Boolean),
+    };
+}
 
 export const FOCUS_DIRECTIVE = `FOCUS: Each plan file path below is the single source of truth for that plan; ignore any mirrored or 'brain'-directory copies of it.`;
 
@@ -1156,7 +1224,23 @@ export function buildKanbanBatchPrompt(
     // Phone-a-Friend directive — emitted only for coder/lead/intern branches below.
     // The port is plumbed at build time (Option A) so worktree CWDs don't read the
     // port file (which lives only in the main workspace root's .switchboard/).
-    const phoneAFriendBlock = (options?.phoneAFriendEnabled && options?.apiPort) ? PHONE_A_FRIEND_DIRECTIVE(options.apiPort) : '';
+    // NO process.env.SWITCHBOARD_TERMINAL fallback: that variable is injected into a
+    // PTY CHILD's environment by PtyFleetService.create(), and prompts are built in the
+    // extension/standalone host process, where it is never set. Reading it here can only
+    // ever yield undefined — and Phone-a-Friend targets vscode.Terminal anyway, which
+    // never carries it. Until a caller passes the resolved terminal name, the field is
+    // omitted and resolution falls back to role → singleton.
+    const phoneAFriendOriginTerminal = options?.originTerminal;
+    const phoneAFriendDispatchId = options?.dispatchId ?? freshDispatchId();
+    const phoneAFriendBlock = (options?.phoneAFriendEnabled && options?.apiPort) ? PHONE_A_FRIEND_DIRECTIVE(options.apiPort, role, phoneAFriendOriginTerminal, phoneAFriendDispatchId) : '';
+    // Parent-side delegate notice — emitted only when the host co-launched
+    // delegate children for this terminal. The children's friendlyNames are
+    // interpolated at build time. No port, token, or join protocol — just a
+    // one-line statement that the children exist and will report.
+    const delegateChildren = Array.isArray(options?.delegateChildren) ? options!.delegateChildren : [];
+    const delegateParentBlock = (options?.apiPort && options?.agentInstanceId && delegateChildren.length > 0)
+        ? DELEGATE_PARENT_NOTICE(options.agentInstanceId, delegateChildren)
+        : '';
     // The per-subtask/high-low directive variants (which listed worktree assignments and
     // required suppressing the generic worktree line) were removed. The base feature
     // directive never lists worktree assignments, so the generic worktree line always
@@ -1310,6 +1394,17 @@ export function buildKanbanBatchPrompt(
             if (dsBlock) {
                 plannerPrompt += dsBlock;
             }
+        }
+
+        if (options?.unattended && role === 'planner' && plans.length === 1) {
+            const planPath = plans[0].absolutePath;
+            plannerPrompt += `
+
+UNATTENDED IMPROVER CONTRACT:
+- Never ask questions in chat — no one is attached to this session. If you need a user decision or external research, append it to the plan's \`## Outstanding Questions\` section, state the assumption you are proceeding under, and finish the work.
+- You are improving exactly one plan: \`${planPath}\`. Do not create, modify, rename or delete any other file in \`.switchboard/plans/\`. Other workers are concurrently improving sibling plans in this same directory; touching their files will destroy their work.
+- If the plan should be split, record that under \`## Outstanding Questions\` as a \`[user]\` item. Do not write the split files.
+- Write the plan file once, at the end.`;
         }
 
         return normalizeNewlines(plannerPrompt);
@@ -1536,6 +1631,7 @@ For each plan:
             featureDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`,
             phoneAFriendBlock,
+            delegateParentBlock,
             staggeredImplementationBlock,
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
@@ -1594,6 +1690,7 @@ For each plan:
                 featureFileBlock,
                 featureSubagentBlock,
                 phoneAFriendBlock,
+                delegateParentBlock,
                 staggeredImplementationBlock,
                 suppressWalkthroughBlock
             ].filter(Boolean).join('\n\n');
@@ -1639,6 +1736,7 @@ For each plan:
             featureDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`,
             phoneAFriendBlock,
+            delegateParentBlock,
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
 
@@ -1680,6 +1778,7 @@ For each plan:
             featureDirectiveBlock,
             `PLANS TO PROCESS:\n${planList}`,
             phoneAFriendBlock,
+            delegateParentBlock,
             staggeredImplementationBlock,
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
