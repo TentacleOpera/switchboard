@@ -188,7 +188,7 @@ When creating any plan file, resolve the project in this priority order:
 2. Otherwise, if your prompt carries a **PROJECT PIN directive**, write the exact `**Project:** <name>` it specifies. This directive is the authoritative source: the extension resolves the board's active project **once, at prompt-generation time**, and injects it — a frozen, race-free snapshot.
 3. Otherwise, omit the line. **Do not read `kanban.activeProjectFilter` or open `kanban.db` yourself.** The extension already resolved the active project at prompt-generation time; re-deriving it in-session duplicates that work and races (the user may browse other boards while the agent runs), and remote / DB-less sessions cannot read it at all. Never guess, never substitute the workspace/repo name, never leave a literal `<project>` placeholder. The plan lands unassigned and can be reassigned on the board.
 
-State the pin in your reply ("Pinning to *<name>*") so a wrong snapshot is visible immediately.
+State the pin in your reply ("Pinning to *<name>*") **only when you actually write one**, so a wrong snapshot is visible immediately. When you omit the line (case 3), say nothing about it — an unpinned plan is already visible as unassigned on the board, so reporting the omission is noise.
 
 Write the pin as `**Project:** <name>` — plain or as a `- ` list item; both parse. The .md metadata is the carrier — the plan watcher reads it directly on import.
 
