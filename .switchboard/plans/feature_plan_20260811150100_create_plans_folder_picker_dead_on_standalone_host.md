@@ -71,7 +71,9 @@ None. Every decision below is made in the plan: typed paths are constrained to t
 
 ### Complex / Risky
 
-1. **Path validation is a security boundary, and it must sit on the read path.** `_collectFolderDocSources` walks the folder recursively, so an unvalidated path is an arbitrary-directory read reachable over the local API. Validation must: expand `~`, resolve relative input against the workspace root, resolve the real path (`fs.realpathSync`, defeating symlink escapes), require it to exist and be a directory, and require it to sit within an allowed root. The codebase already has this pattern — `_buildLocalAssetUrl` does realpath-then-prefix-check against an allow-list (`src/services/TicketsPanelProvider.ts:483-501`) and `downloadAttachment` does an explicit traversal check (`src/services/TaskViewerProvider.ts`). Follow them; do not invent a new check. **It must be applied in `createPlansDownloadZip` as well as in `createPlansSetFolder`** — see the second defect above.
+1. **Path validation is a security boundary, and it must sit on the read path.** `_collectFolderDocSources` walks the folder recursively, so an unvalidated path is an arbitrary-directory read reachable over the local API. Validation must: expand `~`, resolve relative input against the workspace root, resolve the real path (`fs.realpathSync.native`, defeating symlink escapes and Windows 8.3 / mapped-drive aliases), require it to exist and be a directory, and require it to sit within an allowed root. **It must be applied in `createPlansDownloadZip` as well as in `createPlansSetFolder`** — see the second defect above.
+
+   The codebase's existing traversal guards — `_buildLocalAssetUrl` (`src/services/TicketsPanelProvider.ts:483-501`) and `downloadAttachment` (`src/services/TaskViewerProvider.ts`) — use realpath-then-**prefix-check**. This plan follows their *shape* (resolve first, then contain) but **not** their comparison: a `startsWith` prefix check is bypassable on Windows via a cross-drive path, and case-blind on macOS. Use `_isContainedIn` as written below. See "Path containment: resolved" for the evidence and for why the existing sites are left alone here.
 
 2. **Deciding the allowed root.** The editor path lets the user pick *any* folder via the OS dialog, so a typed path is not a privilege escalation in the editor host. But the browser cockpit may be reached from another machine, where "any folder on the server" is a materially different exposure. **Decision: restrict typed paths to within the workspace roots.** This covers the real use case (bundling the project's own docs) and keeps the remote-viewer case safe. The native picker keeps its existing unrestricted behaviour in the editor — that is an explicit, local user action.
 
@@ -92,8 +94,12 @@ None. Every decision below is made in the plan: typed paths are constrained to t
 | Path outside the workspace roots, typed (standalone) | Rejected with an explicit message naming the constraint, not a silent no-op. |
 | Symlink inside the workspace pointing outside an allowed root | Rejected — validation resolves with `realpathSync` **before** the prefix check. |
 | `createPlansDownloadZip` POSTed directly with an arbitrary `folder` | Rejected by the same validation. The setter is not a gate; the read path is. |
-| Prefix check on a sibling directory (`/repo-evil` vs `/repo`) | Rejected — compare `real === root || real.startsWith(root + path.sep)`, never a bare `startsWith(root)`. |
-| Case-insensitive volume (`/Users/x` vs `/users/x`) | See **Uncertain Assumptions** — compare case-insensitively on `darwin`/`win32` unless research shows `realpathSync` already canonicalises case on both. |
+| Sibling directory sharing a prefix (`/repo-evil` vs `/repo`) | Rejected — containment is `path.relative` + `!isAbsolute` + no `..` prefix, which has no prefix-overlap failure mode. |
+| Case-variant path on macOS (`/USERS/x/repo/docs`) | Accepted only if it resolves inside a root — the comparison case-folds on `darwin`. `realpathSync` does **not** canonicalise case there, so a case-sensitive compare would reject a legitimate path and, worse, make containment inconsistent for two spellings of one directory. |
+| Case-variant path on Linux | `/app/Uploads` and `/app/uploads` are **distinct directories**. Comparison must stay case-sensitive; folding here would be a hole, not a convenience. |
+| Windows cross-drive path (`D:\etc` against root `C:\repo`) | Rejected — `path.relative` returns an absolute `D:\etc`, which does not start with `..`; the `isAbsolute` clause is what catches it. |
+| Windows 8.3 short name (`C:\PROGRA~1\…`) or mapped network drive | Expanded/resolved by `fs.realpathSync.native` before comparison. |
+| Child equals the workspace root exactly | Accepted — `path.relative` returns `''`, which the check allows explicitly. |
 | Editor host picking an outside folder via the dialog | Still allowed. The zip arm accepts it via the picker-approved set, not via a client-supplied flag. |
 
 ### Side Effects
@@ -133,7 +139,7 @@ None. Every decision below is made in the plan: typed paths are constrained to t
 
 ## Adversarial Synthesis
 
-**Key risks:** (1) declaring the capability in the unwired `createHeadlessHostSeams` bundle, which compiles, tests green, and does nothing on the real host; (2) validating the typed-path setter while `createPlansDownloadZip` still accepts an arbitrary folder over HTTP — a security fix that passes its own tests and leaves the hole open; (3) overriding the UI seam by spreading a class instance, which silently drops every prototype method. **Mitigations:** the flags are declared on `HostUI` and set through a typed `createVscodeHostSeams` capability option applied at `bootstrap.ts:659`; validation is extracted to one private helper called from **both** verb arms; the bootstrap override passes options into the constructor rather than spreading the instance, and a test asserts the standalone seam still answers `showTemporaryNotification`.
+**Key risks:** (1) declaring the capability in the unwired `createHeadlessHostSeams` bundle, which compiles, tests green, and does nothing on the real host; (2) validating the typed-path setter while `createPlansDownloadZip` still accepts an arbitrary folder over HTTP — a security fix that passes its own tests and leaves the hole open; (3) a `startsWith(root + sep)` containment check, which the repo's existing guards use but which a Windows cross-drive path walks straight through and which is case-blind on macOS; (4) overriding the UI seam by spreading a class instance, which silently drops every prototype method. **Mitigations:** the flags are declared on `HostUI` and set through a typed `createVscodeHostSeams` capability option applied at `bootstrap.ts:659`; validation is extracted to one private helper called from **both** verb arms; containment is `path.relative` + `!isAbsolute` + no-`..`, case-folded on `darwin`/`win32` only, over `realpathSync.native`; the bootstrap override passes options into the constructor rather than spreading the instance, and a test asserts the standalone seam still answers `showTemporaryNotification`.
 
 ## Proposed Changes
 
@@ -225,19 +231,33 @@ private _validateDocsFolder(raw: string, cpRoot: string): { folder: string } | {
     try { if (!fs.statSync(real).isDirectory()) { return { error: `Not a folder: ${real}` }; } }
     catch { return { error: `Folder not found: ${real}` }; }
     if (this._pickerApprovedFolders.has(real)) { return { folder: real }; }
-    const roots = this._getWorkspaceRoots().map(r => { try { return fs.realpathSync(r); } catch { return r; } });
-    const eq = (a: string, b: string) => (process.platform === 'darwin' || process.platform === 'win32')
-        ? a.toLowerCase() === b.toLowerCase() : a === b;
-    const under = (child: string, root: string) => eq(child, root)
-        || (process.platform === 'darwin' || process.platform === 'win32'
-            ? child.toLowerCase().startsWith(root.toLowerCase() + path.sep)
-            : child.startsWith(root + path.sep));
-    if (!roots.some(r => under(real, r))) {
+    const roots = this._getWorkspaceRoots().map(r => { try { return fs.realpathSync.native(r); } catch { return r; } });
+    if (!roots.some(r => this._isContainedIn(r, real))) {
         return { error: 'Folder must be inside an open workspace.' };
     }
     return { folder: real };
 }
+
+/** Containment test for an already-realpath'd child against an already-realpath'd
+ *  root. Uses path.relative + isAbsolute rather than a `startsWith(root + sep)`
+ *  prefix match, and case-folds only on the two case-insensitive platforms.
+ *  Every clause here is load-bearing — see "Path containment: resolved". */
+private _isContainedIn(realRoot: string, realChild: string): boolean {
+    const p = process.platform === 'win32' ? path.win32 : path.posix;
+    const fold = (s: string) => (process.platform === 'win32' || process.platform === 'darwin')
+        ? p.normalize(s).toLowerCase()      // realpath does NOT case-canonicalise on darwin
+        : p.normalize(s);                   // linux is case-SENSITIVE — folding here is a hole
+    const rel = p.relative(fold(realRoot), fold(realChild));
+    // rel === ''  → child IS the root (allowed).
+    // '..' prefix → escapes upward.
+    // isAbsolute  → cross-drive / UNC escape on Windows: path.relative('C:\\a','D:\\b')
+    //               returns 'D:\\b', which does NOT start with '..' and would pass a
+    //               '..'-only check.
+    return rel === '' || (!rel.startsWith('..') && !p.isAbsolute(rel));
+}
 ```
+
+Use `fs.realpathSync.native` (not plain `realpathSync`) throughout. On Windows it routes to `GetFinalPathNameByHandleW`, which expands 8.3 short names (`C:\PROGRA~1\` → `C:\Program Files\`) and resolves mapped network drives to their UNC form — both are traversal vectors a JS-side resolve would miss. `stateFs` spreads `node:fs`, so `.native` is present on the copied function reference.
 
 **`createPlansPickFolder` — stop throwing an off-topic error:**
 
@@ -351,10 +371,13 @@ Extend the existing `createPlansFolderPicked` handler to render `msg.error` into
    - a non-existent path → `folder: ''` and a `Folder not found:` error;
    - a path to a **file** → rejected with `Not a folder:`;
    - a path outside the workspace roots → rejected with the workspace-constraint error;
-   - a **symlink inside the workspace pointing outside it** → rejected (proves realpath runs before the prefix check, not after);
-   - a **sibling-prefix** path (`<root>-evil`) → rejected (proves the `root + path.sep` boundary);
+   - a **symlink inside the workspace pointing outside it** → rejected (proves realpath runs before the containment check, not after);
+   - a **sibling-prefix** path (`<root>-evil`) → rejected;
+   - the workspace root **itself** → accepted (proves the `rel === ''` clause);
    - `~` and relative inputs → expanded/resolved, then validated;
-   - trailing whitespace and a trailing separator → normalised, accepted.
+   - trailing whitespace and a trailing separator → normalised, accepted;
+   - **case-variance behaviour, asserted per platform** (skip the non-applicable ones): on `darwin`, an all-caps spelling of an in-workspace path → **accepted**; on `linux`, a case-variant of an in-workspace path that does not exist → **rejected** at the realpath step, and a genuinely distinct `Uploads` vs `uploads` pair → treated as two separate directories, never merged;
+   - on `win32` only: a path on **another drive** (`D:\…` against a `C:\…` root) → rejected. This is the case a `..`-prefix-only check lets through, so it is the test that proves `_isContainedIn` rather than merely exercising it.
 4. New test asserting **`createPlansDownloadZip` enforces the same validation** — POST it directly with a folder outside every workspace root and assert `{success:false}` and that `_collectFolderDocSources` was never called. This is the test that distinguishes a real fix from a decorative one.
 5. Assert a seam built by `createVscodeHostSeams(root, secrets)` reports `supportsOpenDialog: true`, and one built with `{ ui: { supportsOpenDialog: false } }` reports `false`.
 6. Assert the standalone seam bundle still answers `showTemporaryNotification` and `showErrorMessage` after the bootstrap override — the guard against reintroducing the class-spread bug.
@@ -373,12 +396,23 @@ Extend the existing `createPlansFolderPicked` handler to render `msg.error` into
 **Regression guard**
 14. `createPlansPasteBack` and `createPlansCopyPrompt` must be unaffected on both hosts.
 
-## Uncertain Assumptions
+## Path containment: resolved
 
-The following are **not** confirmed and the user was advised to run web research to confirm them before implementation:
+This was the plan's one open uncertainty. Web research settled it, and the answer **changed the design** — the original `startsWith(root + path.sep)` boundary is not sufficient. Findings, with the decision each drives:
 
-- Whether Node's `fs.realpathSync` canonicalises **case** on case-insensitive volumes (macOS APFS/HFS+ and Windows NTFS), or returns the path as typed. This decides whether the `real === root || real.startsWith(root + path.sep)` prefix check needs the case-insensitive comparison written into `_validateDocsFolder` above, or whether that comparison is redundant belt-and-braces. If `realpathSync` does canonicalise on both, the case-folding branch can be dropped; if it does not, the branch is load-bearing and dropping it would let `/USERS/x/repo/../../etc` style case variance defeat the boundary.
-- Related, same family: whether `fs.realpathSync` on Windows normalises drive-letter case and UNC path form consistently enough for a `startsWith` comparison, or whether `path.relative()` is the safer boundary primitive there.
+| Platform | Does `realpathSync` canonicalise case? | Comparison decision |
+| --- | --- | --- |
+| `darwin` (APFS/HFS+) | **No.** Node delegates to libuv `uv_fs_realpath` → POSIX `realpath(3)`, which resolves symlinks and `.`/`..` but does not query filesystem metadata to rewrite non-symlink segments to their on-disk casing. `/USERS/alice/documents` comes back unchanged. | Case-fold. **Load-bearing** — without it, two spellings of one directory get different containment verdicts. |
+| `win32` (NTFS) | **Yes**, via `GetFinalPathNameByHandleW` — canonical casing, 8.3 short names expanded, drive letters uppercased, mapped drives resolved to UNC. But divergence still occurs: JS-fallback paths on some virtual mounts retain caller casing, and a root string may carry a differently-cased drive letter. | Case-fold anyway. Cheap; closes the fallback gap. |
+| `linux` (ext4/xfs/btrfs) | Case-sensitive filesystem; the question does not arise. | **Must NOT fold.** `/app/Uploads` and `/app/uploads` are different directories; folding would merge two distinct boundaries. |
+
+**`path.relative` beats `startsWith`, and the reason is a real bypass, not style.** On Windows, `path.relative('C:\\app\\uploads', 'D:\\etc\\passwd')` returns `'D:\\etc\\passwd'` — an absolute path that does **not** begin with `..`. A containment check testing only for a `..` prefix passes it. The `!isAbsolute(rel)` clause is what closes that; it is not defensive padding. `startsWith` additionally fails on separator mismatch (a root stored with `/` against a `realpath` result with `\`) and on prefix overlap if the trailing separator is ever dropped (`/var/app/data` vs `/var/app/data-secret`).
+
+**Also adopted:** `fs.realpathSync.native` rather than `fs.realpathSync`, so Windows 8.3 short names and mapped network drives are expanded before comparison rather than after.
+
+**Precedent check.** The two in-repo patterns this plan was told to follow — `_buildLocalAssetUrl` (`src/services/TicketsPanelProvider.ts:483-501`) and `downloadAttachment` (`src/services/TaskViewerProvider.ts`) — use prefix-style checks. This plan deliberately does **not** copy them on this point; they predate the finding above. Bringing them into line is out of scope here and worth its own plan.
+
+**Related CVE context** (background for the implementer, not a claim about this codebase): CVE-2025-27210 (Windows reserved DOS device names bypassing Node path-traversal guards), CVE-2023-30584 / CVE-2023-32002 (Node permission-model boundary bypasses via trailing-character and symlink edge cases), and CVE-2026-44705 / CVE-2026-24884 (path traversal in `tmp` / `compressing` caused by incomplete `startsWith` prefix checks and failure to resolve intermediate symlinks before validating). The last pair is precisely the failure mode this section exists to avoid.
 
 Everything else in this plan was verified directly against the source files cited.
 

@@ -1987,7 +1987,15 @@ export class LocalApiServer {
                 // HARDCODED false — a relay into a working terminal must never
                 // reset it. There is no field for the caller to omit or get
                 // wrong; the capability simply does not exist on this route.
-                clearBeforePrompt: false
+                clearBeforePrompt: false,
+                // Relays are agent-to-agent notes — a question, an answer, a
+                // "done" — not task dispatches. Appending the recipient's whole
+                // standing-orders block (up to MAX_BLOCK_CHARS) to every one of
+                // them is pure inflation on the highest-frequency delivery path
+                // in the fleet, and the recipient's context is never cleared here
+                // so there is nothing to re-establish. Hardcoded, like the flag
+                // above: a relay has no legitimate reason to carry the block.
+                standingOrders: false
             }, workspaceRoot);
 
             if (!delivered || delivered.success === false) {
@@ -2380,7 +2388,12 @@ export class LocalApiServer {
                 let added: StandingOrder | undefined;
                 await mutateStandingOrders(db, async (orders) => {
                     if (orders.length >= MAX_ORDERS) {
-                        throw new Error(`Standing order limit reached (${MAX_ORDERS})`);
+                        // Tagged so the aggregate catch reports it as the client
+                        // error it is (400) rather than a server fault (500) —
+                        // the caller can fix this by deleting an order.
+                        const capErr: any = new Error(`Standing order limit reached (${MAX_ORDERS})`);
+                        capErr.statusCode = 400;
+                        throw capErr;
                     }
                     added = makeStandingOrder(parent, child, instruction);
                     return [...orders, added];
@@ -2407,8 +2420,9 @@ export class LocalApiServer {
             res.end(JSON.stringify({ success: true }));
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
+            const status = (err as any)?.statusCode === 400 ? 400 : 500;
             console.error('[LocalApiServer] standing-orders write failed:', err);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.writeHead(status, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: message }));
         }
     }

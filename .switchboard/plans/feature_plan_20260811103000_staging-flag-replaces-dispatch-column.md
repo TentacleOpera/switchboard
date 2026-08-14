@@ -47,7 +47,13 @@ Both must be redirected onto the stamp, and the `DISPATCH` target must keep work
 
 ## User Review Required
 
-**None.** Five decisions made here:
+**None.** Eight decisions made here:
+
+* **`kanban-state-dispatch.md` keeps being written, empty.** Following the `CODED` precedent exactly rather than carving a legacy exclusion into the `VALID_KANBAN_COLUMNS` mirror invariant. See change 6.
+* **`setStaged` / `clearStaged` are net-new verbs**, not renames — there is no `sendToDispatch` to rename. See change 3.
+* **`PLANNED_STAGED` is offered alongside `PLAN REVIEWED`, not substituted for it**, diverging from the `CODED_AUTO` aggregate's substitution because staged plans are a subset rather than a rollup. See change 5.
+
+And the five original decisions:
 
 * **A nullable timestamp, not a boolean.** `plans.staged_at TEXT DEFAULT NULL` matches the house pattern set by V58 (`last_liveness_at`) and V59 (`blocked_at`), and gives staging order for free — useful for "send the oldest staged first" and legible in reports. `NULL` means not staged.
 * **`DISPATCH` becomes a legacy alias, not a deleted value.** It moves into `LEGACY_COLUMN_LABELS` with `legacyAliasOf: 'PLAN REVIEWED'`, following the precedent already set by `CODED → LEAD CODED`. It stays in `VALID_KANBAN_COLUMNS` so a row written by an older or cloud-synced machine is accepted and normalised rather than rejected.
@@ -88,8 +94,9 @@ Both must be redirected onto the stamp, and the `DISPATCH` target must keep work
 
 ### Side Effects
 * **The Planned column gets longer** — it now shows staged cards too. That is the requested behaviour, and the count badge must include them (a badge that excludes staged cards would recreate the invisibility this plan removes).
-* `kanban-state-dispatch.md` stops being written. A `kanban-state-staging.md`, derived from the stamp, replaces it so the mirror-reading sibling plan has a surface for staged-ness.
-* `kanban-state-plan-reviewed.md` grows to include staged plans.
+* `kanban-state-dispatch.md` becomes a permanently-empty tombstone (the `CODED` precedent — see change 6), and a new `kanban-state-staging.md`, derived from the stamp, carries staged-ness for the mirror-reading sibling plan.
+* `kanban-state-plan-reviewed.md` grows to include staged plans. At HEAD it is 31 KB / 55 cards and `kanban-state-dispatch.md` holds 1; the merged file is not meaningfully larger, so the sibling board-mirror plan's size argument is unaffected.
+* Two new verbs (`setStaged`, `clearStaged`) enter `verbAllowlist.ts` and `verbSchemas.ts`. Per the PRD's two-layer completion contract, they must also be reachable under `npx switchboard` — the kanban verb router is already wired in both hosts, so this is inherited rather than new work, but a headless test must assert the returned body carries `stagedAt`.
 
 ### Dependencies & Conflicts
 * **`src/services/KanbanDatabase.ts`** — `SCHEMA_TABLES_SQL` (`:170`), migration constants (`MIGRATION_V58_SQL` `:467`, `MIGRATION_V59_SQL` `:482`), the runner (`:8318-8337`), `VALID_KANBAN_COLUMNS` (`:904`, `'DISPATCH'` at `:908`), the board grouping map (`:9045`) and the per-column mirror writer (`_writeLocalBoardMirror` `:8975`, per-column path `:9074`, index `:9123`). Migration head at HEAD is **V59** → this is **V60**. **Never edit a shipped `MIGRATION_Vnn_SQL` body**; add V60 only.
@@ -118,7 +125,7 @@ Both must be redirected onto the stamp, and the `DISPATCH` target must keep work
 
 ## Adversarial Synthesis
 
-Key risks: (1) **migrating the column without the stamp** — the six live `DISPATCH` cards land in Planned as ordinary reviewed plans and the user's staging decisions are silently gone, which is data loss dressed as a cleanup; (2) **shipping the `UPDATE` without the read-path alias** — a cloud-synced or older-version writer reintroduces `DISPATCH` rows and cards start disappearing from Planned again, with the migration already marked complete so it never re-runs; (3) **a missed remapping site** — a leftover `card.column === 'DISPATCH'` comparison is now permanently false and compiles clean, so the failure is a dead branch discovered by a user, not by a build; (4) **the count badge excluding staged cards** — reproduces the exact invisibility the plan exists to remove, on the one surface a user actually scans; (5) **scope creep into `BACKLOG`** — a 38-card migration and the `CREATED` column's whole toggle/Advance-All path riding along on a 6-card change; (6) **`staged_at` outliving the column** — a card sent to a coder and later moved back presents stale staging as current. Mitigations: migrate column and stamp in the same statement; move `DISPATCH` into `LEGACY_COLUMN_LABELS` so normalisation happens on every read rather than once; drive the webview edits from a grep of the ~20 sites with a test asserting no `'DISPATCH'` comparison survives outside the legacy alias; assert the badge counts staged cards; leave `BACKLOG` untouched and say so in the plan; clear `staged_at` on every transition out of `PLAN REVIEWED`.
+Key risks: (0) **normalising the column string without back-filling the stamp** — the `CODED` precedent this plan leans on is a pure `string → string` map duplicated in two providers, so "follow the `CODED` precedent" delivers a legacy row that appears in Planned and is silently *unstaged*: the same data loss as risk 1, arriving from a stale writer rather than from the migration, and after the migration has been marked complete; (1) **migrating the column without the stamp** — the six live `DISPATCH` cards land in Planned as ordinary reviewed plans and the user's staging decisions are silently gone, which is data loss dressed as a cleanup; (2) **shipping the `UPDATE` without the read-path alias** — a cloud-synced or older-version writer reintroduces `DISPATCH` rows and cards start disappearing from Planned again, with the migration already marked complete so it never re-runs; (3) **a missed remapping site** — a leftover `card.column === 'DISPATCH'` comparison is now permanently false and compiles clean, so the failure is a dead branch discovered by a user, not by a build; (4) **the count badge excluding staged cards** — reproduces the exact invisibility the plan exists to remove, on the one surface a user actually scans; (5) **scope creep into `BACKLOG`** — a 38-card migration and the `CREATED` column's whole toggle/Advance-All path riding along on a 6-card change; (6) **`staged_at` outliving the column** — a card sent to a coder and later moved back presents stale staging as current; (7) **deleting the write-side of the drag mapping** (`kanban.html:8128-8130`) instead of replacing it — dragging into the staging view then "succeeds" while changing nothing, because the card is already in `PLAN REVIEWED`; (8) **planning against stale line numbers** — `kanban.html` and `terminals.js` moved by hundreds of lines during panel extraction, and the `ALL CODED` aggregate this plan expected to serialise against has already shipped. Mitigations: migrate column and stamp in the same statement; back-fill the stamp at card-build time, not only in the string normaliser, and edit both copies of it; replace the drag write-mapping with a `setStaged` call and assert it in manual step 9; grep for symbols rather than trusting the line numbers below; adopt the shipped `CODED_AUTO` conventions verbatim; move `DISPATCH` into `LEGACY_COLUMN_LABELS` so normalisation happens on every read rather than once; drive the webview edits from a grep of the ~20 sites with a test asserting no `'DISPATCH'` comparison survives outside the legacy alias; assert the badge counts staged cards; leave `BACKLOG` untouched and say so in the plan; clear `staged_at` on every transition out of `PLAN REVIEWED`.
 
 ---
 
@@ -253,13 +260,21 @@ Drop `columns.set('DISPATCH', [])` from the board grouping map (`:9045`)?  **No 
 
 ### 6. Mirror export and the skill
 
-**Implementation:** emit `.switchboard/kanban-state-staging.md` from `staged_at IS NOT NULL` and stop emitting `kanban-state-dispatch.md` (drop the grouping-map entry per change 2). Update `kanban-auto-export.test.ts:78-81` for the new mirror set and `:416` for `labelSource: 'legacy'`.
+**Implementation:** emit `.switchboard/kanban-state-staging.md` from `staged_at IS NOT NULL`, as an **additional** derived mirror.
 
-In `.agents/skills/dispatch-analysis/SKILL.md`, replace the step-5 `POST /kanban/move` with the staging verb, and delete the surrounding column language. Note in step 1 that staged plans **remain in `PLAN REVIEWED`** and are therefore already in the re-queried candidate set — the pass should skip re-staging a plan that is already staged and say so in the report.
+> **Superseded:** "stop emitting `kanban-state-dispatch.md` (drop the grouping-map entry per change 2). Update `kanban-auto-export.test.ts:78-81` for the new mirror set."
+> **Reason:** Dropping `columns.set('DISPATCH', [])` (`KanbanDatabase.ts:9045`) breaks a live invariant, and "update the test for the new mirror set" understates what that costs. `kanban-auto-export.test.ts:78-88` is a **loop over `VALID_KANBAN_COLUMNS`** asserting each entry has both a `kanban-state-<slug>.md` link in `kanban-board.md` and a `## <COLUMN>` heading in its own file. Since change 2 deliberately keeps `'DISPATCH'` in `VALID_KANBAN_COLUMNS`, dropping the grouping entry makes that loop fail — and "fixing" it means adding a legacy-exclusion carve-out to a general invariant, weakening it for every future retired column. The `CODED` precedent this plan invokes throughout does the opposite: `CODED` is a legacy alias, is still in `VALID_KANBAN_COLUMNS`, and **still gets a mirror** — `.switchboard/kanban-state-coded.md` exists at HEAD and is 40 bytes (`## CODED` + `_No plans_`). An always-empty file is the shipped, tested behaviour for a retired column.
+> **Replaced with:** Leave `columns.set('DISPATCH', [])` in place. After V60 it is permanently empty and `kanban-state-dispatch.md` becomes a 40-byte tombstone, exactly like `kanban-state-coded.md`. The `VALID_KANBAN_COLUMNS` loop stays untouched and keeps its full strength. Only `:416`'s label assertion changes, to `labelSource: 'legacy'`.
+
+`kanban-state-staging.md` is written outside the per-column loop, from the stamp rather than from a column, and therefore does **not** appear in `kanban-board.md`'s column table — it is not a column. Say so in a one-line header inside the file (`**Derived:** plans in PLAN REVIEWED with staged_at set`) so a reader does not mistake it for one.
+
+In `.agents/skills/dispatch-analysis/SKILL.md`, replace the step-5 `POST /kanban/move` with the staging verb, and delete the surrounding column language — including the summary block at the top of the file ("moves that subset to the **DISPATCH** column") and the step-6 report line ("Plans moved to Dispatch (parallel-safe)"). Note in step 1 that staged plans **remain in `PLAN REVIEWED`** and are therefore already in the re-queried candidate set — the pass should skip re-staging a plan that is already staged and say so in the report.
 
 **Logic:** `kanban-state-staging.md` gives the mirror-reading sibling plan a surface for staged-ness without a column to read it from.
 
-**Edge cases:** edit only `.agents/`; `.claude/skills/dispatch-analysis/SKILL.md` is generated and `npm run mirror:check` is a CI gate.
+> **Superseded:** "edit only `.agents/`; `.claude/skills/dispatch-analysis/SKILL.md` is generated and `npm run mirror:check` is a CI gate."
+> **Reason:** Factually wrong at HEAD — `.claude/skills/dispatch-analysis/` does not exist. `scripts/check-claude-mirror.js` walks `.claude/skills/**` and compares it against `generateClaudeMirror`'s output; a file that is in neither is invisible to it. The instruction is harmless but it teaches a coder that a gate is watching this file when none is, and it contradicts the sibling worktree plan, which states the position correctly.
+> **Replaced with:** `.agents/skills/dispatch-analysis/SKILL.md` is the only copy. It is read by the extension **by path** and is listed in `.agents/.switchboard-bundled.json:37` for packaging. There is no `.claude` mirror and `npm run mirror:check` does not gate it — so there is also no mirror edit to forget, and no CI signal if the file drifts. The compensating gate is `src/test/dispatch-analysis-scope-contract.test.js`, which already reads source files to enforce cross-file contracts; the sibling board-mirror plan extends it to assert the skill's step-1 spelling, and this plan should add the same for step 5.
 
 ---
 
@@ -275,13 +290,20 @@ In `.agents/skills/dispatch-analysis/SKILL.md`, replace the step-5 `POST /kanban
 * **`staged_at` clears on exit:** moving a staged card out of `PLAN REVIEWED` nulls it; moving it back leaves it unstaged.
 * **Idempotent stamp:** staging twice does not change the timestamp.
 * **Analysis sees staged cards:** `dispatchAnalyze`'s candidate set includes staged plans — the direct regression test for the invisibility this plan removes.
-* **No surviving comparisons:** a grep-style assertion that `'DISPATCH'` appears in `src/` only in `LEGACY_COLUMN_LABELS`, `VALID_KANBAN_COLUMNS` and migration SQL.
-* **Badge counts staged cards.**
-* **`getBoardCards` returns `stagedAt`** on every card.
-* **Terminals pane picker offers `PLANNED_STAGED`** alongside `PLAN REVIEWED`, and selecting it yields only cards with a non-null `stagedAt` while requesting `column: 'PLAN REVIEWED'`.
-* **Pane guards stay keyed on the chosen id:** with one pane on `PLAN REVIEWED` and another on `PLANNED_STAGED`, concurrent fetches do not collide in `kanbanFetchInFlight` and neither response renders under the other's heading.
+* **No surviving comparisons:** a grep-style assertion that `'DISPATCH'` appears in `src/` only in `LEGACY_COLUMN_LABELS`, `VALID_KANBAN_COLUMNS`, `_normalizeLegacyKanbanColumn` (both copies), the board grouping map and migration SQL.
+* **`_normalizeLegacyKanbanColumn` agrees across providers:** both copies map `DISPATCH → PLAN REVIEWED` and `CODED → LEAD CODED`. The direct guard against a one-sided edit.
+* **Legacy row back-fills the stamp:** a row read with `kanban_column = 'DISPATCH'` and `staged_at IS NULL` produces a card with `column: 'PLAN REVIEWED'` **and a non-null `stagedAt`**. Column-only normalisation passing this test is the failure it exists to catch — assert both fields.
+* **`POST /kanban/move` with `targetColumn: 'DISPATCH'` stamps and does not move:** the row's `kanban_column` is unchanged and `staged_at` is set. The un-updated-caller test.
+* **Badge counts staged cards**, and the Planned header's staged count reads from `stagedAt`, not from a column.
+* **`getBoardCards` returns `stagedAt`** on every card, and a completed-plan card returns `stagedAt: null`.
+* **Both new verbs return their stamp in the body** (`{ success, planId, stagedAt }`), asserted over the HTTP path, not only the postMessage path — PRD contract #4.
+* **The `VALID_KANBAN_COLUMNS` mirror loop still passes unmodified**, with `kanban-state-dispatch.md` present and empty. The regression guard for change 6's correction.
+* **`kanban-state-staging.md` lists exactly the stamped set** and is absent from `kanban-board.md`'s column table.
+* **Terminals pane picker offers `PLANNED_STAGED`** alongside — not instead of — `PLAN REVIEWED`, adjacent in sort order, and selecting it yields only cards with a non-null `stagedAt` while requesting `column: 'PLAN REVIEWED'`.
+* **`columnLabelForId('PLANNED_STAGED')`** returns the title-case label, not the raw id.
+* **Pane fetch keeps `col` synthetic:** the post-response `kanbanPaneColumn[index] === col` re-check compares `PLANNED_STAGED`, so a pane switched to plain `PLAN REVIEWED` mid-flight discards the staged response instead of rendering it under the full column's heading.
 * **`bodySig` includes `stagedAt`:** staging a card while a `PLANNED_STAGED` pane is open re-renders it (regression guard for the stale-set-with-a-happy-poll failure).
-* **Unknown saved id degrades:** a persisted `PLANNED_STAGED` on a build without the entry falls back to `PLAN REVIEWED`, not an empty pane.
+* **Unknown saved id does not self-destruct:** a persisted `PLANNED_STAGED` on a build without the entry renders an empty pane with a raw-id label and **does not rewrite or persist** `terminals.kanbanPaneColumn`.
 
 ### Manual Verification (VSIX install)
 1. **The headline check.** Open the board. All Planned plans are visible, including the ones previously hidden in Dispatch. The count badge matches what is on screen.
@@ -291,11 +313,11 @@ In `.agents/skills/dispatch-analysis/SKILL.md`, replace the step-5 `POST /kanban
 5. **Send to coder.** From the Staging view, send the staged set forward. Cards route by complexity from `PLAN REVIEWED` as normal, and `staged_at` clears.
 6. **Move back.** Drag a staged card to `CREATED` and back to Planned. It returns unstaged.
 7. **Drag out of the staging view.** Confirm the card files by its real column, not a remapped one.
-8. **Terminals pane.** Set a kanban-mode pane to **PLANNED — STAGED**. It shows only staged plans. Set a second pane to **PLAN REVIEWED**; it shows all of them, including the staged ones, and the two panes do not interfere. Stage a card from the board and confirm the staged pane picks it up on the next tick without a reload.
-9. **Mirrors.** `kanban-state-staging.md` exists and lists the staged set; `kanban-state-dispatch.md` is no longer written; `kanban-state-plan-reviewed.md` includes staged plans.
-10. **No stray Dispatch label** anywhere in the UI.
-11. **`BACKLOG` unaffected.** The `CREATED` toggle, its counts and Advance All behave exactly as before.
-12. **Mirror gate.** `npm run mirror:check` passes.
+8. **Terminals pane.** Set a kanban-mode pane to **Planned — Staged**. It shows only staged plans. Set a second pane to **PLAN REVIEWED**; it shows all of them, including the staged ones, and the two panes do not interfere. Stage a card from the board and confirm the staged pane picks it up on the next tick without a reload. Confirm the option sits next to Planned in the dropdown and that an **Autocode** pane still behaves exactly as before.
+9. **Drag to stage.** With the Staging filter open, drag a card from `CREATED` into the Planned column. It must arrive **staged**, not merely moved — the write-side mapping at `kanban.html:8128-8130` is the thing being replaced, and a silent no-op here looks identical to success.
+10. **Mirrors.** `kanban-state-staging.md` exists and lists the staged set; `kanban-state-dispatch.md` still exists and is empty (matching `kanban-state-coded.md`); `kanban-state-plan-reviewed.md` includes staged plans.
+11. **No stray Dispatch label** anywhere in the UI. `GET /kanban/columns` reports `DISPATCH` with `legacyAliasOf: 'PLAN REVIEWED'` rather than `displayModeOf`.
+12. **`BACKLOG` unaffected.** The `CREATED` toggle, its counts and Advance All behave exactly as before.
 
 ---
 

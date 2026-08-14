@@ -11,6 +11,7 @@ const bootstrapTs = fs.readFileSync(path.join(__dirname, '../standalone/bootstra
 const ptyHostTs = fs.readFileSync(path.join(__dirname, '../standalone/ptyHost.ts'), 'utf8');
 const taskViewerTs = fs.readFileSync(path.join(__dirname, '../services/TaskViewerProvider.ts'), 'utf8');
 const terminalsJs = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
+const planIngestionTs = fs.readFileSync(path.join(__dirname, '../services/PlanIngestionEngine.ts'), 'utf8');
 
 let passed = 0;
 let failed = 0;
@@ -62,7 +63,13 @@ function makeTerm(opts) {
 }
 
 const FEAT_WT = makeWt(1, '/tmp/sb-fixture/feature-worktree', 'feature-9', 'Acme');
-const PROJ_WT = makeWt(2, '/tmp/sb-fixture/project-worktree', null, 'Acme');
+// Distinct project on purpose. matchWorktreePath's project tier is a plain
+// `find(w => w.project === plan.project)` over ALL active worktrees — a feature
+// worktree that also carries the project would win it on array order. That is the
+// shared resolver's pre-existing behaviour and not this module's to change, so the
+// fixture exercises the project tier honestly instead of asserting a property the
+// resolver does not have.
+const PROJ_WT = makeWt(2, '/tmp/sb-fixture/project-worktree', null, 'Zenith');
 const OTHER_WT = makeWt(3, '/tmp/sb-fixture/other-worktree', 'feature-other', 'Other');
 
 console.log('\n--- attributePlansToTerminals: name tier ---');
@@ -78,9 +85,13 @@ test('name tier wins over path tier for the same terminal', () => {
 });
 
 test('a row naming terminal A is not path-matched onto terminal B in the same worktree', () => {
+    // ONE row, and it names coder-A while also carrying the worktree's featureId.
+    // The fixture previously added a SECOND, unnamed row — a legitimate path-tier
+    // candidate — which made this case identical to the "one candidate, two seats,
+    // one already name-matched ⇒ the other resolves" test below while asserting the
+    // opposite. The property under test is that a NAMED row stays name-tier only.
     const rows = [
-        makeRow({ planId: 'plan-A', topic: 'A', dispatchedTerminal: 'coder-A' }),
-        makeRow({ planId: 'plan-B', topic: 'B', featureId: 'feature-9', project: 'Acme' }),
+        makeRow({ planId: 'plan-A', topic: 'A', dispatchedTerminal: 'coder-A', featureId: 'feature-9', project: 'Acme' }),
     ];
     const terminals = [
         makeTerm({ friendlyName: 'coder-A', worktreePath: '/tmp/sb-fixture/feature-worktree' }),
@@ -101,7 +112,7 @@ test('an unattributed row whose featureId matches a worktree resolves with one s
 });
 
 test('an unattributed row whose project matches a worktree resolves with one seat there', () => {
-    const rows = [makeRow({ planId: 'plan-proj', topic: 'Project', project: 'Acme' })];
+    const rows = [makeRow({ planId: 'plan-proj', topic: 'Project', project: 'Zenith' })];
     const terminals = [makeTerm({ friendlyName: 'coder-1', worktreePath: '/tmp/sb-fixture/project-worktree' })];
     const result = attributePlansToTerminals(rows, [FEAT_WT, PROJ_WT], terminals);
     assert.strictEqual(result.get('coder-1')?.planId, 'plan-proj');
@@ -197,10 +208,15 @@ test('bootstrap.ts ptyListTerminals arm calls attributePlansToTerminals and atta
 });
 
 test('TaskViewerProvider.ts ptyListTerminals block calls attributePlansToTerminals and attaches planTitle', () => {
-    const arm = taskViewerTs.substring(
-        taskViewerTs.indexOf("if (verb === 'ptyListTerminals'"),
-        taskViewerTs.indexOf("if (['ptyCreateTerminal'")
-    );
+    // Anchor on the HTTP-seam block specifically. TaskViewerProvider has TWO
+    // `if (verb === 'ptyListTerminals'` sites: the earlier one is _ptyHostVerb, the
+    // internal path that deliberately pays NO DB cost (plan Change 4). Slicing from
+    // the first occurrence spanned the wrong region entirely and failed a correct
+    // implementation. lastIndexOf pins the enrichment block; the guard below keeps
+    // the two from being confused if a third ever appears.
+    const armStart = taskViewerTs.lastIndexOf("if (verb === 'ptyListTerminals'");
+    const arm = taskViewerTs.substring(armStart, taskViewerTs.indexOf('this._localApiServer = new LocalApiServer('));
+    assert.ok(armStart > taskViewerTs.indexOf("if (verb === 'ptyListTerminals'"), 'the internal _ptyHostVerb site must still exist and must not be the enriched one');
     assert.ok(arm.includes('attributePlansToTerminals'), 'TaskViewerProvider.ts must call attributePlansToTerminals');
     assert.ok(arm.includes('planTitle'), 'TaskViewerProvider.ts must attach planTitle per terminal');
     assert.ok(arm.includes('planId'), 'TaskViewerProvider.ts must attach planId per terminal');
@@ -233,12 +249,59 @@ test('terminals.js postFleetStateToShell payload does not gain the plan title', 
     assert.ok(!fn.includes('planId'), 'postFleetStateToShell must not carry planId');
 });
 
+test('the internal _ptyHostVerb ptyListTerminals site pays no DB cost', () => {
+    // Plan Change 4: the enrichment sits on the HTTP seam only, so the completion
+    // broadcast and the liveness sweep keep reading an un-enriched payload.
+    const internal = taskViewerTs.substring(
+        taskViewerTs.indexOf("if (verb === 'ptyListTerminals'"),
+        taskViewerTs.lastIndexOf("if (verb === 'ptyListTerminals'")
+    );
+    assert.ok(!internal.includes('attributePlansToTerminals'), '_ptyHostVerb must not run plan attribution');
+    assert.ok(!internal.includes('getLiveDispatchAttribution'), '_ptyHostVerb must not query live dispatch rows');
+});
+
 test('terminals.js drop handler POSTs attributePastedPrompt', () => {
-    const handler = terminalsJs.substring(
-        terminalsJs.indexOf("paneEl.addEventListener('drop'"),
+    // Scope is wireTerminalDropTarget, not the drop listener alone: attributeDropDispatch
+    // is declared ABOVE the listener (it serves both drop branches), so a slice starting
+    // at addEventListener('drop' cannot see the fetch and failed a correct implementation.
+    const wiring = terminalsJs.substring(
+        terminalsJs.indexOf('function wireTerminalDropTarget'),
         terminalsJs.indexOf('    function createPaneElement')
     );
-    assert.ok(handler.includes("/kanban/verb/attributePastedPrompt"), 'drop handler must POST attributePastedPrompt');
+    assert.ok(wiring.includes("/kanban/verb/attributePastedPrompt"), 'drop wiring must POST attributePastedPrompt');
+    const handler = wiring.substring(wiring.indexOf("paneEl.addEventListener('drop'"));
+    assert.ok(handler.includes('attributeDropDispatch('), 'the drop handler must call attributeDropDispatch');
+    // The strip reads straight off the fleet list, so the write must be followed by a
+    // pull or the pane stays blank until the next 5s poll.
+    assert.ok(wiring.includes('fetchTerminalList()'), 'drop attribution must refetch the terminal list');
+});
+
+test('the turn-end silence branch resolves the plan root with matchWorktreePath, not worktree_id alone', () => {
+    // The sibling subtask established that plans.worktree_id has no live writer, so a
+    // root resolved only from it collapses to the main checkout — and the completion
+    // arm is ONLY load-bearing for worktree dispatches (the plan watcher wins every
+    // other race). Keying on worktree_id alone therefore reads every worktree
+    // completion as blocked while every unit test stays green. Silent and total.
+    const branch = planIngestionTs.substring(
+        planIngestionTs.indexOf('if (silentTerminals.length > 0)'),
+        planIngestionTs.indexOf('const cleared = await db.clearStaleWorkingState(')
+    );
+    assert.ok(branch.length > 0, 'the silence branch must exist');
+    assert.ok(branch.includes('matchWorktreePath('), 'the mtime discriminator must resolve the worktree via matchWorktreePath');
+    assert.ok(branch.includes('fs.promises.stat('), 'the discriminator must stat the plan file, never read updated_at');
+    assert.ok(!branch.includes('updated_at') && !branch.includes('updatedAt'), 'updated_at advances AFTER this sweep — it can never detect a completion');
+    assert.ok(branch.includes('if (!record.blockedAt)'), 'setBlockedState must be gated once per turn, not re-stamped per tick');
+});
+
+test('the silence branch cannot fire on a missing lastDataAt', () => {
+    const loop = planIngestionTs.substring(
+        planIngestionTs.indexOf('const silentTerminals: string[] = [];'),
+        planIngestionTs.indexOf('let recordedLiveness = 0;')
+    );
+    assert.ok(loop.includes('entry.lastDataAt > 0'), 'a zero/absent lastDataAt is no evidence, not evidence of silence');
+    const exitedAt = loop.indexOf("entry.status === 'exited'");
+    const silentAt = loop.indexOf('turnEndSilenceMs');
+    assert.ok(exitedAt >= 0 && silentAt > exitedAt, 'the exited branch must precede the silence branch — branch ORDER is what keeps dead seats out of it');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

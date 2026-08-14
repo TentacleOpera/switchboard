@@ -103,7 +103,7 @@ owner, and the ordering constraint recorded here.
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
 - [ ] [Audit the openExternal channel — standalone returns `true` and opens nothing](../plans/feature_plan_20260811160000_audit-openexternal-channel-reports-success-opens-nothing.md) — **PLAN REVIEWED**
-- [ ] [Audit the command seam — 62 of 71 commands are unbridged and their failures are swallowed](../plans/feature_plan_20260811160001_audit-command-seam-62-unbridged-commands-swallowed.md) — **PLAN REVIEWED**
+- [ ] [Audit the command seam — unbridged commands are dead and their failures are swallowed](../plans/feature_plan_20260811160001_audit-command-seam-62-unbridged-commands-swallowed.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

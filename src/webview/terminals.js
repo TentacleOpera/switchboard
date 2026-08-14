@@ -59,7 +59,22 @@
         return kanbanPaneSelection[index];
     }
     function clearPaneSelection(index) {
-        kanbanPaneSelection[index] = new Set();
+        // Cleared IN PLACE, never reassigned. Every row's click handler closes over the
+        // Set the row was rendered with, while dragstart re-reads paneSelection(index).
+        // Swapping the object leaves those two looking at DIFFERENT Sets for as long as
+        // the clear is not followed by a row rebuild — and that window is real: the
+        // clear-on-drop runs before the async fetchBoardCardsForPane lands, and when
+        // promptSelected advances nothing (its "no next column" arm returns success with
+        // advanced: 0) the card list never changes, so the pane's body signature matches
+        // and renderKanbanPane early-returns forever. Clicks would then mutate an orphaned
+        // Set while the drag carried the empty live one — selection looks fine and
+        // dispatches one plan.
+        paneSelection(index).clear();
+        // The class is not the source of truth, but a clear with no rebuild behind it
+        // would leave rows painted selected over an empty Set, and the next click on
+        // such a row would re-select it instead of toggling it off.
+        document.querySelectorAll(`.terminal-pane[data-pane-index="${index}"] .kanban-pane-row.selected`)
+            .forEach(el => el.classList.remove('selected'));
     }
     // Cached flat ordered column list from getKanbanStructure.
     let kanbanColumnsCache = [];
@@ -1415,6 +1430,11 @@
 
         // LINK_PRESETS is declared ~6000 lines below, but this function is only
         // called from init() after the whole IIFE body has run top to bottom.
+        // Validated against the WHOLE list because buildPresetOptions() builds an
+        // <option> for every entry. The two must stay in step: an id that survives
+        // validation but is never built makes `presetSel.value = linkPreset` a
+        // silent no-op, leaving a blank dropdown above an empty box and a dead
+        // SEND with nothing on screen to explain it.
         const savedPreset = await loadSetting('terminals.linkPreset', LINK_PRESETS[0].id);
         linkPreset = LINK_PRESETS.some(p => p.id === savedPreset) ? savedPreset : LINK_PRESETS[0].id;
 
@@ -4084,6 +4104,13 @@
                     planFiles: [],
                     workspaceRoot
                 })
+            }).then(() => {
+                // Chained, not fired beside the POST: the strip is read straight off
+                // the fleet list, and the list only carries a title once the
+                // attribution row exists. A parallel refetch would race the write and
+                // leave the pane blank until the next 5s poll. The drop path pulls no
+                // other terminal list, so this is the only refetch in flight here.
+                fetchTerminalList();
             }).catch(err => {
                 console.warn('[Terminals] drop attribution failed:', err);
             });
@@ -4168,6 +4195,19 @@
                     // standing-orders block must be applied client-side.
                     const withOrders = applyStandingOrdersClient(promptText, targetName, standingOrders, liveNameSet());
                     entry.ws.send(encodeInputFrame('\x1b[200~' + withOrders + '\x1b[201~'));
+                    // Attributed here too, and it must not be dropped as "the operator
+                    // has not sent it yet". The paste detector cannot pick this delivery
+                    // up: this branch writes over the raw input WebSocket, and
+                    // term.onData only fires for input typed or pasted INTO xterm — so
+                    // an unattributed shift-drop stays permanently dark (no activity
+                    // light, no plan strip, no liveness — recordLiveness only touches
+                    // rows with a dispatched_terminal, KanbanDatabase.ts:9995).
+                    // ws.send() returns void, so the readyState guard above is the only
+                    // success signal available; do not invent an ack protocol for it.
+                    // Attribution is therefore early by the seconds the operator spends
+                    // reviewing, and it self-corrects the moment output starts
+                    // (recordLiveness nulls blocked_at). An abandoned shift-drop reads
+                    // as "Waiting on you", which is what it is.
                     attributeDropDispatch(targetName, ids, workspaceRoot);
                 } else {
                     // Normal drop: use the server-side ptySendPrompt verb, which handles
@@ -4596,19 +4636,28 @@
             syncDispatchChip(paneEl, titleEl, dispatchInFlight.has(assignedName));
             syncInputStateChip(paneEl, titleEl, state);
 
+            // Guarded like the empty-slot and kanban-mode branches: this runs inside
+            // the grid reconcile, so a null here would throw out of renderPaneGrid and
+            // strand every pane, not just this one.
             const planEl = paneEl.querySelector('.pane-plan-title');
             const planTitle = ((fleetItem && fleetItem.planTitle) || '').trim();
-            if (planTitle) {
+            if (planEl && planTitle) {
                 planEl.textContent = planTitle;
                 planEl.title = planTitle;
                 planEl.style.display = '';
-            } else {
+            } else if (planEl) {
                 planEl.textContent = '';
                 planEl.removeAttribute('title');
                 planEl.style.display = 'none';
             }
         } else {
             titleEl.textContent = `Pane ${index + 1} (Empty)`;
+            // Setting textContent wipes the chip ELEMENT, but the class lives on the pane
+            // and only syncDispatchChip clears it. Panes are reused, so a pane unassigned
+            // mid-dispatch would carry .is-dispatching until something reassigned it —
+            // inert today (no CSS keys off it) and self-healing on the next assignment,
+            // but it is a class asserting a dispatch that is no longer this pane's.
+            paneEl.classList.remove('is-dispatching');
             const planEl = paneEl.querySelector('.pane-plan-title');
             if (planEl) {
                 planEl.textContent = '';
@@ -8107,8 +8156,24 @@
             .replace(/\{parent\}/g, parentName || 'this terminal');
     }
 
-    /** Build the preset options once. The option text is static, so there is no
-     *  reason to rebuild this on a parent/child change. */
+    /**
+     * Build the preset options once. The option text is static, so there is no
+     * reason to rebuild this on a parent/child change.
+     *
+     * EVERY preset is offered, `reports-to-head` included, and the persisted-id
+     * validation in loadLayoutSettings() checks the same whole list — the two
+     * must stay in step, or a saved id the dropdown never builds makes
+     * `presetSel.value = linkPreset` a silent no-op (blank dropdown, empty box,
+     * dead SEND). If a preset is ever filtered out here, filter the validation
+     * with the same predicate.
+     *
+     * Known asymmetry, deliberately left: `reports-to-head` carries
+     * `direction: 'member-receives'` (installed ON the member ABOUT the head),
+     * but this modal always writes {parent, child} as chosen in the two selects.
+     * `direction` is honoured by wireSpawnedTeam on the spawn path, not here.
+     * Owned by feature_plan_20260812171500_link-up-presets-fire-through-relay-
+     * not-standing-orders.md, which flags it and keeps the entry.
+     */
     function buildPresetOptions() {
         const sel = document.getElementById('link-preset');
         if (!sel) { return; }
@@ -8257,6 +8322,12 @@
         if (standingOpt) { standingOpt.disabled = !standingOrdersAvailable; }
         if (!standingOrdersAvailable && sel.value === 'standing') {
             sel.value = 'instant';
+            // sendLinkMessage branches on the VARIABLE, not the select. Leaving
+            // linkMode === 'standing' here sends a "SAVE" to a store the gate just
+            // declared unreachable, under a dropdown reading "Instant".
+            // Deliberately NOT persisted: the operator's stored preference should
+            // survive a context that merely happens to lack the store.
+            linkMode = 'instant';
         }
     }
 
@@ -8300,24 +8371,34 @@
         const presetSel = document.getElementById('link-preset');
         if (!modal || !parentSel || !childSel || !modeSel || !messageEl || !presetSel) { return; }
 
+        // Everything up to `modal.hidden = false` is SYNCHRONOUS: the modal must
+        // appear on the frame the operator clicked LINK UP. A modal that waits on
+        // a fetch first looks like a dead button, and the second click queues a
+        // second open. The persisted preset is already resolved (loadLayoutSettings),
+        // so nothing in the send-ready path needs the network.
         fillTerminalSelect(parentSel, live, defaultLinkParent());
-        syncChildOptions();
-
-        // Fetch the management list and gate the standing-orders mode if the store
-        // is not reachable (e.g. solo popout, headless, or no DB).
-        await fetchStandingOrders();
-        modeSel.value = linkMode;
-        syncModeAvailability(modeSel);
-        renderStandingList();
-
         presetDirty = false;
+        // BEFORE syncChildOptions(): its tail call to applyPresetToMessage(false)
+        // resolves against whatever the select currently holds, which on the first
+        // open is the first option rather than the persisted preset.
         presetSel.value = linkPreset; // options already exist — built once in wireLinkModal
+        syncChildOptions();
         applyPresetToMessage(true);  // fills the box; SEND is live on open
-        syncSendEnabled();
+        modeSel.value = linkMode;
         setLinkError(null);
 
         modal.hidden = false;
         presetSel.focus();           // the preset is now the primary control; Tab reaches the box
+
+        // Only the standing-orders list and its mode gate need the store, and
+        // neither is on the send-ready path — they render into an already-visible
+        // modal. Gated off when the store is not reachable (solo popout, headless,
+        // or no DB).
+        await fetchStandingOrders();
+        syncModeAvailability(modeSel);
+        renderStandingList();
+        syncSendEnabled();           // syncModeAvailability may have forced the mode
+                                     // back to instant; the button label follows it
     }
 
     /**

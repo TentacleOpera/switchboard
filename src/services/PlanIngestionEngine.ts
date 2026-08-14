@@ -24,6 +24,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { KanbanDatabase, type KanbanPlanRecord } from './KanbanDatabase';
+import { matchWorktreePath } from './worktreeResolver';
 import { appendFeatureClobberDiag } from './featureClobberDiag';
 import { parsePlanMetadata, extractClickUpTaskId, extractLinearIssueId } from './planMetadataUtils';
 import { isRuntimeMirrorPlanFile } from './PlanFileImporter';
@@ -308,11 +309,17 @@ export class PlanIngestionEngine {
                         // Active AND recently produced output → stamp its heartbeat
                         // so the widened age basis keeps its card lit past timeout.
                         liveNames.push(entry.friendlyName);
-                    } else if (nowMs - entry.lastDataAt >= turnEndSilenceMs) {
+                    } else if (entry.lastDataAt > 0 && nowMs - entry.lastDataAt >= turnEndSilenceMs) {
                         // Active but quiet longer than the turn-end threshold: the
                         // strongest CLI-agnostic signal that a turn boundary may
                         // have been reached. The branch is terminal — no seat can
                         // be both heartbeat-stamped and silence-tested on one tick.
+                        // `lastDataAt > 0` is load-bearing, not defensive: the
+                        // liveness read coerces a missing timestamp to 0 (a ptyHost
+                        // child predating the `liveness` key), and 0 reads as
+                        // "silent since the epoch" — which would blocked-stamp every
+                        // dispatched card on the first tick under version skew. No
+                        // timestamp is NO EVIDENCE, so it falls to the blind timer.
                         silentTerminals.push(entry.friendlyName);
                     }
                 }
@@ -343,16 +350,40 @@ export class PlanIngestionEngine {
                                 for (const terminalName of silentTerminals) {
                                     const record = await db.getActiveDispatchedByTerminal(wsId, terminalName);
                                     if (!record || !record.planFile || !record.dispatchedAt) continue;
-                                    const wtRow = worktrees.find(w => w.id === record.worktreeId);
-                                    const planRoot = wtRow ? wtRow.path : folder;
+                                    const dispatchedMs = Date.parse(record.dispatchedAt);
+                                    // An unparseable stamp is no evidence either way.
+                                    // Skipping beats stamping blocked off a NaN compare.
+                                    if (!Number.isFinite(dispatchedMs)) continue;
+                                    // Candidate roots for the copy the agent actually wrote.
+                                    // `plans.worktree_id` is V26-era vestigial — no live path
+                                    // writes it (repo-wide the only write is `worktree_id =
+                                    // excluded.worktree_id` in the upsert conflict clause, and
+                                    // every caller supplies a preserved value or null), so
+                                    // resolving the root from it ALONE collapses to the main
+                                    // repo and misreads every worktree completion as blocked.
+                                    // matchWorktreePath is the resolver the completion broadcast
+                                    // already uses (TaskViewerProvider/bootstrap). The watched
+                                    // folder stays in the list because a plan whose feature owns
+                                    // a worktree can still be dispatched in the main checkout —
+                                    // an advance at EITHER copy is the same completion evidence
+                                    // the plan watcher's own mtime clear acts on.
+                                    const planRoots: string[] = [];
+                                    const byId = worktrees.find(w => w.id === record.worktreeId);
+                                    if (byId?.path) planRoots.push(byId.path);
+                                    const resolvedWt = matchWorktreePath(worktrees, record);
+                                    if (resolvedWt && !planRoots.includes(resolvedWt)) planRoots.push(resolvedWt);
+                                    if (!planRoots.includes(folder)) planRoots.push(folder);
                                     let completed = false;
-                                    try {
-                                        const stat = await fs.promises.stat(path.join(planRoot, record.planFile));
-                                        completed = stat.mtimeMs > Date.parse(record.dispatchedAt);
-                                    } catch (statErr) {
-                                        // Missing or unreadable plan file is no
-                                        // evidence of completion → conservative
-                                        // blocked. No need to log each file access.
+                                    for (const planRoot of planRoots) {
+                                        try {
+                                            const stat = await fs.promises.stat(path.join(planRoot, record.planFile));
+                                            if (stat.mtimeMs > dispatchedMs) { completed = true; break; }
+                                        } catch (statErr) {
+                                            // Missing or unreadable plan file at this root is no
+                                            // evidence of completion → try the next root, and if
+                                            // none advance, fall through to the conservative
+                                            // blocked arm. No need to log each file access.
+                                        }
                                     }
                                     if (completed) {
                                         const transitioned = await db.clearWorkingState(record.planFile, wsId);

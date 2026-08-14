@@ -1,41 +1,51 @@
-# External Orchestration — Governance, Brakes and Controls in Connections
+# Remove the Instruction-Inbox / Standing-Jobs / Declared-Moves Subsystem Entirely
 
 ## Goal
 
-Gate and govern the declared-move channel so an external surface (Gemini Spark, Claude Cowork, or anything else that can write into the workspace) can act as an orchestrator over the local fleet **only when explicitly permitted, within a declared scope, and subject to the same stop controls as local automation** — with the controls living in Connections, not the Automation tab.
+Delete the instruction-inbox, standing-jobs and declared-board-moves subsystem from the codebase, the database schema, the Connections panel and the generated Spark context — completely enough that grepping the repository for it returns nothing.
 
-### Problem & background
+It is unreachable dead code: the only function that creates its directories has **no production callers**, so the subsystem has never run on any install. But it is extensively *described* — in Spark's generated context, in a Connections sub-tab, in three DB tables and in a passing test file — and that description is what matters. Every piece of residue is evidence to a future agent (or user) that Switchboard has an inbox system, and they will build on it. The removal has to leave nothing to reason from.
 
-**The mechanism is already live in `src/`; nothing governs it.** The declared-intent path is implemented and ungated today: an external agent writes a moves file to `.switchboard/instructions/moves/`, Switchboard watches the directory (`KanbanProvider.ts:819-828`, `fs.watch` with a 150ms settle), validates each line, and applies legal moves **through the same `moveCardToColumn` path a human click uses** — the apply function is `processDeclaredMoves` (`ScheduledJobsService.ts:144`), called on every workspace scan (`KanbanProvider.ts:815`) and on every moves-file write (`:824`). Outcomes are filed in the `board_move_requests` table (`KanbanDatabase.ts:222`). A `pipeline-manager` standing job (`ScheduledJobsService.ts:408`) is seeded whose entire work product is column transitions. This was committed 2026-08-05 (commits `4505876a`, `1c7de0f6`).
+### Why this is a deletion and not a fix
 
-> **Superseded:** "The mechanism is being built; nothing governs it… the sibling plan now owns the full declared-intent path… the gate must land with it or before it."
-> **Reason:** Stale briefing. The apply watcher and `processDeclaredMoves` are already committed in `src/` and run on every workspace with a moves directory. The gate is therefore a **remediation of live, ungated code**, not a concurrent landing with a mechanism still on paper. Treating it as future-tense misleads the coder into thinking there is sequencing slack there is not.
-> **Replaced with:** The channel is live and ungated **now**. This plan remediates it: the gate, scope, caps, and brake must land against the existing `processDeclaredMoves` apply path, and until they do, any process that can write a file into `.switchboard/instructions/moves/` dispatches coding agents with no toggle, no scope limit, and no brake coverage.
+> **Superseded:** every prior version of this plan — first "gate the declared-move channel with a default-OFF toggle, column scope, rate caps, a held-move queue and controls in Connections", then "gate on move provenance so both the file channel and `POST /kanban/move` are covered", then "retire the file channel and point its consumer at the HTTP API".
+> **Reason:** all three were built on the premise that the declared-move channel is **live and dispatching coding agents right now**. Investigation on 2026-08-14 disproved it. `bootstrapInstructionsDirectory()` (`ScheduledJobsService.ts:42`) is the only code that creates `.switchboard/instructions/{inbox,claimed,standing,moves,applied}` and seeds the standing jobs, and its only callers are in `src/test/scheduled-jobs-and-connections.test.js` — eight call sites, all tests. `writeInstruction()` is the same. No production path invokes either.
+>
+> Everything downstream is guarded on a directory that is therefore never created: the moves watcher is inside `if (fs.existsSync(movesDir))` (`KanbanProvider.ts:891`), and `ingestJobActivity` returns early when the inbox is missing. Verified on the author's own install: **`.switchboard/instructions/` does not exist**, and `job_instructions`, `job_runs` and `board_move_requests` all hold **0 rows**.
+>
+> So there was never an ungated channel to gate. A user would have to hand-create `.switchboard/instructions/moves/` before a single line of that machinery could execute. Every urgency claim in the previous versions — including the ones added during review — was wrong.
+> **Replaced with:** delete the subsystem. There is no behaviour to preserve, no migration to write, and no consumer to migrate.
 
-That is the right mechanism and this plan does not relitigate it. But in Switchboard **a column move is a dispatch** — `moveCardToColumn` auto-dispatches the destination column's agent (`KanbanProvider.ts:8024+`, the same path `RemoteControlService._applyStateMirror` → `onColumnMove` → `{dispatched}` uses for Notion at `RemoteControlService.ts:623-663`). So the declared-move channel is, by construction, a remote agent-dispatch channel. Four things follow that the mechanism does not cover:
+### The actual problem: it is described far more thoroughly than it is implemented
 
-**Root cause 1 — the capability is default-ON by existence.** Once the apply watcher runs, *any* process that can write a file into `.switchboard/instructions/moves/` can dispatch coding agents. There is no toggle. That contradicts PRD contract #2 ("new capabilities ship default-OFF") for the highest-privilege capability in the feature, and it means the gate is "did the user happen to install a version with the watcher", not a decision anyone made.
+**1. Spark is taught the whole protocol as though it were live.** `SparkContextExporter.ts:209-238` writes a `## Scheduled Jobs & Instruction Inbox Protocol` section into the uploadable context: one-shot task instructions in `.switchboard/instructions/inbox/`, claim markers at `inbox/claimed/<file>.claim` with `claimed_ts` + `agent`, a **24-hour claim lease** after which an item is `stuck` and retryable, a `result:` line written on completion, standing-job definitions with `schedule:` frontmatter that "Switchboard uses to decide cadence", a `run-log.md` whose last line is read as an **mtime cursor**, and the declared-board-moves file format. None of it is wired. The surface is instructed to claim work off a queue that nothing fills and nothing reads.
 
-**Root cause 2 — the brakes do not reach it.** `PipelineOrchestrator` holds `_running` and `_paused` (`:52`, persisted as `pipeline.paused` at `:279`), its tick bails on either (`:243`), and the user reaches them through `pipelineStart` / `pipelineStop` / `pipelinePause` / `pipelineUnpause` (`TaskViewerProvider.ts:12714-12729`). The declared-move apply path is orthogonal to all of it. So a user who hits **Stop** because agents are misbehaving stops local advancement while an external orchestrator keeps declaring moves that keep dispatching. The one control they will reach for does not cover the new path, and it will look like Stop is broken.
+This also contradicts the same file four separate times — `:199` (*"Do not claim to have moved a card"*), `:205`, `:252` and `:256` all state that writing a plan file is the **only** permitted side effect.
 
-> **Note — pipeline verbs exist only in the extension host.** `PipelineOrchestrator` is constructed in exactly one place: `TaskViewerProvider.ts:760`. The standalone host (`src/standalone/`) does **not** construct one and exposes no pipeline verbs. This is load-bearing for the brake design in change 3: a brake that reads pipeline state must not assume a pipeline exists, or it silently bricks declared moves in `npx switchboard` (the host this project exists to build — PRD "two hosts, one engine").
+**2. The Connections Jobs sub-tab presents it as a running feature.** `connections.html:461-488`:
+* *"Standing background jobs scan the instruction inbox `.switchboard/instructions/` and apply declared board moves."* — describes a system with no entry point.
+* A "Standing Job Definitions" list naming `memo-to-plans.md`, `nightly-code-review.md` and `research-unknowns.md`. Those names are real — `seedDefaultStandingJobs` (`ScheduledJobsService.ts:374-428`) writes those three plus `notes-to-plans.md` — but the seeder is only reachable from the uncalled bootstrap, so none of the files is ever created.
+* A "Recent Job Activity" panel whose `#jobs-list` div has **no JavaScript wiring whatsoever** in `connections.js` (the only handler in that card is `regenerateSparkContext` at `:355`). It is a hardcoded string that can never change, backed by tables with no reader.
 
-**Root cause 3 — no scope or rate limit.** A moves file with two hundred valid lines dispatches two hundred agents. Every line is individually legal; the aggregate is not something anyone intended. There is also no restriction on *which* columns an external party may move into — the channel that advances a plan to a review column can equally advance it to a coding column, or to COMPLETED.
+This is a PRD contract #6 violation — a panel describing capability the host has not wired — and it is the single most persuasive piece of residue.
 
-**Not a root cause: coexistence with the local orchestrator persona.** `switchboard-orchestrator` also moves cards, but it is a different class of thing — a heavyweight unattended batch manager doing grouping, worktree dispatch and merge-back — and a user runs one or the other, not both. No arbitration mechanism is specified here. If the two ever do overlap, Switchboard remains the only executor of declared moves, so the DB stays consistent; the failure mode would be duplicate dispatch, which the caps in change 2 already bound.
+**3. Three DB tables exist with writers and no readers.** `job_runs` (`KanbanDatabase.ts:247`), `job_instructions` (`:254`) and `board_move_requests` (`:262`). Their only writers — `recordJobRun` (`:3974`), `upsertJobInstruction` (`:4008`), `recordBoardMoveRequest` (`:3994`) — are called only from `ingestJobActivity` and `processDeclaredMoves`, both of which are being deleted. Nothing anywhere reads any of the three.
 
-**Why Connections and not the Automation tab.** These are two different questions that look similar. The Automation tab governs **how the local engine runs** — tick interval, drain versus watch, starting and stopping our own fleet. This plan governs **what an outside party is permitted to do to that engine**: whether it may act at all, which columns it may reach, how much it may do per cycle. That is a privilege attached to a *connection* — closer to an OAuth scope than to an engine setting. Filing "who may drive this machine" under "how fast the machine runs" puts the trust decision in the operations panel and hides it from the panel that exists to describe external surfaces.
+**4. A test file keeps all of it compiling and green.** `src/test/scheduled-jobs-and-connections.test.js` exercises the subsystem directly, which is why it has survived: it looks maintained.
 
-The practical test: a user auditing what Spark is allowed to do should find the answer next to where they connected Spark. Under Automation they would have to already know the capability exists to go looking for it — which is the exact discoverability failure the Connections panel was created to fix.
+### What this is not
 
-**Scope boundary.** This plan adds no new command types. It does **not** introduce direct terminal prompts from an external orchestrator: a declared move is checkable (planId exists, column exists, transition legal), whereas a free-text prompt into `ptySendPrompt` has no schema against which "is this legal" can be answered. Moves already give an external orchestrator real dispatch power inside a validated envelope; raw prompt injection from an unattended process gives that property up for a capability moves largely cover. If it is ever wanted it is a separate plan with its own safety case.
+**The orchestrator's inbox is a different thing and is NOT touched.** `.switchboard/orchestrator/inbox/`, `POST /orchestrator/request` (`LocalApiServer.ts:3999`), `GET /orchestrator/inbox` (`:4029`) and `_handleOrchestratorInboxRequest` (`TaskViewerProvider.ts:4962`) are the orchestrator persona's **upward request channel** — fleet agents inside worktrees filing questions to their orchestrator, drained by the persona on wake (`switchboard-orchestrator/SKILL.md:50`). It is wired, coherent, and out of scope. The two systems share only the word "inbox", and conflating them during this removal is the main hazard.
+
+Also untouched: the board-state export (`kanban-state-<column>.md`, `setBoardStateExport`), the Spark context exporter itself and its Connections button, and the memo system.
 
 ---
 
 ## Metadata
-**Complexity:** 6
-**Tags:** security, backend, ui, reliability, infrastructure
-**Project:** browser-switchboard
+
+**Complexity:** 3
+**Tags:** refactor, backend, ui, docs, database
+**Project:** Browser Switchboard
 
 ---
 
@@ -43,149 +53,204 @@ The practical test: a user auditing what Spark is allowed to do should find the 
 
 **None.** Three decisions made here:
 
-* **Default OFF.** External orchestration is disabled until the user turns it on. A fresh install with the watcher compiled in grants nothing. The gate is **channel-level (per workspace)**, not per-connection: there is no authorship verification for moves files (anything that can write into the workspace can write one — see Security), so the toggle authorises *the channel*, and the panel copy must say so rather than implying per-surface control.
-* **Stop means stop, globally.** The existing pipeline stop/pause controls hold declared moves that would dispatch. One brake, both paths — not a second stop button the user has to learn about.
-* **No new command vocabulary.** Column moves only. See the scope boundary above.
+* **Total removal, not deprecation.** No compatibility shim, no feature flag, no "retired" stub. The acceptance test is that the greps in Verification return nothing.
+* **No tombstone comments.** A comment reading *"the instruction inbox was removed in favour of X"* is itself residue — it tells a future agent the concept existed and invites its reconstruction. Delete the code and let git history hold the record. This is the one instruction most likely to be violated by a well-meaning implementer.
+* **The three DB tables are dropped, not orphaned.** They landed 2026-08-05 (`4505876a`) in unreleased dev work — the marketplace VSIX is 1.5.9 from March 2026 — so no released version has them and this is a clean break. Leaving them in place would leave `job_instructions` and `board_move_requests` visible to anyone reading the schema, which is exactly the residue this plan exists to eliminate.
 
 ---
 
 ## Complexity Audit
-* **Score:** 6 / 10
+
+* **Score:** 3 / 10
 
 ### Routine
-* A persisted boolean and a small scope config in the Kanban DB config table.
-* A gate check at the top of the apply path.
-* A controls section in an existing panel.
+
+* Deleting one whole file, one test file, three table definitions, three writer methods, two UI cards and one generated-context section.
+* Removing an import and two call sites.
 
 ### Complex / Risky
-* **This is a privilege boundary, so failure modes are asymmetric.** A gate that fails open silently grants remote dispatch; a gate that fails closed merely stops work. Every ambiguous case must resolve to closed.
-* **Brake integration crosses two subsystems** that currently know nothing about each other — `PipelineOrchestrator`'s in-memory `_running`/`_paused` and the file-driven apply watcher. Reading pipeline state from the apply path introduces a coupling that must not become a circular dependency or a startup-order hazard — and must be **host-aware**, because the standalone host has no pipeline at all (see change 3).
-* **Held-versus-dropped is a data-loss decision.** A move arriving while the pipeline is stopped must not vanish, and must not silently flood in on unpause. Both failure directions are bad and the middle needs designing.
-* **Remediation, not greenfield.** The apply path is already live in `src/` and ungated. The gate lands against running code, so there is a current (not future) window in which the capability is ungated; the brake rule must also avoid regressing the standalone host while fixing the extension host.
+
+* **Conflating the two inboxes.** `.switchboard/orchestrator/inbox/` must survive untouched. A grep-and-delete on the word "inbox" destroys a working subsystem. Every deletion must be checked against the explicit keep-list.
+* **Residue is the whole point, so a partial removal fails the plan's purpose** even if it compiles. A leftover table, a leftover doc line, or a helpful tombstone comment reconstitutes the belief this plan exists to remove.
+* **The Jobs sub-tab is not deleted wholesale** — it also hosts the Spark Context Exporter button, which is real and wired. Only the jobs fiction comes out.
 
 ---
 
 ## Edge-Case & Dependency Audit
 
 ### Race Conditions
-* **Enable flipped off mid-apply.** A moves file part-applied when the user disables must stop cleanly at a line boundary, record which lines applied and which were abandoned, and not re-apply the applied ones on re-enable.
-* **Stop pressed during an apply cycle.** Same requirement: finish or abandon at a line boundary, never mid-move.
-* **Unpause thundering herd.** Moves accumulated while paused must not all apply at once on unpause — that is precisely the runaway the user pressed pause to avoid. Drain them through the same per-cycle cap as fresh moves.
+
+* None introduced. The removal *eliminates* the only concurrency hazard here — two `fs.watch` events 200ms apart starting overlapping `processDeclaredMoves` runs over the same directory (`KanbanProvider.ts:892-896`), which was safe only because the `fs.rename` into `applied/` happens to be atomic.
 
 ### Security
-* **This is the security surface of the whole feature.** Everything else in Connections is prompts and files; this one starts agents that execute code and modify the repo. Treat the gate as a privilege boundary: default closed, explicit to open, visible while open, and instantly revocable.
-* **Writer authentication is not available and must not be pretended.** Anything that can write into the workspace can write a moves file — a stray script, another agent, a synced folder. The gate is the only meaningful control; there is no way to verify *which* external surface authored a file. State this honestly in the panel copy rather than implying per-surface authorisation. Column-scope limits exist precisely because authorship cannot be verified.
-* **Scope limits are the blast-radius control.** Allow-listing target columns means a compromised or confused writer can advance work through review stages but cannot, say, mark everything COMPLETED or dispatch the entire backlog.
+
+* Not a security change and must not be described as one. The subsystem never ran. Removing it narrows the surface incidentally.
 
 ### Side Effects
-* An enabled external orchestrator causes agent runs that spend real quota and change the repo, with nobody watching. The panel must show this is on, not bury it in a settings list.
-* Held moves accumulate while stopped. Bound the queue and surface the depth; an unbounded hold is a delayed flood.
+
+* None user-visible. Nothing has ever executed, no rows exist, and no directory is created.
+* Users who hand-created `.switchboard/instructions/` for experimentation keep their files; they simply stop being read (see change 1 edge cases).
 
 ### Dependencies & Conflicts
-* **Sibling plan — Scheduled External-Agent Jobs.** Owns the moves file format, the apply watcher, `moves/applied/`, and the `board_move_requests` table (now implemented in `src/`). This plan owns the gate, the scope config, the brake integration, and the controls UI. **This plan adds a `held` status value to that table; it does not redefine it** (the schema is `status TEXT NOT NULL DEFAULT 'applied'` — free-text, so `held` is a new value, no migration). The watcher is already in `src/`, so the gate is a remediation landing against live code, not a concurrent ship.
-* **`PipelineOrchestrator`** — `src/services/PipelineOrchestrator.ts:52` (`_paused`), `:98-119` (`stop`/`pause`/`unpause`), `:132-141` (`getState`), `:243` (tick guard), `:279` (persistence). Read state via `getState()` (or a host-aware accessor wrapping it); do not fork a second notion of running. **Constructed only at `TaskViewerProvider.ts:760` — absent in the standalone host.**
-* **Pipeline verbs** — `TaskViewerProvider.ts:12714-12729` (`pipelineStart`/`pipelineStop`/`pipelinePause`/`pipelineUnpause`). Extension-host only.
-* **Connections panel** — the controls land in its Jobs sub-tab (or an Orchestration section within it). Buildable headless-first; the gate must work with no UI at all.
-* Config storage — the Kanban DB `config` table (`KanbanDatabase.ts:167`), which is the blessed home for multi-process state.
+
+* **`src/services/ScheduledJobsService.ts`** — 443 lines, and **every export belongs to this subsystem**: `InstructionRequest`, `InstructionWriteResult`, `bootstrapInstructionsDirectory`, `writeInstruction`, `isInboxItemClaimed`, `claimInboxItem`, `getLastRunCursor`, `MoveDirective`, `processDeclaredMoves`, `ingestJobActivity`, plus the module-private `canonColumnRef`, `BUILTIN_COLUMN_REFS`, `LEGACY_PIPELINE_MANAGER_BODY`, `seedDefaultStandingJobs` and `retireLegacyPipelineManager`. Nothing in the file survives, so the file is deleted rather than edited.
+* **`src/services/KanbanProvider.ts`** — the import at `:42`, the `processDeclaredMoves` / `ingestJobActivity` calls at `:886-887`, the `fs.watch` block at `:888-899`, and the `_movesFsWatchers` field with its disposal.
+* **`src/services/KanbanDatabase.ts`** — `job_runs` (`:247`), `job_instructions` (`:254`) and `board_move_requests` (`:262`) DDL in `SCHEMA_TABLES_SQL`; `recordJobRun` (`:3974`), `recordBoardMoveRequest` (`:3994`), `upsertJobInstruction` (`:4008`); plus any index entries for those tables in `SCHEMA_INDEX_STATEMENTS`.
+* **`src/services/SparkContextExporter.ts`** — the section at `:209-238`, its `sections.push('scheduled-jobs-protocol')`, the moves bullet at `:250`, and the comment at `:112` referencing `bootstrapInstructionsDirectory`.
+* **`src/webview/connections.html`** — the two jobs cards at `:461-475` and the "Recent Job Activity" block at `:485-488`. **Keep** the "Uploadable AI Surface Context" block (`:478-483`).
+* **`src/test/scheduled-jobs-and-connections.test.js`** — covers both this subsystem and Connections; split before deleting (see change 6).
+* **Control-plane docs** — already clean. Grepping `.agents/` and `.claude/` for `instructions/inbox`, `instructions/standing`, `instructions/moves`, `standing job`, `claim marker` and `run-log` returns **nothing**. No skill or workflow teaches this protocol; only the generated Spark context does.
 
 ---
 
 ## Dependencies
-* The apply watcher is **already in `src/`** (`processDeclaredMoves`, `KanbanProvider.ts:815/824`; `ScheduledJobsService.ts:144`), so this plan is a remediation on live code, not a prerequisite gate. The gate/scope/brake must land against that existing path; there is no "ship after the watcher" option — the watcher is already shipping from `src/`.
-* **Standalone host** (`src/standalone/bootstrap.ts`) — the brake integration must tolerate the absence of `PipelineOrchestrator` here (see change 3). If the standalone host later gains a pipeline, the `noPipelineInHost` branch naturally retires.
+
+* No session dependencies; lands against HEAD.
+* **Sibling subtask (`DELETE /kanban/plans` parity)** — no shared file. That subtask edits `LocalApiServer.ts`, both hosts' option bags, and two files under `.agents/skills/`; this plan touches none of them. The two can land in any order.
 
 ---
 
 ## Adversarial Synthesis
 
-Key risks: (1) **the channel is live and ungated now** — `processDeclaredMoves` runs on scan and on `fs.watch` with no gate, so until this plan lands any process that can write a file into `instructions/moves/` dispatches coding agents (present-tense remediation, not a future release window); (2) **Stop that does not stop** — the pipeline brakes are orthogonal to the file-driven apply path, so a user halting misbehaving agents watches an external orchestrator keep dispatching, and concludes the stop button is broken; (3) **the brake bricks the standalone host** — `PipelineOrchestrator` is built only in the extension host, so an unconditional "absent → held" rule permanently holds every dispatching move in `npx switchboard` while the toggle reads "on" (PRD contract #6 dead-button failure); (4) **held-move mishandling** — dropping queued moves loses work, releasing them all at once on unpause reproduces the runaway the pause existed to prevent; (5) **unverifiable authorship** — nothing can confirm which surface wrote a moves file, so per-surface/per-connection trust is an illusion and column-scope limits are the only real blast-radius control. Mitigations: land the gate/scope/brake against the existing apply path and default closed, resolving every ambiguous case to closed; read `_running`/`_paused` via a host-aware accessor that returns `noPipelineInHost` for the standalone host (gate + caps govern, do not hold) and `absentTransient` only for extension-host early startup; bound the hold queue, surface its depth, and drain it through the same per-cycle cap as fresh moves; state plainly in the panel that the gate authorises *the channel* (per workspace), not a particular vendor or connection.
+Key risks: (1) **deleting the wrong inbox** — `.switchboard/orchestrator/inbox/` and its `POST /orchestrator/request` / `GET /orchestrator/inbox` endpoints are a live, coherent upward-request channel for the orchestrator persona and share only a word with the subsystem being removed; (2) **partial removal**, which compiles and passes review while leaving a table, a UI string or a doc line from which a future agent reconstructs the whole concept — the failure this plan exists to prevent; (3) **a tombstone comment**, the most likely well-intentioned violation, which preserves the idea in the exact place someone will read it; (4) **deleting the Jobs sub-tab wholesale** and taking the working Spark Context Exporter button with it; (5) **deleting a user's hand-created files** while removing the code that read them. Mitigations: work from the explicit keep-list in change 7; make the greps in Verification the acceptance criterion rather than compilation; forbid tombstones in the plan text and check for them in review; remove only the two jobs cards from the Jobs tab; never touch anything under `.switchboard/` on a user's disk.
 
 ---
 
 ## Proposed Changes
 
-**Build order:** (1) gate → (2) scope + caps → (3) brake integration → (4) controls UI. Steps 1-3 are the safety story and are worth landing before the UI.
+**Build order:** (1) source → (2) schema → (3) generated context → (4) UI → (5) drop tables → (6) tests → (7) residue sweep. The sweep is the acceptance gate, not a formality.
 
-### 1. The gate — default closed
+### 1. Delete `src/services/ScheduledJobsService.ts` and its call sites
 
-**Implementation:** a persisted flag in the Kanban DB config table (`connections.externalOrchestration.enabled`, default `false`). The apply path checks it **first**, before parsing a moves file. Disabled means files are left in place untouched, not deleted and not marked — re-enabling processes what accumulated, subject to the caps below.
+**Implementation:**
+* `git rm src/services/ScheduledJobsService.ts`. Every export in its 443 lines belongs to this subsystem; there is nothing to salvage.
+* In `src/services/KanbanProvider.ts`: remove the import at `:42`; remove the `await processDeclaredMoves(folder, this)` and `await ingestJobActivity(folder, db)` calls at `:886-887`; remove the entire `fs.watch` block at `:888-899`; remove the `_movesFsWatchers` field declaration and its disposal loop.
 
-**Logic:** leaving files in place makes disabled a true pause rather than a silent bin, and means a user who enables the feature after an agent has been writing for a week does not discover their instructions were discarded.
+**Logic:** the file has no production entry point, so removing it cannot change behaviour. The `setGlobalPlanWatcher` initial-scan loop keeps its plan-scan and complexity-backfill work — only the two job calls and the watcher block come out.
 
-**Edge cases:** a missing or unreadable config value resolves to **disabled**. Every ambiguous read fails closed — this is the asymmetric-failure rule and it applies to the config read as much as to the validation.
+**Edge cases:** **do not delete anything under a user's `.switchboard/instructions/`.** If the directory exists it simply stops being read. Do not add a startup log line announcing that it is now ignored — that is a tombstone (see change 7).
 
-### 2. Scope and caps
+### 2. Remove the three tables from the schema
 
-**Implementation:** stored alongside the flag:
-* `allowedTargetColumns: string[]` — target columns an external orchestrator may move *into*. Default to review/inspection columns, **not** coding columns; the user opts into dispatch-triggering targets deliberately.
-* `maxMovesPerFile: number` — a file exceeding it is rejected whole, logged, and left for the user, rather than half-applied.
-* `maxDispatchesPerHour: number` — a rolling cap across all applied moves that trigger a dispatch. On breach, subsequent dispatching moves are **held**, not dropped.
+**Implementation:** in `src/services/KanbanDatabase.ts`, delete the `job_runs` (`:247`), `job_instructions` (`:254`) and `board_move_requests` (`:262`) blocks from `SCHEMA_TABLES_SQL`, any matching entries in `SCHEMA_INDEX_STATEMENTS`, and the three writer methods `recordJobRun` (`:3974`), `recordBoardMoveRequest` (`:3994`) and `upsertJobInstruction` (`:4008`).
 
-**Logic:** the per-file cap catches a runaway generator; the hourly cap catches a slow leak that no single file reveals. They fail differently and both are needed.
+**Logic:** with `ScheduledJobsService` gone the writers have no callers, and nothing has ever read the tables. Removing them from `SCHEMA_TABLES_SQL` means a fresh database never creates them.
 
-**Edge cases:** a move whose target is outside `allowedTargetColumns` is **skipped with a reason**, exactly like an invalid planId — a legal move the user has not authorised, not an error. Record it so the user can see what the orchestrator wanted and widen scope deliberately.
+**Edge cases:** do **not** edit any historical `MIGRATION_Vnn_SQL` body to retro-remove these tables — shipped migration SQL is immutable, and rewriting it corrupts the upgrade chain for existing installs. Removing the tables from the forward schema plus the drop migration in change 5 is the complete change.
 
-### 3. Brake integration — one stop, both paths
+### 3. Strip the protocol from the generated Spark context
 
-**Implementation:** the apply path reads `PipelineOrchestrator` state (`:135`) before applying. When `_running` is false or `_paused` is true:
-* moves whose target column **would trigger a dispatch** are **held** — recorded in `board_move_requests` with a new `held` status and left un-applied;
-* moves whose target column does **not** dispatch may still apply. Decide this per-column from the same routing config the board uses; do not hard-code a list.
+**Implementation:** in `src/services/SparkContextExporter.ts`:
+* Delete the entire `## Scheduled Jobs & Instruction Inbox Protocol` section (`:209-238`) — Inbox & Claim Markers, Standing Jobs, Declared Board Moves, Run Log — and its `sections.push('scheduled-jobs-protocol')`.
+* **Keep** the `### Kanban State Files` subsection describing `kanban-state-<column-slug>.md`; that export is a real, separately-wired feature. Relocate it under the write-back section so it survives the section deletion.
+* Delete the "What to do instead" bullet at `:250` (*"write a declared board-moves file… and let the user apply it"*), leaving the research-sub-agent and plan-file bullets.
+* Delete the comment at `:112` referencing `bootstrapInstructionsDirectory`.
+* **Keep the exclusion list at `:243-247` exactly as written**, including *"You cannot make HTTP calls to Switchboard's LocalApiServer"*, *"You cannot run… `curl`, `wget`, `node *.js`"*, *"You cannot directly move cards, change board columns, or mutate board state"* and *"You cannot dispatch a Switchboard coding, review, orchestrator or terminal agent."* This is the intended posture for that surface: a planning-and-research worker whose only side effect is a file written to `.switchboard/plans/`. Removing the protocol brings the rest of the document into agreement with what these lines and `:199` / `:205` / `:252` / `:256` already say.
 
-On unpause or start, drain held moves oldest-first through the normal caps.
+**Logic:** the surface's capabilities are defined by the file we generate for it. Removing the section removes the capability and resolves a four-times-repeated self-contradiction in the same document.
 
-**Logic:** the user's mental model is "Stop means no new agents start." Honouring that for the external path costs one state read and removes an entire class of "the stop button is broken" confusion. Letting non-dispatching moves through preserves bookkeeping progress while the fleet is halted, which is the actual intent of pausing.
+**Edge cases:** the context file is only rewritten on `regenerateSparkContext`, so an existing upload keeps the stale protocol until the user re-exports. Regenerate automatically on activation when the on-disk `.switchboard/switchboard-spark.md` still contains the `Scheduled Jobs & Instruction Inbox Protocol` heading, so a stale copy cannot outlive the code.
 
-**Edge cases:** read pipeline state through an accessor rather than reaching into private fields. The orchestrator may not be constructed yet during extension-host startup, and **in the standalone host (`npx switchboard`) no `PipelineOrchestrator` is ever constructed** (`src/standalone/` has none; it is built only at `TaskViewerProvider.ts:760`). The brake must distinguish these two cases:
+### 4. Remove the jobs fiction from the Connections panel
 
-> **Superseded:** "absent state resolves to held, not applied."
-> **Reason:** That rule is correct for the extension-host startup-order hazard (pipeline not yet built → transient → hold). Applied unconditionally it is a **permanent hold in the standalone host**, where no pipeline ever exists — every dispatching move would be held forever while the toggle reads "enabled," bricking the declared-move channel in the one host this project exists to build (PRD "two hosts, one engine"; contract #6 — no dead buttons). A green "held" count is not a substitute for the channel actually working.
-> **Replaced with:** a **host-aware brake rule**:
-> - **Pipeline exists and is constructed** → read `_running`/`_paused`; dispatching moves are held when stopped/paused, non-dispatching moves apply. (Extension host, steady state.)
-> - **Pipeline accessor exists but reports not-yet-constructed** (extension host, early startup) → hold dispatching moves (transient; drained once the pipeline is up). This preserves the original fail-safe intent.
-> - **No pipeline in this host** (standalone / `npx switchboard`) → the brake is **not applicable**: there is no local fleet pipeline to stop, so the dispatch decision falls back to the gate's enable flag and the caps alone. Do not hold.
->
-> Concretely: resolve the brake through a single accessor (e.g. `getPipelineDispatchState()` on the host/provider) that returns one of `{ running, paused, absentTransient, noPipelineInHost }`. Only `paused`, `!running`, and `absentTransient` hold dispatching moves; `noPipelineInHost` does not. This keeps the extension-host safety story intact and makes the standalone host's declared-move channel actually function — satisfying PRD contracts #6 (no dead buttons) and #7 (two-layer completion: the gate must work headless with no pipeline present).
+**Implementation:** in `src/webview/connections.html`, delete:
+* the `conn-card` at `:461-465` ("Scheduled External Jobs & Context Exporter" + the sentence about standing jobs scanning the instruction inbox) — retitle the remaining content rather than leaving the heading orphaned;
+* the "Standing Job Definitions" card at `:467-475`;
+* the "Recent Job Activity" block at `:485-488`, including the unwired `#jobs-list` div.
 
-### 4. Controls in Connections
+**Keep** the "Uploadable AI Surface Context" block at `:478-483` and its `btn-regenerate-spark-context` handler (`connections.js:355`) — that is a working feature. With the jobs content gone, the sub-tab holds only the context exporter; rename the tab from **Jobs** to **AI Surfaces** (or fold it into an adjacent sub-tab) rather than leaving a tab called "Jobs" that has no jobs in it.
 
-**Implementation:** in the Jobs sub-tab, an Orchestration section carrying:
-* the enable toggle, with the current state legible at a glance — this is a privilege that starts agents, so it should not look like a preference;
-* the scope config (allowed columns, caps);
-* a live list from `board_move_requests`: applied, skipped-with-reason, held-with-reason, and the hold-queue depth;
-* a kill switch that disables the gate and clears held moves in one action.
+**Logic:** a panel describing a subsystem the host has not wired is a PRD contract #6 violation, and this one is the most convincing residue in the product — it reads as a shipped feature.
 
-**Logic:** the audit list is what makes the gate trustworthy. A toggle with no visibility into what the channel has been doing is a checkbox the user cannot reason about.
+**Edge cases:** if the tab is renamed, update the `data-tab` / `data-tab-content` pair together (`:311` and the content div) — the shared tab script matches on those attributes, and changing one silently produces a tab that selects nothing.
 
-**Edge cases:** when external orchestration is enabled, surface it outside this panel too — a status indicator wherever the automation state is already shown. A privilege that only announces itself on the page where it was granted is one the user forgets is on. No confirm dialog on the toggle or the kill switch; both act immediately.
+### 5. Drop the tables from existing databases
+
+**Implementation:** add one new forward migration — a **new** `MIGRATION_Vnn_SQL` entry, never an edit to an existing one — containing `DROP TABLE IF EXISTS job_runs; DROP TABLE IF EXISTS job_instructions; DROP TABLE IF EXISTS board_move_requests;`.
+
+**Logic:** the tables landed 2026-08-05 (`4505876a`) in unreleased dev work; the marketplace VSIX is 1.5.9 (March 2026), so no released install has them and no user data can be lost. Dropping them is what makes the schema itself free of residue — a developer or agent running `.schema` should find no trace.
+
+**Edge cases:** `DROP TABLE IF EXISTS` is a no-op where the tables were never created, so the migration is safe on every database including fresh ones. Do not gate the drop on a row count; the tables are provably empty because their only writers were unreachable.
+
+### 6. Split and delete the test file
+
+**Implementation:** `src/test/scheduled-jobs-and-connections.test.js` covers both this subsystem and Connections. Move any assertions that genuinely test Connections behaviour into the appropriate Connections test file, then `git rm` the original. Do not leave a skipped or commented-out block.
+
+**Logic:** the test file is why the dead code looked maintained. Leaving even a `describe.skip` preserves the appearance of a real feature.
+
+### 7. Residue sweep — the acceptance gate
+
+**Implementation:** run the greps in Verification and confirm each returns nothing. Then check the diff for tombstones.
+
+**No tombstone comments.** Do not write *"the instruction inbox was removed"*, *"formerly used for standing jobs"*, *"declared moves are no longer supported"*, or a `@deprecated` marker anywhere — not in source, not in the Spark context, not in the Connections panel, not in a changelog line an agent will read as a feature list. A comment explaining what used to exist is the most efficient possible way to convince the next agent it should exist again. Git history is the record.
+
+**Explicit keep-list — do NOT delete any of these:**
+* `.switchboard/orchestrator/inbox/`, `POST /orchestrator/request`, `GET /orchestrator/inbox`, `_handleOrchestratorInboxRequest`, `last-wake-complete` — the orchestrator's upward request channel.
+* `.switchboard/kanban-state-<column>.md` export, `setBoardStateExport`, `setBoardStateExportRemoteUrl`.
+* `SparkContextExporter` itself and its Connections button.
+* The memo system (`.switchboard/memo.md`).
+* `POST /kanban/move`, `move-card.js`, `POST /kanban/orchestration/dispatch`.
 
 ---
 
 ## Verification Plan
 
-### Automated Tests
-Tests are skipped per session directive, and compilation is skipped per session directive. Target coverage for the coding pass:
-* Gate tests: disabled ⇒ no moves applied and files untouched; missing config ⇒ treated as disabled; unreadable config ⇒ treated as disabled.
-* Cap tests: a file over `maxMovesPerFile` applies **nothing**; the hourly cap holds rather than drops; held moves drain oldest-first under the cap.
-* Brake tests: pipeline stopped ⇒ dispatching moves held, non-dispatching moves applied; unpause drains without exceeding the cap; **extension-host early startup (accessor reports `absentTransient`) ⇒ dispatching moves held**; **standalone host (accessor reports `noPipelineInHost`) ⇒ dispatching moves apply under the gate + caps, NOT held** — this is the regression test for the standalone dead-button failure.
-* Scope test: a target outside `allowedTargetColumns` is skipped with a reason, not applied and not errored.
+Tests are skipped per session directive, and compilation is skipped per session directive. The greps below are the acceptance criteria.
+
+### Automated / mechanical checks
+
+Each of these must return **no results** across `src/`, `.agents/`, `.claude/` and `scripts/`:
+
+```
+grep -rn "instructions/inbox\|instructions/standing\|instructions/moves"
+grep -rn "ScheduledJobsService\|processDeclaredMoves\|ingestJobActivity"
+grep -rn "bootstrapInstructionsDirectory\|writeInstruction\|claimInboxItem\|isInboxItemClaimed\|getLastRunCursor"
+grep -rn "seedDefaultStandingJobs\|retireLegacyPipelineManager\|pipeline-manager"
+grep -rn "job_instructions\|job_runs\|board_move_requests"
+grep -rn "recordJobRun\|upsertJobInstruction\|recordBoardMoveRequest"
+grep -rn "claim marker\|claimed_ts\|standing job\|run-log"
+```
+
+These must still return results (the keep-list):
+
+```
+grep -rn "orchestrator/inbox"          # orchestrator upward channel — MUST survive
+grep -rn "last-wake-complete"          # orchestrator wake handshake — MUST survive
+grep -rn "kanban-state-"               # board-state export — MUST survive
+grep -rn "regenerateSparkContext"      # Spark exporter button — MUST survive
+```
+
+And a fresh database must contain none of the three tables, while an existing one has them dropped by the change-5 migration.
 
 ### Manual Verification
-1. **Fresh install grants nothing:** with the watcher present and the gate never touched, drop a valid moves file. Nothing applies; the file is still there.
-2. **Enable, then apply:** turn it on, drop the same file, confirm the move applies through the human-click path — mirror re-exports, board updates, feature recomputation fires.
-3. **Stop means stop (the headline check):** with external orchestration enabled and a `pipeline-manager` job running, press **Stop**. Confirm no new agents start, that dispatching moves show as *held* with the reason, and that the hold depth is visible.
-4. **Unpause is not a flood:** accumulate held moves, then unpause. They drain oldest-first under the cap, not all at once.
-5. **Scope refusal:** configure allowed columns to review-only, then declare a move into a coding column. Skipped with a reason, visible in the panel, no dispatch.
-6. **Per-file cap:** a file over the limit applies **zero** lines — not a partial prefix.
-7. **Kill switch:** with moves in flight and held, hit it. Applying stops at a line boundary, held moves clear, nothing is half-applied.
-8. **Visible while on:** with the gate enabled, confirm it is legible outside Connections wherever automation state is shown.
-9. **Honest copy:** the panel does not claim to authorise a specific vendor. It authorises the channel — anything that can write to the workspace can write a moves file, and the copy says so.
-10. **Plan import:** confirm the importer registers this plan on the board.
-11. **Standalone host parity (the PRD check):** under `npx switchboard` (no `PipelineOrchestrator`), enable the gate, drop a valid dispatching moves file. Confirm the move applies (not held) — the `noPipelineInHost` branch governs and the channel is usable in the standalone host, not bricked.
+
+1. **Nothing regressed in the plan watcher:** open a workspace, confirm plans still import, cards still appear, and the complexity backfill still runs — the `setGlobalPlanWatcher` loop keeps everything except the two removed job calls.
+2. **Regenerate the Spark context** and read it end to end. There is no inbox, no claim marker, no standing job, no run log, no board-moves section — and the exclusion list and Kanban State Files section are both intact.
+3. **Connections panel:** the sub-tab shows only the AI-surface context exporter, the button still regenerates, and no card mentions jobs or the instruction inbox.
+4. **Orchestrator still works:** start it from the AUTOMATION tab, confirm the kickoff prompt is delivered, and confirm `.switchboard/orchestrator/inbox/` is untouched.
+5. **Schema:** run `.schema` against a fresh DB and an upgraded one. Neither mentions `job_runs`, `job_instructions` or `board_move_requests`.
+6. **Tombstone check:** read the full diff. Any comment, string or doc line that explains what was removed is a defect — delete it.
 
 ---
 
 ## Recommendation
 
-Complexity 6 → **Send to Coder.** The apply watcher is already live and ungated in `src/` (`processDeclaredMoves`, `KanbanProvider.ts:815/824`), so this is a remediation of unreleased dev work, not a concurrent landing — land steps 1-3 (gate → scope + caps → host-aware brake) against the existing apply path before the next VSIX cut; until they land, the declared-move channel dispatches coding agents with no toggle, no scope, and no brake. The brake integration must be host-aware (the `noPipelineInHost` branch) or it bricks `npx switchboard` — the host this project exists to build.
+Complexity 3 → **Send to Intern.**
 
-**Migration:** none. The marketplace VSIX is 1.5.9 (shipped March 2026); the moves watcher first committed 2026-08-05 in unreleased dev work (`package.json` 1.7.13). No released version contains the ungated channel, so default-OFF gating is a **clean break** — no compat shim, no upgrade notice, no migration of prior `pipeline-manager` usage (there is none in the field).
+> **Superseded:** "Complexity 6 → Send to Coder", then "Complexity 7 → Send to Lead Coder", then "Complexity 4 → Send to Coder."
+> **Reason:** each earlier score priced a system that turned out never to have run. With the gate, scope, caps, provenance threading, brake integration and audit reader all removed, what remains is a bounded deletion with an explicit keep-list.
+> **Replaced with:** Complexity 3 → Intern.
+
+This is a deletion with a checklist. The two ways to get it wrong are both listed explicitly: deleting the **orchestrator's** inbox by mistake, and leaving a tombstone comment that reconstitutes the idea. Treat the residue greps as the definition of done — compilation proves nothing here, because the subsystem never ran in the first place.
+
+**Migration:** one new forward migration dropping three tables that no released version contains. No user data is affected; no files on disk are touched.
+
+---
+
+## Follow-up recorded, not planned here
+
+**The orchestrator may be partly superseded by agent teams.** Investigation on 2026-08-14 found that `_orchestrationDispatchFeature` (`TaskViewerProvider.ts:10068`) fans out a feature to **one shared worktree and one terminal** as a single batch (cap `maxConcurrentSubtasks`, default 5), while the newer agent-teams mechanism (`teamWiring.ts`, `agentGroupInstantiation.ts`, `terminals.agentGroups`) spawns a **head with up to 8 delegate children**, auto-installs a callback standing order on each, registers the set as one terminals group with an auto-sized layout, and is host-agnostic across both hosts. Teams additionally have a structured result contract (`POST /delegates/result`, correlationIds, size caps, `resultRef`) where the orchestrator has a file inbox and an mtime handshake.
+
+The overlap is the fan-out concern. The orchestrator's still-unique responsibilities are grouping plans into features, worktree lifecycle and merge-back, and the unattended wake cadence. The stated product direction — *"all the orchestrator needs to do is manage different agent teams"* — would keep those three and move fan-out onto the teams mechanism, retiring the orchestrator's own inbox and mtime handshake with it.
+
+That is an architecture change with its own design surface and is **deliberately not part of this plan**. Recorded here so the finding is not lost.

@@ -189,3 +189,11 @@ None. Every claim in this plan is verified against the code at HEAD and cited by
 ## Recommendation
 
 Complexity 5 → **Send to Coder.**
+
+## Review Findings
+
+**CRITICAL — the pool clamp shipped one burst too late.** `_effectivePlannerSlots` computed the count asynchronously and returned the *unclamped* configured value, so `plannerConcurrency: 10` against a 3-terminal pool dispatched all ten on the first pump and halt-on-failure killed the whole pass — precisely the failure the clamp exists to prevent (plan test 3). It also wrote the observed count back into `params.plannerConcurrency`, a one-way ratchet that is serialised into `oversight-state.md` and re-read by `resumeFromDisk`. Rewritten (`OversightPassService.ts:489`) to cache the count on the runtime, dispatch nothing until the first count lands, and re-pump once when it does.
+
+**Other fixes.** `_hasOpenQuestions` matched only a bare `- [user]` bullet, so it returned false for the schema's own `- **[user]**` form — every plan with open questions would have reported none; replaced by `_readOpenQuestions` (`:652`), which matches both forms, bounds the scan to the section, and reports empty-but-present as a violation logged to `oversight-log.md`. `_snapshot.plannerLane.readyAt` still derived from `lastCompletionAtMs`, advertising the barrier this plan removed — now derived from `lastDispatchAtMs` (`:731`). A dispatch landing after `stop()` re-armed its stuck timer and recreated the just-deleted state file, resurrecting the resume offer; guarded at `:555`.
+
+**Verification.** New `src/test/unattended-batch-improvement-contract.test.js` drives the real service and covers plan tests 1, 2/4 (spacing), 3, 8 and 11; wired as `test:contract:unattended-batch` in `package.json` and CI. 18/18 green, plus typecheck and the three PRD ratchets. Plan tests 5, 6, 7, 9, 10 and 12 (independent completion, scoping, multi-root, state serialisation, halt, autoban interlock) remain uncovered, and standalone wiring stays deliberately out of scope, so `POST /oversight/start` still 503s under `npx`.

@@ -865,6 +865,8 @@
     "test:contract:rendermarkdown": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/sharedUtils-renderMarkdown.test.js",
     "test:contract:drag-guard": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-card-button-drag-guard.test.js",
     "test:contract:render-guard": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-render-guard-contract.test.js",
+    "test:contract:kanban-view-plan-removal": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-view-plan-removal-regression.test.js",
+    "test:contract:dispatch-view": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/dispatch-view-contract.test.js",
     "test:contract:drag-confirm-order": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-drag-confirm-before-dispatch.test.js",
     "test:contract:tickets-sidebar-scoping": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/tickets-sidebar-list-scoping.test.js",
     "test:contract:tickets-delta-sweep-gate": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/tickets-delta-sweep-gate-regression.test.js",
@@ -931,7 +933,8 @@
     "test:contract:paste-attribution": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/paste-attribution-contract.test.js",
     "test:contract:dispatch-analysis-scope": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/dispatch-analysis-scope-contract.test.js",
     "test:contract:standing-orders-marker": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standing-orders-marker-contract.test.js",
-    "test:contract:link-presets-mirror": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/link-presets-mirror-contract.test.js"
+    "test:contract:link-presets-mirror": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/link-presets-mirror-contract.test.js",
+    "test:contract:unattended-batch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/unattended-batch-improvement-contract.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",

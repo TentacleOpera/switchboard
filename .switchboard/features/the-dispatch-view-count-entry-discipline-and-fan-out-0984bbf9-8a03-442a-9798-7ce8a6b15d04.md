@@ -14,9 +14,9 @@ DISPATCH is a display mode of the Planned column that is supposed to mean these 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Send the Dispatch Set to Coders, with Terminal Provisioning](../plans/dispatcher-auto-send-to-coder-terminals.md) — **INTERN CODED**
-- [ ] [The DISPATCH toggle on the Planned column shows how many plans are staged](../plans/feature_plan_20260808120100_dispatch-toggle-staged-count-badge.md) — **INTERN CODED**
-- [ ] [Remove the Manual "Move to Dispatch" Button from Planned Column Cards](../plans/feature_plan_20260808120000_remove-manual-send-to-dispatch-button-from-planned-cards.md) — **INTERN CODED**
+- [ ] [Send the Dispatch Set to Coders, with Terminal Provisioning](../plans/dispatcher-auto-send-to-coder-terminals.md) — **CODE REVIEWED**
+- [ ] [The DISPATCH toggle on the Planned column shows how many plans are staged](../plans/feature_plan_20260808120100_dispatch-toggle-staged-count-badge.md) — **CODE REVIEWED**
+- [ ] [Remove the Manual "Move to Dispatch" Button from Planned Column Cards](../plans/feature_plan_20260808120000_remove-manual-send-to-dispatch-button-from-planned-cards.md) — **CODE REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -32,3 +32,7 @@ Scope note: this feature covers the **manual** Dispatch view only. Autoban pools
 ## Completion Report
 
 Implemented the three subtasks: the DISPATCH toggle now shows a live staged-plan count, the manual per-card "Move to Dispatch" button and `sendToDispatch` verb have been removed, and the Dispatch view gained a "Send all to coders" fan-out button with an alive-coder terminal count and a `+` terminal stepper. Files changed: `src/webview/kanban.html`, `src/services/KanbanProvider.ts`, and the regenerated `src/generated/verbAllowlist.ts` and `protocol-catalog.json`. The `coderTerminalCount` is now pushed in every `updateBoard` payload and `npm run catalog:generate` plus `npm run parity:check` both pass; no issues encountered.
+
+## Review Findings
+
+Reviewer pass over all three subtasks: the count subtask and the button removal were correct as shipped; the fan-out subtask shipped a stepper whose count never repainted, blocked by three independent gates (no board refresh after terminal creation, a cards-only snapshot hash that discarded the recomputed `coderTerminalCount`, and a webview repaint reachable only through card-signature-gated paths). Fixed across `src/services/KanbanProvider.ts`, `src/webview/kanban.html`, `src/standalone/bootstrap.ts` and `src/services/verbSchemas.ts`; also added the missing `sendDispatchSetToCoders` schema (PRD contract #5) and a `terminalCreateAvailable` capability flag so standalone disables the `+` instead of faking success (PRD contract #6). The count subtask's required contract test had never been written — added as `src/test/dispatch-view-contract.test.js` and wired into `package.json` plus `.github/workflows/integration-tests.yml`, since a check defined but not invoked by CI is the green-while-incomplete hole. Validation: `catalog:check`, `parity:check`, `push-routing:check`, `verb-returns:check` and `standalone-parity:check` all exit 0, `browser-panel-verb-routing` 11/11, `verb-engine-kanban` 19/19, `render-guard` and `drag-guard` pass, the new contract test passes, `tsc --noEmit` holds at the 5 pre-existing TS2835 errors, and every inline script in `kanban.html` parses cleanly. Remaining risk is UAT-only: the manual steps in all three plans require an installed VSIX, and "alive ≠ idle" means Send can still over-dispatch onto a busy terminal (an accepted design decision, not a defect).

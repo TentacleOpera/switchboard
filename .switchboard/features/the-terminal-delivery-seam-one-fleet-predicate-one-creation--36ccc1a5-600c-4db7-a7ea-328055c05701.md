@@ -9,7 +9,7 @@ Fix the two halves of the terminal-delivery seam that both hang off TaskViewerPr
 ## How the Subtasks Achieve This
 
 - **One Fleet Seam: Stop `_ptyHostPort` Meaning "A Fleet Exists"**: adds an injectable `_fleetVerb` fallback to `_ptyHostVerb`, introduces a `_hasFleet()` predicate that is exactly "a child port OR an injected verb", and swaps the seven guards that currently read the child-process port as a proxy for fleet existence. Standalone registers its in-process fleet through the same seam, which makes the Design panel sends, the Artifacts planner and architect sends, the analyst message, the project-manager terminal, agent-to-agent messaging, the delegate prompt block and role-to-terminal-name resolution all work under `npx switchboard`.
-- **Terminal Creation Policy — Spawn in the Fleet Instead of Declining**: supplies the third branch the parent plan specified but never shipped. When a role resolves to nothing in either set and a fleet is running, it spawns in the fleet — with the same startup-command and settle behaviour the VS Code path has always applied — rather than returning `false` and degrading to a clipboard fallback. It converts all three creation paths, so the policy does not diverge again.
+- **Terminal Creation Policy — Spawn in the Fleet Instead of Declining**: supplies the third branch the parent plan specified but never shipped. When a role resolves to nothing in either set and a fleet is running, it spawns in the fleet — reaching startup-command and settle parity with the VS Code path — rather than returning `false` and degrading to a clipboard fallback. It converts **both** creation paths (`sendPromptToAgentTerminal` and `PlanningPanelProvider._sendPromptToTerminal`) in one change, so the policy does not diverge again. `_deliverPromptToPmTerminal` was verified at HEAD to have no creation path at all — its clipboard-only behaviour is deliberate and documented, so it is explicitly out of scope rather than a third path to convert. The startup command is applied **conditionally**: `PtyFleetService.create()` already injects the role's configured command, so the seam tops up only the cases the fleet's narrower resolution misses (hard-coded role fallbacks such as `claude_artifacts`, custom agents, and pre-backfill legacy installs).
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
@@ -26,7 +26,18 @@ Fix the two halves of the terminal-delivery seam that both hang off TaskViewerPr
 
 Landing them in the other order means the creation policy is written against a predicate that is about to be replaced, and the guard gets rewritten twice.
 
-**Shared files — one agent stream:** both touch `src/services/TaskViewerProvider.ts` and `src/services/PlanningPanelProvider.ts`, and both touch `src/test/browser-direct-terminal-helpers.test.js`. That test currently asserts *"refuses to create a terminal when fleet is available"* — the fleet-seam plan requires the literal `hasPtyHost()` to survive in `PlanningPanelProvider._sendPromptToTerminal`, while the creation-policy plan rewrites the refusal assertion into the three-branch policy. Both edits to that file must be made deliberately, with the old assertion's intent recorded inline.
+**Shared files — one agent stream:** both touch `src/services/TaskViewerProvider.ts` and `src/services/PlanningPanelProvider.ts`, and both touch `src/test/browser-direct-terminal-helpers.test.js`.
+
+**Reconciled test ownership (verified 2026-08-14).** A census of source-text pins (`grep -rn "_ptyHostPort" src/test/`, plus `hasPtyHost`) found **four** pinned assertions across **three** CI-wired files, not one assertion in one file. Each is assigned a single owner so the two subtasks never edit the same assertion:
+
+| File:line | Pins | Owner |
+| :--- | :--- | :--- |
+| `browser-direct-terminal-helpers.test.js:75` | `_tryFleetDeliveryForRole` literal `if (!this._ptyHostPort)` | **One Fleet Seam** — rewrite to `_hasFleet()` |
+| `browser-direct-terminal-helpers.test.js:109` | `sendPromptToAgentTerminal` literal `if (this._ptyHostPort)` | **One Fleet Seam** — rewrite to `_hasFleet()` |
+| `pty-dispatch-focus-contract.test.js:199` | `_isLikelyPtyDispatchTarget` literal `if (!this._ptyHostPort)` | **One Fleet Seam** — rewrite to `_hasFleet()` |
+| `browser-direct-terminal-helpers.test.js:96` | `hasPtyHost()` present in `_sendPromptToTerminal` | **Terminal Creation Policy** — keep green, do not rewrite |
+
+The contradiction flagged earlier resolves cleanly: the creation-policy subtask keeps `hasPtyHost()` as the *branch selector* and changes only what the true branch does (spawn instead of decline), so the literal survives and no assertion is contested. The fleet-seam subtask must not treat `browser-direct-terminal-helpers` as a must-stay-green gate — it reds on that plan executing correctly, and reverting the two chokepoint swaps to "fix" it would undo the feature's entire point.
 
 **Practical, non-blocking:** the fleet-seam plan registers its seam in the same `bootstrap.ts` block as the already-landed Agent Groups `setAgentGroupInstantiator`; land after it to avoid resolving that block twice.
 

@@ -146,3 +146,7 @@ Deferred by this dispatch — run on any dispatch without SKIP TESTS / SKIP COMP
 ---
 
 **Recommendation: Send to Intern.** Two things not to improvise: replace the ternary expression wholesale, and run `npm run catalog:generate` after capturing the known-red `catalog:check` baseline.
+
+## Review Findings
+
+Clean — no material findings. The removal is complete and symmetric: `grep -rn "sendToDispatch\|send-to-dispatch"` over `src/` returns zero hits, the verb is gone from `KANBAN_VERBS` and `protocol-catalog.json`, and the `backlogActionBtn` ternary in `src/webview/kanban.html` was replaced wholesale as three arms with `→ Planned` correctly promoted — the adjacent `.send-to-backlog-btn` / `.send-to-new-btn` / `.send-to-planned-btn` listeners are all intact. The half-done-removal tripwire and the ternary re-flatten hazard were both verified directly: `test:contract:browser-panel-verb-routing` passes 11/11, `test:contract:verb-engine-kanban` passes 19/19, and parsing every inline `<script>` in `kanban.html` yields zero syntax errors (the load-time failure `tsc` cannot see). The previously-red `node scripts/generate-protocol-catalog.js` now exits 0 and `npm run parity:check` exits 0, ratcheting the known-red baseline as the plan intended; `tsc --noEmit` shows only the 5 pre-existing TS2835 errors. Regression coverage for the removal was added to the new `src/test/dispatch-view-contract.test.js` (CI-wired), so a future re-introduction fails a gate rather than a grep; remaining risk is manual-only (steps 7-11 need an installed VSIX).

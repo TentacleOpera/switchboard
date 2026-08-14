@@ -1,6 +1,6 @@
 # Terminals Panel UAT Fixes: Peek, Brand Icons, Group Headers, Link-Up
 
-**Complexity:** 5
+**Complexity:** 6
 
 ## Goal
 

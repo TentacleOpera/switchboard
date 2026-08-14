@@ -40,7 +40,7 @@ This is what makes the "keep two lanes hot" workflow expensive. With a saturated
 **None.** Four decisions made here:
 
 * **Store write sets, not the conflict graph.** 14 node rows, not 91 edge rows. One plan edit invalidates one row; storing edges means one plan edit invalidates up to 13 rows and the correctness of that fan-out is easy to get wrong and impossible to notice when wrong.
-* **mtime + size as the cache key, not a content hash.** `KanbanDatabase.ts:6490-6505` already uses forward-mtime comparison for external-write detection, so this is the house pattern; size catches the same-mtime edit that mtime alone misses. Hashing 1.3 MB per run to avoid reading 1.3 MB per run saves nothing.
+* **mtime + size as the cache key, not a content hash.** `KanbanDatabase._initialize` (`:6588-6592`) already uses a forward-mtime comparison (`fileMtime > previousMtime`) to detect an external/cloud write to `kanban.db`, so this is the house pattern; size catches the same-mtime edit that mtime alone misses. Hashing 1.3 MB per run to avoid reading 1.3 MB per run saves nothing.
 * **The agent extracts; the extension stores and invalidates.** See "Why the extension cannot do the extraction" above.
 * **A cache miss degrades to today's behaviour, never to a failure.** Missing table, empty table, stale row, unreachable endpoint — all fall back to reading the plan file. The cache is an accelerator with no correctness authority.
 
@@ -57,8 +57,8 @@ This is what makes the "keep two lanes hot" workflow expensive. With a saturated
 ### Complex / Risky
 * **A stale write set is a silent false negative.** This is the whole risk of the plan. If the cache returns a set from before an edit that *added* a file, the pass will parallelise two plans that now collide — the exact unrecoverable failure the skill exists to prevent, except now it is invisible because the pass believes it did the work. Every ambiguous invalidation case must resolve to *miss*, not *hit*.
 * **Skill-rule drift needs a global invalidation lever.** When the extraction rules in the skill change, every cached row was produced under the old rules and is wrong in a way no per-file mtime can detect. Without an `extractor_version` the cache would serve pre-change sets forever.
-* **Fresh-DB and migrated-DB paths are separate and both mandatory.** Per the comment at `KanbanDatabase.ts:396`, additive tables go in `SCHEMA_TABLES_SQL` *and* in a numbered migration. Shipping only the migration leaves fresh installs without the table; shipping only the schema leaves ~4,000 existing installs without it.
-* **Two hosts, one DB.** The extension host and `npx switchboard` both open `kanban.db`. The table must be created by whichever host initialises first, and the standalone host reaches the schema through `_initialize` rather than `createIfMissing()`.
+* **Fresh-DB and migrated-DB paths are separate and both mandatory.** Per the comment at `KanbanDatabase.ts:406` ("Additive CREATE TABLE IF NOT EXISTS; fresh DBs already get it from `SCHEMA_TABLES_SQL`"), additive tables go in `SCHEMA_TABLES_SQL` *and* in a numbered migration. Shipping only the migration leaves fresh installs without the table; shipping only the schema leaves ~4,000 existing installs without it. Note the corollary the comment does **not** state: `SCHEMA_TABLES_SQL` is not a superset of the migrated schema, so a fresh DB still runs the whole V20–V61 chain — never stamp a baseline version to skip it.
+* **Two hosts, one DB.** The extension host and `npx switchboard` both open `kanban.db`. The table must be created by whichever host initialises first, and the standalone host reaches the schema through `_initialize` (`:6571`) rather than `createIfMissing()` — it never calls the latter, so a table added only on the `createIfMissing` path would be extension-only.
 
 ---
 
@@ -77,11 +77,23 @@ This is what makes the "keep two lanes hot" workflow expensive. With a saturated
 * First run after the migration is a full extraction and populates the cache; it is no slower than today.
 
 ### Dependencies & Conflicts
-* **`.agents/skills/dispatch-analysis/SKILL.md`** — edited by this plan, by `feature_plan_20260811094500_dispatch-analysis-blind-to-already-staged-cards.md`, and by `feature_plan_20260810173147_dispatch-analysis-reads-the-board-mirror-not-a-full-json-board-dump.md`. All three serialise on that file. This plan lands **last** of the three: the occupancy fix is a safety hole and goes first, the mirror plan changes how the board is sourced, and this plan's step-2 rewrite should be authored against both rather than rebased through them.
-* **`.claude/skills/dispatch-analysis/SKILL.md` is generated** — edit only `.agents/`; `npm run mirror:check` is a CI gate.
-* **`src/services/KanbanDatabase.ts`** — `SCHEMA_TABLES_SQL` (`:160`), the migration constants (`:457`, `:472`) and the migration runner (`:8309-8328`). Migration head at HEAD is **V59**; `feature_plan_20260811103000_staging-flag-replaces-dispatch-column.md` takes **V60** and lands first, so this is **V61**. If that plan is dropped or reordered, renumber this one to V60 — do not leave a gap.
+> **Superseded:** "edited by this plan, by `feature_plan_20260811094500_dispatch-analysis-blind-to-already-staged-cards.md`, and by `feature_plan_20260810173147_…board-mirror…`. All three serialise on that file. This plan lands **last** of the three: the occupancy fix is a safety hole and goes first…"
+> **Reason:** The occupancy plan no longer exists — `feature_plan_20260811094500_dispatch-analysis-blind-to-already-staged-cards.md` is absent from `.switchboard/plans/` at HEAD. It was superseded by `feature_plan_20260811103000_staging-flag-replaces-dispatch-column.md`, which removes the invisibility rather than working around it, and was deleted. The ordering conclusion (this plan lands last) is unchanged, but its stated first term names a plan that is gone, and the follow-on reasoning in change 3 ("after the sibling occupancy plan lands…") points at nothing.
+> **Replaced with:** Three plans serialise on `.agents/skills/dispatch-analysis/SKILL.md` and this one lands **last**:
+> 1. `feature_plan_20260811103000_staging-flag-replaces-dispatch-column.md` — retires the `DISPATCH` column, rewrites step 5 from a card move to a `staged_at` stamp, and takes migration **V60**.
+> 2. `feature_plan_20260810173147_…board-mirror…` — rewrites step 1/1a/2's read and the Rules.
+> 3. **This plan** — rewrites step 2 again into fetch-then-fill and adds the step-5 staleness re-check. Authored once against the other two's final shape rather than rebased through them.
+>
+> A fourth sibling (`feature_plan_20260811143000_…worktree-recommendation.md`) adds steps 4a/6a/6b to disjoint sections and does not need to serialise with these.
+
+> **Superseded:** "`.claude/skills/dispatch-analysis/SKILL.md` is generated — edit only `.agents/`; `npm run mirror:check` is a CI gate."
+> **Reason:** Wrong at HEAD. `.claude/skills/dispatch-analysis/` does not exist; `scripts/check-claude-mirror.js` walks `.claude/skills/**` and never sees this file. The instruction is harmless but it implies a gate that is not there, and it contradicts the sibling worktree plan, which states the position correctly.
+> **Replaced with:** `.agents/skills/dispatch-analysis/SKILL.md` is the only copy — read by the extension **by path**, packaged via `.agents/.switchboard-bundled.json:37`, and **not** covered by `npm run mirror:check`. There is no mirror to update and no CI signal if the skill drifts, which is why this plan's contract-test assertions matter more than they would for a mirrored skill.
+
+* **`src/services/KanbanDatabase.ts`** — `SCHEMA_TABLES_SQL` (`:170`), the migration constants (`MIGRATION_V58_SQL` `:467`, `MIGRATION_V59_SQL` `:482`) and the migration runner (`:8318-8337`). Migration head at HEAD is confirmed **V59**; `feature_plan_20260811103000_staging-flag-replaces-dispatch-column.md` takes **V60** and lands first, so this is **V61**. If that plan is dropped or reordered, renumber this one to V60 — do not leave a gap.
 * **Never edit a shipped `MIGRATION_Vnn_SQL` body.** V20-V59 are historical; a rename sweep through them corrupts installed users' upgrade path. Add V61 only.
-* **`src/services/LocalApiServer.ts`** — two new routes. **`src/standalone/bootstrap.ts`** — the same routes must exist in the standalone host, or the cache silently never populates under `npx switchboard`.
+* **`src/services/LocalApiServer.ts`** — two new routes, registered in the flat `else if` ladder alongside `/worktree/cleanup` (`:3977`) and `/worktree/list` (`:4013`), and advertised in `_handleGetCatalog` (`:2760`) or fleet agents cannot see them. **`src/standalone/bootstrap.ts`** — the same routes must exist in the standalone host, or the cache silently never populates under `npx switchboard`.
+* **`src/services/verbSchemas.ts`** is not involved — these are raw HTTP routes, not kanban verbs, so they take the route-handler's own body validation rather than a verb schema. Validate at the boundary regardless (PRD contract #5): `planIds` is a caller-supplied CSV and `entries[].files` a caller-supplied array.
 
 ---
 
@@ -104,7 +116,7 @@ Key risks: (1) **a stale hit produces the unrecoverable failure the pass exists 
 
 ### 1. V61 — a `plan_write_sets` table
 
-**Implementation:** add to `SCHEMA_TABLES_SQL` (`KanbanDatabase.ts:160`) *and* as `MIGRATION_V61_SQL` following the V58/V59 shape:
+**Implementation:** add to `SCHEMA_TABLES_SQL` (`KanbanDatabase.ts:170`) *and* as `MIGRATION_V61_SQL` following the V58/V59 shape — the `CREATE TABLE` and the `CREATE INDEX` as **two separate array elements**, because the runner's `try/catch` is per statement and a combined string lets a re-run's first failure swallow the second (`MIGRATION_V13_SQL` at `:490` is the precedent):
 
 ```sql
 CREATE TABLE IF NOT EXISTS plan_write_sets (
@@ -121,7 +133,7 @@ CREATE TABLE IF NOT EXISTS plan_write_sets (
 CREATE INDEX IF NOT EXISTS idx_plan_write_sets_ws ON plan_write_sets(workspace_id);
 ```
 
-Register in the runner (`:8309-8328`) with the existing idempotent shape:
+Register in the runner (`:8318-8337`, immediately after the V59 block) with the existing idempotent shape:
 
 ```ts
 const v61 = await this.getMigrationVersion();
@@ -167,7 +179,7 @@ Add a rule: *"A cache miss, an error, or an unreachable endpoint means read the 
 
 Also add: *"`extractor_version` must be bumped in `KanbanDatabase.ts` in the same change as any edit to the extraction rules in this step. A rules change without a bump serves stale sets indefinitely."*
 
-**Logic:** including occupied lanes in the fetch matters — after the sibling occupancy plan lands, staged plans are read on every pass too, and they are the plans least likely to have changed.
+**Logic:** including occupied lanes in the fetch matters — after the staging plan lands, staged plans stay in `PLAN REVIEWED` and are therefore in the candidate set on every subsequent pass, so they are read every run. They are also the plans *least* likely to have changed, which makes them the cache's best hits. "Occupied lane" after that plan means **a plan carrying a `staged_at` stamp**, not a plan sitting in a `DISPATCH` column; write step 2 with that spelling.
 
 **Edge cases:** a partial `POST` failure is not fatal; those plans simply miss next run. Never abandon the pass because the cache write failed.
 
@@ -208,6 +220,6 @@ Also add: *"`extractor_version` must be bumped in `KanbanDatabase.ts` in the sam
 
 ## Recommendation
 
-Complexity 5 → **Send to Coder.** Additive schema, two endpoints, one skill step rewritten — no existing data touched and rollback is dropping an unread table. Land it **after** the two sibling skill plans, since all three edit `.agents/skills/dispatch-analysis/SKILL.md` and step 2 should be authored once against their final shape rather than rebased twice.
+Complexity 5 → **Send to Coder.** Additive schema, two endpoints, one skill step rewritten — no existing data touched and rollback is dropping an unread table. Land it **after** the staging plan (V60) and the board-mirror plan, since all three edit `.agents/skills/dispatch-analysis/SKILL.md` and step 2 should be authored once against their final shape rather than rebased twice. Write "occupied lane" as *carrying a `staged_at` stamp*, not *in the `DISPATCH` column* — that column is gone by the time this lands.
 
 Two things must not be traded away under time pressure, because both fail silently and both defeat the pass's core guarantee: the `extractor_version` gate (without it, a future edit to the extraction rules serves stale write sets forever) and the pre-move staleness re-check (without it, the read-to-move window can stage a plan whose file set changed underneath the analysis). A cache that is merely fast is not worth a pass that can put two coders in the same file while reporting success.

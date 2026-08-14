@@ -76,6 +76,16 @@ If the target file is under `.switchboard/features/` or contains an auto-generat
         - Context, Logic, Implementation, Edge Cases
    9. **## Verification Plan**
       - ### Automated Tests
+   10. **## Outstanding Questions** *(OPTIONAL — include ONLY when something is genuinely unresolved; omit the heading entirely otherwise)*
+       ```markdown
+       ## Outstanding Questions
+       - **[user]** <question needing a human decision> — proceeding on the assumption that <assumption>
+       - **[research]** <thing needing external sources, stated as a specific question> — proceeding on the assumption that <assumption>
+       ```
+       - **Omit the heading entirely when there is nothing outstanding.** Its presence is the signal. An empty-but-present section is a **schema violation**, not "done" — it forces every reader to parse prose to decide whether the plan is blocked.
+       - Every item states the question **and** the assumption you proceeded under, so the plan stays coherent and codeable before anyone answers.
+       - You **continue and complete the work regardless**. Never block waiting for an answer.
+       - This section is additive and must never displace a required section — in particular the problem / root-cause analysis that belongs in or below `## Goal` stays where it is.
 
    **Complexity Criteria:**
    - **Routine (1-4):** Single-file, localized changes. Reuses existing patterns. Low risk. Small scope.
@@ -117,6 +127,24 @@ If the target file is under `.switchboard/features/` or contains an auto-generat
      - If complexity is 1-3 → "Send to Intern"
      - If complexity is 4-6 → "Send to Coder"
      - If complexity is 7-10 → "Send to Lead Coder"
+
+## Unattended runs
+
+When the dispatching prompt says this run is unattended (it carries an `UNATTENDED IMPROVER
+CONTRACT:` block), these override the defaults above. They apply **only** on that signal — an
+attended, single-plan improve is unchanged, and asking the user is still correct there.
+
+- **Never ask questions in chat — no one is attached to this session.** If you need a user
+  decision or external research, append it to the plan's `## Outstanding Questions` section,
+  state the assumption you are proceeding under, and finish the work.
+- **You are improving exactly one plan: the one named in your prompt.** Do not create, modify,
+  rename or delete any other file in `.switchboard/plans/`. Other workers are concurrently
+  improving sibling plans in this same directory; touching their files will destroy their work.
+- **Step 2 still applies as a recommendation, not as a write.** If the plan should be split,
+  record that under `## Outstanding Questions` as a `[user]` item. Do not write the split files,
+  and do not invoke `create-feature-from-plans`.
+- **Write the plan file once, at the end.** The pass treats the first plan-file mtime advance
+  after dispatch as your completion signal; later writes arrive after the card is already done.
 
 ## Post-Review Board State
 

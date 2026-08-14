@@ -29,17 +29,21 @@ produces **nothing visible**: the prompt is copied, the verb returns `{ success:
 either thrown at the wrong surface or discarded.
 
 This is not one button. The notification seam is the *primary* success-feedback channel for the whole
-verb engine — 284 `seams().ui.show*` call sites plus 114 `showTemporaryNotification` call sites:
+verb engine — **287** `seams().ui.show*` call sites plus **107** `showTemporaryNotification` call sites
+(re-measured at HEAD, 2026-08-14):
 
 | File | `seams().ui.show*` calls |
 | :--- | :--- |
 | `src/services/TaskViewerProvider.ts` | 104 |
-| `src/services/KanbanProvider.ts` | 78 |
+| `src/services/KanbanProvider.ts` | 80 |
 | `src/services/PlanningPanelProvider.ts` | 45 |
-| `src/services/TicketsPanelProvider.ts` | 22 |
+| `src/services/TicketsPanelProvider.ts` | 24 |
 | `src/services/DesignPanelProvider.ts` | 20 |
 | `src/services/SetupPanelProvider.ts` | 11 |
 | `src/services/sharedUtilityVerbs.ts` | 3 |
+
+The exact totals drift as arms are added; they are here to establish **order of magnitude**, which is
+the argument for capture-at-the-seam over per-arm edits. Do not gate anything on these numbers.
 
 Only two panels have any client-side toast of their own — `project.js` (`showToast`, 16 uses) and
 `kanban.html` (`showStatusMessage`). `tickets.js`, `design.js`, `terminals.js`, `connections.js`,
@@ -48,13 +52,16 @@ that ever existed.
 
 ### Root cause
 
-Both browser hosts serve panel verbs through `LocalApiServer` (`src/standalone/bootstrap.ts:1688`
-constructs one too), and both drop the notification — for *different* reasons:
+Both browser hosts serve panel verbs through `LocalApiServer` (standalone constructs one too), and both
+drop the notification — for *different* reasons:
+
+> **Line numbers below were re-verified at HEAD on 2026-08-14 and several had drifted.** Corrected
+> throughout; the symbols are the durable anchors, so `grep` the symbol if a number has moved again.
 
 **1. Extension-served browser — notification fires at the wrong surface.**
 `npx switchboard` detects the running extension via `api-server-port.txt` and points the browser at the
 extension's `LocalApiServer`. `POST /tickets/verb/copyDiagramPrompt` →
-`_handleTicketsVerb` (`src/services/LocalApiServer.ts:2006`) → `ticketsVerb`
+`_handleTicketsVerb` (`src/services/LocalApiServer.ts:2075`) → `ticketsVerb`
 (`src/services/TaskViewerProvider.ts:2367`) → `TicketsPanelProvider.handleServiceVerb`
 (`:139`) → `_handleMessage` → `handleCopyDiagramPrompt` → `VscodeHostUI.showTemporaryNotification`
 (`src/services/hostSeams.ts:378`) → `vscode.window.withProgress`. The toast renders **in the VS Code
@@ -63,8 +70,8 @@ window** the user is not looking at. The HTTP response body carries no trace of 
 **2. Standalone (`npx` with no extension) — notification dies in the shim.**
 
 **Get the live path right before editing anything.** Standalone injects
-`createVscodeHostSeams(workspaceRoot, secretStorage)` (`src/standalone/bootstrap.ts:603`) — the
-*vscode-backed* bundle — and `webpack.config.js:149-150` aliases the `vscode` module to
+`createVscodeHostSeams(workspaceRoot, secretStorage)` (`src/standalone/bootstrap.ts:659`) — the
+*vscode-backed* bundle — and `webpack.config.js:147-152` aliases the `vscode` module to
 `src/standalone/vscodeShim.ts`. So standalone runs `VscodeHostUI`, and the dead end is the shim:
 
 ```ts
@@ -77,30 +84,52 @@ export async function showErrorMessage(_message: string, ..._items: any[]): Prom
 `showTemporaryNotification` reaches `vscode.window.withProgress`, which the shim implements
 (`:146-148`) by running the task and reporting nothing. The notice never leaves the process.
 
-**`hostServices.ts:422-434` is NOT this path.** `createHeadlessHostSeams` (`hostServices.ts:370`) has
-**zero callers** — confirmed by `grep -rn "createHeadlessHostSeams" src/`, whose only hits are the
-definition and two comments saying it is not what standalone injects (`bootstrap.ts:752`,
-`vscodeShim.ts:235`). It is a ~90-line literal that reads exactly like the live standalone
-implementation, and editing it changes nothing at runtime. Wire the shim; treat the dead bundle as
-described in change #4.
+**`hostServices.ts` is NOT this path.** `createHeadlessHostSeams` (`hostServices.ts:371`) has **zero
+callers** — re-confirmed at HEAD by `grep -rn "createHeadlessHostSeams" src/`, whose only hits are the
+definition plus three comments saying it is not what standalone injects (`bootstrap.ts:664`,
+`bootstrap.ts:817`, `vscodeShim.ts:235`) and one in a test explaining the same thing
+(`tickets-auto-refresh-on-file-change.test.js:154`). It is a ~90-line literal that reads exactly like the
+live standalone implementation, and editing it changes nothing at runtime. Wire the shim; treat the dead
+bundle as described in change #4.
 
 **3. `transport.js` has a failure-only toast and no success channel.**
 The browser shim already renders host problems:
 
 ```js
-// src/webview/transport.js:377-384
+// src/webview/transport.js:377-405 (verbatim at HEAD — note the quiet-list)
 if (result && typeof result === 'object' && result.success === false) {
-    const text = result.error || ('Action failed: ' + verb);
-    if (STATUS_MESSAGE_PANELS[panel]) {
-        dispatchMessage({ type: 'showStatusMessage', message: text, isError: true });
-    } else {
-        showTransportError(text);
+    // A typed, EXPECTED miss (e.g. readLocalTicketFile for a subtask whose file
+    // has not been downloaded yet) is not a transport failure — the panel's own
+    // handler owns the recovery UI. Suppress the generic toast for quiet-listed
+    // reasons, but still fall through to dispatchMessage below.
+    const EXPECTED_QUIET = new Set(['not-imported']);
+    if (!EXPECTED_QUIET.has(result.reason)) {
+        const text = result.error || ('Action failed: ' + verb);
+        console.warn('[transport] verb failed:', verb, text);
+        if (STATUS_MESSAGE_PANELS[panel]) {
+            dispatchMessage({ type: 'showStatusMessage', message: text, isError: true });
+        } else {
+            showTransportError(text);
+        }
     }
+    // A TYPED failure body is an ADDRESSED reply: it still falls through to
+    // dispatchMessage so the panel can clear its own loading state. Only an
+    // UNTYPED failure — which no handler could route — stops here.
+    if (typeof result.type !== 'string') {
+        return;
+    }
+}
 ```
 
 So the plumbing and the DOM host (`#sb-transport-error`, `src/webview/transport.js:324-342`) exist —
 there is simply no path for an *informational* notice, and a verb that succeeds returns a body with
 nothing to render. `copyDiagramPrompt` returning bare `{ success: true }` hits exactly that hole.
+
+**Two behaviours in that block are load-bearing and must survive this change** (an earlier draft of this
+plan quietly dropped both while restructuring the handler):
+- the `EXPECTED_QUIET` suppression, which keeps `not-imported` misses from popping a spurious toast, and
+- the typed-failure fall-through to `dispatchMessage`, without which a panel's spinner runs forever
+  behind a transient toast.
 
 ### Fix shape
 
@@ -135,9 +164,14 @@ ALS context is ever established there, so editor toasts keep working exactly as 
 - Wiring the standalone `ui` seam object — a 6-line literal in one file.
 
 **Complex / risky**
-- **First `AsyncLocalStorage` use in the repo** (`grep -rn "AsyncLocalStorage\|async_hooks" src/` → no
-  hits). It is a Node builtin, so the VSIX's no-`node_modules` constraint is not a factor, but webpack's
-  `externals` handling of `node:async_hooks` must be confirmed at build time, not assumed.
+- **First `AsyncLocalStorage` use in the repo** (`grep -rn "AsyncLocalStorage\|async_hooks" src/` → still
+  no hits at HEAD). It is a Node builtin, so the VSIX's no-`node_modules` constraint is not a factor.
+
+  *The original "webpack may not resolve `node:async_hooks`" worry has been checked and largely
+  discharged:* both bundles set `target: 'node'` (`webpack.config.js:14`, `:129`) and the repo is on
+  webpack `^5.105.4`, which resolves `node:`-prefixed builtins as externals natively. This is now a
+  one-line confirmation during the first build, not a design risk. If it does fail, the fallback is
+  `require('async_hooks')` without the prefix — no design change.
 - **Suppression semantics.** When a notice is captured, the native toast must be skipped — otherwise a
   browser click pops a phantom notification in the editor. But suppression must never *lose* a notice:
   any notice raised after the response has flushed has to fall back to the native path. This is the one
@@ -156,7 +190,13 @@ ALS context is ever established there, so editor toasts keep working exactly as 
   `MultiRepoScaffoldingService.ts` ×2, `KanbanDatabase.ts` ×2). These fire from watchers and sync loops,
   not inside a verb request, so no request context exists to capture them.
 - Choice dialogs (`showWarningMessage(msg, 'Yes', 'No')`) — see Edge Cases.
-- The standalone clipboard no-op. Separate defect, separate plan.
+- The standalone clipboard no-op. Separate defect, separate plan — and that plan **ships first**, because
+  a toast saying "copied to clipboard" over an empty clipboard is worse than no toast. See Cross-Subtask
+  Reconciliation.
+- The standalone memo verb fork (`bootstrap.ts:1638-1700` reimplements `memoLoad`/`memoSave`/`memoClear`/
+  `memoGeneratePrompt` outside the provider). Those four arms never reach `VscodeHostUI`, so this plan's
+  capture does not cover them; they are also a standing PRD contract #1 divergence. Pre-existing, known,
+  out of scope for both subtasks.
 
 **No confirmation dialogs are added.** This plan only adds non-blocking, auto-dismissing toasts.
 **No migration is needed** — nothing here reads or writes persisted state.
@@ -206,10 +246,29 @@ ALS context is ever established there, so editor toasts keep working exactly as 
 11. **`/project/verb/*` and `/memo/verb/*` both route to `_handlePlanningVerb`**
     (`src/services/LocalApiServer.ts:3712-3717`), and `/connections/verb/*` splits across Setup and
     Planning. Wrapping the handler methods (not the route table) covers all of these once.
-12. **`_handleTerminalVerb` holds `delegatesAwait` open indefinitely** (`:1856-1871`) and can answer from
-    a `req.on('close')` path. The capture wrapper must not assume a single write, and must not keep a
-    context alive across a long-held join. Simplest correct handling: wrap only the terminal verb's
-    normal completion path, and treat the abort path as closed.
+12. **`_handleTerminalVerb` is not a single dispatch line — do not wrap it like the other six.**
+
+    *(Correcting this plan's original text, which described a `delegatesAwait` long-poll answered from a
+    `req.on('close')` handler. Neither symbol exists anywhere in `src/` at HEAD — `grep -rn
+    "delegatesAwait" src/` and `grep -rn "req.on('close'" src/services/LocalApiServer.ts` are both
+    empty. The hazard is real, but its shape is different:)*
+
+    `_handleTerminalVerb` (`:1828`) is ~180 lines with **many hand-built exits** — it writes `503` for a
+    missing dispatcher, `400` for a missing verb, `404` twice for unknown relay endpoints, `502` for a
+    delivery failure, `500` on catch, and a hand-assembled `200 {success:true, delivered:to}` on the
+    relay path. It also makes **nested verb calls inside one request** (`terminalVerb('ptyListTerminals',
+    …)` then `terminalVerb('ptySendPrompt', …)`), plus the binary `ptyPasteImage` branch that bypasses
+    JSON entirely.
+
+    A single `_runVerbWithNotices` wrapper around "the dispatch line" therefore covers almost none of it,
+    and notices raised by the nested calls would be captured into a store whose body is built by hand and
+    never carries `__notices`. **Handling:** wrap only the terminal rail's normal JSON completion path,
+    leave the binary and hand-built error exits on the native path, and confirm no captured notice is
+    lost by asserting the wrapper is not entered for `ptyPasteImage`. If that proves awkward, exclude
+    `_handleTerminalVerb` from this change entirely and cover the remaining six rails — terminal verbs
+    are driven from the Terminals panel, whose feedback is the terminal output itself, so it is the
+    lowest-value rail of the seven. **Excluding it is an acceptable outcome; a wrapper that silently eats
+    notices is not.**
 
 ## Proposed Changes
 
@@ -356,18 +415,43 @@ Most of those 21 sites fire from watchers and sync loops with no request context
 returns `false` and behaviour is unchanged — but the handful that *are* verb-reachable get covered for
 free, and the shim stops being a silent floor.
 
-**Do NOT edit `hostServices.ts:422-434`.** `createHeadlessHostSeams` has zero callers (see Root cause 2);
-an edit there is dead code that will read like a completed fix to the next auditor. Either leave it
-untouched or delete the function — but decide deliberately, and if it stays, add a one-line header
-saying it is not injected, so it stops impersonating the live path. This plan does not require choosing;
-it requires not mistaking it for the fix.
+**Do NOT edit `createHeadlessHostSeams` in `hostServices.ts:371` (the UI literal at `:422-434`).** It has
+zero callers (see Root cause 2); an edit there is dead code that will read like a completed fix to the
+next auditor.
+
+**Feature-level decision (made once, for both subtasks — do not re-litigate per plan): keep the function,
+add a header comment.** Deleting it is tempting but it is referenced by name in four comments and a test
+(`bootstrap.ts:664`, `:817`, `vscodeShim.ts:235`,
+`tickets-auto-refresh-on-file-change.test.js:154`), all of which exist to explain that it is *not* the
+injected bundle — deleting the function turns those into dangling references to a symbol that no longer
+exists, which is a worse signpost than the one we have. So:
+
+```ts
+/**
+ * NOT INJECTED ANYWHERE. Standalone uses `createVscodeHostSeams` + `vscodeShim.ts`
+ * (bootstrap.ts:659). This bundle reads like the live headless implementation and
+ * is not — editing it changes nothing at runtime. Kept only because several
+ * comments and a test reference it by name to say exactly this.
+ */
+```
+
+That header is the whole change to this file. The `[headless notification]` log line inside it stays
+dead; see Verification step 10 for why it must not be used as evidence of anything.
 
 ### 5. `src/services/LocalApiServer.ts` — wrap the verb rails, attach `__notices`
 
-One private helper, then a one-line change in each of the seven `_handle*Verb` methods
-(`_handleTerminalVerb` :1825, `_handleKanbanVerb` :1939, `_handlePlanningVerb` :1978,
-`_handleTicketsVerb` :2006, `_handleDesignVerb` :2034, `_handleSetupVerb` :2070,
-`_handleTaskViewerVerb` :2114):
+One private helper, then a one-line change in each of the verb rails. Line numbers re-verified at HEAD
+(2026-08-14 — all seven had drifted):
+
+| Method | Line | Wrap? |
+| :--- | ---: | :--- |
+| `_handleTerminalVerb` | 1828 | **Special — see Edge Case 12.** Many hand-built exits + nested verb calls; wrap only the normal JSON path, or exclude |
+| `_handleKanbanVerb` | 2008 | yes |
+| `_handlePlanningVerb` | 2047 | yes (also serves `/project/verb/*` and `/memo/verb/*` — Edge Case 11) |
+| `_handleTicketsVerb` | 2075 | yes |
+| `_handleDesignVerb` | 2103 | yes |
+| `_handleSetupVerb` | 2139 | yes |
+| `_handleTaskViewerVerb` | 2183 | yes |
 
 ```ts
 /**
@@ -443,13 +527,51 @@ function showTransportNotice(text, kind) {
 function showTransportError(text) { showTransportNotice(text, 'error'); }
 ```
 
+**This retires the `#sb-transport-error` element id — and one existing test pins it.** Every *caller*
+keeps working (`showTransportError` survives as a wrapper), but the singleton node is replaced by
+children of `#sb-transport-notices`. Checked at HEAD, `grep -rn "sb-transport-error" src/` returns three
+hits: the two in `transport.js` this change rewrites, and
+
+```js
+// src/test/headless-feature-management-contract.test.js:405
+assert.ok(transportSrc.includes("'sb-transport-error'"));
+```
+
+a **source-text** assertion that goes red the moment the id changes. Update it in the same commit to
+assert on `'sb-transport-notices'` (or, better, on `showTransportError` being defined — the durable
+contract is that the function exists, not the id it happens to use). No panel CSS or JS references the
+id; it is created and styled entirely inline by `transport.js`, so test code is the only exposure. The
+sibling subtask's new JSDOM test must likewise assert on behaviour rather than the id.
+
 In the `postMessage` response handler, render notices before the failure fallback and let captured
-errors replace it:
+errors replace it.
+
+> ⚠️ **This handler is a shared surface.** The sibling subtask
+> ("Finish the prompt-copy return-body retrofit") rewrites the clipboard block at the top of this same
+> function and **lands first**. The snippet below shows the reconciled end-state *after* that plan.
+> The clipboard lines are marked DO-NOT-TOUCH: pasting this plan's original draft — which showed the
+> pre-retrofit `navigator.clipboard` call as `/* unchanged */` — would silently **revert** the sibling's
+> entire client-side fix. Add only the notice block.
 
 ```js
 .then(function (result) {
-    if (result && result.prompt && navigator.clipboard && navigator.clipboard.writeText) { /* unchanged */ }
+    // ─── OWNED BY THE SIBLING SUBTASK — DO NOT MODIFY ────────────────────────
+    // The clipboard write does NOT happen here. The sibling claims the clipboard
+    // synchronously ABOVE the fetch() call, because WebKit refuses a clipboard
+    // write once the network turn has broken the user-gesture call stack. What
+    // remains here is only the failure route and the key cleanup. Re-introducing
+    // a write at this point silently re-breaks Safari.
+    if (clipboardClaim) {
+        clipboardClaim.catch(function (err) {
+            console.warn('[transport] clipboard claim failed:', err);
+            var text = pickCopyText(result);
+            if (text) { offerManualCopy(text, err); }
+        });
+    }
+    if (result && typeof result === 'object' && '__clipboard' in result) { delete result.__clipboard; }
+    // ─────────────────────────────────────────────────────────────────────────
 
+    // ─── ADDED BY THIS PLAN ──────────────────────────────────────────────────
     var notices = (result && Array.isArray(result.__notices)) ? result.__notices : [];
     var sawHostError = false;
     for (var i = 0; i < notices.length; i++) {
@@ -465,10 +587,15 @@ errors replace it:
         }
     }
     if (result && typeof result === 'object' && result.__notices) { delete result.__notices; }
+    // ─────────────────────────────────────────────────────────────────────────
 
     if (result && typeof result === 'object' && result.success === false) {
-        // A captured host error already said this — do not say it twice.
-        if (!sawHostError) {
+        // PRESERVED VERBATIM — the quiet-list keeps `not-imported` misses from
+        // popping a spurious toast. Losing it is a regression on a shipped fix.
+        const EXPECTED_QUIET = new Set(['not-imported']);
+        // `!sawHostError` is the ONLY change inside this block: a captured host
+        // error already said this, so do not say it twice.
+        if (!EXPECTED_QUIET.has(result.reason) && !sawHostError) {
             var text = result.error || ('Action failed: ' + verb);
             console.warn('[transport] verb failed:', verb, text);
             if (STATUS_MESSAGE_PANELS[panel]) {
@@ -477,11 +604,17 @@ errors replace it:
                 showTransportError(text);
             }
         }
+        // PRESERVED VERBATIM — a typed failure body still falls through to
+        // dispatchMessage so the panel can clear its own loading state.
         if (typeof result.type !== 'string') { return; }
     }
     if (result && typeof result === 'object') { dispatchMessage(result); }
 })
 ```
+
+The diff this plan actually introduces inside the failure block is **one conjunct** (`&& !sawHostError`).
+Everything else in it is existing behaviour reproduced so the edit is legible — if a coder's diff shows
+more than that changing, they have rewritten the block instead of extending it.
 
 The `__notices` delete keeps the key out of panel message handlers — no handler switches on it, but the
 body is re-dispatched as a `MessageEvent` and leaving a transport-private field in it invites
@@ -503,6 +636,15 @@ Following `src/test/memo-browser-clear-and-copy-contract.test.js`'s structure (h
   assert two children appear under `#sb-transport-notices` with distinct kind styling; feed
   `{ success: false, error: 'boom', __notices: [{kind:'error',message:'boom'}] }` and assert exactly one
   node (dedup).
+- **JSDOM quiet-list guard:** feed `{ success: false, reason: 'not-imported', type: 'localTicketMiss' }`
+  and assert **zero** notice nodes rendered *and* that `dispatchMessage` still ran. This is the
+  behaviour an earlier draft of this plan deleted while restructuring the handler; a test is the only
+  thing that stops it happening again on the next edit to this function.
+- **JSDOM clipboard co-existence:** feed `{ success: true, prompt: 'abc', __notices: [{kind:'success',message:'Copied'}] }`
+  and assert **both** that the clipboard write was attempted with `'abc'` and that one notice rendered.
+  This is the regression net for the merge hazard in Cross-Subtask Reconciliation: if a coder re-pastes
+  the pre-sibling clipboard block, the clipboard half of this assertion fails.
+- Assert `__notices` is stripped from the body before `dispatchMessage` receives it.
 
 Register as `test:contract:host-notice-bridge` in `package.json` and add it to
 `.github/workflows/integration-tests.yml` alongside the other contract gates.
@@ -535,11 +677,22 @@ Register as `test:contract:host-notice-bridge` in `package.json` and add it to
    → overflow → **Diagram**. Expect a green "Diagram prompt copied to clipboard" toast in the browser,
    and **no** notification in the VS Code window. Paste to confirm the clipboard actually holds the
    prompt (the extension host writes the real system clipboard).
-10. **Standalone:** stop the extension, `npx switchboard` fresh, repeat step 9. Expect the same toast.
-    The clipboard will still be empty in this mode — that is the separate standalone-clipboard defect,
-    not a failure of this plan; confirm the server log no longer prints
-    `[headless notification] Diagram prompt copied to clipboard` (proof the notice was routed, not
-    swallowed).
+10. **Standalone:** stop the extension, `npx switchboard` fresh, repeat step 9. Expect the same toast,
+    **and** the prompt actually on the clipboard (the sibling subtask ships first — see Cross-Subtask
+    Reconciliation).
+
+    *Correcting this plan's original step 10, which asked the verifier to confirm the server log no
+    longer prints `[headless notification] Diagram prompt copied to clipboard`.* That string exists at
+    exactly one place in the tree — `src/standalone/hostServices.ts:428`, inside
+    `createHeadlessHostSeams`, the bundle with **zero callers** that this plan's own Root Cause section
+    warns against mistaking for the live path. It therefore never prints today, and "it still doesn't
+    print" would pass whether or not the fix works. The step proved nothing; this plan fell into the
+    trap it documents.
+
+    **Replacement check:** with the standalone server running in a terminal, confirm the toast appears in
+    the browser and that stdout shows no unhandled-notice `console.warn` from
+    `_runVerbWithNotices` (Proposed Change 5) naming the verb. That warning is the real "notice was
+    dropped" signal, and unlike the log line above it is reachable.
 11. **Editor unchanged:** in VS Code, open the Tickets panel webview and click **Diagram**. Expect the
     native editor toast exactly as before, and no console warning about undelivered notices.
 12. **Multi-notice + long text:** trigger a verb that raises several notices (e.g. a Setup panel save
@@ -552,3 +705,76 @@ Register as `test:contract:host-notice-bridge` in `package.json` and add it to
     board's own `showStatusMessage` strip, not a floating toast.
 15. Spot-check two panels with no client-side toast of their own — Design and Connections — to confirm
     the shared transport toast reaches them (per-panel CSS is deliberately not involved).
+16. **Quiet-list regression:** trigger a `not-imported` miss (open a subtask ticket whose local file has
+    not been downloaded) and confirm **no** toast appears while the panel still falls back to the live
+    view. This is the behaviour an earlier draft of this plan silently deleted; it deserves its own step.
+
+## Cross-Subtask Reconciliation
+
+This plan and its sibling — **"Finish the prompt-copy return-body retrofit"** — both edit
+`src/webview/transport.js`, and both touch `src/standalone/vscodeShim.ts` and
+`src/services/sharedUtilityVerbs.ts`. The reconciled contract:
+
+| Surface | Sibling (lands **first**) | This plan (lands **second**) |
+| :--- | :--- | :--- |
+| `transport.js` — **above** the `fetch()` | Adds a synchronous `ClipboardItem` claim (WebKit refuses post-`await` writes) | Does not touch it |
+| `transport.js` clipboard block `:372-376` | **Removes the write from the `.then()`**; leaves `clipboardClaim.catch(...)` + key cleanup | **Do not touch.** Extend the handler below it; never re-paste the old lines — a write here re-breaks Safari |
+| Manual-copy fallback surface | Adds it (required: Safari over a LAN address has no `navigator.clipboard` at all) | Must not collide with the notice stack — see below |
+| `transport.js` `EXPECTED_QUIET` block | Untouched | Adds exactly one conjunct (`&& !sawHostError`); everything else preserved verbatim |
+| `transport.js` error surface | Uses `showTransportError` as-is | Generalises it into a `#sb-transport-notices` stack; `showTransportError` survives as a wrapper |
+| Reserved body keys | Adds `__clipboard` | Adds `__notices` — same `__` transport-private convention |
+| `#sb-transport-error` id | Still exists; sibling's test must **not** assert on it | Retired — also update `headless-feature-management-contract.test.js:405` |
+| `vscodeShim.ts` | Clipboard no-op `:292-295` stays a no-op | Edits `show*Message` `:133-135` — a different hunk, no conflict |
+| `sharedUtilityVerbs.ts` `handleCopyDiagramPrompt` | Adds `prompt`, widens the signature | Reads it in a contract test; does not edit it |
+| `hostServices.ts` `createHeadlessHostSeams` | Not edited | Header comment only (decision recorded in Proposed Change 4) |
+
+**Why this plan ships second.** Landing it alone gives standalone a green "Diagram prompt copied to
+clipboard" toast over an **empty** clipboard — a louder, more convincing version of the `Copied!` lie the
+sibling exists to fix. Every toast this plan adds is only truthful once the body carries the prompt.
+Landing both together is equally acceptable; landing this one first is not.
+
+**Merge-order consequence.** Because the sibling rewrites the top of the same function, this plan's
+`transport.js` edit should be applied to the post-sibling file rather than rebased mechanically — a
+three-way merge will not catch a reverted clipboard block, since both sides are "valid" JavaScript.
+Re-read `transport.js` before editing rather than trusting the snippet in Proposed Change 6.
+
+**New surface collision introduced by the sibling's redesign — resolve it here.** The sibling's
+manual-copy fallback is a fixed-position overlay carrying a focused `<textarea>`; this plan's notice
+stack is a fixed-position overlay at `bottom:16px; left:50%` with `z-index:2147483647` and
+`pointer-events:none`. Two constraints follow:
+
+- **Never stack them at the same anchor.** A toast covering the textarea the user is being told to press
+  `Cmd+C` in is a self-defeating UI. Give the manual-copy surface the bottom-centre anchor (it is
+  interactive and needs focus) and move the notice stack out of its way while it is open — simplest
+  correct approach: the manual surface sets a flag the notice stack reads to offset itself, or the stack
+  renders above it in the same flex column.
+- **`pointer-events:none` must not be inherited by the manual surface.** The notice stack is
+  deliberately click-through; the manual surface must be clickable and focusable. They must not share a
+  container, and the manual surface needs its own `pointer-events:auto`.
+
+Whichever subtask lands second owns making these two coexist; since this plan lands second, it owns it.
+Verification step 15 (Design/Connections spot-check) should be run with a forced copy failure so both
+surfaces are on screen together at least once.
+
+## Resolved Assumptions
+
+**No web research is required for this plan. Treat this section as authoritative — do not re-open it.** Everything it asserts about this repo — the shim's live
+paths, the zero-caller dead bundle, the call-site counts, the seven verb rails and their line numbers,
+the `EXPECTED_QUIET` block, the existing `sb-transport-error` test assertion, the webpack target and
+version — was verified against HEAD by reading the code.
+
+Two items were considered and deliberately **not** escalated:
+
+- **`AsyncLocalStorage` propagation.** ALS propagates across `await`, promise chains, and timer/immediate
+  callbacks by definition, and `sql.js` is synchronous WASM (a synchronous call cannot lose the context).
+  There is no propagation gap to research. If a future arm introduces a genuinely untracked async
+  boundary, `captureNotice` returns `false` and the notice falls back to the native path — a degradation,
+  never a lost notice, by the `closed`-flag design in Proposed Change 1.
+- **webpack externalising `node:async_hooks`.** A one-line build check, not a research question: both
+  bundles set `target: 'node'` and the repo is on webpack `^5.105.4`, which resolves `node:`-prefixed
+  builtins natively. Confirm on the first `npm run compile`; the fallback is `require('async_hooks')`
+  with no design impact. Tracked in the Verification Plan, not here.
+
+The sibling subtask *does* carry two genuinely external browser-behaviour uncertainties (WebKit clipboard
+permissions and `execCommand` viability). They are recorded in its own plan and the user has been advised
+to research them there — they do not affect this plan's design.

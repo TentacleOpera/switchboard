@@ -130,5 +130,37 @@ test('the scrollbar repair verifies the sync instead of trusting it', () => {
         'the overflowY fallback was removed rather than made reachable');
 });
 
+// ------------------------------------------------- kanban-mode pane scroll chain
+
+test('every .pane-grid layout row track spells minmax(0, 1fr), never a bare 1fr', () => {
+    // `1fr` is shorthand for `minmax(auto, 1fr)`: the auto minimum lets a row grow
+    // past the grid to fit an over-tall pane, which clips the kanban card list and
+    // leaves overflow-y:auto with nothing to scroll. layout-1 and layout-2h shipped
+    // with the bare form while the other five spelled it out — a text property, so a
+    // future layout added with the wrong shorthand is catchable here.
+    const bare = [];
+    const re = /\.pane-grid\.layout-[\w-]+\s*\{[^}]*\}/g;
+    let m;
+    while ((m = re.exec(HTML)) !== null) {
+        const rows = /grid-template-rows\s*:\s*([^;}]+)/.exec(m[0]);
+        if (rows && !/minmax\(/.test(rows[1])) { bare.push(m[0].split('{')[0].trim()); }
+    }
+    assert.deepStrictEqual(bare, [],
+        'these .pane-grid layout rules declare a bare grid-template-rows without minmax(0, …): '
+        + bare.join(', '));
+});
+
+test('.pane-content declares min-height: 0 — the missed link in the kanban scroll chain', () => {
+    // Declared, not effective — a string match cannot tell those apart, which is why
+    // the plan called this a weak guard. It is still the one mechanical guard against
+    // a future edit deleting the declaration while every sibling keeps theirs.
+    const rule = /\.pane-content\s*\{[\s\S]*?\}/.exec(HTML);
+    assert.ok(rule, '.pane-content rule is missing');
+    assert.match(rule[0].replace(/\/\*[\s\S]*?\*\//g, ''), /min-height\s*:\s*0/,
+        '.pane-content must declare min-height: 0 outside a comment — without it the flex '
+        + 'item refuses to shrink below the card list height and .kanban-pane-list never '
+        + 'overflows its own box, so no scrollbar appears');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) { process.exit(1); }

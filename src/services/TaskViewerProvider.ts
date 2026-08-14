@@ -422,7 +422,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // fleet dispatches, because they all route through _ptyHostVerb.
         if (verb === 'ptySendPrompt' && payload?.standingOrders !== false && typeof payload?.data === 'string') {
             try {
-                const db = await this._getKanbanDb(this._getWorkspaceRoot() || '');
+                // Same root the /terminals/standing-orders routes write through
+                // (LocalApiServer._resolveDbForRoot defaults to options.workspaceRoot).
+                // NOT _getWorkspaceRoot(), which follows the board's active workspace
+                // selection and would read a different DB after a workspace switch.
+                const db = await this._getKanbanDb(this._apiServerWorkspaceRoot || this._getWorkspaceRoot() || '');
                 const orders = db ? await db.getConfigJson<StandingOrder[]>(STANDING_ORDERS_CONFIG_KEY, []) : [];
                 if (orders.length > 0) {
                     const listed = await this._ptyHostVerb('ptyListTerminals', {});
@@ -658,6 +662,19 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _terminalSessionToken: string = '';
     private _ptyHostChild?: import('child_process').ChildProcess;
     private _ptyHostPort?: number;
+    /**
+     * The workspace root `_startLocalApiServer` handed to LocalApiServer as
+     * `options.workspaceRoot`. It is the root every DB-backed API route resolves
+     * against (`LocalApiServer._resolveDbForRoot()` defaults to it), so anything
+     * that must READ a store those routes WRITE has to resolve the same root.
+     *
+     * Deliberately NOT `_getWorkspaceRoot()`: that returns the board's CURRENTLY
+     * SELECTED root, which `KanbanProvider.setCurrentWorkspaceRoot` moves whenever
+     * the operator switches workspace. Reading through it would send the
+     * standing-orders lookup to a different kanban.db than the one the modal saved
+     * into — the order lists in the UI and never appends to a prompt.
+     */
+    private _apiServerWorkspaceRoot?: string;
     /**
      * Instance handle on `_startLocalApiServer`'s `updateMirrorRegistry` closure.
      * `runtime.terminals` is the shared registry every other surface reads for PTY
@@ -948,8 +965,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return this._localApiServer.performKanbanDispatch(wsRoot, planRef, targetColumn, options);
             },
             countEligibleTerminals: async (wsRoot, role) => {
-                if (role === 'planner' && this._ptyHiddenTerminalNames.length > 0) {
-                    return this._ptyHiddenTerminalNames.length;
+                if (role === 'planner') {
+                    // Count the SAME set getUnattendedPlannerTerminal draws from, or
+                    // the lane clamps itself against terminals it will never select.
+                    const hidden = this.getUnattendedImproverTerminals();
+                    if (hidden.length > 0) { return hidden.length; }
                 }
                 const { terminals } = await this.getRoleTerminalSet(role, wsRoot);
                 return terminals.length;
@@ -2014,6 +2034,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(workspaceRoot);
+        // Pin the root the API routes resolve DBs against, so in-process readers of
+        // route-written stores (the standing-orders append in _ptyHostVerb) hit the
+        // same kanban.db. Re-assigned on every _startLocalApiServer call, which is
+        // re-entrant — it stays in lockstep with the `workspaceRoot` option below.
+        this._apiServerWorkspaceRoot = effectiveRoot;
         const cacheService = this._getCacheService(effectiveRoot);
         const allRoots = this._filterMappedRoots(this._getWorkspaceRoots());
 
@@ -2119,7 +2144,19 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         if (entry && (entry as any).ideName === PTY_IDE_NAME) continue;
                         terminalMap[name] = entry;
                     }
-                    for (const t of parsed.terminals) {
+                    // Hidden workers are mirrored too, stamped `hidden: true`. They are
+                    // REAL processes: omitting them makes /health under-report the fleet
+                    // and leaves the extension host's registry disagreeing with
+                    // standalone's (PtyFleetService.updateRegistryState already writes
+                    // `hidden` there) — the two-of-three host split this design exists to
+                    // avoid. Selectability is denied at the READ side instead:
+                    // `_getAliveAutobanTerminalRegistry` drops hidden rows, and
+                    // `_ptyTerminalNames` is populated from `terminals` only.
+                    const mirrorRows: Array<{ row: any; hidden: boolean }> = [
+                        ...parsed.terminals.map((t: any) => ({ row: t, hidden: false })),
+                        ...(Array.isArray(parsed.hiddenTerminals) ? parsed.hiddenTerminals : []).map((t: any) => ({ row: t, hidden: true })),
+                    ];
+                    for (const { row: t, hidden } of mirrorRows) {
                         terminalMap[t.friendlyName] = {
                             friendlyName: t.friendlyName,
                             role: t.role,
@@ -2127,6 +2164,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             pid: t.pid,
                             startTime: t.startTime,
                             worktreePath: t.worktreePath,
+                            hidden,
                             ideName: PTY_IDE_NAME,
                             purpose: 'pty',
                         };
@@ -2235,6 +2273,21 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         .getConfiguration('switchboard')
                         .get<boolean>('terminal.claudeInlineRendering', true)
                 };
+                // Same cwd resolution as ptyCreateTerminal above, for the same reason.
+                // Without it a batch falls back to PtyFleetService's own workspaceRoot,
+                // which in a multi-root window is not the board's selected repo — so
+                // hidden improvers would spawn pointed at a different `.switchboard/plans/`
+                // than the one holding the plans they were created to improve.
+                if (!payload.cwd && !payload.worktreePath) {
+                    const selected = this._kanbanProvider?.getCurrentWorkspaceRoot();
+                    if (selected) {
+                        payload = {
+                            ...payload,
+                            cwd: this._kanbanProvider?.resolveEffectiveWorkspaceRoot(selected)
+                                ?? resolveEffectiveWorkspaceRootFromMappings(selected)
+                        };
+                    }
+                }
             }
             // Inject the clear-before-prompt DELAY default for ptySendPrompt when
             // the caller didn't pass it. The clearBeforePrompt flag itself is NOT
@@ -2273,9 +2326,18 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             if (['ptyCreateTerminal', 'ptyCreateBatch', 'ptyCloseTerminal', 'ptyRenameTerminal'].includes(verb)) {
                 const db = await this._getKanbanDb(root || effectiveRoot);
                 void updateMirrorRegistry(db);
-                if (verb === 'ptyRenameTerminal' && result && result.success !== false && db) {
-                    void rewriteStandingOrdersForRename(db, payload.name, payload.alias)
-                        .catch((err: any) => console.warn('[TaskViewerProvider] Standing-orders rename rewrite failed:', err));
+                if (verb === 'ptyRenameTerminal' && result && result.success !== false) {
+                    // Resolved against the pinned API-server root, NOT `root` — a
+                    // caller-supplied workspaceRoot on the rename verb must not send
+                    // the rewrite to a different kanban.db than the one holding the
+                    // store (`/terminals/standing-orders` and the append both use the
+                    // pinned root). A rewrite in the wrong DB orphans the order.
+                    void (async () => {
+                        const ordersDb = await this._getKanbanDb(this._apiServerWorkspaceRoot || root || effectiveRoot);
+                        if (ordersDb) {
+                            await rewriteStandingOrdersForRename(ordersDb, payload.name, payload.alias);
+                        }
+                    })().catch((err: any) => console.warn('[TaskViewerProvider] Standing-orders rename rewrite failed:', err));
                 }
                 // Wire the team (standing orders + group registration) for a
                 // ptyCreateTerminal that produced children. Runs HERE, not in
@@ -6044,14 +6106,31 @@ Each plan file must include:
         return { terminals, locationKey };
     }
 
-    /** Picks the next active hidden planner PTY for an unattended dispatch. */
-    public getUnattendedPlannerTerminal(): string | null {
-        const hidden = this._ptyHiddenTerminalNames.filter(name => {
+    /**
+     * Hidden PTYs eligible to receive an unattended plan-improve dispatch.
+     *
+     * Role-scoped, NOT "every hidden terminal". Batch workers are named
+     * `${role}-N`, so the normalised name carries the role: `planner-1` and
+     * `improver_claude-1` qualify, a hidden `coder-1` does not. The previous
+     * fallback returned the whole hidden fleet whenever no `planner`-named worker
+     * existed — and since batch improvers are named `improver_*`, that fallback WAS
+     * the live path, so a hidden coder seat could be handed an improve prompt.
+     *
+     * `getUnattendedPlannerTerminal` and the oversight `countEligibleTerminals` dep
+     * must share this predicate: a clamp computed over a different set than the
+     * picker draws from means the lane sizes itself against terminals it will never
+     * select.
+     */
+    public getUnattendedImproverTerminals(): string[] {
+        return this._ptyHiddenTerminalNames.filter(name => {
             const normalized = this._normalizeAgentKey(this._stripIdeSuffix(name));
-            return normalized && normalized.startsWith('planner');
+            return !!normalized && (normalized.startsWith('planner') || normalized.startsWith('improver'));
         });
-        // Broader fallback: any hidden terminal whose role looks like an improver.
-        const pool = hidden.length > 0 ? hidden : this._ptyHiddenTerminalNames;
+    }
+
+    /** Picks the next active hidden planner/improver PTY for an unattended dispatch. */
+    public getUnattendedPlannerTerminal(): string | null {
+        const pool = this.getUnattendedImproverTerminals();
         if (pool.length === 0) return null;
         const picked = pool[this._unattendedPlannerCursor % pool.length];
         this._unattendedPlannerCursor = (this._unattendedPlannerCursor + 1) % pool.length;
@@ -9023,6 +9102,16 @@ Each plan file must include:
         for (const [name, rawInfo] of Object.entries(terminalsMap)) {
             const info = { ...(rawInfo as any) };
 
+            // Hidden fleet workers are live and addressable but NEVER selectable. This
+            // is the registry-side half of that rule: everything downstream of this
+            // function — `_resolveAutobanEffectivePool`, the autoban pool reconciler,
+            // `_getAliveAutobanTerminalNames` — picks a dispatch target by matching
+            // `role` against these rows, so ten hidden `planner` improvers would
+            // otherwise join the planner pool and start absorbing board dispatches
+            // while every visual check passed. The verb-side half is that
+            // `ptyListTerminals.terminals` excludes hidden by projection.
+            if (info.hidden === true) { continue; }
+
             // PTY fleet rows are maintained by their own writer; when the caller asks
             // for them, their own `status` is the liveness authority. See the matching
             // single-dispatch workaround at _resolveAgentTerminalForPlan (8379-8404).
@@ -11226,6 +11315,14 @@ Each plan file must include:
                 name: spec.name,
                 cwd: spec.cwd,
                 delegates: spec.delegates,
+                // Bypassing handlePtyVerb also bypasses its host-side resolution of
+                // this setting, and the pty child cannot read configuration — so
+                // without this line an agent-group head (and, by inheritance, its
+                // delegates) would ignore an operator who turned the setting OFF and
+                // always spawn with Claude's alternate screen disabled.
+                claudeInlineRendering: vscode.workspace
+                    .getConfiguration('switchboard')
+                    .get<boolean>('terminal.claudeInlineRendering', true),
             }),
             // Bypassing handlePtyVerb also skips its post-create hook, which is the
             // sole writer of the `runtime.terminals` registry mirror in this host.

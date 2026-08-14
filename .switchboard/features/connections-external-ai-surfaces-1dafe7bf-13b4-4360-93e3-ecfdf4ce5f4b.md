@@ -34,7 +34,6 @@ Short version: Gemini Spark rejects `http://` and its fetch originates in Google
 - [ ] [`switchboard-spark` — A Generated, Uploadable Context Skill for External AI Surfaces](../plans/feature_plan_20260805130000_switchboard-spark-uploadable-context-skill.md) — **CODE REVIEWED**
 - [ ] [Scheduled External-Agent Jobs — Instruction Inbox and Standing Jobs](../plans/feature_plan_20260805130001_scheduled-external-agent-jobs-instruction-inbox.md) — **CODE REVIEWED**
 - [ ] [Move the WEB AGENTS Tab out of Artifacts and into Connections](../plans/feature_plan_20260805130002_move-web-agents-into-connections.md) — **CODE REVIEWED**
-- [ ] [Connections Jobs Tab — Standing Jobs, Inbox Lifecycle and Run-Log View](../plans/feature_plan_20260805153000_connections-jobs-tab-activity-view.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -478,13 +478,22 @@ function testTicketsSubtaskEmbeddingContract() {
         _assetKey: (id, url) => _assetKey(id, url),
         __existing: existing,
     });
-    const fakeFs = { existsSync: (p) => p === shot };
+    const outside = '/tmp/elsewhere/outside.png';
+    const fakeFs = { existsSync: (p) => p === shot || p === outside };
     const call = (body, index) => relocalFn.call(
         makeSelf(index), fakeFs, path, body, path.join(ticketDir, 'attachments'), 'clickup_t1',
         path.join(ticketDir, 'clickup_t1_a-ticket.md')
     );
     const hostedA = 'https://attachments-public.clickup.com/a/shot.png?X-Amz-Signature=AAA';
     const hostedB = 'https://attachments-public.clickup.com/a/shot.png?X-Amz-Signature=BBB';
+    // A CDN URL whose BASENAME is not on disk anywhere. The sidecar is a cache, not a
+    // gate: when it answers with nothing (or with a path that is gone) the function
+    // probes the filesystem for the URL's last path segment before giving up. So a
+    // "must keep the CDN URL" case has to use a basename the probe cannot find —
+    // otherwise it asserts the absence of a fallback that deliberately exists, and the
+    // fixture, not the code, is what fails.
+    const hostedMissing = 'https://attachments-public.clickup.com/a/absent.png?X-Amz-Signature=AAA';
+    const missingKey = 'https://attachments-public.clickup.com/a/absent.png';
     const idx = { clickup_t1: { 'https://attachments-public.clickup.com/a/shot.png': shot } };
 
     assert.strictEqual(
@@ -513,18 +522,28 @@ function testTicketsSubtaskEmbeddingContract() {
         'a data: uri must be untouched'
     );
     assert.strictEqual(
-        call(`![gone](${hostedA})`, { clickup_t1: { 'https://attachments-public.clickup.com/a/shot.png': '/tmp/deleted.png' } }),
-        `![gone](${hostedA})`,
-        'a recorded file that no longer exists must keep the CDN URL rather than emit a broken path'
+        call(`![gone](${hostedMissing})`, { clickup_t1: { [missingKey]: '/tmp/deleted.png' } }),
+        `![gone](${hostedMissing})`,
+        'a recorded file that no longer exists, with no local copy to probe, must keep the CDN URL rather than emit a broken path'
+    );
+    // The other half of the same rule: the record is stale but the asset IS on disk
+    // under its CDN basename, so disk truth outranks the sidecar and it relocalises.
+    // (Observed on clickup_86d3y200v — five inline images present in the ticket
+    // directory, all emitted as CDN URLs because the sidecar had no row.)
+    assert.strictEqual(
+        call(`![found](${hostedA})`, { clickup_t1: { 'https://attachments-public.clickup.com/a/shot.png': '/tmp/deleted.png' } }),
+        '![found](attachments/shot.png)',
+        'a stale record whose asset is on disk under the CDN basename must relocalise from disk'
     );
     assert.strictEqual(
-        call(`![out](${hostedA})`, { clickup_t1: { 'https://attachments-public.clickup.com/a/shot.png': '/tmp/elsewhere/shot.png' } }),
-        `![out](${hostedA})`,
+        call(`![out](https://attachments-public.clickup.com/a/outside.png?X-Amz-Signature=AAA)`,
+            { clickup_t1: { 'https://attachments-public.clickup.com/a/outside.png': outside } }),
+        '![out](https://attachments-public.clickup.com/a/outside.png?X-Amz-Signature=AAA)',
         'a source outside the ticket directory must keep the CDN URL rather than emit ../..'
     );
     assert.strictEqual(
-        call(`![none](${hostedA})`, {}),
-        `![none](${hostedA})`,
+        call(`![none](${hostedMissing})`, {}),
+        `![none](${hostedMissing})`,
         'no sidecar record at all must be a clean no-op (the normal state on legacy installs)'
     );
     // Inline-image uploads live in the `#images` namespace so getAttachmentList's

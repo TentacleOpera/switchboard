@@ -7422,16 +7422,27 @@ Instructions:
                     showTicketsStatus('Imported ✓', false);
                 }
                 break;
-            case 'pushTicketResult':
+            case 'pushTicketResult': {
                 setTicketsLoadingState(false);
+                // A batch ("Push + subtasks") reply carries pushed/skippedStale/failed
+                // counts; a plain Push reply does not. A batch reports success ONLY when
+                // failed === 0, so partial success arrives on the failure branch — and
+                // that is exactly the case the counts exist for. Showing the bare error
+                // there would render a 1-of-9 push identically to a 0-of-9 one, which is
+                // the reporting defect this action was added to remove.
+                const isBatchReply = typeof message.pushed === 'number';
                 if (!message.success) {
-                    showTicketsStatus(message.error || 'Failed to push edits', true);
+                    if (isBatchReply) {
+                        const summary = message.message || `Push + subtasks: ${message.pushed} pushed, ${message.failed || 0} failed.`;
+                        showTicketsStatus(message.error ? `${summary} ${message.error}` : summary, true);
+                        // Some children DID push — their badges are stale until refreshed.
+                        if (message.pushed > 0) { _requestTicketSyncStatuses(); }
+                    } else {
+                        showTicketsStatus(message.error || 'Failed to push edits', true);
+                    }
                 } else {
-                    // A batch ("Push + subtasks") reply carries pushed/skippedStale/
-                    // failed counts; a plain Push reply does not. Surface the batch
-                    // summary when present, otherwise the single-ticket confirmation.
-                    if (typeof message.pushed === 'number') {
-                        showTicketsStatus(message.message || `Push + subtasks: ${message.pushed} pushed.`, message.failed > 0);
+                    if (isBatchReply) {
+                        showTicketsStatus(message.message || `Push + subtasks: ${message.pushed} pushed.`, false);
                     } else {
                         showTicketsStatus('Pushed to source ✓', false);
                     }
@@ -7439,6 +7450,7 @@ Instructions:
                     _requestTicketSyncStatuses();
                 }
                 break;
+            }
             case 'ticketDeleted':
                 setTicketsLoadingState(false);
                 if (message.success) {

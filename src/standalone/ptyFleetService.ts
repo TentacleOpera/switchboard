@@ -56,6 +56,13 @@ export interface ExtendedTerminalHandle extends TerminalHandle {
      */
     _isTeamMember?: boolean;
     /**
+     * The `claudeInlineRendering` decision this seat actually spawned under, after
+     * `create()` resolved caller option → host resolver → `true`. Read by
+     * `spawnDelegates` so team members inherit the head's environment rather than
+     * re-deriving it in a process that may not be able to.
+     */
+    claudeInlineRendering?: boolean;
+    /**
      * Heartbeat timestamp (ms epoch) of the most recent PTY output byte. Stamped
      * from a fleet-owned `onData` subscription created in `create()` — independent
      * of the gateway's tap, so it survives `ptyReady === false` for the WS path.
@@ -129,6 +136,33 @@ export class PtyFleetService {
      */
     private recentlyClosed = new Map<string, number>();
     private static readonly RECENTLY_CLOSED_CAP = 64;
+
+    /**
+     * Host-injected resolver for the DEFAULT value of `CreateOptions.claudeInlineRendering`,
+     * consulted by `create()` only when the caller passed no explicit value.
+     *
+     * Why this exists rather than "every caller passes the option": `create()` has far
+     * more entry points than the two `ptyCreateTerminal` / `ptyCreateBatch` verb arms.
+     * In this host alone the board-dispatch auto-create, the send-by-name auto-create,
+     * the memo→planner auto-create and the agent-group head all call `create()` with no
+     * options, and `spawnDelegates` calls it twice for team members. Wiring only the verb
+     * arms leaves every one of those seats on the alternate screen with all gates green —
+     * the same reach failure mode that made a service-internal CONFIG READ wrong.
+     *
+     * A resolver, not a value: the standalone config provider reads live, so this must
+     * be evaluated at spawn time rather than latched at construction.
+     *
+     * Unset (ptyHost.ts's config-blind child) → `true`, matching the
+     * `switchboard.terminal.claudeInlineRendering` contributed default. That child's two
+     * verb arms pass the proxying host's resolved boolean explicitly, and its delegates
+     * inherit from the head handle, so no path there depends on this fallback being right.
+     */
+    private _claudeInlineRenderingResolver?: () => boolean;
+
+    /** See {@link _claudeInlineRenderingResolver}. Called once by the host that owns config. */
+    public setClaudeInlineRenderingResolver(resolver: () => boolean): void {
+        this._claudeInlineRenderingResolver = resolver;
+    }
 
     constructor(workspaceRoot: string, db?: KanbanDatabase, apiToken?: string) {
         this.workspaceRoot = workspaceRoot;
@@ -230,7 +264,14 @@ export class PtyFleetService {
         // spawns a SHELL, and `claude` is started later by a startup command or by
         // the operator, so there is no reliable role→CLI fact at this point. Other
         // CLIs ignore unrecognised CLAUDE_CODE_* variables.
-        const claudeEnvDefaults: Record<string, string> = opts?.claudeInlineRendering
+        //
+        // `??`, not `||`: an explicit `false` from a verb arm must win over the host
+        // default. When no caller passed the option at all (the delegate, group-head,
+        // planner and dispatch auto-create paths), fall back to the host resolver so
+        // those seats get the operator's setting instead of silently staying broken.
+        const claudeInlineRendering = opts?.claudeInlineRendering
+            ?? (this._claudeInlineRenderingResolver ? this._claudeInlineRenderingResolver() : true);
+        const claudeEnvDefaults: Record<string, string> = claudeInlineRendering
             ? {
                 CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN: '1',
                 CLAUDE_CODE_DISABLE_MOUSE: '1',
@@ -264,6 +305,12 @@ export class PtyFleetService {
             cwd: effectiveCwd,
             hidden: opts?.hidden === true,
             _isTeamMember: opts?._isTeamMember === true,
+            // Recorded so spawnDelegates can hand each team member the SAME decision the
+            // head spawned under. Delegates are ordinary PTY seats in the same cockpit
+            // grid, so a head rendering inline while its children sit on the alternate
+            // screen is the reported bug, half-fixed. Inheriting from the handle keeps
+            // this correct in ptyHost.ts's child too, which cannot read the setting.
+            claudeInlineRendering,
             // Initialise the heartbeat to creation time so a freshly-spawned shell
             // that has not yet emitted its banner still reads as "just heard from".
             lastDataAt: Date.now(),
@@ -447,7 +494,8 @@ export class PtyFleetService {
                                 parent.worktreePath,
                                 undefined, // unparented — no parentInstanceId
                                 d.startupCommand,
-                                { _isTeamMember: true }
+                                // Inherit the head's env decision — see ExtendedTerminalHandle.
+                                { _isTeamMember: true, claudeInlineRendering: parent.claudeInlineRendering }
                             );
                         });
                         children.push(existing);
@@ -483,7 +531,8 @@ export class PtyFleetService {
                         parent.worktreePath,
                         parent.agentInstanceId,
                         d.startupCommand,
-                        { _isTeamMember: true }
+                        // Inherit the head's env decision — see ExtendedTerminalHandle.
+                        { _isTeamMember: true, claudeInlineRendering: parent.claudeInlineRendering }
                     ));
                 } catch (err) {
                     // Best-effort with a report: the parent and any already-spawned

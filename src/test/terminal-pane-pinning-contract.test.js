@@ -285,6 +285,102 @@ test('showPaneToast hides the Undo button when onUndo is null', () => {
     );
 });
 
+// ------------------------------------------------------- pane header brand icon
+
+/** terminals.html with CSS comments stripped — several rules NAME a selector while
+ *  explaining why never to write it, so a bare text search false-positives. */
+const htmlNoComments = terminalsHtml.replace(/\/\*[\s\S]*?\*\//g, '');
+
+test('the pane header carries its own brand-icon rule, not the sidebar class', () => {
+    assert.ok(/\.pane-brand-icon\s*\{/.test(htmlNoComments),
+        '.pane-brand-icon rule is missing — the pane header is the one terminal-identifying '
+        + 'surface with no brand mark without it');
+    assert.ok(/\.pane-brand-icon\.is-exited\s*\{/.test(htmlNoComments),
+        'the exited variant must be a class on the IMAGE');
+});
+
+test('no .terminal-pane.is-exited selector — that class only ever lands on a sidebar row', () => {
+    // is-exited is applied to .terminal-item in renderTerminalRow; .terminal-pane never
+    // receives it, so any rule keyed on it is dead CSS that a manual check would appear
+    // to "pass" because the icon dims for an unrelated reason.
+    assert.ok(!/\.terminal-pane\.is-exited/.test(htmlNoComments),
+        'a .terminal-pane.is-exited rule can never match — stamp the state on the element '
+        + 'where fleetItem.status is already in scope instead');
+});
+
+test('updatePaneElement declares fleetItem and agentLabel exactly once each', () => {
+    // The hoist-and-delete: the icon needs agentLabel before the index chip, so both
+    // consts moved to the top of the `if (assignedName)` block. Leaving the originals
+    // behind is a same-scope const redeclaration — the whole panel script stops parsing
+    // and EVERY pane renders blank, not just this one.
+    const region = block(terminalsJs, 'function updatePaneElement(paneEl, index) {', 'function resolveFlooredLayout(');
+    const fleetItems = region.match(/const fleetItem\s*=/g) || [];
+    const agentLabels = region.match(/const agentLabel\s*=/g) || [];
+    assert.strictEqual(fleetItems.length, 1,
+        `updatePaneElement must declare const fleetItem exactly once, found ${fleetItems.length}`);
+    assert.strictEqual(agentLabels.length, 1,
+        `updatePaneElement must declare const agentLabel exactly once, found ${agentLabels.length}`);
+});
+
+// ---------------------------------------------------------- dispatch progress chip
+
+test('the dispatch chip is refcounted per terminal, not a boolean', () => {
+    // withTerminalLock serialises concurrent sends to one terminal, so the first
+    // response can land while a second is still queued. A boolean clears the chip early.
+    assert.ok(/const dispatchInFlight = new Map\(\)/.test(terminalsJs),
+        'dispatchInFlight must be a Map of counts');
+    const begin = block(terminalsJs, 'function beginDispatchIndicator(', 'function endDispatchIndicator(');
+    assert.match(begin, /\|\|\s*0\)\s*\+\s*1/, 'begin must increment a count');
+    const end = block(terminalsJs, 'function endDispatchIndicator(', 'function refreshDispatchState(');
+    assert.match(end, /-\s*1/, 'end must decrement rather than delete outright');
+});
+
+test('refreshDispatchState hands the header back to the input-state chip', () => {
+    // syncInputStateChip early-returns while .is-dispatching is set, so removing the
+    // dispatch chip without this tail leaves the header with NO chip at all — the
+    // connecting / read-only / paste-queued states stay invisible until the next poll.
+    const fn = block(terminalsJs, 'function refreshDispatchState(name) {', 'function notifyInputDropped(');
+    assert.ok(fn.includes('syncDispatchChip('), 'must go through the one chip writer');
+    assert.ok(fn.includes('refreshInputState('),
+        'refreshDispatchState must call refreshInputState after syncing — otherwise a finished '
+        + 'dispatch leaves the pane with no chip for a full poll cycle');
+    assert.ok(!fn.includes('renderPaneGrid('),
+        'a purely visual repaint must not rebuild the grid — that reparents live xterm DOM');
+});
+
+test('the render path syncs the dispatch chip BEFORE the input-state chip', () => {
+    // Panes are reused and .is-dispatching is cleared only by syncDispatchChip, so the
+    // reverse order makes syncInputStateChip see a stale class from a finished dispatch
+    // (or from the pane's previous occupant) and suppress the input chip for a poll cycle.
+    const region = block(terminalsJs, 'function updatePaneElement(paneEl, index) {', 'function resolveFlooredLayout(');
+    const dispatchAt = region.indexOf('syncDispatchChip(paneEl, titleEl');
+    const inputAt = region.indexOf('syncInputStateChip(paneEl, titleEl');
+    assert.ok(dispatchAt !== -1 && inputAt !== -1, 'both chip syncs must run in the assigned branch');
+    assert.ok(dispatchAt < inputAt,
+        'syncDispatchChip must be called before syncInputStateChip');
+});
+
+test('the drop dispatch clears the chip from finally, and stale entries are pruned', () => {
+    const drop = block(terminalsJs, 'beginDispatchIndicator(targetName)', 'attributeDropDispatch(targetName, ids, workspaceRoot);\n                }');
+    assert.match(drop, /\}\s*finally\s*\{[\s\S]*endDispatchIndicator\(targetName\)/,
+        'endDispatchIndicator must run in a finally — a rejected fetch must not strand the '
+        + 'chip, and the failure toast must never render beside a live "dispatching…"');
+    const sanitize = block(terminalsJs, 'function sanitizePaneAssignments() {', 'function renderSidebarList(');
+    assert.ok(/dispatchInFlight\.delete\(name\)/.test(sanitize),
+        'sanitizePaneAssignments must drop in-flight entries for dead terminals — one that '
+        + 'died mid-dispatch never sends a response, so its refcount would strand');
+});
+
+test('the dispatch chip has its own box and a dense-layout variant', () => {
+    assert.ok(/\.pane-dispatch-state\s*\{/.test(htmlNoComments), '.pane-dispatch-state rule is missing');
+    assert.ok(/layout-3x3\s+\.pane-dispatch-state/.test(htmlNoComments),
+        'the two dense layouts need the dot-only variant — isTerseLayout() empties the label, '
+        + 'and without this the gap survives an empty label');
+    assert.ok(/prefers-reduced-motion[\s\S]{0,200}\.pane-dispatch-state::before/.test(htmlNoComments)
+        || /\.pane-dispatch-state::before\s*\{\s*animation:\s*none/.test(htmlNoComments),
+        'the pulse must be disabled under reduced motion — a static dot still reads as in-progress');
+});
+
 console.log(`\nResults: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
     process.exit(1);

@@ -6388,7 +6388,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const dispatchStagedNow = (isPlanReviewed && showingDispatch) ? dispatchStagedCount() : 0;
                     const dispatchViewControls = (isPlanReviewed && showingDispatch)
                         ? `<span id="dispatch-view-info" class="dispatch-view-info" style="font-size:11px; margin-right:auto; color:var(--vscode-descriptionForeground);">0 plans · 0 coder terminals</span>
-                           <button class="column-icon-btn" id="btn-add-coder-terminal" data-action="addCoderTerminal" data-column="${escapeAttr(def.id)}" data-tooltip="Add a coder terminal"${dispatchAnalyzeAvailable ? '' : ' disabled'} style="font-size:12px; width:22px;">+</button>
+                           <button class="column-icon-btn" id="btn-add-coder-terminal" data-action="addCoderTerminal" data-column="${escapeAttr(def.id)}" data-tooltip="${(dispatchAnalyzeAvailable && terminalCreateAvailable) ? 'Add a coder terminal' : 'Creating terminals requires a terminal host (unavailable here)'}"${(dispatchAnalyzeAvailable && terminalCreateAvailable) ? '' : ' disabled'} style="font-size:12px; width:22px;">+</button>
                            <button class="column-icon-btn" id="btn-send-dispatch-set" data-action="sendDispatchSetToCoders" data-column="${escapeAttr(def.id)}" data-tooltip="Send all staged plans to complexity-routed coders" style="width:auto; padding:0 8px; font-size:10px;"${(dispatchStagedNow === 0 || !dispatchAnalyzeAvailable) ? ' disabled' : ''}>Send all to coders</button>`
                         : '';
                     buttonArea = `<div class="column-button-area" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
@@ -6634,7 +6634,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             break;
                         }
                         case 'addCoderTerminal': {
-                            if (!dispatchAnalyzeAvailable) return;
+                            if (!dispatchAnalyzeAvailable || !terminalCreateAvailable) return;
                             postKanbanMessage({ type: 'addAutobanTerminal', role: 'coder' });
                             break;
                         }
@@ -7124,6 +7124,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 if (countEl) countEl.textContent = String(counts[col] || 0);
             });
             updateDispatchToggleCount();
+            updateDispatchViewInfo();
         }
 
         // Staged-plan count for the DISPATCH toggle on the Planned column header.
@@ -7162,7 +7163,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const m = lastCoderTerminalCount;
             info.textContent = `${n} plan${n === 1 ? '' : 's'} · ${m} coder terminal${m === 1 ? '' : 's'}`;
             if (sendBtn) sendBtn.disabled = !(n > 0 && dispatchAnalyzeAvailable);
-            if (addBtn) addBtn.disabled = !dispatchAnalyzeAvailable;
+            if (addBtn) addBtn.disabled = !(dispatchAnalyzeAvailable && terminalCreateAvailable);
         }
 
         function renderBoard(cards, justFinishedIds = new Set()) {
@@ -7938,6 +7939,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let dispatchAnalyzeAvailable = true;
         // Alive coder-terminal count, pushed in updateBoard for the Dispatch view header.
         let lastCoderTerminalCount = 0;
+        // Whether the host can actually CREATE a coder terminal. Distinct from
+        // dispatchAnalyzeAvailable (pty readiness): standalone can have a live PTY fleet
+        // while `switchboard.addAutobanTerminalFromKanban` is unregistered in its command
+        // registry, in which case the arm returns success having done nothing. Defaults
+        // true — the extension host registers the command (extension.ts) and omits the
+        // field; standalone sets it false explicitly.
+        let terminalCreateAvailable = true;
 
         // Drag & Drop handlers
         let draggedSessionId = null;
@@ -8632,8 +8640,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (typeof msg.dispatchAnalyzeAvailable !== 'undefined') {
                         dispatchAnalyzeAvailable = msg.dispatchAnalyzeAvailable === true;
                     }
+                    // A coder-terminal change moves NO card, so neither renderBoard nor
+                    // refreshColumnCounts runs below — both are gated on a card-signature
+                    // change. Repaint the Dispatch header explicitly on the edge, or the
+                    // `+` stepper's only feedback never arrives.
+                    let coderTerminalCountChanged = false;
                     if (typeof msg.coderTerminalCount === 'number') {
+                        coderTerminalCountChanged = msg.coderTerminalCount !== lastCoderTerminalCount;
                         lastCoderTerminalCount = msg.coderTerminalCount;
+                    }
+                    if (typeof msg.terminalCreateAvailable !== 'undefined') {
+                        terminalCreateAvailable = msg.terminalCreateAvailable === true;
                     }
                     if (msg.routingConfig) {
                         routingMapConfig = msg.routingConfig;
@@ -8702,6 +8719,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             lastAllCardsSignature = nextAllCardsSignature;
                         }
                     }
+                    // Edge-triggered, so the common (cards-changed) path does not repaint
+                    // twice — renderBoard already called this.
+                    if (coderTerminalCountChanged) updateDispatchViewInfo();
                     break;
                 }
                 case 'settingResult': {

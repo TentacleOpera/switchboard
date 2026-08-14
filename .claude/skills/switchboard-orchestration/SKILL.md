@@ -151,8 +151,8 @@ headless/test harnesses (503).
 
 | Endpoint | Body / Query | Purpose |
 |---|---|---|
-| `POST /oversight/start` | `{ workspaceRoot, queue: { planIds?: [] \| sourceColumn?: "" }, targetColumn?, stage?, reviewGate?, reviewColumn?, cooldownMs?, stuckThresholdMs? }` | Resolve the queue once and start the pass. Returns `{ success, passId?, pass }` (or `{ success, alreadyRunning: true, pass }` if a pass is already in flight — singleton, never a second loop). `409` while autoban/orchestration automation is armed (double-dispatch guard). `400` if neither `planIds` nor `sourceColumn` is supplied. |
-| `GET /oversight/status` | `?workspaceRoot=` (omit for all known passes) | Live pass state: `passId`, `state` (`running` \| `halted` \| `ended` \| `stopped`), `haltReason?`, `queueRemaining[]`, `inFlight[]` (`planId`, `topic`, `lane`, `cardStage`, `dispatchedAt`, `dispatchConfirmed`), `plannerLane` (`cooldownMs`, `lastCompletionAt`, `readyAt`), `completed[]` (`planId`, `topic`, `lane`, `durationSeconds`, `landedColumn`), `skipped[]`. |
+| `POST /oversight/start` | `{ workspaceRoot, queue: { planIds?: [] \| sourceColumn?: "" }, targetColumn?, stage?, reviewGate?, reviewColumn?, cooldownMs?, stuckThresholdMs?, plannerConcurrency? }` | Resolve the queue once and start the pass. Returns `{ success, passId?, pass }` (or `{ success, alreadyRunning: true, pass }` if a pass is already in flight — singleton, never a second loop). `409` while autoban/orchestration automation is armed (double-dispatch guard). `400` if neither `planIds` nor `sourceColumn` is supplied. |
+| `GET /oversight/status` | `?workspaceRoot=` (omit for all known passes) | Live pass state: `passId`, `state` (`running` \| `halted` \| `ended` \| `stopped`), `haltReason?`, `queueRemaining[]`, `inFlight[]` (`planId`, `topic`, `lane`, `cardStage`, `dispatchedAt`, `dispatchConfirmed`), `plannerLane` (`cooldownMs`, `lastDispatchAt`, `readyAt`, `lastCompletionAt`), `completed[]` (`planId`, `topic`, `lane`, `durationSeconds`, `landedColumn`, `hasOpenQuestions`), `skipped[]`. |
 | `POST /oversight/stop` | `{ workspaceRoot }` | Cancel the running pass; leaves the board as-is; writes a stop log line. |
 
 **Queue semantics (resolved once at `start`, in code AND prose):**
@@ -165,8 +165,24 @@ headless/test harnesses (503).
 - Coding lane WIP-1, review-gated by default for explicit lists (`reviewGate` defaults
   true when `planIds` is supplied, false for column sweeps). `cardStage` = `coding` →
   `review`. `targetColumn` omitted/`"auto"` ⇒ complexity auto-routing.
-- Planner lane overlaps the coding lane with a ≥`cooldownMs` (default 120000) cooldown
-  measured from the previous planner dispatch's **completion signal**.
+- Planner lane overlaps the coding lane and runs up to `plannerConcurrency` cards at once
+  (default **1** — an omitted field reproduces the old single-card behaviour exactly).
+  The engine clamps that number down to the count of live planner terminals, so asking for
+  more workers than exist yields a smaller lane rather than a pass-wide halt.
+- `cooldownMs` (default 120000) is the minimum interval between planner **dispatches**, not a
+  completion-gated barrier: at most one planner card is dispatched per `cooldownMs` window.
+  Measuring it from completions is what silently re-serialised a parallel lane after its first
+  N cards, so `lastCompletionAt` is still reported but no longer gates anything. Pass a small
+  `cooldownMs` when you actually want N workers running concurrently.
+
+**Unattended improvers (planner lane):** every oversight dispatch is marked unattended, which
+appends an `UNATTENDED IMPROVER CONTRACT:` block to the improver's prompt: never ask in chat,
+touch exactly one plan file, and record unresolved items under `## Outstanding Questions` in
+that plan. A completed plan carrying that heading with at least one `[user]`/`[research]` item
+is reported as `hasOpenQuestions: true` on its `completed[]` row in `GET /oversight/status` and
+named in the end-of-pass summary line in `oversight-log.md`. The heading is the only channel —
+there is no inbox and no message. See the `improve-plan` skill's `## Unattended runs` block for
+the improver-side half of the same contract.
 
 **Halt / resume / singleton:**
 - Halt-on-failure: any dispatch failure or stuck-timeout halts the WHOLE pass — never

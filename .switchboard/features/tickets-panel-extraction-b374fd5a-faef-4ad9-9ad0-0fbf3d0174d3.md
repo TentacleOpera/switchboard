@@ -23,8 +23,6 @@ Extract the TICKETS tab out of the Artifacts panel into a dedicated Tickets pane
 - [ ] [Extract the TICKETS tab into its own panel, registered in both the VS Code and standalone hosts](../plans/tickets-panel-2-extract-tickets-tab-into-standalone-panel.md) — **CODE REVIEWED**
 - [ ] [De-collide the three tickets-folder verbs that Planning and Setup both define with different meanings](../plans/tickets-panel-3-decollide-duplicate-tickets-folder-verbs.md) — **CODE REVIEWED**
 - [ ] [Move the ClickUp and Linear config tabs out of Setup and into the Tickets panel](../plans/tickets-panel-4-move-clickup-and-linear-config-out-of-setup.md) — **CODE REVIEWED**
-- [ ] [Sweep the dead ticket code left in the Artifacts panel after the Tickets extraction](../plans/tickets-panel-7-sweep-dead-ticket-code-from-planning.md) — **CREATED**
-- [ ] [Give `tickets.root` a single source of truth: wire the host push, then drop the local mirror](../plans/tickets-panel-8-single-source-for-tickets-root.md) — **CREATED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

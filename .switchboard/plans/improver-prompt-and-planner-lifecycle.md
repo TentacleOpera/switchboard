@@ -175,3 +175,11 @@ None. Every claim is verified against the code and skill files at HEAD and cited
 ## Recommendation
 
 Complexity 3 → **Send to Intern.**
+
+## Review Findings
+
+**CRITICAL — the entire documentation half was missing.** Only Proposed Change #3 (`agentPromptBuilder.ts`) had landed; #1, #2, #4 and #5 had not, despite the feature file's completion summary claiming they had. Added: `## Outstanding Questions` as optional section 10 plus its four imperative rules, and the `## Unattended runs` override block, to `.agents/skills/improve-plan/SKILL.md`; the never-ask-in-chat behaviour rule (item 11) to `switchboard-contracts/SKILL.md`; and the unattended-dispatch / `hasOpenQuestions` invocation note to `switchboard-orchestration/SKILL.md` — which also still documented the superseded completion-gated cooldown. All three `.claude/skills` mirrors were regenerated through the real `generateClaudeMirror`, so `mirror:check` reports no drift on them.
+
+**Verification.** `src/test/unattended-batch-improvement-contract.test.js` (new, wired as `test:contract:unattended-batch` in `package.json` **and** in `.github/workflows/integration-tests.yml`) covers plan tests 1–6 — prompt directives, byte-identical attended output, role gating, skill/prompt agreement on collapsed whitespace, and schema optionality. 18/18 green; typecheck, `parity:check`, `verb-returns:check`, `push-routing:check` all green.
+
+**Remaining risk.** The unattended block is gated on `plans.length === 1`; a multi-plan planner dispatch marked unattended silently gets no contract. Correct for the oversight engine (one card per dispatch) but not defended anywhere. Plan test 7 (control-plane mirror regeneration) is covered by `mirror:check`, which is defined in `package.json` but **not invoked by CI** — a pre-existing gate hole, and it currently fails on an unrelated `delegates/SKILL.md` mirror-manifest orphan from commit `1bd39f4a`.

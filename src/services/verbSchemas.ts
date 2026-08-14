@@ -372,6 +372,15 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             workspaceRoot: { type: 'string' },
         },
     },
+    // The fan-out counterpart of sendDispatchToCoder. It takes NO sessionIds by design —
+    // the arm re-reads the DISPATCH set itself so a card dragged out between render and
+    // press is skipped rather than dispatched. workspaceRoot is optional; the arm falls
+    // back to the provider's current root, same as dispatchAnalyze.
+    sendDispatchSetToCoders: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
 };
 
 export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {

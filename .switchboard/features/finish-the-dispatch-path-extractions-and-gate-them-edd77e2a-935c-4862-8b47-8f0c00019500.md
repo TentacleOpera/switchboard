@@ -13,8 +13,8 @@ Close out two extractions that shipped their mechanism but not their consolidati
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Finish the `advanceCards` Extraction — Seventeen Call Sites Still Open-Code It](../plans/finish-advance-cards-extraction.md) — **PLAN REVIEWED**
-- [ ] [Dispatch-Surface Ratchet — Stop `apiOriginated` / `allowPtyFleet` Growing Back](../plans/dispatch-surface-ratchet-guard.md) — **PLAN REVIEWED**
+- [ ] [Finish the `advanceCards` Extraction — Nineteen Call Sites Still Open-Code It](../plans/finish-advance-cards-extraction.md) — **PLAN REVIEWED**
+- [ ] [Dispatch-Surface Ratchet — Stop `apiOriginated` Growing Back](../plans/dispatch-surface-ratchet-guard.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -2098,16 +2098,20 @@ export class KanbanProvider implements vscode.Disposable {
             // gates the data push — the auxiliary state messages below still post so the
             // webview stays in sync on config/column/agent state.
             const snapshotKey = `${workspaceId}|${this._projectFilter ?? ''}|${this._repoScopeFilter ?? ''}`;
+            const coderTerminalCount = this._taskViewerProvider
+                ? (await this._taskViewerProvider.getAliveRoleTerminalNames('coder', resolvedWorkspaceRoot)).length
+                : 0;
+            // coderTerminalCount is part of the snapshot, not just the payload. The Dispatch
+            // view header renders it, and adding a coder terminal changes NO card — so a
+            // cards-only hash would skip the push and freeze the header at its stale value
+            // while the stepper appears to do nothing.
             const snapshotHash = crypto.createHash('sha256')
-                .update(JSON.stringify({ cards, featureWorktrees }))
+                .update(JSON.stringify({ cards, featureWorktrees, coderTerminalCount }))
                 .digest('hex');
             const snapshotUnchanged = snapshotKey === this._lastBoardSnapshotKey
                 && snapshotHash === this._lastBoardSnapshotHash;
             this._lastBoardSnapshotKey = snapshotKey;
             this._lastBoardSnapshotHash = snapshotHash;
-            const coderTerminalCount = this._taskViewerProvider
-                ? (await this._taskViewerProvider.getAliveRoleTerminalNames('coder', resolvedWorkspaceRoot)).length
-                : 0;
             if (!snapshotUnchanged) {
                 this.postMessage((scope: string | null | undefined) => ({
                     type: 'updateBoard',
@@ -10965,6 +10969,13 @@ ${FOCUS_DIRECTIVE}`;
                 const role = String(msg.role || '');
                 if (role) {
                     await this._seams().commands.executeCommand('switchboard.addAutobanTerminalFromKanban', role);
+                    // Terminal creation changes no card, so nothing else on the board path
+                    // re-pushes. The Dispatch header's coder-terminal count is the visible
+                    // feedback for the `+` stepper — without this the number only moves on
+                    // the next live-sync tick. _createAutobanTerminal's own follow-ups
+                    // (_postAutobanState, _refreshTerminalStatuses) target the sidebar, not
+                    // the board, so this is not a double refresh.
+                    await this._refreshBoard();
                     return { success: true, role };
                 }
                 return { success: false, error: 'role is required' };

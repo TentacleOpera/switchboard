@@ -24,9 +24,18 @@ const path = require('path');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const PTY_VERBS = [
-    'ptyCreateTerminal', 'ptyCloseTerminal', 'ptyListTerminals', 'ptyRenameTerminal',
+    'ptyCreateTerminal', 'ptyCreateBatch', 'ptyCloseTerminal', 'ptyListTerminals', 'ptyRenameTerminal',
     'ptyClearTerminal', 'ptySendModel', 'ptyClearAllTerminals', 'ptyPasteImage',
 ];
+
+// The subset the terminals webview actually calls. `ptyCreateBatch` is
+// deliberately agent-only: a planner creates a hidden fleet over HTTP, never a
+// button, and the hidden-fleet design requires NO change to terminals.js (a
+// change there would mean hidden-ness was implemented as a UI filter instead of
+// a projection). Demanding a webview call site for it would force exactly the
+// edit the design forbids. The NEGATIVE assertion — never on /kanban/verb/ —
+// still covers every verb, batch included.
+const WEBVIEW_PTY_VERBS = PTY_VERBS.filter(v => v !== 'ptyCreateBatch');
 
 let failures = 0;
 async function test(name, fn) {
@@ -284,8 +293,10 @@ function post(port, pathname, body) {
 
     await test('the webview posts pty verbs to /terminals/verb/ and keeps getSetting on /kanban/verb/', () => {
         const js = fs.readFileSync(path.join(REPO_ROOT, 'src', 'webview', 'terminals.js'), 'utf8');
-        for (const verb of PTY_VERBS) {
+        for (const verb of WEBVIEW_PTY_VERBS) {
             assert.ok(new RegExp(`/terminals/verb/${verb}`).test(js), `terminals.js must post ${verb} to /terminals/verb/`);
+        }
+        for (const verb of PTY_VERBS) {
             assert.ok(!new RegExp(`/kanban/verb/${verb}`).test(js), `terminals.js still posts ${verb} to /kanban/verb/`);
         }
         // getSetting is a KANBAN verb (the agents.visibleAgents role-picker read). A
@@ -354,6 +365,135 @@ function post(port, pathname, body) {
             /clearBeforePrompt:\s*false/.test(js.slice(sendStart, sendStart + 4000)),
             'sendLinkMessage must post an explicit clearBeforePrompt: false — omitting it applies the '
             + 'config default (true) and wipes the parent agent before it is asked to relay.'
+        );
+    });
+
+    await test('the clear-settle delay is PARTITIONED by delivery channel, not shared', () => {
+        // One key served two channels with different physics. The PTY path writes straight
+        // to the pty master fd; the vscode.Terminal path goes through a clipboard round
+        // trip, focus acquisition and extension-host IPC — which is where 2000ms was
+        // earned. Lowering the shared contributed default would have silently retuned the
+        // slow path on ~4,000 shipped installs; lowering only the code fallbacks would
+        // have been INERT, because a contributed default preempts get(key, fallback)'s
+        // second argument. Hence a second key, and hence this partition assertion.
+        const provider = fs.readFileSync(path.join(REPO_ROOT, 'src', 'services', 'TaskViewerProvider.ts'), 'utf8');
+        const kanban = fs.readFileSync(path.join(REPO_ROOT, 'src', 'services', 'KanbanProvider.ts'), 'utf8');
+
+        assert.ok(
+            /function resolvePtyClearDelay\(/.test(provider),
+            'resolvePtyClearDelay must exist — the fallback rule has to live in ONE place'
+        );
+        // inspect(), not get(): get() cannot tell "operator set 2000" from "contributed
+        // default is 2000", and `!== undefined` rather than a truthy test because both
+        // keys allow an explicit 0.
+        const resolver = provider.slice(
+            provider.indexOf('function resolvePtyClearDelay('),
+            provider.indexOf('export class TaskViewerProvider')
+        );
+        assert.ok(
+            /\.inspect<number>\('terminal\.ptyClearBeforePromptDelay'\)/.test(resolver)
+            && /\.inspect<number>\('terminal\.clearBeforePromptDelay'\)/.test(resolver),
+            'the resolver must use inspect() for BOTH keys — get() cannot distinguish an '
+            + 'operator-set value from a contributed default'
+        );
+        assert.ok(
+            /!==\s*undefined/.test(resolver) && !/if\s*\(\s*scoped\s*\)/.test(resolver),
+            'scope values must be tested with !== undefined — an operator who deliberately '
+            + 'sets 0 would read as unset under a truthy check'
+        );
+
+        // Every ptySendPrompt arm resolves through the new key…
+        const ptyArms = (provider.match(/clearBeforePromptDelayMs:\s*payload\.clearBeforePromptDelayMs \?\? resolvePtyClearDelay\(/g) || []).length;
+        assert.ok(
+            ptyArms >= 2,
+            `both ptySendPrompt injection arms must call resolvePtyClearDelay, found ${ptyArms}. `
+            + 'The omitted-field branch is a second PTY-channel read; moving only the first '
+            + 'leaves part of the path on 2000ms with every check green.'
+        );
+        // …and the vscode.Terminal sites keep the legacy key and its 2000ms default.
+        const legacyReads = (provider.match(/get<number>\('terminal\.clearBeforePromptDelay',\s*2000\)/g) || []).length;
+        assert.ok(
+            legacyReads >= 2,
+            `the clipboard/sendRobustText sites must keep reading terminal.clearBeforePromptDelay `
+            + `at 2000, found ${legacyReads} in TaskViewerProvider`
+        );
+        assert.ok(
+            /get<number>\('terminal\.clearBeforePromptDelay',\s*2000\)/.test(kanban),
+            'KanbanProvider\'s cache is the vscode.Terminal path and must stay on the legacy key'
+        );
+
+        const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
+        const props = pkg.contributes.configuration.properties;
+        assert.strictEqual(
+            props['switchboard.terminal.clearBeforePromptDelay'].default, 2000,
+            'the legacy key must keep default 2000 — a "cleanup" that harmonises the two keys '
+            + 'silently retunes the clipboard path on every shipped install'
+        );
+        assert.strictEqual(
+            props['switchboard.terminal.ptyClearBeforePromptDelay'].default, 600,
+            'the PTY-scoped key must declare default 600 — the inline fallback alone is inert'
+        );
+    });
+
+    await test('claudeInlineRendering is resolved host-side and reaches EVERY create path', () => {
+        // ptyHost.ts runs in a child process with no vscode API and no configProvider, so
+        // the flag has to arrive as a boolean on the wire. Two silent failure modes: wiring
+        // one host leaves half the install base unfixed, and wiring only the two verb arms
+        // leaves delegates, group heads and the auto-create paths spawning on Claude's
+        // alternate screen — both with every gate green.
+        const provider = fs.readFileSync(path.join(REPO_ROOT, 'src', 'services', 'TaskViewerProvider.ts'), 'utf8');
+        const boot = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'bootstrap.ts'), 'utf8');
+        const child = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'ptyHost.ts'), 'utf8');
+        const fleet = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'ptyFleetService.ts'), 'utf8');
+
+        const hostReads = (provider.match(/get<boolean>\('terminal\.claudeInlineRendering',\s*true\)/g) || []).length;
+        assert.ok(hostReads >= 3,
+            `the extension host must resolve terminal.claudeInlineRendering for ptyCreateTerminal, `
+            + `ptyCreateBatch AND the agent-group head (which calls _ptyHostVerb directly, below `
+            + `handlePtyVerb's injection), found ${hostReads}`);
+        const bootReads = (boot.match(/getConfigBoolean\('terminal\.claudeInlineRendering',\s*true\)/g) || []).length;
+        assert.ok(bootReads >= 3,
+            `the standalone host must resolve it for ptyCreateTerminal, ptyCreateBatch and the `
+            + `fleet-wide resolver, found ${bootReads}`);
+        assert.ok(/setClaudeInlineRenderingResolver\(/.test(boot),
+            'bootstrap must install the fleet-wide resolver — board dispatch, send-by-name, '
+            + 'memo→planner and agent-group heads all call create() with no options');
+
+        const childPassThrough = (child.match(/payload\.claudeInlineRendering !== false/g) || []).length;
+        assert.ok(childPassThrough >= 2,
+            `ptyHost.ts must forward the boolean in BOTH the create and batch arms, found ${childPassThrough}`);
+
+        assert.ok(/claudeInlineRendering:\s*parent\.claudeInlineRendering/.test(fleet),
+            'spawnDelegates must inherit the head\'s decision — a head rendering inline while '
+            + 'its team members sit on the alternate screen is the reported bug, half fixed');
+        assert.ok(/\?\?\s*\(this\._claudeInlineRenderingResolver/.test(fleet),
+            'create() must fall back to the host resolver with ?? (not ||), so an explicit '
+            + 'false from a verb arm still wins');
+
+        // Precedence is the whole operator-override argument and is invisible to any
+        // behavioural test that does not set a host env var.
+        assert.ok(
+            /env:\s*\{\s*\.\.\.claudeEnvDefaults,\s*\.\.\.process\.env,\s*\.\.\.switchboardEnv\s*\}/.test(fleet),
+            'the env spread must be { ...claudeEnvDefaults, ...process.env, ...switchboardEnv } in '
+            + 'that order: defaults lowest so process.env wins per variable, process.env present '
+            + 'or the shell launches with no PATH/HOME/SHELL, seat identity last'
+        );
+        assert.ok(
+            /CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN:\s*'1'/.test(fleet)
+            && /CLAUDE_CODE_DISABLE_MOUSE:\s*'1'/.test(fleet)
+            && !/CLAUDE_CODE_DISABLE_MOUSE_CLICKS/.test(fleet),
+            'DISABLE_MOUSE is the correct variable — DISABLE_MOUSE_CLICKS preserves wheel '
+            + 'capture, which is exactly the half of the symptom that must go'
+        );
+        assert.ok(!/payload\.env/.test(child),
+            'never accept free-form env off the wire — every pty child holds an API token'
+        );
+
+        const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
+        assert.strictEqual(
+            pkg.contributes.configuration.properties['switchboard.terminal.claudeInlineRendering'].default,
+            true,
+            'switchboard.terminal.claudeInlineRendering must ship default true'
         );
     });
 

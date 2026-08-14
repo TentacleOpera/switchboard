@@ -349,6 +349,11 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                         ...rest,
                         routingConfig: kanbanProvider._routingMapForScope(scope),
                         dispatchAnalyzeAvailable: ptyReady, // standalone-only override: gated on ptyReady
+                        // NOT ptyReady: creating an autoban terminal goes through
+                        // `switchboard.addAutobanTerminalFromKanban`, which only extension.ts
+                        // registers. Unbridged here, so the arm would return success having
+                        // done nothing — a button that fakes success (PRD contract #6).
+                        terminalCreateAvailable: false,
                     }), surface);
                 } else if (msg.type === 'cliTriggersState') {
                     // Scope-dependent: broadcast as a factory so wsHub renders
@@ -394,11 +399,13 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         // so it reaches every standalone panel, not just the board.
         const themeName = configProvider.getConfigStringWithDefault('theme.name', 'afterburner');
         const themeEntry = { type: 'switchboardThemeNameSetting', theme: themeName, surface: SURFACES.common };
-        // Override dispatchAnalyzeAvailable on the updateBoard entry: the provider
-        // hardcodes true; standalone gates on ptyReady.
+        // Override the capability flags on the updateBoard entry: the provider hardcodes
+        // dispatchAnalyzeAvailable true (standalone gates it on ptyReady) and omits
+        // terminalCreateAvailable (defaults true in the webview; false here — see the
+        // broadcast site above for why pty readiness is not the right signal for it).
         return [
             ...baseState.map(msg => msg.type === 'updateBoard'
-                ? { ...msg, dispatchAnalyzeAvailable: ptyReady }
+                ? { ...msg, dispatchAnalyzeAvailable: ptyReady, terminalCreateAvailable: false }
                 : msg),
             themeEntry,
         ];
@@ -1732,6 +1739,17 @@ Each plan file must include:
     // lie on this host. The token reaches the shell as SWITCHBOARD_API_TOKEN
     // (an env var, never prompt text) so it never enters the agent's scrollback.
     const ptyFleetService = new PtyFleetService(workspaceRoot, db, sessionToken);
+    // Default for every create() path that passes no explicit claudeInlineRendering.
+    // The two ptyCreateTerminal / ptyCreateBatch arms below resolve it themselves, but
+    // this host also creates seats from board dispatch, send-by-name, memo→planner and
+    // agent-group instantiation — all with no options — and spawnDelegates creates team
+    // members. Without this resolver those seats spawn on Claude's alternate screen with
+    // no pane scrollbar, which is the whole defect, and no gate would notice.
+    // A resolver, not a latched value: configProvider reads live, so a setting change
+    // takes effect for the next seat rather than requiring a host restart.
+    ptyFleetService.setClaudeInlineRenderingResolver(
+        () => configProvider.getConfigBoolean('terminal.claudeInlineRendering', true)
+    );
     // Activity-light liveness seam, wired HERE rather than beside the engine's
     // other seams: the sweep calls this synchronous getter on a 10 s timer to
     // partition the fleet into live (spare) / exited (force-clear) / silent (fall

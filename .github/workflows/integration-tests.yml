@@ -75,6 +75,16 @@ jobs:
       - name: PTY route surface contract (/terminals/verb only, nothing in the generated surface)
         run: npm run test:contract:pty-route-surface
 
+      # Unattended batch plan improvement is three subtasks whose failure modes are
+      # all invisible: a fleet "hidden" only in the UI still joins the role pools six
+      # dispatch call sites and autoban select from; a prompt directive whose skill
+      # half never landed is a contract the improver never reads; and a planner-lane
+      # clamp computed asynchronously lets the FIRST pump dispatch the unclamped
+      # burst, where halt-on-failure then kills the whole pass — coding lane included.
+      # Every one of those ships with a green build and a correct-looking screenshot.
+      - name: Unattended batch improvement contract (hidden fleet, improver contract, parallel lane)
+        run: npm run test:contract:unattended-batch
+
       # Prompt delivery frames the payload with bracketed-paste markers. Chunking the
       # FRAMED string splits the 6-byte close marker across a chunk boundary whenever
       # text.length % 256 lands in [245,249] — the TUI never leaves paste mode and every
@@ -266,6 +276,25 @@ jobs:
 
       - name: Kanban optimistic render guard contract
         run: npm run test:contract:render-guard
+
+      # The kanban-surface `viewPlan` verb (raw markdown preview) was deliberately
+      # deleted; `reviewPlan` (opens the Project panel) replaced it. This test pinned
+      # that removal but was never wired here, so it sat red and unnoticed for months
+      # after the board swapped `title=` for `data-tooltip=`. It also now covers the
+      # terminals kanban pane, whose row button is LABELLED `view` while posting
+      # `reviewPlan` — the exact mismatch a tidy-up refactor "corrects" back into the
+      # deleted verb.
+      - name: Kanban viewPlan removal regression (verb stays deleted, card actions survive)
+        run: npm run test:contract:kanban-view-plan-removal
+
+      # The Dispatch view's staged count is a call-site property, not a value: the
+      # Planned column header is NOT rebuilt on a board refresh, so a count baked into
+      # the renderColumns template is stale in exactly the state it exists to inform.
+      # This pins the four call sites, the count's filter predicate, the removal of the
+      # manual entry button (half-done removal is the documented failure mode), and the
+      # fan-out verb's schema + capability gating.
+      - name: Dispatch view count / entry / fan-out contract
+        run: npm run test:contract:dispatch-view
 
       # A dropped card must become authoritative a DB write after the drop, not a
       # full agent dispatch later. The three drag arms persist → post `moveCards` →
@@ -567,6 +596,18 @@ jobs:
       # the standalone host must translate parentRoot itself since it has no proxy.
       - name: Multi-parent terminals contract (attribution, spawn targeting, hierarchy)
         run: npm run test:contract:multi-parent-terminals
+
+      # Terminal→plan attribution is a two-host join whose failure modes are all
+      # silent: a role-only tier paints the wrong plan on a real pane, a shared
+      # feature-worktree path makes multi-seat ambiguity the COMMON case (any
+      # tie-break is a coin flip), and the superseded designs — joining on the
+      # never-written plans.worktree_id, or filtering is_feature — both produce a
+      # permanently empty header while every other gate stays green. Pins the two
+      # tiers and their ambiguity rule, the enrichment on both DB-bearing hosts and
+      # its ABSENCE in the DB-less pty child, the drop-path attribution write, and
+      # the turn-end silence branch's worktree-aware mtime discriminator.
+      - name: Terminal plan attribution contract (tiers, host parity, turn-end mtime)
+        run: npm run test:contract:terminal-plan-attribution
 
       # The external-agent file protocol has no human in the loop, so every failure
       # here is silent by construction: a claim that never expires wedges an inbox

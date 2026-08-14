@@ -2,7 +2,7 @@
 
 ## Goal
 
-Correct the false deletion mechanism documented in `.agents/skills/improve-feature/SKILL.md:19`, and replace it with the mechanism that actually removes a card plus the ordering rule that stops an agent stranding one.
+Correct the false deletion mechanism documented in `.agents/skills/improve-feature/SKILL.md:19` and replace it with the one the code actually implements.
 
 ### Problem & background
 
@@ -10,21 +10,35 @@ The skill's restructuring guardrail instructs an agent removing a subtask to:
 
 > *Remote (no extension):* `git rm` the removed subtask `.md` files **(the plan watcher hard-deletes their rows on the next local pull)**
 
-Both halves of the parenthetical are wrong, and the error is load-bearing because it is the *only* thing the skill says about how a removed subtask leaves the board.
+Both halves of the parenthetical are false, and it is the only thing the skill says about how a removed subtask leaves the board. An agent that believes it deletes the `.md`, the row stays, and the card remains on the board pointing at a file that no longer exists — with the plan text gone if it was untracked. That happened on 2026-08-14: three stranded cards (`d548ee36`, `352684b3`, `1eedb80d`) cleared by hand, all still `status='active'`, two of them `git rm`'d days earlier.
 
-**It is a soft delete, not a hard delete.** `PlanIngestionEngine._handlePlanDelete` calls `db.markPlanMissingByPlanFile(plan.planFile, plan.workspaceId)` and logs `Soft-deleted (marked missing) plan: <file>`. The row survives. `deletePlanByPlanId` — the only hard delete — is never called from the engine or either watcher; its callers are the Planning panel, a runsheet-cleanup path in `TaskViewerProvider`, and `DELETE /kanban/plans`.
+### What the code does
 
-**It does not wait for a pull.** The delete is event-driven and immediate: both hosts' watchers emit `'delete'` (`GlobalPlanWatcherService.ts:144`, `:189`; `planIngestionHost.ts:82`, `:223`), the engine debounces 300 ms (`_debounceHandleDelete`, `:720`) and handles it. No git operation is involved anywhere in the path.
+1. **Unlink** → the folder watcher emits `'delete'` (`PlanIngestionEngine._setupWatcherForFolder`, `:543-552`).
+2. **300 ms debounce** (`_debounceHandleDelete`, `:720`).
+3. **`_handlePlanDelete`** (`:1074`) → `markPlanMissingByPlanFile` → `status='missing'`.
+4. **The card leaves the board at that instant.** `getPlansByColumn` (`KanbanDatabase.ts:4119`) renders `status='active'` only.
+5. **`runPurgeSweep()`** (`:612`), on startup and every scan tick, hard-deletes `'missing'` rows older than 24 h via `deletePlanByPlanFile` (`:670`).
 
-**The consequence is a stranded card.** An agent that follows the instruction deletes the `.md`, sees the row persist, and has destroyed the plan text with no way to finish the job — the card remains on the board pointing at a file that no longer exists. The plan document is unrecoverable if it was untracked, which a newly-authored subtask usually is. This happened in a real `improve-feature` run on 2026-08-14: the file was removed on the strength of this line, the row stayed, and the operator was left to clear it by hand.
+So with the extension running, `git rm` / `rm` **is** a complete card removal. No git operation is involved in the path, and no pull is waited on.
 
-**Observed 2026-08-14, and worse than "soft-deleted": the soft-delete did not fire at all.** Three stranded cards were cleared by hand that day — `d548ee36` (*Nested Agent Teams*, file `rm`'d, never committed), `352684b3` (*Clear the Activity Light on Sustained Terminal Quiescence*) and `1eedb80d` (*Completion Toasts Fire in Every Pop-Out Window*), the latter two `git rm`'d up to three days earlier as part of the `1ce76fcb` restructure. Measured against `kanban.db` before deletion: this workspace's `plans.status` vocabulary is `active` / `completed` / `deleted` only, 40 rows carry `deleted` (4 of them in PLAN REVIEWED, so the soft-delete path does work in general) — and all three of these rows were still **`active`**, with `plan_events` holding nothing but a `workflow_event`/`start` per row. No delete event was ever recorded, for files that had been gone for days.
+> **Superseded:** "`deletePlanByPlanId` — the only hard delete — is never called from the engine or either watcher", and the implication that a soft-deleted row survives indefinitely.
+> **Reason:** the engine hard-deletes via `deletePlanByPlanFile` in `runPurgeSweep` 24 h after the soft delete. Soft-delete is stage one of two, not a terminal state.
+> **Replaced with:** the five-step chain above.
 
-So the failure mode the skill produces is not a row tagged missing; it is a row indistinguishable from live work, rendering as a normal card in Planned. That is strictly worse than what the corrected instruction (below) will describe, and it means the *remote* half of the guardrail is wrong in a second, independent way: `git rm` did not eventually soft-delete these rows on a later local session, across days of local sessions. **Inferred, not measured:** a staged-and-uncommitted `git rm` may not surface as a watcher `'delete'` event the way a plain `rm` does. The coder should establish which of the two paths actually emits before writing the remote sentence — the honest claim may be "no DB change, ever, until someone calls the route."
+> **Superseded:** "this workspace's `plans.status` vocabulary is `active` / `completed` / `deleted` only, 40 rows carry `deleted` (4 of them in PLAN REVIEWED, so the soft-delete path does work in general)".
+> **Reason:** the vocabulary is five values (`KanbanDatabase.ts:53`), and the soft delete writes `'missing'`, not `'deleted'`. The 40 `'deleted'` rows come from `purgeOrphanedPlans` (`:5871`), a different mechanism. They are not evidence about the watcher path. The real signal was zero `'missing'` rows — the watcher path had never fired for anything.
+> **Replaced with:** nothing; the inference is withdrawn.
 
-**The correct mechanism already exists and does both halves in one call.** `DELETE /kanban/plans?planId=<id>&deleteFile=true` (`LocalApiServer.ts:3051-3090`) hard-deletes the row via `deletePlanByPlanId` and unlinks the plan file, path-confined to `.switchboard/plans/`. The route's own comment states the constraint the skill should have carried: *"deletePlanByPlanId removes the DB row only; the .md file re-imports on the next import_plans unless the caller opts into unlinking it too."*
+> **Superseded:** "**Inferred, not measured:** a staged-and-uncommitted `git rm` may not surface as a watcher `'delete'` event the way a plain `rm` does."
+> **Reason:** both unlink the working-tree file, and both hosts register deletes unconditionally — a VS Code `onDidDelete` on `.switchboard/{plans,features}/**/*.md` plus a native recursive `fs.watch` fallback (`GlobalPlanWatcherService.ts:131-181`). Nothing discriminates on how the unlink happened. `d548ee36` was a plain `rm` and stranded anyway.
+> **Replaced with:** the discriminator is whether a watcher was alive at unlink time.
 
-**There is also an ordering rule worth stating explicitly.** Row removal is gated — it needs the API, and in a permission-restricted session that call may be refused. File removal is not gated and is irreversible. An agent that deletes the file first can be left unable to complete the operation. The destructive, ungated step must come last, or better, be performed by the same call.
+### Why the remote case never resolves
+
+`PlanIngestionEngine`'s only delete path is the live watcher event; its scans import what exists and never enumerate rows to check for absent files. The one disk-vs-DB reconciler, `KanbanDatabase.purgeOrphanedPlans` (`:5871`), has a single non-test caller — `TaskViewerProvider._syncKanbanDbFromSheetsSnapshot` (`:4540`) — reachable only from a startup path gated on an **empty** database (`:4600-4618`: *"DB-first: DB already has data. Just run cleanup, do NOT re-sync from files."*).
+
+On an established workspace that sweep never runs. A plan file removed while nothing is watching leaves its row `active` forever — no later session catches it. That is the stranded card.
 
 ---
 
@@ -37,11 +51,7 @@ So the failure mode the skill produces is not a row tagged missing; it is a row 
 
 ## User Review Required
 
-**None.** Three decisions made here:
-
-* **The instruction is corrected, not annotated.** No "note: this may soft-delete" hedge — the line states the mechanism that works.
-* **`?deleteFile=true` is the documented local path**, because one call in the right order beats two steps an agent can half-complete.
-* **The remote (no-extension) case keeps `git rm`** but stops claiming the row disappears. It states what actually happens — the row is marked missing on the next local session — so the agent's expectations match reality.
+**None.**
 
 ---
 
@@ -51,12 +61,11 @@ So the failure mode the skill produces is not a row tagged missing; it is a row 
 
 ### Routine
 
-* Rewriting one bullet and one step in a skill file.
-* Regenerating the `.claude/` mirror.
+* Rewriting one bullet in a skill file and applying the same edit to its mirror.
 
 ### Complex / Risky
 
-* **Getting the remote-session claim right.** `git rm` in a session with no extension running produces *no* immediate DB effect at all; the soft-delete fires whenever a local watcher next sees the file gone. Overstating this in the other direction would be the same class of error.
+* **The remote sentence has now been drafted wrong twice** — first "hard-deletes on the next local pull", then "marked missing on the next local session". Both optimistic, both false. The replacement below is written to be transcribed, not re-derived.
 
 ---
 
@@ -65,36 +74,33 @@ So the failure mode the skill produces is not a row tagged missing; it is a row 
 ### Race Conditions
 
 * Not applicable — a documentation change.
-* Worth documenting, though: `_handlePlanDelete` skips the soft-delete when the file still exists after the debounce (atomic write/rename guard, `:3-11` of the handler) and when the path is in `_recentRenames`. An agent that deletes and immediately recreates a plan file at the same path gets no delete effect at all.
 
 ### Security
 
-* None. The `?deleteFile=true` unlink is already path-confined to `.switchboard/plans/` and that confinement is not being changed.
+* None.
 
 ### Side Effects
 
-* Agents following the corrected instruction will call a hard-delete route where previously they called nothing. That is the intent, and it is the same route the Planning panel's delete button uses.
+* None. The corrected text describes existing behaviour; no code path changes.
 
 ### Dependencies & Conflicts
 
-* **`.agents/skills/improve-feature/SKILL.md`** — `:19` (the Guardrails bullet, the false claim) and `:67` (High/Low mode step 4, which says `git rm the original subtask files` and inherits the same wrong expectation without restating it).
-* **`.claude/skills/improve-feature/SKILL.md`** — generated mirror. Edit `.agents/`, never the mirror; regenerate and verify with `npm run mirror:check`.
-* **`src/services/PlanIngestionEngine.ts`** — `_handlePlanDelete`, `_debounceHandleDelete` (`:720`), `_setupWatcherForFolder` (`:543-552`). Read-only reference; **no source change in this plan.**
-* **`src/services/LocalApiServer.ts:3051-3090`** — the `DELETE /kanban/plans` route and its `deleteFile` param. Read-only reference.
-* **`.agents/skills/kanban_operations/`** — has no plan-delete script (only `move-card.js`, `delete-feature.js`, `remove-from-feature.js`). If the corrected instruction should be runnable without curl, adding `delete-plan.js` is the obvious follow-up — **noted, not in scope here.**
-* **`rearrange-feature` and `group-into-features`** — sibling skills that restructure subtask sets. Grep both for the same claim; the audit at time of writing found the wording only in `improve-feature`, but a paraphrase would not have matched.
+* **`.agents/skills/improve-feature/SKILL.md`** — `:19` (the false claim) and `:67` (High/Low mode step 4, which repeats `git rm the original subtask files`). Line numbers verified at time of writing.
+* **`.claude/skills/improve-feature/SKILL.md`** — generated mirror; same bullet at `:25`. The mirror is the `.agents` body prefixed with six lines of YAML frontmatter and nothing else. There is **no npm regeneration script** (`generateClaudeMirror` runs only from the extension's scaffold path), so edit both files in lockstep.
+* **`rearrange-feature`, `group-into-features`** — checked; neither mentions `git rm` or any deletion mechanism. Nothing to fix there.
+* Read-only references: `PlanIngestionEngine.ts` (`:543`, `:612`, `:720`, `:1074`), `KanbanDatabase.ts` (`:3219`, `:3227`, `:4119`, `:5871`), `LocalApiServer.ts:3050-3095`, `TaskViewerProvider.ts:4540`/`:4600-4618`. **No source change in this plan.**
 
 ---
 
 ## Dependencies
 
-* None. One file edit plus a mirror regeneration.
+* None. Two file edits, no source change, no state change.
 
 ---
 
 ## Adversarial Synthesis
 
-Key risks: (1) **fixing the sentence and leaving the ordering trap** — an agent told the right route can still delete the file first and strand itself if the route is refused, so the ordering rule has to be stated, not implied; (2) **over-correcting the remote case**, where `git rm` genuinely is the only available action and the honest statement is "the row is marked missing when a local session next sees it", not "this removes the card"; (3) **editing the generated mirror instead of `.agents/`**, which reverts on the next generation; (4) **the same claim surviving as a paraphrase** in a sibling restructuring skill that a literal grep misses. Mitigations: state the ordering rule in the same bullet as the route; describe the remote case in terms of what the operator will observe; edit `.agents/` and gate on `npm run mirror:check`; read `rearrange-feature` and `group-into-features` for the claim rather than only grepping for its exact words.
+Key risk: writing a third wrong sentence about the remote case, which is why the replacement text is specified verbatim below. Secondary risk: mirror drift, since there is no npm regeneration path and the two files must stay byte-identical below the frontmatter. Mitigations: transcribe the specified wording; edit both files together and diff them.
 
 ---
 
@@ -102,48 +108,44 @@ Key risks: (1) **fixing the sentence and leaving the ordering trap** — an agen
 
 ### `.agents/skills/improve-feature/SKILL.md`
 
-**Context:** `:19` is the Guardrails sub-bullet covering set changes; `:67` is High/Low mode step 4.
+**Context:** `:19` is the `*Remote (no extension):*` child bullet under `- **Route set changes through the real mechanisms**, not the block:`. `:67` is High/Low mode step 4.
 
-**Implementation — `:19`, local case:** state the one-call mechanism and the ordering rule.
+**`:19` — replace the false parenthetical.** The bullet currently opens:
 
-* Removing a subtask locally (extension running) is `DELETE /kanban/plans?planId=<id>&deleteFile=true&workspaceRoot=<abs workspace path>` — it hard-deletes the row and unlinks the plan file in one call.
-* **`workspaceRoot` is not optional in practice.** Every root in a multi-root window writes the *same* port into its own `.switchboard/api-server-port.txt`, and the route falls back to `this._options.workspaceRoot` (`LocalApiServer.ts:3064`) — one arbitrary root. Omit the param and a planId that lives in a sibling root returns `404 Plan not found`, which reads exactly like "the row is already gone". On 2026-08-14 that 404 is what convinced an agent the stranded row did not exist; the same omission makes `GET /kanban/plans` return only the default root's cards. `deleteFile` also silently no-ops without it, since the unlink is resolved against `root`.
-* **Never delete the plan file first.** The row removal is the gated step; the file removal is irreversible. Deleting the file on its own leaves a card pointing at nothing, and an untracked plan document is gone for good.
+> *Remote (no extension):* `git rm` the removed subtask `.md` files (the plan watcher hard-deletes their rows on the next local pull), create any new consolidated plan file…
 
-**Implementation — `:19`, remote case:** keep `git rm`, drop the false claim, describe the real effect.
+Replace the parenthetical with the true mechanism, split by session type. Transcribe:
 
-* `git rm` the removed subtask `.md` files. No DB change happens in a remote session. When a local session next observes the file missing, the watcher **soft-deletes** the row — marks it missing (`markPlanMissingByPlanFile`) — which is not the same as removing the card. Clearing it fully requires the local route above.
+* *Local (extension running):* `git rm` the removed subtask `.md` files — the watcher clears the card from the board within a second and the row is purged within a day. `DELETE /kanban/plans?planId=<id>&deleteFile=true&workspaceRoot=<abs workspace path>` does both in one call if you want it immediate; `workspaceRoot` is required in a multi-root window or the route resolves against an arbitrary root and returns `404 Plan not found`.
+* *Remote (no extension):* `git rm` the removed subtask `.md` files — **this removes the file and nothing else, now or ever.** The row stays `active` and the card stays on the board until it is deleted from a local session.
 
-> **Verify this sentence before shipping it.** The 2026-08-14 evidence (see Problem & background) is that two `git rm`'d subtasks kept `status='active'` with no `plan_events` entry across three days of local sessions — i.e. the soft-delete never fired. If manual verification step 3 reproduces that, this bullet must say the row is **untouched** until someone calls the route, not "marked missing". Writing the optimistic version would repeat the original defect in a milder form.
+**`:67` — do not restate the mechanism.** High/Low mode step 4 opens ``4. `git rm` the original subtask files (their intent now lives in the two tier files)…``. Point it at the Guardrails bullet instead, so there is one description to keep true.
 
-**Implementation — `:67`:** point High/Low mode's `git rm` step at the corrected bullet rather than restating the mechanism, so there is one description to keep true.
+### `.claude/skills/improve-feature/SKILL.md`
 
-**Edge cases:** do not add a "may vary" hedge — the mechanism is deterministic and now documented. Do not edit `.claude/skills/improve-feature/SKILL.md` directly; regenerate it.
+Apply the identical body edits at `:25` and in High/Low step 4. Leave the six-line YAML frontmatter untouched.
 
 ---
 
 ## Verification Plan
 
-Tests are skipped per session directive, and compilation is skipped per session directive.
+Automated tests and compilation are skipped per session directive. `npm run mirror:check` requires `npm run compile-tests` (it loads `out/services/ClaudeCodeMirrorService.js`), so the byte diff below stands in for it.
 
 ### Automated Tests
 
-* Grepping `.agents/` for `hard-delete`, `hard delete` and `next local pull` returns nothing.
-* `npm run mirror:check` passes, and `.claude/skills/improve-feature/SKILL.md` carries the corrected text.
+* Not run (session directive).
 
-### Manual Verification
+### Static checks
 
-1. **The documented call works:** create a throwaway plan file, let it import, then run `DELETE /kanban/plans?planId=<id>&deleteFile=true&workspaceRoot=<abs path>`. Confirm the card is gone from the board *and* the file is gone from disk. Read the row back from `kanban.db` **twice, seconds apart** — the route returns on the in-memory mutation and the write-back to disk is throttled, so an immediate read can still show the row. That stale read cost real confusion on 2026-08-14.
-2. **The same call without `workspaceRoot`, from a multi-root window:** confirm it returns `404 Plan not found` for a row that demonstrably exists in a sibling root's `kanban.db`. This is the failure the corrected bullet exists to prevent, so it should be reproduced once rather than trusted.
-3. **Which removal actually emits a delete:** create two throwaway plans; `rm` one and `git rm` the other. For each, check the log for `Soft-deleted (marked missing) plan:`, then read `plans.status` and `plan_events`. Write the remote sentence from whichever result you get — the 2026-08-14 evidence is that `git rm`'d files left rows `active` with no event for days, which contradicts the "marked missing on the next local session" wording proposed above.
-4. **Read the corrected bullet** as an agent would and confirm it cannot be followed in an order that strands a card.
+1. `grep -rn "hard-delete\|hard delete\|next local pull" .agents/ .claude/` returns nothing.
+2. `diff <(tail -n +7 .claude/skills/improve-feature/SKILL.md) .agents/skills/improve-feature/SKILL.md` is empty — this is exactly what `mirror:check` asserts for this file, without compiling.
 
 ---
 
 ## Recommendation
 
-Complexity 2 → **Send to Intern.**
+Complexity 2 → **Send to Intern.** The replacement wording is specified verbatim; transcribe it rather than re-deriving it.
 
-**The thing to get right:** the ordering rule is the substance, not the route name. An agent that knows the correct endpoint can still destroy the plan file first, discover the row removal is refused, and leave the board holding a broken card with the plan text unrecoverable. The instruction must make the gated step first and the irreversible step last — or, better, a single call that cannot be half-completed.
+**Follow-up, not in scope:** `purgeOrphanedPlans` is unreachable on a populated database, so nothing reconciles disk against the DB. That is the durable fix for stranded cards and deserves its own plan.
 
-**Migration:** none. Documentation only; no source change, no state change.
+**Migration:** none. Documentation only.

@@ -8835,8 +8835,21 @@ Return ONLY the drafted prompt with no additional commentary.`;
             }
             case 'a': return `[${inner()}](${node.getAttribute('href') || ''})`;
             case 'img': return `![${node.getAttribute('alt') || ''}](${node.getAttribute('src') || ''})`;
-            case 'ul': return Array.from(node.children).filter(c => c.tagName === 'LI').map(li => `- ${nodeToMarkdown(li).trim()}\n`).join('') + '\n';
-            case 'ol': return Array.from(node.children).filter(c => c.tagName === 'LI').map((li, i) => `${i + 1}. ${nodeToMarkdown(li).trim()}\n`).join('') + '\n';
+            case 'ul': case 'ol': {
+                const ordered = tag === 'ol';
+                const items = Array.from(node.children).filter(c => c.tagName === 'LI');
+                return items.map((li, i) => {
+                    const prefix = ordered ? `${i + 1}. ` : '- ';
+                    // Mirrors tickets.js: renderMarkdown (shared, sharedUtils.js) marks an
+                    // item that followed a blank line in the source with `md-li-loose`, and
+                    // this serialiser is the only thing that can carry that gap back out.
+                    // Without it an HTML -> markdown round trip flattens a loose list to a
+                    // tight one in the SAVED file, permanently. htmlToMarkdown's
+                    // /\n{3,}/ -> '\n\n' collapse is why this emits exactly one blank line.
+                    const gap = (i > 0 && li.classList.contains('md-li-loose')) ? '\n' : '';
+                    return `${gap}${prefix}${nodeToMarkdown(li).trim()}\n`;
+                }).join('') + '\n';
+            }
             case 'li': return inner();
             case 'blockquote': return inner().split('\n').map(l => `> ${l}`).join('\n') + '\n\n';
             case 'hr': return '---\n\n';

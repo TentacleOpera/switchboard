@@ -98,6 +98,15 @@ interface OversightPassRuntime {
     cooldownTimer?: NodeJS.Timeout;
     /** Serialises async rewrites of oversight-state.md. */
     stateWrite: Promise<void>;
+    /**
+     * Last observed count of live planner terminals. `undefined` until the FIRST
+     * count lands — runtime-scoped on purpose, so the observed pool size is never
+     * written into `params` (and therefore never into oversight-state.md, where a
+     * momentary dip would be resumed as if the user had configured it).
+     */
+    plannerPoolCount?: number;
+    /** True while a pool count is in flight — dedupes concurrent refreshes. */
+    plannerPoolPending?: boolean;
 }
 
 export interface OversightDispatchOutcome {
@@ -440,7 +449,7 @@ export class OversightPassService implements vscode.Disposable {
         // Planner lane — fill up to the (clamped) concurrency limit, with cooldown
         // as minimum spacing between dispatches, not a completion-gated barrier.
         const plannerInFlight = s.inFlight.filter(c => c.lane === 'planner').length;
-        const slots = this._effectivePlannerSlots(s);
+        const slots = this._effectivePlannerSlots(runtime);
         const now = Date.now();
         for (let i = 0; i < slots - plannerInFlight; i++) {
             const idx = s.queue.findIndex(q => q.lane === 'planner');
@@ -464,17 +473,56 @@ export class OversightPassService implements vscode.Disposable {
         }
     }
 
-    private _effectivePlannerSlots(s: OversightPassState): number {
+    /**
+     * Planner-lane slot count, clamped to the live terminal pool so a missing
+     * worker shrinks the lane instead of halting the whole pass.
+     *
+     * `_pump` is synchronous and re-entered from four places, so the count cannot
+     * be awaited inline. It is refreshed out of band and cached on the RUNTIME —
+     * never written back into `params.plannerConcurrency`, which is the user's
+     * configured value, is serialised into oversight-state.md, and is re-read by
+     * `resumeFromDisk`. Writing the observed count there made the clamp a one-way
+     * ratchet: a single momentary dip to one terminal pinned the lane at 1 for the
+     * rest of the pass and resumed that way, indistinguishable from a deliberate
+     * setting.
+     */
+    private _effectivePlannerSlots(runtime: OversightPassRuntime): number {
+        const s = runtime.state;
         const configured = s.params.plannerConcurrency;
         if (!this._deps.countEligibleTerminals) return configured;
-        // Clamp to the live terminal pool so missing workers do not halt the whole pass.
-        // Fire-and-forget: a count failure is not fatal.
-        void this._deps.countEligibleTerminals(s.workspaceRoot, 'planner').then(count => {
-            if (count < configured) {
-                s.params.plannerConcurrency = Math.max(1, Math.min(configured, count));
-            }
-        }).catch(() => { /* keep configured value */ });
-        return s.params.plannerConcurrency;
+
+        if (!runtime.plannerPoolPending) {
+            runtime.plannerPoolPending = true;
+            // Re-pump only on the FIRST count. Re-pumping on every refresh would be
+            // a loop: each pump starts a count and each count finishes with a pump.
+            const isFirstCount = runtime.plannerPoolCount === undefined;
+            void this._deps.countEligibleTerminals(s.workspaceRoot, 'planner')
+                .then(count => {
+                    runtime.plannerPoolCount = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : configured;
+                })
+                .catch(() => {
+                    // A count failure must not strand the lane — fall back to no clamp.
+                    runtime.plannerPoolCount = configured;
+                })
+                .finally(() => {
+                    runtime.plannerPoolPending = false;
+                    if (isFirstCount && runtime.state.state === 'running') { this._pump(runtime); }
+                });
+        }
+
+        // Until the first count lands, dispatch NOTHING on this lane. Returning the
+        // configured value here is what made the clamp arrive one burst too late:
+        // `plannerConcurrency: 10` against a three-terminal pool dispatched all ten
+        // before the count resolved, and halt-on-failure then killed the entire pass —
+        // the exact failure the clamp exists to prevent. The re-pump above starts the
+        // lane the moment the count is known.
+        if (runtime.plannerPoolCount === undefined) { return 0; }
+
+        // Floor of 1: an empty pool still makes ONE honest dispatch attempt, which
+        // halts the pass naming the missing terminal. Returning 0 here would leave a
+        // non-empty queue with nothing in flight — no dispatch, no stuck timer, no
+        // end-of-queue check — i.e. a pass that idles forever and reports "running".
+        return Math.max(1, Math.min(configured, runtime.plannerPoolCount));
     }
 
     private async _dispatchEntry(runtime: OversightPassRuntime, queueIndex: number): Promise<void> {
@@ -501,6 +549,15 @@ export class OversightPassService implements vscode.Disposable {
             const res = await this._deps.dispatch(s.workspaceRoot, entry.planId, target, dispatchOptions);
             if (!res?.payload?.success) {
                 await this._halt(runtime, `dispatch failed for "${entry.topic}": ${res?.payload?.error || `HTTP ${res?.status}`}`);
+                return;
+            }
+            if (s.state !== 'running') {
+                // The pass was stopped or halted while this dispatch was in flight.
+                // Arming a stuck timer here re-arms a timer `stop()` just cleared, and
+                // `_writeState` below RECREATES the state file `stop()` just deleted —
+                // resurrecting the §1 resume offer for a pass the user explicitly ended.
+                // Parallel lanes make a late-landing dispatch the common case, not the
+                // rare one: N dispatches are in flight when the stop arrives, not one.
                 return;
             }
             // Baseline AFTER the confirmed dispatch — never before.
@@ -552,7 +609,13 @@ export class OversightPassService implements vscode.Disposable {
         } catch { /* landing column is best-effort */ }
         const durationMs = now - card.firstDispatchedAtMs;
         const planFileAbs = path.resolve(s.workspaceRoot, card.planFile);
-        const hasOpenQuestions = this._hasOpenQuestions(planFileAbs);
+        const questions = this._readOpenQuestions(planFileAbs);
+        const hasOpenQuestions = questions.open;
+        if (questions.malformed) {
+            // An empty-but-present heading is a schema violation, not "done" — say so
+            // in the log rather than silently folding it into the done bucket.
+            await this._appendLog(runtime, `WARNING: "${card.topic}" wrote an EMPTY "## Outstanding Questions" heading — schema violation (the heading is omitted entirely when nothing is outstanding). Counted as no open questions.`);
+        }
         s.completed.push({ planId: card.planId, topic: card.topic, lane: card.lane, durationMs, landedColumn, hasOpenQuestions });
         if (card.lane === 'planner') {
             // Cooldown is measured from the planner COMPLETION signal.
@@ -573,16 +636,33 @@ export class OversightPassService implements vscode.Disposable {
         await this._writeState(runtime);
     }
 
-    private _hasOpenQuestions(planFileAbsolute: string): boolean {
+    /**
+     * Reads the `## Outstanding Questions` contract defined in
+     * `.agents/skills/improve-plan/SKILL.md`. THREE states, not two:
+     *
+     *   heading absent                    → { open: false, malformed: false }  — done
+     *   heading + ≥1 [user]/[research]    → { open: true,  malformed: false }  — blocked on a human
+     *   heading present but empty         → { open: false, malformed: true  }  — schema violation
+     *
+     * The bullet is matched in BOTH the schema's emphasised form (`- **[user]** …`)
+     * and the bare form (`- [user] …`). Requiring the bare form only made this
+     * return false for every correctly-written section — the digest would have
+     * reported "no open questions" for exactly the plans that had them.
+     */
+    private _readOpenQuestions(planFileAbsolute: string): { open: boolean; malformed: boolean } {
         try {
             const raw = fs.readFileSync(planFileAbsolute, 'utf8');
-            const m = raw.match(/^## Outstanding Questions\s*$/m);
-            if (!m) return false;
-            const after = raw.slice(raw.indexOf(m[0]) + m[0].length);
-            // Present heading is only a signal when it has at least one bullet/item below it.
-            return /^\s*-\s+\[(?:user|research)\]/m.test(after);
+            const m = /^##[ \t]+Outstanding Questions[ \t]*$/m.exec(raw);
+            if (!m) { return { open: false, malformed: false }; }
+            // Bound the scan to THIS section. Scanning to end-of-file let a
+            // `[user]` bullet under any later heading count as an open question.
+            const body = raw.slice(m.index + m[0].length);
+            const next = /^##[ \t]/m.exec(body);
+            const section = next ? body.slice(0, next.index) : body;
+            const open = /^[ \t]*[-*][ \t]+(?:\*\*)?\[(?:user|research)\]/mi.test(section);
+            return { open, malformed: !open };
         } catch {
-            return false;
+            return { open: false, malformed: false };
         }
     }
 
@@ -644,7 +724,11 @@ export class OversightPassService implements vscode.Disposable {
             plannerLane: {
                 cooldownMs: s.params.cooldownMs,
                 lastCompletionAt: lastCompletion ? new Date(lastCompletion).toISOString() : null,
-                readyAt: lastCompletion ? new Date(lastCompletion + s.params.cooldownMs).toISOString() : null,
+                // `cooldownMs` is DISPATCH SPACING now, so "ready" means "the next
+                // planner dispatch is allowed" — derived from the last dispatch, not
+                // the last completion. Leaving it on lastCompletionAt advertised a
+                // completion-gated barrier the engine no longer applies.
+                readyAt: lastDispatch ? new Date(lastDispatch + s.params.cooldownMs).toISOString() : null,
                 lastDispatchAt: lastDispatch ? new Date(lastDispatch).toISOString() : null
             },
             completed: s.completed.map(c => ({ ...c, durationSeconds: Math.round(c.durationMs / 1000) })),

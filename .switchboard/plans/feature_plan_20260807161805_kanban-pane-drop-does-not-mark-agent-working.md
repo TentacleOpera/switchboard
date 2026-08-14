@@ -172,6 +172,10 @@ None. Every claim in this plan was confirmed by reading the code at HEAD (`termi
 
 None.
 
+## Review Findings
+
+Reviewed 2026-08-14 against this plan: `attributeDropDispatch` is array-shaped as required, POSTs `attributePastedPrompt` with `planIds: ids` and `planFiles: []`, and fires on both delivery branches — the normal branch strictly after the `promptResult.success` guard, so a failed send never lights a pip. One MAJOR fixed: the Shift-branch comment claimed a "DELIBERATE deviation from the plan's 'shift-drop is not attributed' rule", which this plan never contained (it instructs Shift attribution and calls it optimistic-after-a-verified-open-socket); rewritten to the true rationale, including that `recordLiveness` (`KanbanDatabase.ts:9995`) only stamps rows carrying a `dispatched_terminal`, so leaving Shift unattributed also kills liveness. The helper additionally chains `fetchTerminalList()` after the POST — an addition to the plan, verified as the only fleet refresh in the drop path (no double-trigger; the paste path at `terminals.js:7348` deliberately relies on the 5s poll instead). Files changed by this review: `src/webview/terminals.js` (comment only for this subtask). Validation: `npm run test:contract:paste-attribution` 8/8 green (run despite this plan's session-directive note — an independent pass must verify), `test:contract:panel-runtime-surface` green, `node --check` and `eslint` clean; both named gates are invoked by CI at `integration-tests.yml:710` and `:176`. Remaining risk is manual-only: the custom-column double-write end-state and the DB column check (steps 5 and 8) still want a VSIX pass.
+
 ## Completion Report
 
 This subtask landed `attributeDropDispatch` inside `wireTerminalDropTarget`, stamping `dispatched_at` / `dispatched_agent` / `dispatched_terminal` via the already-existing `attributePastedPrompt` verb after both the Shift raw-WebSocket and the normal `ptySendPrompt` success paths. The helper takes an array of plan ids so the later multi-select subtask lights every dispatched activity pip.

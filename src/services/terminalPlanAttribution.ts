@@ -48,17 +48,22 @@ export function attributePlansToTerminals(
     const live = terminals.filter(t => t && t.friendlyName && (!t.status || t.status === 'active'));
     if (live.length === 0) return result;
 
+    // A title is only a title after trimming. getLiveDispatchAttribution already
+    // trims, but this module is the contract both hosts share and a whitespace-only
+    // topic (malformed import) must read as NO attribution, not as a blank strip.
+    const titleOf = (row: LiveDispatchAttributionRow): string => (row.topic || '').trim();
+
     // Tier 1 — name. First row per name wins (rows are dispatched_at DESC).
     const byName = new Map<string, LiveDispatchAttributionRow>();
     for (const row of rows) {
-        if (!row || !row.topic || !row.dispatchedTerminal) continue;
+        if (!row || !titleOf(row) || !row.dispatchedTerminal) continue;
         if (!byName.has(row.dispatchedTerminal)) byName.set(row.dispatchedTerminal, row);
     }
     const unnamed: TerminalLike[] = [];
     for (const t of live) {
         const name = t.friendlyName as string;
         const named = byName.get(name);
-        if (named) { result.set(name, { planId: named.planId, planTitle: named.topic }); }
+        if (named) { result.set(name, { planId: named.planId, planTitle: titleOf(named) }); }
         else { unnamed.push(t); }
     }
 
@@ -66,7 +71,7 @@ export function attributePlansToTerminals(
     const wts = Array.isArray(worktrees) ? worktrees : [];
     const rowsByPath = new Map<string, LiveDispatchAttributionRow[]>();
     for (const row of rows) {
-        if (!row || !row.topic || row.dispatchedTerminal) continue;
+        if (!row || !titleOf(row) || row.dispatchedTerminal) continue;
         const resolvedPath = matchWorktreePath(wts, {
             featureId: row.featureId,
             project: row.project,
@@ -88,7 +93,7 @@ export function attributePlansToTerminals(
     for (const [resolvedPath, candidates] of rowsByPath) {
         const seats = seatsByPath.get(resolvedPath);
         if (!seats || seats.length !== 1 || candidates.length !== 1) continue;
-        result.set(seats[0], { planId: candidates[0].planId, planTitle: candidates[0].topic });
+        result.set(seats[0], { planId: candidates[0].planId, planTitle: titleOf(candidates[0]) });
     }
     return result;
 }

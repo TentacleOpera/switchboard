@@ -33,8 +33,8 @@ all read `Claude Code` and nothing else.
 
 ### Root cause
 
-`updatePaneElement()` in `src/webview/terminals.js` builds the title from exactly two
-inputs, and `role` is not one of them:
+`updatePaneElement()` (`src/webview/terminals.js:4453`) builds the title from exactly two
+inputs, and `role` is not one of them — the block below is `:4550–4569` at HEAD:
 
 ```js
 const fleetItem = fleetList.find(t => t.friendlyName === assignedName);
@@ -57,7 +57,7 @@ titleEl.appendChild(nameSpan);
 titleEl.title = `${agentLabel ? agentLabel + ' — ' : ''}${handle}`;
 ```
 
-`agentLabelForRole(role)` is a **brand** lookup, not a role formatter:
+`agentLabelForRole(role)` (`:6062`) is a **brand** lookup, not a role formatter:
 
 ```js
 function agentLabelForRole(role) {
@@ -96,25 +96,34 @@ roleEl.textContent = agentLabel
 ```
 
 So the sidebar row and the pane header disagree today: the sidebar names the role, the
-pane header does not.
+pane header does not. That sidebar block is live at HEAD in `renderTerminalRow`
+(`src/webview/terminals.js:2059–2064`) — verified, not inferred from the commit diff.
 
 ### Background context
 
 - `fleetItem.role` is always present on a live fleet entry — `ptyCreateTerminal` defaults
   it to `coder` when the caller sends none, and the "No role" picker button sends the
-  sentinel `shell` (`NO_ROLE`), for which `agentLabelForRole` deliberately returns `''`.
+  sentinel `shell` (`NO_ROLE`, declared at `:6013`), for which `agentLabelForRole`
+  deliberately returns `''`. Both hosts project `role` into the fleet list from one shared
+  shape (`src/standalone/ptyHost.ts:143–145` and `src/standalone/bootstrap.ts:1223–1234`),
+  so the field is not host-conditional.
 - Custom agents have arbitrary role strings (`custom_agent_*` and user-defined roles), so
   the role must be rendered as raw text, not looked up in a fixed label map.
 - The header is width-critical. `.pane-title` is a flex row whose **only** shrinkable
-  child is `.pane-title-name`; `.pane-grid.layout-1x3/2x3/3x3 .pane-title` applies
-  `overflow: hidden; text-overflow: ellipsis`. Any new field must either live inside the
-  ellipsising span or be `flex-shrink: 0` and short.
+  child is `.pane-title-name` (`src/webview/terminals.html:1267`); `.pane-title` itself
+  carries `overflow: hidden; text-overflow: ellipsis` (`:1257–1262`). Any new field must
+  either live inside the ellipsising span or be `flex-shrink: 0` and short.
 
 ## Metadata
 
 - **Complexity:** 3
 - **Tags:** frontend, ui, bugfix
 - **Project:** Browser Switchboard
+
+## User Review Required
+
+- None. The one design decision (terse layouts show the **role**, not the brand) is
+  resolved in the Complexity Audit below and carried into the Proposed Changes.
 
 ## Complexity Audit
 
@@ -164,15 +173,61 @@ every pane runs the same CLI.
    a screen reader and a hover tooltip will disagree with the visible header.
 
 8. **Do not touch the sidebar.** `renderTerminalRow` already renders the role correctly
-   (`handle · role`). This plan changes the pane header only; making the two *agree* is the
-   goal, not making them identical.
+   (`handle · role`, `:2059–2064`). This plan changes the pane header only; making the two
+   *agree* is the goal, not making them identical.
+
+9. **Nothing pins the header text today — which is how the regression shipped.** Verified:
+   `pane-title-name`, `agentLabelForRole` and the title-string shape appear in **zero**
+   assertions across `src/test/`. The header rewrite in `1c7de0f6` therefore dropped the
+   role with every gate green. This plan closes that by adding one source-text assertion
+   (§3 below). Note the difference from its two siblings: their test edits *repair
+   assertions this change turns red*, whereas this one adds a guard where none exists —
+   do not copy their repair step into this subtask, nothing here goes red.
+
+10. **Two source-text constraints on `updatePaneElement` that this edit must not trip.**
+    `src/test/terminal-pane-grid-reconcile-contract.test.js` slices the function with
+    `block('function updatePaneElement(', 'function resolveFlooredLayout() {')` and asserts
+    (a) the slice contains **no** `addEventListener` — listeners belong in
+    `createPaneElement` — and (b) `isTerseLayout` remains a **function** declaration
+    (`assert.ok(SRC.includes('function isTerseLayout('))`), because other suites use its
+    declaration as a block delimiter. The change below adds no listener and does not touch
+    `isTerseLayout`'s declaration, so both hold — but an "optimisation" that hoists
+    `isTerseLayout()` into a per-render const would go red.
+
+## Dependencies
+
+- None external. Self-contained in `src/webview/terminals.js` plus a comment-only edit in
+  `src/webview/terminals.html`. No backend, no message plumbing, no persisted state.
+- **Shares `src/webview/terminals.js`** with the other two subtasks of this feature. The
+  regions are disjoint — this one owns `updatePaneElement`'s title row (`:4550–4569`),
+  the `exited`-latch subtask owns `fetchTerminalList` + the socket handlers, and the
+  glyph-corruption subtask owns the renderer/budget block (`:349–600`) and
+  `startFitLadder`. Under the project's one-stream-per-file rule they serialise anyway;
+  no rebase conflict is expected between them.
+- **Behaviourally independent** of both siblings: it reads `fleetItem.role`, which neither
+  of them writes, and it changes no state.
+
+## Adversarial Synthesis
+
+Key risks: (1) the terse-layout swap replaces one lossy label with another — an operator
+who was using the brand to tell a Claude pane from a Devin pane in a `3x3` loses that text,
+mitigated by the coloured `.pane-brand-icon` that sits immediately left of the `P<n>` chip
+and is built from the same `agentLabel`; (2) a third field in a width-critical flex row,
+mitigated because the only growth is inside `.pane-title-name`, which already ellipsises,
+and the terse arm is *shorter* than today's for long brand labels; (3) a status suffix that
+silently disappears in terse layouts today — this change fixes that rather than causing it,
+which is a behavioural delta beyond the stated goal and is called out explicitly in the
+Proposed Changes.
 
 ## Proposed Changes
 
 ### 1. `src/webview/terminals.js` — write the role into the pane header
 
-Inside `updatePaneElement()`, in the `if (assignedName)` branch, replace the
-`nameSpan` construction and the two derived strings.
+Inside `updatePaneElement()` (`:4453`), in the `if (assignedName)` branch (`:4506`),
+replace the `handle`/`nameSpan` construction and the two derived strings — the block at
+`:4545–4569` at HEAD, which starts at the comment *"The agent name was absent from the pane
+header entirely."* Replace that comment too: it documents the terse arm as showing the
+label alone, which this change reverses.
 
 ```js
             // The ROLE is the discriminator the header lost. agentLabel is the CLI BRAND
@@ -229,8 +284,9 @@ Note the two behavioural deltas beyond adding the field:
 
 ### 2. `src/webview/terminals.html` — no new element, one width note
 
-No new DOM node is introduced, so no new rule is required. Update the mandatory comment on
-`.pane-title` so the next editor knows the span now carries three fields:
+No new DOM node is introduced, so no new rule is required. Update the mandatory comment
+above `.pane-title-name` (`:1264–1266`) so the next editor knows the span now carries three
+fields:
 
 ```css
         /* The name is the ONLY shrinkable child of the .pane-title flex row — the
@@ -242,7 +298,47 @@ No new DOM node is introduced, so no new rule is required. Update the mandatory 
         .pane-title-name {
 ```
 
+### 3. `src/test/terminal-pane-grid-reconcile-contract.test.js` — pin the role as a field
+
+The regression this plan fixes shipped with every gate green because no assertion anywhere
+reads the pane header. Add one test to the suite that already slices `updatePaneElement`,
+in that file's existing source-text style (the panel is a browser-only IIFE with no export
+surface, so behavioural assertions are not available — see the header comment of
+`terminal-pane-grid-reconcile-contract.test.js`).
+
+```js
+test('the pane header renders the ROLE as its own field, not as a substring of the handle', () => {
+    const update = block('function updatePaneElement(', 'function resolveFlooredLayout() {');
+    // The handle is `${role}-${n}` only until the rename affordance overwrites it, and
+    // agentLabel is the CLI BRAND. Neither carries "what is this agent" — the header
+    // rewrite in 1c7de0f6 dropped the role with every gate green because nothing here
+    // looked at the title.
+    assert.ok(/const role = \(fleetItem && fleetItem\.role\) \|\| ''/.test(update),
+        'the header must read fleetItem.role directly, not infer it from the handle');
+    assert.ok(update.includes("role !== NO_ROLE"),
+        "the 'shell' sentinel is the deliberate no-agent case and must not grow a role chip");
+    // Terse layouts previously rendered the brand alone: nine panes of "Claude Code".
+    const terseArm = update.slice(update.indexOf('if (isTerseLayout())'));
+    assert.ok(terseArm.indexOf('showRole') !== -1 && terseArm.indexOf('showRole') < terseArm.indexOf('agentLabel'),
+        'the terse arm must prefer the role over the brand — the brand is identical across a fan-out');
+    // A terse header that shows only the role must not be the sole source of truth.
+    assert.ok(/aria-label[\s\S]{0,200}titleEl\.title/.test(update),
+        'the accessible name must be derived from the same full-identity string as the tooltip');
+});
+```
+
 ## Verification Plan
+
+### Automated Tests
+
+- `node src/test/terminal-pane-grid-reconcile-contract.test.js` — the four assertions added
+  in §3, plus the suite's pre-existing `updatePaneElement` assertions (no `addEventListener`
+  in the slice; `isTerseLayout` still a function declaration), which this change must leave
+  green.
+- No other suite touches the pane header — verified by grepping `src/test/` for
+  `pane-title-name` and `agentLabelForRole`, which return zero hits at HEAD.
+
+### Manual
 
 1. **Roomy layout, un-renamed terminal.** Open a planner in layout `1`. Header reads
    `P1  Claude Code · planner · planner-1`. Hover: tooltip reads
@@ -270,3 +366,10 @@ No new DOM node is introduced, so no new rule is required. Update the mandatory 
 9. **Sidebar unchanged.** Confirm `renderTerminalRow` output is byte-identical to before —
    this plan touches `updatePaneElement` only.
 10. `node --check src/webview/terminals.js` clean.
+
+---
+
+**Recommendation: Send to Intern.** Complexity 3 — one function in one webview file, one
+CSS comment, one new source-text test. The role is already in hand at the exact site that
+needs it; the only judgement call (terse layouts show the role, not the brand) is decided
+in this plan and needs no re-litigation during coding.

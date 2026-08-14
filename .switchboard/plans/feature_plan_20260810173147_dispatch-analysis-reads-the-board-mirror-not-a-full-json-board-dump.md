@@ -68,23 +68,41 @@ The mirror's content hash (`_localMirrorLastHash`) covers `planId`, `kanbanColum
 - **Tags:** docs, performance, reliability
 - **Project:** Browser Switchboard
 
-## Complexity Audit (Routine vs Complex/Risky)
+## User Review Required
 
-**Routine.** The bulk of the change is rewriting one section of one skill file that no code parses. The extension does not read step 1; it only injects `WORKSPACE_ROOT`, `API_PORT`, `PROJECT=` and the plan list, and it hands the agent the skill path to read.
+**None.** Four decisions made here:
 
-**The one non-routine bit:** step 1a's parent-lookup and step 2's path resolution get their semantics changed, not just their transport. The rewrite has to preserve both guarantees exactly (a subtask whose parent is elsewhere is skipped; an unreadable plan stays in Planned) or the pass gets *less* safe, which is the failure mode that matters — a wrongly-promoted card means two agents editing the same file in parallel.
+* **The mirror is the primary read; `/kanban/plans?column=` is the fallback; `/kanban/board` is neither.** The board endpoint stays in the codebase untouched for its other callers, but it stops being an instruction in this skill.
+* **The fallback is detected by file absence, not by reading the `boardStateExport` setting.** The agent cannot read VS Code settings, and a missing file is the exact and only symptom of every reason the mirror might not be where the prompt says.
+* **The `subtask-of:` quote strip is in scope.** It is a two-line change in `KanbanDatabase.ts`, and this plan is what makes the marker load-bearing. Shipping the parser without the strip means a feature titled with a `"` silently drops its subtasks from the analysis.
+* **No prompt-body change.** See "Deliberately out of scope" below.
+
+## Complexity Audit
+
+* **Score:** 3 / 10
+
+### Routine
+
+* The bulk of the change is rewriting one section of one skill file that no code parses. The extension does not read step 1; it only injects `WORKSPACE_ROOT`, `API_PORT`, `PROJECT=` and the plan list, and it hands the agent the skill path to read.
+* The `subtask-of:` quote strip is a one-line `.replace(/"/g, '')` mirroring the `project` handling three lines away.
+
+### Complex / Risky
+
+* **Step 1a's parent-lookup and step 2's path resolution get their semantics changed, not just their transport.** The rewrite has to preserve both guarantees exactly (a subtask whose parent is elsewhere is skipped; an unreadable plan stays in Planned) or the pass gets *less* safe, which is the failure mode that matters — a wrongly-promoted card means two agents editing the same file in parallel.
+* **No CI gate watches this file.** `.agents/skills/dispatch-analysis/SKILL.md` has no `.claude/skills` mirror and `npm run mirror:check` never sees it, so a regression in the skill's prose is caught only by the assertions this plan adds to `dispatch-analysis-scope-contract.test.js`. Those assertions are the gate, not a nicety.
+* **Three plans edit this file** (see Dependencies). This one is authored **second**, against the staging plan's already-rewritten step 5.
 
 **Deliberately out of scope:**
-- **No prompt-body change.** `KanbanProvider.generateUnifiedPrompt`'s dispatch-analysis arm (src/services/KanbanProvider.ts:4736-4757) already passes `WORKSPACE_ROOT`; the skill derives the mirror path from it. `src/test/dispatch-analysis-scope-contract.test.js:245-260` asserts the exact byte layout `API_PORT=…\nPROJECT=…\n\nPLANS TO PROCESS:` — adding a line there would break three assertions for no benefit.
-- **`API_PORT` stays in the prompt.** Step 5 still moves cards via `POST /kanban/move`. Only the *read* changes.
+- **No prompt-body change.** `KanbanProvider.generateUnifiedPrompt`'s dispatch-analysis arm already passes `WORKSPACE_ROOT`; the skill derives the mirror path from it. `src/test/dispatch-analysis-scope-contract.test.js` asserts the exact byte layout `API_PORT=…\nPROJECT=…\n\nPLANS TO PROCESS:` (the `the extension arm emits PROJECT= between API_PORT and PLANS TO PROCESS` case) — adding a line there would break assertions for no benefit. Note the sibling worktree plan *does* add a `FEATURE_WORKTREE_MODE=` line and owns updating those assertions; this plan must not.
+- **`API_PORT` stays in the prompt.** Step 5 still writes via the API. Only the *read* changes.
 - **No change to `/kanban/board` itself.** Other callers use it; this plan does not touch the endpoint, its handler, or its shape.
 - **No sweep of other skills.** `switchboard-orchestration` documents the endpoint catalog, which is correct — it is a catalog. Only dispatch-analysis is re-pointed here.
 
 ## Edge-Case & Dependency Audit
 
-1. **`boardStateExport: 'control-plane'` moves the mirror.** `_resolveExportRoot()` (src/services/KanbanDatabase.ts:8826-8847) returns the mapped *effective* workspace root when the setting is `control-plane`, so the mirror is written under a different root than the `WORKSPACE_ROOT` in the prompt. **Handling:** the skill treats a missing file at `$WORKSPACE_ROOT/.switchboard/kanban-state-plan-reviewed.md` as the trigger for the HTTP fallback. This is the primary reason the fallback must survive the rewrite rather than being deleted.
+1. **`boardStateExport: 'control-plane'` moves the mirror.** `_resolveExportRoot()` (src/services/KanbanDatabase.ts:8834-8847) returns the mapped *effective* workspace root when the setting is `control-plane`, so the mirror is written under a different root than the `WORKSPACE_ROOT` in the prompt. **Handling:** the skill treats a missing file at `$WORKSPACE_ROOT/.switchboard/kanban-state-plan-reviewed.md` as the trigger for the HTTP fallback. This is the primary reason the fallback must survive the rewrite rather than being deleted.
 
-2. **A double quote in a feature topic corrupts the `subtask-of:` marker.** The writer strips quotes from the project name (`plan.project.replace(/"/g, '')`) but not from the feature topic:
+2. **A double quote in a feature topic corrupts the `subtask-of:` marker.** The writer strips quotes from the project name (`plan.project.replace(/"/g, '')`) but not from the feature topic (`KanbanDatabase.ts:9102`):
    ```ts
    parts.push(featureTopic ? `subtask-of:"${featureTopic}"` : `subtask-of:${plan.featureId}`);
    ```
@@ -98,7 +116,31 @@ The mirror's content hash (`_localMirrorLastHash`) covers `planId`, `kanbanColum
 
 6. **Custom columns.** `_columnSlug` lowercases and hyphenates whitespace only. A custom column named `My Column` writes `kanban-state-my-column.md`. Dispatch-analysis only ever reads the fixed `PLAN REVIEWED` column, so custom columns do not affect it — but the skill should state the derivation rather than hardcode the filename with no explanation, so a reader can tell it is derived and not magic.
 
-7. **Dependency: none on unshipped work.** The mirror shipped 2026-06-28 and is written unconditionally whenever the DB persists — `_writeLocalBoardMirror` is not gated by `boardStateExport` (that setting only gates the *orphan-branch snapshot* publisher and, separately, redirects the export root). No migration is involved: the skill file is control-plane content, not user state.
+7. **Dependency: none on unshipped work.** The mirror shipped 2026-06-28 and is written unconditionally whenever the DB persists — `_writeLocalBoardMirror` (`KanbanDatabase.ts:8975`) is not gated by `boardStateExport` (that setting only gates the *orphan-branch snapshot* publisher and, separately, redirects the export root). No migration is involved: the skill file is control-plane content, not user state.
+
+8. **The per-column file has a preamble, not just card lines.** `kanban-state-plan-reviewed.md` opens with `## PLAN REVIEWED`, `**Label:** Planned`, `**Agent:** …` before the first `- [` line. The `grep -E '^- \['` in step 1 is what makes that irrelevant — a naive full-file read would hand the agent header noise and, on `CODE REVIEWED`, 698 KB of it. Keep the anchored grep; do not soften it to a plain `cat`.
+
+## Dependencies
+
+* No blocking plan dependencies; every surface this plan touches exists at HEAD (mirror writer shipped 2026-06-28; the skill file and the contract test both present).
+* **Serialises behind `feature_plan_20260811103000_staging-flag-replaces-dispatch-column.md`** on `.agents/skills/dispatch-analysis/SKILL.md`. That plan rewrites step 5 from a card move to a `staged_at` stamp and retires the `DISPATCH` column; this plan rewrites step 1, 1a, 2 and the Rules. Author this one against that plan's finished step 5 — see "Reconciliation with the staging plan" below.
+* **Serialises ahead of `feature_plan_20260811094600_cache-plan-write-sets-for-dispatch-analysis.md`**, which rewrites step 2 again into a fetch-then-fill and should be authored against this plan's final path-resolution text.
+* The sibling worktree plan (`feature_plan_20260811143000_…worktree-recommendation.md`) adds steps 4a/6a/6b and a new prompt line. It touches disjoint sections of the skill and disjoint assertions in the contract test, so it can land in any order relative to this plan — but it, not this plan, owns the `FEATURE_WORKTREE_MODE=` prompt-layout assertions.
+* No migration, no schema, no persisted state.
+
+### Reconciliation with the staging plan
+
+The staging plan lands first and changes what step 5 *is*. Three places in this plan's text must be written against that end-state rather than against HEAD:
+
+1. **The Rules bullet** — "Use the API only for the card moves in step 5" becomes "Use the API only for the staging writes in step 5".
+2. **Step 1's candidate set** — after staging, staged plans are still in `PLAN REVIEWED` and therefore still in the mirror file. That is *correct and required*: it is what lets the pass see the cards it staged. The step-1 text must say so, and must tell the pass to skip re-staging a plan already carrying a stamp.
+3. **Verification step 5** below — "moved cards land in DISPATCH" becomes "staged cards stay in Planned and appear under the Staging filter".
+
+The `planId:<uuid>` marker, the mirror's format, the `project:"…"` scoping table and the `subtask-of:` parsing are all unaffected by staging.
+
+## Adversarial Synthesis
+
+Key risks: (1) **losing a safety guarantee while changing transport** — step 1a's "a subtask whose parent is elsewhere is skipped" and step 2's "an unreadable plan stays in Planned" are the two rules standing between this pass and two coders in one file, and both are being re-expressed against a different data source in the same edit; (2) **deleting the fallback** — `boardStateExport: control-plane` genuinely relocates the mirror, so a rewrite that assumes the file is always there strands those workspaces with no read path at all; (3) **parsing a marker that was never built to be parsed** — an unescaped `"` in a feature topic truncates `subtask-of:` and silently orphans that feature's subtasks, which reads as "no candidates" rather than as an error; (4) **no CI gate on the file** — with no `.claude` mirror and no `mirror:check` coverage, prose drift is invisible unless the contract test asserts it; (5) **authoring against HEAD instead of against the staging plan's step 5**, producing a skill that tells the agent to move cards to a retired column. Mitigations: re-express both guarantees explicitly in the rewritten bullets and pin them with the feature-unit regression check; keep the fallback and detect it by file absence; strip quotes at the writer and pin the marker contract with a test; add the skill-spelling assertions to `dispatch-analysis-scope-contract.test.js`; and land this plan second, against the staging plan's finished text.
 
 ## Proposed Changes
 
@@ -201,7 +243,7 @@ The "leave unreadable plans in Planned" paragraph below it is unchanged.
 ```markdown
 - **Read the mirror, not the whole board.** `{WORKSPACE_ROOT}/.switchboard/kanban-state-plan-reviewed.md`
   is one column; `GET /kanban/board` is every card in every column. Use the API only for the
-  card moves in step 5, or as step 1's documented fallback when the mirror file is absent.
+  staging writes in step 5, or as step 1's documented fallback when the mirror file is absent.
 - **Stay inside the board's scope.** The mirror carries every project's cards in that column;
   the column the user pressed Analyze on does not. Scope per step 1 before analysing
   anything, and name the scope in the report.
@@ -279,14 +321,25 @@ await test('dispatch-analysis step 1 names the mirror and demotes /kanban/board'
     const boardAsInstruction = /GET\s+http:\/\/localhost:\{API_PORT\}\/kanban\/board/.test(skill);
     assert.ok(!boardAsInstruction,
         'a bare GET /kanban/board pulls every column; the pass needs one');
-    assert.ok(/POST[\s\S]{0,80}\/kanban\/move/.test(skill),
-        'the move endpoint must survive — only the READ moved off HTTP');
+    assert.ok(/POST[\s\S]{0,120}\/kanban\/(move|verb\/setStaged)/.test(skill),
+        'the write endpoint must survive — only the READ moved off HTTP');
 });
 ```
+
+The write-endpoint assertion is deliberately loose on *which* endpoint: the staging plan lands first and replaces `POST /kanban/move` with the staging verb, and an assertion pinned to `/kanban/move` alone would go red on that plan's change rather than on a regression in this one. What it must pin is that **some** write endpoint survives step 5 — the failure this guards is a rewrite that moves the whole pass off HTTP, read *and* write.
 
 `readSrc` resolves relative to the repo root, so the skill path needs no helper change.
 
 ## Verification Plan
+
+### Automated Tests
+
+* **`subtask-of` survives a quoted feature topic** — the `kanban-auto-export.test.ts` case in change 3.
+* **The skill names the mirror and no longer instructs `GET /kanban/board`** — the `dispatch-analysis-scope-contract.test.js` case in change 4.
+* **A write endpoint survives step 5** — same case, loose match per the note above.
+* **The existing prompt-layout assertions still pass unchanged** (`API_PORT=…\nPROJECT=…\n\nPLANS TO PROCESS:`), proving the prompt body was not disturbed.
+
+### Manual Verification
 
 1. **Byte comparison, before and after.** With the extension running, capture the three sources the plan measured and confirm the ratio holds on the reader's board:
    ```bash
@@ -309,10 +362,16 @@ await test('dispatch-analysis step 1 names the mirror and demotes /kanban/board'
 
 3. **Freshness under a live move.** Move a card into Planned on the board, wait one second, re-run the grep from step 1 of the skill, and confirm the new card is present. Then move it out and confirm it disappears. This is the claim the API re-query existed to guarantee.
 
-4. **Unit tests.** `npm test` — the two new tests above pass, and the existing `dispatch-analysis-scope-contract.test.js` prompt-layout assertions (`API_PORT=4711\nPROJECT=…\n\nPLANS TO PROCESS:`) still pass unchanged, proving the prompt body was not disturbed.
+4. **End-to-end, the real button.** Press **Analyze** on the Planned column with a project filter active. Watch the planner terminal: it must `grep` the mirror rather than `curl` the board, must report the scope it analysed, must print the intended set before the first write (step 5a), and must write one card at a time with an outcome line each (step 5b). Confirm on the board that the selected cards are **staged in place** — still in Planned, visible under the Staging filter — and that no subtask was staged independently of its feature. (Before the staging plan lands, this reads as "the moved cards land in DISPATCH"; after it lands, staging is the correct expectation and a card that *moves* is the regression.)
 
-5. **End-to-end, the real button.** Press **Analyze** on the Planned column with a project filter active. Watch the planner terminal: it must `grep` the mirror rather than `curl` the board, must report the scope it analysed, must print the intended set before the first move (step 5a), and must move cards one at a time with an outcome line each (step 5b). Confirm on the board that the moved cards land in DISPATCH and that no subtask moved independently of its feature.
+5. **Fallback path.** Temporarily rename `.switchboard/kanban-state-plan-reviewed.md`, press Analyze again, and confirm the agent detects the missing file and falls back to `GET /kanban/plans?column=PLAN%20REVIEWED` — not to `GET /kanban/board` — then restore the file.
 
-6. **Fallback path.** Temporarily rename `.switchboard/kanban-state-plan-reviewed.md`, press Analyze again, and confirm the agent detects the missing file and falls back to `GET /kanban/plans?column=PLAN%20REVIEWED` — not to `GET /kanban/board` — then restore the file.
+6. **Feature-unit regression.** With a feature whose subtasks sit in Planned while the feature card itself sits in another column, confirm the pass skips those subtasks and names them in the report. This is the guarantee step 1a's rewrite is most at risk of losing.
 
-7. **Feature-unit regression.** With a feature whose subtasks sit in Planned while the feature card itself sits in another column, confirm the pass skips those subtasks and names them in the report. This is the guarantee step 1a's rewrite is most at risk of losing.
+7. **Quoted-topic end-to-end.** Rename a feature to include a `"`, let the mirror rewrite, and confirm its subtasks still resolve to it in the report rather than being reported as parentless. The unit test pins the writer; this pins the reader.
+
+## Recommendation
+
+Complexity 3 → **Send to Intern.** One skill-file section rewritten, a one-line quote strip, and two tests. The whole risk is concentrated in two sentences — step 1a's parent test and step 2's path resolution — so the reviewer's attention belongs there and almost nowhere else.
+
+Land it **after** the staging plan, and write step 5's surrounding language against the stamp rather than the retired `DISPATCH` column.
