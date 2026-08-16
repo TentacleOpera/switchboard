@@ -31,7 +31,21 @@ That is the whole skill. It should be short enough to read in one screen.
 
 The entry protocol and its `awk` board-count pipeline. The five-item menu and every category section beneath it. Feature management prose. Plan-ID resolution. Guided setup and tour. The column-oversight pass protocol and the project-pipeline wrapper. The management-console persona and its hard rules about being a manager rather than a coder.
 
-None of this is trimmed or relocated wholesale — the surfaces that own each concern already exist. Anything found to have no owner is a gap in the board, and the fix is in the board.
+None of this is trimmed or relocated wholesale — the surfaces that own each concern already exist.
+
+## Three things must move first — they have no other home
+
+Verified by grep across `.claude/skills/`, `.agents/skills/` and `docs/`: the verb-rail traps appear in **exactly one file, the one being deleted**. `switchboard-orchestration`, which this skill names as the owner of the HTTP contract, has zero mentions of any of them.
+
+Move these into `switchboard-orchestration` **before** deleting anything:
+
+1. **Read verbs over the verb rail return only `{success:true}`** — their data arrives on the WS hub. Reads must use the dedicated GET endpoints (`/kanban/board`, `/kanban/plans`, `/kanban/plan`).
+2. **Canonical column IDs, never slugs** — `LEAD CODED`, not `lead-coded`.
+3. **Exact webview message field names** — `triggerAction` takes `{sessionId, targetColumn}`; `promptOnDrop` takes `{sessionIds, sourceColumn, targetColumn}`. `planId` / `column` are silently wrong.
+
+They share one failure mode, and it is the reason they are worth preserving: **the route answers `{success:true}` and nothing happens.** An agent cannot detect this from the response, so it reports success and moves on. That is the most expensive class of bug on this surface, and this knowledge is one `git rm` from being lost.
+
+`workspaceRoot` on every call needs no move — `switchboard-orchestration` already covers it thoroughly.
 
 ## Supersedes
 
@@ -50,3 +64,4 @@ None of this is trimmed or relocated wholesale — the surfaces that own each co
 4. The skill contains no board listing, no menu, no column narration, and no oversight-pass protocol.
 5. The skill fits on one screen.
 6. Nothing that used to be reachable only through the skill is now unreachable — each former capability is available on the board or through the skill that owns it.
+7. `switchboard-orchestration` documents all three verb-rail traps **before** the console skill is deleted. Grep the tree afterwards: each trap still appears somewhere, and not only in git history.
