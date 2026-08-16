@@ -14,19 +14,23 @@ Delete `autoCommitForCodeReview`. Commit responsibility moves to the roles that 
 
 **The per-role mechanism exists, but it deliberately excludes the reviewer — and that exclusion is the real decision here.** `gitCommitStrategyByRole` (`KanbanProvider.ts:5397`) resolves `lead`, `coder`, `intern` and `claude_designer` from role config and hardcodes the rest to `'notSpecified'`. That is not an oversight: `sharedDefaults.js:62` scopes the three git-policy radios to *"the four code-writing roles"*, the reviewer's default addons carry `gitProhibition` and none of the three strategies, and the UI renders `ROLE_ADDONS[role]` so the control never appears for a reviewer. All three layers agree. Nothing is silently ignored and there is no dead control.
 
-So letting a reviewer commit is not unhardcoding a line — it changes what a reviewer **is**. Today the model has one category, "roles that touch git," and the reviewer is outside it. This introduces a distinction the model does not currently draw: signing off on work someone else wrote is not the same as writing code, and only the first is being granted.
+**But the classification is wrong.** The reviewer *does* write code: `agentPromptBuilder.ts:1436` instructs it to "assess the actual code changes against the plan requirements inline, **fix valid material issues**, then verify." A role that fixes bugs is a code-writing role. The same applies to the planner, which authors plan files — its own work product, tracked in git.
+
+So this is not a boundary being crossed. It is three layers consistently implementing a misclassification, and the fix is to correct the classification for the two roles that need it.
 
 ## What changes
 
 **1. Delete auto-commit** — `autoCommitForCodeReview`, the `switchboard.kanban.autoCommitOnCodeReview` setting, its `globalState` read, and the call site.
 
-**2. Give the reviewer a commit strategy — three changes, all of them required.** Missing any one leaves a control that does nothing or an option nobody can set:
+**2. Give the planner and the reviewer a commit strategy — three changes each, all required.** Missing any one leaves a control that does nothing or an option nobody can set:
 
-- `sharedDefaults.js` — add `gitCommitStrategy` to the reviewer's default addons.
-- `ROLE_ADDONS.reviewer` — add the radio so the control renders.
-- `KanbanProvider.ts:5403` — read `reviewerConfig?.addons?.gitCommitStrategy`, as `lead` and `coder` do.
+- `sharedDefaults.js` — add `gitCommitStrategy` to that role's default addons.
+- `ROLE_ADDONS.<role>` — add the radio so the control renders.
+- `KanbanProvider.ts:5397-5407` — read `<role>Config?.addons?.gitCommitStrategy`, as `lead` and `coder` do.
 
-Give the reviewer **only** the commit strategy. Not branch, not push. The grant is "may commit work it has reviewed", not "is now a code-writing role", and adding the other two radios would erase the distinction this plan is introducing.
+Together with the lead, that gives one committer per pipeline stage: planner, lead, reviewer.
+
+**Commit strategy only — not branch, not push.** Not because these roles are barred from writing code (they are not), but because nothing here needs them and each radio is another way for a dispatch to go sideways. There is no principled reason to withhold them later if a use appears.
 
 Leave the `'incremental'` → `'notSpecified'` mapping intact — a retired value, not this plan's business.
 
