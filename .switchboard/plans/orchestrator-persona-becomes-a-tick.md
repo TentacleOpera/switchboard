@@ -28,6 +28,18 @@ The orchestrator's whole job is to keep two lanes fed. Each lane has a capacity 
 
 Assess both lanes on every wake. Waiting is the expected outcome most of the time, not a failure.
 
+### How the guards are answered
+
+Two signals, both of which the orchestrator can read or ask for directly:
+
+1. **Completion reports in the plan files.** A dispatched agent appends a completion summary to its plan file when it finishes (`CODING_COMPLETION_REPORT_DIRECTIVE`; plan files are write-once-at-the-end). The report's presence is the fact.
+2. **Ask the lead.** Message it for a status update via `ptySendPrompt` when the files are ambiguous.
+
+**Two things that look like signals and are not:**
+
+- **Column state.** Cards move on coding *start* — the move **is** the dispatch, and they never move on finish (`switchboard-contracts` #1). A card in a coding column means work began, not that it ended.
+- **Terminal silence.** A lead is idle most of the time by design: it hands a subtask to a coder and waits. Silence is its normal working state, not a completion.
+
 **What is deliberately not on this list:**
 
 - **Grouping loose plans into features.** It is a judgement about what belongs together, not something a timer should do every ten minutes.
@@ -49,7 +61,7 @@ Clearing makes tick N and tick N+40 identical in construction. It also makes the
 - **One dispatch per lane per wake.** A wake may feed both lanes, never the same lane twice.
 - **Silent when idle.** A no-op wake writes nothing to the session log. At a ten-minute interval, logging every wake makes the overnight record unreadable — which defeats the log's only purpose. Most wakes are no-ops.
 - **A wake arriving mid-pass is dropped, not queued.** Never two passes at once.
-- **Re-derive every wake.** Availability and board state come from git and the board, never from what a previous wake believed. "Still working" is a fact about the world, not a remembered flag.
+- **Re-derive every wake.** Read the plan files and the board fresh; never trust what a previous wake believed. "Still working" is a fact about the world, not a remembered flag.
 - **Obey the worktree setting; never write it.** Read it, follow it.
 
 ## Rules that carry over unchanged
