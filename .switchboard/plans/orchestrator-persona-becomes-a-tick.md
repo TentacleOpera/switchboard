@@ -28,10 +28,6 @@ The orchestrator's whole job is to keep two lanes fed. Each lane has a capacity 
 
 Assess both lanes on every wake. Waiting is the expected outcome most of the time, not a failure.
 
-### How "still working" is answered
-
-By the system's existing turn-end classification — the same finished/blocked state the board already shows. This plan does not define, choose, or re-derive a completion signal; `feature_plan_20260814150000_agent-completion-endpoint.md` owns that, including pushing it to the orchestrator. The tick reads it.
-
 **What is deliberately not on this list:**
 
 - **Grouping loose plans into features.** It is a judgement about what belongs together, not something a timer should do every ten minutes.
