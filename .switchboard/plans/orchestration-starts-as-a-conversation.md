@@ -43,6 +43,24 @@ It remains a recommendation, not a gate. You may proceed with a lone agent — b
 
 The same sequence runs when you simply ask the orchestrator about orchestration in its terminal. There is one entry path, and the button is a shortcut to it rather than a second mechanism.
 
+## Where the entry point lives
+
+**The AUTOMATION tab holds configuration; the terminal holds the conversation.** The tab owns which CLI command starts the orchestrator, how often it wakes, and which mode is active. It does not own starting, because starting is a dialogue and a settings panel is a poor place to have one. Its button *opens the orchestrator* — it does not start orchestration.
+
+**Not the TEAMS tab.** A team is a head with members working subtasks. The orchestrator is a singleton with no members; giving it a team card recreates the "Solo coder" entry that `teams-tab-three-presets-and-phone-a-friend.md` removes for exactly this reason — a team-type card for something that is not a team.
+
+**Not a new panel.** One agent does not need a third surface.
+
+### Two doors, one sequence
+
+The other door already exists and shipped: the `/switchboard` management console (`.claude/skills/switchboard/SKILL.md`), whose Automation menu offers **"Arm / disarm the unattended engine — `POST /orchestration/start`."**
+
+Today that arms the engine directly. After this plan it must not: **`POST /orchestration/start` seats the orchestrator and delivers the pre-flight — it never begins ticking.** Any caller reaching it, from the tab, the console, or a script, lands in the same conversation.
+
+Leaving one door with a pre-flight and one without is the two-mechanism pattern that produced the original footgun the console skill was written to close — a human opening a management view and silently triggering unattended automation. Do not reintroduce it on the API side.
+
+Reserve a separate resume path for a session already confirmed (see verification 8), so restarting a dead terminal does not re-run the interview.
+
 ## The session file
 
 Confirmation produces `.switchboard/orchestrator/session.md`, in two parts:
@@ -74,3 +92,4 @@ Requires `automation-tab-three-exclusive-modes.md` (2 of 4), which creates agent
 7. Reply narrowing scope to two plans: the session file records that scope, and the ticks stay inside it.
 8. Kill and restart the terminal mid-session: the agent picks up the existing session file rather than re-running pre-flight from scratch.
 9. A cron fire or a browser-load startup team seats the orchestrator's terminal but does not begin orchestration.
+10. `POST /orchestration/start` — called from the `/switchboard` console or by hand — lands in the same pre-flight and does not begin ticking. Both doors behave identically.
