@@ -28,6 +28,16 @@ The orchestrator's whole job is to keep two lanes fed. Each lane has a capacity 
 
 Assess both lanes on every wake. Waiting is the expected outcome most of the time, not a failure.
 
+### How "still working" is answered
+
+Not by asking the agent, and not from plan-file mtime. The turn boundary is **silence on the pty stream** (`lastDataAt` off `handle.onData`), classified once per sweep in `PlanIngestionEngine` into *finished* or *blocked* — mtime only disambiguates those two after silence has already marked the boundary. Agent-reported completion was built as `POST /agent/event` with CLI hooks and removed on 2026-08-08: it worked for one CLI and degraded to a blind timer for the rest, so the board meant different things per seat.
+
+`feature_plan_20260814150000_agent-completion-endpoint.md` pushes that classification to the waiting agent — the seat's head, or the orchestrator when there is no head. Land it and the lane guards have a real signal instead of an opinion.
+
+**That also demotes the interval.** As that plan puts it, the wake cadence "polls on a timer precisely because nothing pushes." With the notification landed, a turn-end wakes the orchestrator directly and the interval is a **backstop** for the case where no notification arrives — a crashed seat, a dropped message. This is what the existing persona's first Hard Rule already assumed: it names a `[switchboard:turn-end]` notice as a wake signal, and nothing has ever sent one.
+
+Nothing above changes if the notification has not landed yet — the tick simply runs on the interval alone, and reads the same classification from board state rather than being pushed it.
+
 **What is deliberately not on this list:**
 
 - **Grouping loose plans into features.** It is a judgement about what belongs together, not something a timer should do every ten minutes.
