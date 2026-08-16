@@ -669,7 +669,7 @@ export const PHONE_A_FRIEND_DIRECTIVE = (port: number, originRole: string, origi
     ...(originTerminal ? [`"originTerminal":"${originTerminal}"`] : []),
     `"dispatchId":"${dispatchId}"`,
   ].join(',');
-  return `PHONE-A-FRIEND: When you have finished coding ALL plans in this batch, you MUST notify the Phone-a-Friend agent ONCE by running:\ncurl -s -X POST http://127.0.0.1:${port}/phone-a-friend -H "Content-Type: application/json" -d '{${fields}}'\nReplace <PLAN_FILE_PATH> with the relative path of the LAST plan file you completed. Send exactly one request per batch (not one per plan). This is a required step — if the Phone-a-Friend agent is not running, the request will still succeed silently, but you must send it regardless. (Requires the Phone-a-Friend agent configured in the Agents tab.)`;
+  return `PHONE-A-FRIEND: When you have finished coding ALL plans in this batch, you MUST notify the Phone-a-Friend agent ONCE by running:\ncurl -s -X POST http://127.0.0.1:${port}/phone-a-friend -H "Content-Type: application/json" -d '{${fields}}'\nReplace <PLAN_FILE_PATH> with the relative path of the LAST plan file you completed. Send exactly one request per batch (not one per plan). This is a required step — if the Phone-a-Friend agent is not running, the request will still succeed silently, but you must send it regardless. (Requires the Phone-a-Friend toggle enabled in the TEAMS tab.)`;
 };
 
 /**

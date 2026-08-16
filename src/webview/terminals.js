@@ -113,7 +113,7 @@
     // per-group member order, per-group stored layouts, and per-group extras
     // (terminals added to a derived group via the locked-group empty-pane fill).
     // One object under one key to avoid a spray of saveSetting calls.
-    let groupPrefs = { threshold: 2, hidden: [], pinned: [], orders: {}, layouts: {}, extras: {} };
+    let groupPrefs = { threshold: 2, hidden: [], pinned: [], orders: {}, layouts: {}, extras: {}, autoRoleGroups: false };
 
     /**
      * Which group header the role picker is currently open under.
@@ -137,6 +137,10 @@
     /** Cached { visibleAgents, hasCommand } so a re-render rebuilds the picker
      *  without a round trip and without flashing an empty menu. */
     let rolePickerData = null;
+    /** Cached team definitions (from ptyListAgentGroups) so a re-render
+     *  rebuilds the team list and the role annotations without a round trip.
+     *  Array of { id, name, headRole, members, unassigned, unassignedReason }. */
+    let teamPickerData = null;
     /**
      * One-shot: scroll the picker into view on the render that OPENED it, and only
      * that render. .terminals-list is overflow-y:auto, so a `+` on a header at the
@@ -1487,7 +1491,9 @@
                 pinned: Array.isArray(savedGroupPrefs.pinned) ? savedGroupPrefs.pinned.filter(id => typeof id === 'string') : [],
                 orders: (savedGroupPrefs.orders && typeof savedGroupPrefs.orders === 'object') ? savedGroupPrefs.orders : {},
                 layouts: savedLayouts,
-                extras: savedExtras
+                extras: savedExtras,
+                // Opt-in and stays opt-in: absent or non-true reads as false.
+                autoRoleGroups: savedGroupPrefs.autoRoleGroups === true
             };
         }
 
@@ -1589,7 +1595,22 @@
                     }
                     if (!restoredLockOnLoad && activeGroupId) {
                         restoredLockOnLoad = true;
-                        switchToGroup(activeGroupId, { noSave: true });
+                        const savedId = String(activeGroupId);
+                        if (getAllGroups().some(g => g.id === savedId)) {
+                            switchToGroup(savedId, { noSave: true });
+                        } else if (!groupPrefs.autoRoleGroups && savedId.startsWith('dg_role_')) {
+                            // Role grouping is off, so getDerivedGroups emits no role tab at all and
+                            // this id can never resolve. switchToGroup would early-return and leave
+                            // the panel soft-dead: no active tab, an inert seatActiveGroupPage, and
+                            // a dead empty-pane fill. clearGroupLock re-seats from the live fleet
+                            // honouring pins, and saves.
+                            //
+                            // Deliberately NOT "any unresolved dg_role_ id": with role grouping ON,
+                            // an absent group means the location is merely below threshold, and
+                            // clearing there would persist activeGroupId = null and discard a lock
+                            // that the next spawn would have restored.
+                            clearGroupLock();
+                        }
                     }
                     sanitizePaneAssignments();
                     renderSidebarList();
@@ -2104,7 +2125,12 @@
         if (claimingGroup) {
             const groupChip = document.createElement('span');
             groupChip.className = 'item-group-chip';
-            groupChip.textContent = claimingGroup.name;
+            // .item-group-chip is max-width:80px / ellipsis at 9px (terminals.html).
+            // A location-scoped role group's full name ("Planners · switchboard")
+            // truncates to "Planners · s…", so two DIFFERENT groups render identical
+            // chips — the operator reads that as the bug still being present. The chip
+            // names the group; the title names the location.
+            groupChip.textContent = claimingGroup.shortName || claimingGroup.name;
             groupChip.title = `Member of ${claimingGroup.name}`;
             roleRow.appendChild(groupChip);
         }
@@ -2485,6 +2511,52 @@
         return 'dg_' + source + '_' + encoded;
     }
 
+    /**
+     * Separator for the composite (role, location) key. A filesystem path can
+     * contain '@', a space, a dash, a colon and a pipe; it cannot contain NUL.
+     * Using NUL guarantees two distinct (role, location) pairs can never collide
+     * into one map key.
+     */
+    const LOC_SEP = '\u0000';
+
+    /** Normalise a path for keying: `\` → `/`, trailing slashes stripped. Case is
+     *  deliberately preserved — renderSidebarList compares parentRoot exactly, and
+     *  a case-folding key here would bucket a terminal differently from the tree. */
+    function normalizeLocationPath(p) {
+        return String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
+    }
+
+    /**
+     * A terminal's physical location: its worktree if it has one, else the parent
+     * workspace it was spawned under. Both fields are stamped by both hosts
+     * (TaskViewerProvider.ts, bootstrap.ts) and are the same two fields
+     * renderSidebarList buckets the tree by.
+     *
+     * The worktree is only treated as a distinct location when the sidebar treats
+     * it as one: renderSidebarList files a terminal as `direct` under its
+     * parent when worktreePath IS the parent root or is itself a registered parent
+     * folder. Mirroring that rule is what stops the group strip and the sidebar
+     * tree from telling two different stories about the same terminal.
+     */
+    function locationKeyForTerminal(t) {
+        const parentRoot = normalizeLocationPath(t && t.parentRoot);
+        const wt = normalizeLocationPath(t && t.worktreePath);
+        if (!wt || wt === parentRoot) { return parentRoot; }
+        const registeredParents = new Set(
+            (Array.isArray(parentsList) ? parentsList : [])
+                .map(p => normalizeLocationPath(p && p.parentFolder))
+                .filter(Boolean)
+        );
+        return registeredParents.has(wt) ? parentRoot : wt;
+    }
+
+    /** Basename of a location key, for the group label. Matches renderSidebarList. */
+    function locationLabelForKey(key) {
+        if (!key) { return 'unmapped'; }
+        const parts = String(key).split('/').filter(Boolean);
+        return parts.length > 0 ? parts[parts.length - 1] : key;
+    }
+
     function getDerivedGroups() {
         const threshold = groupPrefs.threshold;
         const hidden = new Set(groupPrefs.hidden);
@@ -2492,18 +2564,38 @@
         const roleMap = new Map();
         const worktreeMap = new Map();
         for (const t of live) {
-            if (t.role) { roleMap.set(t.role, (roleMap.get(t.role) || 0) + 1); }
+            // Role is a job title, not a team and not a place. Two planners in two
+            // different checkouts are two agents doing two jobs — keying on role
+            // alone seated them into one grid and named the result "Planners".
+            if (t.role) {
+                const loc = locationKeyForTerminal(t);
+                const key = t.role + LOC_SEP + loc;
+                const entry = roleMap.get(key) || { role: t.role, loc, count: 0 };
+                entry.count++;
+                roleMap.set(key, entry);
+            }
             if (t.worktreePath) { worktreeMap.set(t.worktreePath, (worktreeMap.get(t.worktreePath) || 0) + 1); }
         }
         const derived = [];
-        for (const [role, count] of roleMap) {
-            if (count >= threshold) {
-                derived.push({
-                    id: safeGroupIdForValue('role', role),
-                    name: (role.charAt(0).toUpperCase() + role.slice(1)) + 's',
-                    source: 'role',
-                    value: role
-                });
+        // Opt-in. Worktree groups below stay automatic: they are location-keyed by
+        // construction and describe a place the operator chose to create.
+        if (groupPrefs.autoRoleGroups) {
+            for (const { role, loc, count } of roleMap.values()) {
+                if (count >= threshold) {
+                    const label = (role.charAt(0).toUpperCase() + role.slice(1)) + 's';
+                    // Always suffixed, never conditionally: a name that flips when a
+                    // planner appears in another workspace is a name the operator
+                    // cannot learn.
+                    derived.push({
+                        id: safeGroupIdForValue('role', role + LOC_SEP + loc),
+                        name: label + ' · ' + locationLabelForKey(loc),
+                        shortName: label,
+                        source: 'role',
+                        value: role,
+                        role,
+                        location: loc
+                    });
+                }
             }
         }
         for (const [wt, count] of worktreeMap) {
@@ -2561,7 +2653,14 @@
                 if (live.has(n) && !names.includes(n)) { names.push(n); }
             }
         } else if (group.source === 'role') {
-            names = fleetList.filter(t => t.status !== 'exited' && !t.parentInstanceId && t.role === group.value).map(t => t.friendlyName);
+            // Same predicate as getDerivedGroups: role AND location. Filtering on role
+            // alone is what unioned every workspace's planners into one group.
+            names = fleetList
+                .filter(t => t.status !== 'exited'
+                    && !t.parentInstanceId
+                    && t.role === group.value
+                    && locationKeyForTerminal(t) === group.location)
+                .map(t => t.friendlyName);
         } else if (group.source === 'worktree') {
             names = fleetList.filter(t => t.status !== 'exited' && !t.parentInstanceId && t.worktreePath === group.value).map(t => t.friendlyName);
         }
@@ -2885,9 +2984,15 @@
         // menu. Realistic counts are small (derived groups only materialise
         // at groupPrefs.threshold members), so this is a guard, not the
         // common path. The » menu also carries the "N hidden groups — show
-        // all" entry that used to live in the sidebar.
+        // all" entry that used to live in the sidebar, and the role-grouping
+        // toggle — so it must be reachable when there are no tabs at all,
+        // otherwise the only control that turns role groups back on lives
+        // inside a menu that role groups being off has hidden. Both the
+        // measurement gate and the build gate are therefore unconditional;
+        // overflowReserved (36px) is already subtracted unconditionally below,
+        // so the » costs no layout that was not already budgeted.
         const hasHiddenGroups = Array.isArray(groupPrefs.hidden) && groupPrefs.hidden.length > 0;
-        if (groupTabEls.length > 0 || hasHiddenGroups) {
+        {
             // Reading offsetWidth forces a synchronous layout, so the
             // measurements are accurate before we remove anything.
             const stripWidth = tabRow.clientWidth;
@@ -2906,81 +3011,100 @@
                 }
             }
 
-            if (overflowing.length > 0 || hasHiddenGroups) {
-                for (const item of overflowing) {
-                    if (item.el.parentNode === tabRow) {
-                        tabRow.removeChild(item.el);
-                    }
+            for (const item of overflowing) {
+                if (item.el.parentNode === tabRow) {
+                    tabRow.removeChild(item.el);
                 }
-
-                const overflowContainer = document.createElement('div');
-                overflowContainer.className = 'group-tab-overflow';
-
-                const overflowBtn = document.createElement('button');
-                overflowBtn.type = 'button';
-                overflowBtn.className = 'group-tab-overflow-btn';
-                overflowBtn.textContent = '»';
-                overflowBtn.title = 'More groups';
-                overflowContainer.appendChild(overflowBtn);
-
-                const menu = document.createElement('div');
-                menu.className = 'group-tab-overflow-menu';
-                menu.style.display = 'none';
-
-                for (const item of overflowing) {
-                    const g = item.group;
-                    const menuItem = document.createElement('div');
-                    menuItem.className = 'group-tab-overflow-item' + (g.id === activeGroupId ? ' active' : '');
-                    const nameSpan = document.createElement('span');
-                    nameSpan.textContent = g.name;
-                    const countSpan = document.createElement('span');
-                    countSpan.className = 'group-tab-count';
-                    countSpan.textContent = String(getGroupMembers(g).length);
-                    menuItem.appendChild(nameSpan);
-                    menuItem.appendChild(countSpan);
-                    menuItem.addEventListener('click', () => {
-                        if (activeGroupId !== g.id) { switchToGroup(g.id); }
-                        menu.style.display = 'none';
-                    });
-                    menu.appendChild(menuItem);
-                }
-
-                if (overflowing.length > 0 && hasHiddenGroups) {
-                    const divider = document.createElement('div');
-                    divider.className = 'group-tab-overflow-divider';
-                    menu.appendChild(divider);
-                }
-
-                if (hasHiddenGroups) {
-                    const restoreItem = document.createElement('div');
-                    restoreItem.className = 'group-tab-overflow-restore';
-                    restoreItem.textContent = `${groupPrefs.hidden.length} deleted group${groupPrefs.hidden.length === 1 ? '' : 's'} — restore all`;
-                    restoreItem.title = 'Restore every deleted derived group';
-                    restoreItem.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        groupPrefs.hidden = [];
-                        saveLayoutSettings();
-                        renderSidebarList();
-                    });
-                    menu.appendChild(restoreItem);
-                }
-
-                overflowBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    menu.style.display = menu.style.display === 'none' ? 'flex' : 'none';
-                });
-
-                // Close on outside click — one-shot listener.
-                document.addEventListener('click', function closeOverflow(ev) {
-                    if (!overflowContainer.contains(ev.target)) {
-                        menu.style.display = 'none';
-                        document.removeEventListener('click', closeOverflow);
-                    }
-                });
-
-                overflowContainer.appendChild(menu);
-                tabRow.insertBefore(overflowContainer, addBtn);
             }
+
+            const overflowContainer = document.createElement('div');
+            overflowContainer.className = 'group-tab-overflow';
+
+            const overflowBtn = document.createElement('button');
+            overflowBtn.type = 'button';
+            overflowBtn.className = 'group-tab-overflow-btn';
+            overflowBtn.textContent = '»';
+            overflowBtn.title = 'More groups';
+            overflowContainer.appendChild(overflowBtn);
+
+            const menu = document.createElement('div');
+            menu.className = 'group-tab-overflow-menu';
+            menu.style.display = 'none';
+
+            for (const item of overflowing) {
+                const g = item.group;
+                const menuItem = document.createElement('div');
+                menuItem.className = 'group-tab-overflow-item' + (g.id === activeGroupId ? ' active' : '');
+                const nameSpan = document.createElement('span');
+                nameSpan.textContent = g.name;
+                const countSpan = document.createElement('span');
+                countSpan.className = 'group-tab-count';
+                countSpan.textContent = String(getGroupMembers(g).length);
+                menuItem.appendChild(nameSpan);
+                menuItem.appendChild(countSpan);
+                menuItem.addEventListener('click', () => {
+                    if (activeGroupId !== g.id) { switchToGroup(g.id); }
+                    menu.style.display = 'none';
+                });
+                menu.appendChild(menuItem);
+            }
+
+            if (overflowing.length > 0 && hasHiddenGroups) {
+                const divider = document.createElement('div');
+                divider.className = 'group-tab-overflow-divider';
+                menu.appendChild(divider);
+            }
+
+            // Role-grouping toggle — opt-in consent for derived role groups.
+            // Lives in the » menu so it is reachable even when role grouping is
+            // off (zero tabs). No confirm gate per CLAUDE.md.
+            const roleToggle = document.createElement('div');
+            roleToggle.className = 'group-tab-overflow-item';
+            roleToggle.textContent = groupPrefs.autoRoleGroups
+                ? 'Group by role: on — click to stop'
+                : 'Group by role: off — click to group same-role terminals per workspace';
+            roleToggle.title = 'When on, terminals sharing a role IN THE SAME workspace or worktree get a group tab. Roles never span locations.';
+            roleToggle.addEventListener('click', (e) => {
+                e.stopPropagation();
+                groupPrefs.autoRoleGroups = !groupPrefs.autoRoleGroups;
+                // Turning it off strands a lock on a group that no longer exists: no tab
+                // renders active and the empty-pane fill goes inert. Drop it here, where
+                // clearGroupLock also re-seats the grid and saves.
+                const stillExists = getAllGroups().some(g => g.id === activeGroupId);
+                if (activeGroupId && !stillExists) { clearGroupLock(); }
+                else { saveLayoutSettings(); renderSidebarList(); }
+            });
+            menu.appendChild(roleToggle);
+
+            if (hasHiddenGroups) {
+                const restoreItem = document.createElement('div');
+                restoreItem.className = 'group-tab-overflow-restore';
+                restoreItem.textContent = `${groupPrefs.hidden.length} deleted group${groupPrefs.hidden.length === 1 ? '' : 's'} — restore all`;
+                restoreItem.title = 'Restore every deleted derived group';
+                restoreItem.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    groupPrefs.hidden = [];
+                    saveLayoutSettings();
+                    renderSidebarList();
+                });
+                menu.appendChild(restoreItem);
+            }
+
+            overflowBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                menu.style.display = menu.style.display === 'none' ? 'flex' : 'none';
+            });
+
+            // Close on outside click — one-shot listener.
+            document.addEventListener('click', function closeOverflow(ev) {
+                if (!overflowContainer.contains(ev.target)) {
+                    menu.style.display = 'none';
+                    document.removeEventListener('click', closeOverflow);
+                }
+            });
+
+            overflowContainer.appendChild(menu);
+            tabRow.insertBefore(overflowContainer, addBtn);
         }
 
         // Picker for `group:*` key — mounted in the strip, outside listEl,
@@ -6133,6 +6257,28 @@
         return { visibleAgents: { ...DEFAULT_VISIBLE_AGENTS }, hasCommand: {} };
     }
 
+    /**
+     * Fetch the host-resolved team definitions for the team list and the
+     * honest role picker. Returns an array (empty on failure). The definition
+     * is resolved host-side — the start verb never accepts one from the wire.
+     */
+    async function fetchAgentGroups() {
+        try {
+            const res = await fetch('/terminals/verb/ptyListAgentGroups', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            if (res.ok) {
+                const data = await res.json();
+                if (data && data.success && Array.isArray(data.groups)) {
+                    return data.groups;
+                }
+            }
+        } catch { /* fall through */ }
+        return [];
+    }
+
     async function fetchVisibleRoles() {
         const data = await fetchPtyVisibleRoles();
         return Object.keys(data.visibleAgents).filter(k => data.visibleAgents[k] !== false);
@@ -6149,23 +6295,41 @@
             return;
         }
         // Claim the open synchronously, then fetch BEFORE committing pickerState, so
-        // the picker never renders empty and then repopulates.
+        // the picker never renders empty and then repopulates. Fetch roles and
+        // teams in parallel — the team list and the role annotations render from
+        // the same picker open, so a serial pair would double the latency.
         pickerOpening = groupKey;
-        const data = await fetchPtyVisibleRoles();
+        const [data, teams] = await Promise.all([
+            fetchPtyVisibleRoles(),
+            fetchAgentGroups()
+        ]);
         // A later click (or a cancel) superseded this one — discard the result.
         if (pickerOpening !== groupKey) { return; }
         pickerOpening = null;
         rolePickerData = data;
+        teamPickerData = teams;
         pickerState = { key: groupKey, targetSpec };
         pickerNeedsScroll = true;
         renderSidebarList();
     }
 
     /**
+     * Plain-language summary of what a team spawns, e.g. "3× coder".
+     * Mirrors the member-summary style used in the TEAMS tab gallery.
+     */
+    function teamSpawnSummary(team) {
+        const members = Array.isArray(team?.members) ? team.members : [];
+        const parts = members.map(m => `${m.count || 1}× ${m.role}${m.scope === 'shared' ? ' (shared)' : ''}`);
+        return parts.length > 0 ? parts.join(', ') : 'head only';
+    }
+
+    /**
      * Build the inline role picker for one group. Returns a detached element the
      * renderer inserts between a group header and its items container, so it stays
      * visible when the group is collapsed and is unmistakably attached to the
-     * workspace it will spawn into.
+     * workspace it will spawn into. Now also renders a "Start a team" section
+     * above the role chips (one START action per defined team) and annotates
+     * role options that head a team with the team name and what spawns.
      */
     function buildRolePicker(targetSpec) {
         const picker = document.createElement('div');
@@ -6176,6 +6340,51 @@
         title.textContent = 'New terminal — pick a role';
         picker.appendChild(title);
 
+        // ── Team list — explicit START action per defined team ───────────
+        // The engine behind instantiateAgentGroup was finished and never called;
+        // this is its front door. A team whose head role is already live will be
+        // refused by the verb with a specific message — the button still shows
+        // so the operator sees the team exists.
+        const teams = Array.isArray(teamPickerData) ? teamPickerData : [];
+        if (teams.length > 0) {
+            const teamSection = document.createElement('div');
+            teamSection.className = 'team-picker';
+            const teamTitle = document.createElement('div');
+            teamTitle.className = 'team-picker-title';
+            teamTitle.textContent = 'Start a team';
+            teamSection.appendChild(teamTitle);
+            const teamOptions = document.createElement('div');
+            teamOptions.className = 'team-picker-options';
+            for (const team of teams) {
+                if (!team || !team.id) { continue; }
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'team-option' + (team.unassigned ? ' is-unassigned' : '');
+                const nameEl = document.createElement('span');
+                nameEl.className = 'team-option-name';
+                nameEl.textContent = 'START ' + (team.name || team.id);
+                const summaryEl = document.createElement('span');
+                summaryEl.className = 'team-option-summary';
+                summaryEl.textContent = teamSpawnSummary(team) + (team.unassigned ? ' · no auto-start' : '');
+                btn.appendChild(nameEl);
+                btn.appendChild(summaryEl);
+                btn.title = team.unassigned
+                    ? `Start "${team.name}" explicitly. ${team.unassignedReason || 'This team does not auto-start.'}`
+                    : `Start "${team.name}" — ${teamSpawnSummary(team)}`;
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    // Close synchronously — same reasoning as the role buttons.
+                    pickerState = null;
+                    renderSidebarList();
+                    startTeam(team, targetSpec);
+                });
+                teamOptions.appendChild(btn);
+            }
+            teamSection.appendChild(teamOptions);
+            picker.appendChild(teamSection);
+        }
+
+        // ── Role picker — annotated with auto-start team info ────────────
         const optionsEl = document.createElement('div');
         optionsEl.className = 'role-picker-options';
 
@@ -6184,6 +6393,17 @@
         const data = rolePickerData || { visibleAgents: {}, hasCommand: {} };
         const visible = data.visibleAgents;
         const hasCommand = data.hasCommand;
+        // Auto-start resolves to the non-unassigned team for a head role
+        // (findTeamForHeadRole filters !g.unassigned). An unassigned team heads
+        // the same role but does NOT auto-start — it is started explicitly from
+        // the team list above. Annotate only the auto-start winner so the picker
+        // says what picking the role will actually do.
+        const autoStartByHeadRole = {};
+        for (const t of teams) {
+            if (t && t.headRole && !t.unassigned && !autoStartByHeadRole[t.headRole]) {
+                autoStartByHeadRole[t.headRole] = t;
+            }
+        }
         const SYSTEM_ROLES = new Set(['orchestrator', 'mcp_monitor']);
         const roles = Object.keys(visible)
             .filter(k => visible[k] !== false && !SYSTEM_ROLES.has(k))
@@ -6205,10 +6425,33 @@
             btn.className = 'role-option';
             const meta = BUILT_IN_AGENT_LABELS.find(r => r.key === role);
             const label = meta ? meta.label : role;
-            btn.textContent = label;
-            btn.title = hasCommand[role]
-                ? `Open ${label} terminal`
-                : `${label} — no agent CLI configured (plain shell)`;
+            const autoTeam = autoStartByHeadRole[role];
+            if (autoTeam) {
+                // Annotate: this role heads a team, so picking it spawns the
+                // team's members alongside the head. The note names the team and
+                // lists what spawns, so the control never silently produces five.
+                btn.classList.add('has-team');
+                const labelEl = document.createElement('span');
+                labelEl.className = 'role-option-label';
+                labelEl.textContent = label;
+                const note = document.createElement('span');
+                note.className = 'role-option-team-note';
+                const memberCount = (Array.isArray(autoTeam.members) ? autoTeam.members : [])
+                    .reduce((n, m) => n + (m.count || 1), 0);
+                note.textContent = memberCount > 0
+                    ? `starts ${autoTeam.name} · ${teamSpawnSummary(autoTeam)}`
+                    : `heads ${autoTeam.name} (no members)`;
+                btn.appendChild(labelEl);
+                btn.appendChild(note);
+                btn.title = hasCommand[role]
+                    ? `Open ${label} — auto-starts team "${autoTeam.name}" (${teamSpawnSummary(autoTeam)})`
+                    : `${label} — no agent CLI configured; auto-starts team "${autoTeam.name}" (${teamSpawnSummary(autoTeam)})`;
+            } else {
+                btn.textContent = label;
+                btn.title = hasCommand[role]
+                    ? `Open ${label} terminal`
+                    : `${label} — no agent CLI configured (plain shell)`;
+            }
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 // Close NOW, not whenever the next render happens to run. The static
@@ -6303,19 +6546,243 @@
             if (res.ok) {
                 const data = await res.json();
                 if (data.success && data.terminal) {
+                    const delegates = Array.isArray(data.delegates) ? data.delegates : [];
                     // BEFORE fetchTerminalList/assign: those are what build the pane and
                     // its xterm, and updatePaneElement reads startupCurtains to decide
                     // whether to paint the overlay. Arming after them would paint one
                     // reconcile late — a visible flash of the raw prompt.
                     armStartupCurtain(data.terminal.friendlyName, hasStartupCommand);
+                    if (delegates.length > 0) {
+                        // Team members run the role's configured agent CLI even when the
+                        // member definition carries no command of its own
+                        // (ptyFleetService.injectStartupCommand falls back to the role's),
+                        // so they need curtains too. One fetch for the whole team.
+                        const { hasCommand } = await fetchPtyVisibleRoles();
+                        for (const d of delegates) {
+                            if (d && d.friendlyName) {
+                                armStartupCurtain(d.friendlyName, hasCommand[d.role] === true);
+                            }
+                        }
+                    }
+                    // Members must be in fleetList before any seating: getGroupMembers()
+                    // filters the group's stored names through a liveness set built from
+                    // fleetList, so seating before this await resolves the team to its
+                    // head alone — the original bug with a bigger grid.
                     await fetchTerminalList();
-                    assignToFocusedPane(data.terminal.friendlyName);
+
+                    let seatFallbackReason = null;
+                    if (delegates.length === 0) {
+                        assignToFocusedPane(data.terminal.friendlyName);
+                    } else if (data.teamGroupId && await switchToTeamGroup(data.teamGroupId, data.terminal.friendlyName)) {
+                        // Seated by the group lock — sized by the group's stored layout
+                        // and paged by seatActiveGroupPage. Deliberately INSTEAD OF
+                        // assignToFocusedPane: that helper drops the group lock (see the
+                        // keepLock contract in terminal-sidebar-groupings-contract), which
+                        // would undo the seating on the next reconcile.
+                    } else {
+                        seatFallbackReason = data.teamGroupId
+                            ? 'its group did not load'
+                            : 'no group was registered';
+                        seatTeamWithoutGroup(data.terminal.friendlyName, delegates);
+                    }
+
+                    reportTeamStart(data, delegates, seatFallbackReason);
                 } else if (data && data.error) {
                     console.error('[Terminals] Create rejected:', data.error);
                 }
             }
         } catch (err) {
             console.error('[Terminals] Failed to create terminal:', err);
+        }
+    }
+
+    /**
+     * Pull the backend-registered team group into memory, then lock onto it.
+     * Returns false when the group did not arrive, so the caller can seat the
+     * team by hand instead.
+     *
+     * The presence check is NOT defensive padding: reloadTerminalGroups() ends
+     * in `catch { }` and switchToGroup() early-returns on an unknown id, so an
+     * unchecked pair fails silently — an unseated team with nothing on screen
+     * to say so, which is the bug this whole change exists to remove.
+     *
+     * The reload must precede the switch: switchToGroup calls
+     * saveLayoutSettings(), which writes the WHOLE in-memory terminalGroups
+     * array back to `terminals.groups` and would clobber the group the backend
+     * just registered.
+     */
+    async function switchToTeamGroup(groupId, headName) {
+        await reloadTerminalGroups();
+        if (!terminalGroups.some(g => g && g.id === groupId)) { return false; }
+        switchToGroup(groupId);
+        focusSeatedTerminal(headName);
+        return true;
+    }
+
+    /**
+     * Put the caret on the head after a team seat. switchToGroup rebuilds
+     * paneAssignments but deliberately leaves focusedPaneIndex and
+     * activeTerminalName alone — a tab click is navigation, not selection.
+     * After a CREATE that is wrong: the operator's active terminal would stay
+     * pointing at whatever was focused before, which the rebuild just pushed
+     * off the grid, and every act-on-the-active-terminal path (drag-to-terminal,
+     * paste, send prompt) would target something invisible.
+     *
+     * NOT assignToFocusedPane: that helper drops the group lock.
+     */
+    function focusSeatedTerminal(name) {
+        const idx = paneAssignments.indexOf(name);
+        if (idx < 0 || idx >= getSlotCount(effectiveLayout)) { return; }
+        focusedPaneIndex = idx;
+        activeTerminalName = name;
+        renderSidebarList();
+        renderPaneGrid();
+    }
+
+    /**
+     * Seat a team when no group is available — wiring failed, or the group did
+     * not load. Seats the team's OWN names, in team order, into free slots.
+     *
+     * Explicitly not fillEmptyPanes(): that helper fills in fleetList order with
+     * no notion of this team, so on a busy fleet the free panes go to unrelated
+     * terminals and the members stay invisible — the fallback reproducing the
+     * bug it exists to prevent. Pinned slots and kanban panes are skipped for
+     * the same reasons fillEmptyPanes skips them.
+     *
+     * Members that do not fit are left unseated; the caller's toast is the
+     * honest channel for that (and for solo mode, where growLayoutForFleet
+     * no-ops by design).
+     */
+    function seatTeamWithoutGroup(headName, delegates) {
+        // Drop any group lock FIRST, exactly as assignToFocusedPane does on the
+        // no-delegate path. Without this the fallback is a silent revert waiting
+        // to happen: the only thing that would clear the lock is growLayoutForFleet's
+        // setLayoutMode side effect, and that NO-OPS when the grid is already big
+        // enough. So on a fleet with room to spare, activeGroupId stays pointing at
+        // the operator's previous group — the tab strip shows THAT group as active
+        // while its panes hold the team, applyLayoutFloor's banner counts the wrong
+        // membership, and the next seatActiveGroupPage() (a resize tripping the
+        // floor, a banner page click, promoteGroupMember) rebuilds paneAssignments
+        // from the old group and evicts the team. That is the invisible-team bug
+        // this plan exists to kill, restored inside its own fallback.
+        activeGroupId = null;
+        activeGroupPage = 0;
+        const names = [headName, ...delegates.map(d => d && d.friendlyName).filter(Boolean)];
+        growLayoutForFleet(names.length);
+        const rendered = getSlotCount(effectiveLayout);
+        const next = paneAssignments.slice();
+        while (next.length < getMaxSlotCount()) { next.push(null); }
+        let slot = 0;
+        for (const name of names) {
+            if (next.includes(name)) { continue; }
+            while (slot < rendered && (next[slot] || pinnedPanes[slot] || paneModes[slot] === 'kanban')) { slot++; }
+            if (slot >= rendered) { break; }
+            next[slot++] = name;
+        }
+        paneAssignments = next;
+        const headIdx = paneAssignments.indexOf(headName);
+        if (headIdx >= 0 && headIdx < rendered) {
+            focusedPaneIndex = headIdx;
+            activeTerminalName = headName;
+        }
+        saveLayoutSettings();
+        renderSidebarList();
+        renderPaneGrid();
+        batchFitVisiblePanes();
+    }
+
+    /**
+     * Surface team auto-start failures. The create response carries three
+     * independent failure channels and the UI showed none of them, so a team
+     * that half-spawned looked exactly like one that fully spawned. The fourth
+     * (seatFallbackReason) is local: the team is on screen but not locked to
+     * its group, so the next reconcile composes differently than the operator
+     * expects.
+     *
+     * `teamAutoStart` is extension-host only; its ABSENCE means "no diagnosis
+     * available", never "zero members".
+     */
+    function reportTeamStart(data, delegates, seatFallbackReason) {
+        if (data.delegateError) {
+            showPaneToast(`Team partially started: ${data.delegateError}`);
+            return;
+        }
+        if (data.wiringError) {
+            showPaneToast(`Team started but wiring failed: ${data.wiringError}`);
+            return;
+        }
+        if (seatFallbackReason) {
+            showPaneToast(`Team seated without its group — ${seatFallbackReason}.`);
+            return;
+        }
+        const wanted = data.teamAutoStart && data.teamAutoStart.memberDefinitions;
+        if (wanted > 0 && delegates.length === 0) {
+            showPaneToast(`Team "${data.teamAutoStart.team || 'unknown'}" defines ${wanted} member${wanted === 1 ? '' : 's'} but none started.`);
+        }
+    }
+
+    /**
+     * Start a team explicitly by id — the first caller of the
+     * instantiateAgentGroup path that was finished and never wired. The
+     * definition is host-resolved (the verb rejects a wire-supplied group),
+     * so only the team id is sent. Surfaces start failures verbatim: the
+     * cap and PTY-unavailable errors the core returns are good messages that
+     * previously reached nobody.
+     *
+     * `targetSpec` is the same workspace target the role picker uses, so a
+     * team started from a group's `+` spawns into that group's workspace.
+     */
+    async function startTeam(team, targetSpec) {
+        if (!team || !team.id) { return; }
+        try {
+            const payload = { teamId: team.id };
+            if (typeof targetSpec === 'string') {
+                payload.cwd = targetSpec;
+            } else if (targetSpec && typeof targetSpec === 'object') {
+                if (targetSpec.parentRoot) { payload.parentRoot = targetSpec.parentRoot; }
+                if (targetSpec.worktreePath) { payload.cwd = targetSpec.worktreePath; }
+            }
+            const res = await fetch('/terminals/verb/ptyStartTeam', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            // The LocalApiServer returns 502 (not 200) when success === false,
+            // but the error body is still JSON — read it regardless of res.ok
+            // so a cap refusal, double-start refusal, or PTY-unavailable message
+            // reaches the operator verbatim instead of a generic "request failed".
+            let data = null;
+            try { data = await res.json(); } catch { /* non-JSON body */ }
+            if (data && data.success) {
+                // Arm curtains for the head and any delegates that carry a
+                // startup command, then refresh the fleet list and focus the
+                // head — same flow as createTerminal, applied to the team.
+                const headName = data.terminal?.friendlyName || (data.created && data.created[0]);
+                if (headName) { armStartupCurtain(headName, true); }
+                const workers = Array.isArray(data.workers) ? data.workers : [];
+                for (const w of workers) {
+                    if (w?.friendlyName) { armStartupCurtain(w.friendlyName, true); }
+                }
+                await fetchTerminalList();
+                if (headName) { assignToFocusedPane(headName); }
+                if (data.delegateError) {
+                    showPaneToast(`Team started with a delegate warning: ${data.delegateError}`);
+                } else if (data.error) {
+                    // Terminals created but wiring failed — surface it.
+                    showPaneToast(`Team started with a warning: ${data.error}`);
+                }
+            } else if (data && data.error) {
+                // Verbatim start failure — cap refusal, double-start refusal,
+                // PTY unavailable, missing team. These are the messages that
+                // used to reach nobody because the path was unwired.
+                showPaneToast(`Could not start team: ${data.error}`);
+                console.error('[Terminals] Team start rejected:', data.error);
+            } else {
+                showPaneToast('Could not start team — the request failed.');
+            }
+        } catch (err) {
+            console.error('[Terminals] Failed to start team:', err);
+            showPaneToast('Could not start team — a network error occurred.');
         }
     }
 
@@ -8126,9 +8593,14 @@
             id: 'reports-to-head',
             label: 'Reports to me — it works what I hand it',
             direction: 'member-receives',
+            // Byte-identical to AGENT_GROUP_CALLBACK_INSTRUCTION in teamWiring.ts
+            // and to the reports-to-head template in linkPresets.ts.
+            // {child} is the head terminal name — substituted by resolvePreset
+            // in the pair-order path (childName = headName for member-receives)
+            // and by wireSpawnedTeam directly when building the team prompt.
             template:
-                'it is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with ' +
-                '{"name":"<that terminal>","data":"<your report>","clearBeforePrompt":false} against the port in ' +
+                '{child} is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with ' +
+                '{"name":"{child}","data":"<your report>","clearBeforePrompt":false} against the port in ' +
                 '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.'
         },
         { id: 'custom', label: 'Custom…', direction: 'head-receives', template: '' }
@@ -8138,12 +8610,15 @@
     let linkPreset = LINK_PRESETS[0].id;
     let presetDirty = false;
 
-    // Client mirror of the standing-orders resolver. Keep these in sync with
+    // Client mirror of the standing-orders resolver. Keep in sync with
     // src/services/standingOrders.ts — the marker string is the contract that
     // prevents double-blocking when a prompt is processed by both client and host.
     const STANDING_ORDERS_MARKER = '=== STANDING ORDERS ===';
-    const MAX_BLOCK_CHARS = 4000;
-    const MAX_INSTRUCTION_CHARS = 2000;
+    // Matches the block-strip regex in standingOrders.ts — anchored to a COMPLETE
+    // block (marker + body + trailing 'These apply...' line) so a prompt that
+    // merely quotes the marker mid-text is not silently truncated.
+    const STANDING_ORDERS_BLOCK_RE =
+        /\n*=== STANDING ORDERS ===\n[\s\S]*?These apply to everything you do in this terminal until told otherwise\.\n$/;
     let linkMode = 'instant';
     let standingOrders = [];
     let standingOrdersAvailable = false;
@@ -8266,15 +8741,9 @@
     function syncSendEnabled() {
         const msg = document.getElementById('link-message');
         const sendBtn = document.getElementById('link-send');
-        const counterEl = document.getElementById('link-counter');
         if (!msg || !sendBtn) { return; }
         sendBtn.disabled = !msg.value.trim();
         sendBtn.textContent = linkMode === 'standing' ? 'SAVE' : 'SEND';
-        if (counterEl) {
-            const len = msg.value.length;
-            counterEl.textContent = `${len} / ${MAX_INSTRUCTION_CHARS}`;
-            counterEl.classList.toggle('is-over', len > MAX_INSTRUCTION_CHARS);
-        }
     }
 
     function liveNameSet() {
@@ -8282,20 +8751,177 @@
     }
 
     /** Client-side mirror of `applyStandingOrders` from `src/services/standingOrders.ts`. */
-    function applyStandingOrdersClient(prompt, targetName, orders, liveNames) {
-        if (!prompt || prompt.includes(STANDING_ORDERS_MARKER)) { return prompt; }
-        const mine = orders.filter(o => o.parent === targetName && liveNames.has(o.child));
-        if (mine.length === 0) { return prompt; }
 
-        let block = '\n\n' + STANDING_ORDERS_MARKER + '\n';
-        for (const o of mine) {
-            block += `- Regarding terminal "${o.child}": ${o.instruction}\n`;
+    /**
+     * Pre-rewrite callback text — byte-identical to the shipped
+     * AGENT_GROUP_CALLBACK_INSTRUCTION before the team-prompt change.
+     * Existing installs have per-member pair rows carrying this exact string.
+     * The migration recogniser matches against it (not the post-rewrite
+     * constant) because this is what is actually on disk.
+     *
+     * Mirror of PRE_REWRITE_CALLBACK_INSTRUCTION in teamWiring.ts.
+     */
+    var PRE_REWRITE_CALLBACK_INSTRUCTION =
+        'it is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with '
+        + '{"name":"<that terminal>","data":"<your report>","clearBeforePrompt":false} against the port in '
+        + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.';
+
+    /**
+     * Post-rewrite callback template — {child} is the head terminal name.
+     * Mirror of AGENT_GROUP_CALLBACK_INSTRUCTION in teamWiring.ts.
+     */
+    var POST_REWRITE_CALLBACK_INSTRUCTION =
+        '{child} is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with '
+        + '{"name":"{child}","data":"<your report>","clearBeforePrompt":false} against the port in '
+        + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.';
+
+    /**
+     * Git safety directive — mirror of GIT_SAFETY_DIRECTIVE in
+     * agentPromptBuilder.ts. One source of truth in the host; this copy
+     * exists because the webview cannot import TypeScript modules. The
+     * standing-orders-marker-contract test pins byte-identity.
+     */
+    var GIT_SAFETY_DIRECTIVE_CLIENT =
+        'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — commit first, then correct forward.';
+
+    /**
+     * Client-side mirror of migrateTeamPairOrders from teamWiring.ts.
+     *
+     * Recognises pre-rewrite per-member pair rows (instruction matches
+     * PRE_REWRITE_CALLBACK_INSTRUCTION), groups them by head (the `child`
+     * field in member-receives direction), and folds them into team-scoped
+     * orders carrying the default team prompt (callback + git safety).
+     * Unrecognised rows are left untouched.
+     *
+     * Applied INSIDE applyStandingOrdersClient at render time — NOT at the
+     * GET /terminals/standing-orders fetch level — so the standingOrders
+     * array used by the Link-up editor for delete-by-id is never touched
+     * and ids do not churn.
+     */
+    function migrateTeamPairOrdersClient(orders) {
+        if (!Array.isArray(orders) || orders.length === 0) { return orders; }
+
+        var groups = {}; // headName → true (we only need the head name)
+        var recognised = {}; // order id → true
+
+        for (var i = 0; i < orders.length; i++) {
+            var o = orders[i];
+            if (!o || typeof o !== 'object') { continue; }
+            var scope = o.scope || 'pair';
+            if (scope !== 'pair') { continue; }
+            if (o.instruction !== PRE_REWRITE_CALLBACK_INSTRUCTION) { continue; }
+            var headName = o.child;
+            if (!headName) { continue; }
+            if (!o.parent) { continue; }
+
+            groups[headName] = true;
+            recognised[o.id] = true;
+        }
+
+        var recognisedCount = Object.keys(recognised).length;
+        if (recognisedCount === 0) { return orders; }
+
+        var migrated = [];
+        var headNames = Object.keys(groups);
+        for (var j = 0; j < headNames.length; j++) {
+            var headName = headNames[j];
+            var teamId = 'team_' + encodeURIComponent(headName).replace(/[^a-zA-Z0-9_]/g, '_');
+            var callbackText = POST_REWRITE_CALLBACK_INSTRUCTION.replace(/\{child\}/g, headName);
+            var instruction = callbackText + '\n' + GIT_SAFETY_DIRECTIVE_CLIENT;
+            migrated.push({
+                id: 'migrated-team-' + teamId,
+                parent: headName,
+                child: '',
+                instruction: instruction,
+                createdAt: Date.now(),
+                scope: 'team',
+                teamId: teamId,
+            });
+        }
+
+        // Check for existing team-scoped orders with the same teamId to
+        // avoid duplication (e.g. from a prior wireSpawnedTeam call).
+        var existingTeamIds = {};
+        for (var k = 0; k < orders.length; k++) {
+            var ord = orders[k];
+            if (ord && ord.scope === 'team' && ord.teamId) {
+                existingTeamIds[ord.teamId] = true;
+            }
+        }
+        var newTeamOrders = [];
+        for (var m = 0; m < migrated.length; m++) {
+            if (!existingTeamIds[migrated[m].teamId]) {
+                newTeamOrders.push(migrated[m]);
+            }
+        }
+
+        var kept = [];
+        for (var n = 0; n < orders.length; n++) {
+            if (!recognised[orders[n].id]) {
+                kept.push(orders[n]);
+            }
+        }
+        return kept.concat(newTeamOrders);
+    }
+
+    function applyStandingOrdersClient(prompt, targetName, orders, liveNames) {
+        if (!prompt) { return prompt; }
+        // Strip a pre-existing block so a prompt that already carries one does
+        // not end up with two blocks or lose the target's own orders. Mirrors
+        // the host resolver's strip + re-append behaviour.
+        var cleanPrompt = prompt.replace(STANDING_ORDERS_BLOCK_RE, '');
+
+        // Migrate pre-rewrite per-member pair rows into team-scoped orders
+        // before selection. Pure transform — does not mutate the input
+        // array or the persisted standingOrders. Mirrors migrateTeamPairOrders
+        // in teamWiring.ts.
+        var effectiveOrders = migrateTeamPairOrdersClient(orders);
+
+        // Scope-aware selection — mirrors selectOrders in standingOrders.ts.
+        var mine = effectiveOrders.filter(function (o) {
+            var scope = o.scope || 'pair';
+            if (scope === 'global') { return true; }
+            if (scope === 'team') {
+                if (!o.teamId) { return false; }
+                var group = terminalGroups.find(function (g) { return g && g.id === o.teamId; });
+                if (!group || !Array.isArray(group.members)) { return false; }
+                // Exclude the head — the team prompt is for members only.
+                // The head name is stored in `o.parent` by wireSpawnedTeam.
+                // Mirrors the host resolver's head-exclusion check.
+                if (o.parent && targetName === o.parent) { return false; }
+                return group.members.indexOf(targetName) !== -1;
+            }
+            if (scope === 'team-head') {
+                if (!o.teamId) { return false; }
+                var hGroup = terminalGroups.find(function (g) { return g && g.id === o.teamId; });
+                if (!hGroup || !Array.isArray(hGroup.members)) { return false; }
+                return !!o.parent && targetName === o.parent && hGroup.members.indexOf(targetName) !== -1;
+            }
+            // pair (default)
+            return o.parent === targetName && o.child !== undefined && liveNames.has(o.child);
+        });
+        if (mine.length === 0) { return cleanPrompt; }
+
+        // Render safeguard-bearing scopes (global, team) before pair. Mirrors
+        // the host's scope-rank sort. Stable sort preserves creation order.
+        var scopeRank = { global: 0, 'team-head': 1, team: 1, pair: 2 };
+        var sorted = mine.slice().sort(function (a, b) {
+            return scopeRank[(a.scope || 'pair')] - scopeRank[(b.scope || 'pair')];
+        });
+
+        var block = '\n\n' + STANDING_ORDERS_MARKER + '\n';
+        for (var i = 0; i < sorted.length; i++) {
+            var o = sorted[i];
+            var scope = o.scope || 'pair';
+            if (scope === 'pair') {
+                if (!o.child) { continue; }
+                block += '- Regarding terminal "' + o.child + '": ' + o.instruction + '\n';
+            } else {
+                block += '- ' + o.instruction + '\n';
+            }
         }
         block += 'These apply to everything you do in this terminal until told otherwise.\n';
-        if (block.length > MAX_BLOCK_CHARS) {
-            block = block.slice(0, MAX_BLOCK_CHARS) + '\n…[standing orders truncated]\n';
-        }
-        return prompt + block;
+        return cleanPrompt + block;
     }
 
     async function fetchStandingOrders() {

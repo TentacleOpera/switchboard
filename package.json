@@ -927,6 +927,9 @@
     "test:contract:terminal-replay-gap": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-replay-gap-contract.test.js",
     "test:contract:terminal-operations-no-periodic-reopen": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-operations-no-periodic-reopen.test.js",
     "test:contract:multi-parent-terminals": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/multi-parent-terminals-contract.test.js",
+    "test:contract:team-autostart-scope": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/team-autostart-workspace-scope.test.js",
+    "test:contract:autoban-state": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/autoban-state-regression.test.js",
+    "test:contract:autoban-no-valid-tickets": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/autoban-no-valid-tickets-regression.test.js",
     "test:contract:terminal-plan-attribution": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-plan-attribution-contract.test.js",
     "test:contract:scheduled-jobs": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/scheduled-jobs-and-connections.test.js",
     "test:contract:spark-context-exporter": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/spark-context-exporter-contract.test.js",
@@ -934,6 +937,7 @@
     "test:contract:paste-attribution": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/paste-attribution-contract.test.js",
     "test:contract:dispatch-analysis-scope": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/dispatch-analysis-scope-contract.test.js",
     "test:contract:standing-orders-marker": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standing-orders-marker-contract.test.js",
+    "test:contract:team-scoped-routing": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/team-scoped-role-routing.test.js",
     "test:contract:link-presets-mirror": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/link-presets-mirror-contract.test.js",
     "test:contract:unattended-batch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/unattended-batch-improvement-contract.test.js"
   },

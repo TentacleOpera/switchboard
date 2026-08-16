@@ -31,6 +31,7 @@ import { matchWorktreePath } from '../services/worktreeResolver';
 import { attributePlansToTerminals, type TerminalPlanAttribution } from '../services/terminalPlanAttribution';
 import { createStandalonePlanIngestionHost, readPlanScannerCustomSourceDirs } from './planIngestionHost';
 import { PtyFleetService, PTY_IDE_NAME } from './ptyFleetService';
+import { resolveTeamScopedRoleTerminal } from '../services/teamWiring';
 import { isPtyAvailable } from './ptyBackend';
 import { SURFACES } from '../services/wsHub';
 import { GlobalIntegrationConfigService } from '../services/GlobalIntegrationConfigService';
@@ -40,10 +41,11 @@ import {
     applyStandingOrders,
     STANDING_ORDERS_CONFIG_KEY,
     StandingOrder,
+    TerminalGroup,
     rewriteStandingOrdersForRename,
 } from '../services/standingOrders';
 import { instantiateAgentGroupCore } from '../services/agentGroupInstantiation';
-import { wireSpawnedTeam, findTeamForHeadRole } from '../services/teamWiring';
+import { wireSpawnedTeam, findTeamForHeadRole, migrateTeamPairOrders } from '../services/teamWiring';
 
 import { ClickUpSyncService } from '../services/ClickUpSyncService';
 import { LinearSyncService } from '../services/LinearSyncService';
@@ -234,8 +236,14 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
             try {
                 const orders = await db.getConfigJson<StandingOrder[]>(STANDING_ORDERS_CONFIG_KEY, []);
                 if (orders.length > 0) {
-                    const live = new Set(ptyFleetService.listActive().map(t => t.friendlyName));
-                    out = applyStandingOrders(text, handle.friendlyName, orders, live);
+                    // Migrate pre-rewrite per-member pair rows into team-scoped
+                    // orders before rendering. Pure transform — no DB writes.
+                    const effectiveOrders = migrateTeamPairOrders(orders);
+                    if (effectiveOrders.length > 0) {
+                        const live = new Set(ptyFleetService.listActive().map(t => t.friendlyName));
+                        const groups = await db.getConfigJson<TerminalGroup[]>('terminals.groups', []);
+                        out = applyStandingOrders(text, handle.friendlyName, effectiveOrders, live, groups || []);
+                    }
                 }
             } catch { /* a degraded prompt beats a lost dispatch */ }
         }
@@ -349,8 +357,8 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                         ...rest,
                         routingConfig: kanbanProvider._routingMapForScope(scope),
                         dispatchAnalyzeAvailable: ptyReady, // standalone-only override: gated on ptyReady
-                        // NOT ptyReady: creating an autoban terminal goes through
-                        // `switchboard.addAutobanTerminalFromKanban`, which only extension.ts
+                        // NOT ptyReady: terminal creation rides
+                        // `switchboard.addCoderTerminalFromKanban`, which only extension.ts
                         // registers. Unbridged here, so the arm would return success having
                         // done nothing — a button that fakes success (PRD contract #6).
                         terminalCreateAvailable: false,
@@ -877,6 +885,21 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     switchboardCommandRegistry.register('switchboard.pushTicketEditsWithSubtasks', async (data: any) =>
         taskViewerProvider.pushTicketEditsWithSubtasks(data.workspaceRoot || workspaceRoot, data));
 
+    // Autoban run-sheet controls. Registered ONLY in extension.ts before this change
+    // (extension.ts:1750/1755/1760), so the registry-first command seam fell through to
+    // vscodeShim's warn-once no-op: pressing the automation toggle in the browser cockpit
+    // updated KanbanProvider's display mirror, returned success, and never started the
+    // engine — contract #6 (faked success) on top of contract #7 (Layer 1 without Layer 2).
+    // The ENGINE was always host-agnostic; only the way the UI reached it was missing.
+    // The mode dropdown worked because `setAutomationMode` calls the provider directly
+    // rather than through a command, which is exactly why the gap stayed invisible.
+    switchboardCommandRegistry.register('switchboard.setAutobanEnabledFromKanban', async (enabled: boolean) =>
+        await taskViewerProvider.setAutobanEnabledFromKanban(!!enabled));
+    switchboardCommandRegistry.register('switchboard.resetAutobanTimersFromKanban', async () =>
+        await taskViewerProvider.resetAutobanTimersFromKanban());
+    switchboardCommandRegistry.register('switchboard.setAutobanPausedFromKanban', async (paused: boolean) =>
+        await taskViewerProvider.setAutobanPausedFromKanban(!!paused));
+
     const moveSessionsToColumn = async (sessionIds: string[], targetColumn: string) => {
         for (const sid of sessionIds) {
             const plan = await db.getPlanBySessionId(sid);
@@ -1135,6 +1158,46 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     return { success: true, ...roles };
                 }
 
+                case 'ptyListAgentGroups': {
+                    // Host-resolved team definitions for the terminals-panel team
+                    // list and the honest role picker. Read-only; no pty needed.
+                    const groups = await kanbanProvider.listAgentGroups(root);
+                    return { success: true, groups };
+                }
+
+                case 'ptyStartTeam': {
+                    // Explicit team start by id. The definition is HOST-resolved
+                    // from `terminals.agentGroups` — never accepted from the wire.
+                    // Every pty child is handed an API token, so a caller could
+                    // supply its own group definition carrying a shell command;
+                    // reject it unconditionally, mirroring the delegates guard in
+                    // the ptyCreateTerminal arm.
+                    if (payload && payload.group) {
+                        return { success: false, error: 'Team definition cannot be supplied over the wire' };
+                    }
+                    const teamId = payload?.teamId;
+                    if (!teamId) { return { success: false, error: 'Missing team id' }; }
+                    // The team definition resolves from the board DB (root); the
+                    // spawn cwd honours the picker's target workspace when the
+                    // operator started the team from a specific group/worktree.
+                    const spawnCwd = payload.cwd || (!payload.worktreePath && payload.parentRoot ? payload.parentRoot : undefined);
+                    const result = await kanbanProvider.startAgentGroupById(root, teamId, async () =>
+                        ptyFleetService.listActive().map(t => ({
+                            role: t.role,
+                            friendlyName: t.friendlyName,
+                            parentInstanceId: t.parentInstanceId,
+                            status: t.status,
+                        })), spawnCwd);
+                    if (result && result.success !== false) {
+                        // Push a refresh so open panels reload terminals.groups
+                        // before their next whole-array save can clobber the
+                        // backend-registered group — the auto-start path does
+                        // the same after wireSpawnedTeam.
+                        try { server.broadcastWs('terminalsGroupsChanged', { type: 'terminalsGroupsChanged' }, SURFACES.terminals); } catch { /* broadcast failure must not fail the start */ }
+                    }
+                    return result;
+                }
+
                 case 'ptyCreateTerminal': {
                     // The sidebar's per-parent `+` posts `parentRoot`, never `cwd` — the
                     // extension host translates it in its proxy. This host has no proxy in
@@ -1149,8 +1212,15 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // token (every pty child is handed one) hand us its own. Overwrite
                     // unconditionally, and drop a wire-supplied startupCommand for the
                     // parent terminal for the same reason.
-                    const roleConfig = kanbanProvider.getScopedRoleConfig(payload.role || 'coder');
-                    payload = { ...payload, delegates: Array.isArray(roleConfig?.addons?.delegates) ? roleConfig.addons.delegates : [] };
+                    //
+                    // The role-config `addons.delegates` read path is RETIRED —
+                    // delegate children are now authored exclusively as team
+                    // members in the TEAMS tab. Existing `addons.delegates` config
+                    // was imported into team definitions by `importDelegatesIntoTeams`
+                    // in `_loadAgentGroups` (one-time migration, never overwrites an
+                    // existing team). The team auto-start below is the sole source
+                    // of delegates now.
+                    payload = { ...payload, delegates: [] };
                     delete payload.startupCommand;
                     // Auto-start: if this is an UNPARENTED terminal whose role
                     // heads a team, spawn that team's members alongside it. The
@@ -1166,10 +1236,38 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // delegates: one team per head role is the constraint. The
                     // head is created first; spawnDelegates is best-effort, so
                     // a cap refusal does not prevent the head from starting.
+                    // Declared OUTSIDE the auto-start block: `team` is block-scoped
+                    // to it, but the wiring call below (which needs the team's
+                    // prompt) sits after the block. Reading `team?.prompt` down
+                    // there was a ReferenceError, not a silent undefined —
+                    // optional chaining guards a null VALUE, never an undeclared
+                    // BINDING. A local rather than a payload field because the
+                    // prompt is only needed by wireSpawnedTeam, and payload is
+                    // wire-supplied.
+                    let teamPrompt: string | undefined;
+                    let teamHeadPrompt: string | undefined;
                     if (!payload.parentInstanceId && !payload._isTeamMember) {
-                        const team = await findTeamForHeadRole(db, payload.role || 'coder');
-                        if (team && Array.isArray(team.members) && team.members.length > 0) {
+                        // No root list here: this host has exactly ONE workspace root
+                        // (allRoots: [workspaceRoot], getKanbanDatabase: () => db), so
+                        // the writer/reader divergence the extension host has cannot
+                        // occur. If this host ever grows multiple roots, this is the
+                        // site that must grow `findTeamForHeadRoleInRoots` too.
+                        const headRole = payload.role || 'coder';
+                        const team = await findTeamForHeadRole(db, headRole);
+                        const memberCount = Array.isArray(team?.members) ? team.members.length : 0;
+                        console.log(
+                            !team
+                                ? `[bootstrap] Team auto-start: no team heads role '${headRole}' — starting a bare head`
+                                : memberCount === 0
+                                    ? `[bootstrap] Team auto-start: team '${team.name}' heads role '${headRole}' `
+                                      + `but defines ZERO members — starting a bare head, nothing to spawn`
+                                    : `[bootstrap] Team auto-start: role '${headRole}' -> team '${team.name}' `
+                                      + `(${memberCount} member definition(s))`
+                        );
+                        if (team && memberCount > 0) {
                             payload = { ...payload, delegates: team.members, teamName: team.name };
+                            teamPrompt = team.prompt;
+                            teamHeadPrompt = team.headPrompt;
                         }
                     }
                     const terminal = await ptyFleetService.create(payload.role || 'coder', payload.name, targetCwd, payload.worktreePath, payload.parentInstanceId, undefined, {
@@ -1187,17 +1285,19 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // extension host's post-create hook. Awaited so the create
                     // response implies wiring is done.
                     let wiringError: string | undefined;
+                    let teamGroupId: string | undefined;
                     if (spawned.children.length > 0) {
-                        const wired = await wireSpawnedTeam({ db, headName: terminal.friendlyName, children: spawned.children, members: rawDelegates });
+                        const wired = await wireSpawnedTeam({ db, headName: terminal.friendlyName, children: spawned.children, members: rawDelegates, prompt: teamPrompt, headPrompt: teamHeadPrompt });
                         if (!wired.ok) {
                             wiringError = wired.error;
                         } else {
+                            teamGroupId = wired.groupId;
                             // Push a refresh so open panels reload terminals.groups
                             // before their next whole-array save can clobber it.
                             try { server.broadcastWs('terminalsGroupsChanged', { type: 'terminalsGroupsChanged' }, SURFACES.terminals); } catch { /* broadcast failure must not fail the create */ }
                         }
                     }
-                    return { success: true, terminal: { friendlyName: terminal.friendlyName, agentInstanceId: terminal.agentInstanceId, parentInstanceId: terminal.parentInstanceId, role: terminal.role, status: terminal.status, hidden: terminal.hidden === true }, delegates: spawned.children.map(t => ({ friendlyName: t.friendlyName, agentInstanceId: t.agentInstanceId, role: t.role, status: t.status, hidden: t.hidden === true })), ...(spawned.error ? { delegateError: spawned.error } : {}), ...(wiringError ? { wiringError } : {}) };
+                    return { success: true, terminal: { friendlyName: terminal.friendlyName, agentInstanceId: terminal.agentInstanceId, parentInstanceId: terminal.parentInstanceId, role: terminal.role, status: terminal.status, hidden: terminal.hidden === true }, delegates: spawned.children.map(t => ({ friendlyName: t.friendlyName, agentInstanceId: t.agentInstanceId, role: t.role, status: t.status, hidden: t.hidden === true })), ...(spawned.error ? { delegateError: spawned.error } : {}), ...(wiringError ? { wiringError } : {}), ...(teamGroupId ? { teamGroupId } : {}) };
                 }
 
                 case 'ptyCreateBatch': {
@@ -1758,6 +1858,80 @@ Each plan file must include:
     // engine treats an unset provider as "no evidence", so the window before this
     // line is the fleet-less contract, not a gap.
     ingestionEngine.setTerminalLivenessProvider(() => ptyFleetService.getLiveness());
+    // Turn-end notification seam, wired HERE for the same TDZ reason as the
+    // liveness provider above: the closure references `ptyFleetService`, which
+    // was constructed just above. Standalone owns the fleet in-process, so
+    // recipient resolution uses `ptyFleetService.listActive()` directly (each
+    // handle carries agentInstanceId / parentInstanceId / role) — NOT an HTTP
+    // round-trip, and NOT the liveness snapshot (which carries only
+    // friendlyName / lastDataAt / status, no parent). The engine emits only
+    // { seatName, planFile, outcome, workspaceRoot }; this host resolves the
+    // recipient (parentInstanceId → live terminal, orchestrator fallback) and
+    // delivers via `deliverPrompt` with clearBeforePrompt: false and standing
+    // orders suppressed (machine-origin notification, not a dispatched task).
+    ingestionEngine.setTurnEndNotifier((info) => {
+        void (async () => {
+            const seatName = info.seatName;
+            const planFile = info.planFile;
+            // `body` (pre-composed evidence) wins when set; otherwise compose the
+            // host's own one-line message. `stalled` always carries a body.
+            const message = info.body ?? (info.outcome === 'completed'
+                ? `[switchboard:turn-end] Seat '${seatName}' finished its turn on '${planFile}'.`
+                : info.outcome === 'stalled'
+                    ? `[switchboard:turn-end] Feature stall: seat '${seatName}' is idle with un-accepted subtasks remaining.`
+                    : `[switchboard:turn-end] Seat '${seatName}' has gone quiet on '${planFile}' without writing a completion report — it may be waiting on input.`);
+            const active = ptyFleetService.listActive();
+            // `recipientSeat` (the feature nudge) names the recipient directly —
+            // the head IS the recipient, so resolving its parent would address the
+            // orchestrator instead. Skip the parent-chain walk entirely.
+            let recipientName: string | undefined;
+            if (info.recipientSeat) {
+                recipientName = info.recipientSeat;
+            } else {
+                const seatRow = active.find(t => t.friendlyName === seatName);
+                if (seatRow?.parentInstanceId) {
+                    const parent = active.find(t => t.agentInstanceId === seatRow.parentInstanceId);
+                    if (parent) { recipientName = parent.friendlyName; }
+                }
+                // Fallback: a live orchestrator terminal (role === 'orchestrator').
+                if (!recipientName) {
+                    const orch = active.find(t => (t.role || '') === 'orchestrator');
+                    if (orch) { recipientName = orch.friendlyName; }
+                }
+            }
+            // Malformed parent chain: the recipient is the seat itself. Skip.
+            // Scoped to the PARENT-RESOLUTION branch only: the feature nudge
+            // deliberately addresses the head about the head (seatName ===
+            // recipientSeat), so an unscoped check swallows every nudge.
+            if (!info.recipientSeat && recipientName && recipientName === seatName) {
+                log(opts, `turn-end: recipient '${recipientName}' is the seat itself (malformed parent chain) — skipping.`);
+                return;
+            }
+            if (!recipientName) {
+                // Explicit "no recipient" rather than a silent return.
+                log(opts, `turn-end: no recipient for seat '${seatName}' (${info.outcome} on ${planFile}).`);
+                return;
+            }
+            const handle = ptyFleetService.get(recipientName);
+            if (!handle || handle.status !== 'active') {
+                log(opts, `turn-end: recipient '${recipientName}' no longer active — skipping.`);
+                return;
+            }
+            try {
+                // clearBeforePrompt: false — never wipe the recipient's conversation.
+                // standingOrders (4th arg) false — machine-origin, not a dispatched task.
+                await deliverPrompt(handle, message, { clearBeforePrompt: false }, false);
+            } catch (err) {
+                log(opts, `turn-end delivery to '${recipientName}' failed: ${err}`);
+            }
+        })().catch(e => console.error('[bootstrap] turn-end notify failed:', e));
+        // Second consumer: completion-driven autoban dispatch. Added INSIDE the
+        // existing closure — setTurnEndNotifier is a single-slot setter, so
+        // calling it again would silently replace this closure and kill the
+        // turn-end notification. handleAutobanTurnEnd guards on
+        // enabled/paused/single-column internally, so a no-op for other modes.
+        taskViewerProvider.handleAutobanTurnEnd(info);
+    });
 
     // Agent-group instantiation, standalone edition. The TaskViewer arm guards on
     // `_ptyHostPort`, which only exists in the extension host (its fleet lives in a
@@ -1858,11 +2032,30 @@ Each plan file must include:
         allRoots: [workspaceRoot],
         getKanbanDatabase: async () => db,
         kanbanVerb,
+        // Team-scoped reviewer routing for POST /kanban/dispatch. The helper is
+        // pure over (db, liveTerminals) so the standalone host needs no
+        // TaskViewerProvider — it supplies the pty fleet directly. Note this still
+        // short-circuits on the missing gate.role (resolveKanbanDispatch is not
+        // wired on standalone) until that one-line follow-up lands; wire the
+        // callback anyway so that follow-up is a one-line change.
+        resolveTeamRoleTerminal: async (_wsRoot: string, originTerminal: string, role: string) => {
+            try {
+                // Standalone is single-root: `db` is the only KanbanDatabase. The
+                // wsRoot arg is accepted for interface parity but not needed here.
+                if (!db) { return null; }
+                const live = ptyFleetService.listActive().map(t => ({ name: t.friendlyName, role: t.role }));
+                const normalizeRole = (r: string | undefined) => (r || '')
+                    .toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+                return await resolveTeamScopedRoleTerminal({
+                    db, originName: originTerminal, role, liveTerminals: live, normalizeRole,
+                });
+            } catch { return null; }
+        },
         // Same `ptyReady` guard the kanbanVerb entry point carries: a page loaded
         // before a restart (or a direct API caller) can still reach these verbs, and
         // an unguarded call would surface as an unhandled spawn exception.
         terminalVerb: async (verb: string, payload: any, workspaceRootArg?: string) => {
-            if (verb !== 'ptyVisibleRoles' && !ptyReady) {
+            if (verb !== 'ptyVisibleRoles' && verb !== 'ptyListAgentGroups' && !ptyReady) {
                 return { success: false, error: 'PTY terminals are unavailable: the optional node-pty module could not be loaded on this machine.' };
             }
             return handlePtyVerb(verb, payload, workspaceRootArg || payload?.workspaceRoot || workspaceRoot);
@@ -1980,6 +2173,30 @@ Each plan file must include:
     const bindUrl = `http://127.0.0.1:${port}`;
     const url = `http://${displayHost}:${port}`;
     log(opts, `Local API server listening on ${bindUrl}${url === bindUrl ? '' : ` (serving as ${url})`}`);
+
+    // ── Delegate-children import at startup ──────────────────────────
+    // Run importDelegatesIntoTeams once at boot, BEFORE any terminal can be
+    // spawned (autoban restore below can dispatch immediately). The import
+    // inside _loadAgentGroups is only reachable via the UI path
+    // (ptyListAgentGroups), but auto-start resolves teams via
+    // findTeamForHeadRole which does NOT run the import — so without this
+    // boot-time pass, an upgraded install with addons.delegates on a role
+    // that no team claims would silently lose its delegates until a UI
+    // surface happens to call _loadAgentGroups. The import is idempotent
+    // (never overwrites an existing team), so the _loadAgentGroups call
+    // is a harmless second run.
+    try {
+        await kanbanProvider.listAgentGroups(workspaceRoot);
+    } catch (e) {
+        log(opts, `delegate import at startup failed: ${e}`);
+    }
+
+    // Resume a board that was left with autoban armed. Deliberately AFTER the server
+    // and the pty fleet are up: restoring can start the run-sheet clock, whose first
+    // pass dispatches immediately, and that needs terminals to resolve against.
+    // Fire-and-forget — a restore failure must never take down the server.
+    void taskViewerProvider.restoreAutobanOnStartup()
+        .catch(err => log(opts, `autoban restore failed: ${err}`));
 
     return {
         server,

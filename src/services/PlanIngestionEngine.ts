@@ -74,6 +74,50 @@ export interface PlanIngestionHostLogger {
 
 export type PlanIngestionEnvironmentChange = 'roots' | 'config';
 
+/**
+ * Turn-end notification payload. The engine emits this once per turn boundary
+ * (gated on the existing single-fire signals) so a host can notify the agent
+ * waiting on a seat. The engine supplies only what it knows — recipient
+ * resolution and delivery are the host's job (see `setTurnEndNotifier`).
+ */
+export interface TurnEndInfo {
+    /** Friendly name of the seat whose turn ended. */
+    seatName: string;
+    /** The plan file the seat was working on. */
+    planFile: string;
+    /** `completed` = plan file mtime advanced (the seat finished); `blocked` = silence without a report;
+     *  `stalled` = the feature-level nudge — no dispatch is outstanding, the head went idle with
+     *  un-accepted subtasks remaining, and the engine is waking it with evidence. */
+    outcome: 'completed' | 'blocked' | 'stalled';
+    /** The workspace root the swept card lives in. */
+    workspaceRoot: string;
+    /** Deliver directly to this terminal, skipping parent resolution. Used by the feature-level
+     *  nudge, where the head IS the recipient — resolving its parent would address the orchestrator
+     *  instead. When absent, hosts resolve the seat's parent (the existing turn-end path). */
+    recipientSeat?: string;
+    /** Pre-composed evidence body for the nudge (remaining subtasks, their seats, silence, mtime).
+     *  Hosts send this verbatim when set and fall back to their own one-line message when absent. */
+    body?: string;
+}
+
+/**
+ * Feature-level stall watch (the nudge). Armed by the head agent driving a
+ * feature via `watchFeature` / cancelled by `unwatchFeature` (KanbanProvider
+ * verbs) and persisted in the `kanban.featureWatches` config key. The sweep
+ * reads this each tick and nudges the head when the feature has un-accepted
+ * subtasks, no dispatch is outstanding, and the head has gone idle.
+ */
+export interface FeatureWatchRecord {
+    featureId: string;
+    headTerminal: string;
+    armedAt: number;
+    lastNudgedAt: number;
+    /** Optional kanban columns the head treats as "accepted" beyond COMPLETED
+     *  (e.g. CODE REVIEWED). A subtask parked in one of these counts as accepted
+     *  and does not keep the watch alive. */
+    stopColumns?: string[];
+}
+
 export interface PlanIngestionHost {
     /** Watcher factory — creates recursive folder / single-file watchers. */
     readonly watcher: PlanIngestionWatcher;
@@ -144,6 +188,24 @@ export class PlanIngestionEngine {
 
     public setOnWorkingStateCleared(cb: (record: KanbanPlanRecord, workspaceRoot: string) => void): void {
         this._onWorkingStateCleared = cb;
+    }
+
+    /**
+     * Turn-end notification seam. Fired once per turn boundary alongside the
+     * existing single-fire gates (the `transitioned` boolean for the completed
+     * arm, `!record.blockedAt` for the blocked arm) so a host can tell the agent
+     * waiting on a seat that the seat has gone quiet. The engine passes only what
+     * it knows — the seat name, the plan file, the outcome and the workspace
+     * root — and stays host-agnostic: recipient resolution (parentInstanceId →
+     * live terminal, orchestrator fallback) and delivery (ptySendPrompt) belong
+     * to the host, which has the fleet identity data this module deliberately
+     * does not import. A host that sets no notifier degrades silently — the
+     * classification still runs, nothing is delivered, no null-callback crash.
+     */
+    private _turnEndNotifier?: (info: TurnEndInfo) => void;
+
+    public setTurnEndNotifier(fn: (info: TurnEndInfo) => void): void {
+        this._turnEndNotifier = fn;
     }
 
     /**
@@ -331,6 +393,12 @@ export class PlanIngestionEngine {
                         await db.ensureReady();
                         const wsId = await db.getWorkspaceId();
                         if (!wsId) continue;
+                        // Seats that received a turn-end notice (completed or
+                        // blocked) on THIS tick. The feature nudge suppresses
+                        // itself while a notice for one of the feature's seats is
+                        // outstanding, so a stall does not double-wake a head that
+                        // the per-dispatch backstop already poked this tick.
+                        const notifiedSeatsThisTick = new Set<string>();
                         // Persist heartbeats for live active terminals BEFORE the
                         // sweep so the widened basis is in the row the sweep reads.
                         // ~1 write per live card per 10s — well within the sql.js
@@ -391,9 +459,23 @@ export class PlanIngestionEngine {
                                             `[GlobalPlanWatcher] Turn-end (plan file mtime advance) for ${terminalName}: ${record.planFile}` +
                                             (transitioned ? '' : ' (already cleared)')
                                         );
-                                        if (transitioned && this._onWorkingStateCleared) {
-                                            try { this._onWorkingStateCleared(record, folder); } catch (cbErr) {
-                                                this._host.logger.appendLine(`[GlobalPlanWatcher] onWorkingStateCleared callback failed: ${cbErr}`);
+                                        // Both consumers hang off the SAME transitioned gate — the
+                                        // completion broadcast (existing) and the turn-end notifier
+                                        // (new). Re-deriving the condition would risk divergence; the
+                                        // boolean is the single-fire contract. Each callback is
+                                        // independently optional, so an unset notifier leaves the
+                                        // broadcast intact and vice versa.
+                                        if (transitioned) {
+                                            if (this._onWorkingStateCleared) {
+                                                try { this._onWorkingStateCleared(record, folder); } catch (cbErr) {
+                                                    this._host.logger.appendLine(`[GlobalPlanWatcher] onWorkingStateCleared callback failed: ${cbErr}`);
+                                                }
+                                            }
+                                            if (this._turnEndNotifier) {
+                                                notifiedSeatsThisTick.add(terminalName);
+                                                try { this._turnEndNotifier({ seatName: terminalName, planFile: record.planFile, outcome: 'completed', workspaceRoot: folder }); } catch (cbErr) {
+                                                    this._host.logger.appendLine(`[GlobalPlanWatcher] turnEndNotifier callback failed: ${cbErr}`);
+                                                }
                                             }
                                         }
                                     } else if (!record.blockedAt) {
@@ -401,6 +483,15 @@ export class PlanIngestionEngine {
                                         this._host.logger.appendLine(
                                             `[GlobalPlanWatcher] Turn-end (silence) marked blocked for ${terminalName}: ${record.planFile}`
                                         );
+                                        // The `!record.blockedAt` guard IS the single-fire gate for the
+                                        // blocked arm — once blockedAt is stamped this branch cannot
+                                        // re-enter, so the notifier fires exactly once per blocked turn.
+                                        if (this._turnEndNotifier) {
+                                            notifiedSeatsThisTick.add(terminalName);
+                                            try { this._turnEndNotifier({ seatName: terminalName, planFile: record.planFile, outcome: 'blocked', workspaceRoot: folder }); } catch (cbErr) {
+                                                this._host.logger.appendLine(`[GlobalPlanWatcher] turnEndNotifier callback failed: ${cbErr}`);
+                                            }
+                                        }
                                     }
                                 }
                             } catch (silenceErr) {
@@ -416,6 +507,21 @@ export class PlanIngestionEngine {
                                     : '')
                             );
                             this._firePlanDiscovered(folder);
+                        }
+                        // ── Feature-level stall nudge ───────────────────────────────
+                        // A head driving a feature can stall in the window where no
+                        // dispatch is outstanding (it dropped the thread, its turn
+                        // ended without sending the next subtask, a registration
+                        // failed). Per-dispatch turn-end says nothing about that —
+                        // there is no dispatch to observe. An armed watch keeps
+                        // nudging the head until the feature is done. Ships OFF by
+                        // default; armed by the head agent via `watchFeature`.
+                        try {
+                            await this._runFeatureNudgeSweep({
+                                db, folder, liveness, nowMs, turnEndSilenceMs, notifiedSeatsThisTick,
+                            });
+                        } catch (nudgeErr) {
+                            this._host.logger.appendLine(`[GlobalPlanWatcher] feature nudge sweep failed for ${folder}: ${nudgeErr}`);
                         }
                         await this._retryPendingFeatureLinks(db, folder);
                     } catch (sweepErr) {
@@ -780,6 +886,185 @@ export class PlanIngestionEngine {
         }
     }
 
+    /**
+     * Feature-level stall nudge — one sweep tick's worth. For every armed watch
+     * (config key `kanban.featureWatches`), wake the head ONLY when all four hold:
+     *   1. the feature still has at least one un-accepted subtask;
+     *   2. the head terminal is live and `active`;
+     *   3. the head's own `lastDataAt` is older than `turnEndSilenceMs` (not mid-turn);
+     *   4. no dispatch record for any of the feature's seats is outstanding, and
+     *      no turn-end notice for one of them fired on this tick.
+     * The wake carries evidence (remaining subtasks, their seats, silence, mtime),
+     * not a poke. Delivery reuses the turn-end notifier with `outcome: 'stalled'`,
+     * `recipientSeat` = the head (skip parent resolution) and `body` = the composed
+     * evidence. Cancellation is automatic when no un-accepted subtasks remain, or
+     * the head terminal is absent/`exited`. Paced by `lastNudgedAt` with a floor of
+     * `turnEndSilenceMs` so a stalled feature produces a periodic reminder, not a
+     * stream. A watch is never retried against a dead head.
+     */
+    private async _runFeatureNudgeSweep(args: {
+        db: KanbanDatabase;
+        folder: string;
+        liveness: Array<{ friendlyName: string; lastDataAt: number; status: string }>;
+        nowMs: number;
+        turnEndSilenceMs: number;
+        notifiedSeatsThisTick: Set<string>;
+    }): Promise<void> {
+        if (!this._turnEndNotifier) return; // no notifier → no delivery → nothing to do.
+        const { db, folder, liveness, nowMs, turnEndSilenceMs, notifiedSeatsThisTick } = args;
+        const WATCH_KEY = 'kanban.featureWatches';
+        let watches: FeatureWatchRecord[] = [];
+        try {
+            watches = await db.getConfigJson<FeatureWatchRecord[]>(WATCH_KEY, []);
+        } catch { return; } // unreadable config is no evidence — try next tick.
+        if (watches.length === 0) return;
+        // An EMPTY liveness snapshot is NO EVIDENCE, not evidence that every head
+        // died. `getFleetLiveness()` returns [] whenever the fleet is unavailable —
+        // before the first forward after an extension reload, while the ptyHost is
+        // booting, on a fleet-less host. Without this guard the very next tick reads
+        // every armed head as "absent" and permanently drops every watch, silently,
+        // for a head that is still running. Same contract as the silence branch's
+        // `lastDataAt > 0` guard: no data is not a signal.
+        if (liveness.length === 0) return;
+
+        // Liveness by friendly name for the head-silence and head-active tests.
+        const livenessByName = new Map<string, { lastDataAt: number; status: string }>();
+        for (const entry of liveness) {
+            if (entry.friendlyName) livenessByName.set(entry.friendlyName, { lastDataAt: entry.lastDataAt, status: entry.status });
+        }
+
+        let mutated = false;
+        const kept: FeatureWatchRecord[] = [];
+        for (const watch of watches) {
+            // (2) Head terminal live and active. Absent or exited → drop the watch
+            // and log which one ended it. A watch is never retried against a dead
+            // head — the same honesty notifyTurnEnd shows when the recipient exited.
+            const headLive = livenessByName.get(watch.headTerminal);
+            if (!headLive || headLive.status === 'exited') {
+                this._host.logger.appendLine(
+                    `[GlobalPlanWatcher] Feature nudge: dropping watch for feature ${watch.featureId} — head '${watch.headTerminal}' is ${!headLive ? 'absent' : 'exited'}.`
+                );
+                mutated = true;
+                continue;
+            }
+
+            // (1) Feature still has ≥1 un-accepted subtask. getSubtasksByFeatureId
+            // filters status = 'active'; reaching COMPLETED sets status = 'completed',
+            // so "no rows" = the feature is done. A subtask parked in a `stopColumns`
+            // entry counts as accepted too (plain string compare on kanbanColumn).
+            let subtasks: KanbanPlanRecord[] = [];
+            try {
+                subtasks = await db.getSubtasksByFeatureId(watch.featureId);
+            } catch {
+                // Unreadable subtasks is no evidence either way — keep the watch,
+                // try again next tick. Do not nudge on a failed read.
+                kept.push(watch);
+                continue;
+            }
+            const stopSet = watch.stopColumns ? new Set(watch.stopColumns) : null;
+            const remaining = subtasks.filter(s => s.kanbanColumn !== 'COMPLETED' && (!stopSet || !stopSet.has(s.kanbanColumn)));
+            if (remaining.length === 0) {
+                this._host.logger.appendLine(
+                    `[GlobalPlanWatcher] Feature nudge: dropping watch for feature ${watch.featureId} — no un-accepted subtasks remain.`
+                );
+                mutated = true;
+                continue;
+            }
+
+            // (4a) No dispatch record for any of the feature's seats is outstanding.
+            // A subtask with a non-null dispatchedAt is being worked by a coder —
+            // the per-dispatch backstop covers it, so the nudge stays silent. This
+            // is the "no dispatch to observe" window the nudge exists for.
+            const outstanding = remaining.some(s => !!s.dispatchedAt);
+            if (outstanding) {
+                kept.push(watch);
+                continue;
+            }
+
+            // (4b) No turn-end notice for one of the feature's seats fired this tick.
+            // A seat that just produced a completed/blocked notice already woke the
+            // head this tick — a nudge on top of it is a double-wake about the same stall.
+            const seatNotifiedThisTick = remaining.some(s => !!s.dispatchedTerminal && notifiedSeatsThisTick.has(s.dispatchedTerminal));
+            if (seatNotifiedThisTick) {
+                kept.push(watch);
+                continue;
+            }
+
+            // (3) Head's own lastDataAt older than turnEndSilenceMs — it is not
+            // mid-turn. Delivering a prompt to a terminal whose agent is actively
+            // working injects text into a running turn; the safeguard must not be
+            // the thing that breaks the driving agent.
+            if (headLive.lastDataAt <= 0 || nowMs - headLive.lastDataAt < turnEndSilenceMs) {
+                kept.push(watch);
+                continue;
+            }
+
+            // Pacing: at most one nudge per watch per `turnEndSilenceMs` window.
+            // A floor well above the sweep tick (10s) so a stalled feature produces
+            // a periodic reminder rather than a stream.
+            if (watch.lastNudgedAt > 0 && nowMs - watch.lastNudgedAt < turnEndSilenceMs) {
+                kept.push(watch);
+                continue;
+            }
+
+            // Compose the evidence body. The engine holds the subtask rows, the
+            // liveness snapshot and the mtimes; the host must not re-derive it. A
+            // head woken with the state acts immediately; a head woken with "check
+            // on your coders" has to re-derive everything.
+            const lines: string[] = [`[switchboard:turn-end] Feature stall — you armed a watch on feature ${watch.featureId} and have gone idle with ${remaining.length} un-accepted subtask(s) remaining:`];
+            for (const s of remaining) {
+                const seat = s.dispatchedTerminal ? `seat '${s.dispatchedTerminal}'` : 'no seat attributed';
+                const seatLastDataAt = s.dispatchedTerminal ? (livenessByName.get(s.dispatchedTerminal)?.lastDataAt ?? 0) : 0;
+                const silentFor = seatLastDataAt > 0 ? `, silent ${Math.round((nowMs - seatLastDataAt) / 1000)}s` : '';
+                // Plan-file mtime is the OTHER half of the evidence: a seat that has
+                // been quiet for minutes but whose plan file was written seconds ago
+                // finished and never reported. Absolute age, not a compare against
+                // `dispatchedAt` — these subtasks have no outstanding dispatch (that
+                // is gate 4a), so there is no dispatch stamp to compare against.
+                let writtenAgo = '';
+                try {
+                    const stat = await fs.promises.stat(path.join(folder, s.planFile));
+                    writtenAgo = `, plan file written ${Math.round((nowMs - stat.mtimeMs) / 1000)}s ago`;
+                } catch { /* unreadable at this root is no evidence — omit the clause */ }
+                lines.push(`  - ${s.planFile} (column ${s.kanbanColumn}, ${seat}${silentFor}${writtenAgo})`);
+            }
+            lines.push('Register the next subtask (attributePastedPrompt) and dispatch it, or accept the remaining subtasks to end this watch.');
+            const body = lines.join('\n');
+
+            // Deliver via the turn-end notifier with `recipientSeat` = the head
+            // (skip parent resolution — the head IS the recipient; resolving its
+            // parent would address the orchestrator instead) and the composed body.
+            try {
+                this._turnEndNotifier({
+                    seatName: watch.headTerminal,
+                    planFile: '',
+                    outcome: 'stalled',
+                    workspaceRoot: folder,
+                    recipientSeat: watch.headTerminal,
+                    body,
+                });
+            } catch (cbErr) {
+                this._host.logger.appendLine(`[GlobalPlanWatcher] feature nudge notifier failed for ${watch.featureId}: ${cbErr}`);
+            }
+            this._host.logger.appendLine(
+                `[GlobalPlanWatcher] Feature nudge fired for feature ${watch.featureId} → head '${watch.headTerminal}' (${remaining.length} subtask(s) remaining).`
+            );
+
+            // Stamp lastNudgedAt and keep the watch.
+            watch.lastNudgedAt = nowMs;
+            mutated = true;
+            kept.push(watch);
+        }
+
+        if (mutated) {
+            try {
+                await db.setConfigJson(WATCH_KEY, kept);
+            } catch (writeErr) {
+                this._host.logger.appendLine(`[GlobalPlanWatcher] feature nudge: failed to persist watch state: ${writeErr}`);
+            }
+        }
+    }
+
     private async _retryPendingFeatureLinks(db: KanbanDatabase, workspaceRoot: string): Promise<void> {
         if (this._pendingFeatureLinks.size === 0) return;
         const workspaceId = (await db.getWorkspaceId()) || '';
@@ -1029,6 +1314,28 @@ export class PlanIngestionEngine {
                         if (transitioned && this._onWorkingStateCleared) {
                             try { this._onWorkingStateCleared(clearedRecord, workspaceRoot); } catch (cbErr) {
                                 this._host.logger.appendLine(`[GlobalPlanWatcher] onWorkingStateCleared callback failed: ${cbErr}`);
+                            }
+                        }
+                        // Turn-end notifier on the SAME `transitioned` gate as the
+                        // completion broadcast. The sweep's `completed` arm at :423 is
+                        // unreachable for any plan file this watcher imports: by the
+                        // time the seat is silent enough to be swept, `clearWorkingState`
+                        // here has already NULLed `dispatched_at`, so
+                        // `getActiveDispatchedByTerminal` returns null and the sweep
+                        // moves on. The completion transition is observed HERE, not in
+                        // the sweep — so the notifier must fire from here too. Re-
+                        // deriving the condition would re-open the double-fire the
+                        // `transitioned` boolean exists to close; hanging off it keeps
+                        // the single-fire contract. `seatName` comes from the cleared
+                        // record's `dispatchedTerminal` — empty for an unattributed
+                        // dispatch (no agent registered it), which has no seat to name
+                        // and therefore no parent to resolve. Skip silently in that
+                        // case; an empty `seatName` would address nobody. Both
+                        // callbacks stay independently optional, matching the sweep's
+                        // structure at :435–:446.
+                        if (transitioned && this._turnEndNotifier && clearedRecord.dispatchedTerminal) {
+                            try { this._turnEndNotifier({ seatName: clearedRecord.dispatchedTerminal, planFile: relativePath, outcome: 'completed', workspaceRoot }); } catch (cbErr) {
+                                this._host.logger.appendLine(`[GlobalPlanWatcher] turnEndNotifier callback failed: ${cbErr}`);
                             }
                         }
                     } catch (clearErr) {

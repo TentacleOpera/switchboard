@@ -287,7 +287,7 @@ What would you like to do?
     background job, do NOT emit a "waiting for the API" pre-message, do NOT split it across
     two turns. Run it, then report the result once.
 - **Focus-code a single plan** — Dispatch with a single-plan feature or direct prompt.
-- **Dispatch a feature's coding** — `POST /kanban/orchestration/dispatch` with `{"workspaceRoot": "$ROOT", ...}`.
+- **Dispatch a feature's coding** — Message the team lead via `POST /terminals/verb/ptySendPrompt` with `clearBeforePrompt: false`, naming the feature and its subtasks.
 - **Drive a feature through a coder terminal** — "implement this feature, use a terminal as a
   coder", "send this plan to coder-1 and check their work". The head agent dispatches each
   subtask to a named coder terminal, gets called back on completion, reviews the diff, and

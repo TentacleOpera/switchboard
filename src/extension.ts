@@ -804,6 +804,26 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     }
 
+    // ── Delegate-children import at activation ───────────────────────
+    // Run importDelegatesIntoTeams once at activation, BEFORE any terminal
+    // can be spawned. The import inside _loadAgentGroups is only reachable
+    // via the UI path (ptyListAgentGroups), but auto-start resolves teams
+    // via findTeamForHeadRoleInRoots which does NOT run the import — so
+    // without this activation pass, an upgraded install with
+    // addons.delegates on a role that no team claims would silently lose
+    // its delegates until a UI surface happens to call _loadAgentGroups.
+    // The import is idempotent (never overwrites an existing team), so the
+    // _loadAgentGroups call is a harmless second run. Awaited so the
+    // import completes before activation returns and any terminal can be
+    // spawned; a failure is caught so it never takes activation down.
+    if (workspaceRoot) {
+        try {
+            await kanbanProvider!.listAgentGroups(workspaceRoot);
+        } catch (e) {
+            console.warn('[Switchboard] Delegate import at activation skipped:', e);
+        }
+    }
+
     // Multi-root control-plane refresh: refresh every Switchboard-managed folder
     // (mapping parents ∪ open managed folders), not just the focused one. The
     // mappings list is the user-maintained distribution list; open folders cover
@@ -1077,6 +1097,24 @@ export async function activate(context: vscode.ExtensionContext) {
     // forward) so the cross-process sweep loop never blocks on an HTTP call. Empty
     // when the fleet is unavailable → the sweep degrades to today's blind timeout.
     globalPlanWatcher.getEngine().setTerminalLivenessProvider(() => taskViewerProvider.getFleetLiveness());
+    // Turn-end notification seam: when a dispatched seat goes quiet (turn end),
+    // tell the agent waiting on it — its head (parentInstanceId) or the
+    // orchestrator. Same idiom as the two seams above: a host-injected callback
+    // on the shared engine, wired here so the safeguard is NOT extension-only.
+    // The engine emits only { seatName, planFile, outcome, workspaceRoot };
+    // recipient resolution + delivery happen in the provider, which owns the
+    // pty host child process and the ptyListTerminals path that carries
+    // agentInstanceId / parentInstanceId. A host that sets no notifier degrades
+    // silently — the classification still runs, nothing is delivered.
+    globalPlanWatcher.getEngine().setTurnEndNotifier((info) => {
+        taskViewerProvider.notifyTurnEnd(info);
+        // Second consumer: completion-driven autoban dispatch. Added INSIDE the
+        // existing closure — setTurnEndNotifier is a single-slot setter, so
+        // calling it again would silently replace this closure and kill the
+        // turn-end notification card. handleAutobanTurnEnd guards on
+        // enabled/paused/single-column internally, so a no-op for other modes.
+        taskViewerProvider.handleAutobanTurnEnd(info);
+    });
     context.subscriptions.push(taskViewerProvider);
     if (workspaceRoot) {
         void taskViewerProvider.deregisterAllTerminals(true).then(() => {
@@ -1749,50 +1787,18 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(setPairProgrammingModeDisposable);
 
-    const addAutobanTerminalDisposable = registerSwitchboardCommand('switchboard.addAutobanTerminalFromKanban', async (role: string, requestedName?: string, cwd?: string) => {
-        await taskViewerProvider.addAutobanTerminalFromKanban(role, requestedName, cwd);
+    // Dispatch header `+` stepper. Extension-host only by design — standalone
+    // reports terminalCreateAvailable:false and disables the button rather than
+    // faking success (PRD contract #6).
+    const addCoderTerminalDisposable = registerSwitchboardCommand('switchboard.addCoderTerminalFromKanban', async (role: string, requestedName?: string, cwd?: string) => {
+        await taskViewerProvider.addCoderTerminalFromKanban(role, requestedName, cwd);
     });
-    context.subscriptions.push(addAutobanTerminalDisposable);
+    context.subscriptions.push(addCoderTerminalDisposable);
 
     const revealWorktreeTerminalDisposable = vscode.commands.registerCommand('switchboard.revealWorktreeTerminal', async (worktreePath: string) => {
         await taskViewerProvider.revealWorktreeTerminal(worktreePath);
     });
     context.subscriptions.push(revealWorktreeTerminalDisposable);
-
-    const removeAutobanTerminalDisposable = registerSwitchboardCommand('switchboard.removeAutobanTerminalFromKanban', async (role: string, terminalName: string) => {
-        await taskViewerProvider.removeAutobanTerminalFromKanban(role, terminalName);
-    });
-    context.subscriptions.push(removeAutobanTerminalDisposable);
-
-    const launchMcpMonitorTerminalDisposable = registerSwitchboardCommand('switchboard.launchMcpMonitorTerminal', async (jobId?: string) => {
-        await taskViewerProvider.launchMcpMonitorTerminal(jobId);
-    });
-    context.subscriptions.push(launchMcpMonitorTerminalDisposable);
-
-    const stopMcpMonitorTerminalDisposable = registerSwitchboardCommand('switchboard.stopMcpMonitorTerminal', async (jobId?: string) => {
-        await taskViewerProvider.stopMcpMonitorTerminal(jobId);
-    });
-    context.subscriptions.push(stopMcpMonitorTerminalDisposable);
-
-    const checkMcpMonitorAuthDisposable = registerSwitchboardCommand('switchboard.checkMcpMonitorAuth', async () => {
-        await taskViewerProvider.checkMcpMonitorAuth();
-    });
-    context.subscriptions.push(checkMcpMonitorAuthDisposable);
-
-    const startMcpMonitorPollingDisposable = registerSwitchboardCommand('switchboard.startMcpMonitorPolling', async () => {
-        await taskViewerProvider.startMcpMonitorPolling();
-    });
-    context.subscriptions.push(startMcpMonitorPollingDisposable);
-
-    const stopMcpMonitorPollingDisposable = registerSwitchboardCommand('switchboard.stopMcpMonitorPolling', async () => {
-        await taskViewerProvider.stopMcpMonitorPolling();
-    });
-    context.subscriptions.push(stopMcpMonitorPollingDisposable);
-
-    const resetAutobanPoolsDisposable = registerSwitchboardCommand('switchboard.resetAutobanPoolsFromKanban', async () => {
-        await taskViewerProvider.resetAutobanPoolsFromKanban();
-    });
-    context.subscriptions.push(resetAutobanPoolsDisposable);
 
     const dispatchToCoderTerminalDisposable = registerSwitchboardCommand('switchboard.dispatchToCoderTerminal',
         async (prompt: string, worktreePath?: string) => {

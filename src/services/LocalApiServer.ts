@@ -10,11 +10,12 @@ import { importPlanFiles } from './PlanFileImporter';
 import {
     STANDING_ORDERS_CONFIG_KEY,
     StandingOrder,
+    StandingOrderScope,
     validateInstruction,
     mutateStandingOrders,
     makeStandingOrder,
-    MAX_ORDERS,
 } from './standingOrders';
+import { plausibleOriginTerminal } from './teamWiring';
 import {
     DEFAULT_KANBAN_COLUMNS,
     DISPLAY_MODE_COLUMNS,
@@ -211,6 +212,12 @@ interface LocalApiServerOptions {
         source: string | null;
     }>;
     /**
+     * Resolve the terminal of `role` on the same registered team as `originTerminal`.
+     * Optional — absent in headless/test harnesses, where routing degrades to the
+     * workspace-wide role pick (today's behaviour).
+     */
+    resolveTeamRoleTerminal?: (workspaceRoot: string, originTerminal: string, role: string) => Promise<string | null>;
+    /**
      * Complexity-routed target column for POST /kanban/dispatch when the caller
      * omits targetColumn (or passes "auto"). Delegates to the board's own
      * score→role resolution (custom routing map or default bands 1–4 intern /
@@ -283,35 +290,12 @@ interface LocalApiServerOptions {
         reason?: string;
     }>;
     /**
-     * Orchestrator request channel — reached by a fleet coding/review agent's
-     * `curl` when it needs to raise a question, warning, research request, or
-     * blocker to the orchestrator. The host resolves the workspace root and
-     * writes the request to `.switchboard/orchestrator/inbox/`. Optional —
-     * absent in headless/test harnesses (returns 503).
-     */
-    onOrchestratorRequest?: (request: {
-        stage: string; type: string; from?: string;
-        planId?: string; feature?: string; body: string; worktreePath?: string;
-    }, workspaceRoot?: string) => Promise<{ success: boolean; file?: string; error?: string }>;
-    /**
      * KanbanDatabase accessor for read/management endpoints. LocalApiServer
      * holds no DB handle today; every kanban op above is an injected callback.
      * This accessor lets read endpoints reach the DB. Optional — absent in
      * headless/test harnesses (endpoints return 503).
      */
     getKanbanDatabase?: (workspaceRoot?: string) => Promise<any | null | undefined>;
-    /**
-     * Orchestration fan-out dispatch — reached by the orchestrator's `curl` after
-     * grouping completes. The host resolves the feature's PLAN REVIEWED subtasks,
-     * routes each by complexity, resolves its worktree terminal, and dispatches the
-     * coder via the established batch-trigger path. Subtasks beyond the concurrency
-     * cap stay in PLAN REVIEWED for later wake ticks. Optional — absent in
-     * headless/test harnesses (returns 503).
-     */
-    orchestrationDispatch?: (
-        workspaceRoot: string,
-        featurePlanId: string
-    ) => Promise<{ success: boolean; dispatched?: string[]; skipped?: Array<{ planId: string; reason: string }>; error?: string }>;
     /**
      * Arm the unattended orchestration engine — the same path the AUTOMATION tab
      * "Start orchestrator" button takes (terminal + kickoff + autoban clock).
@@ -321,8 +305,9 @@ interface LocalApiServerOptions {
      */
     orchestrationStart?: (workspaceRoot?: string) => Promise<void>;
     /**
-     * Disarm the orchestration engine — disables orchestration, stops the autoban
-     * clock, persists state, and broadcasts. Reached by `POST /orchestration/stop`.
+     * Disarm the oversight agent — disables orchestrationConfig.enabled,
+     * persists state, and broadcasts. Does NOT stop the autoban engine.
+     * Reached by `POST /orchestration/stop`.
      * Optional — absent in headless/test harnesses (returns 503).
      */
     orchestrationStop?: () => Promise<void>;
@@ -1228,7 +1213,10 @@ export class LocalApiServer {
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
             const ref = String(body?.plan || body?.planId || body?.sessionId || body?.planFile || '').trim();
             const rawColumn = String(body?.targetColumn || body?.column || '').trim();
-            const outcome = await this.performKanbanDispatch(workspaceRoot, ref, rawColumn || undefined);
+            const from = String(body?.from || body?.originTerminal || '').trim();
+            const outcome = await this.performKanbanDispatch(
+                workspaceRoot, ref, rawColumn || undefined, { originTerminal: from || undefined }
+            );
             res.writeHead(outcome.status, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(outcome.payload));
         } catch (err) {
@@ -1236,6 +1224,18 @@ export class LocalApiServer {
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanDispatch failed' }));
         }
+    }
+
+    /**
+     * The terminal name recorded against a plan, or '' when what is recorded is
+     * not a terminal name. Delegates to the shared pure `plausibleOriginTerminal`
+     * so the API dispatch path and the drag path apply the identical filter.
+     * `dispatched_terminal` is only ever a real name; `dispatched_agent` can also
+     * be 'unknown', an IDE-shaped "<IDE> <role>" string, or a bare role word
+     * (the paste-attribution path writes the role there).
+     */
+    private _plausibleOriginTerminal(record: any): string {
+        return plausibleOriginTerminal(record);
     }
 
     /**
@@ -1248,7 +1248,7 @@ export class LocalApiServer {
         workspaceRoot: string,
         ref: string,
         rawColumn?: string,
-        dispatchOptions?: { unattended?: boolean; targetTerminalOverride?: string }
+        dispatchOptions?: { unattended?: boolean; targetTerminalOverride?: string; originTerminal?: string }
     ): Promise<{ status: number; payload: any }> {
         const fail = (status: number, error: string): { status: number; payload: any } =>
             ({ status, payload: { success: false, error } });
@@ -1311,10 +1311,40 @@ export class LocalApiServer {
                 }
             }
 
+            // 3b. Team-scoped target: a review handed back to the board belongs to the
+            //     reviewer on the SAME team that produced the work. Role resolution
+            //     downstream is workspace-wide and would pick an arbitrary reviewer once
+            //     a second team is live. Origin precedence: explicit `from` (the head
+            //     naming itself) → the plan's dispatched_terminal → its dispatched_agent
+            //     → none. `unknown`, IDE-shaped names and bare role words are not
+            //     terminal names. `record` is the PRE-move read (step 1): after step 4
+            //     these fields name the reviewer, not the coder.
+            let teamOverride: string | undefined = dispatchOptions?.targetTerminalOverride;
+            let teamRouting: string | undefined;
+            if (!teamOverride && this._options.resolveTeamRoleTerminal) {
+                if (!gate?.role) {
+                    teamRouting = 'team-scoped: dispatch role unavailable on this host — fell back to workspace-wide';
+                } else {
+                    const origin = (dispatchOptions?.originTerminal || '').trim()
+                        || this._plausibleOriginTerminal(record);
+                    if (origin) {
+                        const hit = await this._options.resolveTeamRoleTerminal(workspaceRoot, origin, gate.role);
+                        if (hit) {
+                            teamOverride = hit;
+                            teamRouting = `team-scoped: ${origin} → ${hit}`;
+                        } else {
+                            teamRouting = `team-scoped: no ${gate.role} on ${origin}'s team — fell back to workspace-wide`;
+                        }
+                    } else {
+                        teamRouting = 'team-scoped: no origin terminal — fell back to workspace-wide';
+                    }
+                }
+            }
+
             // 4. Fire the exact arm a webview drag fires: it persists the move FIRST,
             //    then dispatches (the known move↔dispatch coupling order).
             const dispatchedAtBefore = record.dispatchedAt ?? null;
-            await kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, bypassTriggerGate: true, unattended: !!dispatchOptions?.unattended, targetTerminalOverride: dispatchOptions?.targetTerminalOverride }, workspaceRoot);
+            await kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, bypassTriggerGate: true, unattended: !!dispatchOptions?.unattended, targetTerminalOverride: teamOverride }, workspaceRoot);
 
             // 5. Verify against the DB — report what happened, not what was requested.
             const after: any = await db.getPlanByPlanId(record.planId);
@@ -1338,6 +1368,7 @@ export class LocalApiServer {
                     dispatched,
                     dispatchedAgent: after?.dispatchedAgent || null,
                     dispatchedAt: after?.dispatchedAt || null,
+                    ...(teamRouting ? { teamRouting } : {}),
                     ...(success ? {} : {
                         error: !moved
                             ? `Card did not land in '${targetColumn}' (currently '${column}')`
@@ -1990,7 +2021,7 @@ export class LocalApiServer {
                 clearBeforePrompt: false,
                 // Relays are agent-to-agent notes — a question, an answer, a
                 // "done" — not task dispatches. Appending the recipient's whole
-                // standing-orders block (up to MAX_BLOCK_CHARS) to every one of
+                // standing-orders block to every one of
                 // them is pure inflation on the highest-frequency delivery path
                 // in the fleet, and the recipient's context is never cleared here
                 // so there is nothing to re-establish. Hardcoded, like the flag
@@ -2319,7 +2350,13 @@ export class LocalApiServer {
         }
 
         try {
-            const orders = await db.getConfigJson(STANDING_ORDERS_CONFIG_KEY, []) as StandingOrder[];
+            const raw = await db.getConfigJson(STANDING_ORDERS_CONFIG_KEY, []) as StandingOrder[];
+            // Default absent `scope` to `pair` on read so the client always
+            // sees an explicit scope field, even for shipped-state rows.
+            const orders = (Array.isArray(raw) ? raw : []).map(o => ({
+                ...o,
+                scope: o.scope || 'pair' as StandingOrderScope,
+            }));
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: true, available: true, orders }));
         } catch (err) {
@@ -2331,8 +2368,9 @@ export class LocalApiServer {
 
     /**
      * POST /terminals/standing-orders — add or delete a standing order.
-     * Body: `{ action: 'add'|'delete', parent, child, instruction? }`.
-     * Validation and caps are server-side; the modal's counter is advisory only.
+     * Body: `{ action: 'add'|'delete', parent, child, instruction?, scope?, teamId? }`.
+     * For `global`/`team` scope, `parent`/`child` are not required; `team` requires `teamId`.
+     * Validation is server-side.
      */
     private async _handleStandingOrdersWrite(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
@@ -2368,16 +2406,36 @@ export class LocalApiServer {
                 const parent = typeof body?.parent === 'string' ? body.parent.trim() : '';
                 const child = typeof body?.child === 'string' ? body.child.trim() : '';
                 const instruction = typeof body?.instruction === 'string' ? body.instruction : '';
-                if (!parent || !child) {
+                const scope = (typeof body?.scope === 'string' ? body.scope : 'pair') as StandingOrderScope;
+                const teamId = typeof body?.teamId === 'string' ? body.teamId.trim() : '';
+
+                // Validate scope
+                if (!['global', 'team', 'pair'].includes(scope)) {
                     res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: false, error: 'parent and child are required' }));
+                    res.end(JSON.stringify({ success: false, error: "scope must be 'global', 'team', or 'pair'" }));
                     return;
                 }
-                if (parent === child) {
+
+                // parent/child are required for pair scope; for global/team they
+                // are optional (a global order has no partner terminal).
+                if (scope === 'pair') {
+                    if (!parent || !child) {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: false, error: 'parent and child are required for pair scope' }));
+                        return;
+                    }
+                    if (parent === child) {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: false, error: 'parent and child must be different terminals' }));
+                        return;
+                    }
+                }
+                if (scope === 'team' && !teamId) {
                     res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: false, error: 'parent and child must be different terminals' }));
+                    res.end(JSON.stringify({ success: false, error: 'teamId is required for team scope' }));
                     return;
                 }
+
                 const instructionErr = validateInstruction(instruction);
                 if (instructionErr) {
                     res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -2387,15 +2445,7 @@ export class LocalApiServer {
 
                 let added: StandingOrder | undefined;
                 await mutateStandingOrders(db, async (orders) => {
-                    if (orders.length >= MAX_ORDERS) {
-                        // Tagged so the aggregate catch reports it as the client
-                        // error it is (400) rather than a server fault (500) —
-                        // the caller can fix this by deleting an order.
-                        const capErr: any = new Error(`Standing order limit reached (${MAX_ORDERS})`);
-                        capErr.statusCode = 400;
-                        throw capErr;
-                    }
-                    added = makeStandingOrder(parent, child, instruction);
+                    added = makeStandingOrder(parent, child, instruction, scope, teamId || undefined);
                     return [...orders, added];
                 });
 
@@ -2484,111 +2534,6 @@ export class LocalApiServer {
         }
     }
 
-    private async _handleOrchestratorRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-        if (!await this._checkAuth(req, true)) {
-            this._sendUnauthorized(res);
-            return;
-        }
-
-        const onOrchestratorRequest = this._options.onOrchestratorRequest;
-        if (!onOrchestratorRequest) {
-            res.writeHead(503, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Orchestrator request channel not available' }));
-            return;
-        }
-
-        try {
-            const body = await this._parseJsonBody(req);
-            const stage = String(body?.stage || '').trim();
-            const type = String(body?.type || '').trim();
-            const from = body?.from ? String(body.from).trim() : undefined;
-            const planId = body?.planId ? String(body.planId).trim() : undefined;
-            const feature = body?.feature ? String(body.feature).trim() : undefined;
-            const worktreePath = body?.worktreePath ? String(body.worktreePath).trim() : undefined;
-            const reqBody = String(body?.body || '').trim();
-
-            const validStages = ['planner', 'coder', 'reviewer'];
-            const validTypes = ['question', 'warning', 'research', 'blocked'];
-            if (!validStages.includes(stage)) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: `Invalid stage '${stage}'. Must be one of: ${validStages.join(', ')}` }));
-                return;
-            }
-            if (!validTypes.includes(type)) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: `Invalid type '${type}'. Must be one of: ${validTypes.join(', ')}` }));
-                return;
-            }
-            if (!reqBody) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Missing required field: body' }));
-                return;
-            }
-
-            const result = await onOrchestratorRequest(
-                { stage, type, from, planId, feature, body: reqBody, worktreePath },
-                this._options.workspaceRoot
-            );
-            if (result.success) {
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: true, file: result.file }));
-            } else {
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: result.error || 'orchestrator request failed' }));
-            }
-        } catch (err) {
-            console.error('[LocalApiServer] orchestratorRequest error:', err);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'orchestratorRequest failed' }));
-        }
-    }
-
-    private async _handleOrchestrationDispatch(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-        if (!await this._checkAuth(req, true)) {
-            this._sendUnauthorized(res);
-            return;
-        }
-
-        const orchestrationDispatch = this._options.orchestrationDispatch;
-        if (!orchestrationDispatch) {
-            res.writeHead(503, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Orchestration dispatch not available' }));
-            return;
-        }
-
-        try {
-            const body = await this._parseJsonBody(req);
-            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
-            const featurePlanId = String(body?.featurePlanId || '').trim();
-            if (!featurePlanId) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Missing required field: featurePlanId' }));
-                return;
-            }
-            if (!workspaceRoot) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Missing required field: workspaceRoot' }));
-                return;
-            }
-            const result = await orchestrationDispatch(workspaceRoot, featurePlanId);
-            if (result.success) {
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({
-                    success: true,
-                    dispatched: result.dispatched || [],
-                    skipped: result.skipped || []
-                }));
-            } else {
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: result.error || 'orchestration dispatch failed' }));
-            }
-        } catch (err) {
-            console.error('[LocalApiServer] orchestrationDispatch error:', err);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'orchestrationDispatch failed' }));
-        }
-    }
-
     /**
      * POST /orchestration/start — arm the unattended orchestration engine.
      * Calls startOrchestratorFromKanban (the same path the AUTOMATION tab button
@@ -2622,9 +2567,10 @@ export class LocalApiServer {
     }
 
     /**
-     * POST /orchestration/stop — disarm the orchestration engine.
-     * Calls stopOrchestratorFromKanban (disables orchestration, stops the autoban
-     * clock, persists state, broadcasts). No body required.
+     * POST /orchestration/stop — disarm the oversight agent.
+     * Calls stopOrchestratorFromKanban (disables orchestrationConfig.enabled,
+     * persists state, broadcasts). Does NOT stop the autoban engine — oversight
+     * and board automation are independent. No body required.
      */
     private async _handleOrchestrationStop(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
@@ -2642,7 +2588,7 @@ export class LocalApiServer {
         try {
             await orchestrationStop();
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true, message: 'Orchestration engine disarmed' }));
+            res.end(JSON.stringify({ success: true, message: 'Oversight agent disarmed' }));
         } catch (err) {
             console.error('[LocalApiServer] orchestrationStop error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -2834,27 +2780,6 @@ export class LocalApiServer {
             if (!db) throw new Error('Kanban database not available');
             const worktrees = await db.getWorktrees();
             return worktrees;
-        });
-    }
-
-    private async _handleGetOrchestratorInbox(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-        await this._handleReadEndpoint(req, res, async () => {
-            const root = this._options.workspaceRoot;
-            const inboxDir = path.join(root, '.switchboard', 'orchestrator', 'inbox');
-            const entries: Array<{ file: string; content: string }> = [];
-            try {
-                const files = await fs.readdir(inboxDir);
-                for (const f of files) {
-                    if (f === 'processed') continue;
-                    const filePath = path.join(inboxDir, f);
-                    const stat = await fs.stat(filePath);
-                    if (stat.isFile()) {
-                        const content = await fs.readFile(filePath, 'utf8');
-                        entries.push({ file: f, content });
-                    }
-                }
-            } catch { /* inbox doesn't exist yet — return empty */ }
-            return entries;
         });
     }
 
@@ -3966,8 +3891,6 @@ export class LocalApiServer {
             } else if (pathname.startsWith('/taskViewer/verb/') && req.method === 'POST') {
                 const verb = decodeURIComponent(pathname.slice('/taskViewer/verb/'.length));
                 await this._handleTaskViewerVerb(verb, req, res);
-            } else if (pathname === '/kanban/orchestration/dispatch' && req.method === 'POST') {
-                await this._handleOrchestrationDispatch(req, res);
             } else if (pathname === '/orchestration/start' && req.method === 'POST') {
                 await this._handleOrchestrationStart(req, res);
             } else if (pathname === '/orchestration/stop' && req.method === 'POST') {
@@ -3996,8 +3919,6 @@ export class LocalApiServer {
                 await this._handlePhoneAFriend(req, res);
             } else if (pathname === '/research/dispatch' && req.method === 'POST') {
                 await this._handleResearchDispatch(req, res);
-            } else if (pathname === '/orchestrator/request' && req.method === 'POST') {
-                await this._handleOrchestratorRequest(req, res);
             } else if (pathname === '/api/clickup' && req.method === 'POST') {
                 await this._handleClickUpApiProxy(req, res);
             } else if (pathname === '/api/linear' && req.method === 'POST') {
@@ -4026,8 +3947,6 @@ export class LocalApiServer {
                 await this._handleGetColumns(req, res);
             } else if (pathname === '/worktree/list' && req.method === 'GET') {
                 await this._handleGetWorktrees(req, res);
-            } else if (pathname === '/orchestrator/inbox' && req.method === 'GET') {
-                await this._handleGetOrchestratorInbox(req, res);
             } else if (pathname === '/orchestrator/session-log' && req.method === 'GET') {
                 await this._handleGetOrchestratorSessionLog(req, res);
             } else if (pathname === '/catalog' && req.method === 'GET') {

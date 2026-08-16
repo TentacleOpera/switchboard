@@ -1,6 +1,6 @@
 # External Orchestration Surface — Honest Deletes, Dead Scaffolding Removed
 
-**Complexity:** 3
+**Complexity:** 4
 
 ## Goal
 
@@ -19,7 +19,7 @@ Both subtasks are the same principle applied twice: **what the system tells an a
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [External Orchestration — Governance, Brakes and Controls in Connections](../plans/feature_plan_20260805140000_external-orchestration-governance-in-connections.md) — **PLAN REVIEWED**
+- [ ] [Remove the Instruction-Inbox / Standing-Jobs / Declared-Moves Subsystem Entirely](../plans/feature_plan_20260805140000_external-orchestration-governance-in-connections.md) — **PLAN REVIEWED**
 - [ ] [`DELETE /kanban/plans` Leaves the Markdown and the Feature File Behind — Bring It to Parity With the Board's Delete](../plans/feature_plan_20260812120500_delete-plan-api-parity-with-board-delete.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
 

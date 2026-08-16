@@ -1,4 +1,16 @@
-export type AutobanTriggerMode = 'drain' | 'watch';
+/**
+ * How a column decides WHEN to dispatch.
+ *
+ * `drain` (default) and `watch` are clock-driven: the engine installs an
+ * interval per enabled column and dispatches a card each tick. That is the
+ * supported default and always has been.
+ *
+ * `completion` is the opt-in alternative: no interval, one card in flight, and
+ * the next dispatch is triggered by the turn-end signal for the previous one.
+ * It is a custom mode for people who want strict one-in-one-out pacing — it
+ * does NOT replace the clock.
+ */
+export type AutobanTriggerMode = 'drain' | 'watch' | 'completion';
 export type AutobanRuleState = {
     enabled: boolean;
     intervalMinutes: number;
@@ -12,48 +24,89 @@ export const AUTOBAN_SHARED_REVIEWER_COLUMNS = ['LEAD CODED', 'CODER CODED', 'IN
 
 export const AUTOBAN_BATCH_SIZE_OPTIONS = [1, 2, 3, 4, 5] as const;
 export const DEFAULT_AUTOBAN_BATCH_SIZE = 1;
-export const DEFAULT_AUTOBAN_GLOBAL_SESSION_CAP = 200;
 export const MAX_AUTOBAN_TERMINALS_PER_ROLE = 5;
 
-// Orchestration wake-loop contract (subtask 5). The tick key is deliberately not
-// a real column name so it can never collide with `rules` entries.
-export const ORCHESTRATION_TICK_KEY = '__ORCHESTRATION__';
 export const ORCHESTRATOR_TERMINAL_NAME = 'Orchestrator';
-export const ORCHESTRATION_MAX_SKIPPED_WAKES = 3;
-export const ORCHESTRATION_MAX_FAILED_WAKES = 3;
+
+export const AUTOBAN_SOURCE_COLUMN = 'PLAN REVIEWED';
+
+/**
+ * The automation axis is *who runs the clock*.
+ *
+ * `internal` — Switchboard runs the run sheet on its own schedule, dispatching
+ * to local terminals. Oversight agent optional. This is the only mode that
+ * installs timers and dispatches.
+ *
+ * `external` — Switchboard emits a copyable prompt for a tool that runs agent
+ * cron jobs (Antigravity, a Claude scheduled agent). Switchboard runs no clock
+ * and dispatches nothing.
+ *
+ * Orchestration is NOT a mode — it is an optional oversight agent armed via
+ * `orchestrationConfig.enabled` while the run sheet runs.
+ */
+export type AutobanAutomationMode = 'internal' | 'external';
+
+/**
+ * One step of the run sheet: "if this team's head is alive and this column has
+ * cards, send one card to that head."
+ *
+ * `headRole` names a TEAM HEAD, not a pool slot. Resolution prefers the head of
+ * a team defined for that role and falls back to any alive terminal carrying it;
+ * the head then delegates to its own members, which is what team mode is for.
+ * There is no complexity routing and no role fallback chain here — a step either
+ * has its team or it is skipped this tick.
+ */
+/**
+ * Tick key for the single run-sheet clock. Not a real column name, so it can
+ * never collide with a `rules` entry or a source column.
+ */
+export const AUTOBAN_RUN_SHEET_TICK_KEY = '__RUN_SHEET__';
+
+export type AutobanRunSheetStep = {
+    sourceColumn: string;
+    headRole: string;
+};
+
+/**
+ * THE RUN SHEET. One clock, ordered steps, evaluated top to bottom every tick.
+ *
+ * Hard-coded for now and deliberately shaped as DATA rather than control flow,
+ * so making it user-editable later is a config read plus an editor — not a
+ * rewrite of the tick. Order matters: earlier steps feed later ones, so running
+ * the planner step first lets a plan it produces be picked up by the coder step
+ * on a subsequent tick rather than waiting a full extra interval.
+ */
+export const DEFAULT_AUTOBAN_RUN_SHEET: readonly AutobanRunSheetStep[] = [
+    { sourceColumn: 'CREATED', headRole: 'planner' },
+    { sourceColumn: AUTOBAN_SOURCE_COLUMN, headRole: 'coder' }
+] as const;
 
 export type SingleColumnAutobanConfig = {
     enabled: boolean;
     intervalMinutes: number;
     batchSize: number;
     complexityFilter: AutobanComplexityFilter;
-    terminalPools: Record<string, string[]>;
-    sourceColumn: string;  // NEW: the Kanban column to automate
-    sourceColumnRole?: string; // NEW: dynamic role of the source column
     triggerMode?: AutobanTriggerMode;
+    /**
+     * The WHEN control — a single schedule for the run sheet.
+     * null/undefined = OFF (default): the run sheet runs continuously,
+     * paced by completion (today's behaviour).
+     * A 5-field cron string = ON: the run sheet fires on the cron line.
+     */
+    whenSchedule?: string | null;
 };
 
 export type OrchestrationConfig = {
     enabled: boolean;          // orchestrator session armed (Start pressed, not yet stopped)
-    intervalMinutes: number;   // wake cadence for subtask 5's tick; stored now, acted on later
-    maxConcurrentSubtasks?: number; // per-call concurrency budget for fan-out (subtask 4); default 5
-    lastWakeAt?: number;       // epoch ms; written by subtask 5, rendered by the status line
 };
 
 export const DEFAULT_ORCHESTRATION_CONFIG: OrchestrationConfig = {
-    enabled: false,
-    intervalMinutes: 10,
-    maxConcurrentSubtasks: 5
+    enabled: false
 };
 
 export function normalizeOrchestrationConfig(state?: Partial<OrchestrationConfig> | null): OrchestrationConfig {
     return {
-        enabled: state?.enabled === true,
-        intervalMinutes: Math.max(1, Math.min(60, Number.isFinite(state?.intervalMinutes as number) ? Math.floor(state!.intervalMinutes!) : 10)),
-        maxConcurrentSubtasks: Math.max(1, Math.min(20, Number.isFinite(state?.maxConcurrentSubtasks as number) ? Math.floor(state!.maxConcurrentSubtasks!) : 5)),
-        lastWakeAt: (typeof state?.lastWakeAt === 'number' && Number.isFinite(state.lastWakeAt) && state.lastWakeAt > 0)
-            ? state.lastWakeAt
-            : undefined
+        enabled: state?.enabled === true
     };
 }
 
@@ -62,29 +115,34 @@ export const DEFAULT_SINGLE_COLUMN_CONFIG: SingleColumnAutobanConfig = {
     intervalMinutes: 10,
     batchSize: 1,
     complexityFilter: 'all',
-    terminalPools: {},
-    sourceColumn: 'PLAN REVIEWED',
-    sourceColumnRole: 'lead',
-    triggerMode: 'drain'
+    triggerMode: 'drain',
+    whenSchedule: null
 };
 
 export function normalizeSingleColumnConfig(state?: Partial<SingleColumnAutobanConfig> | null): SingleColumnAutobanConfig {
+    const rawSchedule = state?.whenSchedule;
+    const whenSchedule = typeof rawSchedule === 'string' && rawSchedule.trim() ? rawSchedule.trim() : null;
     return {
         enabled: state?.enabled === true,
-        intervalMinutes: Math.max(1, Math.min(60, Number.isFinite(state?.intervalMinutes as number) ? Math.floor(state!.intervalMinutes!) : 10)),
+        // Floor of 1 minute only — no ceiling. The run-sheet interval is how often
+        // the board advances, and "once every few hours" or "overnight" are valid
+        // answers. A 60-minute cap was an arbitrary bound, not a constraint.
+        intervalMinutes: Math.max(1, Number.isFinite(state?.intervalMinutes as number) ? Math.floor(state!.intervalMinutes!) : 10),
         batchSize: normalizeAutobanBatchSize(state?.batchSize),
         complexityFilter: (['all', 'low_and_below', 'medium_and_below', 'medium_and_above', 'high_and_above'] as const).includes(state?.complexityFilter as any)
             ? state!.complexityFilter!
             : 'all',
-        terminalPools: (typeof state?.terminalPools === 'object' && state!.terminalPools !== null)
-            ? Object.fromEntries(Object.entries(state!.terminalPools).map(([k, v]) => [k, Array.isArray(v) ? v.filter(Boolean) : []]))
-            : {},
-        sourceColumn: (typeof state?.sourceColumn === 'string' && state!.sourceColumn!.trim().length > 0)
-            ? state!.sourceColumn!.trim()
-            : 'PLAN REVIEWED',
-        sourceColumnRole: typeof state?.sourceColumnRole === 'string' ? state.sourceColumnRole : undefined,
-        triggerMode: state?.triggerMode === 'watch' ? 'watch' : 'drain'
+        triggerMode: normalizeAutobanTriggerMode(state?.triggerMode),
+        whenSchedule
     };
+}
+
+/**
+ * Unknown persisted values fall back to `drain` — the clock-driven default.
+ * A config that predates `completion` normalises to the behaviour it already had.
+ */
+export function normalizeAutobanTriggerMode(value: unknown): AutobanTriggerMode {
+    return value === 'watch' || value === 'completion' ? value : 'drain';
 }
 
 export type AutobanConfigState = {
@@ -92,21 +150,19 @@ export type AutobanConfigState = {
     batchSize: number;
     complexityFilter: AutobanComplexityFilter;
     routingMode: AutobanRoutingMode;
-    globalSessionCap: number;
-    sessionSendCount: number;
-    sendCounts: Record<string, number>;
-    terminalPools: Record<string, string[]>;
-    managedTerminalPools: Record<string, string[]>;
-    poolCursor: Record<string, number>;
     rules: Record<string, AutobanRuleState>;
     lastTickAt?: Record<string, number>;
     paused: boolean;
     pausedRemainingMs?: Record<string, number>;
     pairProgrammingMode: 'off' | 'cli-cli' | 'cli-ide' | 'ide-cli' | 'ide-ide';
     aggressivePairProgramming: boolean;
-    automationMode?: 'single-column' | 'multi-column' | 'antigravity-batch' | 'orchestration' | 'scheduler';
+    automationMode?: AutobanAutomationMode;
+    /** Broadcast-only: the active run sheet, so the panel renders what the engine runs. */
+    runSheet?: AutobanRunSheetStep[];
     singleColumnConfig?: SingleColumnAutobanConfig;
     orchestrationConfig?: OrchestrationConfig;
+    /** One-time notice shown in the Internal panel when a board-batch job is migrated. */
+    migratedBoardBatchNotice?: string;
 };
 
 const DEFAULT_AUTOBAN_RULES: Record<string, AutobanRuleState> = {
@@ -134,37 +190,6 @@ export function normalizeAutobanBatchSize(value: unknown): number {
         DEFAULT_AUTOBAN_BATCH_SIZE,
         AUTOBAN_BATCH_SIZE_OPTIONS[0],
         AUTOBAN_BATCH_SIZE_OPTIONS[AUTOBAN_BATCH_SIZE_OPTIONS.length - 1]
-    );
-}
-
-function normalizeCountRecord(record?: Record<string, number> | null): Record<string, number> {
-    if (!record || typeof record !== 'object') {
-        return {};
-    }
-    return Object.fromEntries(
-        Object.entries(record)
-            .map(([key, value]) => [String(key).trim(), normalizeFiniteCount(value, 0, 0)] as const)
-            .filter(([key]) => key.length > 0)
-    );
-}
-
-function normalizeStringArrayRecord(record?: Record<string, string[]> | null): Record<string, string[]> {
-    if (!record || typeof record !== 'object') {
-        return {};
-    }
-    return Object.fromEntries(
-        Object.entries(record)
-            .map(([role, entries]) => {
-                const normalizedEntries = Array.isArray(entries)
-                    ? Array.from(new Set(
-                        entries
-                            .map(entry => String(entry || '').trim())
-                            .filter(Boolean)
-                    )).slice(0, MAX_AUTOBAN_TERMINALS_PER_ROLE)
-                    : [];
-                return [String(role).trim(), normalizedEntries] as const;
-            })
-            .filter(([role]) => role.length > 0)
     );
 }
 
@@ -234,6 +259,28 @@ export function isWatchColumn(rule?: AutobanRuleState | null): boolean {
     return rule?.triggerMode === 'watch' && rule?.enabled === true;
 }
 
+/**
+ * The automation axis is *who runs the clock*. `internal` is the only mode
+ * that installs timers and dispatches; `external` emits a prompt and runs
+ * nothing.
+ *
+ * This is shipped state on ~4,000 installs, so the retired values MAP rather
+ * than fall through a whitelist: `run-sheet` and `scheduler` were the earlier
+ * pair (board progression vs. arbitrary prompts on a timer — both are
+ * Switchboard running the clock, so both map to `internal`); `single-column`
+ * was the run sheet under an older name; `orchestration` was a peer mode that
+ * is now an optional oversight agent (see the orchestrationConfig migration
+ * below). A whitelist that fell through would silently disarm a shipped
+ * install's clock — everything unrecognised lands on `internal`, the safe
+ * default that keeps the board ticking.
+ */
+export function normalizeAutomationMode(value: unknown): AutobanAutomationMode {
+    if (value === 'external') { return 'external'; }
+    // 'run-sheet', 'scheduler', 'single-column', 'orchestration' and anything
+    // unrecognised all land on internal — it is the only clock-running mode.
+    return 'internal';
+}
+
 export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> | null): AutobanConfigState {
     const rawRules = state?.rules ?? {};
     const legacyCodedRule = rawRules['CODED'];
@@ -253,14 +300,10 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
                 return [column, {
                     enabled: typeof rule?.enabled === 'boolean' ? rule.enabled : fallback.enabled,
                     intervalMinutes,
-                    triggerMode: (rule?.triggerMode === 'watch' ? 'watch' : 'drain') as AutobanTriggerMode
+                    triggerMode: normalizeAutobanTriggerMode(rule?.triggerMode)
                 }] as [string, AutobanRuleState];
             })
     );
-
-    const normalizedTerminalPools = normalizeStringArrayRecord(state?.terminalPools);
-    const normalizedManagedTerminalPools = normalizeStringArrayRecord(state?.managedTerminalPools);
-    const normalizedPoolCursor = normalizeCountRecord(state?.poolCursor);
 
     return {
         enabled: state?.enabled === true,
@@ -274,18 +317,6 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
         routingMode: state?.routingMode === 'all_coder' || state?.routingMode === 'all_lead'
             ? state.routingMode
             : 'dynamic',
-        globalSessionCap: normalizeFiniteCount(
-            typeof state?.globalSessionCap === 'number' && Number.isFinite(state.globalSessionCap) && state.globalSessionCap >= 1
-                ? state.globalSessionCap
-                : DEFAULT_AUTOBAN_GLOBAL_SESSION_CAP,
-            DEFAULT_AUTOBAN_GLOBAL_SESSION_CAP,
-            1
-        ),
-        sessionSendCount: normalizeFiniteCount(state?.sessionSendCount, 0, 0),
-        sendCounts: normalizeCountRecord(state?.sendCounts),
-        terminalPools: normalizedTerminalPools,
-        managedTerminalPools: normalizedManagedTerminalPools,
-        poolCursor: normalizedPoolCursor,
         rules: normalizedRules,
         lastTickAt: state?.lastTickAt ? { ...state.lastTickAt } : undefined,
         paused: state?.paused === true,
@@ -304,11 +335,18 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
             return 'off';
         })((state as any)?.pairProgrammingMode, (state as any)?.pairProgrammingEnabled),
         aggressivePairProgramming: state?.aggressivePairProgramming === true,
-        automationMode: (['single-column', 'multi-column', 'antigravity-batch', 'orchestration', 'scheduler'] as const).includes(state?.automationMode as any)
-            ? state!.automationMode!
-            : 'single-column',
+        automationMode: normalizeAutomationMode(state?.automationMode),
         singleColumnConfig: normalizeSingleColumnConfig(state?.singleColumnConfig),
-        orchestrationConfig: normalizeOrchestrationConfig(state?.orchestrationConfig)
+        // `orchestration` used to be a peer MODE; it is now an optional oversight
+        // agent armed alongside the run sheet. An install persisted in that mode
+        // keeps its oversight armed rather than silently losing it — the mode
+        // value migrates to `internal` above, and this carries the intent across.
+        orchestrationConfig: normalizeOrchestrationConfig(
+            (state as any)?.automationMode === 'orchestration'
+                ? { ...state?.orchestrationConfig, enabled: true }
+                : state?.orchestrationConfig
+        ),
+        migratedBoardBatchNotice: typeof state?.migratedBoardBatchNotice === 'string' ? state.migratedBoardBatchNotice : undefined
     };
 }
 
@@ -318,6 +356,10 @@ export function buildAutobanBroadcastState(
 ): AutobanConfigState {
     return {
         ...normalizeAutobanConfigState(state),
-        lastTickAt: Object.fromEntries(lastTickEntries)
+        lastTickAt: Object.fromEntries(lastTickEntries),
+        // The panel renders the run sheet from this rather than hard-coding its own
+        // copy of the steps — so a future editable sheet reaches the UI for free
+        // instead of the two drifting apart.
+        runSheet: DEFAULT_AUTOBAN_RUN_SHEET.map(s => ({ ...s }))
     };
 }

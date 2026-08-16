@@ -174,11 +174,11 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
         source: 'skills/rearrange-feature', name: 'rearrange-feature', invocation: 'no-user', allowedTools: 'Bash',
         descriptionFallback: 'Restructure a feature\'s subtasks — split one subtask into several, move scope between subtasks, merge, or reorder — WITHOUT rewriting their content. Structure-only; the missing counterpart to improve-feature (content) and group-into-features (composition).'
     },
-    // Orchestration HTTP surface — read endpoints + request channel for fleet agents
-    // working inside orchestration worktrees. Model-invocable.
+    // Orchestration HTTP surface — read endpoints + agent-to-agent messaging for
+    // fleet agents working inside orchestration worktrees. Model-invocable.
     {
         source: 'skills/switchboard-orchestration', name: 'switchboard-orchestration', invocation: 'default', allowedTools: 'Bash',
-        descriptionFallback: 'Switchboard orchestration HTTP surface — the complete LocalApiServer contract for external AI coding tools and fleet agents. Discover the port, read the board/plans/features/worktrees/inbox/session-log, manage plan lifecycle, move cards, group and split features, dispatch fan-out, file requests to the orchestrator, and merge/clean up worktrees — all over localhost HTTP. Includes end-to-end workflows for a fleet coder inside a worktree and for an external orchestrator driving the board.'
+        descriptionFallback: 'Switchboard orchestration HTTP surface — the complete LocalApiServer contract for external AI coding tools and fleet agents. Discover the port, read the board/plans/features/worktrees/session-log, manage plan lifecycle, move cards, group and split features, message team leads and report back to the orchestrator via ptySendPrompt, and merge/clean up worktrees — all over localhost HTTP. Includes end-to-end workflows for a fleet coder inside a worktree and for an external orchestrator driving the board.'
     },
 
     // Pure info-retrieval / read-only skills → user-invokable:false + rich description.

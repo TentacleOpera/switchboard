@@ -3131,6 +3131,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <div style="font-size:11px; color:var(--text-secondary); margin-top:8px;">
               Every member reports to the head. Closing the head closes its own members; shared members stay.
             </div>
+            <label class="modal-label" for="agent-groups-prompt" style="margin-top:10px;">Team prompt</label>
+            <textarea id="agent-groups-prompt" class="modal-input" rows="4" placeholder="System prompt delivered to every member on every message. Leave blank for the default (report-back route + git safety). Use {child} for the head terminal name." style="font-family:var(--font-mono, monospace); font-size:11px; resize:vertical; white-space:pre-wrap;"></textarea>
+            <label class="modal-label" for="agent-groups-head-prompt" style="margin-top:10px;">Head prompt (delivered to the team's head only)</label>
+            <textarea id="agent-groups-head-prompt" class="modal-input" rows="4" placeholder="Standing order delivered to the head terminal on every message. Use {head} for the head terminal name. Leave blank for teams whose head needs no special instruction." style="font-family:var(--font-mono, monospace); font-size:11px; resize:vertical; white-space:pre-wrap;"></textarea>
             <div class="flex gap-2" style="margin-top: 10px;">
               <button id="agent-groups-btn-save" class="modal-btn-primary">SAVE TEAM</button>
               <button id="agent-groups-btn-cancel" class="modal-btn-secondary">CANCEL</button>
@@ -3139,11 +3143,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           <button id="agent-groups-btn-add" class="strip-btn" style="width:100%; margin-top:8px;">ADD TEAM</button>
         </div>
 
-        <!-- Delegation & Phone-a-Friend -->
+        <!-- Phone a friend -->
         <div class="db-subsection" id="delegation-subsection">
-          <div class="subsection-header"><span>Delegation &amp; Phone-a-Friend</span></div>
+          <div class="subsection-header"><span>Phone a friend</span></div>
           <div style="font-size:11px; color:var(--text-secondary); margin-bottom:8px;">
-            Configure per-role delegate children and per-instance Phone-a-Friend overrides. Saved to role config.
+            Enable Phone-a-Friend per role — a second-pass coder notified when a batch finishes. Advanced per-terminal overrides below. Saved to role config.
           </div>
           <div class="startup-row" style="gap:8px; margin-bottom:8px;">
             <label style="min-width:70px;">Role</label>
@@ -4252,18 +4256,109 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const phoneSection = document.createElement('div');
             phoneSection.className = 'db-subsection';
             phoneSection.style.padding = '8px';
-            phoneSection.innerHTML = '<div style="font-weight:600; font-size:11px; margin-bottom:6px;">Phone-a-Friend targets</div>';
-            const targetList = document.createElement('div');
-            targetList.style.display = 'flex'; targetList.style.flexDirection = 'column'; targetList.style.gap = '4px';
-            // Materialise the map on the config, not just locally — ADD TARGET and the
-            // row editors both write through `cfg.addons.phoneAFriendTargets`, and a
-            // local `|| {}` left it undefined so the first click threw and the control
-            // did nothing at all.
+
+            // ── Toggle: enable Phone-a-Friend for this role ─────────────
+            // The boolean controls whether the PHONE_A_FRIEND_DIRECTIVE is
+            // emitted in the prompt. The dispatch itself always fires when
+            // the directive is present — the flag governs emission, not
+            // dispatch (see _dispatchPhoneAFriend).
+            const toggleRow = document.createElement('div');
+            toggleRow.className = 'startup-row';
+            toggleRow.style.gap = '6px';
+            toggleRow.style.marginBottom = '8px';
+            const toggleLabel = document.createElement('label');
+            toggleLabel.style.fontSize = '11px';
+            toggleLabel.style.display = 'flex';
+            toggleLabel.style.alignItems = 'center';
+            toggleLabel.style.gap = '4px';
+            toggleLabel.style.cursor = 'pointer';
+            const toggleCheckbox = document.createElement('input');
+            toggleCheckbox.type = 'checkbox';
+            toggleCheckbox.style.width = 'auto';
+            toggleCheckbox.style.margin = '0';
+            toggleCheckbox.checked = cfg.addons.phoneAFriend === true;
+            toggleCheckbox.addEventListener('change', () => {
+                cfg.addons.phoneAFriend = toggleCheckbox.checked;
+                saveRoleConfig(role);
+            });
+            toggleLabel.appendChild(toggleCheckbox);
+            toggleLabel.appendChild(document.createTextNode('Enable Phone-a-Friend for this role'));
+            toggleRow.appendChild(toggleLabel);
+            phoneSection.appendChild(toggleRow);
+
+            // ── Default target select ────────────────────────────────────
+            // The common case: "this coder calls a friend when it finishes a
+            // batch." The target is usually the workspace singleton
+            // ("Phone-a-Friend"), but the operator can name a specific terminal.
+            // This writes a special '*' key into phoneAFriendTargets so the
+            // dispatch resolver picks it up as the role default.
+            const targetRow = document.createElement('div');
+            targetRow.className = 'startup-row';
+            targetRow.style.gap = '6px';
+            targetRow.style.marginBottom = '8px';
+            const targetLabel = document.createElement('label');
+            targetLabel.style.fontSize = '11px';
+            targetLabel.style.minWidth = '70px';
+            targetLabel.textContent = 'Target';
+            const targetInput = document.createElement('input');
+            targetInput.type = 'text';
+            targetInput.placeholder = 'Phone-a-Friend (default)';
+            targetInput.style.flex = '1';
+            targetInput.value = '';
+            // Materialise the map on the config, not just locally — ADD TARGET
+            // and the row editors both write through
+            // `cfg.addons.phoneAFriendTargets`, and a local `|| {}` left it
+            // undefined so the first click threw and the control did nothing
+            // at all. This materialisation is the fix for the past bug the
+            // original code comments called out.
             if (!cfg.addons.phoneAFriendTargets || typeof cfg.addons.phoneAFriendTargets !== 'object') {
                 cfg.addons.phoneAFriendTargets = {};
             }
+            // Read the default target from the '*' key if it exists.
+            const defaultTarget = cfg.addons.phoneAFriendTargets['*'];
+            if (typeof defaultTarget === 'string') { targetInput.value = defaultTarget; }
+            targetInput.addEventListener('blur', () => {
+                const t = agentsTabEnsureRoleConfig(role).addons;
+                if (!t.phoneAFriendTargets || typeof t.phoneAFriendTargets !== 'object') { t.phoneAFriendTargets = {}; }
+                const val = targetInput.value.trim();
+                if (val) {
+                    t.phoneAFriendTargets['*'] = val;
+                } else {
+                    delete t.phoneAFriendTargets['*'];
+                }
+                saveRoleConfig(role);
+            });
+            targetRow.appendChild(targetLabel);
+            targetRow.appendChild(targetInput);
+            phoneSection.appendChild(targetRow);
+
+            // ── Advanced: per-terminal override map ──────────────────────
+            // Shipped state — stays editable behind a disclosure. The map is
+            // origin-terminal → target-terminal (or null for "off"). This is
+            // the override mechanism for installs that need per-instance
+            // routing; the common case is the toggle + default target above.
+            const advToggle = document.createElement('button');
+            advToggle.className = 'strip-btn';
+            advToggle.style.width = '100%';
+            advToggle.style.marginTop = '4px';
+            advToggle.style.fontSize = '10px';
+            advToggle.style.color = 'var(--text-secondary)';
+            advToggle.textContent = '▶ Advanced: per-terminal overrides';
+            const advContent = document.createElement('div');
+            advContent.style.display = 'none';
+            advContent.style.marginTop = '6px';
+            let advOpen = false;
+            advToggle.addEventListener('click', () => {
+                advOpen = !advOpen;
+                advContent.style.display = advOpen ? '' : 'none';
+                advToggle.textContent = advOpen ? '▼ Advanced: per-terminal overrides' : '▶ Advanced: per-terminal overrides';
+            });
+            const targetList = document.createElement('div');
+            targetList.style.display = 'flex'; targetList.style.flexDirection = 'column'; targetList.style.gap = '4px';
             const targets = cfg.addons.phoneAFriendTargets;
             for (const [origin, target] of Object.entries(targets)) {
+                // Skip the '*' default key — it is edited by the target select above.
+                if (origin === '*') { continue; }
                 targetList.appendChild(agentsTabPhoneRow(role, origin, target));
             }
             const addBtn = document.createElement('button');
@@ -4275,43 +4370,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 saveRoleConfig(role);
                 agentsTabRenderDelegationPanel(role);
             });
-            phoneSection.appendChild(targetList);
-            phoneSection.appendChild(addBtn);
+            advContent.appendChild(targetList);
+            advContent.appendChild(addBtn);
+            phoneSection.appendChild(advToggle);
+            phoneSection.appendChild(advContent);
             container.appendChild(phoneSection);
-
-            const delSection = document.createElement('div');
-            delSection.className = 'db-subsection';
-            delSection.style.padding = '8px';
-            let hostCaps = {};
-            try { hostCaps = JSON.parse((document.body.dataset.hostCapabilities || '').replace(/&quot;/g, '"')); } catch { /* ignore */ }
-            if (hostCaps.terminalFleet === false) {
-                const addDel = document.createElement('button');
-                addDel.className = 'strip-btn'; addDel.style.width = '100%'; addDel.style.marginTop = '6px'; addDel.textContent = 'ADD DELEGATE';
-                addDel.disabled = true;
-                addDel.title = 'PTY host unavailable on this platform/installation';
-                delSection.innerHTML = '<div style="font-weight:600; font-size:11px; margin-bottom:6px;">Delegate children</div><div style="color:#888;font-size:11px;">PTY host unavailable on this platform/installation — delegate children cannot be configured.</div>';
-                delSection.appendChild(addDel);
-                container.appendChild(delSection);
-                return;
-            }
-            delSection.innerHTML = '<div style="font-weight:600; font-size:11px; margin-bottom:6px;">Delegate children</div>';
-            const delList = document.createElement('div');
-            delList.style.display = 'flex'; delList.style.flexDirection = 'column'; delList.style.gap = '4px';
-            const delegates = cfg.addons.delegates || [];
-            for (const d of delegates) {
-                delList.appendChild(agentsTabDelegateRow(role, d));
-            }
-            const addDel = document.createElement('button');
-            addDel.className = 'strip-btn'; addDel.style.width = '100%'; addDel.style.marginTop = '6px'; addDel.textContent = 'ADD DELEGATE';
-            addDel.addEventListener('click', () => {
-                agentsTabEnsureRoleConfig(role).addons.delegates = delegates;
-                delegates.push({ role: 'intern', count: 1, label: '', startupCommand: '' });
-                saveRoleConfig(role);
-                agentsTabRenderDelegationPanel(role);
-            });
-            delSection.appendChild(delList);
-            delSection.appendChild(addDel);
-            container.appendChild(delSection);
         }
 
         function agentsTabPhoneRow(role, origin, target) {
@@ -4347,35 +4410,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             return row;
         }
 
-        function agentsTabDelegateRow(role, d) {
-            const row = document.createElement('div');
-            row.className = 'startup-row';
-            row.style.flexWrap = 'wrap';
-            row.style.gap = '4px';
-            row.innerHTML = '<input type="text" placeholder="role" style="flex:1; min-width:60px;"><input type="number" min="1" max="10" style="width:50px;"><input type="text" placeholder="label" style="flex:1; min-width:60px;"><input type="text" placeholder="startup command" style="flex:2; min-width:120px;"><button class="strip-btn" style="padding:2px 8px;">×</button>';
-            const [roleIn, countIn, labelIn, cmdIn, delBtn] = row.children;
-            roleIn.value = d.role || '';
-            countIn.value = d.count ?? 1;
-            labelIn.value = d.label || '';
-            cmdIn.value = d.startupCommand || '';
-
-            function save() {
-                d.role = roleIn.value.trim() || 'intern';
-                d.count = parseInt(countIn.value, 10) || 1;
-                d.label = labelIn.value.trim();
-                d.startupCommand = cmdIn.value.trim();
-                saveRoleConfig(role);
-            }
-            [roleIn, countIn, labelIn, cmdIn].forEach(el => el.addEventListener('blur', save));
-            delBtn.addEventListener('click', () => {
-                const cfg = agentsTabEnsureRoleConfig(role);
-                cfg.addons.delegates = (cfg.addons.delegates || []).filter(x => x !== d);
-                saveRoleConfig(role);
-                agentsTabRenderDelegationPanel(role);
-            });
-            return row;
-        }
-
         // ── Teams (Agent Groups) ───────────────────────────────────────────────────
         // Moved from AGENTS to TEAMS. The agentsTab* prefix is retained for the
         // state variables (agentsTabAgentGroups, agentsTabEditingGroupId) because
@@ -4395,35 +4429,60 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
          */
         const SHIPPED_TEAM_TYPES = [
             {
-                name: 'Feature team',
-                headRole: 'lead',
-                members: [
-                    { role: 'coder', count: 3, scope: 'per-team', relationship: 'reports-to-head' },
-                    { role: 'reviewer', count: 1, scope: 'shared', relationship: 'reviewer' }
-                ],
-                purpose: 'Works a feature\'s subtasks one at a time.'
-            },
-            {
-                name: 'Planning team',
+                name: 'Batch planners',
                 headRole: 'planner',
                 members: [
                     { role: 'researcher', count: 1, scope: 'shared', relationship: 'researcher' }
                 ],
-                purpose: 'Turns tickets and ideas into plans.'
+                purpose: 'Turns tickets and ideas into plans.',
+                prompt: '{child} is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with '
+                    + '{"name":"{child}","data":"<your report>","clearBeforePrompt":false} against the port in '
+                    + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.\n'
+                    + 'Research the context for the plan — read the codebase, trace dependencies, and identify root causes. '
+                    + 'Report your findings to {child} for synthesis into the plan.\n'
+                    + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
+                    + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
+                    + 'commit first, then correct forward.'
             },
             {
-                name: 'Solo coder',
-                headRole: 'coder',
-                members: [],
-                purpose: 'No lead — a cheap second pair of eyes at batch end. Phone-a-Friend fires from role config.'
-            },
-            {
-                name: 'Review team',
-                headRole: 'reviewer',
+                name: 'Coding',
+                headRole: 'lead',
                 members: [
-                    { role: 'tester', count: 1, scope: 'per-team', relationship: 'tester' }
+                    { role: 'coder', count: 3, scope: 'per-team' },
+                    { role: 'reviewer', count: 1, scope: 'shared', relationship: 'reviewer' }
                 ],
-                purpose: 'Verifies finished work before it ships.'
+                purpose: 'Works a feature\'s subtasks one at a time, then hands each to the team reviewer.',
+                prompt: '{child} is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with '
+                    + '{"name":"{child}","data":"<your report>","clearBeforePrompt":false} against the port in '
+                    + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.\n'
+                    + 'Work your assigned subtask to completion. The shared reviewer reviews finished work before it ships.\n'
+                    + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
+                    + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
+                    + 'commit first, then correct forward.',
+                headPrompt: 'You lead this team. When a coder reports a subtask finished and you are '
+                    + 'satisfied with it, hand it to review yourself: read the port from '
+                    + '.switchboard/api-server-port.txt and POST /kanban/dispatch with '
+                    + '{"plan":"<planId>","targetColumn":"CODE REVIEWED","from":"{head}"} — that one '
+                    + 'call advances the card and dispatches the reviewer. Do NOT use /kanban/move: it '
+                    + 'moves the card and dispatches nobody, so the work stalls unreviewed. Only advance '
+                    + 'subtasks this team worked; leave other cards alone. Do not wait to be asked.'
+            },
+            {
+                name: 'Multi-agent planning',
+                headRole: 'planner',
+                members: [
+                    { role: 'researcher', count: 2, scope: 'per-team', relationship: 'researcher' },
+                    { role: 'analyst', count: 1, scope: 'per-team' }
+                ],
+                purpose: 'Fan-in investigation: multiple agents research from different angles, then synthesize.',
+                prompt: '{child} is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with '
+                    + '{"name":"{child}","data":"<your report>","clearBeforePrompt":false} against the port in '
+                    + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.\n'
+                    + 'Investigate the problem from your angle — read code, trace dependencies, and identify risks. '
+                    + 'Report your findings to {child} for fan-in synthesis into a single plan.\n'
+                    + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
+                    + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
+                    + 'commit first, then correct forward.'
             }
         ];
 
@@ -4447,8 +4506,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const container = document.getElementById('teams-gallery');
             if (!container) return;
             container.innerHTML = '';
-            // Claimed head roles from adopted teams — one type per head role.
-            // Unassigned teams do not claim their head role (they are not active).
+            // Head roles that are the auto-start default for an adopted team
+            // (the non-unassigned team for that role). A claimed head role no
+            // longer suppresses the USE button — a second team on the same head
+            // role is adoptable; it just becomes the auto-start loser
+            // (`unassigned`) and is startable explicitly. The set is kept only
+            // to render the informational note naming the auto-start winner.
             const claimedRoles = new Set(agentsTabAgentGroups.filter(g => !g.unassigned).map(g => g.headRole));
             for (const type of SHIPPED_TEAM_TYPES) {
                 container.appendChild(teamsTabGalleryCard(type, claimedRoles));
@@ -4462,7 +4525,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             card.className = 'agents-tab-custom-agent-item';
             card.style.flexWrap = 'wrap';
             const claimed = claimedRoles.has(type.headRole);
-            const claimer = claimed ? agentsTabAgentGroups.find(g => g.headRole === type.headRole) : null;
+            // The auto-start winner for this head role (the non-unassigned
+            // team). Used only for the informational note — the USE button
+            // shows regardless, so a second team on the same head role can be
+            // adopted.
+            const claimer = claimed ? agentsTabAgentGroups.find(g => g.headRole === type.headRole && !g.unassigned) : null;
             const memberSummary = (type.members || [])
                 .map(m => `${m.count || 1}× ${m.role}${m.scope === 'shared' ? ' (shared)' : ''}`)
                 .join(', ') || 'head only';
@@ -4475,33 +4542,38 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             detailDiv.textContent = `head: ${type.headRole} · ${memberSummary} — ${type.purpose}`;
             const actions = document.createElement('div');
             actions.className = 'agents-tab-custom-agent-item-actions';
+            // A claimed head role no longer hides the USE button. Keep the
+            // informational note so the operator still learns which team wins
+            // auto-start on that role.
             if (claimed) {
                 const note = document.createElement('span');
                 note.style.fontSize = '10px';
                 note.style.color = 'var(--text-secondary)';
-                note.textContent = `head role claimed by "${claimer?.name || type.headRole}"`;
+                note.style.marginRight = '6px';
+                note.textContent = `auto-start goes to "${claimer?.name || type.headRole}"`;
                 actions.appendChild(note);
-            } else {
-                const useBtn = document.createElement('button');
-                useBtn.className = 'agents-tab-custom-agent-item-btn';
-                useBtn.textContent = 'USE';
-                useBtn.addEventListener('click', () => {
-                    // Fork the shipped definition into the workspace's own teams.
-                    const forked = {
-                        id: 'group-' + type.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Date.now().toString(36),
-                        name: type.name,
-                        headRole: type.headRole,
-                        members: (type.members || []).map(m => ({ ...m }))
-                    };
-                    agentsTabAgentGroups.push(forked);
-                    teamsTabRenderAgentGroups();
-                    teamsTabRenderGallery();
-                    postKanbanMessage({ type: 'saveAgentGroup', group: forked });
-                    // Open the editor on the forked copy so the operator can tweak it.
-                    teamsTabShowGroupForm(forked);
-                });
-                actions.appendChild(useBtn);
             }
+            const useBtn = document.createElement('button');
+            useBtn.className = 'agents-tab-custom-agent-item-btn';
+            useBtn.textContent = 'USE';
+            useBtn.addEventListener('click', () => {
+                // Fork the shipped definition into the workspace's own teams.
+                const forked = {
+                    id: 'group-' + type.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Date.now().toString(36),
+                    name: type.name,
+                    headRole: type.headRole,
+                    members: (type.members || []).map(m => ({ ...m })),
+                    ...(type.prompt ? { prompt: type.prompt } : {}),
+                    ...(type.headPrompt ? { headPrompt: type.headPrompt } : {})
+                };
+                agentsTabAgentGroups.push(forked);
+                teamsTabRenderAgentGroups();
+                teamsTabRenderGallery();
+                postKanbanMessage({ type: 'saveAgentGroup', group: forked });
+                // Open the editor on the forked copy so the operator can tweak it.
+                teamsTabShowGroupForm(forked);
+            });
+            actions.appendChild(useBtn);
             card.appendChild(headDiv);
             card.appendChild(actions);
             card.appendChild(detailDiv);
@@ -4562,13 +4634,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             detailDiv.className = 'agents-tab-custom-agent-item-command';
             detailDiv.style.flexBasis = '100%';
             detailDiv.textContent = `head: ${group.headRole} · ${memberSummary}`;
-            // Unassigned team: show the collision reason and no auto-start.
+            // Unassigned team: not the auto-start default, but still startable
+            // explicitly (START button in the terminals panel). Informational,
+            // not a fault — muted text, not red.
             if (group.unassigned) {
                 const unassignedDiv = document.createElement('div');
                 unassignedDiv.style.flexBasis = '100%';
                 unassignedDiv.style.fontSize = '10px';
-                unassignedDiv.style.color = 'var(--accent-red)';
-                unassignedDiv.textContent = group.unassignedReason || 'Unassigned — head role claimed by another team. Edit to choose a different head role.';
+                unassignedDiv.style.color = 'var(--text-secondary)';
+                unassignedDiv.textContent = group.unassignedReason || 'Not the auto-start default for its head role. Start it explicitly from the terminals panel.';
                 row.appendChild(unassignedDiv);
             }
             // Member-less starter: show the explanatory copy.
@@ -4669,13 +4743,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             agentsTabEditingGroupId = group ? group.id : null;
             document.getElementById('agent-groups-form-title').textContent = group ? `Edit: ${group.name}` : 'New Team';
             document.getElementById('agent-groups-name').value = group?.name || '';
-            // Disable claimed head roles in the dropdown — one type per head role.
+            // Mark claimed head roles in the dropdown — but do NOT disable them.
+            // A second team on the same head role is now authorable; it just
+            // becomes the auto-start loser (`unassigned`) and is startable
+            // explicitly. The " (claimed)" suffix stays as information so the
+            // operator knows which role already has an auto-start default.
             const headSel = document.getElementById('agent-groups-head-role');
             const claimedRoles = new Set(agentsTabAgentGroups
                 .filter(g => g.id !== group?.id && !g.unassigned)
                 .map(g => g.headRole));
             for (const opt of headSel.options) {
-                opt.disabled = claimedRoles.has(opt.value);
+                opt.disabled = false;
                 opt.textContent = opt.value.charAt(0).toUpperCase() + opt.value.slice(1) + (claimedRoles.has(opt.value) ? ' (claimed)' : '');
             }
             headSel.value = group?.headRole || 'lead';
@@ -4689,6 +4767,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             for (const m of members) {
                 membersDiv.appendChild(teamsTabAgentGroupMemberRow(m));
             }
+            const promptEl = document.getElementById('agent-groups-prompt');
+            if (promptEl) { promptEl.value = group?.prompt || ''; }
+            const headPromptEl = document.getElementById('agent-groups-head-prompt');
+            if (headPromptEl) { headPromptEl.value = group?.headPrompt || ''; }
             document.getElementById('agent-groups-error').textContent = '';
             document.getElementById('agent-groups-inline-form').classList.remove('hidden');
             setTimeout(() => document.getElementById('agent-groups-name').focus(), 0);
@@ -4743,7 +4825,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // Do not carry over unassigned/unassignedReason — the migration
             // re-evaluates collisions on next load. If the operator changed
             // the head role to a free one, the team becomes active.
-            const group = { id, name, headRole, members };
+            const promptText = (document.getElementById('agent-groups-prompt')?.value || '').trim();
+            const headPromptText = (document.getElementById('agent-groups-head-prompt')?.value || '').trim();
+            const group = { id, name, headRole, members, ...(promptText ? { prompt: promptText } : {}), ...(headPromptText ? { headPrompt: headPromptText } : {}) };
             // Replace or append
             const idx = agentsTabAgentGroups.findIndex(g => g.id === id);
             if (idx >= 0) { agentsTabAgentGroups[idx] = group; }
@@ -6635,7 +6719,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         }
                         case 'addCoderTerminal': {
                             if (!dispatchAnalyzeAvailable || !terminalCreateAvailable) return;
-                            postKanbanMessage({ type: 'addAutobanTerminal', role: 'coder' });
+                            postKanbanMessage({ type: 'addCoderTerminal', role: 'coder' });
                             break;
                         }
                         case 'sendDispatchSetToCoders': {
@@ -6836,36 +6920,20 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const isEnabled = !!(autobanConfig && autobanConfig.enabled);
             let watchCount = 0;
             if (isEnabled && autobanConfig) {
-                if (currentAutomationMode === 'single-column') {
+                if (currentAutomationMode === 'internal') {
                     const sc = autobanConfig.singleColumnConfig;
                     if (sc && sc.enabled && sc.triggerMode === 'watch') {
                         watchCount = 1;
                     }
-                } else if (currentAutomationMode === 'multi-column') {
-                    if (autobanConfig.rules) {
-                        for (const [column, rule] of Object.entries(autobanConfig.rules)) {
-                            const isColTransition = ['CREATED', 'PLAN REVIEWED', 'INTERN CODED', 'LEAD CODED', 'CODER CODED'].includes(column);
-                            if (isColTransition && rule && rule.enabled && rule.triggerMode === 'watch') {
-                                watchCount += 1;
-                            }
-                        }
-                    }
                 }
             }
-            // The toolbar button is the single start control for every automation
-            // mode. Its action and active state are mode-aware:
-            //   single/multi-column  → toggles the autoban engine
-            //   orchestration        → starts/stops the orchestrator
+            // The toolbar button is the single start/stop control for the board
+            // automation engine (the run sheet). Oversight is a separate flag
+            // with its own toggle in the panel below — it never rides the toolbar.
             let isActive = isEnabled;
-            let tooltipText;
-            if (currentAutomationMode === 'orchestration') {
-                isActive = !!(autobanConfig && autobanConfig.orchestrationConfig && autobanConfig.orchestrationConfig.enabled);
-                tooltipText = isActive ? 'Stop the orchestrator' : 'Start the orchestrator';
-            } else {
-                tooltipText = isEnabled
-                    ? (watchCount > 0 ? `Stop automation engine (Watching ${watchCount} column(s))` : 'Stop automation engine')
-                    : 'Start automation engine';
-            }
+            let tooltipText = isEnabled
+                ? (watchCount > 0 ? `Stop automation engine (Watching ${watchCount} column(s))` : 'Stop automation engine')
+                : 'Start automation engine';
             autobanBtn.classList.toggle('is-active', isActive);
             autobanBtn.setAttribute('data-tooltip', tooltipText);
             autobanBtn.title = tooltipText;
@@ -6873,17 +6941,20 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (img) {
                 img.alt = isActive ? 'Stop Automation' : 'Start Automation';
             }
-            autobanBtn.style.display = '';
+            // External mode runs no clock — hide the toolbar Start button rather
+            // than toast-guarding it. A button that explains why it does nothing
+            // is still a button that does nothing (PRD contract #6).
+            autobanBtn.style.display = currentAutomationMode === 'external' ? 'none' : '';
 
             const resetBtn = document.getElementById('btn-reset-autoban-timer');
             if (resetBtn) {
-                const showReset = isEnabled && currentAutomationMode !== 'orchestration' && currentAutomationMode !== 'scheduler';
+                const showReset = isEnabled && currentAutomationMode !== 'external';
                 resetBtn.style.display = showReset ? '' : 'none';
             }
 
             const pauseBtn = document.getElementById('btn-pause-autoban-timer');
             if (pauseBtn) {
-                const showPause = isEnabled && currentAutomationMode !== 'orchestration' && currentAutomationMode !== 'scheduler';
+                const showPause = isEnabled && currentAutomationMode !== 'external';
                 pauseBtn.style.display = showPause ? '' : 'none';
                 const isPaused = !!(autobanConfig && autobanConfig.paused);
                 pauseBtn.classList.toggle('is-paused', isPaused);
@@ -7941,9 +8012,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let lastCoderTerminalCount = 0;
         // Whether the host can actually CREATE a coder terminal. Distinct from
         // dispatchAnalyzeAvailable (pty readiness): standalone can have a live PTY fleet
-        // while `switchboard.addAutobanTerminalFromKanban` is unregistered in its command
-        // registry, in which case the arm returns success having done nothing. Defaults
-        // true — the extension host registers the command (extension.ts) and omits the
+        // while terminal creation is unavailable, in which case the arm returns success
+        // having done nothing. Defaults true — the extension host supports it and omits the
         // field; standalone sets it false explicitly.
         let terminalCreateAvailable = true;
 
@@ -8329,32 +8399,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let lastCustomAgents = [];
         let isAutobanPanelInteracting = false;
         let autobanPanelInteractionTimer = null;
-        let isCommsPanelInteracting = false;
-        let commsPanelInteractionTimer = null;
-        let commsPanelRenderPending = false;
 
         let lastSafetySession = null;
         let lastWorktreeConfig = null;
         let selectedWorktreeRepo = '';
-        let currentAutomationMode = 'single-column';
-        // Remap persisted automation modes that no longer exist as UI entries.
-        // `antigravity-batch` shipped in released versions, so it stays a valid member
-        // of the automationMode union (autobanState.ts) and a valid setAutomationMode
-        // input (TaskViewerProvider) — installs still hold it. What it no longer has is
-        // a dropdown entry: the Scheduler (source=board-batch, target=antigravity)
-        // subsumed it, and the option existed only to be remapped away on the next
-        // config push, i.e. selecting it did nothing. Do not re-add the option.
-        function remapAutomationMode(mode) {
-            if (mode === 'antigravity-batch') return 'scheduler';
-            return mode;
-        }
-
-        let managedTerminalPools = {};
-        let mcpMonitorConfig = { enabled: false, pollingEnabled: false, targetRole: 'scheduler', sources: ['slack'], customInstruction: '', sourceIntervals: { slack: 5, gmail: 5, gcal: 5, custom: 5 }, sourceLastCheckAt: {} };
-        let isMcpMonitorTerminalRunning = false;
-        let isMcpMonitorPolling = false;
-        let mcpMonitorPresets = {};
-        let mcpMonitorResolvedCmd = '';
+        let currentAutomationMode = 'internal';
 
         // Listen for messages from the extension
         window.addEventListener('message', (event) => {
@@ -9155,7 +9204,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 case 'updateAutobanConfig':
                     autobanConfig = msg.state || null;
                     if (autobanConfig && autobanConfig.automationMode) {
-                        currentAutomationMode = remapAutomationMode(autobanConfig.automationMode);
+                        currentAutomationMode = autobanConfig.automationMode;
                         saveWebviewState();
                     }
                     updateAutobanIndicators(true);
@@ -9260,40 +9309,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   }
                   break;
                 }
-                case 'updateMcpMonitorConfig': {
-                  mcpMonitorConfig = msg.config || mcpMonitorConfig;
-                  isMcpMonitorTerminalRunning = !!msg.isMonitorRunning;
-                  isMcpMonitorPolling = !!msg.isPolling;
-                  mcpMonitorPresets = msg.presets || mcpMonitorPresets;
-                  mcpMonitorResolvedCmd = msg.resolvedStartupCommand || '';
-                  if (!isCommsPanelInteracting) {
-                      commsPanelRenderPending = false;
-                      renderCommsPanel();
-                  } else {
-                      // State updated but DOM is stale — defer render until guard expires.
-                      commsPanelRenderPending = true;
-                      console.log('[kanban] Deferring comms panel re-render: user interaction guard active');
-                  }
-                  break;
-                }
-                case 'commsMonitorOutput': {
-                    window.__commsMonitorOutput = msg.output
-                        ? `[${new Date(msg.timestamp).toLocaleTimeString()}]\n${msg.output}`
-                        : `[${new Date(msg.timestamp).toLocaleTimeString()}] No output captured (Claude may have responded "All clear" or not yet finished).`;
-                    if (!isCommsPanelInteracting) {
-                        commsPanelRenderPending = false;
-                        renderCommsPanel();
-                    } else {
-                        // State updated but DOM is stale — defer render until guard expires
-                        // (same pattern as updateMcpMonitorConfig).
-                        commsPanelRenderPending = true;
-                    }
-                    break;
-                }
                 case 'schedulerOutput': {
-                    // Per-job output capture (non-comms local-terminal jobs).
-                    // Stored on window for the job row to display; comms jobs use
-                    // commsMonitorOutput above.
+                    // Per-job output capture (local-terminal jobs).
+                    // Stored on window for the job row to display.
                     window.__schedulerOutput = window.__schedulerOutput || {};
                     window.__schedulerOutput[msg.jobId] = msg.output
                         ? `[${new Date(msg.timestamp).toLocaleTimeString()}]\n${msg.output}`
@@ -9311,6 +9329,22 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         }
                     } else if (msg.error) {
                         postKanbanMessage({ type: 'showWarning', message: msg.error });
+                    }
+                    // Reset any COPY PROMPT buttons that were in LOADING state.
+                    document.querySelectorAll('button').forEach(b => {
+                        if (b.textContent === 'LOADING...') { b.textContent = 'COPY PROMPT'; b.disabled = false; }
+                    });
+                    break;
+                }
+                case 'externalAutomationPrompt': {
+                    // External-mode copy-prompt result. Copy to clipboard.
+                    if (msg.prompt) {
+                        try {
+                            navigator.clipboard.writeText(msg.prompt);
+                            postKanbanMessage({ type: 'showInfo', message: 'External automation prompt copied to clipboard.' });
+                        } catch (e) {
+                            postKanbanMessage({ type: 'showWarning', message: 'Failed to copy prompt to clipboard.' });
+                        }
                     }
                     // Reset any COPY PROMPT buttons that were in LOADING state.
                     document.querySelectorAll('button').forEach(b => {
@@ -9340,18 +9374,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         changed = JSON.stringify(window.__schedulerConfig) !== JSON.stringify(incoming);
                     } catch { /* uncomparable — fall through and re-render */ }
                     window.__schedulerConfig = incoming;
-                    if (changed && currentAutomationMode === 'scheduler') {
+                    if (changed && currentAutomationMode === 'internal') {
                         renderAutobanPanel(true);
                     }
                     break;
-                }
-                case 'mcpMonitorPreview': {
-                  // Backend-rendered preview (response to renderMcpMonitorPreview).
-                  // Only update the textarea if the user has not manually overridden.
-                  if (typeof msg.preview === 'string' && window.__commsPreviewUpdate) {
-                      window.__commsPreviewUpdate(msg.preview);
-                  }
-                  break;
                 }
                 case 'customAgents': {
                   agentsTabCustomAgents = msg.customAgents || [];
@@ -9462,11 +9488,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     return { text: `${abbrev}: off`, active: false };
                 });
                 let filteredBadgeData = badgeData;
-                if (currentAutomationMode === 'single-column') {
-                    const sourceCol = (autobanConfig.singleColumnConfig || {}).sourceColumn;
+                if (currentAutomationMode === 'internal') {
+                    const sourceCol = 'PLAN REVIEWED';
                     const sourceIdx = autobanColumns.indexOf(sourceCol);
                     filteredBadgeData = sourceIdx >= 0 ? [badgeData[sourceIdx]] : [];
-                } else if (currentAutomationMode === 'orchestration' || currentAutomationMode === 'scheduler') {
+                } else if (currentAutomationMode === 'external') {
                     filteredBadgeData = [];
                 }
                 if (forceRebuild || container.children.length !== filteredBadgeData.length) {
@@ -9503,14 +9529,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             // Filter badges by automation mode
             let filteredBadgeData = badgeData;
-            if (currentAutomationMode === 'single-column') {
-                const sourceCol = (autobanConfig.singleColumnConfig || {}).sourceColumn;
+            if (currentAutomationMode === 'internal') {
+                const sourceCol = 'PLAN REVIEWED';
                 const sourceIdx = autobanColumns.indexOf(sourceCol);
                 filteredBadgeData = sourceIdx >= 0 ? [badgeData[sourceIdx]] : [];
-            } else if (currentAutomationMode === 'orchestration' || currentAutomationMode === 'scheduler') {
+            } else if (currentAutomationMode === 'external') {
                 filteredBadgeData = [];
             }
-            // multi-column: show all badges (no filtering)
 
             const existingBadges = container.children;
 
@@ -9738,21 +9763,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
         });
         document.getElementById('btn-autoban')?.addEventListener('click', () => {
-            if (currentAutomationMode === 'scheduler') {
-                // The Scheduler panel owns its own start/stop/copy-prompt controls
-                // per job. The toolbar button is a no-op in this mode (the panel
-                // is the single control surface). Surface a hint so the user knows
-                // where to look.
-                postKanbanMessage({ type: 'showInfo', message: 'Use the Scheduler panel below to start/stop jobs or copy prompts.' });
-                return;
-            }
-            if (currentAutomationMode === 'orchestration') {
-                const running = !!(autobanConfig && autobanConfig.orchestrationConfig && autobanConfig.orchestrationConfig.enabled);
-                postKanbanMessage(running
-                    ? { type: 'stopOrchestrator' }
-                    : { type: 'startOrchestrator', workspaceRoot: getActiveWorkspaceRoot() });
-                return;
-            }
+            // External mode hides this button entirely (updateAutobanButtonState);
+            // the toast-guard that used to live here is replaced by absence.
+            // Orchestration is no longer a mode, so the toolbar button always drives
+            // the run sheet. The oversight agent has its own toggle in the panel.
             const currentlyEnabled = !!(autobanConfig && autobanConfig.enabled);
             postKanbanMessage({ type: 'toggleAutoban', enabled: !currentlyEnabled });
         });
@@ -10214,20 +10228,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             const state = autobanConfig;
             let hasWatchActive = false;
-            if (currentAutomationMode === 'single-column') {
+            if (currentAutomationMode === 'internal') {
                 const sc = state.singleColumnConfig;
                 if (sc && sc.enabled && sc.triggerMode === 'watch') {
                     hasWatchActive = true;
-                }
-            } else if (currentAutomationMode === 'multi-column') {
-                if (state.rules) {
-                    for (const [column, rule] of Object.entries(state.rules)) {
-                        const isColTransition = ['CREATED', 'PLAN REVIEWED', 'INTERN CODED', 'LEAD CODED', 'CODER CODED'].includes(column);
-                        if (isColTransition && rule && rule.enabled && rule.triggerMode === 'watch') {
-                            hasWatchActive = true;
-                            break;
-                        }
-                    }
                 }
             }
             const autobanSelectStyle = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:2px 4px; border-radius:3px;';
@@ -10280,11 +10284,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             guardInteraction(modeSelect);
 
             [
-                { value: 'single-column', label: 'Switchboard Single Column' },
-                { value: 'multi-column', label: 'Switchboard Multi Column' },
-                { value: 'scheduler', label: 'Scheduler' },
-
-                { value: 'orchestration', label: 'Orchestration' }
+                { value: 'internal', label: 'Internal' },
+                { value: 'external', label: 'External' }
             ].forEach(m => {
                 const opt = document.createElement('option');
                 opt.value = m.value;
@@ -10295,7 +10296,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             modeSelect.value = currentAutomationMode;
             if (modeSelect.value !== currentAutomationMode) {
-                // No option matched — the remap should make this impossible; log rather than
+                // No option matched — a persisted mode no longer in the dropdown; log rather than
                 // silently presenting a different mode than the engine is configured for.
                 console.warn('[kanban] automation mode has no dropdown entry:', currentAutomationMode);
             }
@@ -10305,11 +10306,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             container.appendChild(modeRow);
 
             const modeDescriptions = {
-                'single-column': 'Automates a single workflow stage. For example, code all plans in the PLANNED column overnight, ready for review the next day.',
-                'multi-column': 'Automates multiple column transitions with per-role terminal pools. Best for full pipeline automation.',
-                'scheduler': 'Schedule any prompt on a recurring timer. Sources: board-batch, fetch cloud plans, reconcile cloud work, custom prompt, or comms (Slack/Gmail/Calendar). Targets: local terminal (sub-hourly), Antigravity, or cloud (laptop-off). The successor to the standalone COMMS tab.',
-
-                'orchestration': 'A system-woken orchestrator agent batches plans into features, fans work out across per-feature worktrees, and merges results back feature by feature. Selecting this mode enables per-feature feature worktrees automatically (restored on switching away).'
+                'internal': 'Switchboard runs the run sheet on its own schedule, dispatching to local terminals. Walks CREATED → planner team, then PLAN REVIEWED → coder team, one card at a time. Oversight agent optional.',
+                'external': 'Switchboard emits a copyable prompt for a tool that runs agent cron jobs (Antigravity, a Claude scheduled agent). Switchboard runs no clock and dispatches nothing — the external scheduler owns recurrence.'
             };
             const modeHelpText = document.createElement('div');
             modeHelpText.style.cssText = 'padding:0 8px 8px 8px; font-size:9px; color:var(--text-secondary); line-height:1.4;';
@@ -10317,7 +10315,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             container.appendChild(modeHelpText);
 
             const safetyNote = document.createElement('div');
-            const isContinuousMode = ['single-column', 'multi-column'].includes(currentAutomationMode);
+            const isContinuousMode = currentAutomationMode === 'internal';
             safetyNote.style.cssText = 'padding:6px 10px; font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 8px 8px; line-height:1.4; display:' + (isContinuousMode ? 'block' : 'none') + ';';
             safetyNote.innerHTML = '💡 <strong>Safe Planning:</strong> Automation pulls plans from <strong>oldest to newest</strong>. You can safely run automation while planning, as recently created plans are processed last.';
             container.appendChild(safetyNote);
@@ -10371,32 +10369,41 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     + 'the cost is one agent run per arrival.');
                 watchBtn.setAttribute('aria-label',
                     'Watch mode: dispatch each arriving plan immediately and never auto-stop');
-                
+
+                const doneBtn = document.createElement('button');
+                doneBtn.textContent = 'ON DONE';
+                doneBtn.setAttribute('data-tooltip',
+                    'ON DONE — one card at a time per run-sheet step, no clock.\n'
+                    + 'Each step dispatches its next card only when the previous one reports its turn '
+                    + 'ended, so a step never has two cards in flight (steps still run in parallel with '
+                    + 'each other). Slower than DRAIN and a step sits idle if its agent dies without '
+                    + 'reporting (a stall notice tells you which card).\n'
+                    + 'Use when you want strict one-in-one-out pacing. DRAIN is the default and '
+                    + 'dispatches on the interval regardless.');
+                doneBtn.setAttribute('aria-label',
+                    'On-done mode: dispatch the next card only when the previous one finishes');
+
+                const ACTIVE = 'background:var(--accent-teal); color:#fff; border:none; padding:0 6px; cursor:pointer; font-size:8px; height:100%; font-weight:bold;';
+                const IDLE = 'background:transparent; color:var(--text-secondary); border:none; padding:0 6px; cursor:pointer; font-size:8px; height:100%;';
                 const updateStyles = (val) => {
-                    if (val === 'watch') {
-                        drainBtn.style.cssText = 'background:transparent; color:var(--text-secondary); border:none; padding:0 6px; cursor:pointer; font-size:8px; height:100%;';
-                        watchBtn.style.cssText = 'background:var(--accent-teal); color:#fff; border:none; padding:0 6px; cursor:pointer; font-size:8px; height:100%; font-weight:bold;';
-                    } else {
-                        drainBtn.style.cssText = 'background:var(--accent-teal); color:#fff; border:none; padding:0 6px; cursor:pointer; font-size:8px; height:100%; font-weight:bold;';
-                        watchBtn.style.cssText = 'background:transparent; color:var(--text-secondary); border:none; padding:0 6px; cursor:pointer; font-size:8px; height:100%;';
-                    }
+                    drainBtn.style.cssText = val === 'watch' || val === 'completion' ? IDLE : ACTIVE;
+                    watchBtn.style.cssText = val === 'watch' ? ACTIVE : IDLE;
+                    doneBtn.style.cssText = val === 'completion' ? ACTIVE : IDLE;
                 };
-                
-                drainBtn.addEventListener('click', (e) => {
+
+                const pick = (val) => (e) => {
                     e.preventDefault();
-                    updateStyles('drain');
-                    onChange('drain');
-                });
-                
-                watchBtn.addEventListener('click', (e) => {
-                    e.preventDefault();
-                    updateStyles('watch');
-                    onChange('watch');
-                });
-                
+                    updateStyles(val);
+                    onChange(val);
+                };
+                drainBtn.addEventListener('click', pick('drain'));
+                watchBtn.addEventListener('click', pick('watch'));
+                doneBtn.addEventListener('click', pick('completion'));
+
                 updateStyles(currentValue);
                 wrapper.appendChild(drainBtn);
                 wrapper.appendChild(watchBtn);
+                wrapper.appendChild(doneBtn);
                 return wrapper;
             };
             const resolveTerminalLiveness = (terminalName) => {
@@ -10410,51 +10417,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const alive = terminal.alive !== undefined ? terminal.alive : (terminal._isLocal || heartbeatAlive);
                 return { terminal, alive: !!alive };
             };
-            const getRolePoolEntries = (role) => {
-                const configuredPool = Array.isArray(state.terminalPools?.[role]) ? state.terminalPools[role].filter(Boolean) : [];
-                const managedPool = new Set(Array.isArray(state.managedTerminalPools?.[role]) ? state.managedTerminalPools[role] : []);
-                const aliveRoleTerminals = Object.keys(lastTerminals)
-                     .filter(name => lastTerminals[name] && lastTerminals[name].role === role)
-                     .filter(name => resolveTerminalLiveness(name).alive)
-                     .sort((a, b) => a.localeCompare(b));
-                const alivePrimaryRoleTerminals = aliveRoleTerminals
-                     .filter(name => String(lastTerminals[name]?.purpose || '').trim().toLowerCase() !== 'autoban-backup');
-                const effectivePool = (
-                     configuredPool.length > 0
-                          ? configuredPool.filter(name => aliveRoleTerminals.includes(name))
-                          : alivePrimaryRoleTerminals
-                ).slice(0, 5);
-                return effectivePool.map(name => {
-                     const status = resolveTerminalLiveness(name);
-                     const count = Number(state.sendCounts?.[name] || 0);
-                     return {
-                          name,
-                          count,
-                          managed: managedPool.has(name),
-                          alive: status.alive,
-                          terminal: status.terminal
-                     };
-                });
-            };
-
-            if (currentAutomationMode === 'single-column') {
+            if (currentAutomationMode === 'internal') {
                 const singleColumnContainer = document.createElement('div');
                 singleColumnContainer.style.cssText = 'display: flex; flex-direction: column; gap: 12px;';
                 container.appendChild(singleColumnContainer);
 
-                const singleColumnConfig = state.singleColumnConfig || { enabled: false, intervalMinutes: 10, batchSize: 1, complexityFilter: 'all', terminalPools: {}, sourceColumn: 'PLAN REVIEWED', sourceColumnRole: 'lead', triggerMode: 'drain' };
-
-                // Client-side column→role mapping (mirrors backend columnToPromptRole)
-                const scColumnRoleMap = {
-                    'CREATED': 'planner',
-                    'PLAN REVIEWED': 'lead',
-                    'LEAD CODED': 'reviewer',
-                    'CODER CODED': 'reviewer',
-                    'INTERN CODED': 'reviewer',
-                    'CODE REVIEWED': 'tester',
-                    'RESEARCHER': 'researcher',
-                    'TICKET UPDATER': 'ticket_updater'
-                };
+                const singleColumnConfig = state.singleColumnConfig || { enabled: false, intervalMinutes: 10, batchSize: 1, complexityFilter: 'all', triggerMode: 'drain' };
 
                 // --- Column Rules Section ---
                 const columnRulesSectionSc = document.createElement('div');
@@ -10470,77 +10438,39 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                 const timingExplanationSc = document.createElement('div');
                 timingExplanationSc.style.cssText = 'padding:8px 12px; font-size:11px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
-                timingExplanationSc.textContent = 'Specify the time delay between advancing each plan to the next stage. Lower intervals require more backup terminals to avoid overwhelming each agent.';
+                timingExplanationSc.textContent = 'On each interval the run sheet is worked top to bottom: for each step, if that column has cards and that team is free, one card is sent to the team lead. A step whose team is busy is skipped and picked up next interval.';
                 columnRulesSectionSc.appendChild(timingExplanationSc);
 
-                // Dropdown to choose which column to automate
-                const columnSelectRow = document.createElement('div');
-                columnSelectRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px 8px 8px; font-size:10px; color:var(--text-secondary);';
-                const columnSelectLabel = document.createElement('span');
-                columnSelectLabel.textContent = 'SOURCE COLUMN:';
-                const columnSelect = document.createElement('select');
-                columnSelect.style.cssText = autobanSelectStyle;
-                guardInteraction(columnSelect);
-
-                // Populate from columnDefinitions, excluding COMPLETED
-                const selectableColumns = columnDefinitions.filter(col => col.id !== 'COMPLETED');
-                selectableColumns.forEach(col => {
-                    const opt = document.createElement('option');
-                    opt.value = col.id;
-                    opt.textContent = col.label || col.id;
-                    if (col.id === (singleColumnConfig.sourceColumn || 'PLAN REVIEWED')) opt.selected = true;
-                    columnSelect.appendChild(opt);
+                // The run sheet, in execution order. Mirrors DEFAULT_AUTOBAN_RUN_SHEET
+                // in autobanState.ts — read-only for now; when the sheet becomes
+                // user-editable these rows gain column/team pickers and add/remove.
+                const runSheet = Array.isArray(state.runSheet) && state.runSheet.length > 0
+                    ? state.runSheet
+                    : [
+                        { sourceColumn: 'CREATED', headRole: 'planner' },
+                        { sourceColumn: 'PLAN REVIEWED', headRole: 'coder' }
+                    ];
+                runSheet.forEach((step, i) => {
+                    const stepRow = document.createElement('div');
+                    stepRow.style.cssText = 'display:flex; align-items:center; gap:6px; padding:3px 8px; font-size:10px; color:var(--text-primary);';
+                    const stepNum = document.createElement('span');
+                    stepNum.style.cssText = 'color:var(--text-secondary); min-width:14px;';
+                    stepNum.textContent = (i + 1) + '.';
+                    const stepLbl = document.createElement('span');
+                    stepLbl.style.cssText = 'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
+                    stepLbl.textContent = step.sourceColumn + '  →  ' + step.headRole + ' team';
+                    stepRow.appendChild(stepNum);
+                    stepRow.appendChild(stepLbl);
+                    columnRulesSectionSc.appendChild(stepRow);
                 });
 
-                columnSelect.addEventListener('change', () => {
-                    singleColumnConfig.sourceColumn = columnSelect.value;
-                    // Update state immediately so renderAutobanPanel picks up the new column
-                    state.singleColumnConfig = { ...singleColumnConfig };
-                    postKanbanMessage({
-                        type: 'setAutomationMode',
-                        mode: 'single-column',
-                        enabled: singleColumnConfig.enabled,
-                        intervalMinutes: singleColumnConfig.intervalMinutes,
-                        batchSize: singleColumnConfig.batchSize,
-                        complexityFilter: singleColumnConfig.complexityFilter,
-                        terminalPools: singleColumnConfig.terminalPools,
-                        sourceColumn: singleColumnConfig.sourceColumn,
-                        routingMode: state.routingMode || 'dynamic',
-                        triggerMode: singleColumnConfig.triggerMode || 'drain'
-                    });
-                    renderAutobanPanel();
-                });
-
-                columnSelectRow.appendChild(columnSelectLabel);
-                columnSelectRow.appendChild(columnSelect);
-                columnRulesSectionSc.appendChild(columnSelectRow);
-
-                // Resolve target role(s) for the rule label using client-side mapping
-                const scSourceCol = singleColumnConfig.sourceColumn || 'PLAN REVIEWED';
-                const resolvedRole = scColumnRoleMap[scSourceCol] || (scSourceCol.startsWith('custom_agent_') ? scSourceCol : null);
-                const scRoutingMode = state.routingMode || 'dynamic';
-                let scTargetLabel;
-                if (!resolvedRole) {
-                    scTargetLabel = '?';
-                } else if (scSourceCol === 'PLAN REVIEWED') {
-                    if (scRoutingMode === 'all_coder') {
-                        scTargetLabel = 'CODER';
-                    } else if (scRoutingMode === 'all_lead') {
-                        scTargetLabel = 'LEAD';
-                    } else {
-                        scTargetLabel = 'LEAD/CODER/INTERN';
-                    }
-                } else {
-                    scTargetLabel = resolvedRole.charAt(0).toUpperCase() + resolvedRole.slice(1);
-                }
-
-                // Rule row
+                // Cadence row — one clock for the whole run sheet.
                 const ruleRowSc = document.createElement('div');
-                ruleRowSc.style.cssText = 'display:flex; align-items:center; gap:6px; padding:4px 8px; font-size:10px;';
+                ruleRowSc.style.cssText = 'display:flex; align-items:center; gap:6px; padding:6px 8px 4px 8px; font-size:10px;';
 
                 const ruleLblSc = document.createElement('span');
-                ruleLblSc.style.cssText = 'color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
-                ruleLblSc.textContent = scSourceCol + ' → ' + scTargetLabel;
+                ruleLblSc.style.cssText = 'color:var(--text-secondary); white-space:nowrap;';
+                ruleLblSc.textContent = 'RUN SHEET';
 
                 const everyLblSc = document.createElement('span');
                 everyLblSc.style.cssText = 'color:var(--text-secondary);';
@@ -10548,24 +10478,23 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                 const minInputSc = document.createElement('input');
                 minInputSc.type = 'number';
+                // Floor of 1 minute, no ceiling — matches normalizeSingleColumnConfig.
+                // "Once every few hours" is a valid run-sheet cadence.
                 minInputSc.min = '1';
-                minInputSc.max = '60';
                 minInputSc.value = String(singleColumnConfig.intervalMinutes);
                 minInputSc.style.cssText = autobanNumberInputStyle;
                 guardInteraction(minInputSc);
                 minInputSc.addEventListener('change', () => {
-                    const val = Math.max(1, Math.min(60, parseInt(minInputSc.value, 10) || 10));
+                    const val = Math.max(1, parseInt(minInputSc.value, 10) || 10);
                     singleColumnConfig.intervalMinutes = val;
                     minInputSc.value = String(val);
                     postKanbanMessage({
                         type: 'setAutomationMode',
-                        mode: 'single-column',
+                        mode: 'internal',
                         enabled: singleColumnConfig.enabled,
                         intervalMinutes: singleColumnConfig.intervalMinutes,
                         batchSize: singleColumnConfig.batchSize,
                         complexityFilter: singleColumnConfig.complexityFilter,
-                        terminalPools: singleColumnConfig.terminalPools,
-                        sourceColumn: singleColumnConfig.sourceColumn || 'PLAN REVIEWED',
                         routingMode: state.routingMode || 'dynamic',
                         triggerMode: singleColumnConfig.triggerMode || 'drain'
                     });
@@ -10585,13 +10514,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     state.singleColumnConfig = { ...singleColumnConfig };
                     postKanbanMessage({
                         type: 'setAutomationMode',
-                        mode: 'single-column',
+                        mode: 'internal',
                         enabled: singleColumnConfig.enabled,
                         intervalMinutes: singleColumnConfig.intervalMinutes,
                         batchSize: singleColumnConfig.batchSize,
                         complexityFilter: singleColumnConfig.complexityFilter,
-                        terminalPools: singleColumnConfig.terminalPools,
-                        sourceColumn: singleColumnConfig.sourceColumn || 'PLAN REVIEWED',
                         routingMode: state.routingMode || 'dynamic',
                         triggerMode: newVal
                     });
@@ -10599,11 +10526,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 });
                 ruleRowSc.appendChild(triggerToggleSc);
                 columnRulesSectionSc.appendChild(ruleRowSc);
-
-                const poolBannerSc = document.createElement('div');
-                poolBannerSc.style.cssText = 'padding:6px 10px; font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 4px 8px; line-height:1.4;';
-                poolBannerSc.innerHTML = '💡 <strong>Terminal Pools:</strong> Using terminal pools allows you to lower this value, since instructions will be rotated among terminals.';
-                columnRulesSectionSc.appendChild(poolBannerSc);
 
                 if (hasWatchActive) {
                     const watchWarningBannerSc = document.createElement('div');
@@ -10643,13 +10565,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     singleColumnConfig.batchSize = parseInt(batchSelectSc.value, 10) || 1;
                     postKanbanMessage({
                         type: 'setAutomationMode',
-                        mode: 'single-column',
+                        mode: 'internal',
                         enabled: singleColumnConfig.enabled,
                         intervalMinutes: singleColumnConfig.intervalMinutes,
                         batchSize: singleColumnConfig.batchSize,
                         complexityFilter: singleColumnConfig.complexityFilter,
-                        terminalPools: singleColumnConfig.terminalPools,
-                        sourceColumn: singleColumnConfig.sourceColumn || 'PLAN REVIEWED',
                         routingMode: state.routingMode || 'dynamic'
                     });
                 });
@@ -10683,13 +10603,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     singleColumnConfig.complexityFilter = complexitySelectSc.value || 'all';
                     postKanbanMessage({
                         type: 'setAutomationMode',
-                        mode: 'single-column',
+                        mode: 'internal',
                         enabled: singleColumnConfig.enabled,
                         intervalMinutes: singleColumnConfig.intervalMinutes,
                         batchSize: singleColumnConfig.batchSize,
                         complexityFilter: singleColumnConfig.complexityFilter,
-                        terminalPools: singleColumnConfig.terminalPools,
-                        sourceColumn: singleColumnConfig.sourceColumn || 'PLAN REVIEWED',
                         routingMode: state.routingMode || 'dynamic'
                     });
                 });
@@ -10697,48 +10615,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 complexityRowSc.appendChild(complexitySelectSc);
                 automationRulesSectionSc.appendChild(complexityRowSc);
 
-                // Routing Mode Selector (only relevant for PLAN REVIEWED which routes to multiple roles)
-                const routingRowSc = document.createElement('div');
-                routingRowSc.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-size:10px; color:var(--text-secondary);';
-                if (scSourceCol !== 'PLAN REVIEWED') {
-                    routingRowSc.style.display = 'none';
-                }
-
-                const routingLabelSc = document.createElement('span');
-                routingLabelSc.textContent = 'ROUTING:';
-
-                const routingSelectSc = document.createElement('select');
-                routingSelectSc.style.cssText = autobanSelectStyle;
-                guardInteraction(routingSelectSc);
-                [
-                    { value: 'dynamic', label: 'Dynamic' },
-                    { value: 'all_coder', label: 'All -> Coder' },
-                    { value: 'all_lead', label: 'All -> Lead' }
-                ].forEach(({ value, label }) => {
-                    const opt = document.createElement('option');
-                    opt.value = value;
-                    opt.textContent = label;
-                    if (value === scRoutingMode) opt.selected = true;
-                    routingSelectSc.appendChild(opt);
-                });
-                routingSelectSc.addEventListener('change', () => {
-                    postKanbanMessage({
-                        type: 'setAutomationMode',
-                        mode: 'single-column',
-                        enabled: singleColumnConfig.enabled,
-                        intervalMinutes: singleColumnConfig.intervalMinutes,
-                        batchSize: singleColumnConfig.batchSize,
-                        complexityFilter: singleColumnConfig.complexityFilter,
-                        terminalPools: singleColumnConfig.terminalPools,
-                        sourceColumn: singleColumnConfig.sourceColumn || 'PLAN REVIEWED',
-                        routingMode: routingSelectSc.value || 'dynamic'
-                    });
-                    renderAutobanPanel();
-                });
-
-                routingRowSc.appendChild(routingLabelSc);
-                routingRowSc.appendChild(routingSelectSc);
-                automationRulesSectionSc.appendChild(routingRowSc);
 
                 // Clear Before Prompt Toggle (inside automation rules section)
                 const scClearRow = document.createElement('div');
@@ -10762,528 +10638,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 scClearRow.appendChild(scClearToggle);
                 automationRulesSectionSc.appendChild(scClearRow);
 
-                // --- Terminal Pools Section ---
-                const terminalPoolsSectionSc = document.createElement('div');
-                terminalPoolsSectionSc.className = 'db-subsection';
-                singleColumnContainer.appendChild(terminalPoolsSectionSc);
-
-                const poolsHeaderSc = document.createElement('div');
-                poolsHeaderSc.className = 'subsection-header';
-                const poolsSpanSc = document.createElement('span');
-                poolsSpanSc.textContent = 'TERMINAL POOLS';
-                poolsHeaderSc.appendChild(poolsSpanSc);
-                terminalPoolsSectionSc.appendChild(poolsHeaderSc);
-
-                const poolsHelpSc = document.createElement('div');
-                poolsHelpSc.style.cssText = 'padding:0 8px; font-size:9px; color:var(--text-secondary); line-height:1.4;';
-                poolsHelpSc.textContent = 'Autoban rotates across the stored pool for each role. Backup terminals created here are kept until you remove or reset them.';
-                terminalPoolsSectionSc.appendChild(poolsHelpSc);
-
-                // Resolve the roles to display pools for based on the source column and routing mode.
-                let scDisplayRoles;
-                if (!resolvedRole) {
-                    scDisplayRoles = [];
-                } else if (scSourceCol === 'PLAN REVIEWED') {
-                    if (scRoutingMode === 'all_coder') {
-                        scDisplayRoles = [{ role: 'coder', label: 'Coder' }];
-                    } else if (scRoutingMode === 'all_lead') {
-                        scDisplayRoles = [{ role: 'lead', label: 'Lead Coder' }];
-                    } else {
-                        scDisplayRoles = [
-                            { role: 'lead', label: 'Lead Coder' },
-                            { role: 'coder', label: 'Coder' },
-                            { role: 'intern', label: 'Intern' }
-                        ];
-                    }
-                } else {
-                    scDisplayRoles = [{ role: resolvedRole, label: resolvedRole.charAt(0).toUpperCase() + resolvedRole.slice(1) }];
-                }
-
-                if (scDisplayRoles.length === 0) {
-                    // Warning message
-                    const warningSc = document.createElement('div');
-                    warningSc.style.cssText = 'padding:8px 12px; font-size:10px; color:var(--accent-red, #e55); border:1px solid var(--accent-red, #e55); border-radius:6px; background:var(--panel-bg2); margin-top:8px; line-height:1.4;';
-                    warningSc.textContent = 'No agent role mapped for this column. Select a different column or configure a custom agent.';
-                    terminalPoolsSectionSc.appendChild(warningSc);
-                } else {
-                    scDisplayRoles.forEach(({ role: scRole, label: scLabel }) => {
-                        const rolePoolEntriesSc = getRolePoolEntries(scRole);
-                        const roleBlockSc = document.createElement('div');
-                        roleBlockSc.style.cssText = 'display:flex; flex-direction:column; gap:6px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px; background:var(--panel-bg2);';
-
-                        const roleHeaderSc = document.createElement('div');
-                        roleHeaderSc.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px;';
-
-                        const roleTitleWrapSc = document.createElement('div');
-                        roleTitleWrapSc.style.cssText = 'display:flex; align-items:center; gap:8px; min-width:0; flex:1 1 auto; overflow:hidden;';
-
-                        const roleTitleSc = document.createElement('span');
-                        roleTitleSc.style.cssText = 'font-size:10px; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:1; min-width:0;';
-                        roleTitleSc.textContent = scLabel;
-
-                        const roleCapacitySc = document.createElement('span');
-                        roleCapacitySc.style.cssText = chipStyle + ' flex-shrink:0;';
-                        roleCapacitySc.textContent = 'POOL ' + rolePoolEntriesSc.length + '/5';
-
-                        roleTitleWrapSc.appendChild(roleTitleSc);
-                        roleTitleWrapSc.appendChild(roleCapacitySc);
-
-                        const addButtonSc = document.createElement('button');
-                        addButtonSc.className = 'action-btn';
-                        addButtonSc.style.cssText = 'padding:3px 8px; font-size:9px; flex-shrink:0;';
-                        addButtonSc.textContent = 'ADD TERMINAL';
-                        addButtonSc.disabled = rolePoolEntriesSc.length >= 5;
-                        addButtonSc.addEventListener('click', () => {
-                            postKanbanMessage({ type: 'addAutobanTerminal', role: scRole });
-                        });
-
-                        roleHeaderSc.appendChild(roleTitleWrapSc);
-                        roleHeaderSc.appendChild(addButtonSc);
-                        roleBlockSc.appendChild(roleHeaderSc);
-
-                        if (rolePoolEntriesSc.length === 0) {
-                            const emptyState = document.createElement('div');
-                            emptyState.style.cssText = 'font-size:9px; color:var(--text-secondary);';
-                            emptyState.textContent = 'No live terminals available for this role yet.';
-                            roleBlockSc.appendChild(emptyState);
-                        } else {
-                            rolePoolEntriesSc.forEach(entry => {
-                                const terminalRow = document.createElement('div');
-                                terminalRow.style.cssText = 'display:flex; align-items:center; gap:6px; justify-content:space-between; flex-wrap:wrap;';
-
-                                const left = document.createElement('div');
-                                left.style.cssText = 'display:flex; align-items:center; gap:6px; min-width:0; flex-wrap:wrap;';
-
-                                const nameSpan = document.createElement('span');
-                                nameSpan.style.cssText = 'font-size:10px; color:var(--text-primary);';
-                                nameSpan.textContent = entry.name;
-
-                                const statusBadge = document.createElement('span');
-                                statusBadge.style.cssText = chipStyle + (entry.alive ? '' : ' border-color:var(--accent-red, #e55); color:var(--accent-red, #e55);');
-                                statusBadge.textContent = entry.alive ? 'READY' : 'OFFLINE';
-
-                                const kindBadge = document.createElement('span');
-                                kindBadge.style.cssText = chipStyle;
-                                kindBadge.textContent = entry.managed ? 'BACKUP' : 'PRIMARY';
-
-                                left.appendChild(nameSpan);
-                                left.appendChild(statusBadge);
-                                left.appendChild(kindBadge);
-
-                                const right = document.createElement('div');
-                                right.style.cssText = 'display:flex; align-items:center; gap:6px;';
-
-                                if (entry.terminal) {
-                                    const focusButton = document.createElement('button');
-                                    focusButton.style.cssText = smallButtonStyle;
-                                    focusButton.textContent = 'FOCUS';
-                                    focusButton.addEventListener('click', () => {
-                                        postKanbanMessage({ type: 'focusTerminal', terminalName: entry.name });
-                                    });
-                                    right.appendChild(focusButton);
-                                }
-
-                                if (entry.managed) {
-                                    const removeButton = document.createElement('button');
-                                    removeButton.style.cssText = smallButtonStyle + ' color:var(--accent-red, #e55);';
-                                    removeButton.textContent = 'REMOVE';
-                                    removeButton.addEventListener('click', () => {
-                                        postKanbanMessage({ type: 'removeAutobanTerminal', role: scRole, terminalName: entry.name });
-                                    });
-                                    right.appendChild(removeButton);
-                                }
-
-                                terminalRow.appendChild(left);
-                                terminalRow.appendChild(right);
-                                roleBlockSc.appendChild(terminalRow);
-                            });
-                        }
-                        terminalPoolsSectionSc.appendChild(roleBlockSc);
-                    });
-                }
-
-            } else if (currentAutomationMode === 'multi-column') {
-                const multiColumnContainer = document.createElement('div');
-                multiColumnContainer.style.cssText = 'display: flex; flex-direction: column; gap: 12px;';
-                container.appendChild(multiColumnContainer);
-
-                // --- Multi Column Content (Existing UI) ---
-                const autobanRoles = [
-                    { role: 'planner', label: 'Planner' },
-                    { role: 'intern', label: 'Intern' },
-                    { role: 'coder', label: 'Coder' },
-                    { role: 'lead', label: 'Lead Coder' },
-                    { role: 'reviewer', label: 'Reviewer' },
-                    ...lastCustomAgents
-                        .map(agent => ({ role: agent.role, label: agent.name }))
-                ];
-
-                const columnTransitions = [
-                    { column: 'CREATED', label: 'CREATED -> PLAN REVIEWED', defaultMin: 10, floorPerPlan: 3 },
-                    { column: 'PLAN REVIEWED', label: 'PLAN REVIEWED -> INTERN/CODER/LEAD', defaultMin: 20, floorPerPlan: 5 },
-                    { column: 'INTERN CODED', label: 'INTERN CODED -> CODE REVIEWED', defaultMin: 15, floorPerPlan: 4 },
-                    { column: 'LEAD CODED', label: 'LEAD CODED -> CODE REVIEWED', defaultMin: 15, floorPerPlan: 4 },
-                    { column: 'CODER CODED', label: 'CODER CODED -> CODE REVIEWED', defaultMin: 15, floorPerPlan: 4 }
-                ];
-
-                // --- Column Rules Section (ordered first) ---
-                const columnRulesSection = document.createElement('div');
-                columnRulesSection.className = 'db-subsection';
-                multiColumnContainer.appendChild(columnRulesSection);
-
-                const rulesHeader = document.createElement('div');
-                rulesHeader.className = 'subsection-header';
-                const rulesSpan = document.createElement('span');
-                rulesSpan.textContent = 'COLUMN RULES';
-                rulesHeader.appendChild(rulesSpan);
-                columnRulesSection.appendChild(rulesHeader);
-
-                const timingExplanation = document.createElement('div');
-                timingExplanation.style.cssText = 'padding:8px 12px; font-size:11px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
-                timingExplanation.textContent = 'Specify the time delay between advancing each plan to the next stage. Lower intervals require more backup terminals to avoid overwhelming each agent.';
-                columnRulesSection.appendChild(timingExplanation);
-
-                columnTransitions.forEach(({ column, label, defaultMin }) => {
-                    const idSuffix = getAutobanRuleIdSuffix(column);
-                    const rule = state.rules?.[column] || { enabled: true, intervalMinutes: defaultMin, triggerMode: 'drain' };
-                    const ruleRow = document.createElement('div');
-                    ruleRow.style.cssText = 'display:flex; align-items:center; gap:6px; padding:4px 8px; font-size:10px;';
-
-                    const checkbox = document.createElement('input');
-                    checkbox.type = 'checkbox';
-                    checkbox.checked = rule.enabled;
-                    checkbox.style.cssText = 'accent-color:var(--accent-teal); cursor:pointer;';
-                    checkbox.addEventListener('change', () => {
-                        if (!state.rules) state.rules = {};
-                        if (!state.rules[column]) {
-                            state.rules[column] = { enabled: true, intervalMinutes: defaultMin, triggerMode: 'drain' };
-                        }
-                        state.rules[column].enabled = checkbox.checked;
-                        emitAutobanState();
-                    });
-
-                    const ruleLbl = document.createElement('span');
-                    ruleLbl.style.cssText = 'color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0;';
-                    ruleLbl.textContent = label;
-
-                    const everyLbl = document.createElement('span');
-                    everyLbl.style.cssText = 'color:var(--text-secondary);';
-                    everyLbl.textContent = 'every';
-
-                    const minInput = document.createElement('input');
-                    minInput.type = 'number';
-                    minInput.min = '1';
-                    minInput.max = '60';
-                    minInput.id = 'interval-input-' + idSuffix;
-                    minInput.value = String(rule.intervalMinutes);
-                    minInput.style.cssText = 'width:40px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:2px 4px; border-radius:3px; text-align:center;';
-                    guardInteraction(minInput);
-                    minInput.addEventListener('change', () => {
-                        if (!state.rules) state.rules = {};
-                        if (!state.rules[column]) {
-                            state.rules[column] = { enabled: true, intervalMinutes: defaultMin, triggerMode: 'drain' };
-                        }
-                        const val = Math.max(1, parseInt(minInput.value, 10) || defaultMin);
-                        state.rules[column].intervalMinutes = val;
-                        minInput.value = String(val);
-                        emitAutobanState();
-                    });
-
-                    const minLbl = document.createElement('span');
-                    minLbl.style.cssText = 'color:var(--text-secondary);';
-                    minLbl.textContent = 'min';
-
-                    ruleRow.appendChild(checkbox);
-                    ruleRow.appendChild(ruleLbl);
-                    ruleRow.appendChild(everyLbl);
-                    ruleRow.appendChild(minInput);
-                    ruleRow.appendChild(minLbl);
-
-                    const triggerToggle = createTriggerModeToggle(rule.triggerMode || 'drain', (newVal) => {
-                        if (!state.rules) state.rules = {};
-                        if (!state.rules[column]) {
-                            state.rules[column] = { enabled: true, intervalMinutes: defaultMin, triggerMode: 'drain' };
-                        }
-                        state.rules[column].triggerMode = newVal;
-                        emitAutobanState();
-                        renderAutobanPanel();
-                    });
-                    ruleRow.appendChild(triggerToggle);
-
-                    columnRulesSection.appendChild(ruleRow);
-                });
-
-                const poolBannerMc = document.createElement('div');
-                poolBannerMc.style.cssText = 'padding:6px 10px; font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 4px 8px; line-height:1.4;';
-                poolBannerMc.innerHTML = '💡 <strong>Terminal Pools:</strong> Using terminal pools allows you to lower this value, since instructions will be rotated among terminals.';
-                columnRulesSection.appendChild(poolBannerMc);
-
-                if (hasWatchActive) {
-                    const watchWarningBannerMc = document.createElement('div');
-                    watchWarningBannerMc.style.cssText = 'padding:6px 10px; font-size:9px; color:#d97706; border-left:3px solid #d97706; border-radius:4px; background:color-mix(in srgb, #d97706 8%, transparent); margin:4px 8px; line-height:1.4;';
-                    watchWarningBannerMc.innerHTML = '⚠️ <strong>Watch mode runs agents automatically.</strong> Columns set to <strong>Watch</strong> never stop on their own. Every plan that lands in a watch column is dispatched to its agent <strong>immediately and unattended</strong> — no batch delay, no review step. Each dispatch starts a real agent run in a terminal, which spends that agent\'s tokens doing the work. While any watch column is active, the engine will <strong>not</strong> auto-stop when the board empties, so a stream of incoming plans becomes a stream of automatic agent runs until you stop it manually with the automation button. (Sitting idle costs nothing — the cost is per arrival, one agent run each.) Use <strong>Drain</strong> (default) for a finite batch that should stop when finished; use <strong>Watch</strong> for entry columns like CREATED or for remote-control hand-offs where plans arrive over time.';
-                    columnRulesSection.appendChild(watchWarningBannerMc);
-                }
-
-                // --- Automation Rules Section (ordered second) ---
-                const automationRulesSection = document.createElement('div');
-                automationRulesSection.className = 'db-subsection';
-                multiColumnContainer.appendChild(automationRulesSection);
-
-                const automationRulesHeader = document.createElement('div');
-                automationRulesHeader.className = 'subsection-header';
-                const automationRulesSpan = document.createElement('span');
-                automationRulesSpan.textContent = 'KANBAN AUTOMATION RULES';
-                automationRulesHeader.appendChild(automationRulesSpan);
-                automationRulesSection.appendChild(automationRulesHeader);
-
-                const batchRow = document.createElement('div');
-                batchRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-size:10px; color:var(--text-secondary);';
-
-                const batchLabel = document.createElement('span');
-                batchLabel.textContent = 'MAX BATCH SIZE:';
-
-                const batchSelect = document.createElement('select');
-                batchSelect.style.cssText = autobanSelectStyle;
-                guardInteraction(batchSelect);
-                const AUTOBAN_BATCH_SIZE_OPTIONS = [1, 2, 3, 4, 5];
-                AUTOBAN_BATCH_SIZE_OPTIONS.forEach(val => {
-                    const opt = document.createElement('option');
-                    opt.value = String(val);
-                    opt.textContent = String(val);
-                    if (val === state.batchSize) opt.selected = true;
-                    batchSelect.appendChild(opt);
-                });
-                batchSelect.addEventListener('change', () => {
-                    state.batchSize = parseInt(batchSelect.value, 10) || 1;
-                    emitAutobanState();
-                });
-
-                batchRow.appendChild(batchLabel);
-                batchRow.appendChild(batchSelect);
-                automationRulesSection.appendChild(batchRow);
-
-                const complexityRow = document.createElement('div');
-                complexityRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-size:10px; color:var(--text-secondary);';
-
-                const complexityLabel = document.createElement('span');
-                complexityLabel.textContent = 'COMPLEXITY:';
-
-                const complexitySelect = document.createElement('select');
-                complexitySelect.style.cssText = autobanSelectStyle;
-                guardInteraction(complexitySelect);
-                [
-                    { value: 'all', label: 'All' },
-                    { value: 'low_and_below', label: 'Low and below (1-4)' },
-                    { value: 'medium_and_below', label: 'Medium and below (1-6)' },
-                    { value: 'medium_and_above', label: 'Medium and above (5-10)' },
-                    { value: 'high_and_above', label: 'High and above (7-10)' }
-                ].forEach(({ value, label }) => {
-                    const opt = document.createElement('option');
-                    opt.value = value;
-                    opt.textContent = label;
-                    if (value === state.complexityFilter) opt.selected = true;
-                    complexitySelect.appendChild(opt);
-                });
-                complexitySelect.title = 'Unknown complexity is treated as High (8). Low and below excludes Unknown.';
-                complexitySelect.addEventListener('change', () => {
-                    state.complexityFilter = complexitySelect.value || 'all';
-                    emitAutobanState();
-                });
-
-                complexityRow.appendChild(complexityLabel);
-                complexityRow.appendChild(complexitySelect);
-                automationRulesSection.appendChild(complexityRow);
-
-                const routingRow = document.createElement('div');
-                routingRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-size:10px; color:var(--text-secondary);';
-
-                const routingLabel = document.createElement('span');
-                routingLabel.textContent = 'ROUTING:';
-
-                const routingSelect = document.createElement('select');
-                routingSelect.style.cssText = autobanSelectStyle;
-                guardInteraction(routingSelect);
-                [
-                    { value: 'dynamic', label: 'Dynamic' },
-                    { value: 'all_coder', label: 'All -> Coder' },
-                    { value: 'all_lead', label: 'All -> Lead' }
-                ].forEach(({ value, label }) => {
-                    const opt = document.createElement('option');
-                    opt.value = value;
-                    opt.textContent = label;
-                    if (value === state.routingMode) opt.selected = true;
-                    routingSelect.appendChild(opt);
-                });
-                routingSelect.addEventListener('change', () => {
-                    state.routingMode = routingSelect.value || 'dynamic';
-                    emitAutobanState();
-                });
-
-                routingRow.appendChild(routingLabel);
-                routingRow.appendChild(routingSelect);
-                automationRulesSection.appendChild(routingRow);
-
-                // Clear Before Prompt Toggle (inside automation rules section)
-                const mcClearRow = document.createElement('div');
-                mcClearRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-size:10px; color:var(--text-secondary);';
-                const mcClearLabel = document.createElement('span');
-                mcClearLabel.textContent = 'CLEAR TERMINAL BEFORE PROMPT:';
-                mcClearLabel.title = '⚠️ Strongly recommended — prevents token waste and agent overload.';
-                const mcClearToggle = document.createElement('input');
-                mcClearToggle.id = 'mc-clear-terminal-before-prompt-toggle';
-                mcClearToggle.type = 'checkbox';
-                mcClearToggle.checked = !!clearTerminalBeforePrompt;
-                mcClearToggle.addEventListener('change', () => {
-                    clearTerminalBeforePrompt = mcClearToggle.checked;
-                    updateClearTerminalBeforePromptUi();
-                    postKanbanMessage({
-                        type: 'toggleClearTerminalBeforePrompt',
-                        enabled: mcClearToggle.checked
-                    });
-                });
-                mcClearRow.appendChild(mcClearLabel);
-                mcClearRow.appendChild(mcClearToggle);
-                automationRulesSection.appendChild(mcClearRow);
-
-                const terminalPoolsSection = document.createElement('div');
-                terminalPoolsSection.className = 'db-subsection';
-                multiColumnContainer.appendChild(terminalPoolsSection);
-
-                const poolsHeader = document.createElement('div');
-                poolsHeader.className = 'subsection-header';
-                const poolsSpan = document.createElement('span');
-                poolsSpan.textContent = 'TERMINAL POOLS';
-                poolsHeader.appendChild(poolsSpan);
-                terminalPoolsSection.appendChild(poolsHeader);
-
-                const poolsHelp = document.createElement('div');
-                poolsHelp.style.cssText = 'padding:0 8px; font-size:9px; color:var(--text-secondary); line-height:1.4;';
-                poolsHelp.textContent = 'Autoban rotates across the stored pool for each role. Backup terminals created here are kept until you remove or reset them.';
-                terminalPoolsSection.appendChild(poolsHelp);
-
-                autobanRoles.forEach(({ role, label }) => {
-                    const poolEntries = getRolePoolEntries(role);
-                    const roleBlock = document.createElement('div');
-                    roleBlock.style.cssText = 'display:flex; flex-direction:column; gap:6px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px; background:var(--panel-bg2);';
-
-                    const roleHeader = document.createElement('div');
-                    roleHeader.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px;';
-
-                    const roleTitleWrap = document.createElement('div');
-                    roleTitleWrap.style.cssText = 'display:flex; align-items:center; gap:8px; min-width:0; flex:1 1 auto; overflow:hidden;';
-
-                    const roleTitle = document.createElement('span');
-                    roleTitle.style.cssText = 'font-size:10px; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:1; min-width:0;';
-                    roleTitle.textContent = label;
-
-                    const roleCapacity = document.createElement('span');
-                    roleCapacity.style.cssText = chipStyle + ' flex-shrink:0;';
-                    roleCapacity.textContent = 'POOL ' + poolEntries.length + '/5';
-
-                    roleTitleWrap.appendChild(roleTitle);
-                    roleTitleWrap.appendChild(roleCapacity);
-
-                    const addButton = document.createElement('button');
-                    addButton.className = 'action-btn';
-                    addButton.style.cssText = 'padding:3px 8px; font-size:9px; flex-shrink:0;';
-                    addButton.textContent = 'ADD TERMINAL';
-                    addButton.disabled = poolEntries.length >= 5;
-                    addButton.addEventListener('click', () => {
-                        postKanbanMessage({ type: 'addAutobanTerminal', role });
-                    });
-
-                    roleHeader.appendChild(roleTitleWrap);
-                    roleHeader.appendChild(addButton);
-                    roleBlock.appendChild(roleHeader);
-
-                    if (poolEntries.length === 0) {
-                        const emptyState = document.createElement('div');
-                        emptyState.style.cssText = 'font-size:9px; color:var(--text-secondary);';
-                        emptyState.textContent = 'No live terminals available for this role yet.';
-                        roleBlock.appendChild(emptyState);
-                    } else {
-                        poolEntries.forEach(entry => {
-                            const terminalRow = document.createElement('div');
-                            terminalRow.style.cssText = 'display:flex; align-items:center; gap:6px; justify-content:space-between; flex-wrap:wrap;';
-
-                            const left = document.createElement('div');
-                            left.style.cssText = 'display:flex; align-items:center; gap:6px; min-width:0; flex-wrap:wrap;';
-
-                            const nameSpan = document.createElement('span');
-                            nameSpan.style.cssText = 'font-size:10px; color:var(--text-primary);';
-                            nameSpan.textContent = entry.name;
-
-                            const statusBadge = document.createElement('span');
-                            statusBadge.style.cssText = chipStyle + (entry.alive ? '' : ' border-color:var(--accent-red, #e55); color:var(--accent-red, #e55);');
-                            statusBadge.textContent = entry.alive ? 'READY' : 'OFFLINE';
-
-                            const kindBadge = document.createElement('span');
-                            kindBadge.style.cssText = chipStyle;
-                            kindBadge.textContent = entry.managed ? 'BACKUP' : 'PRIMARY';
-
-                            left.appendChild(nameSpan);
-                            left.appendChild(statusBadge);
-                            left.appendChild(kindBadge);
-
-                            const right = document.createElement('div');
-                            right.style.cssText = 'display:flex; align-items:center; gap:6px;';
-
-                            if (entry.terminal) {
-                                const focusButton = document.createElement('button');
-                                focusButton.style.cssText = smallButtonStyle;
-                                focusButton.textContent = 'FOCUS';
-                                focusButton.addEventListener('click', () => {
-                                    postKanbanMessage({ type: 'focusTerminal', terminalName: entry.name });
-                                });
-                                right.appendChild(focusButton);
-                            }
-
-                            if (entry.managed) {
-                                const removeButton = document.createElement('button');
-                                removeButton.style.cssText = smallButtonStyle + ' color:var(--accent-red, #e55);';
-                                removeButton.textContent = 'REMOVE';
-                                removeButton.addEventListener('click', () => {
-                                    postKanbanMessage({ type: 'removeAutobanTerminal', role, terminalName: entry.name });
-                                });
-                                right.appendChild(removeButton);
-                            }
-
-                            terminalRow.appendChild(left);
-                            terminalRow.appendChild(right);
-                            roleBlock.appendChild(terminalRow);
-                        });
-                    }
-                    terminalPoolsSection.appendChild(roleBlock);
-                });
-
-                const resetRow = document.createElement('div');
-                resetRow.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px; padding:0 8px;';
-
-                const resetHint = document.createElement('span');
-                resetHint.style.cssText = 'font-size:9px; color:var(--text-secondary); line-height:1.4;';
-                resetHint.textContent = 'Clear sends, restart timers, and remove autoban-created backup terminals.';
-
-                const resetButton = document.createElement('button');
-                resetButton.className = 'action-btn';
-                resetButton.style.cssText = 'padding:4px 8px; font-size:9px; color:var(--accent-red, #e55);';
-                resetButton.textContent = 'CLEAR & RESET';
-                resetButton.addEventListener('click', () => {
-                    postKanbanMessage({ type: 'resetAutobanPools' });
-                });
-
-                resetRow.appendChild(resetHint);
-                resetRow.appendChild(resetButton);
-                multiColumnContainer.appendChild(resetRow);
-
-            } else if (currentAutomationMode === 'scheduler') {
-                // ─── Scheduler panel (plan 4) ─────────────────────────────────
-                // Replaces the standalone COMMS tab. Surfaces the generic scheduler
-                // as a mode in the Automation dropdown. Comms is demoted to one
-                // source option; board-batch / fetch-plans / reconcile / custom
-                // are the others.
-                // External targets (antigravity/cloud) emit a copyable prompt +
-                // prerequisites block; local-terminal jobs start/stop a terminal.
+                // ─── Scheduler job list (plain section in Internal) ──────────
+                // The residual job list survives for fetch-plans / reconcile /
+                // custom — as a plain section of the Internal panel, not a mode.
+                // Local-terminal jobs start/stop a terminal; external targets
+                // (antigravity/cloud) emit a copyable prompt + prerequisites
+                // block.
                 const schedContainer = document.createElement('div');
                 schedContainer.style.cssText = 'display: flex; flex-direction: column; gap: 12px;';
                 container.appendChild(schedContainer);
@@ -11301,25 +10661,69 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                 const schedDesc = document.createElement('div');
                 schedDesc.style.cssText = 'padding:0 8px; font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
-                schedDesc.textContent = 'Schedule any prompt on a recurring timer. Add a job, pick a source and target, set an interval (respecting the target floor), and start (local) or copy the prompt (external). Comms (Slack/Gmail/Calendar) is one source — the sub-form appears when selected.';
+                schedDesc.textContent = 'Schedule any prompt on a recurring timer. Add a job, pick a source and target, set an interval (respecting the target floor), and start (local) or copy the prompt (external).';
                 schedSection.appendChild(schedDesc);
+
+                // One-time migration notice (board-batch → run-sheet interval).
+                if (state.migratedBoardBatchNotice) {
+                    const notice = document.createElement('div');
+                    notice.style.cssText = 'padding:6px 10px; font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 8px 8px; line-height:1.4;';
+                    notice.textContent = state.migratedBoardBatchNotice;
+                    schedSection.appendChild(notice);
+                }
+
+                // ─── WHEN control (run-sheet schedule) ─────────────────────
+                // One control: OFF (default) = continuous, completion-paced;
+                // ON = fires on a 5-field cron line.
+                const sc = state.singleColumnConfig || {};
+                const whenRow = document.createElement('div');
+                whenRow.style.cssText = 'display:flex; gap:6px; align-items:center; padding:0 8px; margin-bottom:8px; font-size:10px; color:var(--text-secondary);';
+                const whenLabel = document.createElement('span');
+                whenLabel.textContent = 'WHEN:';
+                whenLabel.style.cssText = 'font-weight:bold; color:var(--text-primary); flex-shrink:0;';
+                const whenToggle = document.createElement('select');
+                whenToggle.style.cssText = autobanSelectStyle + ' width:70px;';
+                const whenOff = document.createElement('option');
+                whenOff.value = 'off'; whenOff.textContent = 'Off';
+                whenOff.selected = !sc.whenSchedule;
+                const whenOn = document.createElement('option');
+                whenOn.value = 'on'; whenOn.textContent = 'On';
+                whenOn.selected = !!sc.whenSchedule;
+                whenToggle.appendChild(whenOff);
+                whenToggle.appendChild(whenOn);
+                const cronInput = document.createElement('input');
+                cronInput.type = 'text';
+                cronInput.value = sc.whenSchedule || '';
+                cronInput.placeholder = '*/30 * * * *  (min hour day month weekday)';
+                cronInput.style.cssText = 'flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:2px 4px; border-radius:3px; display:' + (sc.whenSchedule ? 'block' : 'none') + ';';
+                const cronHint = document.createElement('span');
+                cronHint.textContent = 'Off = continuous (completion-paced)';
+                cronHint.style.cssText = 'font-size:9px; color:var(--text-secondary); flex-shrink:0; display:' + (sc.whenSchedule ? 'none' : 'block') + ';';
+                whenToggle.addEventListener('change', () => {
+                    const isOn = whenToggle.value === 'on';
+                    cronInput.style.display = isOn ? 'block' : 'none';
+                    cronHint.style.display = isOn ? 'none' : 'block';
+                    if (isOn && !cronInput.value.trim()) {
+                        cronInput.value = '*/30 * * * *';
+                    }
+                    postKanbanMessage({ type: 'setWhenSchedule', schedule: isOn ? cronInput.value.trim() : null });
+                });
+                cronInput.addEventListener('change', () => {
+                    postKanbanMessage({ type: 'setWhenSchedule', schedule: cronInput.value.trim() || null });
+                });
+                whenRow.appendChild(whenLabel);
+                whenRow.appendChild(whenToggle);
+                whenRow.appendChild(cronInput);
+                whenRow.appendChild(cronHint);
+                schedSection.appendChild(whenRow);
 
                 // Job list root. The host pushes SchedulerConfig via
                 // `updateSchedulerConfig`; until then show an empty list with an
-                // "Add job" affordance. Do NOT auto-create a comms job.
+                // "Add job" affordance.
                 const jobListRoot = document.createElement('div');
                 jobListRoot.id = 'scheduler-job-list';
                 jobListRoot.style.cssText = 'padding:0 8px; display:flex; flex-direction:column; gap:8px;';
                 schedSection.appendChild(jobListRoot);
-
-                // Comms sub-form container — populated by renderCommsPanel() when
-                // a comms job is selected. Reuses the existing createCommsPanel()
-                // controls (sources, intervals, Slack/Gmail scoping, editable
-                // preview) lifted, not rewritten.
-                const commsRoot = document.createElement('div');
-                commsRoot.id = 'scheduler-comms-root';
-                commsRoot.style.cssText = 'padding:0 8px;';
-                schedSection.appendChild(commsRoot);
 
                 // Prerequisites block container — rendered from the target
                 // contracts fetched via `getSchedulerTargetContracts`.
@@ -11337,13 +10741,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 addJobBtn.style.cssText = 'font-size:10px;';
                 addJobBtn.addEventListener('click', () => {
                     // Optimistic add: append a placeholder job row. The host
-                    // persists via setSchedulerConfig on save. A fresh job
-                    // defaults to source=board-batch, target=local-terminal.
+                    // persists via setSchedulerConfig on save.
                     const jobEl = createSchedulerJobRow({
                         id: 'job-' + Date.now(),
                         label: 'New job',
                         enabled: false,
-                        source: 'board-batch',
+                        source: 'custom',
                         target: 'local-terminal',
                         intervalMinutes: 10,
                         promptOverride: '',
@@ -11400,13 +10803,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     midRow.style.cssText = 'display:flex; gap:6px; align-items:center;';
                     const sourceSelect = document.createElement('select');
                     sourceSelect.style.cssText = autobanSelectStyle + ' flex:1;';
-                    // Source dropdown ordering: board-batch → fetch-plans → reconcile → custom → comms (last).
+                    // Source dropdown: fetch-plans → reconcile → custom.
                     [
-                        { value: 'board-batch', label: 'Board batch' },
                         { value: 'fetch-plans', label: 'Fetch cloud plans' },
                         { value: 'reconcile', label: 'Reconcile cloud work' },
-                        { value: 'custom', label: 'Custom prompt' },
-                        { value: 'comms', label: 'Comms (Slack/Gmail/Calendar)' }
+                        { value: 'custom', label: 'Custom prompt' }
                     ].forEach(s => {
                         const opt = document.createElement('option');
                         opt.value = s.value; opt.textContent = s.label;
@@ -11444,38 +10845,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     intervalRow.appendChild(intervalInput);
                     intervalRow.appendChild(minLabel);
                     row.appendChild(intervalRow);
-
-                    // Board-batch source config (agent / column / batchSize).
-                    // Shown only when source === 'board-batch'. Stored in sourceConfig.
-                    const batchConfigRow = document.createElement('div');
-                    batchConfigRow.style.cssText = 'display:flex; gap:6px; align-items:center; font-size:10px; color:var(--text-secondary);';
-                    const batchAgentInput = document.createElement('input');
-                    batchAgentInput.type = 'text';
-                    batchAgentInput.dataset.field = 'batchAgent';
-                    batchAgentInput.value = (job.sourceConfig && job.sourceConfig.agent) || job.agent || 'coder';
-                    batchAgentInput.placeholder = 'agent';
-                    batchAgentInput.style.cssText = 'flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:2px 4px; border-radius:3px;';
-                    const batchColumnInput = document.createElement('input');
-                    batchColumnInput.type = 'text';
-                    batchColumnInput.dataset.field = 'batchColumn';
-                    batchColumnInput.value = (job.sourceConfig && job.sourceConfig.column) || job.column || 'CREATED';
-                    batchColumnInput.placeholder = 'column';
-                    batchColumnInput.style.cssText = 'flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:2px 4px; border-radius:3px;';
-                    const batchBatchSizeInput = document.createElement('input');
-                    batchBatchSizeInput.type = 'number';
-                    batchBatchSizeInput.dataset.field = 'batchSize';
-                    batchBatchSizeInput.min = '1';
-                    batchBatchSizeInput.max = '20';
-                    const storedBatch = (job.sourceConfig && job.sourceConfig.batchSize) != null ? job.sourceConfig.batchSize : job.batchSize;
-                    batchBatchSizeInput.value = String(storedBatch != null ? storedBatch : 5);
-                    batchBatchSizeInput.style.cssText = 'width:50px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:2px 4px; border-radius:3px;';
-                    const batchAgentLabel = document.createElement('span');
-                    batchAgentLabel.textContent = 'BATCH:';
-                    batchConfigRow.appendChild(batchAgentLabel);
-                    batchConfigRow.appendChild(batchAgentInput);
-                    batchConfigRow.appendChild(batchColumnInput);
-                    batchConfigRow.appendChild(batchBatchSizeInput);
-                    row.appendChild(batchConfigRow);
 
                     // Fetch-plans source config (remote / branchGlob).
                     // Shown only when source === 'fetch-plans'. Stored in sourceConfig.
@@ -11515,14 +10884,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     startupCmdRow.appendChild(startupCmdInput);
                     row.appendChild(startupCmdRow);
 
-                    // Prompt override (for custom / board-batch-with-override).
+                    // Prompt override (for custom source).
                     const promptRow = document.createElement('div');
                     promptRow.style.cssText = 'display:flex; gap:6px; align-items:flex-start; font-size:10px; color:var(--text-secondary);';
                     const promptLabel = document.createElement('span');
                     promptLabel.textContent = 'PROMPT:';
                     const promptArea = document.createElement('textarea');
                     promptArea.value = job.promptOverride || '';
-                    promptArea.placeholder = 'Custom prompt (overrides the source preset). For board-batch/fetch-plans/reconcile leave blank to use the preset.';
+                    promptArea.placeholder = 'Custom prompt (overrides the source preset). For fetch-plans/reconcile leave blank to use the preset.';
                     promptArea.style.cssText = 'flex:1; min-height:40px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:4px; border-radius:3px; resize:vertical;';
                     promptRow.appendChild(promptLabel);
                     promptRow.appendChild(promptArea);
@@ -11536,14 +10905,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     startBtn.textContent = 'START';
                     startBtn.style.cssText = 'font-size:10px;';
                     startBtn.addEventListener('click', () => {
-                        postKanbanMessage({ type: 'launchMcpMonitorTerminal', jobId: job.id });
+                        postKanbanMessage({ type: 'setSchedulerConfig', config: collectSchedulerJobs() });
+                        postKanbanMessage({ type: 'startSchedulerJob', jobId: job.id });
                     });
                     const stopBtn = document.createElement('button');
                     stopBtn.className = 'strip-btn';
                     stopBtn.textContent = 'STOP';
                     stopBtn.style.cssText = 'font-size:10px;';
                     stopBtn.addEventListener('click', () => {
-                        postKanbanMessage({ type: 'stopMcpMonitorTerminal', jobId: job.id });
+                        postKanbanMessage({ type: 'stopSchedulerJob', jobId: job.id });
                     });
                     const copyBtn = document.createElement('button');
                     copyBtn.className = 'strip-btn';
@@ -11568,16 +10938,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     });
                     row.appendChild(saveBtn);
 
-                    // Toggle comms sub-form + prerequisites on source/target change.
+                    // Toggle source config + prerequisites on source/target change.
                     function refreshSubForms() {
-                        const isComms = sourceSelect.value === 'comms';
-                        const isBatch = sourceSelect.value === 'board-batch';
                         const isFetch = sourceSelect.value === 'fetch-plans';
-                        commsRoot.style.display = isComms ? 'block' : 'none';
-                        if (isComms && commsRoot.childElementCount === 0) {
-                            renderCommsPanel();
-                        }
-                        batchConfigRow.style.display = isBatch ? 'flex' : 'none';
                         fetchConfigRow.style.display = isFetch ? 'flex' : 'none';
                         renderSchedulerPrereq(targetSelect.value);
                         // Show/hide start-stop vs copy-prompt based on target.
@@ -11611,19 +10974,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     const intervalInput = numInputs[0]; // first number input is always the interval
                     const textarea = rowEl.querySelector('textarea');
                     const source = selects[0] ? selects[0].value : 'custom';
-                    // Build sourceConfig from data-field inputs (board-batch / fetch-plans).
+                    // Build sourceConfig from data-field inputs (fetch-plans).
                     const sourceConfig = {};
-                    const batchAgentEl = rowEl.querySelector('input[data-field="batchAgent"]');
-                    const batchColumnEl = rowEl.querySelector('input[data-field="batchColumn"]');
-                    const batchSizeEl = rowEl.querySelector('input[data-field="batchSize"]');
                     const fetchRemoteEl = rowEl.querySelector('input[data-field="fetchRemote"]');
                     const fetchGlobEl = rowEl.querySelector('input[data-field="fetchBranchGlob"]');
                     const startupCmdEl = rowEl.querySelector('input[data-field="startupCommand"]');
-                    if (source === 'board-batch') {
-                        if (batchAgentEl) sourceConfig.agent = batchAgentEl.value || 'coder';
-                        if (batchColumnEl) sourceConfig.column = batchColumnEl.value || 'CREATED';
-                        if (batchSizeEl) sourceConfig.batchSize = parseInt(batchSizeEl.value, 10) || 5;
-                    }
                     if (source === 'fetch-plans') {
                         sourceConfig.remote = (fetchRemoteEl && fetchRemoteEl.value) || 'origin';
                         sourceConfig.branchGlob = (fetchGlobEl && fetchGlobEl.value) || '*';
@@ -11676,7 +11031,78 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 if (!window.__schedulerConfig) {
                     postKanbanMessage({ type: 'getSchedulerConfig' });
                 }
-            } else if (currentAutomationMode === 'orchestration') {
+
+            } else if (currentAutomationMode === 'external') {
+                // ─── External mode panel ──────────────────────────────────────
+                // Switchboard emits a copyable prompt for a tool that runs agent
+                // cron jobs (Antigravity, a Claude scheduled agent). Switchboard
+                // runs no clock and dispatches nothing — the external scheduler
+                // owns recurrence.
+                const extContainer = document.createElement('div');
+                extContainer.style.cssText = 'display: flex; flex-direction: column; gap: 12px;';
+                container.appendChild(extContainer);
+
+                const extSection = document.createElement('div');
+                extSection.className = 'db-subsection';
+                extContainer.appendChild(extSection);
+
+                const extHeader = document.createElement('div');
+                extHeader.className = 'subsection-header';
+                const extSpan = document.createElement('span');
+                extSpan.textContent = 'EXTERNAL';
+                extHeader.appendChild(extSpan);
+                extSection.appendChild(extHeader);
+
+                const extDesc = document.createElement('div');
+                extDesc.style.cssText = 'padding:0 8px; font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
+                extDesc.textContent = 'Switchboard emits a copyable prompt for a tool that runs agent cron jobs (Antigravity, a Claude scheduled agent). Copy the prompt below and paste it into your scheduled agent. Switchboard runs no clock and dispatches nothing — the external scheduler owns recurrence.';
+                extSection.appendChild(extDesc);
+
+                // Editable line: a short instruction describing what the external
+                // agent should do. Defaults to a generic kickoff phrase.
+                const instructionRow = document.createElement('div');
+                instructionRow.style.cssText = 'padding:0 8px; display:flex; gap:6px; align-items:center;';
+                const instructionInput = document.createElement('input');
+                instructionInput.type = 'text';
+                instructionInput.value = 'Kick off the switchboard automation.';
+                instructionInput.placeholder = 'What should the external agent do?';
+                instructionInput.style.cssText = 'flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:4px; border-radius:3px;';
+                instructionRow.appendChild(instructionInput);
+                extSection.appendChild(instructionRow);
+
+                // Copy-prompt button: fetches the evergreen run-sheet prompt from
+                // the host and copies it to the clipboard.
+                const copyPromptBtn = document.createElement('button');
+                copyPromptBtn.className = 'strip-btn is-teal';
+                copyPromptBtn.textContent = 'COPY PROMPT';
+                copyPromptBtn.style.cssText = 'font-size:10px; margin:0 8px;';
+                copyPromptBtn.addEventListener('click', () => {
+                    copyPromptBtn.textContent = 'LOADING...'; copyPromptBtn.disabled = true;
+                    postKanbanMessage({ type: 'externalAutomationPrompt', instruction: instructionInput.value, workspaceRoot: getActiveWorkspaceRoot() });
+                });
+                extSection.appendChild(copyPromptBtn);
+
+                // Paused-jobs line: tells the user that local scheduled jobs are
+                // paused while external mode is selected.
+                const pausedNote = document.createElement('div');
+                pausedNote.style.cssText = 'padding:6px 10px; font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 8px 8px; line-height:1.4;';
+                pausedNote.textContent = 'Local scheduled jobs are paused while External mode is selected. Switch back to Internal to re-arm them.';
+                extSection.appendChild(pausedNote);
+            }
+
+            // ── Oversight agent ───────────────────────────────────────────────
+            // Not a mode. The run sheet advances cards on its own; the oversight
+            // agent is an OPTIONAL extra that rides alongside it, grouping plans
+            // into features and handling the judgement transitions the run sheet
+            // deliberately does not automate. Its own toggle, so arming it never
+            // means giving up the run sheet — which is what a peer mode forced.
+            //
+            // Rendered in BOTH modes on purpose. orchestrationConfig.enabled
+            // survives a mode switch by design (only the toggle disarms it), so
+            // hiding this section in External would strand an armed orchestrator
+            // with no off-switch — a flag with no surface, which is the exact
+            // defect this feature exists to remove.
+            {
                 const orchSection = document.createElement('div');
                 orchSection.className = 'db-subsection';
                 container.appendChild(orchSection);
@@ -11684,80 +11110,47 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const orchHeader = document.createElement('div');
                 orchHeader.className = 'subsection-header';
                 const orchSpan = document.createElement('span');
-                orchSpan.textContent = 'ORCHESTRATION';
+                orchSpan.textContent = 'OVERSIGHT AGENT';
                 orchHeader.appendChild(orchSpan);
                 orchSection.appendChild(orchHeader);
 
                 const orchDesc = document.createElement('div');
                 orchDesc.style.cssText = 'padding:0 8px; font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
-                orchDesc.textContent = 'A system-woken orchestrator batches plans into features, fans work out across per-feature worktrees, then on each wake triages the inbox, verifies progress via git/board ground truth, and merges features back one at a time. Per-feature worktrees are enabled automatically and restored on switching away.';
+                orchDesc.textContent = 'Optional. Runs alongside the run sheet: groups loose plans into features, decides which team gets what, handles worktree merge-back, and owns the transitions the run sheet does not automate (into PLAN REVIEWED and into CODE REVIEWED). The run sheet keeps working whether this is on or off.';
                 orchSection.appendChild(orchDesc);
 
-                const orch = state.orchestrationConfig || { enabled: false, intervalMinutes: 10, maxConcurrentSubtasks: 5 };
-
-                // WAKE INTERVAL row
-                const intervalRow = document.createElement('div');
-                intervalRow.style.cssText = 'padding:0 8px; display:flex; gap:8px; align-items:center; font-size:10px; color:var(--text-secondary); margin-bottom:8px;';
-                const intervalLabel = document.createElement('span');
-                intervalLabel.textContent = 'WAKE EVERY';
-                const intervalInput = document.createElement('input');
-                intervalInput.type = 'number';
-                intervalInput.min = '1';
-                intervalInput.max = '60';
-                intervalInput.value = String(orch.intervalMinutes ?? 10);
-                intervalInput.style.cssText = autobanNumberInputStyle;
-                guardInteraction(intervalInput);
-                intervalInput.addEventListener('change', () => {
-                    const val = Math.max(1, Math.min(60, parseInt(intervalInput.value, 10) || 10));
-                    state.orchestrationConfig = { ...state.orchestrationConfig, intervalMinutes: val };
-                    intervalInput.value = String(val);
-                    emitAutobanState();
+                const oversightRow = document.createElement('div');
+                oversightRow.style.cssText = 'padding:0 8px; display:flex; align-items:center; gap:8px; font-size:10px; color:var(--text-secondary); margin-bottom:4px;';
+                const oversightToggle = document.createElement('input');
+                oversightToggle.type = 'checkbox';
+                oversightToggle.id = 'oversight-agent-toggle';
+                oversightToggle.checked = !!(state.orchestrationConfig && state.orchestrationConfig.enabled);
+                guardInteraction(oversightToggle);
+                const oversightLabel = document.createElement('label');
+                oversightLabel.htmlFor = 'oversight-agent-toggle';
+                // Label is driven solely from the broadcast state — no optimistic
+                // write on click. If the arm fails, the next re-render settles
+                // the label back to "Off" so the toggle never lies.
+                oversightLabel.textContent = oversightToggle.checked ? 'Running' : 'Off';
+                oversightLabel.style.cssText = 'cursor:pointer;';
+                oversightToggle.addEventListener('change', () => {
+                    // Reuses the shipped start/stop messages — the orchestrator
+                    // lifecycle is unchanged, only how it is reached.
+                    postKanbanMessage(oversightToggle.checked
+                        ? { type: 'startOrchestrator', workspaceRoot: getActiveWorkspaceRoot() }
+                        : { type: 'stopOrchestrator', workspaceRoot: getActiveWorkspaceRoot() });
                 });
-                const minLabel = document.createElement('span');
-                minLabel.textContent = 'min';
-                intervalRow.appendChild(intervalLabel);
-                intervalRow.appendChild(intervalInput);
-                intervalRow.appendChild(minLabel);
-                orchSection.appendChild(intervalRow);
+                oversightRow.appendChild(oversightToggle);
+                oversightRow.appendChild(oversightLabel);
+                orchSection.appendChild(oversightRow);
 
-                // CONCURRENCY row
-                const concRow = document.createElement('div');
-                concRow.style.cssText = 'padding:0 8px; display:flex; gap:8px; align-items:center; font-size:10px; color:var(--text-secondary); margin-bottom:8px;';
-                const concLabel = document.createElement('span');
-                concLabel.textContent = 'MAX CONCURRENT SUBTASKS';
-                const concInput = document.createElement('input');
-                concInput.type = 'number';
-                concInput.min = '1';
-                concInput.max = '20';
-                concInput.value = String(orch.maxConcurrentSubtasks ?? 5);
-                concInput.style.cssText = autobanNumberInputStyle;
-                guardInteraction(concInput);
-                concInput.addEventListener('change', () => {
-                    const val = Math.max(1, Math.min(20, parseInt(concInput.value, 10) || 5));
-                    state.orchestrationConfig = { ...state.orchestrationConfig, maxConcurrentSubtasks: val };
-                    concInput.value = String(val);
-                    emitAutobanState();
-                });
-                concRow.appendChild(concLabel);
-                concRow.appendChild(concInput);
-                orchSection.appendChild(concRow);
-
-                // STATUS line
-                const statusLine = document.createElement('div');
-                statusLine.style.cssText = 'padding:0 8px; font-size:10px; color:var(--text-secondary); margin-bottom:8px;';
-                const renderOrchStatus = () => {
-                    const o = state.orchestrationConfig || { enabled: false, intervalMinutes: 10 };
-                    if (!o.enabled) {
-                        statusLine.textContent = 'STATUS: idle';
-                    } else {
-                        const last = o.lastWakeAt ? ' · last wake ' + new Date(o.lastWakeAt).toLocaleTimeString() : '';
-                        statusLine.textContent = 'STATUS: running' + last;
-                    }
-                };
-                renderOrchStatus();
-                orchSection.appendChild(statusLine);
-                // Start/stop lives on the kanban toolbar's Start Automation button
-                // (mode-aware) — no in-tab start control.
+                // Status line — the section says something when idle, not nothing.
+                const oversightStatus = document.createElement('div');
+                oversightStatus.style.cssText = 'padding:0 8px; font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
+                oversightStatus.textContent = oversightToggle.checked
+                    ? 'The oversight agent is supervising the board. It will group loose plans, assign work, and handle judgement transitions.'
+                    : 'No oversight agent running. The run sheet advances cards on its own.';
+                orchSection.appendChild(oversightStatus);
             }
 
             return container;
@@ -11778,498 +11171,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 root.appendChild(createAutobanPanel());
             } catch (err) {
                 console.error('[kanban webview] error rendering autoban panel:', err);
-            }
-        }
-
-        // ─── Comms Monitor Panel (dedicated COMMS tab) ─────────────────────────────
-        // Extracted from createAutobanPanel so the monitor has its own first-class
-        // home separate from the kanban automation engine. Uses an independent
-        // interaction guard (isCommsPanelInteracting) so typing in one panel does
-        // not block re-renders in the other.
-
-        const guardCommsInteraction = (el) => {
-            const setInteracting = () => {
-                isCommsPanelInteracting = true;
-                if (commsPanelInteractionTimer) {
-                    clearTimeout(commsPanelInteractionTimer);
-                }
-                commsPanelInteractionTimer = setTimeout(() => {
-                    isCommsPanelInteracting = false;
-                    commsPanelInteractionTimer = null;
-                    // If a config update was suppressed while the guard was active,
-                    // re-render now so the DOM reflects the current state.
-                    if (commsPanelRenderPending) {
-                        commsPanelRenderPending = false;
-                        renderCommsPanel();
-                    }
-                }, 2000);
-            };
-            el.addEventListener('focus', setInteracting);
-            el.addEventListener('change', setInteracting);
-            el.addEventListener('input', setInteracting);
-        };
-
-        const commsSelectStyle = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:2px 4px; border-radius:3px;';
-
-        function createCommsPanel() {
-            const container = document.createElement('div');
-            container.style.cssText = 'padding:8px; display:flex; flex-direction:column; gap:12px;';
-
-            // Header
-            const commsHeader = document.createElement('div');
-            commsHeader.className = 'subsection-header';
-            const commsHeaderSpan = document.createElement('span');
-            commsHeaderSpan.textContent = 'COMMS SOURCES CONFIG';
-            commsHeader.appendChild(commsHeaderSpan);
-            container.appendChild(commsHeader);
-
-            // Intro text
-            const introText = document.createElement('div');
-            introText.style.cssText = 'padding:0 8px 8px 8px; font-size:9px; color:var(--text-secondary); line-height:1.4;';
-            introText.textContent = 'Periodically checks Slack, Gmail, and Google Calendar for new messages and events. Results appear in the job terminal pane.';
-            container.appendChild(introText);
-
-            // ─── Dependency Notice (claude + MCP servers prerequisite) ───
-            const depNotice = document.createElement('div');
-            depNotice.style.cssText = 'padding:6px 8px; margin:0 8px 8px 8px; border:1px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 6%, transparent); font-size:9px; line-height:1.4; color:var(--text-primary);';
-            depNotice.innerHTML = `
-                <strong>📋 Prerequisites:</strong><br>
-                This monitor requires the <code style="color:var(--accent-teal);">claude</code> CLI with MCP servers configured for the sources you want to watch.<br>
-                <span style="color:var(--text-secondary);">• Install Claude: <code>npm i -g @anthropic-ai/claude-code</code></span><br>
-                <span style="color:var(--text-secondary);">• Add MCP servers (Slack, Gmail, Calendar) via Claude's MCP config</span><br>
-                <span style="color:var(--text-secondary);">• The monitor runs in a dedicated terminal using these servers</span>
-            `;
-            container.appendChild(depNotice);
-
-            // Startup command (always visible)
-            const cmdLabel = document.createElement('div');
-            cmdLabel.style.cssText = 'margin:0 8px 2px 8px; font-size:9px; color:var(--text-secondary);';
-            cmdLabel.textContent = 'Startup command';
-            const cmdPre = document.createElement('pre');
-            cmdPre.style.cssText = 'margin:0 8px 8px 8px; padding:4px; background:var(--panel-bg); border:1px solid var(--border-color); border-radius:3px; font-size:9px; color:var(--text-primary); white-space:pre-wrap; word-break:break-all;';
-            cmdPre.textContent = mcpMonitorResolvedCmd || '(not resolved)';
-            container.appendChild(cmdLabel);
-            container.appendChild(cmdPre);
-
-            // ─── On/Off dropdown (config-panel visibility) ───
-            const mcpRow = document.createElement('div');
-            mcpRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-size:10px; color:var(--text-secondary); margin-bottom:8px;';
-            const mcpLabel = document.createElement('span');
-            mcpLabel.textContent = 'COMMS MONITOR:';
-            const mcpSelect = document.createElement('select');
-            mcpSelect.style.cssText = commsSelectStyle + ' flex:1;';
-            guardCommsInteraction(mcpSelect);
-            [
-                { value: 'off', label: 'Off' },
-                { value: 'on', label: 'On' }
-            ].forEach(optInfo => {
-                const opt = document.createElement('option');
-                opt.value = optInfo.value;
-                opt.textContent = optInfo.label;
-                if ((optInfo.value === 'on') === mcpMonitorConfig.enabled) opt.selected = true;
-                mcpSelect.appendChild(opt);
-            });
-            mcpRow.appendChild(mcpLabel);
-            mcpRow.appendChild(mcpSelect);
-            container.appendChild(mcpRow);
-
-            // ─── Config Panel (collapsible, shown when enabled) ───
-            const mcpConfigPanel = document.createElement('div');
-            mcpConfigPanel.style.cssText = 'padding:8px; margin:0 8px 8px 8px; border:1px solid var(--border-color); border-radius:4px; background:var(--panel-bg2); display:' + (mcpMonitorConfig.enabled ? 'block' : 'none') + '; font-size:10px; color:var(--text-primary);';
-
-            // Sources checklist with per-source interval dropdowns
-            const sourcesHeader = document.createElement('div');
-            sourcesHeader.style.cssText = 'font-weight:bold; color:var(--text-secondary); margin-bottom:4px;';
-            sourcesHeader.textContent = 'Watched Sources:';
-            mcpConfigPanel.appendChild(sourcesHeader);
-
-            const sourcesList = document.createElement('div');
-            sourcesList.style.cssText = 'display:flex; flex-direction:column; gap:6px; margin-bottom:8px; padding-left:4px;';
-
-            const activeSources = new Set(mcpMonitorConfig.sources || []);
-            const presetsToRender = Object.keys(mcpMonitorPresets).length > 0 ? mcpMonitorPresets : {
-                slack: "Slack: unread direct messages and @-mentions across my channels.",
-                gmail: "Gmail: unread or important emails in my inbox.",
-                gcal: "Google Calendar: events starting in the next 24 hours.",
-                custom: "Custom Instruction"
-            };
-
-            const customInstructionRow = document.createElement('div');
-            customInstructionRow.style.cssText = 'margin-top:6px; display:' + (activeSources.has('custom') ? 'block' : 'none') + ';';
-            const customInstructionTextarea = document.createElement('textarea');
-            customInstructionTextarea.placeholder = 'Enter custom instructions for monitor (e.g. check a specific HTTP endpoint)...';
-            customInstructionTextarea.style.cssText = 'width:100%; height:48px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:4px; border-radius:3px; resize:vertical; box-sizing:border-box;';
-            customInstructionTextarea.value = mcpMonitorConfig.customInstruction || '';
-            guardCommsInteraction(customInstructionTextarea);
-            customInstructionRow.appendChild(customInstructionTextarea);
-
-            // Source detail containers (shown when the source is checked)
-            const slackDetails = document.createElement('div');
-            slackDetails.style.cssText = 'display:' + (activeSources.has('slack') ? 'block' : 'none') + '; margin-bottom:6px; padding-left:18px;';
-            const slackChanLabel = document.createElement('div');
-            slackChanLabel.textContent = 'Slack channels (comma-separated, blank = all):';
-            slackChanLabel.style.cssText = 'font-size:9px; color:var(--text-secondary); margin-bottom:2px;';
-            const slackChanInput = document.createElement('input');
-            slackChanInput.type = 'text';
-            slackChanInput.value = mcpMonitorConfig.slackChannels || '';
-            slackChanInput.placeholder = 'e.g. general, engineering, #proj-x';
-            slackChanInput.style.cssText = 'width:100%; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-size:9px; padding:3px; border-radius:3px; box-sizing:border-box;';
-            guardCommsInteraction(slackChanInput);
-            const slackScopeRow = document.createElement('div');
-            slackScopeRow.style.cssText = 'display:flex; gap:8px; margin-top:4px; font-size:9px; color:var(--text-secondary);';
-            const dmOnlyCb = document.createElement('input'); dmOnlyCb.type = 'checkbox'; dmOnlyCb.id = 'mcp-slack-dm-only';
-            dmOnlyCb.checked = !!mcpMonitorConfig.slackDmOnly; guardCommsInteraction(dmOnlyCb);
-            const dmOnlyLabel = document.createElement('label'); dmOnlyLabel.textContent = 'DMs only';
-            dmOnlyLabel.htmlFor = 'mcp-slack-dm-only'; dmOnlyLabel.style.cssText = 'cursor:pointer;';
-            const chanOnlyCb = document.createElement('input'); chanOnlyCb.type = 'checkbox'; chanOnlyCb.id = 'mcp-slack-chan-only';
-            chanOnlyCb.checked = !!mcpMonitorConfig.slackChannelOnly; guardCommsInteraction(chanOnlyCb);
-            const chanOnlyLabel = document.createElement('label'); chanOnlyLabel.textContent = 'Channels only';
-            chanOnlyLabel.htmlFor = 'mcp-slack-chan-only'; chanOnlyLabel.style.cssText = 'cursor:pointer;';
-            slackScopeRow.appendChild(dmOnlyCb); slackScopeRow.appendChild(dmOnlyLabel);
-            slackScopeRow.appendChild(chanOnlyCb); slackScopeRow.appendChild(chanOnlyLabel);
-            slackDetails.appendChild(slackChanLabel);
-            slackDetails.appendChild(slackChanInput);
-            slackDetails.appendChild(slackScopeRow);
-
-            const gmailDetails = document.createElement('div');
-            gmailDetails.style.cssText = 'display:' + (activeSources.has('gmail') ? 'block' : 'none') + '; margin-bottom:6px; padding-left:18px;';
-            const gmailLabelLabel = document.createElement('div');
-            gmailLabelLabel.textContent = 'Gmail label/inbox (blank = INBOX):';
-            gmailLabelLabel.style.cssText = 'font-size:9px; color:var(--text-secondary); margin-bottom:2px;';
-            const gmailLabelInput = document.createElement('input');
-            gmailLabelInput.type = 'text';
-            gmailLabelInput.value = mcpMonitorConfig.gmailLabel || '';
-            gmailLabelInput.placeholder = 'e.g. INBOX, Important, Work';
-            gmailLabelInput.style.cssText = 'width:100%; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-size:9px; padding:3px; border-radius:3px; box-sizing:border-box;';
-            guardCommsInteraction(gmailLabelInput);
-            gmailDetails.appendChild(gmailLabelLabel);
-            gmailDetails.appendChild(gmailLabelInput);
-
-            const sourceDetailMap = { slack: slackDetails, gmail: gmailDetails };
-
-            Object.entries(presetsToRender).forEach(([key, label]) => {
-                const row = document.createElement('div');
-                row.style.cssText = 'display:flex; align-items:center; gap:6px; font-size:9px; color:var(--text-secondary); line-height:1.2;';
-                const labelWrapper = document.createElement('label');
-                labelWrapper.style.cssText = 'display:flex; align-items:flex-start; gap:6px; cursor:pointer; flex:1;';
-                const checkbox = document.createElement('input');
-                checkbox.type = 'checkbox';
-                checkbox.value = key;
-                checkbox.checked = activeSources.has(key);
-                checkbox.style.cssText = 'margin:1px 0 0 0; cursor:pointer; flex-shrink:0;';
-                guardCommsInteraction(checkbox);
-                const span = document.createElement('span');
-                span.textContent = label;
-                labelWrapper.appendChild(checkbox);
-                labelWrapper.appendChild(span);
-
-                // Per-source interval dropdown
-                const intervalSelect = document.createElement('select');
-                intervalSelect.style.cssText = commsSelectStyle + ' width:70px;';
-                guardCommsInteraction(intervalSelect);
-                [1, 2, 5, 10, 15, 30].forEach(minutes => {
-                    const opt = document.createElement('option');
-                    opt.value = String(minutes);
-                    opt.textContent = `${minutes}m`;
-                    const currentInterval = mcpMonitorConfig.sourceIntervals ? mcpMonitorConfig.sourceIntervals[key] : undefined;
-                    if (currentInterval === minutes) opt.selected = true;
-                    intervalSelect.appendChild(opt);
-                });
-                intervalSelect.addEventListener('change', () => {
-                    const intervals = { ...(mcpMonitorConfig.sourceIntervals || {}), [key]: parseInt(intervalSelect.value, 10) };
-                    mcpMonitorConfig = { ...mcpMonitorConfig, sourceIntervals: intervals };
-                    saveMonitorConfig();
-                });
-
-                row.appendChild(labelWrapper);
-                row.appendChild(intervalSelect);
-                sourcesList.appendChild(row);
-
-                // Append the source's detail container (if any) right after its row
-                if (sourceDetailMap[key]) {
-                    sourcesList.appendChild(sourceDetailMap[key]);
-                }
-
-                checkbox.addEventListener('change', () => {
-                    if (checkbox.checked) {
-                        activeSources.add(key);
-                    } else {
-                        activeSources.delete(key);
-                    }
-                    if (key === 'custom') {
-                        customInstructionRow.style.display = checkbox.checked ? 'block' : 'none';
-                    }
-                    if (sourceDetailMap[key]) {
-                        sourceDetailMap[key].style.display = checkbox.checked ? 'block' : 'none';
-                    }
-                    saveMonitorConfig();
-                });
-            });
-
-            mcpConfigPanel.appendChild(sourcesList);
-            mcpConfigPanel.appendChild(customInstructionRow);
-
-            // ─── Editable Prompt Preview ───
-            const previewHeader = document.createElement('div');
-            previewHeader.style.cssText = 'font-weight:bold; color:var(--text-secondary); margin-top:8px; margin-bottom:4px; display:flex; justify-content:space-between; align-items:center;';
-            const previewHeaderText = document.createElement('span');
-            previewHeaderText.textContent = 'Prompt Preview (editable):';
-            previewHeader.appendChild(previewHeaderText);
-            const resetBtn = document.createElement('button');
-            resetBtn.textContent = 'Reset to template';
-            resetBtn.style.cssText = 'font-size:9px; padding:2px 6px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-secondary); border-radius:3px; cursor:pointer;';
-            guardCommsInteraction(resetBtn);
-            previewHeader.appendChild(resetBtn);
-
-            const previewTextarea = document.createElement('textarea');
-            previewTextarea.style.cssText = 'width:100%; height:120px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-size:9px; padding:6px; border-radius:3px; resize:vertical; box-sizing:border-box; line-height:1.4;';
-            guardCommsInteraction(previewTextarea);
-
-            let previewIsOverride = !!(mcpMonitorConfig.promptOverride && mcpMonitorConfig.promptOverride.trim());
-
-            // Client-side prompt builder mirror (must match _buildMcpMonitorPrompt in backend)
-            const buildPreviewPrompt = (cfg) => {
-                if (cfg.promptOverride && cfg.promptOverride.trim()) return cfg.promptOverride.trim();
-                const sources = cfg.sources || [];
-                const baselines = sources.map(s => cfg.sourceLastCheckAt && cfg.sourceLastCheckAt[s]).filter(Boolean).map(s => new Date(s).getTime());
-                const boundary = baselines.length > 0 ? `since ${new Date(Math.min(...baselines)).toUTCString()}` : 'in the past 24 hours';
-                const preamble = `Check the following for anything new that needs my attention ${boundary}. Report only what is new and noteworthy as a short bullet list. If nothing needs attention, reply 'All clear'. This is read-only — do NOT take any actions, send any messages, or modify anything.`;
-                const lines = [];
-                for (const src of sources) {
-                    if (src === 'custom') {
-                        if (cfg.customInstruction && cfg.customInstruction.trim()) lines.push(cfg.customInstruction.trim());
-                    } else if (src === 'slack') {
-                        const channels = (cfg.slackChannels || '').split(',').map(s => s.trim()).filter(Boolean);
-                        const scopeParts = [];
-                        if (!cfg.slackDmOnly) scopeParts.push(channels.length > 0 ? `messages in channels: ${channels.join(', ')}` : 'messages in channels (all)');
-                        if (!cfg.slackChannelOnly) scopeParts.push('direct messages (DMs)');
-                        const slackLast = cfg.sourceLastCheckAt && cfg.sourceLastCheckAt['slack'];
-                        const slackBoundary = slackLast ? `since ${new Date(slackLast).toUTCString()}` : 'in the past 24 hours';
-                        lines.push(`Slack: unread ${scopeParts.join(' and ')} and @-mentions ${slackBoundary}. Clearly label each item as [DM] or [channel: #name].`);
-                    } else if (src === 'gmail') {
-                        const label = cfg.gmailLabel && cfg.gmailLabel.trim() ? cfg.gmailLabel.trim() : 'INBOX';
-                        const gmailLast = cfg.sourceLastCheckAt && cfg.sourceLastCheckAt['gmail'];
-                        const gmailBoundary = gmailLast ? `since ${new Date(gmailLast).toUTCString()}` : 'in the past 24 hours';
-                        lines.push(`Gmail: unread or important emails in label "${label}" ${gmailBoundary}. Include sender and subject for each.`);
-                    } else if (src === 'gcal') {
-                        lines.push('Google Calendar: events starting in the next 24 hours.');
-                    }
-                }
-                if (lines.length === 0) return '';
-                return preamble + "\n\n" + lines.map(l => `- ${l}`).join('\n');
-            };
-
-            const renderPreview = () => {
-                if (!previewIsOverride) {
-                    previewTextarea.value = buildPreviewPrompt({ ...mcpMonitorConfig, promptOverride: '' });
-                } else if (mcpMonitorConfig.promptOverride) {
-                    previewTextarea.value = mcpMonitorConfig.promptOverride;
-                }
-            };
-            renderPreview();
-
-            // Allow the backend-rendered preview (mcpMonitorPreview message) to
-            // update the textarea only when the user has not manually overridden.
-            window.__commsPreviewUpdate = (preview) => {
-                if (!previewIsOverride && typeof preview === 'string') {
-                    previewTextarea.value = preview;
-                }
-            };
-
-            previewTextarea.addEventListener('input', () => {
-                previewIsOverride = true;
-            });
-            resetBtn.addEventListener('click', () => {
-                previewIsOverride = false;
-                mcpMonitorConfig = { ...mcpMonitorConfig, promptOverride: '' };
-                renderPreview();
-                saveMonitorConfig();
-            });
-
-            mcpConfigPanel.appendChild(previewHeader);
-            mcpConfigPanel.appendChild(previewTextarea);
-
-            // ─── Lifecycle controls (three-step launch + stop) ───
-            const lifecycleRow = document.createElement('div');
-            lifecycleRow.style.cssText = 'margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;';
-            const btnBaseStyle = 'padding:4px 10px; font-size:10px; cursor:pointer; border:none; border-radius:3px;';
-
-            const startTermBtn = document.createElement('button');
-            startTermBtn.textContent = 'Start Terminal';
-            startTermBtn.style.cssText = btnBaseStyle + ' background:color-mix(in srgb, var(--accent-teal) 10%, transparent); color:var(--accent-teal); border:1px solid var(--accent-teal-dim);';
-            guardCommsInteraction(startTermBtn);
-            startTermBtn.addEventListener('click', () => {
-                startTermBtn.disabled = true;
-                startTermBtn.textContent = 'Starting…';
-                postKanbanMessage({ type: 'launchMcpMonitorTerminal' });
-            });
-
-            const checkAuthBtn = document.createElement('button');
-            checkAuthBtn.textContent = 'Check Auth';
-            checkAuthBtn.style.cssText = btnBaseStyle + ' background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary);';
-            guardCommsInteraction(checkAuthBtn);
-            checkAuthBtn.addEventListener('click', () => {
-                checkAuthBtn.disabled = true;
-                checkAuthBtn.textContent = 'Checking…';
-                postKanbanMessage({ type: 'checkMcpMonitorAuth' });
-                setTimeout(() => { checkAuthBtn.disabled = false; checkAuthBtn.textContent = 'Check Auth'; }, 3000);
-            });
-
-            const startPollBtn = document.createElement('button');
-            startPollBtn.textContent = 'Start Polling';
-            startPollBtn.style.cssText = btnBaseStyle + ' background:color-mix(in srgb, var(--accent-teal) 10%, transparent); color:var(--accent-teal); border:1px solid var(--accent-teal-dim);';
-            guardCommsInteraction(startPollBtn);
-            startPollBtn.addEventListener('click', () => {
-                postKanbanMessage({ type: 'startMcpMonitorPolling' });
-            });
-
-            const stopPollBtn = document.createElement('button');
-            stopPollBtn.textContent = 'Stop Polling';
-            stopPollBtn.style.cssText = btnBaseStyle + ' background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary);';
-            stopPollBtn.title = 'Stop the polling loop. The terminal stays alive — you can restart polling later without re-launching.';
-            guardCommsInteraction(stopPollBtn);
-            stopPollBtn.addEventListener('click', () => {
-                stopPollBtn.disabled = true;
-                stopPollBtn.textContent = 'Stopping…';
-                postKanbanMessage({ type: 'stopMcpMonitorPolling' });
-            });
-
-            const stopTermBtn = document.createElement('button');
-            stopTermBtn.textContent = 'Kill Terminal';
-            stopTermBtn.style.cssText = btnBaseStyle + ' background:var(--panel-bg2); border:1px solid var(--accent-red, #c0392b); color:var(--accent-red, #c0392b);';
-            stopTermBtn.title = 'Kill the monitor terminal and stop polling. Claude\'s session will be lost.';
-            guardCommsInteraction(stopTermBtn);
-            stopTermBtn.addEventListener('click', () => {
-                stopTermBtn.disabled = true;
-                stopTermBtn.textContent = 'Killing…';
-                postKanbanMessage({ type: 'stopMcpMonitorTerminal' });
-            });
-
-            // Show controls conditionally on terminal + polling state
-            lifecycleRow.appendChild(startTermBtn);
-            if (isMcpMonitorTerminalRunning) {
-                lifecycleRow.appendChild(checkAuthBtn);
-                if (isMcpMonitorPolling) {
-                    lifecycleRow.appendChild(stopPollBtn);
-                } else {
-                    lifecycleRow.appendChild(startPollBtn);
-                }
-            }
-            mcpConfigPanel.appendChild(lifecycleRow);
-
-            // Terminal kill control on a separate row with a divider
-            if (isMcpMonitorTerminalRunning) {
-                const terminalControlRow = document.createElement('div');
-                terminalControlRow.style.cssText = 'margin-top:6px; padding-top:6px; border-top:1px dashed var(--border-color); display:flex; gap:6px;';
-                terminalControlRow.appendChild(stopTermBtn);
-                mcpConfigPanel.appendChild(terminalControlRow);
-            }
-
-            // ─── Status Line ───
-            const statusLine = document.createElement('div');
-            statusLine.style.cssText = 'margin-top:8px; padding-top:6px; border-top:1px dashed var(--border-color); font-size:9px; line-height:1.3;';
-            if (isMcpMonitorTerminalRunning) {
-                const pollTag = isMcpMonitorPolling ? ' (polling)' : ' (idle)';
-                statusLine.innerHTML = '🟢 <strong>Comms terminal:</strong> running' + pollTag;
-            } else {
-                statusLine.innerHTML = '🔴 <strong>No comms terminal running.</strong>';
-            }
-            mcpConfigPanel.appendChild(statusLine);
-
-            // ─── Help text ───
-            const mcpHelp = document.createElement('div');
-            mcpHelp.style.cssText = 'margin-top:8px; font-size:9px; color:var(--text-secondary); line-height:1.3; border-top:1px solid var(--border-color); padding-top:6px;';
-            mcpHelp.textContent = 'How it works: Start the terminal, check auth, then start polling. Each source is polled on its own interval. Switchboard sends a read-only prompt to your monitor terminal asking it to check the selected sources (Slack, Gmail, Google Calendar, or a custom instruction) via your claude.ai MCP servers. The terminal reports what\'s new in its pane.';
-            mcpConfigPanel.appendChild(mcpHelp);
-
-            // ─── Latest Results ───
-            const resultsSection = document.createElement('div');
-            resultsSection.id = 'comms-monitor-results';
-            resultsSection.style.cssText = 'margin-top:8px; padding:8px; border:1px solid var(--border-color); border-radius:4px; background:var(--panel-bg2); font-size:10px; color:var(--text-primary); max-height:200px; overflow-y:auto; white-space:pre-wrap;';
-            if (window.__commsMonitorOutput) {
-                resultsSection.textContent = window.__commsMonitorOutput;
-            } else {
-                resultsSection.textContent = '(no results yet — start polling to see monitor output)';
-            }
-            mcpConfigPanel.appendChild(resultsSection);
-
-            container.appendChild(mcpConfigPanel);
-
-            // ─── saveMonitorConfig (writes through setSchedulerConfig, not setMcpMonitorConfig) ───
-            // Comms is just another source. Its config lives in the comms job's
-            // sourceConfig and saves through the same setSchedulerConfig path as
-            // every other job. No separate privileged write path.
-            const saveMonitorConfig = () => {
-                const enabled = mcpSelect.value === 'on';
-                const customInstruction = customInstructionTextarea.value;
-                const sources = Array.from(activeSources);
-                const slackChannels = slackChanInput.value;
-                const slackDmOnly = dmOnlyCb.checked;
-                const slackChannelOnly = chanOnlyCb.checked;
-                const gmailLabel = gmailLabelInput.value;
-                const promptOverride = previewIsOverride ? previewTextarea.value : '';
-                mcpMonitorConfig = { ...mcpMonitorConfig, enabled, sources, customInstruction, slackChannels, slackDmOnly, slackChannelOnly, gmailLabel, promptOverride };
-                // Update the comms job's sourceConfig in the scheduler config,
-                // then save through setSchedulerConfig — the same path every
-                // other source uses. No setMcpMonitorConfig call.
-                const schedCfg = window.__schedulerConfig || { schemaVersion: 1, jobs: [] };
-                const jobs = (schedCfg.jobs || []).map(j => {
-                    if (j.source !== 'comms') return j;
-                    return {
-                        ...j,
-                        enabled: enabled,
-                        sourceConfig: {
-                            ...j.sourceConfig,
-                            enabled,
-                            pollingEnabled: enabled,
-                            sources,
-                            customInstruction,
-                            sourceIntervals: mcpMonitorConfig.sourceIntervals,
-                            slackChannels,
-                            slackDmOnly,
-                            slackChannelOnly,
-                            gmailLabel,
-                            promptOverride
-                        }
-                    };
-                });
-                window.__schedulerConfig = { ...schedCfg, jobs };
-                postKanbanMessage({
-                    type: 'setSchedulerConfig',
-                    config: { schemaVersion: schedCfg.schemaVersion || 1, jobs }
-                });
-                if (!previewIsOverride) renderPreview();
-            };
-
-            mcpSelect.addEventListener('change', () => {
-                mcpConfigPanel.style.display = mcpSelect.value === 'on' ? 'block' : 'none';
-                saveMonitorConfig();
-            });
-            customInstructionTextarea.addEventListener('input', saveMonitorConfig);
-            slackChanInput.addEventListener('input', saveMonitorConfig);
-            gmailLabelInput.addEventListener('input', saveMonitorConfig);
-            dmOnlyCb.addEventListener('change', saveMonitorConfig);
-            chanOnlyCb.addEventListener('change', saveMonitorConfig);
-
-            return container;
-        }
-
-        function renderCommsPanel() {
-            try {
-                // The standalone COMMS tab is retired (plan 4). The comms sub-form
-                // now lives inside the Scheduler panel as a nested section when a
-                // comms job exists. Render into `scheduler-comms-root` (created by
-                // the Scheduler panel) instead of the deleted `comms-panel-root`.
-                const root = document.getElementById('scheduler-comms-root');
-                if (!root) return;
-                if (isCommsPanelInteracting) {
-                    console.log('[kanban] Skipping comms panel re-render: user interaction guard active');
-                    return;
-                }
-                root.innerHTML = '';
-                root.appendChild(createCommsPanel());
-            } catch (err) {
-                console.error('[kanban webview] error rendering comms panel:', err);
             }
         }
 

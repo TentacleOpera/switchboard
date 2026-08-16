@@ -152,6 +152,19 @@ jobs:
       - name: Standing-orders marker mirror (standingOrders.ts ≡ terminals.js literal)
         run: npm run test:contract:standing-orders-marker
 
+      # Team-scoped reviewer routing. Role→terminal resolution is workspace-wide and
+      # team-blind by default, so a card coded by team A lands on team B's reviewer
+      # once a second team is live — and every gate stays green while it happens,
+      # because the dispatch itself succeeds. Pins the resolver, the origin filter
+      # (`unknown` / IDE-shaped / bare-role-word values are NOT terminal names), the
+      # `from` field on POST /kanban/dispatch with its teamRouting echo, and the two
+      # half-fix holes: the custom-user branch silently discarding a caller override,
+      # and `dispatched_agent` recording the literal 'unknown' on the drag path.
+      # Loads the real compiled helpers from out/, which "Compile test outputs" above
+      # has already produced — this step must stay AFTER it.
+      - name: Team-scoped reviewer routing (origin precedence, teamRouting, override honoured)
+        run: npm run test:contract:team-scoped-routing
+
       - name: Link presets mirror (linkPresets.ts ≡ LINK_PRESETS in terminals.js)
         run: npm run test:contract:link-presets-mirror
 
@@ -606,6 +619,40 @@ jobs:
       # the standalone host must translate parentRoot itself since it has no proxy.
       - name: Multi-parent terminals contract (attribution, spawn targeting, hierarchy)
         run: npm run test:contract:multi-parent-terminals
+
+      # Team auto-start reads the team definition from the workspace the operator
+      # configured it in (the board's selection), not from whichever root the API
+      # server is pinned to. In a multi-root window those are different folders, so
+      # the read silently returned [] and the team never spawned — the UAT report
+      # "teams do not spawn when team owner spawns" with no diagnostic. Pins the
+      # multi-root resolver (nearest-first, first-claim-wins so a member-less seeded
+      # team stops the search instead of falling through to a stranger's team), the
+      # presence-gated DB getter (no warning toast on boardless roots), and the
+      # three-way log that separates "no team" from "empty team" from "spawning team"
+      # on both hosts — collapsing the zero-member case is what hid the bug.
+      - name: Team auto-start workspace scope contract (multi-root resolution, legibility)
+        run: npm run test:contract:team-autostart-scope
+
+      # Autoban config normalisation + completion-driven dispatch. This file existed
+      # for months with NO npm script and NO CI step, so every assertion in it was
+      # decorative — including the ones covering the retired terminal pools and the
+      # deleted session cap. It also pins the three ways completion-driven dispatch
+      # dies silently (all three shipped broken once, all three look identical from
+      # the outside: autoban dispatches ONE card and the board stops with no error):
+      # the absolute-vs-relative planFile key mismatch, hanging the completion
+      # tracking off _releaseSettledDispatchLocks (a lock released inside the same
+      # tick as the dispatch), and stopping the engine inside the per-role dispatch
+      # helper, which both kills autoban on the first missing role and lets the
+      # intern->coder->lead escalation keep dispatching after every tracking map was
+      # cleared.
+      - name: Autoban state + completion-driven dispatch contract
+        run: npm run test:contract:autoban-state
+
+      # Autoban must stop for the reasons that survived the session-cap deletion —
+      # "no valid tickets remain" is now one of only two stop paths, so a regression
+      # here is an engine that never stops or one that stops with no reason shown.
+      - name: Autoban no-valid-tickets stop contract
+        run: npm run test:contract:autoban-no-valid-tickets
 
       # Terminal→plan attribution is a two-host join whose failure modes are all
       # silent: a role-only tier paints the wrong plan on a real pane, a shared

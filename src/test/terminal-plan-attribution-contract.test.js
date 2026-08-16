@@ -12,6 +12,10 @@ const ptyHostTs = fs.readFileSync(path.join(__dirname, '../standalone/ptyHost.ts
 const taskViewerTs = fs.readFileSync(path.join(__dirname, '../services/TaskViewerProvider.ts'), 'utf8');
 const terminalsJs = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
 const planIngestionTs = fs.readFileSync(path.join(__dirname, '../services/PlanIngestionEngine.ts'), 'utf8');
+const kanbanProviderTs = fs.readFileSync(path.join(__dirname, '../services/KanbanProvider.ts'), 'utf8');
+const verbSchemasTs = fs.readFileSync(path.join(__dirname, '../services/verbSchemas.ts'), 'utf8');
+const verbAllowlistTs = fs.readFileSync(path.join(__dirname, '../generated/verbAllowlist.ts'), 'utf8');
+const protocolCatalog = fs.readFileSync(path.join(__dirname, '../../protocol-catalog.json'), 'utf8');
 
 let passed = 0;
 let failed = 0;
@@ -302,6 +306,137 @@ test('the silence branch cannot fire on a missing lastDataAt', () => {
     const exitedAt = loop.indexOf("entry.status === 'exited'");
     const silentAt = loop.indexOf('turnEndSilenceMs');
     assert.ok(exitedAt >= 0 && silentAt > exitedAt, 'the exited branch must precede the silence branch — branch ORDER is what keeps dead seats out of it');
+});
+
+// ── Head-agent wake safeguard ───────────────────────────────────────────────
+// The 2026-08-16 failure: a head dispatched via ptySendPrompt, its coder wrote a
+// completion report, and NOTHING woke the head. Two independent gates had to fall
+// for that, and both are asserted here.
+
+test('the plan-file edit clear fires the turn-end notifier on the same transitioned gate', () => {
+    // Gate two of the 2026-08-16 blind spot. `clearWorkingState` on the watcher's
+    // import NULLs dispatched_at milliseconds after the coder writes its report —
+    // ~90s BEFORE the seat is silent enough to be swept — so the sweep's `completed`
+    // arm is unreachable for any plan file this watcher imports. The completion
+    // transition is observed HERE; if the notifier does not fire here, registration
+    // alone reproduces the observed failure verbatim with a green suite.
+    const clearPath = planIngestionTs.substring(
+        planIngestionTs.indexOf('if (updatedRecord.dispatchedAt) {'),
+        planIngestionTs.indexOf('plan = updatedRecord;')
+    );
+    assert.ok(clearPath.length > 0, 'the plan-file edit clear path must exist');
+    assert.ok(clearPath.includes('this._turnEndNotifier('), 'the file-edit clear must fire the turn-end notifier');
+    assert.ok(
+        /transitioned && this\._turnEndNotifier && clearedRecord\.dispatchedTerminal/.test(clearPath),
+        'the notifier must hang off the SAME `transitioned` boolean as the broadcast (re-deriving it re-opens the double-fire) and skip an empty dispatchedTerminal'
+    );
+    assert.ok(
+        clearPath.includes("outcome: 'completed'"),
+        'a plan-file mtime advance is a completed turn, never blocked'
+    );
+    assert.ok(
+        clearPath.includes('seatName: clearedRecord.dispatchedTerminal'),
+        'seatName must come from the CLEARED record — updatedRecord.dispatchedAt is nulled in place before this point'
+    );
+});
+
+test('the self-recipient skip is scoped to parent resolution in BOTH hosts', () => {
+    // The nudge addresses the head about the head: seatName === recipientSeat === the
+    // head terminal. An unscoped "recipient is the seat itself" guard therefore
+    // swallows EVERY nudge in both hosts while every other assertion stays green —
+    // the feature ships wired, catalogued, schema'd and dead.
+    for (const [host, src] of [['TaskViewerProvider', taskViewerTs], ['bootstrap', bootstrapTs]]) {
+        assert.ok(
+            /!info\.recipientSeat && recipientName && recipientName === seatName/.test(src),
+            `${host}: the malformed-parent-chain skip must be gated on !info.recipientSeat or the feature nudge can never be delivered`
+        );
+        assert.ok(
+            /if \(info\.recipientSeat\) \{\s*\n\s*recipientName = info\.recipientSeat;/.test(src),
+            `${host}: recipientSeat must bypass parent resolution — resolving the head's parent addresses the orchestrator instead`
+        );
+        assert.ok(src.includes('info.body ??'), `${host}: a pre-composed evidence body must win over the host's fallback message`);
+    }
+});
+
+test('the feature nudge sweep treats an empty liveness snapshot as no evidence', () => {
+    // getFleetLiveness() returns [] whenever the fleet is unavailable (extension
+    // reload, ptyHost still booting, fleet-less host). Without an early return the
+    // next tick reads every armed head as "absent" and permanently drops every
+    // watch for heads that are still running. Same contract as `lastDataAt > 0`.
+    const sweep = planIngestionTs.substring(
+        planIngestionTs.indexOf('private async _runFeatureNudgeSweep('),
+        planIngestionTs.indexOf('private async _retryPendingFeatureLinks(')
+    );
+    assert.ok(sweep.length > 0, '_runFeatureNudgeSweep must exist');
+    assert.ok(sweep.includes('if (liveness.length === 0) return;'), 'an empty liveness snapshot must abort the tick, never drop watches');
+    const emptyGuardAt = sweep.indexOf('liveness.length === 0');
+    const dropAt = sweep.indexOf("headLive.status === 'exited'");
+    assert.ok(emptyGuardAt >= 0 && dropAt > emptyGuardAt, 'the no-evidence guard must precede the absent/exited drop');
+    // Gate 3: never inject a prompt into a running turn.
+    assert.ok(sweep.includes('nowMs - headLive.lastDataAt < turnEndSilenceMs'), 'the nudge must gate on the HEAD\'s own silence');
+    assert.ok(sweep.includes('headLive.lastDataAt <= 0'), 'a zero/absent head lastDataAt is no evidence of silence');
+    // Gate 4: no double-wake.
+    assert.ok(sweep.includes('notifiedSeatsThisTick.has('), 'a seat notified this tick must suppress the nudge');
+    assert.ok(sweep.includes('!!s.dispatchedAt'), 'an outstanding dispatch must suppress the nudge — the per-dispatch backstop owns that window');
+    // Cancellation + pacing.
+    assert.ok(sweep.includes('nowMs - watch.lastNudgedAt < turnEndSilenceMs'), 'the nudge must be paced by lastNudgedAt');
+    assert.ok(sweep.includes('recipientSeat: watch.headTerminal'), 'the head IS the recipient — parent resolution must be skipped');
+    // Evidence, not a poke (the PRD "done" definition for this payload).
+    assert.ok(sweep.includes('s.dispatchedTerminal') && sweep.includes('s.kanbanColumn') && sweep.includes('s.planFile'),
+        'the nudge body must name the remaining subtasks, their columns and their seats');
+});
+
+test("handleAutobanTurnEnd ignores outcome 'stalled'", () => {
+    const arm = taskViewerTs.substring(
+        taskViewerTs.indexOf('public handleAutobanTurnEnd('),
+        taskViewerTs.indexOf('private _autobanPlanFileKey(')
+    );
+    assert.ok(arm.length > 0, 'handleAutobanTurnEnd must exist');
+    assert.ok(arm.includes("if (info.outcome === 'stalled') { return; }"), 'a feature stall is never a completion signal to advance on');
+    const stalledAt = arm.indexOf("'stalled'");
+    const enabledAt = arm.indexOf('this._autobanState.enabled');
+    assert.ok(stalledAt >= 0 && enabledAt > stalledAt, 'the stalled early-return must precede the engine-state guards');
+});
+
+test('watchFeature / unwatchFeature are catalogued, allowlisted, schema\'d and return their state', () => {
+    for (const verb of ['watchFeature', 'unwatchFeature']) {
+        assert.ok(verbAllowlistTs.includes(`'${verb}'`), `${verb} must be in KANBAN_VERBS`);
+        assert.ok(protocolCatalog.includes(`"${verb}"`), `${verb} must be in protocol-catalog.json`);
+        assert.ok(new RegExp(`\\n    ${verb}: \\{`).test(verbSchemasTs), `${verb} must have a schema block`);
+        assert.ok(kanbanProviderTs.includes(`case '${verb}': {`), `${verb} must have a KanbanProvider arm (standalone serves it via the default: delegation)`);
+    }
+    // Permissive per contract #5: only featureId is required. A schema that also
+    // required headTerminal/workspaceRoot would reject valid callers at the boundary.
+    const watchSchema = verbSchemasTs.substring(
+        verbSchemasTs.indexOf('    watchFeature: {'),
+        verbSchemasTs.indexOf('    // Plan lifecycle')
+    );
+    assert.ok(watchSchema.length > 0, 'the watch schemas must be readable');
+    assert.strictEqual((watchSchema.match(/required: true/g) || []).length, 2, 'exactly featureId is required on each of the two watch verbs');
+    // Contract #4: the body carries data, not a bare ack.
+    const arms = kanbanProviderTs.substring(
+        kanbanProviderTs.indexOf("case 'watchFeature': {"),
+        kanbanProviderTs.indexOf("case 'julesSelected': {")
+    );
+    assert.ok(arms.includes('return { success: true, watch: next, watches: filtered };'), 'watchFeature must return the armed watch in the body');
+    assert.ok(arms.includes('return { success: true, removed, watches: filtered };'), 'unwatchFeature must return the resulting state in the body');
+    assert.ok(!/vscode\./.test(arms), 'the watch arms must touch only db + config (contract #3) so standalone serves them unchanged');
+    assert.ok(arms.includes("db.getConfigJson<FeatureWatchRecord[]>('kanban.featureWatches'".replace('(', '(')) || arms.includes('kanban.featureWatches'),
+        'watch state lives in the config table, not state.json and not a new table');
+});
+
+test('the shipped attributePastedPrompt paste/drop path is not hardened by this change', () => {
+    // The registration path reuses the SHIPPED verb. A future "reject a second
+    // attribution for a busy terminal" pass would break a user re-attributing a card
+    // by drag on ~4,000 installs (PRD contract #2). Break this test to regress it.
+    const arm = kanbanProviderTs.substring(
+        kanbanProviderTs.indexOf("case 'attributePastedPrompt': {"),
+        kanbanProviderTs.indexOf("case 'watchFeature': {")
+    );
+    assert.ok(arm.length > 0, 'attributePastedPrompt must exist');
+    assert.ok(!arm.includes('getActiveDispatchedByTerminal'), 'the shared paste/drop verb must NOT reject a second attribution for a busy terminal');
+    assert.ok(arm.includes('attributePasteDispatch('), 'registration must stamp dispatched_terminal/dispatched_at through the shipped setter');
+    assert.ok(/return \{ success: true, attributed: attributed\.length/.test(arm), 'the caller needs `attributed` in the body — a zero is a failed registration');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

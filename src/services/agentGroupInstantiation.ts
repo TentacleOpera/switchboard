@@ -1,8 +1,3 @@
-import {
-    MAX_ORDERS,
-    STANDING_ORDERS_CONFIG_KEY,
-    StandingOrder,
-} from './standingOrders';
 import { MAX_DELEGATES_PER_PARENT, MAX_LIVE_DELEGATE_PTYS } from '../standalone/ptyFleetService';
 import { wireSpawnedTeam, AGENT_GROUP_CALLBACK_INSTRUCTION } from './teamWiring';
 
@@ -73,7 +68,6 @@ export async function instantiateAgentGroupCore(
 
     if (!db) { return { success: false, error: 'Kanban DB not ready' }; }
 
-    const existingOrders = await db.getConfigJson(STANDING_ORDERS_CONFIG_KEY, []) as StandingOrder[];
     const members = Array.isArray(group?.members) ? group.members : [];
 
     // Mirror spawnDelegates' own arithmetic exactly (per-definition clamp, then
@@ -83,20 +77,19 @@ export async function instantiateAgentGroupCore(
     const workerCount = members.reduce(
         (n: number, m: any) => n + Math.max(1, Math.min(m?.count || 1, MAX_DELEGATES_PER_PARENT)), 0);
 
-    // Pre-flight ALL THREE caps before creating anything. spawnDelegates checks
-    // its two, but only after the head terminal already exists — so an over-cap
-    // group would leave a running head behind and report a delegateError. This is
-    // the difference between "nothing happened" and "you now have an orphan agent
-    // CLI to close by hand".
+    // Pre-flight the two delegate caps before creating anything. spawnDelegates
+    // checks its own, but only after the head terminal already exists — so an
+    // over-cap group would leave a running head behind and report a
+    // delegateError. This is the difference between "nothing happened" and "you
+    // now have an orphan agent CLI to close by hand". The standing-orders cap
+    // (MAX_ORDERS) was removed — it bounded how many teams you could have, not
+    // what reaches any prompt, and nothing ever pruned orders.
     if (workerCount > MAX_DELEGATES_PER_PARENT) {
         return { success: false, error: `Delegate cap: ${workerCount} requested, ${MAX_DELEGATES_PER_PARENT} allowed per head agent` };
     }
     const liveDelegates = await liveDelegateCount();
     if (liveDelegates + workerCount > MAX_LIVE_DELEGATE_PTYS) {
         return { success: false, error: `Delegate cap: ${liveDelegates} live, ${workerCount} requested, ${MAX_LIVE_DELEGATE_PTYS} allowed in total` };
-    }
-    if (existingOrders.length + workerCount > MAX_ORDERS) {
-        return { success: false, error: `Standing-orders cap: ${existingOrders.length} registered, ${workerCount} requested, ${MAX_ORDERS} allowed in total` };
     }
 
     const result = await createHeadWithDelegates({
@@ -118,8 +111,7 @@ export async function instantiateAgentGroupCore(
     // Wire the team through the shared host-agnostic function — standing orders
     // + group registration. This replaces the inline standing-order block that
     // lived here: running both would double every order. The function is
-    // idempotent (skip existing pairs / group ids) and fails with a specific
-    // MAX_ORDERS error rather than silently stopping at the cap.
+    // idempotent (skip existing pairs / group ids).
     //
     // This wrapper runs BELOW handlePtyVerb (its header comment explains why:
     // the wrapper overwrites `delegates` from role config), so it will not
@@ -127,7 +119,7 @@ export async function instantiateAgentGroupCore(
     // installed exactly once on this path, not twice.
     //
     // Terminals are already created — do not roll back. Surface the error.
-    const wired = await wireSpawnedTeam({ db, headName, children: workers, members: Array.isArray(group?.members) ? group.members : undefined });
+    const wired = await wireSpawnedTeam({ db, headName, children: workers, members: Array.isArray(group?.members) ? group.members : undefined, prompt: group?.prompt, headPrompt: group?.headPrompt });
     if (!wired.ok) {
         return {
             success: true,

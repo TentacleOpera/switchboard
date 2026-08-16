@@ -325,7 +325,12 @@ Three rules, all load-bearing:
 - **Only clear a terminal that is genuinely at rest.** The verb writes `/clear` to the pty
   unconditionally — there is no busy check. A terminal is at rest when its completion message
   has reached you *and* you have decided its next work goes elsewhere. Clearing a coder that
-  is still working destroys the work in flight.
+  is still working destroys the work in flight. "At rest" is **not** "a terminal I am not
+  currently prompting" — a coder you dispatched and have not heard from is working, not
+  resting. In particular, a `blocked` turn-end notice is *silence*, not completion: it means
+  the coder has not reported for ~90 s, which is the one moment it is most likely to be
+  mid-task. Never rest a terminal on a `blocked` notice; only a `completed` notice or an
+  explicit completion message from the coder itself satisfies the precondition.
 - **Standing orders survive a clear.** The callback contract lives at the
   `terminals.standingOrders` DB key and is re-appended to every `ptySendPrompt`. A cleared
   coder still reports to you on its next task — do not re-register the order, and treat any

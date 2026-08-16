@@ -42,7 +42,7 @@ async function runTests() {
         assert.strictEqual(files.length, 1);
 
         const churn2 = structuredClone(churn1);
-        churn2.mcpMonitor = { sourceLastCheckAt: { slack: new Date().toISOString() } };
+        churn2.clickup.lastSync = new Date().toISOString();
         await GlobalIntegrationConfigService.saveGlobal(churn2);
 
         files = fs.readdirSync(backupDir).filter((f) => /^integration-config\..+\.json$/.test(f));
@@ -53,9 +53,9 @@ async function runTests() {
         const reordered = {
             clickup: {
                 selectedListId: 'list-2',
-                workspaceId: '6909707'
-            },
-            mcpMonitor: churn2.mcpMonitor
+                workspaceId: '6909707',
+                lastSync: churn2.clickup.lastSync
+            }
         };
         await GlobalIntegrationConfigService.saveGlobal(reordered);
         files = fs.readdirSync(backupDir).filter((f) => /^integration-config\..+\.json$/.test(f));

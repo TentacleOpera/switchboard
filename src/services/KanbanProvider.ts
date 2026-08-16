@@ -23,6 +23,7 @@ import { AgentSkillExporter } from './AgentSkillExporter';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
 import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine } from './agentPromptBuilder';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow, type ColumnUpdateOutcome } from './KanbanDatabase';
+import type { FeatureWatchRecord } from './PlanIngestionEngine';
 import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (is_feature clobber) — remove with the probes
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { buildFetchPlansPrompt } from './schedulerPresets';
@@ -31,13 +32,14 @@ import { SURFACES } from './wsHub';
 import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveWithRetention';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
-import { migrateAgentGroups, SEEDED_AGENT_GROUP } from './teamWiring';
+import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, startTeamById } from './teamWiring';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
 import { KANBAN_VERBS } from '../generated/verbAllowlist';
 import { createVscodeHostSeams, type HostSeams } from './hostSeams';
 import { validateVerbPayload } from './verbSchemas';
 import { BroadcastHub } from './broadcastHub';
 import type { AutobanConfigState } from './autobanState';
+import { DEFAULT_AUTOBAN_RUN_SHEET } from './autobanState';
 import type { TaskViewerProvider } from './TaskViewerProvider';
 import { processDeclaredMoves, ingestJobActivity } from './ScheduledJobsService';
 import { ClickUpAutomationService } from './ClickUpAutomationService';
@@ -2240,6 +2242,47 @@ export class KanbanProvider implements vscode.Disposable {
         return created;
     }
 
+    /**
+     * Apply or restore the per-feature worktree topology that an oversight
+     * session requires. Called by TaskViewerProvider on the
+     * orchestrationConfig.enabled false→true transition (arm) and the
+     * true→false transition (disarm) — NOT from the verb arms, so HTTP
+     * callers (POST /orchestration/start|stop) reach it too, and a failed
+     * arm (early return before the orchestrationConfig write) never moves
+     * topology.
+     *
+     * armed=true: stash the user's prior mode exactly once (double-enter
+     *   guard), switch to per-feature, broadcast.
+     * armed=false: restore the stashed prior (validModes clamp), consume
+     *   the key, broadcast. No-op when no prior is stashed.
+     */
+    public async applyOversightWorktreeTopology(workspaceRoot: string, armed: boolean): Promise<void> {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !await db.ensureReady()) { return; }
+        const PRIOR_KEY = 'orchestration_prior_feature_worktree_mode';
+        if (armed) {
+            const current = (await db.getConfig('feature_worktree_mode')) || 'none';
+            const savedPrior = await db.getConfig(PRIOR_KEY);
+            // Double-enter guard: never overwrite the true prior.
+            if (!savedPrior) {
+                await db.setConfig(PRIOR_KEY, current);
+            }
+            if (current !== 'per-feature') {
+                await db.setConfig('feature_worktree_mode', 'per-feature');
+            }
+            await this._sendWorktreeConfig(workspaceRoot);
+        } else {
+            const savedPrior = await db.getConfig(PRIOR_KEY);
+            // '' (cleared) and null both skip restore.
+            if (savedPrior) {
+                const validModes = ['none', 'per-feature'];
+                await db.setConfig('feature_worktree_mode', validModes.includes(savedPrior) ? savedPrior : 'none');
+                await db.setConfig(PRIOR_KEY, '');   // consume the saved prior
+                await this._sendWorktreeConfig(workspaceRoot);
+            }
+        }
+    }
+
     private async _reconcileStaleWorktreeMode(workspaceRoot: string): Promise<void> {
         const db = this._getKanbanDb(workspaceRoot);
         if (!await db.ensureReady()) {
@@ -2249,8 +2292,8 @@ export class KanbanProvider implements vscode.Disposable {
         const mode = (await db.getConfig('feature_worktree_mode')) || 'none';
         const savedPrior = await db.getConfig(PRIOR_KEY);
         if (mode === 'per-feature' && savedPrior) {
-            // Guard: skip the reset if an active orchestrator session is detected
-            if (this._taskViewerProvider && this._taskViewerProvider.getAutomationMode() === 'orchestration') {
+            // Guard: skip the reset if an oversight agent session is active
+            if (this._taskViewerProvider && this._taskViewerProvider.isOversightAgentRunning()) {
                 return;
             }
             const validModes = ['none', 'per-feature'];
@@ -4412,15 +4455,101 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         // The converter itself lives in teamWiring.ts and also runs in
         // findTeamForHeadRole's read path — so even if the TEAMS tab is
         // never opened, the auto-start trigger sees converted data.
+        //
+        // Delegate-children import: before running the migration converter,
+        // import any existing `addons.delegates` from role config into team
+        // definitions. This is the retirement migration for the Delegate
+        // children editor — its config becomes a team so the spawn path
+        // (now team-only) still produces the same members. The import runs
+        // BEFORE the converter so the converter's member-shape defaults
+        // (scope/relationship) are applied to the imported members too.
+        // Never overwrites an existing team for a role.
         return this._mutateAgentGroups(workspaceRoot, (groups) => {
-            if (groups === null) {
+            let working = groups;
+            let changed = false;
+            if (working === null) {
                 // Key absent — seed the new member-less starter.
-                return [SEEDED_AGENT_GROUP];
+                working = [SEEDED_AGENT_GROUP];
+                changed = true;
             }
-            // Key present — run the migration converter. Returns null when
-            // nothing changed (already converted), so a no-op activation does
-            // not touch the key.
-            return migrateAgentGroups(groups);
+            // Import addons.delegates from role config into teams BEFORE the
+            // migration converter, so the converter's member-shape defaults
+            // (scope/relationship) are applied to the imported members too.
+            // The role list mirrors DEFAULT_ROLE_CONFIG keys in
+            // sharedDefaults.js — the same set the webview's ROLE_KEYS
+            // derives from. Only roles with a non-empty delegates array and
+            // no existing team are imported. Returns null when nothing was
+            // imported. Never overwrites an operator's existing team.
+            const BUILTIN_ROLES = [
+                'planner', 'lead', 'coder', 'reviewer', 'tester', 'intern',
+                'analyst', 'ticket_updater', 'researcher', 'claude_designer',
+                'phone_a_friend', 'project_manager',
+            ];
+            const roleConfigs: Record<string, any> = {};
+            for (const role of BUILTIN_ROLES) {
+                try {
+                    const cfg = this.getScopedRoleConfig(role);
+                    if (cfg) { roleConfigs[role] = cfg; }
+                } catch { /* role config read failure must not block team load */ }
+            }
+            const imported = importDelegatesIntoTeams(working, roleConfigs);
+            if (imported !== null) { working = imported; changed = true; }
+            // Run the migration converter (neutralise old seed, add
+            // scope/relationship defaults, resolve head-role collisions).
+            // Returns null when nothing changed.
+            const migrated = migrateAgentGroups(working);
+            if (migrated !== null) { working = migrated; changed = true; }
+            // Return null (no write) when nothing changed and the key was
+            // present. When the key was absent (seeded) or either step
+            // changed something, return the working array to persist it.
+            if (!changed) { return null; }
+            return working;
+        });
+    }
+
+    /**
+     * Public read of the team definitions (migrated + seeded), for the
+     * terminals-panel team list and the honest role picker. The terminals
+     * webview fetches this via the `ptyListAgentGroups` verb so it can render
+     * a START action per team and annotate role options that head a team —
+     * without a wire-supplied definition ever reaching the start path.
+     */
+    public async listAgentGroups(workspaceRoot: string): Promise<any[]> {
+        try {
+            return await this._loadAgentGroups(workspaceRoot);
+        } catch (err) {
+            console.warn('[KanbanProvider] listAgentGroups failed:', err);
+            return [];
+        }
+    }
+
+    /**
+     * Start a team by id on the standalone host. Host-resolves the definition
+     * (never from the wire), reconciles a double-start, then calls the
+     * registered instantiator (`setAgentGroupInstantiator`). The extension
+     * host does NOT register an instantiator — it uses
+     * `TaskViewerProvider.instantiateAgentGroup` directly, so this method is
+     * the standalone arm only.
+     */
+    public async startAgentGroupById(
+        workspaceRoot: string,
+        teamId: string,
+        liveTerminals: () => Promise<Array<{ role?: string; friendlyName?: string; parentInstanceId?: any; status?: string }>>,
+        spawnCwd?: string
+    ): Promise<any> {
+        if (!this._agentGroupInstantiator) {
+            return { success: false, error: 'Team start is not available on this host (no instantiator registered)' };
+        }
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) {
+            return { success: false, error: 'Kanban DB not ready' };
+        }
+        return startTeamById({
+            db,
+            teamId,
+            workspaceRoot: spawnCwd || workspaceRoot,
+            liveTerminals,
+            instantiator: this._agentGroupInstantiator,
         });
     }
 
@@ -5447,8 +5576,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         // Shim: delegates to the target-agnostic board-batch core and posts the
         // result as `antigravityPrompt` (legacy message name). The scheduler
         // surface (`schedulerPrompt` with a `target` discriminator) is the
-        // successor; this shim keeps existing antigravity-batch callers working
-        // until plan 4 retires the standalone mode.
+        // successor.
         const result = await this._buildBoardBatchPromptCore(agentName, workspaceRoot, column, batchSize);
         this.postMessage({
             type: 'antigravityPrompt',
@@ -5616,6 +5744,14 @@ This step is what moves the plan forward in the Switchboard pipeline.
     // ─── Scheduler prompt presets & target contracts ────────────────────────
 
     /**
+     * The board-driving contract: how an external agent reaches THIS workspace's
+     * board and moves cards. Shared by the reconcile prompt and the external-mode
+     * prompt so the two cannot drift. Read the port from the port file, move cards
+     * via the sanctioned path, NEVER raw SQL.
+     */
+    private static readonly BOARD_DRIVING_CONTRACT = `Move cards on this workspace's board via the sanctioned \`kanban_operations\` skill (\`move-card.js\` / \`POST /kanban/move\`), NEVER raw SQL. Raw SQL strands cards and bypasses the move-card.js side-effects (cascades, syncs). To reach the board's Local API Server, read the port from \`.switchboard/api-server-port.txt\` in the workspace root.`;
+
+    /**
      * Reconcile prompt: a copyable IDE-agent prompt that pulls recent remote
      * branches, scans pulled plan files for new `## Completion Report` /
      * `## Review Findings` sections, and advances cards **forward-only** via
@@ -5639,7 +5775,7 @@ git pull --all || true
 
 2. For each recently-merged or pushed branch, scan the plan files under \`.switchboard/plans/\` for a NEW \`## Completion Report\` or \`## Review Findings\` section that was not present on the previous reconcile pass. (Use \`git log --since="last reconcile"\` or compare against the last reconcile commit to scope this.)
 
-3. For each plan file with a new completion/review section, move its card **forward-only** — and ONLY forward — via the sanctioned \`kanban_operations\` skill (\`move-card.js\` / \`POST /kanban/move\`), NEVER raw SQL. Raw SQL strands cards and bypasses the move-card.js side-effects (cascades, syncs).
+3. For each plan file with a new completion/review section, move its card **forward-only** — and ONLY forward. ${KanbanProvider.BOARD_DRIVING_CONTRACT}
 
    - Determine the correct next column from the plan's current column and the workspace pipeline. If you cannot determine it, SKIP the card and report it — do not guess.
    - If a card has already been advanced by a human (its current column is already at or past the expected next column), SKIP it. Never move a card backward. Never double-advance.
@@ -5651,10 +5787,51 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
     }
 
     /**
+     * External-mode prompt: a copyable prompt for a tool that runs agent cron
+     * jobs (Antigravity, a Claude scheduled agent). Built from the run sheet as
+     * DATA — no database read, no plan IDs, no absolute paths — so it is
+     * evergreen and builds successfully with an empty board.
+     *
+     * Two halves (both required, by design):
+     *  1. The work instruction — plain English, self-contained. An agent that
+     *     can only read the repo can act on this alone.
+     *  2. The board-driving contract — how to reach this workspace's board and
+     *     move cards. An agent that can reach the extension drives the board.
+     *
+     * The agent's own reachability is the branch — one prompt, no target picker.
+     *
+     * The run sheet is read via `TaskViewerProvider.getAutobanRunSheet()` — the
+     * single seam a persisted, user-edited sheet plugs into later — so a future
+     * editable sheet flows into the emitted prompt for free. Falls back to the
+     * default constant when the provider is absent (e.g. a test stub).
+     *
+     * @param instruction Optional user-typed line that opens the prompt — e.g.
+     *   "Kick off the switchboard automation." or "Review the plans in the
+     *   CREATED column in sequence." Empty string is fine (the work instruction
+     *   below is self-contained).
+     */
+    private _buildExternalAutomationPrompt(instruction?: string): string {
+        const steps = this._taskViewerProvider?.getAutobanRunSheet() ?? DEFAULT_AUTOBAN_RUN_SHEET;
+        const workLines = steps.map((step, i) =>
+            `${i + 1}. Find the oldest plan in the ${step.sourceColumn} column and act on it as the ${step.headRole} team would — read the plan file under \`.switchboard/plans/\`, do the work it describes, and write a completion report when done.`
+        );
+        const instructionLine = (typeof instruction === 'string' && instruction.trim())
+            ? `${instruction.trim()}\n\n`
+            : '';
+        const workInstruction = [
+            `${instructionLine}You are driving Switchboard automation from outside the editor. Walk the run sheet top to bottom, one card at a time, oldest first:`,
+            ``,
+            workLines.join('\n\n'),
+            ``,
+            `A step whose column is empty is skipped this pass. Walk the steps in order — an earlier step's output is visible to a later one on the next pass. When you have completed a plan, advance its card forward to the next column in the pipeline, and only forward.`
+        ].join('\n');
+        return `${workInstruction}\n\n${KanbanProvider.BOARD_DRIVING_CONTRACT}`;
+    }
+
+    /**
      * Custom prompt: free-text from the job's `promptOverride`. The engine
-     * already sends promptOverride directly for non-comms sources; this builder
-     * exists so the scheduler UI's "Copy prompt" action can emit it for external
-     * targets too.
+     * already sends promptOverride directly; this builder exists so the
+     * scheduler UI's "Copy prompt" action can emit it for external targets too.
      */
     private _buildCustomPrompt(promptOverride: string): string {
         return (promptOverride || '').trim();
@@ -5690,9 +5867,6 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
 
     /**
      * Build the scheduler prompt for a job + target. Dispatches on `job.source`:
-     *   - comms → the comms monitor prompt (read-only; built by TaskViewerProvider)
-     *   - board-batch → the board-batch core (DB-backed; byte-identical to the
-     *     legacy antigravity-batch output for the same agent/column/batchSize)
      *   - fetch-plans → the shared `buildFetchPlansPrompt` preset (same copy the
      *     local-terminal tick uses — see `./schedulerPresets`)
      *   - reconcile → the forward-only reconcile prompt
@@ -5709,29 +5883,7 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
         let body: string | null = null;
         let error: string | undefined;
 
-        if (source === 'comms') {
-            // Comms prompt is built by TaskViewerProvider (read-only monitor).
-            // For external targets comms is not meaningful, but we still emit
-            // the override if present.
-            body = (job.promptOverride || '').trim() || null;
-            if (!body) {
-                return { prompt: null, error: 'Comms source requires a local-terminal target and a configured comms job.' };
-            }
-        } else if (source === 'board-batch') {
-            const agent = job.sourceConfig?.agent || job.agent || 'coder';
-            const column = job.sourceConfig?.column || job.column || 'CREATED';
-            const batchSize = job.sourceConfig?.batchSize ?? job.batchSize;
-            // Default to batchSize=1 when unspecified. Without this, the core
-            // builder falls into the non-batch schedulingBlock which hardcodes
-            // "You are running on a scheduled Antigravity timer" — wrong for
-            // cloud or local-terminal targets. The batch path (batchBlock) is
-            // target-agnostic. The legacy antigravityPrompt shim still passes
-            // undefined to preserve byte-identical backward-compat output.
-            const effectiveBatch = typeof batchSize === 'number' ? batchSize : 1;
-            const result = await this._buildBoardBatchPromptCore(agent, workspaceRoot, column, effectiveBatch);
-            body = result.prompt;
-            error = result.error;
-        } else if (source === 'fetch-plans') {
+        if (source === 'fetch-plans') {
             body = buildFetchPlansPrompt(job);
         } else if (source === 'reconcile') {
             body = this._buildReconcilePrompt();
@@ -7879,12 +8031,6 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                         this.postMessage(m);
                     }
                 }
-                // Push persisted MCP monitor config to the kanban webview on
-                // ready. The initial push from setKanbanProvider() is dropped
-                // when _panel is undefined (extension activation), so we
-                // re-request it here once the webview is live.
-                this._taskViewerProvider?.postMcpMonitorConfig();
-
                 // Make ready a full-state resync point. Pull the authoritative state
                 // and post directly to this._panel.webview so mounting webview gets board
                 // cards even if host-side dedup caches consider the state already pushed.
@@ -8362,36 +8508,6 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             // (_resolveProjectContextEnabled / _resolveProjectPrd) remain here, plus the public
             // getProjectContextEnabled / setProjectContextEnabled accessors the Project panel calls.
             case 'setAutomationMode': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                const db = workspaceRoot ? this._getKanbanDb(workspaceRoot) : null;
-                if (db && await db.ensureReady()) {
-                    const PRIOR_KEY = 'orchestration_prior_feature_worktree_mode';
-                    if (msg.mode === 'orchestration') {
-                        const current = (await db.getConfig('feature_worktree_mode')) || 'none';
-                        const savedPrior = await db.getConfig(PRIOR_KEY);
-                        // Double-enter guard: never overwrite the true prior.
-                        if (!savedPrior) {
-                            await db.setConfig(PRIOR_KEY, current);
-                        }
-                        // Orchestration uses the per-feature worktree topology: ONE shared
-                        // worktree per feature, every subtask running inside it, merging
-                        // feature -> main. (Supersedes the earlier per-subtask coupling; see
-                        // the adjust-feature-worktree-modes feature which removes per-subtask.)
-                        if (current !== 'per-feature') {
-                            await db.setConfig('feature_worktree_mode', 'per-feature');
-                        }
-                        await this._sendWorktreeConfig(workspaceRoot!);
-                    } else {
-                        const savedPrior = await db.getConfig(PRIOR_KEY);
-                        // '' (cleared) and null both skip restore.
-                        if (savedPrior) {
-                            const validModes = ['none', 'per-feature'];
-                            await db.setConfig('feature_worktree_mode', validModes.includes(savedPrior) ? savedPrior : 'none');
-                            await db.setConfig(PRIOR_KEY, '');   // consume the saved prior
-                            await this._sendWorktreeConfig(workspaceRoot!);
-                        }
-                    }
-                }
                 if (this._taskViewerProvider) {
                     await this._taskViewerProvider.setAutomationModeFromKanban(msg);
                 }
@@ -8407,43 +8523,9 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             }
             case 'stopOrchestrator': {
                 if (this._taskViewerProvider) {
-                    await this._taskViewerProvider.stopOrchestratorFromKanban();
+                    await this._taskViewerProvider.stopOrchestratorFromKanban(msg.workspaceRoot);
                 }
                 return { success: true };
-            }
-            case 'setMcpMonitorConfig': {
-                if (this._taskViewerProvider && msg.config) {
-                    await this._taskViewerProvider.setMcpMonitorConfigFromKanban(msg.config);
-                }
-                return { success: true };
-            }
-            case 'launchMcpMonitorTerminal': {
-                await this._seams().commands.executeCommand('switchboard.launchMcpMonitorTerminal', msg.jobId);
-                return { success: true };
-            }
-            case 'stopMcpMonitorTerminal': {
-                await this._seams().commands.executeCommand('switchboard.stopMcpMonitorTerminal', msg.jobId);
-                return { success: true };
-            }
-            case 'checkMcpMonitorAuth': {
-                await this._seams().commands.executeCommand('switchboard.checkMcpMonitorAuth');
-                return { success: true };
-            }
-            case 'startMcpMonitorPolling': {
-                await this._seams().commands.executeCommand('switchboard.startMcpMonitorPolling');
-                return { success: true };
-            }
-            case 'stopMcpMonitorPolling': {
-                await this._seams().commands.executeCommand('switchboard.stopMcpMonitorPolling');
-                return { success: true };
-            }
-            case 'renderMcpMonitorPreview': {
-                if (this._taskViewerProvider && msg.config) {
-                    const preview = this._taskViewerProvider.buildMcpMonitorPreview(msg.config);
-                    this.postMessage({ type: 'mcpMonitorPreview', preview });
-                    return { success: true, preview };
-                }
-                return { success: false, error: 'config is required' };
             }
             case 'getSchedulerConfig': {
                 const config = await GlobalIntegrationConfigService.getSchedulerConfig();
@@ -8462,6 +8544,18 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                     return { success: true, config };
                 }
                 return { success: false, error: 'config is required' };
+            }
+            case 'startSchedulerJob': {
+                if (this._taskViewerProvider && msg.jobId) {
+                    await this._taskViewerProvider.launchSchedulerTerminal(msg.jobId);
+                }
+                return { success: true };
+            }
+            case 'stopSchedulerJob': {
+                if (this._taskViewerProvider && msg.jobId) {
+                    await this._taskViewerProvider.stopSchedulerTerminal(msg.jobId);
+                }
+                return { success: true };
             }
             case 'getAutobanConfig': {
                 return { success: true, type: 'updateAutobanConfig', state: this._autobanState };
@@ -8495,6 +8589,12 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             }
             case 'toggleAutobanPause': {
                 await this._seams().commands.executeCommand('switchboard.setAutobanPausedFromKanban', !!msg.paused);
+                return { success: true };
+            }
+            case 'setWhenSchedule': {
+                if (this._taskViewerProvider) {
+                    await this._taskViewerProvider.setWhenSchedule(msg.schedule ?? null);
+                }
                 return { success: true };
             }
             case 'setPairProgrammingMode': {
@@ -8624,7 +8724,13 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                         // built-in single-card branch below).
                         let plannerCursorLocationKey: string | undefined;
                         const tvp = this._taskViewerProvider;
-                        if (role === 'planner' && dispatchMode !== 'prompt' && tvp) {
+                        // A caller-supplied override is authoritative on BOTH branches.
+                        // Only the built-in branch read it before, so a board whose
+                        // CODE REVIEWED column is custom-configured silently discarded
+                        // team-scoped routing and picked an arbitrary reviewer.
+                        if (msg?.targetTerminalOverride) {
+                            targetTerminalOverride = msg.targetTerminalOverride;
+                        } else if (role === 'planner' && dispatchMode !== 'prompt' && tvp) {
                             const { terminals, locationKey } = await tvp.getRoleTerminalSet('planner', workspaceRoot);
                             if (terminals.length > 0) {
                                 const cursor = tvp.getPlannerRotationCursor(locationKey);
@@ -8734,9 +8840,15 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
                             if (plannerCursorLocationKey && tvp) {
                                 await tvp.advancePlannerRotationCursor(plannerCursorLocationKey, 1);
                             }
-                            // Record dispatch identity (TaskViewerProvider does NOT call this for drag-drop
-                            // because explicitTargetColumn is empty when triggerAgentFromKanban has no options)
-                            await this._recordDispatchIdentity(workspaceRoot, sessionId, targetColumn, targetTerminalOverride);
+                            // Record dispatch identity — only when we chose the terminal ourselves
+                            // (planner rotation or a caller-supplied override). The dispatch path now
+                            // records the terminal it resolved (handleKanbanTrigger records whenever a
+                            // target column resolved); re-recording with `undefined` here would overwrite
+                            // that real name with the literal 'unknown', which is what made team-scoped
+                            // reviewer routing impossible on the drag path.
+                            if (targetTerminalOverride) {
+                                await this._recordDispatchIdentity(workspaceRoot, sessionId, targetColumn, targetTerminalOverride);
+                            }
 
                             // Pair programming: when a high-complexity card is dispatched to Lead,
                             // also dispatch the Coder terminal with the Routine prompt.
@@ -10182,6 +10294,85 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
 
                 return { success: true, attributed: attributed.length, skipped: (planIds.length + planFiles.length) - attributed.length };
             }
+            case 'watchFeature': {
+                // Feature-level stall nudge arming. The head agent that starts
+                // driving a feature arms a watch on itself; the plan-ingestion
+                // sweep then nudges it when the feature has un-accepted subtasks,
+                // no dispatch is outstanding, and the head has gone idle. Ships
+                // OFF by default — nothing is watched unless an agent asks, which
+                // makes it self-limiting and self-scoped. Touches only db + config,
+                // so standalone serves it through the `kanbanVerb` `default:`
+                // delegation with no bootstrap edit (contracts #3 and #7). Returns
+                // its state in the body (contract #4) and uses a permissive schema
+                // requiring only `featureId` (contract #5).
+                const featureId: string = msg.featureId || '';
+                const headTerminal: string = msg.headTerminal || '';
+                if (!featureId || !headTerminal) {
+                    return { success: false, error: 'featureId and headTerminal are required' };
+                }
+                const stopColumns: string[] = Array.isArray(msg.stopColumns) ? msg.stopColumns : [];
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    return { success: false, error: 'workspaceRoot could not be resolved' };
+                }
+                try {
+                    const db = this._getKanbanDb(workspaceRoot);
+                    if (!(await db.ensureReady())) {
+                        return { success: false, error: 'kanban database is not ready' };
+                    }
+                    const WATCH_KEY = 'kanban.featureWatches';
+                    const watches = await db.getConfigJson<FeatureWatchRecord[]>(WATCH_KEY, []);
+                    const next: FeatureWatchRecord = {
+                        featureId,
+                        headTerminal,
+                        armedAt: Date.now(),
+                        lastNudgedAt: 0,
+                        stopColumns: stopColumns.length > 0 ? stopColumns : undefined,
+                    };
+                    // Arming twice for the same feature REPLACES the watch rather
+                    // than stacking — a head that re-arms after a restart must not
+                    // accumulate duplicate nudges for the same feature.
+                    const filtered = watches.filter(w => w.featureId !== featureId);
+                    filtered.push(next);
+                    await db.setConfigJson(WATCH_KEY, filtered);
+                    this._scheduleBoardRefresh(workspaceRoot);
+                    return { success: true, watch: next, watches: filtered };
+                } catch (err) {
+                    return { success: false, error: `watchFeature failed: ${err}` };
+                }
+            }
+            case 'unwatchFeature': {
+                // Cancel a feature watch. Called by the head when it accepts the
+                // last subtask (or stops driving), and also used as the manual
+                // off-switch. The sweep also auto-drops a watch when the feature
+                // is done or the head is gone, so this is the explicit path.
+                const featureId: string = msg.featureId || '';
+                if (!featureId) {
+                    return { success: false, error: 'featureId is required' };
+                }
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    return { success: false, error: 'workspaceRoot could not be resolved' };
+                }
+                try {
+                    const db = this._getKanbanDb(workspaceRoot);
+                    if (!(await db.ensureReady())) {
+                        return { success: false, error: 'kanban database is not ready' };
+                    }
+                    const WATCH_KEY = 'kanban.featureWatches';
+                    const watches = await db.getConfigJson<FeatureWatchRecord[]>(WATCH_KEY, []);
+                    const before = watches.length;
+                    const filtered = watches.filter(w => w.featureId !== featureId);
+                    const removed = filtered.length < before;
+                    if (removed) {
+                        await db.setConfigJson(WATCH_KEY, filtered);
+                        this._scheduleBoardRefresh(workspaceRoot);
+                    }
+                    return { success: true, removed, watches: filtered };
+                } catch (err) {
+                    return { success: false, error: `unwatchFeature failed: ${err}` };
+                }
+            }
             case 'julesSelected': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || !Array.isArray(msg.sessionIds) || msg.sessionIds.length === 0) {
@@ -10966,33 +11157,27 @@ ${FOCUS_DIRECTIVE}`;
                 }
                 return { success: true, prompt, planCount: sourceCards.length };
             }
-            case 'addAutobanTerminal': {
-                const role = String(msg.role || '');
-                if (role) {
-                    await this._seams().commands.executeCommand('switchboard.addAutobanTerminalFromKanban', role);
-                    // Terminal creation changes no card, so nothing else on the board path
-                    // re-pushes. The Dispatch header's coder-terminal count is the visible
-                    // feedback for the `+` stepper — without this the number only moves on
-                    // the next live-sync tick. _createAutobanTerminal's own follow-ups
-                    // (_postAutobanState, _refreshTerminalStatuses) target the sidebar, not
-                    // the board, so this is not a double refresh.
-                    await this._refreshBoard();
-                    return { success: true, role };
+
+            case 'addCoderTerminal': {
+                // The Dispatch header's `+` stepper. Nothing to do with the retired
+                // autoban terminal pools — it creates one role-tagged terminal, which
+                // is exactly what the poolless dispatch resolver
+                // (`_selectAutobanTerminal`) now looks for. PRD contract #6: this arm
+                // exists so the button is not a dead click on the extension host;
+                // standalone reports `terminalCreateAvailable: false` and disables it.
+                const role = String(msg.role || 'coder');
+                if (!role) {
+                    return { success: false, error: 'role is required' };
                 }
-                return { success: false, error: 'role is required' };
-            }
-            case 'removeAutobanTerminal': {
-                const role = String(msg.role || '');
-                const terminalName = String(msg.terminalName || '');
-                if (role && terminalName) {
-                    await this._seams().commands.executeCommand('switchboard.removeAutobanTerminalFromKanban', role, terminalName);
-                    return { success: true, role, terminalName };
-                }
-                return { success: false, error: 'role and terminalName are required' };
-            }
-            case 'resetAutobanPools': {
-                await this._seams().commands.executeCommand('switchboard.resetAutobanPoolsFromKanban');
-                return { success: true };
+                await this._seams().commands.executeCommand('switchboard.addCoderTerminalFromKanban', role);
+                // Terminal creation changes no card, so nothing else on the board path
+                // re-pushes. The Dispatch header's coder-terminal count is the visible
+                // feedback for the `+` stepper — without this the number only moves on
+                // the next live-sync tick. _createAutobanTerminal's own follow-ups
+                // (_postAutobanState, _refreshTerminalStatuses) target the sidebar, not
+                // the board, so this is not a double refresh.
+                await this._refreshBoard();
+                return { success: true, role };
             }
 
             case 'focusTerminal': {
@@ -11223,8 +11408,7 @@ ${FOCUS_DIRECTIVE}`;
                 // Scheduler prompt handoff. Dispatches on job.source and appends
                 // the target's prerequisites block for external targets
                 // (antigravity/cloud). The legacy `antigravityPrompt` message is
-                // kept as a shim (generateAntigravityPrompt above) until plan 4
-                // retires the standalone antigravity-batch mode.
+                // kept as a shim (generateAntigravityPrompt above).
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || typeof msg.job !== 'object' || !msg.job) {
                     return { success: false, error: 'workspaceRoot and job are required' };
@@ -11248,6 +11432,20 @@ ${FOCUS_DIRECTIVE}`;
                     contracts: KanbanProvider.SCHEDULER_TARGET_CONTRACTS
                 });
                 return { success: true };
+            }
+            case 'externalAutomationPrompt': {
+                // External-mode copy-prompt. Builds the evergreen run-sheet
+                // prompt (no DB read, no plan IDs) and returns it in the body
+                // for the webview to copy to clipboard. Also pushed via
+                // postMessage for the in-editor webview rail. The optional
+                // `instruction` line from the editable input opens the prompt.
+                const instruction = typeof msg.instruction === 'string' ? msg.instruction.trim() : '';
+                const prompt = this._buildExternalAutomationPrompt(instruction);
+                this.postMessage({
+                    type: 'externalAutomationPrompt',
+                    prompt
+                });
+                return { success: true, prompt };
             }
             case 'getPersonaForRole': {
                 const { role } = msg;

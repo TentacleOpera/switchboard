@@ -3,14 +3,15 @@
 /**
  * Contract: the standing-orders marker literal is byte-identical across the
  * TypeScript writer (src/services/standingOrders.ts) and the webview client
- * mirror (src/webview/terminals.js).
+ * mirror (src/webview/terminals.js), and the scope-aware selection and
+ * rendering logic is mechanically pinned between the two.
  *
  * The marker is the cross-boundary de-duplication token: when a prompt is
- * processed by both the client and the host, `prompt.includes(MARKER)` stops
- * a second standing-orders block from being appended. A one-sided rename
- * breaks de-duplication and delivers two blocks in one prompt. The two
- * declarations are currently held in sync by a comment alone — this test
- * enforces it mechanically so the next rename cannot silently diverge.
+ * processed by both the client and the host, the block-strip regex removes
+ * a pre-existing block before appending a fresh one, so only one block
+ * appears. A one-sided rename or logic divergence breaks de-duplication and
+ * delivers two blocks in one prompt, or drops the target's own orders. This
+ * test enforces parity mechanically so the next change cannot silently diverge.
  *
  * Run with:
  *   node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standing-orders-marker-contract.test.js
@@ -26,13 +27,62 @@ const STANDING_ORDERS_SRC = fs.readFileSync(
 const TERMINALS_JS_SRC = fs.readFileSync(
     path.join(__dirname, '..', 'webview', 'terminals.js'), 'utf8'
 );
+const AGENT_PROMPT_BUILDER_SRC = fs.readFileSync(
+    path.join(__dirname, '..', 'services', 'agentPromptBuilder.ts'), 'utf8'
+);
+const KANBAN_HTML_SRC = fs.readFileSync(
+    path.join(__dirname, '..', 'webview', 'kanban.html'), 'utf8'
+);
+const TEAM_WIRING_SRC = fs.readFileSync(
+    path.join(__dirname, '..', 'services', 'teamWiring.ts'), 'utf8'
+);
+
+/**
+ * Read a chain of single-quoted string literals joined by `+`, starting at
+ * `i`, and return the concatenated value with `\n` and `\'` unescaped.
+ * Returns null when `src[i]` does not begin a string literal.
+ *
+ * Every copy of this prose is authored as `'…' + '…' + '…'` (single-quoted
+ * concatenation is the house style for prompt text — it must never be
+ * evaluated), so byte-comparing the copies means joining the segments first.
+ */
+function readQuotedChain(src, i) {
+    if (src[i] !== "'") { return null; }
+    let value = '';
+    for (;;) {
+        if (src[i] !== "'") { break; }
+        let j = i + 1;
+        let seg = '';
+        while (j < src.length && src[j] !== "'") {
+            if (src[j] === '\\') { seg += src[j] + src[j + 1]; j += 2; continue; }
+            seg += src[j]; j++;
+        }
+        value += seg;
+        i = j + 1;
+        while (i < src.length && /\s/.test(src[i])) { i++; }
+        if (src[i] === '+') { i++; while (i < src.length && /\s/.test(src[i])) { i++; } continue; }
+        break;
+    }
+    return value.replace(/\\n/g, '\n').replace(/\\'/g, "'");
+}
 
 let passed = 0;
 let failed = 0;
+const testPromises = [];
 
 function test(name, fn) {
-    try { fn(); console.log(`  ✅ ${name}`); passed++; }
-    catch (e) { console.error(`  ❌ ${name}`); console.error(e && e.stack ? e.stack : e); failed++; }
+    try {
+        const result = fn();
+        if (result && typeof result.then === 'function') {
+            // Async test — defer pass/fail to promise settlement.
+            testPromises.push(
+                result.then(() => { console.log(`  ✅ ${name}`); passed++; })
+                      .catch((e) => { console.error(`  ❌ ${name}`); console.error(e && e.stack ? e.stack : e); failed++; })
+            );
+        } else {
+            console.log(`  ✅ ${name}`); passed++;
+        }
+    } catch (e) { console.error(`  ❌ ${name}`); console.error(e && e.stack ? e.stack : e); failed++; }
 }
 
 /** Extract the single-quoted string value from a `const STANDING_ORDERS_MARKER = '...';` line. */
@@ -88,35 +138,335 @@ test('validateInstruction rejects an instruction containing the marker', () => {
     assert.ok(marker.length > 0, 'Marker must not be empty');
 });
 
-// 5. Cap lockstep — the client mirror truncates and counts against the SAME
-//    numbers as the server. A client cap larger than the server's renders a
-//    counter that says "fine" for text the route rejects; a client MAX_BLOCK
-//    larger than the server's makes the Shift-drop paste and the dispatched
-//    prompt disagree about where the block ends.
+// 5. Mirror parity — the client mirror (terminals.js) and the server
+//    (standingOrders.ts) must implement the same scope-aware selection and
+//    rendering logic. There is no runtime test enforcing that the filter or
+//    the template match, which is precisely how they could silently diverge.
+//    These source-level assertions pin the scope vocabulary, the team-membership
+//    resolution, the block-strip regex, and the per-scope rendering framing
+//    across both files.
 
-/** Extract a numeric `const NAME = 1234` (TS `export const` or JS `const`). */
-function extractNumber(src, name, fileLabel) {
-    const m = src.match(new RegExp(`${name}\\s*=\\s*(\\d+)`));
-    assert.ok(m, `${name} literal not found in ${fileLabel}`);
-    return Number(m[1]);
-}
-
-for (const capName of ['MAX_BLOCK_CHARS', 'MAX_INSTRUCTION_CHARS']) {
-    test(`${capName} matches across standingOrders.ts and terminals.js`, () => {
-        const tsVal = extractNumber(STANDING_ORDERS_SRC, capName, 'src/services/standingOrders.ts');
-        const jsVal = extractNumber(TERMINALS_JS_SRC, capName, 'src/webview/terminals.js');
-        assert.strictEqual(
-            tsVal, jsVal,
-            `${capName} mismatch: standingOrders.ts has ${tsVal} but terminals.js has ${jsVal}. ` +
-            'A larger client cap makes the modal counter lie about what the route accepts; ' +
-            'a larger client block cap makes Shift-drop and dispatch truncate at different points.'
+test('both files declare the same block-strip regex for de-duplication, anchored to a complete block', () => {
+    for (const [src, label] of [[STANDING_ORDERS_SRC, 'standingOrders.ts'], [TERMINALS_JS_SRC, 'terminals.js']]) {
+        assert.ok(
+            /STANDING_ORDERS_BLOCK_RE/.test(src),
+            `${label} must declare STANDING_ORDERS_BLOCK_RE for block stripping`
         );
-    });
-}
+        // The regex must be anchored to a COMPLETE block — require the trailing
+        // "These apply..." line — so a mid-text marker quote is not silently
+        // truncated from that point to end-of-string.
+        assert.ok(
+            /STANDING_ORDERS_BLOCK_RE/.test(src) && /These apply to everything/.test(src),
+            `${label} block-strip regex must be anchored to the trailing 'These apply...' line`
+        );
+    }
+});
+
+test('both files implement scope-aware selection (global / team / pair)', () => {
+    for (const scope of ['global', 'team', 'pair']) {
+        assert.ok(
+            new RegExp(`scope.*${scope}|${scope}.*scope`).test(STANDING_ORDERS_SRC),
+            `standingOrders.ts must reference the '${scope}' scope in its selection logic`
+        );
+        assert.ok(
+            new RegExp(`scope.*${scope}|${scope}.*scope`).test(TERMINALS_JS_SRC),
+            `terminals.js must reference the '${scope}' scope in its selection logic (mirror parity)`
+        );
+    }
+});
+
+test('both files resolve team membership through group members and teamId', () => {
+    assert.ok(
+        /teamId/.test(STANDING_ORDERS_SRC) && /members/.test(STANDING_ORDERS_SRC),
+        'standingOrders.ts must resolve team scope via teamId and group members'
+    );
+    assert.ok(
+        /teamId/.test(TERMINALS_JS_SRC) && /members/.test(TERMINALS_JS_SRC),
+        'terminals.js must resolve team scope via teamId and group members (mirror parity)'
+    );
+});
+
+test('both files exclude the head from team-scoped orders via o.parent check', () => {
+    // The head exclusion check: when o.parent === targetName, the team order
+    // must not render for the head. This is how the head is excluded from the
+    // member prompt despite being in the group's members array.
+    for (const [src, label] of [[STANDING_ORDERS_SRC, 'standingOrders.ts'], [TERMINALS_JS_SRC, 'terminals.js']]) {
+        // Find the team-scope branch and verify it contains a parent-based
+        // exclusion check. The check must appear inside the team branch
+        // (after the teamId/membership resolution), not at the top level.
+        const teamBranchIdx = src.indexOf("scope === 'team'");
+        assert.ok(teamBranchIdx >= 0, `${label} must have a team-scope branch`);
+        const afterTeamBranch = src.slice(teamBranchIdx);
+        assert.ok(
+            /o\.parent.*targetName.*o\.parent|targetName.*===.*o\.parent/.test(afterTeamBranch),
+            `${label} must exclude the head from team-scoped orders via an o.parent === targetName check in the team branch (mirror parity)`
+        );
+    }
+});
+
+test('both files apply team-pair migration before selection', () => {
+    // The migration recognises pre-rewrite per-member pair rows and folds
+    // them into team-scoped orders. Both the host (migrateTeamPairOrders in
+    // teamWiring.ts, called at the read sites) and the client mirror
+    // (migrateTeamPairOrdersClient in terminals.js, called inside
+    // applyStandingOrdersClient) must implement this. Without parity, the
+    // Shift-drop path renders old pair rows while the host renders the
+    // folded team prompt — divergent delivery to the same terminal.
+    assert.ok(
+        /migrateTeamPairOrders/.test(STANDING_ORDERS_SRC) || /migrateTeamPairOrders/.test(fs.readFileSync(
+            path.join(__dirname, '..', 'services', 'teamWiring.ts'), 'utf8'
+        )),
+        'host must call migrateTeamPairOrders at the standing-orders read sites'
+    );
+    assert.ok(
+        /migrateTeamPairOrdersClient/.test(TERMINALS_JS_SRC),
+        'terminals.js must implement migrateTeamPairOrdersClient and call it inside applyStandingOrdersClient (mirror parity)'
+    );
+    // The migration must match the PRE-rewrite callback text, not the
+    // post-rewrite constant — the rows on disk carry the old wording.
+    const teamWiringSrc = fs.readFileSync(
+        path.join(__dirname, '..', 'services', 'teamWiring.ts'), 'utf8'
+    );
+    assert.ok(
+        /PRE_REWRITE_CALLBACK_INSTRUCTION/.test(teamWiringSrc),
+        'teamWiring.ts must declare PRE_REWRITE_CALLBACK_INSTRUCTION for the migration recogniser'
+    );
+    assert.ok(
+        /PRE_REWRITE_CALLBACK_INSTRUCTION/.test(TERMINALS_JS_SRC),
+        'terminals.js must declare PRE_REWRITE_CALLBACK_INSTRUCTION for the client migration recogniser (mirror parity)'
+    );
+    // The migration must NOT be applied at the GET /terminals/standing-orders
+    // fetch level — makeStandingOrder mints fresh uuids per call, so ids
+    // would churn on every request and the Link-up editor delete-by-id would
+    // break. Verify the client applies it inside applyStandingOrdersClient,
+    // not at the fetch level.
+    const fetchIdx = TERMINALS_JS_SRC.indexOf('fetchStandingOrders');
+    const fetchEnd = TERMINALS_JS_SRC.indexOf('standingOrdersAvailable', fetchIdx);
+    const fetchBlock = fetchIdx >= 0 ? TERMINALS_JS_SRC.slice(fetchIdx, fetchEnd) : '';
+    assert.ok(
+        !/migrateTeamPairOrdersClient/.test(fetchBlock),
+        'terminals.js must NOT call migrateTeamPairOrdersClient inside fetchStandingOrders — it would churn ids and break delete-by-id'
+    );
+});
+
+test('GIT_SAFETY_DIRECTIVE in agentPromptBuilder.ts is byte-identical to GIT_SAFETY_DIRECTIVE_CLIENT in terminals.js', () => {
+    // The team prompt's safety section is the one guardrail team coders get.
+    // The host imports GIT_SAFETY_DIRECTIVE from agentPromptBuilder.ts (one
+    // source of truth); the webview cannot import TypeScript modules, so
+    // terminals.js carries a hand-copied mirror (GIT_SAFETY_DIRECTIVE_CLIENT).
+    // A drift in the copy is invisible without this test — the plan names
+    // this exact failure mode under "Safeguard text must have one source of
+    // truth" and it is verification step 10.
+    //
+    // The host constant is a backtick template literal; the client mirror is
+    // a single-quoted string. Extract the string content from both and
+    // assert byte equality — same shape as the marker and block-regex parity
+    // tests above, and the same shape link-presets-mirror-contract.test.js
+    // uses for the callback constant.
+
+    // Extract from agentPromptBuilder.ts: `export const GIT_SAFETY_DIRECTIVE = `...`;`
+    // The host constant is a backtick template literal with escaped backticks
+    // inside (\`<path>\`). Greedy-match from the opening backtick to the
+    // closing `` `; ``, then unescape \` to `.
+    const hostMatch = AGENT_PROMPT_BUILDER_SRC.match(
+        /export\s+const\s+GIT_SAFETY_DIRECTIVE\s*=\s*`(.*)`;/
+    );
+    assert.ok(hostMatch, 'GIT_SAFETY_DIRECTIVE not found in agentPromptBuilder.ts');
+    const hostValue = hostMatch[1].replace(/\\`/g, '`');
+
+    // Extract from terminals.js: `var GIT_SAFETY_DIRECTIVE_CLIENT = '...';`
+    // The client mirror is a single-quoted string — backticks are literal
+    // inside single quotes, so no unescaping is needed.
+    const clientMatch = TERMINALS_JS_SRC.match(
+        /GIT_SAFETY_DIRECTIVE_CLIENT\s*=\s*\n?\s*'([^']*)'/
+    );
+    assert.ok(clientMatch, 'GIT_SAFETY_DIRECTIVE_CLIENT not found in terminals.js');
+    const clientValue = clientMatch[1];
+
+    assert.strictEqual(
+        hostValue, clientValue,
+        `GIT_SAFETY_DIRECTIVE drift detected.\n` +
+        `agentPromptBuilder.ts: "${hostValue}"\n` +
+        `terminals.js:         "${clientValue}"\n` +
+        `This is the one guardrail team coders get — a drift here is invisible without this test.`
+    );
+});
+
+test('kanban.html shipped team prompts carry byte-identical safety + callback text', () => {
+    // The THIRD and FOURTH copies of this prose. The test above pins
+    // terminals.js to agentPromptBuilder.ts; kanban.html's SHIPPED_TEAM_TYPES
+    // hand-copies BOTH the git-safety directive and the callback instruction
+    // into each shipped team's `prompt`, and nothing pinned them. Those
+    // prompts are what an operator actually adopts when they click USE, so a
+    // drift here silently ships a team whose coders carry stale or absent
+    // safety text — the exact failure the owning plan names under "Safeguard
+    // text must have one source of truth" (verification step 10).
+    const hostMatch = AGENT_PROMPT_BUILDER_SRC.match(
+        /export\s+const\s+GIT_SAFETY_DIRECTIVE\s*=\s*`(.*)`;/
+    );
+    assert.ok(hostMatch, 'GIT_SAFETY_DIRECTIVE not found in agentPromptBuilder.ts');
+    const gitSafety = hostMatch[1].replace(/\\`/g, '`');
+
+    const cbAnchor = /AGENT_GROUP_CALLBACK_INSTRUCTION\s*=\s*/.exec(TEAM_WIRING_SRC);
+    assert.ok(cbAnchor, 'AGENT_GROUP_CALLBACK_INSTRUCTION not found in teamWiring.ts');
+    const callback = readQuotedChain(TEAM_WIRING_SRC, cbAnchor.index + cbAnchor[0].length);
+    assert.ok(callback, 'could not read AGENT_GROUP_CALLBACK_INSTRUCTION as a quoted chain');
+
+    const start = KANBAN_HTML_SRC.indexOf('const SHIPPED_TEAM_TYPES');
+    assert.ok(start >= 0, 'SHIPPED_TEAM_TYPES not found in kanban.html');
+    const end = KANBAN_HTML_SRC.indexOf('const MEMBER_RELATIONSHIP_PRESETS', start);
+    assert.ok(end > start, 'could not bound the SHIPPED_TEAM_TYPES array');
+    const block = KANBAN_HTML_SRC.slice(start, end);
+
+    const prompts = [];
+    const re = /prompt:\s*/g;
+    let m;
+    while ((m = re.exec(block)) !== null) {
+        const value = readQuotedChain(block, m.index + m[0].length);
+        if (value !== null) { prompts.push(value); }
+    }
+    assert.strictEqual(
+        prompts.length, 3,
+        `Expected 3 shipped team prompts, found ${prompts.length}. The gallery ships exactly ` +
+        'three team types (Batch planners, Coding, Multi-agent planning) and each must carry a prompt.'
+    );
+    for (const p of prompts) {
+        assert.ok(
+            p.startsWith(callback),
+            'A shipped team prompt does not open with AGENT_GROUP_CALLBACK_INSTRUCTION verbatim.\n' +
+            `teamWiring.ts: "${callback}"\n` +
+            `kanban.html:   "${p.slice(0, callback.length)}"\n` +
+            'Without it, a team member is never told how to report back to its head.'
+        );
+        assert.ok(
+            p.endsWith(gitSafety),
+            'A shipped team prompt does not end with GIT_SAFETY_DIRECTIVE verbatim.\n' +
+            `agentPromptBuilder.ts: "${gitSafety}"\n` +
+            `kanban.html:           "${p.slice(-gitSafety.length)}"\n` +
+            'This is the only guardrail a team coder gets — a drift here is invisible without this test.'
+        );
+    }
+
+    // ── headPrompt contract ──────────────────────────────────────────
+    // The /prompt:\s*/g regex above is case-sensitive and does NOT match
+    // `headPrompt:` (capital P), so the 3-prompt count is unaffected. Pin
+    // the new field separately: exactly ONE headPrompt exists (only Coding),
+    // and it must carry the dispatch instruction literals.
+    const headPromptMatches = [];
+    const hpRe = /headPrompt:\s*/g;
+    let hpM;
+    while ((hpM = hpRe.exec(block)) !== null) {
+        const value = readQuotedChain(block, hpM.index + hpM[0].length);
+        if (value !== null) { headPromptMatches.push(value); }
+    }
+    assert.strictEqual(
+        headPromptMatches.length, 1,
+        `Expected exactly 1 shipped headPrompt (Coding only), found ${headPromptMatches.length}. ` +
+        'Only the Coding team type carries a head prompt — a planner or researcher head told to ' +
+        'advance cards to CODE REVIEWED would be actively wrong.'
+    );
+    const headPrompt = headPromptMatches[0];
+    assert.ok(headPrompt.includes('/kanban/dispatch'),
+        'Coding headPrompt must reference POST /kanban/dispatch — the endpoint that advances the card AND dispatches the reviewer');
+    assert.ok(headPrompt.includes('CODE REVIEWED'),
+        'Coding headPrompt must name CODE REVIEWED as the target column');
+    assert.ok(headPrompt.includes('"from":"{head}"'),
+        'Coding headPrompt must carry "from":"{head}" — the {head} token is substituted by wireSpawnedTeam with the head terminal name');
+    assert.ok(headPrompt.includes('Do NOT use /kanban/move'),
+        'Coding headPrompt must warn against /kanban/move — that endpoint moves the card and dispatches nobody, leaving the reviewer idle');
+});
+
+test('both files render pair with "Regarding" framing and global/team without it', () => {
+    assert.ok(
+        STANDING_ORDERS_SRC.includes('Regarding terminal'),
+        'standingOrders.ts must render pair scope with "Regarding terminal" framing'
+    );
+    assert.ok(
+        TERMINALS_JS_SRC.includes('Regarding terminal'),
+        'terminals.js must render pair scope with "Regarding terminal" framing (mirror parity)'
+    );
+    // The "Regarding" framing must be conditional on pair scope, not unconditional —
+    // a global/team order rendering "Regarding terminal undefined" is the bug
+    // this refactor exists to remove. Verify the scope check appears before the
+    // Regarding rendering in both files.
+    // Scan CODE ONLY. Both files document the per-scope framing in prose ABOVE
+    // the renderer — standingOrders.ts's renderOrder JSDoc names `- Regarding
+    // terminal "X":` and the "Regarding terminal undefined" bug it removes —
+    // so a raw source scan finds the doc mention before the `scope === 'pair'`
+    // code that gates it and fails on correct source. `stripComments` is a
+    // hoisted function declaration, so it is callable here.
+    for (const [raw, label] of [[STANDING_ORDERS_SRC, 'standingOrders.ts'], [TERMINALS_JS_SRC, 'terminals.js']]) {
+        const src = stripComments(raw);
+        const pairIdx = src.indexOf("scope === 'pair'");
+        const regardingIdx = src.indexOf('Regarding terminal');
+        assert.ok(pairIdx >= 0, `${label} must check scope === 'pair'`);
+        assert.ok(regardingIdx >= 0, `${label} must contain 'Regarding terminal' rendering`);
+        assert.ok(pairIdx < regardingIdx,
+            `${label}: the scope === 'pair' check must appear before the "Regarding" rendering (gating)`);
+    }
+});
+
+test('both files carry a team-head scope branch with matching selection logic and scopeRank', () => {
+    // Source-text parity: both the TypeScript resolver (standingOrders.ts) and
+    // the webview client mirror (terminals.js) must contain a team-head branch
+    // that gates on teamId + group membership + parent === targetName, and both
+    // scopeRank literals must list all four scopes with team-head and team at
+    // the same rank. applyStandingOrdersClient is inside a panel IIFE and
+    // cannot be executed in a test harness, so source-text parity is the guard.
+    for (const [raw, label] of [[STANDING_ORDERS_SRC, 'standingOrders.ts'], [TERMINALS_JS_SRC, 'terminals.js']]) {
+        const src = stripComments(raw);
+        assert.ok(src.includes("'team-head'"),
+            `${label} must contain a 'team-head' scope branch`);
+        assert.ok(src.includes('team-head'),
+            `${label} must reference team-head in scopeRank`);
+        // Both must gate the team-head branch on o.teamId, group membership,
+        // and parent === targetName. Anchor on the BRANCH (`scope === 'team-head'`),
+        // not on the bare literal: in standingOrders.ts the first occurrence of
+        // `'team-head'` is the StandingOrderScope union at the top of the file, and
+        // a window measured from there covers the type declarations instead of the
+        // selection logic — the assertion then fails on correct source.
+        const thIdx = src.indexOf("scope === 'team-head'");
+        assert.ok(thIdx >= 0, `${label}: team-head branch not found`);
+        const thBlock = src.slice(thIdx, thIdx + 400);
+        assert.ok(thBlock.includes('teamId'),
+            `${label}: team-head branch must check o.teamId`);
+        assert.ok(thBlock.includes('parent'),
+            `${label}: team-head branch must check o.parent === targetName`);
+        assert.ok(thBlock.includes('members'),
+            `${label}: team-head branch must check group membership`);
+    }
+    // scopeRank must list all four scopes with team-head and team at the same rank.
+    assert.ok(
+        /scopeRank.*'team-head'.*:\s*1.*team.*:\s*1/.test(STANDING_ORDERS_SRC) ||
+        /scopeRank.*'team-head'.*:\s*1[\s\S]*team.*:\s*1/.test(STANDING_ORDERS_SRC),
+        'standingOrders.ts scopeRank must list team-head and team at the same rank (1)'
+    );
+    assert.ok(
+        /scopeRank.*'team-head'.*:\s*1.*team.*:\s*1/.test(TERMINALS_JS_SRC) ||
+        /scopeRank.*'team-head'.*:\s*1[\s\S]*team.*:\s*1/.test(TERMINALS_JS_SRC),
+        'terminals.js scopeRank must list team-head and team at the same rank (1)'
+    );
+});
+
+test('neither file declares the retired cap constants (MAX_BLOCK_CHARS / MAX_INSTRUCTION_CHARS / MAX_ORDERS)', () => {
+    for (const cap of ['MAX_BLOCK_CHARS', 'MAX_INSTRUCTION_CHARS', 'MAX_ORDERS']) {
+        assert.ok(
+            !new RegExp(`\\b${cap}\\b`).test(STANDING_ORDERS_SRC),
+            `standingOrders.ts must not declare ${cap} — caps were removed`
+        );
+        // MAX_ORDERS was never in terminals.js; MAX_BLOCK_CHARS/MAX_INSTRUCTION_CHARS were
+        assert.ok(
+            !new RegExp(`\\b${cap}\\b`).test(TERMINALS_JS_SRC),
+            `terminals.js must not declare ${cap} — caps were removed (mirror parity)`
+        );
+    }
+});
 
 // 6. Delivery-site coverage — the enumerable guarantee that replaces
-//    "remember to hook all the sites". Both hosts have exactly ONE chokepoint;
-//    a new bare call site is how this feature silently half-ships.
+//    "remember to hook all the sites". Three delivery chokepoints exist:
+//    the PTY host (_ptyHostVerb), the standalone host (deliverPrompt), and
+//    the VS Code terminal path (sendRobustText). A new bare call site or a
+//    missing opt-out gate is how this feature silently half-ships.
 
 /** Blank out `//` and block comments so prose mentions do not count as code. */
 function stripComments(src) {
@@ -130,6 +480,9 @@ const BOOTSTRAP_SRC = fs.readFileSync(
 );
 const TASKVIEWER_SRC = fs.readFileSync(
     path.join(__dirname, '..', 'services', 'TaskViewerProvider.ts'), 'utf8'
+);
+const TERMINAL_UTILS_SRC = fs.readFileSync(
+    path.join(__dirname, '..', 'services', 'terminalUtils.ts'), 'utf8'
 );
 
 test('bootstrap.ts calls sendPromptToPty ONLY inside the deliverPrompt wrapper', () => {
@@ -173,14 +526,25 @@ test('TaskViewerProvider routes every /api/pty/ request through _ptyHostVerb', (
     }
 });
 
-test('the two pty-verb chokepoints carry a standingOrders opt-out guard', () => {
+test('the three delivery chokepoints carry a standingOrders opt-out guard', () => {
+    // Chokepoint 1: PTY host (_ptyHostVerb in TaskViewerProvider)
     assert.ok(
         /standingOrders !== false/.test(TASKVIEWER_SRC),
         'TaskViewerProvider._ptyHostVerb must gate the append on payload.standingOrders !== false'
     );
+    // Chokepoint 2: standalone host (deliverPrompt in bootstrap)
     assert.ok(
         /standingOrders !== false/.test(BOOTSTRAP_SRC),
         'bootstrap.ts ptySendPrompt must pass payload.standingOrders !== false to deliverPrompt'
+    );
+    // Chokepoint 3: VS Code terminal path (sendRobustText in terminalUtils)
+    assert.ok(
+        /applyStandingOrders/.test(TERMINAL_UTILS_SRC),
+        'terminalUtils.ts must import and call applyStandingOrders in the sendRobustText delivery path'
+    );
+    assert.ok(
+        /standingOrders.*!==.*false/.test(TERMINAL_UTILS_SRC),
+        'terminalUtils.ts sendRobustText must gate the standing-orders append on standingOrders !== false'
     );
 });
 
@@ -193,18 +557,45 @@ new Function('exports', 'module', 'require', tsc.transpileModule(STANDING_ORDERS
     compilerOptions: { module: tsc.ModuleKind.CommonJS, target: tsc.ScriptTarget.ES2020 }
 }).outputText)(resolverModule.exports, resolverModule, require);
 
-const { applyStandingOrders, validateInstruction, STANDING_ORDERS_MARKER, MAX_BLOCK_CHARS, MAX_INSTRUCTION_CHARS } = resolverModule.exports;
+const { applyStandingOrders, validateInstruction, STANDING_ORDERS_MARKER } = resolverModule.exports;
 
 const order = (parent, child, instruction) => ({ id: `${parent}->${child}`, parent, child, instruction, createdAt: 0 });
+const globalOrder = (instruction) => ({ id: 'global-' + instruction.slice(0, 8), parent: '', instruction, createdAt: 0, scope: 'global' });
+const teamOrder = (teamId, instruction) => ({ id: 'team-' + teamId, parent: '', instruction, createdAt: 0, scope: 'team', teamId });
 const LIVE = new Set(['child-1', 'child-2']);
+const GROUPS = [
+    { id: 'team_Lead', name: 'Lead', members: ['Lead', 'member-1', 'member-2'] },
+];
 
 test('applyStandingOrders: empty prompt is returned unchanged', () => {
     assert.strictEqual(applyStandingOrders('', 'p', [order('p', 'child-1', 'x')], LIVE), '');
 });
 
-test('applyStandingOrders: a prompt already carrying the marker is not re-blocked', () => {
-    const already = `task\n\n${STANDING_ORDERS_MARKER}\n- Regarding terminal "child-1": x\n`;
-    assert.strictEqual(applyStandingOrders(already, 'p', [order('p', 'child-1', 'x')], LIVE), already);
+test('applyStandingOrders: a prompt already carrying a complete block is stripped and re-blocked, not silently dropped', () => {
+    // The stale/fresh sentinels must not be substrings of the block's own
+    // boilerplate. `old` fails that test — the trailing line is "until tOLD
+    // otherwise.", so `!out.includes('old')` can never pass regardless of
+    // whether the strip works.
+    const already = `task\n\n${STANDING_ORDERS_MARKER}\n- Regarding terminal "child-1": STALE_SENTINEL\nThese apply to everything you do in this terminal until told otherwise.\n`;
+    const out = applyStandingOrders(already, 'p', [order('p', 'child-1', 'FRESH_SENTINEL')], LIVE);
+    assert.ok(out.includes('FRESH_SENTINEL'), 'the fresh order must appear after strip + re-append');
+    assert.ok(!out.includes('STALE_SENTINEL'), 'the stale block content must be stripped');
+    assert.strictEqual(
+        (out.match(new RegExp(STANDING_ORDERS_MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length, 1,
+        'exactly one marker block after strip + re-append'
+    );
+});
+
+test('applyStandingOrders: a prompt that merely quotes the marker mid-text is NOT truncated', () => {
+    // The marker appears in the body of the prompt but NOT as a complete
+    // appended block (no trailing "These apply..." line). The strip regex
+    // must NOT match this — otherwise everything after the quote is lost.
+    const quoted = `Here is a note about the marker: ${STANDING_ORDERS_MARKER} — please review.\nMore text after the quote.`;
+    const out = applyStandingOrders(quoted, 'p', [order('p', 'child-1', 'x')], LIVE);
+    assert.ok(out.includes('More text after the quote.'),
+        'text after a mid-text marker quote must survive (strip anchored to complete blocks only)');
+    assert.ok(out.includes('Here is a note about the marker:'),
+        'text before a mid-text marker quote must survive');
 });
 
 test('applyStandingOrders: no order for this parent leaves the prompt bare', () => {
@@ -226,28 +617,348 @@ test('applyStandingOrders: multiple orders render in creation order under one he
     assert.ok(out.startsWith('task'), 'the original prompt must be preserved verbatim at the head');
 });
 
-test('applyStandingOrders: an over-cap block truncates with a visible notice', () => {
-    const long = 'y'.repeat(MAX_INSTRUCTION_CHARS);
-    const out = applyStandingOrders('task', 'p', [
-        order('p', 'child-1', long),
-        order('p', 'child-2', long),
-        order('p', 'child-1', long),
-    ], LIVE);
-    const block = out.slice('task'.length);
-    assert.ok(block.includes('[standing orders truncated]'), 'truncation must announce itself');
-    assert.ok(block.length <= MAX_BLOCK_CHARS + 40, `block grew to ${block.length}, cap is ${MAX_BLOCK_CHARS}`);
+// 8. Scope behaviour — the three scopes compose into one block with distinct
+//    selection and rendering rules.
+
+test('applyStandingOrders: a global order applies to every target with no partner terminal', () => {
+    const out = applyStandingOrders('task', 'anyone', [globalOrder('be safe')], LIVE);
+    assert.ok(out.includes(STANDING_ORDERS_MARKER), 'global order must produce a block');
+    assert.ok(out.includes('- be safe'), 'global order must render as a plain rule');
+    assert.ok(!out.includes('Regarding'), 'global order must NOT emit "Regarding" framing');
 });
 
-test('validateInstruction: empty, over-length and marker-bearing text are rejected; normal text passes', () => {
+test('applyStandingOrders: a global order still renders when unrelated terminals have exited', () => {
+    const emptyLive = new Set();
+    const out = applyStandingOrders('task', 'solo', [globalOrder('be safe')], emptyLive);
+    assert.ok(out.includes('- be safe'), 'global order must not be liveness-gated');
+});
+
+test('applyStandingOrders: a team order reaches team members and no one else', () => {
+    const memberOut = applyStandingOrders('task', 'member-1', [teamOrder('team_Lead', 'report to head')], LIVE, GROUPS);
+    assert.ok(memberOut.includes('- report to head'), 'team order must reach a group member');
+
+    // A team order with no `parent` (the old teamOrder() helper shape) has
+    // no head to exclude, so it reaches every member including the head.
+    // This is the false-confidence case — the exclusion only fires when
+    // `parent` names the head. The next assertion covers the real shape.
+    const headOutNoParent = applyStandingOrders('task', 'Lead', [teamOrder('team_Lead', 'report to head')], LIVE, GROUPS);
+    assert.ok(headOutNoParent.includes('- report to head'), 'team order with no parent reaches the head (no exclusion target)');
+
+    // A team order whose `parent` is the head must NOT reach the head —
+    // the team prompt is for members only. wireSpawnedTeam sets
+    // `parent = headName` on the team-scoped order precisely so this
+    // exclusion fires.
+    const teamOrderWithHeadParent = { id: 'team-lead-parent', parent: 'Lead', child: '', instruction: 'report to head', createdAt: 0, scope: 'team', teamId: 'team_Lead' };
+    const headOut = applyStandingOrders('task', 'Lead', [teamOrderWithHeadParent], LIVE, GROUPS);
+    assert.strictEqual(headOut, 'task', 'team order must NOT reach the head when parent names the head');
+
+    const outsiderOut = applyStandingOrders('task', 'outsider', [teamOrder('team_Lead', 'report to head')], LIVE, GROUPS);
+    assert.strictEqual(outsiderOut, 'task', 'team order must NOT reach a non-member');
+});
+
+test('applyStandingOrders: a team order whose teamId matches no registered group renders for nobody', () => {
+    const out = applyStandingOrders('task', 'member-1', [teamOrder('nonexistent', 'x')], LIVE, GROUPS);
+    assert.strictEqual(out, 'task', 'team order with unknown teamId must render for nobody, not everybody');
+});
+
+// 8b. team-head scope behaviour — the mirror image of `team`: this order is
+//     FOR the head and nobody else. `parent` holds the head name, `child` is
+//     deliberately '' so an older build's pair fall-through drops it.
+
+const teamHeadOrder = (teamId, headName, instruction) => ({
+    id: 'team-head-' + teamId, parent: headName, child: '', instruction, createdAt: 0,
+    scope: 'team-head', teamId,
+});
+
+const TEAM_HEAD_GROUPS = [
+    { id: 'team_lead_1', name: 'lead-1', members: ['lead-1', 'lead-1-coder-1', 'Coding-reviewer'] },
+];
+
+test('applyStandingOrders: a team-head order reaches the head and nobody else', () => {
+    const headOut = applyStandingOrders('task', 'lead-1',
+        [teamHeadOrder('team_lead_1', 'lead-1', 'advance to reviewed')], LIVE, TEAM_HEAD_GROUPS);
+    assert.ok(headOut.includes('- advance to reviewed'),
+        'team-head order must reach the head (parent === targetName && group member)');
+
+    const coderOut = applyStandingOrders('task', 'lead-1-coder-1',
+        [teamHeadOrder('team_lead_1', 'lead-1', 'advance to reviewed')], LIVE, TEAM_HEAD_GROUPS);
+    assert.strictEqual(coderOut, 'task',
+        'team-head order must NOT reach a coder (only the head)');
+
+    const reviewerOut = applyStandingOrders('task', 'Coding-reviewer',
+        [teamHeadOrder('team_lead_1', 'lead-1', 'advance to reviewed')], LIVE, TEAM_HEAD_GROUPS);
+    assert.strictEqual(reviewerOut, 'task',
+        'team-head order must NOT reach the reviewer (only the head)');
+});
+
+test('applyStandingOrders: team and team-head are complements, not overlaps', () => {
+    // A team order (parent = head) excludes the head; a team-head order
+    // (parent = head) includes ONLY the head. Together they cover the whole
+    // team with no overlap.
+    const teamMemberOrder = { id: 'team-member', parent: 'lead-1', child: '', instruction: 'report to head', createdAt: 0, scope: 'team', teamId: 'team_lead_1' };
+    const headOrder = teamHeadOrder('team_lead_1', 'lead-1', 'advance to reviewed');
+
+    // Head gets the head order, not the member order.
+    const headOut = applyStandingOrders('task', 'lead-1', [teamMemberOrder, headOrder], LIVE, TEAM_HEAD_GROUPS);
+    assert.ok(headOut.includes('- advance to reviewed'), 'head must receive the team-head order');
+    assert.ok(!headOut.includes('- report to head'), 'head must NOT receive the team (member) order');
+
+    // Coder gets the member order, not the head order.
+    const coderOut = applyStandingOrders('task', 'lead-1-coder-1', [teamMemberOrder, headOrder], LIVE, TEAM_HEAD_GROUPS);
+    assert.ok(coderOut.includes('- report to head'), 'coder must receive the team (member) order');
+    assert.ok(!coderOut.includes('- advance to reviewed'), 'coder must NOT receive the team-head order');
+});
+
+test('applyStandingOrders: a team-head order whose teamId matches no group renders for nobody', () => {
+    const out = applyStandingOrders('task', 'lead-1',
+        [teamHeadOrder('nonexistent', 'lead-1', 'x')], LIVE, TEAM_HEAD_GROUPS);
+    assert.strictEqual(out, 'task',
+        'team-head order with unknown teamId must render for nobody, not the head');
+});
+
+test('applyStandingOrders: a team-head order renders as a plain rule with no Regarding framing', () => {
+    const out = applyStandingOrders('task', 'lead-1',
+        [teamHeadOrder('team_lead_1', 'lead-1', 'advance the card')], LIVE, TEAM_HEAD_GROUPS);
+    assert.ok(out.includes('- advance the card'),
+        'team-head order must render as a plain rule');
+    assert.ok(!out.includes('Regarding'),
+        'team-head order must NOT emit "Regarding" framing (same as global/team)');
+});
+
+// 8c. Old-build safety — a team-head order read by a pre-change build (which
+//     has no team-head branch and falls through to the pair rule) must select
+//     for nobody. This is the compatibility claim for the ~4,000-install base.
+
+test('old-build safety: a team-head order falls through to pair and selects for nobody', () => {
+    // Simulate the PRE-change selectOrders: three branches (global, team, pair).
+    // A team-head order has scope 'team-head', which matches none of the three,
+    // so it falls through to the pair rule: parent === targetName && child !==
+    // undefined && liveNames.has(child). The head order has child: '', so
+    // liveNames.has('') is false and the order is dropped.
+    function oldSelectOrders(orders, targetName, liveNames, groups) {
+        return orders.filter(function (o) {
+            var scope = o.scope || 'pair';
+            if (scope === 'global') { return true; }
+            if (scope === 'team') {
+                if (!o.teamId) { return false; }
+                var group = groups.find(function (g) { return g && g.id === o.teamId; });
+                if (!group || !Array.isArray(group.members)) { return false; }
+                if (o.parent && targetName === o.parent) { return false; }
+                return group.members.indexOf(targetName) !== -1;
+            }
+            // pair (default) — the only fall-through in the old build
+            return o.parent === targetName && o.child !== undefined && liveNames.has(o.child);
+        });
+    }
+    const liveNames = new Set(['lead-1', 'lead-1-coder-1', 'Coding-reviewer']);
+    const groups = TEAM_HEAD_GROUPS;
+    const headOrder = teamHeadOrder('team_lead_1', 'lead-1', 'advance to reviewed');
+    for (const target of ['lead-1', 'lead-1-coder-1', 'Coding-reviewer', 'outsider']) {
+        const selected = oldSelectOrders([headOrder], target, liveNames, groups);
+        assert.strictEqual(selected.length, 0,
+            `old build must not deliver team-head order to "${target}" — child: '' makes liveNames.has('') false`);
+    }
+});
+
+test('applyStandingOrders: pair orders keep "Regarding" framing; global and team do not', () => {
+    const out = applyStandingOrders('task', 'member-1', [
+        globalOrder('global rule'),
+        teamOrder('team_Lead', 'team rule'),
+        order('member-1', 'child-1', 'pair rule'),
+    ], LIVE, GROUPS);
+    assert.ok(out.includes('- global rule'), 'global must render as plain rule');
+    assert.ok(out.includes('- team rule'), 'team must render as plain rule');
+    assert.ok(out.includes('- Regarding terminal "child-1": pair rule'), 'pair must render with Regarding framing');
+    // No "Regarding" for global or team
+    const lines = out.split('\n');
+    const regardingLines = lines.filter(l => l.includes('Regarding'));
+    assert.strictEqual(regardingLines.length, 1, 'exactly one "Regarding" line (the pair order only)');
+});
+
+test('applyStandingOrders: safeguard-bearing scopes (global, team) render before pair', () => {
+    const out = applyStandingOrders('task', 'member-1', [
+        order('member-1', 'child-1', 'pair rule'),
+        globalOrder('global rule'),
+    ], LIVE, GROUPS);
+    assert.ok(out.indexOf('global rule') < out.indexOf('pair rule'),
+        'global (safeguard-bearing) must render before pair');
+});
+
+test('applyStandingOrders: a 10000-char order reaches the prompt uncut', () => {
+    const long = 'y'.repeat(10000);
+    const out = applyStandingOrders('task', 'p', [order('p', 'child-1', long)], LIVE);
+    assert.ok(out.includes(long), 'the full instruction must appear untruncated');
+    assert.ok(!out.includes('[standing orders truncated]'), 'no truncation marker must appear');
+});
+
+test('validateInstruction: empty and marker-bearing text are rejected; normal text passes', () => {
     assert.ok(validateInstruction(''), 'empty must be rejected');
     assert.ok(validateInstruction('   '), 'whitespace-only must be rejected');
     assert.ok(validateInstruction(undefined), 'non-string must be rejected');
-    assert.ok(validateInstruction('z'.repeat(MAX_INSTRUCTION_CHARS + 1)), 'over-length must be rejected');
     assert.ok(validateInstruction(`hi ${STANDING_ORDERS_MARKER} there`), 'marker forgery must be rejected');
     assert.strictEqual(validateInstruction('be the researcher for terminal 2'), null);
+    // Over-length text is no longer rejected — the cap was removed.
+    assert.strictEqual(validateInstruction('z'.repeat(10000)), null, 'long text must pass (cap removed)');
+});
+
+// 9. wireSpawnedTeam behaviour — the function is transpiled and executed with
+//    an in-memory db stub. Covers Verification Plan step 4: headPrompt
+//    supplied, absent/whitespace, idempotent re-run, and children: [].
+
+// Transpile linkPresets.ts (no imports — standalone) for the real preset
+// resolvers that wireSpawnedTeam uses to build pair-scoped orders.
+const LINK_PRESETS_SRC = fs.readFileSync(
+    path.join(__dirname, '..', 'services', 'linkPresets.ts'), 'utf8'
+);
+const linkPresetsModule = { exports: {} };
+new Function('exports', 'module', 'require', tsc.transpileModule(LINK_PRESETS_SRC, {
+    compilerOptions: { module: tsc.ModuleKind.CommonJS, target: tsc.ScriptTarget.ES2020 }
+}).outputText)(linkPresetsModule.exports, linkPresetsModule, require);
+
+// Transpile teamWiring.ts with a custom require that resolves its three
+// relative imports: standingOrders (already transpiled above as resolverModule),
+// linkPresets (just transpiled), and agentPromptBuilder (stub with just
+// GIT_SAFETY_DIRECTIVE — the only export teamWiring.ts uses).
+// TEAM_WIRING_SRC is already read at the top of this file (the source-text
+// assertions use it) — do NOT re-declare it here.
+const agentPromptBuilderStub = {
+    GIT_SAFETY_DIRECTIVE: 'GIT_SAFETY_DIRECTIVE_STUB'
+};
+const teamWiringRequire = function (name) {
+    if (name === './standingOrders') { return resolverModule.exports; }
+    if (name === './linkPresets') { return linkPresetsModule.exports; }
+    if (name === './agentPromptBuilder') { return agentPromptBuilderStub; }
+    return require(name);
+};
+const teamWiringModule = { exports: {} };
+new Function('exports', 'module', 'require', tsc.transpileModule(TEAM_WIRING_SRC, {
+    compilerOptions: { module: tsc.ModuleKind.CommonJS, target: tsc.ScriptTarget.ES2020 }
+}).outputText)(teamWiringModule.exports, teamWiringModule, teamWiringRequire);
+
+const { wireSpawnedTeam } = teamWiringModule.exports;
+
+/**
+ * In-memory db stub for wireSpawnedTeam. getConfigJson/setConfigJson operate
+ * on a plain object so mutateStandingOrders can read-modify-write the
+ * standing-orders key. Also stubs the terminals.groups key for the group
+ * registration step.
+ */
+function makeInMemoryDb() {
+    const store = {};
+    return {
+        getConfigJson: async function (key, fallback) {
+            if (key in store) { return JSON.parse(JSON.stringify(store[key])); }
+            return fallback;
+        },
+        setConfigJson: async function (key, value) {
+            store[key] = JSON.parse(JSON.stringify(value));
+        },
+        _store: store,
+    };
+}
+
+const HEAD_NAME = 'lead-1';
+const CODER_CHILDREN = [
+    { friendlyName: 'lead-1-coder-1' },
+    { friendlyName: 'lead-1-coder-2' },
+    { friendlyName: 'lead-1-coder-3' },
+];
+const CODER_MEMBERS = [
+    { role: 'coder', count: 3, scope: 'per-team', relationship: 'reports-to-head' },
+    { role: 'reviewer', count: 1, scope: 'shared', relationship: 'reviewer' }
+];
+const HEAD_PROMPT = 'Advance finished subtasks to CODE REVIEWED. From: {head}.';
+
+test('wireSpawnedTeam: headPrompt supplied => exactly two orders (team + team-head), same teamId, head order has child === "" and {head} substituted', async () => {
+    const db = makeInMemoryDb();
+    await wireSpawnedTeam({
+        db, headName: HEAD_NAME, children: CODER_CHILDREN,
+        members: CODER_MEMBERS, prompt: 'team prompt {child}',
+        headPrompt: HEAD_PROMPT,
+    });
+    const orders = await db.getConfigJson('terminals.standingOrders', []);
+    assert.strictEqual(orders.length, 2,
+        `expected exactly 2 orders (team + team-head), got ${orders.length}`);
+
+    const teamOrders = orders.filter(o => o.scope === 'team');
+    const headOrders = orders.filter(o => o.scope === 'team-head');
+    assert.strictEqual(teamOrders.length, 1, 'exactly one team-scoped order');
+    assert.strictEqual(headOrders.length, 1, 'exactly one team-head-scoped order');
+
+    // Same teamId on both.
+    const teamId = teamOrders[0].teamId;
+    assert.ok(teamId, 'team order must have a teamId');
+    assert.strictEqual(headOrders[0].teamId, teamId,
+        'team-head order must have the same teamId as the team order');
+
+    // Head order has child === '' (old-build safety).
+    assert.strictEqual(headOrders[0].child, '',
+        'team-head order must have child === "" for old-build fall-through safety');
+
+    // {head} substituted with the head name in the head order's instruction.
+    assert.ok(headOrders[0].instruction.includes(HEAD_NAME),
+        `team-head instruction must have {{head}} replaced with "${HEAD_NAME}"`);
+    assert.ok(!headOrders[0].instruction.includes('{head}'),
+        'team-head instruction must NOT contain the literal {head} token after substitution');
+
+    // parent on the head order is the head name (delivery target).
+    assert.strictEqual(headOrders[0].parent, HEAD_NAME,
+        'team-head order parent must be the head name');
+});
+
+test('wireSpawnedTeam: headPrompt absent, empty, or whitespace => exactly one order (team), no fabricated default', async () => {
+    for (const [label, headPrompt] of [['absent', undefined], ['empty', ''], ['whitespace', '   \t\n  ']]) {
+        const db = makeInMemoryDb();
+        await wireSpawnedTeam({
+            db, headName: HEAD_NAME, children: CODER_CHILDREN,
+            members: CODER_MEMBERS, prompt: 'team prompt {child}',
+            headPrompt,
+        });
+        const orders = await db.getConfigJson('terminals.standingOrders', []);
+        assert.strictEqual(orders.length, 1,
+            `headPrompt ${label}: expected exactly 1 order (team only), got ${orders.length}`);
+        assert.strictEqual(orders[0].scope, 'team',
+            `headPrompt ${label}: the single order must be team-scoped`);
+        assert.strictEqual(orders.filter(o => o.scope === 'team-head').length, 0,
+            `headPrompt ${label}: no team-head order must be fabricated`);
+    }
+});
+
+test('wireSpawnedTeam: re-run with identical args => still exactly two orders, no duplicate', async () => {
+    const db = makeInMemoryDb();
+    const args = {
+        db, headName: HEAD_NAME, children: CODER_CHILDREN,
+        members: CODER_MEMBERS, prompt: 'team prompt {child}',
+        headPrompt: HEAD_PROMPT,
+    };
+    await wireSpawnedTeam(args);
+    await wireSpawnedTeam(args);
+    const orders = await db.getConfigJson('terminals.standingOrders', []);
+    assert.strictEqual(orders.length, 2,
+        `idempotent re-run: expected still exactly 2 orders, got ${orders.length} — duplicate detection failed`);
+    assert.strictEqual(orders.filter(o => o.scope === 'team').length, 1,
+        'idempotent re-run: exactly one team order');
+    assert.strictEqual(orders.filter(o => o.scope === 'team-head').length, 1,
+        'idempotent re-run: exactly one team-head order');
+});
+
+test('wireSpawnedTeam: children: [] => zero orders written and { ok: true } returned', async () => {
+    const db = makeInMemoryDb();
+    const result = await wireSpawnedTeam({
+        db, headName: HEAD_NAME, children: [],
+        members: CODER_MEMBERS, prompt: 'team prompt {child}',
+        headPrompt: HEAD_PROMPT,
+    });
+    assert.strictEqual(result.ok, true,
+        'children: [] must return { ok: true } — a bare head is not an error');
+    const orders = await db.getConfigJson('terminals.standingOrders', []);
+    assert.strictEqual(orders.length, 0,
+        `children: []: expected zero orders written, got ${orders.length}`);
 });
 
 // Summary
 
-console.log(`\n${passed} passed, ${failed} failed`);
-if (failed > 0) { process.exit(1); }
+Promise.all(testPromises).then(() => {
+    console.log(`\n${passed} passed, ${failed} failed`);
+    if (failed > 0) { process.exit(1); }
+});

@@ -1,7 +1,7 @@
 {
   "generator": "ClaudeCodeMirrorService",
   "version": "1.7.13",
-  "generatedAt": "2026-08-13T23:30:21.193Z",
+  "generatedAt": "2026-08-16T11:42:47.715Z",
   "skills": [
     {
       "source": "workflows/switchboard.md",
@@ -152,11 +152,6 @@
       "source": "skills/switchboard-orchestration",
       "name": "switchboard-orchestration",
       "relPath": ".claude/skills/switchboard-orchestration/SKILL.md"
-    },
-    {
-      "source": "skills/delegates",
-      "name": "delegates",
-      "relPath": ".claude/skills/delegates/SKILL.md"
     },
     {
       "source": "skills/archive",

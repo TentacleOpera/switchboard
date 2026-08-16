@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { applyStandingOrders, StandingOrder, TerminalGroup } from './standingOrders';
 
 // Clipboard mutex: serialize paste operations to prevent user clipboard data loss
 let _clipboardLock: Promise<void> = Promise.resolve();
@@ -126,20 +127,52 @@ export function getAntigravityHash(rawPath: string): string {
 /**
  * Sends text to a terminal with chunking and pacing to prevent input corruption.
  * Used by TaskViewerProvider for direct terminal push.
+ *
+ * The `standingOrders` option is the VS Code terminal delivery chokepoint.
+ * The PTY host chokepoints (`_ptyHostVerb` / `deliverPrompt`) do not cover VS
+ * Code terminals, which are sent through this path. The caller resolves orders
+ * + live names + groups from the DB and passes them in; this hook applies them
+ * before delivery. Pass `false` to explicitly opt out (machine-origin
+ * notifications); omit the option for sends that are not agent dispatches.
  */
 export async function sendRobustText(
     terminal: vscode.Terminal,
     text: string,
     paced: boolean = true,
     log?: (msg: string) => void,
-    options?: { acquireFocus?: boolean; background?: boolean }
+    options?: {
+        acquireFocus?: boolean;
+        background?: boolean;
+        standingOrders?: false | { orders: StandingOrder[]; liveNames: Set<string>; groups: TerminalGroup[] };
+    }
 ): Promise<void> {
+    // VS Code terminal delivery chokepoint: apply standing orders before
+    // delivery unless explicitly opted out. Resolves the path that silently
+    // skipped orders before — VS Code terminal agents now receive their
+    // standing-orders block like PTY fleet agents do.
+    let deliverText = text;
+    // `!== undefined` first, then `!== false`: a bare truthiness test makes the
+    // second comparison type-invalid (the union is already narrowed to the
+    // object), which is a compile error, and dropping the `!== false` loses the
+    // explicit opt-out the other two chokepoints are contract-tested for.
+    if (options?.standingOrders !== undefined && options.standingOrders !== false) {
+        try {
+            deliverText = applyStandingOrders(
+                text,
+                terminal.name,
+                options.standingOrders.orders,
+                options.standingOrders.liveNames,
+                options.standingOrders.groups
+            );
+        } catch { /* a degraded prompt beats a lost dispatch */ }
+    }
+
     // Background mode: deliver via terminal.sendText wrapped in Bracketed Paste
     // Mode without ever calling terminal.show() or workbench.action.terminal.paste,
     // so keyboard focus is never stolen from the user. Queued per-terminal to
     // prevent chunk interleaving between concurrent background sends.
     if (options?.background) {
-        return _sendRobustTextBackground(terminal, text, log);
+        return _sendRobustTextBackground(terminal, deliverText, log);
     }
 
     const CHUNK_SIZE = 500;
@@ -154,10 +187,10 @@ export async function sendRobustText(
     // reliability for all message types while avoiding clipboard overhead for
     // trivial single-word commands.
     const CLIPBOARD_PASTE_THRESHOLD = 100;
-    if (text.length > CLIPBOARD_PASTE_THRESHOLD) {
-        _log(`Large payload (${text.length} chars) for '${terminal.name}', using clipboard paste delivery.`);
+    if (deliverText.length > CLIPBOARD_PASTE_THRESHOLD) {
+        _log(`Large payload (${deliverText.length} chars) for '${terminal.name}', using clipboard paste delivery.`);
         try {
-            await pasteTextViaClipboard(terminal, text, options);
+            await pasteTextViaClipboard(terminal, deliverText, options);
 
             // Submit the pasted content
             await new Promise(r => setTimeout(r, NEWLINE_DELAY));
@@ -170,9 +203,9 @@ export async function sendRobustText(
     }
 
     // Flatten newlines for CLI agents to prevent premature submission
-    const payload = isCliAgent ? text.replace(/[\r\n]+/g, ' ') : text;
+    const payload = isCliAgent ? deliverText.replace(/[\r\n]+/g, ' ') : deliverText;
     if (isCliAgent) {
-        _log(`CLI terminal '${terminal.name}' detected. Flattening newlines for ${text.length} chars.`);
+        _log(`CLI terminal '${terminal.name}' detected. Flattening newlines for ${deliverText.length} chars.`);
     }
 
     if (payload.length <= CHUNK_SIZE) {
@@ -199,7 +232,7 @@ export async function sendRobustText(
         await new Promise(r => setTimeout(r, CLI_CONFIRM_ENTER_DELAY));
         terminal.sendText('', true);
     }
-    _log(`sendRobustText complete for '${terminal.name}' (${text.length} chars).`);
+    _log(`sendRobustText complete for '${terminal.name}' (${deliverText.length} chars).`);
 }
 
 /**

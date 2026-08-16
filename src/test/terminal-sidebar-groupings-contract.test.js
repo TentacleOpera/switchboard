@@ -556,13 +556,17 @@ test('per-group layouts and the extras overlay both survive the loader whitelist
     // not name. Miss a key and the feature works all session and loses its state
     // on reload — with no error anywhere. Both siblings edit the same two sites.
     assert.ok(
-        /let groupPrefs = \{ threshold: 2, hidden: \[\], pinned: \[\], orders: \{\}, layouts: \{\}, extras: \{\} \}/.test(terminalsJs),
-        'the initialiser must carry both layouts and extras'
+        /let groupPrefs = \{ threshold: 2, hidden: \[\], pinned: \[\], orders: \{\}, layouts: \{\}, extras: \{\}, autoRoleGroups: false \}/.test(terminalsJs),
+        'the initialiser must carry layouts, extras and the autoRoleGroups consent flag'
     );
     const loader = block(terminalsJs, "const savedGroupPrefs = await loadSetting('terminals.groupPrefs', null);", 'if (LAYOUT_MODES.includes(savedMode))');
     assert.ok(
         /layouts: savedLayouts/.test(loader) && /extras: savedExtras/.test(loader),
         'the loader whitelist must name BOTH layouts and extras, or one sibling silently disables the other'
+    );
+    assert.ok(
+        /autoRoleGroups: savedGroupPrefs\.autoRoleGroups === true/.test(loader),
+        'the loader whitelist must name autoRoleGroups, or the toggle forgets on reload with no error'
     );
     assert.ok(
         loader.includes('LAYOUT_MODES.includes(v)'),
@@ -737,6 +741,185 @@ test('terminals.html styles the group tier and selected rows', () => {
     assert.ok(
         terminalsHtml.includes('.terminal-item.is-selected'),
         'terminals.html must contain .terminal-item.is-selected CSS'
+    );
+});
+
+// ---------------------------------------------------------------- team seating (createTerminal team branch)
+
+test('createTerminal team branch calls switchToTeamGroup and not assignToFocusedPane', () => {
+    // Slice the TEAM branch only — from the `else if` that owns it to the
+    // reportTeamStart call. Deliberately NOT from `if (delegates.length === 0)`:
+    // that slice swallows the no-delegate branch, whose assignToFocusedPane call
+    // is REQUIRED (the common path must not regress), so the "no
+    // assignToFocusedPane" assertion below could never pass. The team branch
+    // must seat via switchToTeamGroup, NOT assignToFocusedPane — that helper
+    // drops the group lock and would undo the seating on the next reconcile.
+    const start = terminalsJs.indexOf('} else if (data.teamGroupId');
+    assert.ok(start !== -1, 'team branch marker (else if data.teamGroupId) not found');
+    const end = terminalsJs.indexOf('reportTeamStart(', start);
+    assert.ok(end !== -1, 'reportTeamStart marker not found after team branch');
+    const branch = terminalsJs.substring(start, end);
+    assert.ok(
+        branch.includes('switchToTeamGroup('),
+        'the team branch must call switchToTeamGroup to seat the team'
+    );
+    assert.ok(
+        !branch.includes('assignToFocusedPane('),
+        'the team branch must NOT call assignToFocusedPane — it drops the group lock'
+    );
+});
+
+test('switchToTeamGroup awaits reloadTerminalGroups and guards on terminalGroups.some before switchToGroup', () => {
+    const fn = block(terminalsJs, 'async function switchToTeamGroup(', 'function focusSeatedTerminal(');
+    assert.ok(
+        fn.includes('await reloadTerminalGroups()'),
+        'switchToTeamGroup must await reloadTerminalGroups before switching'
+    );
+    assert.ok(
+        fn.includes('terminalGroups.some('),
+        'switchToTeamGroup must guard on terminalGroups.some — an unguarded switchToGroup is a silent no-op'
+    );
+    assert.ok(
+        fn.includes('switchToGroup(groupId)'),
+        'switchToTeamGroup must call switchToGroup with the group id'
+    );
+});
+
+test('the no-delegate branch still calls assignToFocusedPane(data.terminal.friendlyName)', () => {
+    const start = terminalsJs.indexOf('if (delegates.length === 0) {');
+    assert.ok(start !== -1, 'no-delegate branch marker not found');
+    const end = terminalsJs.indexOf('} else if (data.teamGroupId', start);
+    assert.ok(end !== -1, 'team-group branch marker not found');
+    const noDelegate = terminalsJs.substring(start, end);
+    assert.ok(
+        noDelegate.includes('assignToFocusedPane(data.terminal.friendlyName)'),
+        'the no-delegate branch must still call assignToFocusedPane — the common path must not regress'
+    );
+});
+
+test('seatTeamWithoutGroup seats by name and the create path has no bare fillEmptyPanes call', () => {
+    const fn = block(terminalsJs, 'function seatTeamWithoutGroup(', 'function reportTeamStart(');
+    assert.ok(
+        fn.includes('delegates.map('),
+        'seatTeamWithoutGroup must seat the team\'s own names via delegates.map'
+    );
+    assert.ok(
+        !fn.includes('fillEmptyPanes('),
+        'seatTeamWithoutGroup must not use fillEmptyPanes — it seats in fleetList order with no team notion'
+    );
+    // growLayoutForFleet only drops the lock as a setLayoutMode side effect, and
+    // it no-ops when the grid already fits. Without an explicit clear, a fallback
+    // seat under an existing lock is reverted by the next seatActiveGroupPage().
+    assert.ok(
+        /activeGroupId = null;/.test(fn) && /activeGroupPage = 0;/.test(fn),
+        'seatTeamWithoutGroup must drop the group lock explicitly — a stale lock re-seats the OLD group over the team'
+    );
+    // The create path (from the fetch to the end of createTerminal) must contain
+    // no bare fillEmptyPanes() call — the fallback reproduces the bug otherwise.
+    const createStart = terminalsJs.indexOf("const res = await fetch('/terminals/verb/ptyCreateTerminal', {");
+    const createEnd = terminalsJs.indexOf('async function switchToTeamGroup(', createStart);
+    assert.ok(createStart !== -1 && createEnd !== -1, 'createTerminal bounds not found');
+    const createPath = terminalsJs.substring(createStart, createEnd);
+    assert.ok(
+        !createPath.includes('fillEmptyPanes('),
+        'the createTerminal path must not call fillEmptyPanes — the fallback seats by name, not fleetList order'
+    );
+});
+
+test('focusSeatedTerminal assigns focusedPaneIndex and activeTerminalName without assignToFocusedPane', () => {
+    const fn = block(terminalsJs, 'function focusSeatedTerminal(', 'function seatTeamWithoutGroup(');
+    assert.ok(
+        fn.includes('focusedPaneIndex = idx;'),
+        'focusSeatedTerminal must assign focusedPaneIndex directly'
+    );
+    assert.ok(
+        fn.includes('activeTerminalName = name;'),
+        'focusSeatedTerminal must assign activeTerminalName directly'
+    );
+    assert.ok(
+        !fn.includes('assignToFocusedPane('),
+        'focusSeatedTerminal must NOT call assignToFocusedPane — that helper drops the group lock'
+    );
+});
+
+test('the keepLock call-site count is still exactly 1 (no new keepLock callers)', () => {
+    // This change adds no keepLock caller — the team branch seats via
+    // switchToGroup, not assignToFocusedPane with keepLock.
+    const keepLockCallers = (terminalsJs.match(/assignToFocusedPane\([^)]*keepLock/g) || []).length;
+    assert.strictEqual(
+        keepLockCallers, 1,
+        'only handleLockedTerminalClick\'s free-slot branch may pass keepLock — the team branch must not add one'
+    );
+});
+
+// ---------------------------------------------------------------- role group consent and location scoping
+
+test('role groups are opt-in and never span a workspace or worktree', () => {
+    const derived = block(terminalsJs, 'function getDerivedGroups()', 'function getAllGroups()');
+    assert.ok(
+        /if \(groupPrefs\.autoRoleGroups\)/.test(derived),
+        'the role arm must be gated on consent — a second planner must not conjure a "Planners" tab'
+    );
+    assert.ok(
+        derived.includes('locationKeyForTerminal(t)') && /role \+ LOC_SEP \+ loc/.test(derived),
+        'the role key must carry a location component (NUL-separated), or two workspaces\' planners become one group'
+    );
+    // Slice from the worktree EMISSION loop, not from the first mention of
+    // `worktreeMap` — that is `const worktreeMap = new Map()` at the top of the
+    // function, so slicing there swallows the role arm's own consent gate and
+    // the assertion below can never pass against a correct implementation.
+    const worktreeArm = derived.slice(derived.indexOf('for (const [wt, count] of worktreeMap)'));
+    assert.ok(
+        !/autoRoleGroups/.test(worktreeArm),
+        'worktree groups stay automatic — they are location-keyed by construction and were not the complaint'
+    );
+});
+
+test('the role membership query filters on location, not role alone', () => {
+    const fn = block(terminalsJs, 'function getGroupMembers(group) {', 'function orderGroupMembers(');
+    const roleBranch = fn.slice(fn.indexOf("group.source === 'role'"), fn.indexOf("group.source === 'worktree'"));
+    assert.ok(
+        roleBranch.includes('locationKeyForTerminal(t) === group.location'),
+        'membership must use the same role+location predicate getDerivedGroups keys on'
+    );
+    assert.ok(
+        roleBranch.includes('!t.parentInstanceId'),
+        'delegate children stay excluded'
+    );
+});
+
+test('the role-grouping toggle is reachable with no group tabs on screen', () => {
+    // The » menu is the ONLY control that turns role grouping back on. It used
+    // to be built solely when there were tabs or hidden groups — both false in
+    // exactly the state the toggle exists to escape.
+    const strip = block(terminalsJs, 'function renderGroupTabStrip() {', 'function terminalNameSuffix(');
+    assert.ok(
+        strip.includes('Group by role'),
+        'the strip must carry the role-grouping toggle'
+    );
+    assert.ok(
+        !/if \(groupTabEls\.length > 0 \|\| hasHiddenGroups\)/.test(strip),
+        'the overflow measurement must not be gated on there being tabs — the toggle lives inside it'
+    );
+    assert.ok(
+        !/if \(overflowing\.length > 0 \|\| hasHiddenGroups\)/.test(strip),
+        'the overflow BUILD must not be gated either — the outer gate alone still yields no menu at zero tabs'
+    );
+    assert.ok(
+        !/if \(true\)|\|\| true/.test(strip),
+        'no tautological gate left behind — delete the condition, do not neutralise it'
+    );
+});
+
+test('a load-time lock is dropped only when consent has removed its group', () => {
+    const fetchBlock = block(terminalsJs, 'async function fetchTerminalList()', 'function checkSoloNotFound()');
+    assert.ok(
+        /restoredLockOnLoad[\s\S]{0,1400}clearGroupLock\(\)/.test(fetchBlock),
+        'a role lock that consent has made unreachable must be cleared at the restore site, not left to soft-kill the panel'
+    );
+    assert.ok(
+        /!groupPrefs\.autoRoleGroups && savedId\.startsWith\('dg_role_'\)/.test(fetchBlock),
+        'the reconcile must fire only when role grouping is OFF — a merely below-threshold group keeps its lock'
     );
 });
 

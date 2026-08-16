@@ -312,6 +312,20 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             workspaceRoot: { type: 'string' },
         },
     },
+    watchFeature: {
+        fields: {
+            featureId: { type: 'string', required: true },
+            headTerminal: { type: 'string' },
+            stopColumns: { type: 'array' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    unwatchFeature: {
+        fields: {
+            featureId: { type: 'string', required: true },
+            workspaceRoot: { type: 'string' },
+        },
+    },
     // Plan lifecycle
     selectPlan: {
         fields: {
@@ -378,6 +392,14 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
     // back to the provider's current root, same as dispatchAnalyze.
     sendDispatchSetToCoders: {
         fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    // External-mode copy-prompt. `instruction` is the optional user-typed line
+    // that opens the prompt; `workspaceRoot` is optional (the arm resolves it).
+    externalAutomationPrompt: {
+        fields: {
+            instruction: { type: 'string' },
             workspaceRoot: { type: 'string' },
         },
     },
@@ -1564,10 +1586,19 @@ export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
     getNotionFetchState: {},
     getStartupCommands: {},
     getVisibleAgents: {},
-    getMcpMonitorConfig: {},
-    setMcpMonitorConfig: {
+    startSchedulerJob: {
         fields: {
-            config: { type: 'object' },
+            jobId: { type: 'string', required: true },
+        },
+    },
+    stopSchedulerJob: {
+        fields: {
+            jobId: { type: 'string', required: true },
+        },
+    },
+    setWhenSchedule: {
+        fields: {
+            schedule: { type: 'string' },
         },
     },
     getAccurateCodingSetting: {},
@@ -1626,19 +1657,6 @@ export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
             state: { type: 'object' },
         },
     },
-    addAutobanTerminal: {
-        fields: {
-            role: { type: 'string', required: true },
-            name: { type: 'string' },
-        },
-    },
-    removeAutobanTerminal: {
-        fields: {
-            role: { type: 'string', required: true },
-            terminalName: { type: 'string', required: true },
-        },
-    },
-    resetAutobanPools: {},
     pipelineStart: {
         fields: {
             intervalSeconds: { type: 'number' },

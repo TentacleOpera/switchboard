@@ -191,7 +191,7 @@ export class OversightPassService implements vscode.Disposable {
                 status: 409,
                 body: {
                     success: false,
-                    error: 'Autoban/orchestration automation is armed — an oversight pass would double-dispatch the same scope. Disarm automation (POST /orchestration/stop or the AUTOMATION tab) before starting a pass.'
+                    error: 'Automation is armed (autoban engine or oversight agent) — an oversight pass would double-dispatch the same scope. Disarm automation before starting a pass.'
                 }
             };
         }

@@ -240,6 +240,69 @@
             padding: 0;
         }
         .role-picker-cancel:hover { color: var(--text-primary); }
+        /* A role option that heads a team carries a subtitle naming the team
+           and what it spawns, so "New terminal — Lead" never silently
+           produces five. The button becomes a column: label over note. */
+        .role-option.has-team {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 1px;
+            text-transform: none;
+        }
+        .role-option.has-team .role-option-label { text-transform: capitalize; }
+        .role-option-team-note {
+            font-size: 9px;
+            color: var(--text-secondary);
+            text-transform: none;
+            font-weight: normal;
+            line-height: 1.2;
+        }
+        /* The explicit team-start section: one entry per defined team with a
+           START action. Sits above the role chips, separated by a sub-title. */
+        .team-picker {
+            margin-bottom: 6px;
+        }
+        .team-picker-title {
+            font-size: 10px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+        .team-picker-options {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+        }
+        .team-option {
+            background: transparent;
+            border: 1px solid var(--accent-teal);
+            color: var(--accent-teal);
+            border-radius: 3px;
+            padding: 3px 7px;
+            font-size: 11px;
+            font-family: inherit;
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 1px;
+            text-transform: none;
+        }
+        .team-option:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+        }
+        .team-option:hover .team-option-summary { color: var(--panel-bg); }
+        .team-option-name { font-weight: 600; }
+        .team-option-summary {
+            font-size: 9px;
+            color: var(--text-secondary);
+            line-height: 1.2;
+        }
+        .team-option.is-unassigned .team-option-name { color: var(--text-secondary); }
+        .team-option.is-unassigned { border-style: dashed; }
         .item-name-input {
             font-size: 12px;
             font-weight: 600;
