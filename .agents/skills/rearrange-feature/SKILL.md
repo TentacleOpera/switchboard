@@ -1,8 +1,3 @@
----
-name: rearrange-feature
-description: Restructure a feature's subtasks — split one subtask into several, move scope between subtasks, merge, or reorder — WITHOUT rewriting their content. Structure-only; the missing counterpart to improve-feature (content) and group-into-features (composition).
----
-
 # Rearrange Feature
 
 Re-slice the subtasks of an existing feature so each one is the right size and scope for a single coding agent — **while keeping the subtask content as written.** This is the structure-only operation: it changes *boundaries* (how work is partitioned across subtasks), not *words* (how each subtask is authored).

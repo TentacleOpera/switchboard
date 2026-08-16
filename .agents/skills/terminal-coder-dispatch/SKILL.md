@@ -1,7 +1,3 @@
----
-description: Drive a feature's subtasks through a coder terminal — dispatch, callback, review, resend. The attended long-running single-coder pattern.
----
-
 # Skill: Terminal Coder Dispatch
 
 You are a **head agent** driving a feature's subtasks through one or more **coder terminals**.
@@ -151,6 +147,103 @@ check with GET first.
 
 ---
 
+## 3.5. Register the dispatch before you send — the backstop the standing order is not
+
+A standing order is a contract the coder must choose to honour. On 2026-08-16 a coder with a
+correctly-oriented standing order finished its subtask and **sent nothing back**; the head sat
+idle for eleven minutes and would have sat idle indefinitely. The floor under this pattern is
+not the standing order — it is a dispatch **record** the plan-ingestion sweep reads, and a
+turn-end notifier that fires when the coder's plan file advances. `ptySendPrompt` writes no
+record, so the sweep never saw the dispatch and the notifier never fired.
+
+Register the dispatch with the shipped `attributePastedPrompt` verb **before** you call
+`ptySendPrompt`. Registration stamps `dispatched_terminal` / `dispatched_at` on the plan row —
+the exact columns the sweep's `getActiveDispatchedByTerminal` query reads. With the record in
+place, the sweep's `blocked` outcome (silence past `turnEndSilenceMs`, ~90 s) and the
+file-edit `completed` outcome (the coder writes its completion report) both fire a
+`[switchboard:turn-end]` notice to your prompt. The notice *is* the new turn.
+
+**Register BEFORE you send, not after.** `dispatched_at` is stamped at registration time and the
+completion test is `plan-file mtime > dispatchedAt`. Registering after the coder already wrote
+inverts the compare and the completion is invisible — you then get a late `blocked` instead.
+One call, in this order:
+
+```bash
+# 1. Register — stamps the dispatch record the backstop reads.
+curl -s -X POST "$BASE/kanban/verb/attributePastedPrompt" $AUTH \
+  -H "Content-Type: application/json" --max-time 10 \
+  -d '{"terminalName":"coder-1","role":"coder","planFiles":[".switchboard/plans/<plan-file>"],"workspaceRoot":"'"$PWD"'"}'
+# → { "success": true, "attributed": 1, "skipped": 0 }
+
+# 2. Dispatch — only AFTER the registration succeeded.
+curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" $AUTH \
+  -H "Content-Type: application/json" --max-time 30 \
+  -d '{"name":"coder-1","data":"<your prompt>","clearBeforePrompt":false}'
+```
+
+`planFiles` is the workspace-relative plan path (the same path you put in the dispatch prompt).
+If you know the `planId`, pass `planIds: ["<id>"]` instead — it resolves without the plan-file
+fallback. `workspaceRoot` is your CWD.
+
+### Check the body — `attributed: 0` is a failed registration
+
+The verb returns `{ success, attributed, skipped }` in the body. `success: true` with
+`attributed: 0` means nothing was stamped — the plan did not resolve, the DB was not ready, or
+the workspace root did not match. **A zero is a failed registration, not a success.** You are
+not covered: no record, no backstop, the 2026-08-16 failure. Re-resolve the plan (check the
+path, check `workspaceRoot`) and re-register until `attributed: 1`.
+
+### One outstanding plan per terminal
+
+`getActiveDispatchedByTerminal` is `ORDER BY dispatched_at DESC LIMIT 1`. A second registration
+against a terminal already holding an unresolved plan **hides the first from the backstop** —
+the sweep only ever reads the newest row. Drive **one subtask at a time per coder terminal**;
+use a second coder terminal for concurrency. This matches the one-subtask-per-terminal pattern
+this skill teaches, and the verb does not reject a second attribution (it is shared with the
+board's paste/drop path, which must stay permissive on ~4 000 installs).
+
+### What the wake looks like
+
+A `[switchboard:turn-end]` message arriving at your prompt *is* the new turn — text delivered
+to an idle agent terminal is a turn, same as a coder's report. Two outcomes:
+
+- **`completed`** — `Seat '<coder>' finished its turn on '<plan file>'.` The coder's plan file
+  advanced. Review the diff (§5).
+- **`blocked`** — `Seat '<coder>' has gone quiet on '<plan file>' without writing a completion
+  report — it may be waiting on input.` **`blocked` means "go look", not "this subtask is
+  dead".** A `blocked` notice is not terminal: the coder can write its report afterward and a
+  `completed` notice for the same seat follows. Do not abandon a subtask on a `blocked`; read
+  the terminal and decide.
+
+### Arming the feature-level nudge (optional, for the whole feature)
+
+The per-dispatch backstop covers each dispatch you register. It does NOT cover the window where
+**no** dispatch is outstanding — you dropped the thread, your turn ended without you sending the
+next subtask, or a registration failed. For that, arm a feature watch on yourself:
+
+```bash
+# Arm — the sweep nudges you when the feature has un-accepted subtasks, no dispatch is
+# outstanding, and you have gone idle past turnEndSilenceMs.
+curl -s -X POST "$BASE/kanban/verb/watchFeature" $AUTH \
+  -H "Content-Type: application/json" --max-time 10 \
+  -d '{"featureId":"<feature planId>","headTerminal":"'"$SWITCHBOARD_TERMINAL"'","workspaceRoot":"'"$PWD"'"}'
+# Optional stopColumns: columns you treat as accepted beyond COMPLETED.
+#   ,"stopColumns":["CODE REVIEWED"]
+
+# Cancel when you are done (the sweep also auto-drops the watch when the feature is
+# done or your terminal exits).
+curl -s -X POST "$BASE/kanban/verb/unwatchFeature" $AUTH \
+  -H "Content-Type: application/json" --max-time 10 \
+  -d '{"featureId":"<feature planId>","workspaceRoot":"'"$PWD"'"}'
+```
+
+The nudge carries **evidence, not a poke**: the remaining subtasks, their seats, and how long
+each has been silent. It fires at most once per `turnEndSilenceMs` window per watch, and it
+gates on your own silence — it will not interrupt you mid-turn. Arm it once when you start
+driving a feature; it cancels itself when every subtask is accepted or your terminal exits.
+
+---
+
 ## 4. The dispatch prompt template
 
 With the callback carried by the standing order, the prompt itself holds only:
@@ -210,8 +303,15 @@ from absence.
 
 Each with the observable signal and the fix:
 
-- **Coder never replies** — nothing wakes you. Check the terminal is `status: 'active'` in
-  `ptyListTerminals` and that a standing order exists for the pair (`GET /terminals/standing-orders`).
+- **Coder never replies** — nothing wakes you. The standing order is the fast path, not the
+  floor: a coder can ignore it (it did, on 2026-08-16). The floor is the dispatch record. Check
+  you registered the dispatch with `attributePastedPrompt` **before** `ptySendPrompt` and that
+  the body returned `attributed: 1` (a zero is a failed registration — no record, no backstop).
+  Then check the terminal is `status: 'active'` in `ptyListTerminals` and that a standing order
+  exists for the pair (`GET /terminals/standing-orders`). With the record in place, a silent
+  coder produces a `blocked` turn-end notice at ~90 s and a coder that writes its report
+  produces a `completed` notice — either wakes you. For the no-dispatch-outstanding window, arm
+  a feature watch (`watchFeature`) so the sweep nudges you when you stall.
 - **Coder replies to the wrong name** — the reply is a silent no-op; the response body carries
   `success:false` and the HTTP status is 502. Read the body; never treat a non-2xx call as
   delivered.

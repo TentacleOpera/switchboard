@@ -98,7 +98,7 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     },
     {
         source: 'skills/design-system-builder', name: 'design-system-builder', invocation: 'default',
-        descriptionFallback: 'Interactively build or refine a project\'s HTML design system via an agent interview'
+        descriptionFallback: 'Interactively build, derive, or refine a project\'s HTML design system via an agent interview'
     },
 
     // Side-effecting proxy skills → disable-model-invocation (explicit /name only).
