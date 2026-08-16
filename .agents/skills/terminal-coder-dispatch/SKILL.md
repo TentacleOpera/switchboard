@@ -29,6 +29,7 @@ AUTH=""; [ -n "$SWITCHBOARD_API_TOKEN" ] && AUTH="-H \"Authorization: Bearer $SW
 | :--- | :--- |
 | **Primary — send a prompt (both hosts)** | `POST /terminals/verb/ptySendPrompt` with `{ "name": "<friendlyName>", "data": "<prompt>", "clearBeforePrompt": false }` |
 | Enumerate live terminals | `POST /terminals/verb/ptyListTerminals` with `{}` → `{ terminals: [...], hiddenTerminals: [...] }` |
+| Rest a terminal — reset its context | `POST /terminals/verb/ptyClearTerminal` with `{ "name": "<friendlyName>" }` |
 | Extension-host alternative | `POST /taskViewer/verb/sendToTerminal` with `{ "name", "input" }` |
 | Standalone alternative | `POST /terminals/verb/sendToTerminal` with `{ "terminalName", "text" }` |
 
@@ -46,12 +47,12 @@ orders. Both own bracketed-paste framing, chunking, the per-terminal lock and th
 
 ### `clearBeforePrompt: false` is mandatory and non-obvious
 
-The extension's `handlePtyVerb` injects the config default
-(`switchboard.terminal.clearBeforePrompt`, default `true`) whenever the field is absent, and
-standalone's `getPromptDeliveryOptions()` does the same. **Omit the field and every dispatch
-sends `/clear` to the coder first**, wiping the conversation that makes a resend work at all.
-The symptom is a coder with no memory of work it did minutes earlier. Pass it explicitly on
-every send:
+Both hosts currently treat an **absent** `clearBeforePrompt` as `false` — the extension injects
+the config default only when a caller passes `clearBeforePromptFromConfig: true`
+(`TaskViewerProvider.ts`), and standalone does the same (`bootstrap.ts`). Do not rely on that.
+The meaning of an omitted field has already moved once, and if it moves back, every dispatch
+you send wipes the coder's conversation and the symptom is a coder with no memory of work it
+did minutes earlier. Pass it explicitly on every send:
 
 ```bash
 curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" $AUTH \
@@ -137,9 +138,9 @@ instruction — otherwise it may finish, intend to report, and have no idea how:
 > `…send it a message via POST /terminals/verb/ptySendPrompt with {"name":"<that terminal>","data":"<your report>","clearBeforePrompt":false} against the port in .switchboard/api-server-port.txt.`
 
 `available: false` in the GET response means no kanban DB is reachable — gate honestly rather
-than pretending zero orders. Caps are server-side: `MAX_ORDERS = 20`,
-`MAX_INSTRUCTION_CHARS = 2000`, `MAX_BLOCK_CHARS = 4000` (the block cap is shared across every
-order applying to one terminal, so a long instruction crowds out its siblings).
+than pretending zero orders. There are no server-side caps and no truncation: a duplicate
+order is not dropped, it is rendered a second time in the standing-orders block of every
+prompt that terminal receives from then on.
 
 **Treat an existing order as authoritative.** The Agents-tab group control that instantiates a
 wired team installs the callback order at creation time. Do not duplicate or overwrite it —
@@ -208,7 +209,7 @@ A `[switchboard:turn-end]` message arriving at your prompt *is* the new turn —
 to an idle agent terminal is a turn, same as a coder's report. Two outcomes:
 
 - **`completed`** — `Seat '<coder>' finished its turn on '<plan file>'.` The coder's plan file
-  advanced. Review the diff (§5).
+  advanced. Review the diff (see The review turn).
 - **`blocked`** — `Seat '<coder>' has gone quiet on '<plan file>' without writing a completion
   report — it may be waiting on input.` **`blocked` means "go look", not "this subtask is
   dead".** A `blocked` notice is not terminal: the coder can write its report afterward and a
@@ -290,7 +291,49 @@ each attempt in your report.
 
 ---
 
-## 7. Sequencing across subtasks
+## 7. Resting a terminal — clear it when you put it down
+
+A coder reports completion. You review the diff, and the next subtask goes to a *different*
+terminal. That first terminal is now **at rest** — clear it immediately:
+
+```bash
+curl -s -X POST "$BASE/terminals/verb/ptyClearTerminal" $AUTH \
+  -H "Content-Type: application/json" --max-time 10 \
+  -d '{"name":"coder-1"}'
+```
+
+Both hosts serve this verb with the same `{ name }` payload — the extension through
+`handlePtyVerb` → the pty host, standalone in `bootstrap.ts`. It takes the same per-terminal
+send lock as `ptySendPrompt`, so a clear issued right after dispatching to another terminal
+cannot splice into an in-flight paste.
+
+**Why this step exists.** Because you pass `clearBeforePrompt: false` on every send, your
+coders are never cleared by the dispatch path — a coder that took subtask 1, then subtask 4,
+then a fix resend, carries all of it into subtask 7. Clearing at rest is what resets that
+context, and it costs nothing: the terminal is idle, minutes pass before you dispatch to it
+again, and nothing is waiting on the CLI's re-render. The alternative — letting the next
+prompt carry the clear — pays for `/clear` and its settle window *inside* the dispatch and
+destroys the conversation a resend depends on. The mandatory `clearBeforePrompt: false` rule
+above is unchanged: a resend to a terminal you did **not** rest still needs its context.
+
+Three rules, all load-bearing:
+
+- **Never clear yourself.** Your driving context is your own conversation across turns —
+  there is no loop holding it and nothing to recover it from. `SWITCHBOARD_TERMINAL` is your
+  own name; never pass it to this verb. For the same reason, never call
+  `ptyClearAllTerminals`: it clears every active terminal, you included.
+- **Only clear a terminal that is genuinely at rest.** The verb writes `/clear` to the pty
+  unconditionally — there is no busy check. A terminal is at rest when its completion message
+  has reached you *and* you have decided its next work goes elsewhere. Clearing a coder that
+  is still working destroys the work in flight.
+- **Standing orders survive a clear.** The callback contract lives at the
+  `terminals.standingOrders` DB key and is re-appended to every `ptySendPrompt`. A cleared
+  coder still reports to you on its next task — do not re-register the order, and treat any
+  existing order as authoritative (check with `GET /terminals/standing-orders` first).
+
+---
+
+## 8. Sequencing across subtasks
 
 Read the feature's `## Dependencies & sequencing` section. Honour ordering statements, and
 treat "not concurrently" as a hard serialisation when driving more than one coder. When the
@@ -299,7 +342,7 @@ from absence.
 
 ---
 
-## 8. Failure modes
+## 9. Failure modes
 
 Each with the observable signal and the fix:
 
@@ -323,10 +366,15 @@ Each with the observable signal and the fix:
   memory of its earlier work.
 - **No `SWITCHBOARD_TERMINAL` in your environment** — you are running outside a fleet terminal.
   Stop and tell the user; do not invent a reply address.
+- **`ptyClearTerminal` answered `success: true` and nothing was cleared** — the verb returns
+  `success: true` when the name resolves but the terminal is not `active`; it writes nothing,
+  because a dead pty has no context to reset. Only an unknown name returns
+  `{"success": false, "error": "No such terminal: <name>"}`. Treat `success: true` as "the
+  name resolved", not as "the terminal is alive" — `ptyListTerminals` is the liveness check.
 
 ---
 
-## 9. Empty coder pool
+## 10. Empty coder pool
 
 Before dispatching, enumerate the live coder pool with `ptyListTerminals` and filter for
 `role: 'coder'` (or the role your directive names). If the pool is empty or too small for the

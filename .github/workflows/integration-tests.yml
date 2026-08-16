@@ -96,6 +96,16 @@ jobs:
       - name: PTY prompt delivery framing (whole paste markers at the stranding lengths)
         run: npm run test:contract:pty-prompt-delivery-framing
 
+      # A lead driving coders passes clearBeforePrompt: false on every send, so the
+      # dispatch path never resets those terminals — a coder carries subtask 1's
+      # conversation into subtask 7 forever. Clearing a terminal when the lead stands
+      # it down is the only reset on that path, and it is pure source text: a rest
+      # instruction that loses its "only when at rest" precondition has a lead wipe a
+      # coder that is still working, and a lead that clears itself loses a driving
+      # context nothing can recover.
+      - name: Proactive terminal rest clear contract (rest instruction, prohibitions, no stale facts)
+        run: npm run test:contract:terminal-rest-clear
+
       # A browser-originated dispatch that correctly lands in a PTY terminal must not
       # also raise a VS Code "Terminal not found" toast. The pre-dispatch focus call is
       # a VS Code-only reveal; a PTY is invisible to it, so the miss warns — reading as
