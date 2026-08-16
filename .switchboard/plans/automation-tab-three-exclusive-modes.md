@@ -20,7 +20,9 @@ Exactly one is active. The whole tab is a three-way choice, an interval, an on/o
 
 **The scheduler and the run sheet are the same feature wearing different clothes.** Both are "every N minutes, do a thing to the board." They were built separately, so they got separate UI, separate persistence, separate arming. Merging them removes a whole surface rather than reorganising it.
 
-**Oversight was modelled as a flag alongside automation** (`feature_plan_20260816150001_oversight-stops-being-a-mode.md`, shipped — `orchestrationConfig.enabled`). The correct model is that an orchestrator deciding the next action and a run sheet mechanically applying rules are *alternatives*. You run one or the other, never both — two things dispatching the same board is the double-dispatch hazard `isAutomationArmed` already exists to guard.
+**Oversight as a flag alongside automation is being removed because it earns nothing.** `feature_plan_20260816150001_oversight-stops-being-a-mode.md` landed `orchestrationConfig.enabled` — an agent that watches while the run sheet drives. Watching adds nothing: the run sheet is already mechanical and correct, so a supervisor over it has no decision to make. The orchestrator is only worth running when it *is* the automation — deciding and taking the next action itself. That makes it a mode, and makes it exclusive with the run sheet: two things dispatching the same board is the double-dispatch hazard `isAutomationArmed` exists to guard.
+
+This is a deliberate reversal of 150001, not a misreading of it.
 
 ## The tab
 
@@ -44,7 +46,7 @@ Selecting a mode reveals only that mode's controls. The status line is one sente
 
 **Agent-managed** — a wake interval, nothing else. On each wake Switchboard prompts the orchestrator to assess the board and take the next action. Which action is the agent's call; the tab does not enumerate them.
 
-**Scheduled** — an interval, and the run-sheet rules that genuinely differ per install. Two checkboxes absorb the surviving scheduler jobs (below).
+**Scheduled** — an interval, and the run-sheet rules that genuinely differ per install.
 
 **External** — the copy button and the evergreen prompt, unchanged from what ships today.
 
@@ -52,32 +54,27 @@ Selecting a mode reveals only that mode's controls. The status line is one sente
 
 Say the word if any of these earn their place — they are gone otherwise:
 
-- The **scheduler job list** in its entirety: source picker, target picker, per-job interval, per-job START/STOP, per-job COPY PROMPT, and the target-contract message round-trip. This is the second clock.
+- The **scheduler** in its entirety — UI and persistence both. Source picker, target picker, per-job interval, per-job START/STOP, per-job COPY PROMPT, the target-contract round-trip, and the stored job records. This is the second clock, and it has never been released, so it goes without a trace.
 - `KANBAN AUTOMATION RULES` as a section. Whatever inside it is still real moves into Scheduled's small set; the box goes.
 - `OVERSIGHT AGENT` as a section. It becomes the Agent-managed mode.
 - The toolbar's separate arming path as a second way in. One ON/OFF, on the tab.
 
 ## Data
 
-`automationMode` becomes `'agent-managed' | 'scheduled' | 'external'`. Shipped state on ~4,000 installs, so every retired value maps rather than falls through:
+`automationMode` becomes `'agent-managed' | 'scheduled' | 'external'`. It is shipped state, so retarget the mapping that `normalizeAutomationMode` already performs — one function, one fall-through, no new migration machinery:
 
-| Persisted | Becomes | Why |
-| :--- | :--- | :--- |
-| `internal`, `run-sheet`, `scheduler`, `single-column` | `scheduled` | All were Switchboard running the run sheet on its own clock. |
-| `external` | `external` | Unchanged. |
-| `orchestration` | `agent-managed` | Restores the original intent, which 150001 had mapped to `internal` + a flag. |
-| anything with `orchestrationConfig.enabled === true` | `agent-managed` | The 150001 round-trip: that flag is how an orchestration install was recorded after the earlier migration. Read it once, then stop treating it as an arming flag. |
-| unrecognised | `scheduled` | Safe default — keeps the board ticking, matching today's fall-through. |
+| Persisted | Becomes |
+| :--- | :--- |
+| `internal`, `run-sheet`, `scheduler`, `single-column` | `scheduled` |
+| `orchestration` | `agent-managed` |
+| `external` | `external` |
+| unrecognised | `scheduled` — keeps the board ticking, as today |
 
-Keep the `orchestrationConfig` key in the persisted blob rather than scrubbing it; per the repo's migration rule an inert legacy key is preserved, not dropped.
+**The scheduler is deleted outright — it has never left the source tree.** No migration, no checkboxes, no drop-on-read, no preserved job records, no `integration-config.json` handling. Per the repo's own rule, unreleased work takes a clean break. Delete the job list, the source and target pickers, the per-job intervals and START/STOP, the target-contract round-trip, and the persistence behind them.
 
-Persisted scheduler jobs, which are live configuration on real installs:
+**`orchestrationConfig.enabled` is deleted, not migrated.** It landed days ago in 150001 and never shipped, so nothing on disk needs carrying across. `orchestrationConfig` keeps one field: the wake interval.
 
-- `fetch-plans` and `reconcile` become two checkboxes inside Scheduled, running on the one clock. Interval preserved only insofar as the run sheet's interval now governs them; their own intervals are dropped.
-- `custom` — an arbitrary prompt on a timer — has no home in a run-sheet model. Dropped on read, following the `comms` precedent: no flag, no disabled-but-present option, no bespoke rewrite pass over `integration-config.json`.
-- A migrated job arrives **off**. Its arming is yours.
-
-Agent-managed needs a wake interval, which `orchestrationConfig` does not currently have (`normalizeOrchestrationConfig` carries only `enabled`). Add `intervalMinutes`, defaulting to the run sheet's current default so a migrated orchestration install wakes on a familiar cadence.
+Agent-managed needs that wake interval, which does not exist yet — `normalizeOrchestrationConfig` carries only `enabled`. Replace it with `intervalMinutes`, defaulting to the run sheet's current default.
 
 ## Metadata
 
@@ -91,6 +88,5 @@ Agent-managed needs a wake interval, which `orchestrationConfig` does not curren
 3. Pick Scheduled, turn it on — the run sheet advances cards on the interval; the orchestrator is not running.
 4. Switching between the two does not leave both live — count installed timers, not just UI state.
 5. Pick External — no timer is installed, no scheduled job runs, COPY PROMPT yields a prompt that builds against an empty board.
-6. An install persisted as `orchestration` opens on Agent-managed. An install persisted as `internal` with `orchestrationConfig.enabled = true` also opens on Agent-managed.
-7. An install with a persisted `fetch-plans` job opens on Scheduled with that checkbox present and off, and nothing running until armed.
-8. An install with a persisted `custom` job loses it without an error, and `integration-config.json` is otherwise byte-intact.
+6. An install persisted as `orchestration` opens on Agent-managed; one persisted as `internal` or `single-column` opens on Scheduled.
+7. Nothing in the tree still references the scheduler job surface — no orphaned verbs, no dead message handlers, no `getSchedulerTargetContracts` round-trip.
