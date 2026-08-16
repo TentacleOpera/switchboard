@@ -41,15 +41,19 @@ Do not invent a new relationship id for this. `reports-to-head` already produces
 
 The prompt must name the **feature's** planId. The current one names a subtask's, which is the other half of why cards never reached review as a unit.
 
-**3. Nothing else moves.** No change to `/kanban/dispatch`, to the cascade behaviour, to how subtasks are assigned, or to the reviewer's own role prompt.
+**3. `"from":"{head}"` is load-bearing — do not trim it.** Team-scoped reviewer routing already ships (`resolveTeamScopedRoleTerminal`, `teamWiring.ts:914`, wired at `TaskViewerProvider.ts:9484` and `bootstrap.ts:2049`). It routes on `from`: it looks up the group the origin heads and picks the live member with the wanted role. Drop `from`, or send a name that is in no group, and the resolver returns `null` — dispatch falls back to workspace-wide resolution and hands the card to whichever reviewer sorts alphabetically first. In a one-team workspace that looks correct, so a trimmed prompt survives casual testing and misroutes the moment a second team is live.
+
+**4. Nothing else moves.** No change to `/kanban/dispatch`, to the resolver, to the cascade behaviour, to how subtasks are assigned, or to the reviewer's own role prompt.
+
+Changing the reviewer's `relationship` does **not** affect routing. The resolver reads group *membership* from `terminals.groups`; `relationship` only decides which standing orders get installed. The reviewer stays in the roster and stays addressable — it simply stops receiving hand-written prompts from the lead.
 
 ## Supersedes
 
 `feature_plan_20260816164108_coding-team-head-advances-card-to-code-reviewed.md` — that plan is what installed the per-subtask `headPrompt` now in the tree. It correctly identified that the reviewer was never reached, but chose subtask granularity and did not remove the competing `reviewer` pair order, so the bypass survived. Implement this plan instead of that one; do not implement both.
 
-## Companion
+## Already shipped — do not re-plan
 
-`feature_plan_20260816164109_team-scoped-reviewer-routing-on-code-reviewed.md` stays valid and matters more after this change: once the lead dispatches through the board, the board must route to *its* team's reviewer rather than the first reviewer on the fleet. Separate plan, separate ship.
+`feature_plan_20260816164109_team-scoped-reviewer-routing-on-code-reviewed.md` **is implemented in the tree.** `resolveTeamScopedRoleTerminal` (`teamWiring.ts:914`) is called from both hosts and covered by `src/test/team-scoped-role-routing.test.js`. Nothing in this plan needs to build reviewer routing; it needs only to keep feeding it a correct `from`.
 
 ## Metadata
 
