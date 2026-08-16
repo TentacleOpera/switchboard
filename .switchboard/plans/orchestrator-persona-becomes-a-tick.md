@@ -34,6 +34,16 @@ Assess both lanes on every wake. Waiting is the expected outcome most of the tim
 - **Advancing cards.** The coding team's head now owns the advance to CODE REVIEWED through board dispatch (see `coding-team-sends-the-feature-to-review-not-each-subtask.md`). The orchestrator must not also do it, or the two race on the same card.
 - **Merge-back**, under the default `none` topology — there is nothing to merge back. It applies only when the user has chosen `per-feature`.
 
+## Context is cleared every tick
+
+Each wake clears the terminal and hands the agent a fresh prompt: the persona, plus `.switchboard/orchestrator/session.md` — the agreed goal and scope, and the log of what has happened. It re-reads the board and git from scratch and decides from that.
+
+**Why cleared rather than continuous.** Every other rule here already says so. "Ground truth over self-report" and "re-derive every wake" are instructions to distrust memory — and a context that has been accumulating since 9pm is precisely a memory competing with the board. A long-lived context also grows without bound across an overnight run, and the compaction that eventually follows can silently drop the session goal, which is the one thing that must survive to 6am.
+
+Clearing makes tick N and tick N+40 identical in construction. It also makes the session recoverable: kill the terminal, restart it, and nothing is lost, because everything that mattered was on disk. The mechanism already exists — `ptySendPrompt` takes `clearBeforePrompt`.
+
+**What this demands in exchange:** anything the next tick needs must be written to the session file when it happens. A dispatch that is not logged is a dispatch the next tick will make again. That is a real constraint, and it is the reason the log is append-only and written at the moment of action rather than at the end of a pass.
+
 ## Rules the tick needs and the current persona lacks
 
 - **One dispatch per lane per wake.** A wake may feed both lanes, never the same lane twice.

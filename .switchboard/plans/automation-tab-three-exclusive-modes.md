@@ -44,7 +44,11 @@ Selecting a mode reveals only that mode's controls. The status line is one sente
 
 ## What each mode carries
 
-**Agent-managed** — a wake interval, nothing else. On each wake Switchboard prompts the orchestrator to assess the board and take the next action. Which action is the agent's call; the tab does not enumerate them.
+**Agent-managed** — a CLI startup command and a wake interval. That is the mode.
+
+The orchestrator is an ordinary agent: a terminal running a CLI with a skill, like a lead or a planner. So the tab configures it the way any agent is configured — which command starts it — and how often Switchboard wakes it. There is no bespoke orchestrator machinery to expose, and the tab does not enumerate the actions it may take; that is the persona's job.
+
+Pressing Start here does not begin orchestration. It brings the agent up for a pre-flight conversation, and the session begins only when the user answers in the terminal — see `orchestration-starts-as-a-conversation.md`.
 
 **Scheduled** — an interval, and the run-sheet rules that genuinely differ per install.
 
