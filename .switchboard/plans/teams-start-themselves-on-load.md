@@ -27,11 +27,13 @@ If a team's head is already live — a reload, a second window — `startTeamByI
 
 If one team fails to start, the others still start, and the failure surfaces the same way a failed manual START does. Boot never blocks on it.
 
-## Prerequisite
+## Prerequisite, and what shipping without it looks like
 
 `ptyStartTeam` currently resolves team definitions from a single root (`TaskViewerProvider.ts:2602`, `root || effectiveRoot`) while the TEAMS tab writes to the board's selected root. In a multi-root window those differ, and start finds the wrong team or none. Autostart calls the same path and inherits it exactly.
 
 Fix that first — it is already planned and evidenced in `feature_plan_20260816212416_team-verbs-read-the-wrong-workspace-db.md`. This plan does not re-solve it and does not work around it.
+
+**It is still shippable before that fix, with a known limit.** In a single-root window the two roots are the same folder, so autostart works correctly. The failure is specific to multi-root windows, where it will start the wrong team or none — and it will fail *silently at boot*, which is worse than failing at a click, because nobody is watching. If this ships first, that limit must be stated wherever the toggle is set, and removed once the prerequisite lands.
 
 ## Metadata
 

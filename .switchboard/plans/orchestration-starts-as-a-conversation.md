@@ -52,6 +52,12 @@ Confirmation produces `.switchboard/orchestrator/session.md`, in two parts:
 
 This file is the session's memory (see `orchestrator-persona-becomes-a-tick.md`), which is why it is written before the first tick rather than discovered along the way.
 
+## Order — third of four
+
+Requires `automation-tab-three-exclusive-modes.md` (2 of 4), which creates agent-managed mode and the Start this plan redefines — there is no button to change until it exists. That in turn requires `worktree-strategy-is-the-users-choice.md` (1 of 4), whose setting the pre-flight reports on.
+
+`orchestrator-persona-becomes-a-tick.md` (4 of 4) lands after this one: it reads the session file that confirmation produces here.
+
 ## Metadata
 
 **Complexity:** 4

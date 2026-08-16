@@ -65,6 +65,16 @@ The current persona is coding and code review only: *"You never automate plannin
 
 What still escalates is unchanged in kind: a **question** it cannot answer, a stalled agent, a conflict it cannot resolve. Feeding the planning lane is routine work; deciding a planner's open question is not.
 
+## Order — land this last
+
+This is **4 of 4** in the orchestration set, and it is the one that consumes everything the other three build:
+
+- `worktree-strategy-is-the-users-choice.md` (1 of 4) — the tick obeys the worktree setting and assumes `none` is the default. Without it, the setting is still being forced out from under the user and "obey it, never write it" describes nothing.
+- `automation-tab-three-exclusive-modes.md` (2 of 4) — supplies the interval that produces the wake. Without it there are no ticks to describe.
+- `orchestration-starts-as-a-conversation.md` (3 of 4) — writes `session.md` at confirmation. This plan clears context every tick and hands the agent that file; land the persona first and each tick wakes with no goal, no scope and no log.
+
+Landing it early is not merely premature — it replaces a persona that works today with one describing a world that does not exist yet, so orchestration is worse in the interval, not just unchanged.
+
 ## Metadata
 
 **Complexity:** 3

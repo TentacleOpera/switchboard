@@ -80,6 +80,12 @@ Say the word if any of these earn their place — they are gone otherwise:
 
 Agent-managed needs that wake interval, which does not exist yet — `normalizeOrchestrationConfig` carries only `enabled`. Replace it with `intervalMinutes`, defaulting to the run sheet's current default.
 
+## Order — second of four
+
+Land `worktree-strategy-is-the-users-choice.md` first. It removes `applyOversightWorktreeTopology`, which fires on the `orchestrationConfig.enabled` false→true transition — the very field this plan deletes. Delete the field while that caller still exists and the topology machinery is left reaching for state that is gone.
+
+`orchestration-starts-as-a-conversation.md` and `orchestrator-persona-becomes-a-tick.md` both follow this plan, since neither has anywhere to live until agent-managed mode exists.
+
 ## Metadata
 
 **Complexity:** 6

@@ -32,6 +32,17 @@ You pick how work is isolated. The default is **no worktrees** — everyone work
 
 `none` and `per-feature` both exist in the tree today; this plan makes the choice yours and deletes the machinery that overrode it. `per-team` is new provisioning work for an option you said *could* exist rather than one you plan to use. Ship the two that exist, then add `per-team` when you actually want it. Say so and it goes in this plan instead.
 
+## Order — land this first
+
+This is **1 of 4** in the orchestration set. It has no prerequisites, and the other three assume the `none` default it establishes:
+
+1. **this plan** — worktree strategy becomes the user's, `none` is the default
+2. `automation-tab-three-exclusive-modes.md` — agent-managed mode exists
+3. `orchestration-starts-as-a-conversation.md` — Start opens a pre-flight
+4. `orchestrator-persona-becomes-a-tick.md` — the persona consumes all of the above
+
+Landing this second or later means the persona describes a `none` default that does not exist, and the automation tab deletes `orchestrationConfig.enabled` while `applyOversightWorktreeTopology` is still firing on its transitions.
+
 ## Metadata
 
 **Complexity:** 4
