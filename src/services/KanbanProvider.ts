@@ -5062,11 +5062,13 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         // into each per-group options copy so the existing single-feature builder keeps
         // working unchanged.
         const db = this._getKanbanDb(workspaceRoot);
+        // Legacy fallback: feature_prompt_template's writer (the on-board feature-manage
+        // modal) was removed and updateFeatureConfig no longer writes it, so only a value
+        // left over from an old install can surface here. Per the repo migration rule the
+        // read path is retained so that legacy text is not silently dropped.
         let featurePromptTemplate: string | undefined;
-        let featureWorktreeMode: string | undefined;
         if (db && await db.ensureReady()) {
             featurePromptTemplate = (await db.getConfig('feature_prompt_template')) || undefined;
-            featureWorktreeMode = (await db.getConfig('feature_worktree_mode')) || 'none';
         }
 
         // ONE prompt for the whole batch. buildKanbanBatchPrompt does not build a
@@ -5090,7 +5092,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             batchOptions.featureTopic = featureTopics[0];
             // Total across every feature in the batch — the plural opener reports the sum.
             batchOptions.subtaskCount = partition.featureGroups.reduce((n, g) => n + g.subtasks.length, 0);
-            batchOptions.featureWorktreeMode = featureWorktreeMode || 'none';
             if (totalFeatureGroups === 1) {
                 // Single-feature batches keep the exact prior payload, planId included.
                 const soleId = partition.featureGroups[0].feature.planId || partition.featureGroups[0].feature.sessionId || '';

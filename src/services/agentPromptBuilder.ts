@@ -312,13 +312,6 @@ export interface PromptBuilderOptions {
      * When empty/absent, no design system block is emitted.
      */
     designSystemReferences?: Array<{ projectName: string; designSystemLink: string }>;
-    /**
-     * The feature's `feature_worktree_mode` snapshot ('none' | 'per-feature').
-     * Only meaningful when featureMode is true. The per-subtask/high-low variants
-     * were removed — both 'none' and 'per-feature' resolve to the base orchestration
-     * directive; this field is read only so the known-mode guard doesn't warn.
-     */
-    featureWorktreeMode?: string;
     /** The feature's planId. Retained for caller compatibility (formerly drove the high-low consolidation directive). */
     featurePlanId?: string;
     /** Formerly pre-provisioned tier worktrees for high-low mode. High-low was removed; this field is now unused and retained for caller compatibility. */
@@ -559,11 +552,14 @@ export const GIT_SAFETY_DIRECTIVE = `Never run work-discarding or history-rewrit
 
 /**
  * Worktree-mode guardrail — for dispatches where agents are told to self-provision
- * worktrees (useWorktreesPerPlanEnabled or featureMode). Permits `git worktree remove`
+ * worktrees (useWorktreesPerPlanEnabled). Permits `git worktree remove`
  * for cleanup after merge (removes the working copy, commits survive) while keeping the
  * ban on branch deletion (loses commits) and all other destructive ops. The standard
  * guardrail above forbids worktree deletion because agents don't own the lifecycle in
- * the pre-assigned-worktree path; here they do.
+ * the pre-assigned-worktree path; here they do. A host-provisioned worktree
+ * (feature_worktree_mode = 'per-feature') is owned and removed by the host, so the
+ * agent keeps the standard guardrail — removal permission is granted iff the agent
+ * was told to create worktrees, not merely because it is standing inside one.
  */
 export const GIT_SAFETY_DIRECTIVE_WORKTREE_MODE = `Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout \`<path>\` / git restore, git clean, git stash drop/clear, force pushes, or branch deletion. You may remove git worktrees you created with \`git worktree remove\` to clean up after merging — this removes the working copy, not commits. Do not use \`git worktree remove --force\` (would discard uncommitted work). If you make a mistake, do not discard — commit first, then correct forward.`;
 
@@ -632,9 +628,11 @@ export function buildGitPolicyBlock(opts: {
 
     // Safety guardrail — independent checkbox; emits only when truthy. The
     // worktreePerPlanActive flag selects the variant: when agents self-provision
-    // worktrees (useWorktreesPerPlanEnabled or featureMode), the narrowed guardrail
+    // worktrees (useWorktreesPerPlanEnabled), the narrowed guardrail
     // permits `git worktree remove` for cleanup; otherwise the standard guardrail
-    // forbids worktree deletion (agents don't own the lifecycle).
+    // forbids worktree deletion (agents don't own the lifecycle). A host-provisioned
+    // worktree (feature_worktree_mode = 'per-feature') does NOT select the narrowed
+    // guardrail — the host owns that lifecycle, so the agent keeps the standard one.
     if (guardrail) {
         clauses.push(worktreePerPlanActive ? GIT_SAFETY_DIRECTIVE_WORKTREE_MODE : GIT_SAFETY_DIRECTIVE);
     }
@@ -907,14 +905,6 @@ export const CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE = (name: string) =>
 export const WORKTREES_PER_PLAN_DIRECTIVE = 'Where possible, process each plan as an isolated unit, creating a dedicated git worktree per plan to prevent file conflicts between concurrent tasks.';
 
 /**
- * Context bundle for `resolveFeatureOrchestrationDirective`. The per-subtask/high-low
- * variants were removed; the base directive is the sole path. This interface is retained
- * (empty) for caller compatibility — callers still pass a context object, it is ignored.
- */
-interface FeatureOrchestrationDirectiveContext {
-}
-
-/**
  * Single selector for the feature orchestration directive.
  * The worktree clause is gated on `worktreesEnabled` (`useWorktreesPerPlan`).
  * Subagent policy is driven exclusively by `policy` — `default` emits no subagent language,
@@ -946,11 +936,9 @@ export function buildFeatureSubagentClause(
 }
 
 export function resolveFeatureOrchestrationDirective(
-    mode: string | undefined,
     featureTopic: string,
     subtaskCount: number,
     worktreesEnabled: boolean = false,
-    _context?: FeatureOrchestrationDirectiveContext,
     policy?: string,
     customSubagentName?: string,
     role?: string,
@@ -967,9 +955,6 @@ export function resolveFeatureOrchestrationDirective(
     const unitClause = multiTopics
         ? `The subtasks of each feature are a single delivery unit — do not treat them as independent tickets, and do not interleave work across features.`
         : `All subtasks are part of a single delivery unit — do not treat them as independent tickets.`;
-    if (mode !== undefined && !['none', 'per-feature'].includes(mode)) {
-        console.warn(`[agentPromptBuilder] Unknown feature_worktree_mode "${mode}" — falling back to base orchestration directive.`);
-    }
     // Planner role: improve-feature / improve-plan restructure plan files; they do NOT ship
     // product code and never spawn subagents. Bypass buildFeatureSubagentClause (whose
     // execution-coded verbs — "Handle all subtasks yourself", "Use your native subagent…",
@@ -1275,11 +1260,9 @@ export function buildKanbanBatchPrompt(
     if (options?.featureMode && options?.featureTopic) {
         const featureSubagentPolicy = options?.featureUseSubagentsEnabled ? 'useSubagents' : (options?.featureNoSubagentsEnabled ? 'noSubagents' : (options?.featureCustomSubagentName ? 'customSubagent' : 'default'));
         const directive = resolveFeatureOrchestrationDirective(
-            options.featureWorktreeMode,
             options.featureTopic,
             options.subtaskCount || 0,
             useWorktreesPerPlanEnabled,
-            undefined,
             featureSubagentPolicy,
             options.featureCustomSubagentName,
             role,
@@ -1367,7 +1350,7 @@ export function buildKanbanBatchPrompt(
 
         // Add dispatch context and plan list
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled || options?.featureMode === true });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled });
         const suffixBlock = assembleSuffix('planner', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1499,7 +1482,7 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled || options?.featureMode === true });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled });
         const suffixBlock = assembleSuffix('reviewer', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1556,7 +1539,7 @@ For each plan:
             : `The implementation for each of the following ${plans.length} plans passed code review. Execute a direct product acceptance / intent review against the product requirements document in-place for each plan.`;
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled || options?.featureMode === true });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled });
         const suffixBlock = assembleSuffix('tester', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1615,7 +1598,7 @@ For each plan:
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled || options?.featureMode === true });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled });
         const suffixBlock = assembleSuffix('lead', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1668,7 +1651,7 @@ For each plan:
             // §10 — No FOCUS (single file path, no ambiguity), no batch rules,
             // no subagent block, no feature directive (replaced by featureExecutionBlock).
             // gitBlock still included via assembleSuffix.
-            const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled || options?.featureMode === true });
+            const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled });
             const suffixBlock = assembleSuffix('coder', {
                 dispatchContextPrefix, gitBlock, antigravityBlock, skipBlock
             });
@@ -1721,7 +1704,7 @@ For each plan:
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled || options?.featureMode === true });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled });
         const suffixBlock = assembleSuffix('coder', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1763,7 +1746,7 @@ For each plan:
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled || options?.featureMode === true });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled });
         const suffixBlock = assembleSuffix('intern', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock: effectiveSubagentBlock
         });
@@ -1797,7 +1780,7 @@ For each plan:
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled || options?.featureMode === true });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled });
         // §6 — analyst is NOT code-touching; gitBlock excluded by assembleSuffix.
         const suffixBlock = assembleSuffix('analyst', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock: effectiveSubagentBlock
@@ -1859,7 +1842,7 @@ fields above, no speculative implementation detail. Comment only.`;
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled || options?.featureMode === true });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled });
         // §6 — ticket_updater is NOT code-touching; gitBlock excluded by assembleSuffix.
         const suffixBlock = assembleSuffix('ticket_updater', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock: effectiveSubagentBlock
@@ -1910,7 +1893,7 @@ fields above, no speculative implementation detail. Comment only.`;
         const safeguardsBlock = (plans.length > 1 && switchboardSafeguardsEnabled && effectiveBatchExecutionRules)
             ? effectiveBatchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
-        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled || options?.featureMode === true });
+        const gitBlock = buildGitPolicyBlock({ branch: gitBranchStrategy, commit: gitCommitStrategy, push: gitPushStrategy, guardrail: gitProhibitionEnabled, worktreeActive, worktreePerPlanActive: useWorktreesPerPlanEnabled });
         // §6 — researcher is NOT code-touching; gitBlock excluded by assembleSuffix.
         const suffixBlock = assembleSuffix('researcher', {
             dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock: effectiveSubagentBlock
