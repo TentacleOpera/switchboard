@@ -50,6 +50,16 @@ Match `switchboard-site/public/assets/*-detailed.svg` exactly — that is the ho
 
 Four portraits: **planner**, **lead**, **researcher/coder**, **reviewer**. They double as the flow-diagram nodes at small scale, so author them once at a single cell size and scale by whole multiples to keep the grid crisp.
 
+### Placeholder art is expected first — do not block on it
+
+**Ship the tab with crude placeholders.** A portrait can start as a handful of `<rect>`s in the cyan ramp — a head, a body, one distinguishing mark per role. That is enough to build, review and use the whole tab. Nobody should be waiting on finished art to wire a click handler.
+
+What makes this safe is the structure, so build it this way from the start: each portrait is a `<symbol>` in one `<defs>` block, drawn everywhere via `<use>` at a fixed cell size. Cards and diagram nodes reference the symbol; neither knows what is inside it. Replacing placeholder art with final art is then an edit to the `<defs>` block alone — no change to the cards, the flow diagram, the layout, or the animation.
+
+Because the cell size is fixed, better art cannot later shift the layout. That is the property worth protecting; the drawing quality is not.
+
+A placeholder that looks unfinished is the correct state for this tab to be in while the mechanics get proven.
+
 ## The animation
 
 On pick, the diagram draws itself: nodes fade in top-down, staggered ~60ms; each arrow strokes on via `stroke-dashoffset` over ~220ms after its nodes land. Once settled, a slow pulse travels head-ward along the arrows — the idle state, showing direction of reporting.
@@ -86,3 +96,4 @@ Open the TEAMS tab and look at it:
 5. `+ Build your own` opens the existing form; save one and it appears as a fourth card that draws like the rest.
 6. With reduced motion on, the diagram is simply there.
 7. Nothing in the SVG references a URL — confirm no network requests from the tab.
+8. Swap one placeholder portrait for a finished one by editing only the `<defs>` block: the cards and the flow diagram pick it up with no other edit, and no layout shifts.
