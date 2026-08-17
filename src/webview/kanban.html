@@ -1106,6 +1106,9 @@
         }
         @media (prefers-reduced-motion: reduce) {
             .kanban-card.card-op-completed { animation: none; }
+            .teams-flow-node { opacity: 1; animation: none; }
+            .teams-flow-edge { stroke-dashoffset: 0; animation: none; }
+            .teams-flow-pulse { animation: none; opacity: 0.5; }
         }
 
         .card-actions {
@@ -1335,6 +1338,113 @@
         .agents-tab-custom-agent-item-btn.delete:hover {
           border-color: var(--accent-red);
           color: var(--accent-red);
+        }
+
+        /* ── TEAMS tab — card row, flow diagram, portraits ─────────────── */
+        /* Three-card row: each card is a clickable tile carrying a portrait,
+           name, purpose and roster strip. The whole card is the click target. */
+        .teams-card-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .teams-card {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding: 10px;
+            border: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+            border-radius: 4px;
+            cursor: pointer;
+            transition: border-color 0.15s, background 0.15s;
+            min-width: 140px;
+            flex: 1 1 140px;
+        }
+        .teams-card:hover {
+            border-color: var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg2));
+        }
+        .teams-card.is-picked {
+            border-color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 8%, var(--panel-bg2));
+        }
+        .teams-card-portrait {
+            flex-shrink: 0;
+        }
+        .teams-card-name {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .teams-card-purpose {
+            font-size: 10px;
+            color: var(--text-secondary);
+            line-height: 1.3;
+        }
+        .teams-card-roster {
+            font-size: 9px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            margin-top: 2px;
+        }
+        .teams-card-note {
+            font-size: 9px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+        .teams-build-link {
+            display: inline-block;
+            margin-top: 8px;
+            font-size: 11px;
+            color: var(--accent-teal);
+            cursor: pointer;
+            text-decoration: none;
+        }
+        .teams-build-link:hover { text-decoration: underline; }
+
+        /* Flow diagram panel — sits below the card row. */
+        #teams-flow-panel {
+            margin-top: 10px;
+            min-height: 0;
+        }
+        #teams-flow-panel:empty { display: none; }
+        .teams-flow-svg {
+            width: 100%;
+            overflow-x: auto;
+        }
+        .teams-flow-node {
+            opacity: 0;
+            animation: teams-flow-node-in 0.3s ease-out forwards;
+        }
+        @keyframes teams-flow-node-in {
+            to { opacity: 1; }
+        }
+        .teams-flow-edge {
+            stroke-dasharray: 200;
+            stroke-dashoffset: 200;
+            animation: teams-flow-edge-draw 0.22s ease-out forwards;
+        }
+        @keyframes teams-flow-edge-draw {
+            to { stroke-dashoffset: 0; }
+        }
+        .teams-flow-pulse {
+            animation: teams-flow-pulse 2.5s ease-in-out infinite;
+        }
+        @keyframes teams-flow-pulse {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 0.8; }
+        }
+        .teams-flow-action {
+            margin-top: 8px;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .teams-flow-error {
+            font-size: 11px;
+            color: var(--accent-red);
         }
 
         /* Secondary button — ported from implementation.html so .secondary-btn
@@ -3085,25 +3195,89 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
     <!-- Teams Tab Content -->
     <div id="teams-tab-content" class="shared-tab-content">
+      <!-- SVG defs: portrait symbols + glow filter. Emitted once, referenced
+           via <use> by every card and flow node. Placeholder art — replacing
+           it is an edit to this block alone, no layout shift. -->
+      <svg width="0" height="0" style="position:absolute;" aria-hidden="true">
+        <defs>
+          <filter id="portrait-glow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="1.5" result="blur"/>
+            <feMerge>
+              <feMergeNode in="blur"/>
+              <feMergeNode in="SourceGraphic"/>
+            </feMerge>
+          </filter>
+          <!-- Planner: head + body, clipboard mark -->
+          <symbol id="portrait-planner" viewBox="0 0 24 24" shape-rendering="crispEdges">
+            <rect x="8" y="2" width="8" height="6" fill="#00e5ff"/>
+            <rect x="8" y="2" width="8" height="2" fill="#7ff3ff"/>
+            <rect x="6" y="8" width="12" height="12" fill="#00e5ff"/>
+            <rect x="6" y="8" width="12" height="2" fill="#7ff3ff"/>
+            <rect x="6" y="18" width="12" height="2" fill="#00b8cc"/>
+            <rect x="9" y="11" width="6" height="5" fill="#00b8cc"/>
+            <rect x="10" y="12" width="4" height="1" fill="#7ff3ff"/>
+          </symbol>
+          <!-- Lead: head + body, star mark -->
+          <symbol id="portrait-lead" viewBox="0 0 24 24" shape-rendering="crispEdges">
+            <rect x="8" y="2" width="8" height="6" fill="#00e5ff"/>
+            <rect x="8" y="2" width="8" height="2" fill="#7ff3ff"/>
+            <rect x="6" y="8" width="12" height="12" fill="#00e5ff"/>
+            <rect x="6" y="8" width="12" height="2" fill="#7ff3ff"/>
+            <rect x="6" y="18" width="12" height="2" fill="#00b8cc"/>
+            <rect x="10" y="11" width="4" height="4" fill="#00b8cc"/>
+            <rect x="11" y="12" width="2" height="2" fill="#7ff3ff"/>
+          </symbol>
+          <!-- Coder/Researcher: head + body, code mark -->
+          <symbol id="portrait-coder" viewBox="0 0 24 24" shape-rendering="crispEdges">
+            <rect x="8" y="2" width="8" height="6" fill="#00e5ff"/>
+            <rect x="8" y="2" width="8" height="2" fill="#7ff3ff"/>
+            <rect x="6" y="8" width="12" height="12" fill="#00e5ff"/>
+            <rect x="6" y="8" width="12" height="2" fill="#7ff3ff"/>
+            <rect x="6" y="18" width="12" height="2" fill="#00b8cc"/>
+            <rect x="9" y="12" width="2" height="3" fill="#00b8cc"/>
+            <rect x="13" y="12" width="2" height="3" fill="#00b8cc"/>
+          </symbol>
+          <!-- Reviewer: head + body, check mark -->
+          <symbol id="portrait-reviewer" viewBox="0 0 24 24" shape-rendering="crispEdges">
+            <rect x="8" y="2" width="8" height="6" fill="#00e5ff"/>
+            <rect x="8" y="2" width="8" height="2" fill="#7ff3ff"/>
+            <rect x="6" y="8" width="12" height="12" fill="#00e5ff"/>
+            <rect x="6" y="8" width="12" height="2" fill="#7ff3ff"/>
+            <rect x="6" y="18" width="12" height="2" fill="#00b8cc"/>
+            <rect x="9" y="12" width="2" height="2" fill="#00b8cc"/>
+            <rect x="11" y="13" width="2" height="2" fill="#00b8cc"/>
+            <rect x="13" y="14" width="2" height="2" fill="#00b8cc"/>
+          </symbol>
+          <!-- Generic agent: head + body, no distinguishing mark -->
+          <symbol id="portrait-agent" viewBox="0 0 24 24" shape-rendering="crispEdges">
+            <rect x="8" y="2" width="8" height="6" fill="#00e5ff"/>
+            <rect x="8" y="2" width="8" height="2" fill="#7ff3ff"/>
+            <rect x="6" y="8" width="12" height="12" fill="#00e5ff"/>
+            <rect x="6" y="8" width="12" height="2" fill="#7ff3ff"/>
+            <rect x="6" y="18" width="12" height="2" fill="#00b8cc"/>
+          </symbol>
+        </defs>
+      </svg>
       <div style="padding:12px; overflow-y:auto; height:100%;">
 
         <!-- Team Types Gallery -->
         <div class="db-subsection" id="teams-gallery-subsection">
-          <div class="subsection-header"><span>Team Types</span></div>
+          <div class="subsection-header"><span>Teams</span></div>
           <div style="font-size:11px; color:var(--text-secondary); margin-bottom:8px;">
-            Adopt a working arrangement, then edit it. A team starts when its head role starts — no instantiate button.
+            Pick a team to see it drawn, then start it. A team also starts automatically when its head role starts —
+            the button here is for starting it on its own.
           </div>
-          <div id="teams-gallery" style="display:flex; flex-direction:column; gap:6px;"></div>
+          <div id="teams-gallery" class="teams-card-row"></div>
+          <a class="teams-build-link" id="teams-build-link">+ Build your own</a>
+          <div id="teams-flow-panel"></div>
         </div>
 
         <!-- Your Teams -->
         <div class="db-subsection" id="agent-groups-subsection">
           <div class="subsection-header"><span>Your Teams</span></div>
           <div style="font-size:11px; color:var(--text-secondary); margin-bottom:8px;">
-            Define a named team once — members, roles, counts, which one leads. Starting the head role
-            spawns the team wired: workers parented to the head, standing orders installed, a group
-            registered in the terminals tab. Each terminal is a running agent CLI; keep counts single-digit.
-            Editing a definition affects the next start, not already-running terminals.
+            Adopted teams and their definitions. Edit one to adjust members, roles, or prompts;
+            delete one to remove it. Starting the head role spawns the team wired.
           </div>
           <div id="agent-groups-list" style="display:flex; flex-direction:column; gap:6px;"></div>
           <div id="agent-groups-error" style="min-height:0px; color: var(--accent-red); font-size: 11px; margin-top: 4px;"></div>
@@ -4064,6 +4238,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // Agent Groups state
         let agentsTabAgentGroups = [];
         let agentsTabEditingGroupId = null;
+        // TEAMS tab card-row state: the picked card's key, and a pending
+        // start id sequenced on saveAgentGroupResult (the race guard for
+        // USE & START — the id is only started once the host confirms the
+        // save persisted it).
+        let teamsTabPickedKey = null;
+        let teamsTabPendingStartId = null;
+        // Tracks an in-progress start so a gallery re-render (e.g. from
+        // getAgentGroups arriving after saveAgentGroupResult) does not reset
+        // the button from STARTING… back to START.
+        let teamsTabStartingId = null;
 
         function agentsTabSanitizeCustomAgentId(value) {
           const normalized = String(value || '')
@@ -4211,6 +4395,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         // Teams (Agent Groups) event listeners
         document.getElementById('agent-groups-btn-add')?.addEventListener('click', () => {
+            teamsTabShowGroupForm(null);
+        });
+        document.getElementById('teams-build-link')?.addEventListener('click', () => {
             teamsTabShowGroupForm(null);
         });
         document.getElementById('agent-groups-btn-save')?.addEventListener('click', teamsTabSaveAgentGroup);
@@ -4503,108 +4690,325 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             { id: 'second-opinion', label: 'Second opinion' }
         ];
 
+        /**
+         * Map a role string to a portrait symbol id. Four authored symbols
+         * (planner, lead, coder, reviewer); everything else (researcher,
+         * analyst, tester, intern, free-text) resolves to the generic
+         * #portrait-agent. No <use> ever references a missing symbol.
+         */
+        function teamsTabPortraitId(role) {
+            const r = String(role || '').toLowerCase();
+            if (r === 'planner') { return 'portrait-planner'; }
+            if (r === 'lead') { return 'portrait-lead'; }
+            if (r === 'coder') { return 'portrait-coder'; }
+            if (r === 'reviewer') { return 'portrait-reviewer'; }
+            return 'portrait-agent';
+        }
+
+        /** Cell size for portrait <use> — fixed so better art cannot shift layout. */
+        const TEAMS_TAB_CELL = 28;
+
+        /**
+         * Render the card row from a merged list: adopted teams first, then
+         * un-adopted shipped types (matched by name so an adopted type renders
+         * once, as its adopted team). Tracks the picked card and renders the
+         * flow panel below the row.
+         */
         function teamsTabRenderGallery() {
             const container = document.getElementById('teams-gallery');
             if (!container) return;
             container.innerHTML = '';
-            // Head roles that are the auto-start default for an adopted team
-            // (the non-unassigned team for that role). A claimed head role no
-            // longer suppresses the USE button — a second team on the same head
-            // role is adoptable; it just becomes the auto-start loser
-            // (`unassigned`) and is startable explicitly. The set is kept only
-            // to render the informational note naming the auto-start winner.
-            const claimedRoles = new Set(agentsTabAgentGroups.filter(g => !g.unassigned).map(g => g.headRole));
-            for (const type of SHIPPED_TEAM_TYPES) {
-                container.appendChild(teamsTabGalleryCard(type, claimedRoles));
+            const adoptedByName = new Map(agentsTabAgentGroups.map(g => [g.name, g]));
+            const cards = [
+                ...agentsTabAgentGroups.map(g => ({ group: g, adopted: true })),
+                ...SHIPPED_TEAM_TYPES
+                    .filter(t => !adoptedByName.has(t.name))
+                    .map(t => ({ group: t, adopted: false })),
+            ];
+            for (const entry of cards) {
+                container.appendChild(teamsTabGalleryCard(entry));
             }
-            // Custom team card — any head role, any members.
-            container.appendChild(teamsTabCustomCard(claimedRoles));
+            // Re-render the flow panel for the picked card, or clear it if
+            // the picked team was deleted.
+            const flowPanel = document.getElementById('teams-flow-panel');
+            if (flowPanel) {
+                if (teamsTabPickedKey) {
+                    const picked = cards.find(c => teamsTabCardKey(c) === teamsTabPickedKey);
+                    if (picked) {
+                        teamsTabRenderFlow(picked);
+                    } else {
+                        flowPanel.innerHTML = '';
+                        teamsTabPickedKey = null;
+                    }
+                } else {
+                    flowPanel.innerHTML = '';
+                }
+            }
         }
 
-        function teamsTabGalleryCard(type, claimedRoles) {
+        /** Stable key for a card entry — adopted teams have ids, types have names. */
+        function teamsTabCardKey(entry) {
+            return entry.adopted ? entry.group.id : ('type:' + entry.group.name);
+        }
+
+        /**
+         * One card: portrait, name, purpose, roster strip. The whole card is
+         * the click target. No USE button — adoption moves to the flow panel.
+         */
+        function teamsTabGalleryCard(entry) {
+            const group = entry.group;
             const card = document.createElement('div');
-            card.className = 'agents-tab-custom-agent-item';
-            card.style.flexWrap = 'wrap';
-            const claimed = claimedRoles.has(type.headRole);
-            // The auto-start winner for this head role (the non-unassigned
-            // team). Used only for the informational note — the USE button
-            // shows regardless, so a second team on the same head role can be
-            // adopted.
-            const claimer = claimed ? agentsTabAgentGroups.find(g => g.headRole === type.headRole && !g.unassigned) : null;
-            const memberSummary = (type.members || [])
-                .map(m => `${m.count || 1}× ${m.role}${m.scope === 'shared' ? ' (shared)' : ''}`)
-                .join(', ') || 'head only';
-            const headDiv = document.createElement('div');
-            headDiv.className = 'agents-tab-custom-agent-item-name';
-            headDiv.textContent = type.name;
-            const detailDiv = document.createElement('div');
-            detailDiv.className = 'agents-tab-custom-agent-item-command';
-            detailDiv.style.flexBasis = '100%';
-            detailDiv.textContent = `head: ${type.headRole} · ${memberSummary} — ${type.purpose}`;
-            const actions = document.createElement('div');
-            actions.className = 'agents-tab-custom-agent-item-actions';
-            // A claimed head role no longer hides the USE button. Keep the
-            // informational note so the operator still learns which team wins
-            // auto-start on that role.
-            if (claimed) {
-                const note = document.createElement('span');
-                note.style.fontSize = '10px';
-                note.style.color = 'var(--text-secondary)';
-                note.style.marginRight = '6px';
-                note.textContent = `auto-start goes to "${claimer?.name || type.headRole}"`;
-                actions.appendChild(note);
+            card.className = 'teams-card';
+            const key = teamsTabCardKey(entry);
+            if (key === teamsTabPickedKey) { card.classList.add('is-picked'); }
+
+            // Portrait
+            const portraitSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            portraitSvg.setAttribute('width', String(TEAMS_TAB_CELL));
+            portraitSvg.setAttribute('height', String(TEAMS_TAB_CELL));
+            portraitSvg.setAttribute('class', 'teams-card-portrait');
+            const useEl = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+            useEl.setAttribute('href', '#' + teamsTabPortraitId(group.headRole));
+            useEl.setAttribute('width', String(TEAMS_TAB_CELL));
+            useEl.setAttribute('height', String(TEAMS_TAB_CELL));
+            portraitSvg.appendChild(useEl);
+            card.appendChild(portraitSvg);
+
+            // Name
+            const nameDiv = document.createElement('div');
+            nameDiv.className = 'teams-card-name';
+            nameDiv.textContent = group.name || group.id;
+            card.appendChild(nameDiv);
+
+            // Purpose — types carry one; adopted teams fall back to member summary
+            const purposeDiv = document.createElement('div');
+            purposeDiv.className = 'teams-card-purpose';
+            purposeDiv.textContent = group.purpose || teamsTabRosterStrip(group);
+            card.appendChild(purposeDiv);
+
+            // Roster strip: LEAD · 3 CODER · 1 REVIEWER
+            const rosterDiv = document.createElement('div');
+            rosterDiv.className = 'teams-card-roster';
+            rosterDiv.textContent = teamsTabRosterStrip(group);
+            card.appendChild(rosterDiv);
+
+            // Unassigned note for adopted teams that lost the auto-start claim
+            if (entry.adopted && group.unassigned) {
+                const noteDiv = document.createElement('div');
+                noteDiv.className = 'teams-card-note';
+                noteDiv.textContent = group.unassignedReason || 'Not the auto-start default for its head role.';
+                card.appendChild(noteDiv);
             }
-            const useBtn = document.createElement('button');
-            useBtn.className = 'agents-tab-custom-agent-item-btn';
-            useBtn.textContent = 'USE';
-            useBtn.addEventListener('click', () => {
-                // Fork the shipped definition into the workspace's own teams.
-                const forked = {
-                    id: 'group-' + type.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Date.now().toString(36),
-                    name: type.name,
-                    headRole: type.headRole,
-                    members: (type.members || []).map(m => ({ ...m })),
-                    ...(type.prompt ? { prompt: type.prompt } : {}),
-                    ...(type.headPrompt ? { headPrompt: type.headPrompt } : {})
-                };
-                agentsTabAgentGroups.push(forked);
-                teamsTabRenderAgentGroups();
+
+            card.addEventListener('click', () => {
+                teamsTabPickedKey = key;
                 teamsTabRenderGallery();
-                postKanbanMessage({ type: 'saveAgentGroup', group: forked });
-                // Open the editor on the forked copy so the operator can tweak it.
-                teamsTabShowGroupForm(forked);
             });
-            actions.appendChild(useBtn);
-            card.appendChild(headDiv);
-            card.appendChild(actions);
-            card.appendChild(detailDiv);
             return card;
         }
 
-        function teamsTabCustomCard(claimedRoles) {
-            const card = document.createElement('div');
-            card.className = 'agents-tab-custom-agent-item';
-            card.style.flexWrap = 'wrap';
-            const headDiv = document.createElement('div');
-            headDiv.className = 'agents-tab-custom-agent-item-name';
-            headDiv.textContent = 'Custom team';
-            const detailDiv = document.createElement('div');
-            detailDiv.className = 'agents-tab-custom-agent-item-command';
-            detailDiv.style.flexBasis = '100%';
-            detailDiv.textContent = 'Any head role, any members.';
-            const actions = document.createElement('div');
-            actions.className = 'agents-tab-custom-agent-item-actions';
-            const useBtn = document.createElement('button');
-            useBtn.className = 'agents-tab-custom-agent-item-btn';
-            useBtn.textContent = 'USE';
-            useBtn.addEventListener('click', () => {
-                teamsTabShowGroupForm(null);
+        /** Compact roster strip: "LEAD · 3 CODER · 1 REVIEWER" */
+        function teamsTabRosterStrip(group) {
+            const members = group.members || [];
+            const parts = members.map(m => `${(m.count || 1)} ${String(m.role || 'member').toUpperCase()}${m.scope === 'shared' ? ' (SHARED)' : ''}`);
+            return [String(group.headRole || 'head').toUpperCase(), ...parts].join(' · ') || 'head only';
+        }
+
+        /**
+         * Derive nodes and edges from headRole + members[] and emit the SVG
+         * diagram + the action button. One function, one input, no state of
+         * its own. Nodes fade in staggered; edges stroke on after their nodes.
+         */
+        function teamsTabRenderFlow(entry) {
+            const panel = document.getElementById('teams-flow-panel');
+            if (!panel) return;
+            panel.innerHTML = '';
+
+            const group = entry.group;
+            const members = group.members || [];
+            const CELL = 20;   // node size in the diagram (smaller than card)
+            const GAP = 12;    // horizontal gap between nodes
+            const ROW_H = 70;  // vertical distance between rows
+
+            // Collect all nodes: head first, then each member expanded by count.
+            const headNode = { role: group.headRole, label: String(group.headRole || 'head').toUpperCase(), isHead: true };
+            const memberNodes = [];
+            const edges = []; // { from, to, label, rel }
+            for (const m of members) {
+                const count = m.count || 1;
+                const rel = m.relationship || 'reports-to-head';
+                const relPreset = MEMBER_RELATIONSHIP_PRESETS.find(p => p.id === rel);
+                const label = relPreset ? relPreset.label : '';
+                for (let i = 0; i < count; i++) {
+                    const node = { role: m.role, label: String(m.role || 'member').toUpperCase(), isHead: false };
+                    memberNodes.push(node);
+                    edges.push({ from: node, to: headNode, label, rel });
+                }
+            }
+            const allNodes = [headNode, ...memberNodes];
+
+            // Layout: head centered on top row, members on the row below,
+            // wrapping at a max of 5 per row.
+            const MAX_PER_ROW = 5;
+            const memberRows = [];
+            for (let i = 0; i < memberNodes.length; i += MAX_PER_ROW) {
+                memberRows.push(memberNodes.slice(i, i + MAX_PER_ROW));
+            }
+            const totalRows = 1 + memberRows.length;
+            const svgHeight = totalRows * ROW_H + 20;
+            const maxRowWidth = Math.max(1, ...memberRows.map(r => r.length)) * (CELL + GAP);
+            const svgWidth = Math.max(200, maxRowWidth + 40);
+
+            // Compute x positions per row
+            function rowXs(row, totalWidth) {
+                const rowWidth = row.length * (CELL + GAP) - GAP;
+                const startX = (totalWidth - rowWidth) / 2;
+                return row.map((_, i) => startX + i * (CELL + GAP));
+            }
+
+            const headXs = rowXs([headNode], svgWidth);
+            headNode.x = headXs[0] + CELL / 2;
+            headNode.y = 10 + CELL / 2;
+
+            memberRows.forEach((row, rowIdx) => {
+                const xs = rowXs(row, svgWidth);
+                row.forEach((node, i) => {
+                    node.x = xs[i] + CELL / 2;
+                    node.y = 10 + (rowIdx + 1) * ROW_H + CELL / 2;
+                });
             });
-            actions.appendChild(useBtn);
-            card.appendChild(headDiv);
-            card.appendChild(actions);
-            card.appendChild(detailDiv);
-            return card;
+
+            // Build the SVG
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('class', 'teams-flow-svg');
+            svg.setAttribute('width', String(svgWidth));
+            svg.setAttribute('height', String(svgHeight));
+            svg.setAttribute('viewBox', `0 0 ${svgWidth} ${svgHeight}`);
+
+            // Edges first (so nodes render on top)
+            edges.forEach((edge, i) => {
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', String(edge.from.x));
+                line.setAttribute('y1', String(edge.from.y));
+                line.setAttribute('x2', String(edge.to.x));
+                line.setAttribute('y2', String(edge.to.y));
+                line.setAttribute('stroke', 'var(--accent-teal)');
+                line.setAttribute('stroke-width', '1.5');
+                line.setAttribute('class', 'teams-flow-edge');
+                line.style.animationDelay = `${0.3 + i * 0.04}s`;
+                svg.appendChild(line);
+                if (edge.label) {
+                    const midX = (edge.from.x + edge.to.x) / 2;
+                    const midY = (edge.from.y + edge.to.y) / 2;
+                    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    text.setAttribute('x', String(midX + 4));
+                    text.setAttribute('y', String(midY));
+                    text.setAttribute('font-size', '8');
+                    text.setAttribute('fill', 'var(--text-secondary)');
+                    text.textContent = edge.label;
+                    svg.appendChild(text);
+                }
+            });
+
+            // Nodes
+            allNodes.forEach((node, i) => {
+                const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                g.setAttribute('class', 'teams-flow-node');
+                g.style.animationDelay = `${i * 0.06}s`;
+                g.setAttribute('transform', `translate(${node.x - CELL / 2}, ${node.y - CELL / 2})`);
+                const nodeSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                nodeSvg.setAttribute('width', String(CELL));
+                nodeSvg.setAttribute('height', String(CELL));
+                const useEl = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+                useEl.setAttribute('href', '#' + teamsTabPortraitId(node.role));
+                useEl.setAttribute('width', String(CELL));
+                useEl.setAttribute('height', String(CELL));
+                nodeSvg.appendChild(useEl);
+                g.appendChild(nodeSvg);
+                // Label below the node
+                const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                label.setAttribute('x', String(CELL / 2));
+                label.setAttribute('y', String(CELL + 10));
+                label.setAttribute('text-anchor', 'middle');
+                label.setAttribute('font-size', '8');
+                label.setAttribute('fill', 'var(--text-secondary)');
+                label.textContent = node.label;
+                g.appendChild(label);
+                svg.appendChild(g);
+            });
+
+            panel.appendChild(svg);
+
+            // Action button — label resolved from adoption state
+            const actionDiv = document.createElement('div');
+            actionDiv.className = 'teams-flow-action';
+            const btn = document.createElement('button');
+            btn.className = 'agents-tab-custom-agent-item-btn';
+            btn.id = 'teams-flow-start-btn';
+            // Preserve STARTING… state across re-renders (getAgentGroups
+            // arriving after saveAgentGroupResult would otherwise reset it).
+            const starting = teamsTabStartingId
+                && teamsTabCardKey(entry) === teamsTabStartingId;
+            if (starting) {
+                btn.disabled = true;
+                btn.textContent = 'STARTING…';
+            } else {
+                btn.textContent = entry.adopted ? 'START' : 'USE & START';
+            }
+            btn.addEventListener('click', () => {
+                if (entry.adopted) {
+                    teamsTabStartTeam(entry.group.id);
+                } else {
+                    teamsTabAdoptAndStart(entry.group);
+                }
+            });
+            actionDiv.appendChild(btn);
+            const errorSpan = document.createElement('span');
+            errorSpan.className = 'teams-flow-error';
+            errorSpan.id = 'teams-flow-error';
+            actionDiv.appendChild(errorSpan);
+            panel.appendChild(actionDiv);
+        }
+
+        /**
+         * Fork a shipped type into the workspace's own teams (exactly as the
+         * old USE handler did), re-render, post saveAgentGroup, and record the
+         * pending start id. The start is sequenced on saveAgentGroupResult —
+         * never fired here — so the host has confirmed the id is persisted
+         * before ptyStartTeam resolves it.
+         */
+        function teamsTabAdoptAndStart(type) {
+            const forked = {
+                id: 'group-' + type.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Date.now().toString(36),
+                name: type.name,
+                headRole: type.headRole,
+                members: (type.members || []).map(m => ({ ...m })),
+                ...(type.prompt ? { prompt: type.prompt } : {}),
+                ...(type.headPrompt ? { headPrompt: type.headPrompt } : {})
+            };
+            agentsTabAgentGroups.push(forked);
+            teamsTabPendingStartId = forked.id;
+            teamsTabPickedKey = forked.id;
+            teamsTabRenderAgentGroups();
+            teamsTabRenderGallery();
+            postKanbanMessage({ type: 'saveAgentGroup', group: forked });
+        }
+
+        /**
+         * Post the start message and surface the result. Disables the button
+         * and shows STARTING… until startAgentGroupResult arrives. On failure
+         * writes msg.error verbatim — the host's messages (cap refusal,
+         * double-start refusal, No team found with id) are good and must not
+         * be generified.
+         */
+        function teamsTabStartTeam(groupId) {
+            if (!groupId) return;
+            teamsTabStartingId = groupId;
+            const btn = document.getElementById('teams-flow-start-btn');
+            const errEl = document.getElementById('teams-flow-error');
+            if (btn) { btn.disabled = true; btn.textContent = 'STARTING…'; }
+            if (errEl) { errEl.textContent = ''; }
+            postKanbanMessage({ type: 'startAgentGroup', groupId });
         }
 
         function teamsTabRenderAgentGroups() {
@@ -4668,6 +5072,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             delBtn.addEventListener('click', () => {
                 // Delete immediately — no confirmation dialog (hard project rule).
                 agentsTabAgentGroups = agentsTabAgentGroups.filter(g => g.id !== group.id);
+                // Clear the flow panel if the deleted team was the picked card —
+                // otherwise the panel keeps a START button for a deleted id.
+                if (teamsTabPickedKey === group.id) {
+                    teamsTabPickedKey = null;
+                }
                 teamsTabRenderAgentGroups();
                 teamsTabRenderGallery();
                 postKanbanMessage({ type: 'deleteAgentGroup', groupId: group.id });
@@ -9358,6 +9767,39 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   } else {
                     document.getElementById('agent-groups-error').textContent = msg.error || 'Failed to save agent group';
                   }
+                  // Race guard for USE & START: the start is sequenced on this
+                  // message, not on the post, so the host has confirmed the id
+                  // is persisted before ptyStartTeam resolves it. A failed save
+                  // aborts the start and surfaces the error — starting after a
+                  // failed save is the worst outcome (the id does not exist).
+                  if (teamsTabPendingStartId) {
+                    const id = teamsTabPendingStartId;
+                    teamsTabPendingStartId = null;
+                    if (msg.success) {
+                      teamsTabStartTeam(id);
+                    } else {
+                      const errEl = document.getElementById('teams-flow-error');
+                      if (errEl) { errEl.textContent = msg.error || 'Failed to save team — start aborted.'; }
+                      const btn = document.getElementById('teams-flow-start-btn');
+                      if (btn) { btn.disabled = false; btn.textContent = 'USE & START'; }
+                      teamsTabStartingId = null;
+                    }
+                  }
+                  break;
+                }
+                case 'startAgentGroupResult': {
+                  teamsTabStartingId = null;
+                  const btn = document.getElementById('teams-flow-start-btn');
+                  const errEl = document.getElementById('teams-flow-error');
+                  if (msg.success) {
+                    if (errEl) { errEl.textContent = ''; }
+                  } else {
+                    // Verbatim host error — cap refusal, double-start refusal,
+                    // No team found with id. These are good messages; do not
+                    // generify them.
+                    if (errEl) { errEl.textContent = msg.error || 'Failed to start team'; }
+                  }
+                  if (btn) { btn.disabled = false; btn.textContent = 'START'; }
                   break;
                 }
                 case 'deleteAgentGroupResult': {

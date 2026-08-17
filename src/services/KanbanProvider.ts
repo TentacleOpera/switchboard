@@ -11594,6 +11594,38 @@ ${FOCUS_DIRECTIVE}`;
                     return { success: false, error: e?.message || 'Failed to delete agent group' };
                 }
             }
+            case 'startAgentGroup': {
+                // Group ID ONLY — never a definition. This panel is reachable over
+                // HTTP in the browser cockpit, and a team definition carries
+                // startupCommand strings the host runs. Same rule as ptyStartTeam's
+                // payload.group rejection.
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const groupId = msg.groupId;
+                if (!groupId || !workspaceRoot || typeof groupId !== 'string') {
+                    this.postMessage({ type: 'startAgentGroupResult', success: false, error: 'Missing team ID or workspace' });
+                    return { success: false, error: 'Missing team ID or workspace' };
+                }
+                try {
+                    // Host split, mirroring setAgentGroupInstantiator's own contract
+                    // (:300-310): standalone registers an instantiator and owns the
+                    // fleet in-process; the extension host does not, and reaches the
+                    // pty fleet through TaskViewerProvider. startTeamForWorkspace is
+                    // the extension host's single team-start entry point — it owns
+                    // the candidate-root walk, so this arm must NOT resolve a root
+                    // of its own.
+                    const result = this._agentGroupInstantiator
+                        ? await this.startAgentGroupById(workspaceRoot, groupId, async () => [])
+                        : await this._taskViewerProvider!.startTeamForWorkspace({
+                              teamId: groupId,
+                              pinnedRoot: workspaceRoot,
+                          });
+                    this.postMessage({ type: 'startAgentGroupResult', ...result });
+                    return result;
+                } catch (e: any) {
+                    this.postMessage({ type: 'startAgentGroupResult', success: false, error: e?.message || 'Failed to start team' });
+                    return { success: false, error: e?.message || 'Failed to start team' };
+                }
+            }
             case 'getUATData': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (workspaceRoot) {
