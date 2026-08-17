@@ -310,6 +310,7 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             planIds: { type: 'array' },
             planFiles: { type: 'array' },
             workspaceRoot: { type: 'string' },
+            dispatchedAt: { type: 'string' },
         },
     },
     watchFeature: {

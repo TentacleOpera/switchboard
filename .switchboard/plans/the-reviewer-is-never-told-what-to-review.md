@@ -138,3 +138,7 @@ REVIEW UNIT: review commit <sha> — `git show <sha>` is the change set for this
 ---
 
 **Recommendation:** Complexity 6 → **Send to Lead Coder.**
+
+## Completion Report
+
+Implemented the REVIEW UNIT block so the reviewer is handed a bounded diff (the coded commit) instead of inferring a change set from a shared dirty tree. The caller resolves, the builder renders: `KanbanProvider._resolveCodedCommitsForPlans` runs `git log -n 1 --all-match --grep=Switchboard-Plan: <id> --grep=Switchboard-Stage: coded` per plan against the plan's own worktreePath-or-workspaceRoot (5s timeout, any throw/empty/timeout contributes nothing), deduplicates the shas, and passes them via a new `reviewCommits?: string[]` option; `agentPromptBuilder.ts` renders the block above `PLANS TO PROCESS:` and emits nothing when the array is absent/empty (byte-identical to today). Files changed: `src/services/agentPromptBuilder.ts` (option + `buildReviewUnitBlock` + reviewer `promptParts` insertion), `src/services/KanbanProvider.ts` (reviewer-branch resolution + `_resolveCodedCommitsForPlans` helper), `src/test/stage-marker-commit-contract.test.js` (five new cases added; no existing assertion altered). No issues encountered. `node --check` on the test file passes. Not committed or staged, per instruction.

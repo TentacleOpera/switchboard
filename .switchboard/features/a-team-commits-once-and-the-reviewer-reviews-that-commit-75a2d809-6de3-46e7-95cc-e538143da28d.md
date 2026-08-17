@@ -56,11 +56,11 @@ This feature makes a team commit once, as its head: members report instead of co
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [A Coder's Commit Sweeps the Whole Shared Tree, Including Its Peers' Unfinished Work](../plans/agent-commits-sweep-the-whole-shared-tree.md) — **PLAN REVIEWED**
-- [ ] [A Lead-Dispatched Coder's Commits Carry No Stage Trailers, So Coded Work Reads as Unmarked](../plans/lead-dispatched-commits-carry-no-stage-trailers.md) — **PLAN REVIEWED**
-- [ ] [A Team Commits Once, As Its Head — Members Never Commit Their Own Subtasks](../plans/a-team-commits-once-as-its-head.md) — **PLAN REVIEWED**
-- [ ] [The Reviewer Is Never Told What To Review — It Is Handed Plan Paths and a Dirty Tree](../plans/the-reviewer-is-never-told-what-to-review.md) — **PLAN REVIEWED**
-- [ ] [A Lead-Dispatched Plan Is Never Registered, So Every Backstop Downstream Is Blind](../plans/a-lead-dispatched-plan-is-never-registered.md) — **PLAN REVIEWED**
+- [ ] [A Coder's Commit Sweeps the Whole Shared Tree, Including Its Peers' Unfinished Work](../plans/agent-commits-sweep-the-whole-shared-tree.md) — **CODER CODED**
+- [ ] [A Lead-Dispatched Coder's Commits Carry No Stage Trailers, So Coded Work Reads as Unmarked](../plans/lead-dispatched-commits-carry-no-stage-trailers.md) — **CODER CODED**
+- [ ] [A Team Commits Once, As Its Head — Members Never Commit Their Own Subtasks](../plans/a-team-commits-once-as-its-head.md) — **CODER CODED**
+- [ ] [The Reviewer Is Never Told What To Review — It Is Handed Plan Paths and a Dirty Tree](../plans/the-reviewer-is-never-told-what-to-review.md) — **CODER CODED**
+- [ ] [A Lead-Dispatched Plan Is Never Registered, So Every Backstop Downstream Is Blind](../plans/a-lead-dispatched-plan-is-never-registered.md) — **CODER CODED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

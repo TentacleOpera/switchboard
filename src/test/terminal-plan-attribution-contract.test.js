@@ -530,6 +530,205 @@ test('both hosts honour info.body for completed turn-end notices', () => {
     );
 });
 
+console.log('\n--- parse-based dispatch backstop (lead-dispatched plan registration) ---');
+
+// The shared parser lives in src/services/dispatchIdentity.ts. The compiled
+// out/ module is not guaranteed to exist when this test runs in a
+// skip-compilation context, so the parser is extracted from the TypeScript
+// source and evaluated in-process — the same source-text fidelity as the
+// mirror contract tests, but exercising real behaviour.
+const dispatchIdentityTs = fs.readFileSync(path.join(__dirname, '../services/dispatchIdentity.ts'), 'utf8');
+
+function loadExtractDispatchIdentity() {
+    const minCharsMatch = dispatchIdentityTs.match(/export const PASTE_SCAN_MIN_CHARS = (\d+)/);
+    assert.ok(minCharsMatch, 'PASTE_SCAN_MIN_CHARS must be exported from dispatchIdentity.ts');
+    const PASTE_SCAN_MIN_CHARS = Number(minCharsMatch[1]);
+    const fnStart = dispatchIdentityTs.indexOf('export function extractDispatchIdentity');
+    assert.ok(fnStart >= 0, 'extractDispatchIdentity must be exported from dispatchIdentity.ts');
+    const braceStart = dispatchIdentityTs.indexOf('{', fnStart);
+    let depth = 0, end = -1;
+    for (let i = braceStart; i < dispatchIdentityTs.length; i++) {
+        if (dispatchIdentityTs[i] === '{') depth++;
+        else if (dispatchIdentityTs[i] === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
+    }
+    assert.ok(end > 0, 'extractDispatchIdentity function body must be balanced');
+    let fn = dispatchIdentityTs.substring(fnStart, end);
+    // Strip TS type annotations so V8 can parse the body.
+    fn = fn.replace(/^export /, '');
+    fn = fn.replace(/extractDispatchIdentity\(text: string\): DispatchIdentity \| null/, 'extractDispatchIdentity(text)');
+    fn = fn.replace(/: string\[\]/g, '');
+    fn = fn.replace(/: RegExpExecArray \| null/g, '');
+    const factory = new Function('PASTE_SCAN_MIN_CHARS', fn + '\nreturn extractDispatchIdentity;');
+    return factory(PASTE_SCAN_MIN_CHARS);
+}
+
+// 1. The shared parser returns the full UUID for a PLAN_ID — the regression
+//    test for the shipped \d+ regex that captured "6" out of a UUID.
+test('extractDispatchIdentity returns the full UUID for PLAN_ID, not a single digit', () => {
+    const parse = loadExtractDispatchIdentity();
+    const uuid = '6bef84f4-726d-437c-8ad2-dbc3f34af9d9';
+    const prompt = [
+        'PLANS TO PROCESS:',
+        `PLAN_ID=${uuid}`,
+        'Plan File: .switchboard/plans/example.md',
+        'x'.repeat(220),
+    ].join('\n');
+    const result = parse(prompt);
+    assert.ok(result, 'parser must return an identity for a genuine dispatch prompt');
+    assert.ok(result.planIds.includes(uuid), `parser must capture the full UUID, got: ${JSON.stringify(result.planIds)}`);
+    assert.ok(!result.planIds.includes('6'), 'the \\d+ regression ("6") must not survive');
+});
+
+// 2. A consultation prompt (PLANS TO DISCUSS:) is not a dispatch.
+test('extractDispatchIdentity returns null for a PLANS TO DISCUSS: consultation prompt', () => {
+    const parse = loadExtractDispatchIdentity();
+    const prompt = [
+        'PLANS TO DISCUSS:',
+        'PLAN_ID=6bef84f4-726d-437c-8ad2-dbc3f34af9d9',
+        'x'.repeat(220),
+    ].join('\n');
+    assert.strictEqual(parse(prompt), null, 'a consultation prompt must not be attributed as a dispatch');
+});
+
+// 3. A prompt with no PLANS TO PROCESS: marker is not a dispatch.
+test('extractDispatchIdentity returns null for a prompt with no PLANS TO PROCESS: marker', () => {
+    const parse = loadExtractDispatchIdentity();
+    const prompt = [
+        'PLAN_ID=6bef84f4-726d-437c-8ad2-dbc3f34af9d9',
+        'x'.repeat(220),
+    ].join('\n');
+    assert.strictEqual(parse(prompt), null, 'a prompt without PLANS TO PROCESS: must not be attributed');
+});
+
+// 4. Byte-equality: the client mirror's parser body matches the shared module's.
+//    The webview cannot import TypeScript, so its copy is hand-maintained; a
+//    contract test is what keeps the two from drifting (same precedent as the
+//    link-presets and standing-orders marker mirrors).
+test('terminals.js extractPastedDispatchIdentity body is byte-equal to dispatchIdentity.ts extractDispatchIdentity', () => {
+    function extractFnBody(src, fnName) {
+        const start = src.indexOf('function ' + fnName);
+        assert.ok(start >= 0, `${fnName} must exist`);
+        const braceStart = src.indexOf('{', start);
+        let depth = 0, end = -1;
+        for (let i = braceStart; i < src.length; i++) {
+            if (src[i] === '{') depth++;
+            else if (src[i] === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
+        }
+        return src.substring(braceStart + 1, end - 1);
+    }
+    // The shared module is TypeScript (typed annotations); the client is plain
+    // JS. Strip the TS annotations so the comparison is over the logic, regex
+    // and guards — the behaviour that must not drift.
+    function stripTsAnnotations(body) {
+        return body
+            .replace(/: string\[\]/g, '')
+            .replace(/: RegExpExecArray \| null/g, '')
+            .replace(/: DispatchIdentity \| null/g, '')
+            .replace(/\(text: string\)/g, '(text)');
+    }
+    const sharedBody = stripTsAnnotations(extractFnBody(dispatchIdentityTs, 'extractDispatchIdentity'));
+    const clientBody = extractFnBody(terminalsJs, 'extractPastedDispatchIdentity');
+    // The shared module references PASTE_SCAN_MIN_CHARS (module-scoped const);
+    // the client references the same name (function-scoped const above it).
+    // The logic, regex and guards must be identical.
+    assert.strictEqual(
+        sharedBody.replace(/\s+/g, ' ').trim(),
+        clientBody.replace(/\s+/g, ' ').trim(),
+        'the client mirror parser must be byte-equal to the shared module parser (whitespace-insensitive, TS annotations stripped)'
+    );
+});
+
+// 5. Source-text: neither host awaits the registration call, and both capture
+//    the stamp BEFORE the send.
+test('both hosts capture the dispatchedAt stamp before the send and never await the registration', () => {
+    // TaskViewerProvider: the stamp is captured before the proxied HTTP send,
+    // and the registration is a void fire-and-forget after the send completes.
+    const tvSendBlock = taskViewerTs.substring(
+        taskViewerTs.indexOf('let parsedDispatchIdentity'),
+        taskViewerTs.indexOf('if (verb === \'ptySendPrompt\' && result && typeof result === \'object\')')
+    );
+    assert.ok(tvSendBlock.includes('parsedDispatchedAt = new Date().toISOString()'), 'TaskViewerProvider must capture the stamp before the send');
+    const tvRegBlock = taskViewerTs.substring(
+        taskViewerTs.indexOf('if (verb === \'ptySendPrompt\' && result && typeof result === \'object\')'),
+        taskViewerTs.indexOf('return {', taskViewerTs.indexOf('if (verb === \'ptySendPrompt\' && result && typeof result === \'object\')'))
+    );
+    assert.ok(/void this\._kanbanProvider\.handleServiceVerb\('attributePastedPrompt'/.test(tvRegBlock), 'TaskViewerProvider must fire-and-forget the registration via void');
+    assert.ok(tvRegBlock.includes('.catch(() =>'), 'TaskViewerProvider registration must be swallowed, never able to fail the send');
+    assert.ok(!/await this\._kanbanProvider\.handleServiceVerb\('attributePastedPrompt'/.test(tvRegBlock), 'TaskViewerProvider must NOT await the registration ahead of the send');
+
+    // bootstrap.ts: the stamp is captured before sendPromptToPty, and the
+    // registration is a void fire-and-forget after it.
+    const bsBlock = bootstrapTs.substring(
+        bootstrapTs.indexOf('const hasDispatch = dispatch !== undefined && dispatch !== null;'),
+        bootstrapTs.indexOf('    };', bootstrapTs.indexOf('const hasDispatch = dispatch !== undefined && dispatch !== null;'))
+    );
+    assert.ok(bsBlock.indexOf('parsedDispatchedAt = new Date().toISOString()') < bsBlock.indexOf('await sendPromptToPty'),
+        'bootstrap.ts must capture the stamp before sendPromptToPty');
+    assert.ok(/void kanbanProvider\.handleServiceVerb\('attributePastedPrompt'/.test(bsBlock), 'bootstrap.ts must fire-and-forget the registration via void');
+    assert.ok(bsBlock.includes('.catch(() =>'), 'bootstrap.ts registration must be swallowed, never able to fail the send');
+    assert.ok(!/await kanbanProvider\.handleServiceVerb\('attributePastedPrompt'/.test(bsBlock), 'bootstrap.ts must NOT await the registration ahead of the send');
+});
+
+// 6. attributePasteDispatch with no dispatchedAt produces the same SQL
+//    parameters as before this change (stamp defaults to now, updated_at stays
+//    now-at-write-time). The SQL string itself is unchanged.
+test('attributePasteDispatch defaults dispatchedAt to now and keeps the SQL string unchanged', () => {
+    const body = kanbanDbTs.substring(
+        kanbanDbTs.indexOf('public async attributePasteDispatch'),
+        kanbanDbTs.indexOf('public async clearWorkingState')
+    );
+    assert.ok(body.includes('const stamp = info.dispatchedAt || new Date().toISOString();'),
+        'attributePasteDispatch must default dispatchedAt to now when absent (byte-identical for existing callers)');
+    // updated_at must remain now-at-write-time, NOT the passed-in stamp.
+    assert.ok(/updated_at = \?[\s\S]*new Date\(\)\.toISOString\(\), normalized, workspaceId/.test(body),
+        'updated_at must stay now-at-write-time — only dispatched_at honours the explicit stamp');
+    // The SQL string must be the same UPDATE as before.
+    assert.ok(body.includes('UPDATE plans SET dispatched_agent = ?, dispatched_terminal = ?, dispatched_at = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?'),
+        'the attributePasteDispatch SQL string must be unchanged');
+});
+
+// 7. Source-text: both hosts guard the registration on the absence of
+//    payload.dispatch — the parse-based path is unreachable when the strict
+//    branch has already run. Assert the GUARD, not merely that the call exists;
+//    a missing guard is invisible in every functional test because both writers
+//    produce a correct-looking row.
+test('both hosts guard the parse-based registration on the absence of payload.dispatch', () => {
+    // TaskViewerProvider: hasDispatch is computed, and the parse only runs
+    // inside `if (!hasDispatch)`. The registration is gated on
+    // parsedDispatchIdentity which is only populated in that branch.
+    const tvParseBlock = taskViewerTs.substring(
+        taskViewerTs.indexOf('const hasDispatch = payload?.dispatch !== undefined && payload?.dispatch !== null;'),
+        taskViewerTs.indexOf('if (hasDispatch) {', taskViewerTs.indexOf('const hasDispatch = payload?.dispatch !== undefined && payload?.dispatch !== null;'))
+    );
+    assert.ok(/if \(!hasDispatch\) \{/.test(tvParseBlock), 'TaskViewerProvider must parse only when !hasDispatch');
+    assert.ok(tvParseBlock.includes('extractDispatchIdentity(payload.data)'),
+        'TaskViewerProvider must call extractDispatchIdentity inside the !hasDispatch guard');
+    // The registration call must be gated on parsedDispatchIdentity (null when
+    // hasDispatch, so the call is unreachable in the strict branch).
+    const tvRegBlock = taskViewerTs.substring(
+        taskViewerTs.indexOf('if (parsedDispatchIdentity && parsedDispatchedAt && this._kanbanProvider)'),
+        taskViewerTs.indexOf('return {', taskViewerTs.indexOf('if (parsedDispatchIdentity && parsedDispatchedAt && this._kanbanProvider)'))
+    );
+    assert.ok(tvRegBlock.length > 0 && tvRegBlock.includes('handleServiceVerb(\'attributePastedPrompt\''),
+        'TaskViewerProvider registration must be gated on parsedDispatchIdentity (null under hasDispatch)');
+
+    // bootstrap.ts: hasDispatch is computed from the dispatch param, and the
+    // parse only runs inside `if (!hasDispatch)`.
+    const bsParseBlock = bootstrapTs.substring(
+        bootstrapTs.indexOf('const hasDispatch = dispatch !== undefined && dispatch !== null;'),
+        bootstrapTs.indexOf('await sendPromptToPty', bootstrapTs.indexOf('const hasDispatch = dispatch !== undefined && dispatch !== null;'))
+    );
+    assert.ok(/if \(!hasDispatch\) \{/.test(bsParseBlock), 'bootstrap.ts must parse only when !hasDispatch');
+    assert.ok(bsParseBlock.includes('extractDispatchIdentity(text)'),
+        'bootstrap.ts must call extractDispatchIdentity inside the !hasDispatch guard');
+    const bsRegBlock = bootstrapTs.substring(
+        bootstrapTs.indexOf('if (parsedDispatchIdentity && parsedDispatchedAt && kanbanProvider)'),
+        bootstrapTs.indexOf('    };', bootstrapTs.indexOf('if (parsedDispatchIdentity && parsedDispatchedAt && kanbanProvider)'))
+    );
+    assert.ok(bsRegBlock.length > 0 && bsRegBlock.includes('handleServiceVerb(\'attributePastedPrompt\''),
+        'bootstrap.ts registration must be gated on parsedDispatchIdentity (null under hasDispatch)');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) { process.exit(1); }
 

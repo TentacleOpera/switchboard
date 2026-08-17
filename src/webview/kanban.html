@@ -4655,7 +4655,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     + 'Report your findings to {child} for synthesis into the plan.\n'
                     + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
                     + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
-                    + 'commit first, then correct forward.'
+                    + 'commit first, then correct forward. '
+                    + 'Stage by explicit path only the files belonging to the work you are committing — never `git add -A` or `git add .` — '
+                    + 'other agents may be working the same tree.'
             },
             {
                 name: 'Coding',
@@ -4671,7 +4673,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     + 'Work your assigned subtask to completion. The shared reviewer reviews finished work before it ships.\n'
                     + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
                     + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
-                    + 'commit first, then correct forward.',
+                    + 'commit first, then correct forward. '
+                    + 'Stage by explicit path only the files belonging to the work you are committing — never `git add -A` or `git add .` — '
+                    + 'other agents may be working the same tree.',
                 headPrompt: 'You lead this team. Your coders work the subtasks of one feature. Each subtask carries '
                     + 'a recommendedRole; dispatch it to a seat of that role on your team. If your team has '
                     + 'no such seat, dispatch to a coder and say why in your status report. Post a status report '
@@ -4706,7 +4710,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     + 'Report your findings to {child} for fan-in synthesis into a single plan.\n'
                     + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
                     + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
-                    + 'commit first, then correct forward.'
+                    + 'commit first, then correct forward. '
+                    + 'Stage by explicit path only the files belonging to the work you are committing — never `git add -A` or `git add .` — '
+                    + 'other agents may be working the same tree.'
             }
         ];
 

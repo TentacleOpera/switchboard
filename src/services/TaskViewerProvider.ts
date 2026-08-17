@@ -13,6 +13,7 @@ import {
     rewriteStandingOrdersForRename,
     mutateStandingOrders,
     makeStandingOrder,
+    resolveTeamStanding,
 } from './standingOrders';
 import { writeOrchestratorReport } from './ScheduledJobsService';
 import * as vscode from 'vscode';
@@ -83,6 +84,7 @@ import {
     ensureDispatchProtocolDirectives,
     validateDispatchPayload
 } from './agentPromptBuilder';
+import { extractDispatchIdentity } from './dispatchIdentity';
 import type { NotionFetchService } from './NotionFetchService';
 let NotionFetchServiceClass: any;
 import type { NotionBackupService } from './NotionBackupService';
@@ -488,8 +490,26 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // second list call.
         let foldedAttributionResult: { attributed: number; skipped: number } | null = null;
         let directivesAttached: string[] = [];
+        // Parse-based dispatch backstop: when the caller did NOT supply a
+        // `dispatch` field, scrape plan identity straight off the prompt body so
+        // registration is a property of the delivery layer, not a caller chore.
+        // The stamp is captured BEFORE the send (below) because fire-and-forget
+        // registration lands after the send and stamping at write time would
+        // invert the `plan-file mtime > dispatched_at` completion compare the
+        // turn-end notifier depends on. The existing strict `payload.dispatch`
+        // branch stays sole owner of the row whenever a caller names its plan
+        // explicitly — this path is unreachable when hasDispatch is true.
+        let parsedDispatchIdentity: { planIds: string[]; planFiles: string[] } | null = null;
+        let parsedDispatchedAt: string | null = null;
+        let parsedDispatchRole = '';
         if (verb === 'ptySendPrompt' && typeof payload?.data === 'string') {
             const hasDispatch = payload?.dispatch !== undefined && payload?.dispatch !== null;
+            if (!hasDispatch) {
+                parsedDispatchIdentity = extractDispatchIdentity(payload.data);
+                if (parsedDispatchIdentity) {
+                    parsedDispatchedAt = new Date().toISOString();
+                }
+            }
             if (hasDispatch) {
                 // Shape-validate before the field reaches a DB UPDATE — reject,
                 // never coerce (see validateDispatchPayload).
@@ -571,6 +591,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         ...(Array.isArray(listed?.hiddenTerminals) ? listed.hiddenTerminals : [])
                     ];
 
+                    // Resolve role for the parse-based dispatch backstop from
+                    // the same list call (no second list call — see :487). Best
+                    // effort: an unresolved role falls back to '' and the
+                    // registration writes an empty dispatchedAgent, which is
+                    // preferable to no registration at all.
+                    if (parsedDispatchIdentity) {
+                        const regRow = roleRows.find((t: any) => t.friendlyName === payload.name);
+                        parsedDispatchRole = regRow?.role || '';
+                    }
+
                     // Prune cache against live roleRows (terminals + hiddenTerminals)
                     if (listed && (Array.isArray(listed.terminals) || Array.isArray(listed.hiddenTerminals))) {
                         const liveInstanceIds = new Set<string>();
@@ -588,6 +618,21 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
                     let data = payload.data;
 
+                    // Hoist the standing-orders config reads above the seat-block
+                    // branch so the team-commit gate can resolve team standing
+                    // BEFORE seat options are composed. These reads are
+                    // unconditional (they run even when standingOrders: false)
+                    // because team standing is a fact about the seat, not an
+                    // order delivered to it — suppressing the orders block must
+                    // not restore commit authority to a member. The same
+                    // migrated `effectiveOrders` array feeds both the gate and
+                    // `applyStandingOrders` below, so standing-orders behaviour
+                    // is unchanged.
+                    const effectiveOrders = db ? await loadEffectiveStandingOrders(db) : [];
+                    const groups = this._kanbanProvider
+                        ? this._kanbanProvider._getScopedSetting<TerminalGroup[]>(TERMINALS_GROUPS_KEY, [])
+                        : (db ? await db.getConfigJson<TerminalGroup[]>(TERMINALS_GROUPS_KEY, []) : []);
+
                     // Seat block — resolve role from the terminal record, build
                     // the block from the shared resolver, and append it AFTER
                     // stripping any inbound SO block. An unresolved role (empty
@@ -601,7 +646,49 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             const seatOpts = this._kanbanProvider
                                 ? await this._kanbanProvider.resolveSeatPromptOptions(role)
                                 : null;
-                            const seatBlock = seatOpts ? buildSeatDirectiveBlock(seatOpts) : '';
+                            // Team-commit gate: a non-head member of a live team
+                            // is forced to dontCommit (it reports to its head); the
+                            // head is forced to whenDone (it closes the body). The
+                            // gate MUST be symmetric — gagging members while leaving
+                            // the head on its shipped notSpecified default produces
+                            // a team whose completed work nobody is told to commit.
+                            // resolveTeamStanding is the SAME predicate selectOrders
+                            // uses, so the gate and the standing-orders delivery
+                            // cannot disagree on who is a member vs a head.
+                            const standing = resolveTeamStanding(payload.name, effectiveOrders, groups || []);
+                            const effectiveOpts = !seatOpts || !standing.inTeam
+                                ? seatOpts
+                                : { ...seatOpts, gitCommitStrategy: standing.isHead ? 'whenDone' : 'dontCommit' };
+                            // planIds resolution — at the CALLER, not the
+                            // composer (which must stay pure) and not the
+                            // shared resolver (which roots on the board's ACTIVE
+                            // workspace and would read a different DB after a
+                            // workspace switch). `db` here is resolved from
+                            // _apiServerWorkspaceRoot, the same root the
+                            // /terminals routes write through. For a team head
+                            // the ids are its members' live dispatch records
+                            // (nobody dispatches TO a head); for anything else
+                            // the id comes from the seat's own name. Dedupe AND
+                            // sort: the seat block is memoised per
+                            // agentInstanceId on its own string, so a varying
+                            // id order would re-send the whole block on every
+                            // message — sorting is a correctness requirement
+                            // for the cache, not tidiness.
+                            let planIds: string[] | undefined;
+                            try {
+                                const wsId = db ? await db.getWorkspaceId() : null;
+                                if (wsId && db) {
+                                    const names = standing.inTeam && standing.isHead
+                                        ? standing.members.filter((n: string) => n !== payload.name)
+                                        : [payload.name];
+                                    const recs = await db.getActiveDispatchedByTerminals(wsId, names);
+                                    const ids = recs.map(r => r.planId).filter((id): id is string => !!id);
+                                    if (ids.length) { planIds = [...new Set(ids)].sort(); }
+                                }
+                            } catch { /* stage-only beats a lost dispatch */ }
+                            const seatBlock = effectiveOpts
+                                ? buildSeatDirectiveBlock({ ...effectiveOpts, planIds })
+                                : '';
                             if (seatBlock) {
                                 const instanceId = targetRow?.agentInstanceId;
                                 const isClearingSend = payload?.clearBeforePrompt === true;
@@ -622,16 +709,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     // Standing orders — apply AFTER the seat block so the SO
                     // block is last (constraint 1). applyStandingOrders strips
                     // internally (no-op when the seat block already stripped).
+                    // The `effectiveOrders` and `groups` reads are hoisted above
+                    // the seat-block branch (:631-634) so the team-commit gate
+                    // and the standing-orders block share ONE resolution — two
+                    // separate reads could observe different config state within
+                    // one prompt and disagree about who is a head.
                     if (applySO) {
-                        const effectiveOrders = db ? await loadEffectiveStandingOrders(db) : [];
                         if (effectiveOrders.length > 0) {
-                            // Read registered terminal groups for team-scope membership
-                            // resolution. wireSpawnedTeam writes one group per started team
-                            // into terminals.groups; applyStandingOrders uses it to decide
-                            // whether a team-scoped order applies to this terminal.
-                            const groups = this._kanbanProvider
-                                ? this._kanbanProvider._getScopedSetting<TerminalGroup[]>(TERMINALS_GROUPS_KEY, [])
-                                : (db ? await db.getConfigJson<TerminalGroup[]>(TERMINALS_GROUPS_KEY, []) : []);
                             data = applyStandingOrders(data, payload.name, effectiveOrders, live, groups || []);
                         }
                     }
@@ -730,6 +814,25 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }));
             }
             if (verb === 'ptySendPrompt' && result && typeof result === 'object') {
+                // Parse-based dispatch backstop: register AFTER the proxied send
+                // is dispatched, fire-and-forget. Never awaited ahead of the send
+                // (the send completed above), never able to fail it — a lost
+                // registration degrades a backstop, a blocked send loses the
+                // dispatch. Mirrors the writeOrchestratorReport precedent
+                // (never awaited ahead of the pty send, never able to suppress
+                // it). Reuses the shipped `attributePastedPrompt` verb so plan
+                // resolution (planIds first, planFiles fallback) is identical to
+                // the strict branch. The stamp was captured before the send.
+                if (parsedDispatchIdentity && parsedDispatchedAt && this._kanbanProvider) {
+                    void this._kanbanProvider.handleServiceVerb('attributePastedPrompt', {
+                        terminalName: payload.name,
+                        role: parsedDispatchRole,
+                        planIds: parsedDispatchIdentity.planIds,
+                        planFiles: parsedDispatchIdentity.planFiles,
+                        workspaceRoot: payload.workspaceRoot,
+                        dispatchedAt: parsedDispatchedAt
+                    }).catch(() => { /* a lost registration degrades a backstop, never a send */ });
+                }
                 return {
                     ...result,
                     directivesAttached,

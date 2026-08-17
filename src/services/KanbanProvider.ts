@@ -21,7 +21,7 @@ import {
 } from './agentConfig';
 import { AgentSkillExporter } from './AgentSkillExporter';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
-import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine, SeatDirectiveOptions } from './agentPromptBuilder';
+import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine, SeatDirectiveOptions, STAGE_BY_ROLE } from './agentPromptBuilder';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow, type ColumnUpdateOutcome } from './KanbanDatabase';
 import type { FeatureWatchRecord } from './PlanIngestionEngine';
 import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (is_feature clobber) — remove with the probes
@@ -4932,6 +4932,39 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         return designSystemReferences;
     }
 
+    /**
+     * Resolve the newest `coded` commit carrying each plan's id, for the reviewer
+     * dispatch path. Returns the distinct, deduplicated set of shas (most-recent-wins
+     * via `git log -n 1 --all-match`). Runs against the repo each plan actually lives
+     * in — the plan's `worktreePath` when assigned, else `workspaceRoot` — never the
+     * board's active root.
+     *
+     * `--all-match` is required: without it the two `--grep` patterns are an OR and any
+     * coded commit matches any plan. The plan id is interpolated into the argument
+     * array (never a shell string), so no quoting question arises. Any throw, timeout
+     * (5000ms, treated as no-commit-found) or empty result contributes nothing — absent
+     * means absent, never a placeholder.
+     */
+    private async _resolveCodedCommitsForPlans(plans: BatchPromptPlan[], workspaceRoot: string): Promise<string[]> {
+        const execFileAsync = promisify(cp.execFile);
+        const shas = new Set<string>();
+        for (const plan of plans) {
+            const planId = plan.planId;
+            if (!planId) { continue; }
+            const repoRoot = plan.worktreePath || workspaceRoot;
+            try {
+                const { stdout } = await execFileAsync('git', [
+                    'log', '-n', '1', '--format=%H', '--all-match',
+                    `--grep=Switchboard-Plan: ${planId}`,
+                    '--grep=Switchboard-Stage: coded',
+                ], { cwd: repoRoot, timeout: 5000 });
+                const sha = stdout.trim();
+                if (sha) { shas.add(sha); }
+            } catch { /* no commit / timeout / bad repo — contribute nothing */ }
+        }
+        return [...shas];
+    }
+
     public async generateUnifiedPrompt(
         role: string,
         // Plan arrays for dispatch MUST come from KanbanProvider.buildDispatchPlans
@@ -5154,6 +5187,19 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             resolvedOptions.reviewerConciseModeEnabled = promptsConfig.reviewerConciseModeEnabled;
             resolvedOptions.reviewerCompactPlanUpdateEnabled = promptsConfig.reviewerCompactPlanUpdateEnabled;
             resolvedOptions.noSeparateReviewArtifactsEnabled = promptsConfig.noSeparateReviewArtifactsEnabled;
+            // REVIEW UNIT — resolve the newest coded commit carrying each plan's id, so
+            // the reviewer is handed a bounded diff instead of a shared dirty tree. The
+            // builder only renders; resolution lives here (the caller), keeping
+            // agentPromptBuilder.ts free of child_process. Most-recent-wins via `-n 1`,
+            // `--all-match` so both --grep patterns are an AND (without it any coded
+            // commit matches any plan). Per-plan repo root is the plan's worktreePath
+            // when assigned, else the workspace root — the repo the plan actually lives
+            // in, not the board's active root. Any throw/timeout/empty result contributes
+            // nothing; absent means absent (no placeholder, no dangling ref).
+            const reviewCommits = await this._resolveCodedCommitsForPlans(plans, workspaceRoot);
+            if (reviewCommits.length > 0) {
+                resolvedOptions.reviewCommits = reviewCommits;
+            }
         } else if (role === 'tester') {
             // The acceptance tester needs an authoritative requirements baseline. The
             // active project's PRD (resolved above into resolvedOptions.prdReferences
@@ -5300,6 +5346,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             cavemanOutput: promptsConfig.cavemanOutputByRole?.[role] ?? false,
             suppressWalkthrough: promptsConfig.suppressWalkthroughByRole?.[role] ?? false,
             accurateCoding: promptsConfig.accurateCodingEnabledByRole?.[role] ?? false,
+            // stage is resolved ONCE here from the seat's role via STAGE_BY_ROLE,
+            // so both hosts receive it free — no second STAGE_BY_ROLE read in
+            // either host. An unmapped role (tester, analyst, '') yields
+            // undefined → no trailer instruction. No fallback, no sentinel: a
+            // wrong stage is worse than a missing one.
+            stage: STAGE_BY_ROLE[role],
         };
     }
 
@@ -10101,6 +10153,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const dispatchedAgent: string = msg.role || '';
                 const planIds: string[] = Array.isArray(msg.planIds) ? msg.planIds : [];
                 const planFiles: string[] = Array.isArray(msg.planFiles) ? msg.planFiles : [];
+                // Optional explicit stamp. The fleet delivery-layer backstop
+                // captures `dispatched_at` BEFORE the send and passes it through
+                // here, because fire-and-forget registration lands AFTER the send
+                // and stamping at write time inverts the completion compare.
+                // Absent ⇒ attributePasteDispatch defaults to now (byte-identical
+                // for the strict `payload.dispatch` branch and the paste/drop path).
+                const dispatchedAt: string | undefined = typeof msg.dispatchedAt === 'string' ? msg.dispatchedAt : undefined;
 
                 const preferredRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const rootsToSearch = preferredRoot
@@ -10156,6 +10215,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         const ok = await db.attributePasteDispatch(record.planFile, workspaceId, {
                             dispatchedAgent,
                             dispatchedTerminal: terminalName,
+                            dispatchedAt,
                         });
                         if (ok) { attributed.push(record.planId || record.sessionId); }
                     } catch (err) {

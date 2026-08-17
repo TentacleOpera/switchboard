@@ -38,6 +38,7 @@ import { SURFACES } from '../services/wsHub';
 import { GlobalIntegrationConfigService } from '../services/GlobalIntegrationConfigService';
 import { TerminalWsGateway } from './terminalWsGateway';
 import { sendPromptToPty, clearPty, modelPty, writeSlashCommand } from './ptyPromptDelivery';
+import { extractDispatchIdentity } from '../services/dispatchIdentity';
 import {
     applyStandingOrders,
     stripStandingOrdersBlock,
@@ -45,6 +46,7 @@ import {
     StandingOrder,
     TerminalGroup,
     rewriteStandingOrdersForRename,
+    resolveTeamStanding,
 } from '../services/standingOrders';
 import { instantiateAgentGroupCore } from '../services/agentGroupInstantiation';
 // The pure migrators are deliberately NOT imported here — see the note at the
@@ -275,6 +277,25 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         if (dispatch && typeof dispatch === 'object') {
             out = ensureDispatchProtocolDirectives(out);
         }
+        // Hoist the standing-orders config reads above the seat-block branch so
+        // the team-commit gate can resolve team standing BEFORE seat options are
+        // composed. These reads are unconditional (they run even when
+        // standingOrders: false) because team standing is a fact about the seat,
+        // not an order delivered to it — suppressing the orders block must not
+        // restore commit authority to a member. The same migrated
+        // `effectiveOrders` array feeds both the gate and `applyStandingOrders`
+        // below, so the two cannot disagree about who is a head. Own try because
+        // this host's seat-block and orders branches have separate trys — a
+        // config read failure must yield inTeam false (seat behaves as today),
+        // not change which of the two blocks is skipped.
+        let effectiveOrders: StandingOrder[] = [];
+        let groups: TerminalGroup[] = [];
+        try {
+            effectiveOrders = await loadEffectiveStandingOrders(db);
+            groups = kanbanProvider
+                ? kanbanProvider._getScopedSetting<TerminalGroup[]>(TERMINALS_GROUPS_KEY, [])
+                : await db.getConfigJson<TerminalGroup[]>(TERMINALS_GROUPS_KEY, []);
+        } catch { /* inTeam stays false — a degraded prompt beats a lost dispatch */ }
         if (applySeatBlock) {
             try {
                 out = stripStandingOrdersBlock(out);
@@ -285,7 +306,44 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                 const seatOpts = kanbanProvider
                     ? await kanbanProvider.resolveSeatPromptOptions(role)
                     : null;
-                const seatBlock = seatOpts ? buildSeatDirectiveBlock(seatOpts) : '';
+                // Team-commit gate: a non-head member of a live team is forced
+                // to dontCommit (it reports to its head); the head is forced to
+                // whenDone (it closes the body). The gate MUST be symmetric —
+                // gagging members while leaving the head on its shipped
+                // notSpecified default produces a team whose completed work
+                // nobody is told to commit. resolveTeamStanding is the SAME
+                // predicate selectOrders uses, so the gate and the
+                // standing-orders delivery cannot disagree on who is a member
+                // vs a head.
+                const standing = resolveTeamStanding(handle.friendlyName, effectiveOrders, groups || []);
+                const effectiveOpts = !seatOpts || !standing.inTeam
+                    ? seatOpts
+                    : { ...seatOpts, gitCommitStrategy: standing.isHead ? 'whenDone' : 'dontCommit' };
+                // planIds resolution — at the CALLER, not the composer (which
+                // must stay pure) and not the shared resolver (which roots on
+                // the board's ACTIVE workspace). Standalone is single-root so
+                // getWorkspaceId() is unambiguous. For a team head the ids are
+                // its members' live dispatch records (nobody dispatches TO a
+                // head); for anything else the id comes from the seat's own
+                // name. Dedupe AND sort: the seat block is memoised per
+                // agentInstanceId on its own string, so a varying id order
+                // would re-send the whole block on every message — sorting is
+                // a correctness requirement for the cache, not tidiness.
+                let planIds: string[] | undefined;
+                try {
+                    const wsId = await db.getWorkspaceId();
+                    if (wsId) {
+                        const names = standing.inTeam && standing.isHead
+                            ? standing.members.filter((n: string) => n !== handle.friendlyName)
+                            : [handle.friendlyName];
+                        const recs = await db.getActiveDispatchedByTerminals(wsId, names);
+                        const ids = recs.map(r => r.planId).filter((id): id is string => !!id);
+                        if (ids.length) { planIds = [...new Set(ids)].sort(); }
+                    }
+                } catch { /* stage-only beats a lost dispatch */ }
+                const seatBlock = effectiveOpts
+                    ? buildSeatDirectiveBlock({ ...effectiveOpts, planIds })
+                    : '';
                 if (seatBlock) {
                     const instanceId = handle?.agentInstanceId;
                     const isClearingSend = opts?.clearBeforePrompt === true;
@@ -302,17 +360,45 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         }
         if (applyOrders) {
             try {
-                const effectiveOrders = await loadEffectiveStandingOrders(db);
                 if (effectiveOrders.length > 0) {
                     const live = new Set(ptyFleetService.listActive().map(t => t.friendlyName));
-                    const groups = kanbanProvider
-                        ? kanbanProvider._getScopedSetting<TerminalGroup[]>(TERMINALS_GROUPS_KEY, [])
-                        : await db.getConfigJson<TerminalGroup[]>(TERMINALS_GROUPS_KEY, []);
                     out = applyStandingOrders(out, handle.friendlyName, effectiveOrders, live, groups || []);
                 }
             } catch { /* a degraded prompt beats a lost dispatch */ }
         }
+        // Parse-based dispatch backstop: when the caller did NOT supply a
+        // `dispatch` field, scrape plan identity off the ORIGINAL prompt text
+        // (before any directive/seat-block/SO rewriting above) so registration
+        // is a property of the delivery layer, not a caller chore. The stamp is
+        // captured BEFORE the send because fire-and-forget registration lands
+        // after the send and stamping at write time would invert the
+        // `plan-file mtime > dispatched_at` completion compare. The parser's
+        // `PLANS TO PROCESS:` requirement gates non-dispatch traffic (reports,
+        // chatter, turn-end notices) — no second caller-shape test needed.
+        const hasDispatch = dispatch !== undefined && dispatch !== null;
+        let parsedDispatchIdentity: { planIds: string[]; planFiles: string[] } | null = null;
+        let parsedDispatchedAt: string | null = null;
+        if (!hasDispatch) {
+            parsedDispatchIdentity = extractDispatchIdentity(text);
+            if (parsedDispatchIdentity) {
+                parsedDispatchedAt = new Date().toISOString();
+            }
+        }
         await sendPromptToPty(handle, out, opts);
+        // Register AFTER the send is dispatched, fire-and-forget. Never awaited
+        // ahead of the send (the send completed above), never able to fail it.
+        // Reuses the shipped `attributePastedPrompt` verb so plan resolution
+        // (planIds first, planFiles fallback) is identical to the strict branch.
+        if (parsedDispatchIdentity && parsedDispatchedAt && kanbanProvider) {
+            void kanbanProvider.handleServiceVerb('attributePastedPrompt', {
+                terminalName: handle.friendlyName,
+                role: handle.role || '',
+                planIds: parsedDispatchIdentity.planIds,
+                planFiles: parsedDispatchIdentity.planFiles,
+                workspaceRoot,
+                dispatchedAt: parsedDispatchedAt
+            }).catch(() => { /* a lost registration degrades a backstop, never a send */ });
+        }
     };
 
     const secrets = createStandaloneHostSecrets(workspaceRoot);

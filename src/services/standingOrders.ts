@@ -77,6 +77,68 @@ function scopeOf(o: StandingOrder): StandingOrderScope {
 }
 
 /**
+ * Team standing of a seat, derived from the SAME facts `selectOrders` uses:
+ * the group roster (`terminals.groups`) plus the head name carried on each
+ * team-scoped order's `parent`. Returns `inTeam: false` when no live team
+ * claims the seat — never a guess.
+ *
+ * `members` is the resolved group's `members` array VERBATIM — head included,
+ * flat, in stored order. `[]` when `inTeam` is false. Returned because the
+ * head's commit trailers need its members' plan ids
+ * (`lead-dispatched-commits-carry-no-stage-trailers.md`) and that plan must
+ * NOT re-resolve the group: re-deriving the roster from `teamId` is impossible
+ * (the id is a lossy slug of the head name) and re-deriving it from `groups`
+ * is the second membership test this helper exists to prevent. One
+ * resolution, one roster, two consumers.
+ *
+ * A seat that is both a head of one team and a member of another resolves as
+ * **head**, and `members` is the roster of the team it *heads* — a head's
+ * commit authority wins, because it is the seat other agents are reporting
+ * to, and the plan ids it must carry are its own team's.
+ */
+export function resolveTeamStanding(
+    targetName: string,
+    orders: StandingOrder[],
+    groups: TerminalGroup[]
+): {
+    inTeam: boolean;
+    isHead: boolean;
+    teamId?: string;
+    headName?: string;
+    members: string[];
+} {
+    // Head-first: a seat that heads any team resolves as head, and its team's
+    // roster is what the commit-trailer plan needs. The team-head scope carries
+    // the head name in `o.parent`; `!!o.parent` is the gate that makes an
+    // empty-parent team-head order resolve as not-head (and thus not-in-team
+    // via this path).
+    for (const o of orders) {
+        if (scopeOf(o) !== 'team-head') { continue; }
+        if (!o.teamId) { continue; }
+        const group = groups.find(g => g && g.id === o.teamId);
+        if (!group || !Array.isArray(group.members)) { continue; }
+        if (!!o.parent && targetName === o.parent && group.members.includes(targetName)) {
+            return { inTeam: true, isHead: true, teamId: o.teamId, headName: o.parent, members: group.members };
+        }
+    }
+    // Not a head of any team — check if the target is a non-head member of a
+    // team-scope order's group. The head exclusion (`o.parent && targetName ===
+    // o.parent`) is the SAME check `selectOrders`' team branch uses, so the two
+    // cannot diverge on who is a member vs a head.
+    for (const o of orders) {
+        if (scopeOf(o) !== 'team') { continue; }
+        if (!o.teamId) { continue; }
+        const group = groups.find(g => g && g.id === o.teamId);
+        if (!group || !Array.isArray(group.members)) { continue; }
+        if (o.parent && targetName === o.parent) { continue; } // head exclusion
+        if (group.members.includes(targetName)) {
+            return { inTeam: true, isHead: false, teamId: o.teamId, headName: o.parent || undefined, members: group.members };
+        }
+    }
+    return { inTeam: false, isHead: false, members: [] };
+}
+
+/**
  * Select the orders that apply to `targetName` given the registered groups and
  * the live terminal set.
  *
@@ -103,6 +165,10 @@ function selectOrders(
     liveNames: Set<string>,
     groups: TerminalGroup[]
 ): StandingOrder[] {
+    // Resolve the target's team standing once via the shared predicate, so
+    // the delivery layer and this selector cannot diverge on what "is a
+    // non-head team member" means.
+    const standing = resolveTeamStanding(targetName, orders, groups);
     return orders.filter(o => {
         const scope = scopeOf(o);
         if (scope === 'global') {
@@ -115,7 +181,8 @@ function selectOrders(
             // Exclude the head — the team prompt is for members only. The
             // head name is stored in `o.parent` by wireSpawnedTeam.
             if (o.parent && targetName === o.parent) { return false; }
-            return group.members.includes(targetName);
+            return group.members.includes(targetName)
+                && standing.inTeam && !standing.isHead && o.teamId === standing.teamId;
         }
         if (scope === 'team-head') {
             // The mirror image of `team`: this order is FOR the head and nobody
@@ -127,7 +194,8 @@ function selectOrders(
             if (!o.teamId) { return false; }
             const group = groups.find(g => g && g.id === o.teamId);
             if (!group || !Array.isArray(group.members)) { return false; }
-            return !!o.parent && targetName === o.parent && group.members.includes(targetName);
+            return !!o.parent && targetName === o.parent && group.members.includes(targetName)
+                && standing.isHead && o.teamId === standing.teamId;
         }
         // pair (default)
         return o.parent === targetName && o.child !== undefined && liveNames.has(o.child);

@@ -186,3 +186,9 @@ const effectiveOpts = !seatOpts || !standing.inTeam
 ---
 
 **Recommendation:** Complexity 6 → **Send to Lead Coder.**
+
+---
+
+## Completion Report
+
+Implemented the team-commit gate on both delivery hosts. Added `resolveTeamStanding` to `standingOrders.ts` as the one exported predicate that derives team standing (inTeam, isHead, members verbatim) from the same facts `selectOrders` uses; rewrote `selectOrders`' team and team-head branches to call it so the two cannot diverge. In `TaskViewerProvider._ptyHostVerb`, hoisted the `loadEffectiveStandingOrders` and `terminals.groups` reads above the `if (applySeatBlock)` branch (inside the existing outer try, no second try), and overrode `seatOpts.gitCommitStrategy` to `dontCommit` for non-head members and `whenDone` for heads; deleted the duplicated inner reads so one resolution feeds both the gate and `applyStandingOrders`. In `bootstrap.ts` `deliverPrompt`, same hoist and override with its own try (yielding `inTeam: false` on failure) since that host has separate trys. `buildKanbanBatchPrompt` is ungated (board path bypasses the head). Eight test cases added to `seat-safeguards-fleet-prompt-path.test.js`; `node --check` passes. Files changed: `src/services/standingOrders.ts`, `src/services/TaskViewerProvider.ts`, `src/standalone/bootstrap.ts`, `src/test/seat-safeguards-fleet-prompt-path.test.js`. No issues encountered; not committed or staged per team-head policy.

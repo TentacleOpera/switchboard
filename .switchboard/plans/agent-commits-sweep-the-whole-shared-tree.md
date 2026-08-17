@@ -189,3 +189,8 @@ None. The clause text, its quoting, its placement in one of the two constants, a
 ---
 
 **Recommendation:** Complexity 3 → **Send to Intern.**
+
+## Completion Report
+
+Implemented explicit staging-scope clause across `GIT_SAFETY_DIRECTIVE` in `src/services/agentPromptBuilder.ts`, the webview client mirror `GIT_SAFETY_DIRECTIVE_CLIENT` in `src/webview/terminals.js`, and all 3 shipped team prompt templates in `src/webview/kanban.html`. Added a negative contract assertion in `src/test/standing-orders-marker-contract.test.js` ensuring `GIT_SAFETY_DIRECTIVE_WORKTREE_MODE` excludes the staging-scope restriction. No issues encountered during implementation.
+

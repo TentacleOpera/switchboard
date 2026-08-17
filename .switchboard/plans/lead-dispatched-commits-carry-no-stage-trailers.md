@@ -246,3 +246,9 @@ const seatBlock = buildSeatDirectiveBlock({ ...effectiveOpts, planIds });
 **Recommendation:** Complexity 6 → **Send to Lead Coder.**
 
 *Raised from 5 during the feature reconciliation pass: the plan now also owns the delivery-layer cache interaction (ordering determinism plus a doc-comment amendment on `SeatDirectiveOptions`), and its roster input is a contract shared with a sibling plan rather than a local lookup.*
+
+---
+
+## Completion Report
+
+Implemented gate A: the seat path now forwards `stage` and `planIds` into `buildGitPolicyBlock` so a lead-driven coder's commit carries `Switchboard-Stage` / `Switchboard-Plan` trailers. `stage` is resolved once in `resolveSeatPromptOptions` as `STAGE_BY_ROLE[role]` (no second read in either host, no sentinel); `planIds` is resolved at the caller — `standing.members` minus the head for a head, `[targetName]` otherwise — deduplicated AND `.sort()`ed for cache-key determinism. `buildSeatDirectiveBlock` stays pure (no await, no DB call). Gate B left closed; `stage-marker-commit-contract.test.js` untouched. Files changed: `src/services/agentPromptBuilder.ts` (SeatDirectiveOptions + doc comment + forwarding), `src/services/KanbanProvider.ts` (STAGE_BY_ROLE import + stage field), `src/services/KanbanDatabase.ts` (new `getActiveDispatchedByTerminals` batch reader, one newest live row per terminal via ROW_NUMBER), `src/services/TaskViewerProvider.ts` and `src/standalone/bootstrap.ts` (caller-side planIds resolution), and `src/test/seat-safeguards-fleet-prompt-path.test.js` (10 new cases, file now 93 tests). `node --check` passes on the test file; source-text assertions verified against live source. No issues encountered.

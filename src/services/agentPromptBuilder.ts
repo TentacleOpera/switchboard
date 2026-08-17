@@ -169,6 +169,15 @@ export interface PromptBuilderOptions {
     reviewerCompactPlanUpdateEnabled?: boolean;
     /** When true (default), the reviewer prompt forbids creating separate .md review artifact files. */
     noSeparateReviewArtifactsEnabled?: boolean;
+    /**
+     * The coded commit shas that closed the work the reviewer is reviewing, resolved
+     * by the CALLER (KanbanProvider dispatch path) via `git log --all-match` against
+     * the repo the plans live in. The builder only renders them — it never spawns a
+     * subprocess (the purity guard in stage-marker-commit-contract.test.js pins this).
+     * Empty/absent → emit nothing; the prompt is byte-identical to today. Most-recent-wins
+     * (`-n 1`) and deduplicated are the caller's contract, not the builder's.
+     */
+    reviewCommits?: string[];
 
     /** Path to the workflow file for the planner role. Defaults to .agents/skills/improve-plan/SKILL.md */
     plannerWorkflowPath?: string;
@@ -550,7 +559,7 @@ export function partitionPlansByFeature(plans: BatchPromptPlan[]): { featureGrou
  * Safety) by `buildGitPolicyBlock`. The Safety guardrail below is the salvaged
  * half of the original string and remains byte-for-byte as strong — do not soften.
  */
-export const GIT_SAFETY_DIRECTIVE = `Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout \`<path>\` / git restore, git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — commit first, then correct forward.`;
+export const GIT_SAFETY_DIRECTIVE = `Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout \`<path>\` / git restore, git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — commit first, then correct forward. Stage by explicit path only the files belonging to the work you are committing — never \`git add -A\` or \`git add .\` — other agents may be working the same tree.`;
 
 /**
  * Worktree-mode guardrail — for dispatches where agents are told to self-provision
@@ -1067,7 +1076,13 @@ export const WORKTREES_PER_PLAN_DIRECTIVE = 'Where possible, process each plan a
  * Dispatch-scoped addons (FOCUS_DIRECTIVE, BATCH_EXECUTION_RULES, PRD injection,
  * project pin, featureSubagentPolicy, workflow-file redirection, pairProgramming)
  * are deliberately absent — they reference plan files and are meaningless on
- * arbitrary text sends.
+ * arbitrary text sends. The two exceptions are `stage` and `planIds`: `stage` is
+ * seat-scoped (derived from the seat's role via STAGE_BY_ROLE by the shared
+ * resolver), and `planIds` is dispatch-varying by design — for a member it is
+ * its own live dispatch record, for a team head it is the union of its members'
+ * records. The delivery layer's content-keyed seat-block cache absorbs that
+ * variation: a changed id set re-renders the block (correct), an unchanged one
+ * does not (the ids are sorted so DB row order cannot force a re-send).
  */
 export interface SeatDirectiveOptions {
     subagentPolicy?: 'noSubagents' | 'useSubagents' | 'customSubagent' | 'default';
@@ -1084,6 +1099,18 @@ export interface SeatDirectiveOptions {
     /** Worktree signals for buildGitPolicyBlock — dispatch-scoped, default false on the seat path. */
     worktreeActive?: boolean;
     worktreePerPlanActive?: boolean;
+    /** Stage marker for the commit trailer, resolved from the seat's role via
+     *  STAGE_BY_ROLE by `KanbanProvider.resolveSeatPromptOptions` — the one
+     *  shared resolver both hosts call. Absent → no trailer instruction, which
+     *  is the correct outcome for an unmapped role. */
+    stage?: string;
+    /** planIds this seat is currently accountable for, resolved by the CALLER.
+     *  For a member that is its own dispatch record; for a team head it is the
+     *  union of its members' records, because nobody dispatches plans TO a head.
+     *  Kept as a plain value so this composer stays pure — it must never perform
+     *  the lookup itself, and it cannot move into resolveSeatPromptOptions,
+     *  which roots on the board's ACTIVE workspace. */
+    planIds?: string[];
 }
 
 /**
@@ -1118,6 +1145,8 @@ export function buildSeatDirectiveBlock(opts: SeatDirectiveOptions): string {
         guardrail: opts.gitProhibitionEnabled,
         worktreeActive: opts.worktreeActive,
         worktreePerPlanActive: opts.worktreePerPlanActive,
+        stage: opts.stage,
+        planIds: opts.planIds,
     });
     if (gitBlock) { parts.push(gitBlock); }
 
@@ -1364,6 +1393,38 @@ function assembleSuffix(role: string, parts: {
         parts.skipBlock,
         parts.subagentBlock
     ].filter(Boolean).join('\n\n');
+}
+
+/**
+ * Render the REVIEW UNIT block that names the coded commit(s) the reviewer is
+ * reviewing. Pure: takes already-resolved shas, renders text or `''`. The
+ * caller (KanbanProvider dispatch path) resolves the shas via `git log`; this
+ * module never spawns a subprocess (the purity guard in
+ * stage-marker-commit-contract.test.js pins that — two sibling plans depend on
+ * this module staying free of node's process-spawning builtins).
+ *
+ * - Empty/absent input → `''` (the prompt stays byte-identical to today; a
+ *   reviewer told to review a commit that does not exist is worse than one
+ *   told nothing).
+ * - Deduplicates and trims; falsy entries contribute nothing.
+ * - Singular: "review commit <sha>"; plural: "review commits <sha1>, <sha2>".
+ */
+function buildReviewUnitBlock(reviewCommits: string[] | undefined): string {
+    if (!Array.isArray(reviewCommits)) { return ''; }
+    const distinct: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of reviewCommits) {
+        if (typeof raw !== 'string') { continue; }
+        const sha = raw.trim();
+        if (!sha || seen.has(sha)) { continue; }
+        seen.add(sha);
+        distinct.push(sha);
+    }
+    if (distinct.length === 0) { return ''; }
+    const head = distinct.length === 1
+        ? `REVIEW UNIT: review commit ${distinct[0]} — \`git show ${distinct[0]}\` is the change set for this review.`
+        : `REVIEW UNIT: review commits ${distinct.join(', ')} — for each sha, \`git show <sha>\` is the change set for this review.`;
+    return `${head} Do not infer the change set from the working tree: other agents may be working the same tree, and uncommitted files there are not part of this review. Commit your own fixes separately.`;
 }
 
 /**
@@ -1731,6 +1792,15 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
             ? NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE
             : '';
 
+        // REVIEW UNIT — names the coded commit(s) the reviewer is reviewing, so review
+        // runs against a bounded diff instead of whatever sits in a shared working tree.
+        // The CALLER resolves the shas (KanbanProvider dispatch path, git log --all-match);
+        // the builder only renders. Empty/absent → '' and the prompt is byte-identical to
+        // today (absent means absent — never a placeholder, never a dangling ref). Sits
+        // ABOVE PLANS TO PROCESS: so the plan list reads as context for the diff, not as
+        // the review target.
+        const reviewUnitBlock = buildReviewUnitBlock(options?.reviewCommits);
+
         const promptParts = [
             reviewerExecutionBlock,
             safeguardsBlock,
@@ -1738,6 +1808,7 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
             baseInstructions,
             suffixBlock,
             featureDirectiveBlock,
+            reviewUnitBlock,
             `PLANS TO PROCESS:\n${planList}`,
             noSeparateReviewArtifactsBlock
         ].filter(Boolean).join('\n\n');

@@ -9734,12 +9734,23 @@ FROM plans
     public async attributePasteDispatch(planFile: string, workspaceId: string, info: {
         dispatchedAgent: string;
         dispatchedTerminal?: string;
+        /**
+         * Explicit `dispatched_at` stamp. The fleet delivery-layer backstop
+         * captures this BEFORE the send is dispatched and passes it in, because
+         * fire-and-forget registration lands AFTER the send and stamping at
+         * write time would invert the `plan-file mtime > dispatched_at`
+         * completion compare the turn-end notifier depends on. Defaults to now
+         * so every existing caller (the strict `payload.dispatch` branch, the
+         * paste/drop path) is byte-identical.
+         */
+        dispatchedAt?: string;
     }): Promise<boolean> {
         const normalized = this._ensureRelativePlanFile(planFile);
         const terminalName = info.dispatchedTerminal || '';
+        const stamp = info.dispatchedAt || new Date().toISOString();
         return this._persistedUpdate(
             'UPDATE plans SET dispatched_agent = ?, dispatched_terminal = ?, dispatched_at = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
-            [info.dispatchedAgent, terminalName, new Date().toISOString(), new Date().toISOString(), normalized, workspaceId]
+            [info.dispatchedAgent, terminalName, stamp, new Date().toISOString(), normalized, workspaceId]
         );
     }
 
@@ -9830,6 +9841,50 @@ FROM plans
         try {
             const rows = this._readRows(stmt);
             return rows[0] ?? null;
+        } finally {
+            stmt.free();
+        }
+    }
+
+    /**
+     * Batch variant of `getActiveDispatchedByTerminal` — returns the newest
+     * live dispatched row PER terminal in the set, rather than collapsing to
+     * one row the way the singular reader does. Used by the seat path to
+     * resolve a team head's plan ids: nobody dispatches plans TO a head, so the
+     * head's ids are the union of its members' live dispatch records, gathered
+     * in one statement rather than N round-trips on the delivery path.
+     *
+     * Same row shape and filter as the singular reader
+     * (`status = 'active' AND is_feature = 0 AND dispatched_at IS NOT NULL`).
+     * Empty `names` returns `[]` without touching the DB. Row order is
+     * unspecified by design — the caller deduplicates AND `.sort()`s the ids
+     * before rendering, because the seat block is memoised per agentInstanceId
+     * on its own string and a non-deterministic id order would re-send the
+     * entire block on every message.
+     */
+    public async getActiveDispatchedByTerminals(workspaceId: string, names: string[]): Promise<KanbanPlanRecord[]> {
+        if (!(await this.ensureReady()) || !this._db || !workspaceId) return [];
+        const filtered = names.filter(n => !!n);
+        if (filtered.length === 0) return [];
+        const placeholders = filtered.map(() => '?').join(', ');
+        // ROW_NUMBER() picks the newest row per terminal by dispatched_at DESC
+        // (sql.js bundles SQLite 3.49.1, which supports window functions). This
+        // deliberately does NOT collapse to a single row across the set — one
+        // row per terminal is the whole point.
+        const stmt = this._db.prepare(
+            `WITH ranked AS (
+                SELECT ${PLAN_COLUMNS},
+                       ROW_NUMBER() OVER (PARTITION BY dispatched_terminal ORDER BY dispatched_at DESC) AS _rn
+                FROM plans
+                WHERE workspace_id = ? AND status = 'active' AND is_feature = 0
+                  AND dispatched_at IS NOT NULL
+                  AND dispatched_terminal IN (${placeholders})
+            )
+            SELECT ${PLAN_COLUMNS} FROM ranked WHERE _rn = 1`,
+            [workspaceId, ...filtered]
+        );
+        try {
+            return this._readRows(stmt);
         } finally {
             stmt.free();
         }

@@ -176,3 +176,9 @@ if (!hasDispatch) {
 ---
 
 **Recommendation:** Complexity 5 → **Send to Coder.**
+
+---
+
+## Completion Report
+
+Implemented the parse-based dispatch-registration backstop on both delivery hosts. Created `src/services/dispatchIdentity.ts` (host-agnostic pure parser, UUID regex `[0-9a-fA-F-]{8,}`); wired fire-and-forget registration into `TaskViewerProvider._ptyHostVerb` (extension) and `bootstrap.ts` `deliverPrompt` (standalone), both guarded on `!hasDispatch` so the strict `payload.dispatch` branch keeps sole ownership, stamp captured before the send and passed through a new optional `dispatchedAt` parameter on `KanbanDatabase.attributePasteDispatch` (threaded via the `attributePastedPrompt` verb in `KanbanProvider` and its schema). Fixed the shipped `\d+` id regex in `terminals.js` `extractPastedDispatchIdentity`. Added the seven test cases to `src/test/terminal-plan-attribution-contract.test.js` (parser behaviour via source-eval, byte-equality mirror contract, and source-text assertions for the guard/stamp/fire-and-forget invariants); `node --check` passes. Files changed: `src/services/dispatchIdentity.ts` (new), `src/services/KanbanDatabase.ts`, `src/services/KanbanProvider.ts`, `src/services/verbSchemas.ts`, `src/services/TaskViewerProvider.ts`, `src/standalone/bootstrap.ts`, `src/webview/terminals.js`, `src/test/terminal-plan-attribution-contract.test.js`. No issues encountered; not committed or staged per the team-head policy.

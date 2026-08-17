@@ -393,6 +393,18 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
     );
 });
 
+test('GIT_SAFETY_DIRECTIVE_WORKTREE_MODE excludes the staging-scope clause (isolated trees need no path-staging rule)', () => {
+    const hostMatch = AGENT_PROMPT_BUILDER_SRC.match(
+        /export\s+const\s+GIT_SAFETY_DIRECTIVE_WORKTREE_MODE\s*=\s*`(.*)`;/
+    );
+    assert.ok(hostMatch, 'GIT_SAFETY_DIRECTIVE_WORKTREE_MODE not found in agentPromptBuilder.ts');
+    const worktreeDirective = hostMatch[1];
+    assert.ok(
+        !worktreeDirective.includes('git add -A'),
+        'GIT_SAFETY_DIRECTIVE_WORKTREE_MODE must NOT contain "git add -A" — worktree agents own their isolated tree and do not need shared-tree staging restrictions'
+    );
+});
+
 test('both files render pair with "Regarding" framing and global/team without it', () => {
     assert.ok(
         STANDING_ORDERS_SRC.includes('Regarding terminal'),

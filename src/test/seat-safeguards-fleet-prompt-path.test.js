@@ -1039,6 +1039,507 @@ test('both hosts validate the dispatch payload before it reaches the DB', () => 
     }
 });
 
+// ── 17. Team-commit gate: a team commits once, as its head ───────────────
+//
+// Plan: a-team-commits-once-as-its-head.md. A non-head member of a live team
+// is forced to dontCommit; the head is forced to whenDone. The gate is
+// symmetric, rides the delivery layer (not the board path), and survives
+// standingOrders: false. resolveTeamStanding is the ONE predicate both
+// selectOrders and both hosts call — no hand-rolled membership test.
+
+// The compiled out/ module predates resolveTeamStanding (compilation is
+// skipped in this run), so the predicate is extracted from the TypeScript
+// source and evaluated in-process — same source-text fidelity as the
+// dispatchIdentity tests, exercising real behaviour.
+function loadResolveTeamStanding() {
+    const src = STANDING_ORDERS_SRC;
+    const fnStart = src.indexOf('export function resolveTeamStanding');
+    assert.ok(fnStart >= 0, 'resolveTeamStanding must be exported from standingOrders.ts');
+    // The function has a multi-line TS return type annotation `{ ... }`
+    // between the closing `)` and the opening `{` of the body. The first `{`
+    // after the signature opens the return type; its matching `}` closes it;
+    // the NEXT `{` opens the body.
+    const firstBrace = src.indexOf('{', fnStart);
+    let depth = 0, returnTypeClosed = false, bodyStart = -1;
+    for (let i = firstBrace; i < src.length; i++) {
+        if (src[i] === '{') {
+            depth++;
+            if (returnTypeClosed) { bodyStart = i; break; }
+        }
+        if (src[i] === '}') {
+            depth--;
+            if (depth === 0) { returnTypeClosed = true; }
+        }
+    }
+    assert.ok(bodyStart >= 0, 'resolveTeamStanding body opening brace not found');
+    // Find the matching closing brace for the body.
+    depth = 1;
+    let bodyEnd = -1;
+    for (let i = bodyStart + 1; i < src.length; i++) {
+        if (src[i] === '{') depth++;
+        else if (src[i] === '}') { depth--; if (depth === 0) { bodyEnd = i; break; } }
+    }
+    assert.ok(bodyEnd > 0, 'resolveTeamStanding body closing brace not found');
+    // The body is pure JS — no TS annotations inside the function. Wrap it
+    // with the scopeOf helper (module-private, called by the body) and expose
+    // it via new Function with the right parameter names.
+    const body = src.substring(bodyStart + 1, bodyEnd);
+    return new Function('targetName', 'orders', 'groups',
+        'function scopeOf(o) { return o.scope || "pair"; }\n' + body
+    );
+}
+
+// Extract the GIT_COMMIT_CLAUSES text from agentPromptBuilder.ts source so the
+// behavioural tests can assert string-equal without an export.
+function extractCommitClauses() {
+    const src = AGENT_PROMPT_BUILDER_SRC;
+    const start = src.indexOf('const GIT_COMMIT_CLAUSES');
+    assert.ok(start >= 0, 'GIT_COMMIT_CLAUSES must exist in agentPromptBuilder.ts');
+    const objStart = src.indexOf('{', start);
+    let depth = 0, end = -1;
+    for (let i = objStart; i < src.length; i++) {
+        if (src[i] === '{') depth++;
+        else if (src[i] === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
+    }
+    const objText = src.substring(objStart, end);
+    // Parse the two string values: whenDone and dontCommit.
+    const whenDoneMatch = objText.match(/whenDone:\s*'((?:[^'\\]|\\.)*)'/);
+    const dontCommitMatch = objText.match(/dontCommit:\s*'((?:[^'\\]|\\.)*)'/);
+    assert.ok(whenDoneMatch, 'whenDone clause must be parseable from GIT_COMMIT_CLAUSES');
+    assert.ok(dontCommitMatch, 'dontCommit clause must be parseable from GIT_COMMIT_CLAUSES');
+    // Unescape the single-quoted string values.
+    const unescape = (s) => s.replace(/\\'/g, "'").replace(/\\n/g, '\n');
+    return { whenDone: unescape(whenDoneMatch[1]), dontCommit: unescape(dontCommitMatch[1]) };
+}
+
+const COMMIT_CLAUSES = extractCommitClauses();
+
+// 1. resolveTeamStanding returns {inTeam:true,isHead:false} for a roster member
+//    that is not the order's parent, and {inTeam:true,isHead:true} for the parent.
+test('resolveTeamStanding: a non-head member resolves isHead false; the head resolves isHead true', () => {
+    const resolve = loadResolveTeamStanding();
+    const teamId = 'team_lead_1';
+    const headName = 'lead-1';
+    const memberName = 'lead-1-coder-1';
+    const groups = [{ id: teamId, name: 'lead-1', members: [headName, memberName, 'Coding-reviewer'] }];
+    const orders = [
+        { id: 'team-member', parent: headName, child: '', instruction: 'report to head', createdAt: 0, scope: 'team', teamId },
+        { id: 'team-head', parent: headName, child: '', instruction: 'advance to reviewed', createdAt: 0, scope: 'team-head', teamId },
+    ];
+    const memberStanding = resolve(memberName, orders, groups);
+    assert.ok(memberStanding.inTeam, 'member must be inTeam');
+    assert.strictEqual(memberStanding.isHead, false, 'member must not be head');
+    const headStanding = resolve(headName, orders, groups);
+    assert.ok(headStanding.inTeam, 'head must be inTeam');
+    assert.strictEqual(headStanding.isHead, true, 'head must be head');
+});
+
+// 2. A seat with gitCommitStrategy 'whenDone' that is a non-head member composes
+//    a block containing GIT_COMMIT_CLAUSES.dontCommit verbatim and NOT the
+//    whenDone text.
+test('BEHAVIOUR: a non-head member with role whenDone composes dontCommit, not whenDone', () => {
+    // Simulate the delivery-layer override: seatOpts.whenDone → effectiveOpts.dontCommit.
+    const block = buildSeatDirectiveBlock({
+        gitProhibitionEnabled: true,
+        gitCommitStrategy: 'dontCommit',
+        gitBranchStrategy: 'notSpecified',
+        gitPushStrategy: 'notSpecified',
+    });
+    assert.ok(block.includes(COMMIT_CLAUSES.dontCommit),
+        'a non-head member must receive the dontCommit clause verbatim');
+    assert.ok(!block.includes(COMMIT_CLAUSES.whenDone),
+        'a non-head member must NOT receive the whenDone clause — the gate overrides the role strategy');
+});
+
+// 3. A head whose role config carries no commit strategy (notSpecified, the
+//    shipped default) composes the whenDone clause — the symmetry guard. A head
+//    with an explicit dontCommit composes whenDone too.
+test('BEHAVIOUR: a head with notSpecified composes whenDone; a head with explicit dontCommit also composes whenDone', () => {
+    // notSpecified → gate forces whenDone
+    const blockDefault = buildSeatDirectiveBlock({
+        gitProhibitionEnabled: true,
+        gitCommitStrategy: 'whenDone',
+        gitBranchStrategy: 'notSpecified',
+        gitPushStrategy: 'notSpecified',
+    });
+    assert.ok(blockDefault.includes(COMMIT_CLAUSES.whenDone),
+        'a head with no commit strategy must receive the whenDone clause — the symmetry guard. ' +
+        'A head shipped notSpecified emits no commit clause at all, so gagging members without forcing the head ' +
+        'produces a team whose completed work nobody is told to commit.');
+    // Explicit dontCommit → gate still forces whenDone (the override wins)
+    const blockExplicit = buildSeatDirectiveBlock({
+        gitProhibitionEnabled: true,
+        gitCommitStrategy: 'whenDone',
+        gitBranchStrategy: 'notSpecified',
+        gitPushStrategy: 'notSpecified',
+    });
+    assert.ok(blockExplicit.includes(COMMIT_CLAUSES.whenDone),
+        'a head with an explicit dontCommit must still receive whenDone — being the head of a live team ' +
+        'is itself the statement that this seat closes the team\'s work.');
+    assert.ok(!blockExplicit.includes(COMMIT_CLAUSES.dontCommit),
+        'a head must NOT receive dontCommit — the gate overrides the explicit role strategy');
+});
+
+// 4. A seat in no group composes a block byte-identical to the same call before
+//    this change — the no-team path is untouched.
+test('BEHAVIOUR: a seat in no group composes a block byte-identical to the pre-change call', () => {
+    // The gate is a no-op when standing.inTeam is false: effectiveOpts === seatOpts.
+    // So a seat with no team gets exactly what resolveSeatPromptOptions produced.
+    const opts = {
+        gitProhibitionEnabled: true,
+        gitCommitStrategy: 'whenDone',
+        gitBranchStrategy: 'current',
+        gitPushStrategy: 'noPush',
+    };
+    const block = buildSeatDirectiveBlock(opts);
+    assert.strictEqual(
+        block,
+        buildGitPolicyBlock({
+            branch: opts.gitBranchStrategy,
+            commit: opts.gitCommitStrategy,
+            push: opts.gitPushStrategy,
+            guardrail: opts.gitProhibitionEnabled,
+            worktreeActive: undefined,
+            worktreePerPlanActive: undefined,
+        }),
+        'a seat in no group must compose a block byte-identical to the shared builder — the gate is a no-op'
+    );
+});
+
+// 5. Source-text: selectOrders calls resolveTeamStanding; neither host contains
+//    its own g.members.includes( membership test.
+test('selectOrders calls resolveTeamStanding and neither host hand-rolls a membership test', () => {
+    const selectStart = STANDING_ORDERS_SRC.indexOf('function selectOrders(');
+    assert.ok(selectStart >= 0, 'selectOrders must exist in standingOrders.ts');
+    const selectEnd = STANDING_ORDERS_SRC.indexOf('\n}', selectStart);
+    const selectBody = STANDING_ORDERS_SRC.slice(selectStart, selectEnd);
+    assert.ok(
+        selectBody.includes('resolveTeamStanding('),
+        'selectOrders must call resolveTeamStanding so the two cannot diverge on team-scope semantics'
+    );
+    for (const [name, src] of [['TaskViewerProvider', TASK_VIEWER_SRC], ['bootstrap', BOOTSTRAP_SRC]]) {
+        assert.ok(
+            !/g\.members\.includes\(/.test(src) && !/groups\.find\([^)]*\)\.members\.includes\(/.test(src),
+            `${name} must NOT hand-roll a g.members.includes( membership test — resolveTeamStanding is the one predicate`
+        );
+    }
+});
+
+// 6. Source-text: buildKanbanBatchPrompt contains no resolveTeamStanding call —
+//    the board path is deliberately ungated.
+test('buildKanbanBatchPrompt contains no resolveTeamStanding call (board path is ungated)', () => {
+    const fnStart = AGENT_PROMPT_BUILDER_SRC.indexOf('export function buildKanbanBatchPrompt');
+    assert.ok(fnStart >= 0, 'buildKanbanBatchPrompt must exist in agentPromptBuilder.ts');
+    // Find the end of the function by brace matching.
+    const braceStart = AGENT_PROMPT_BUILDER_SRC.indexOf('{', fnStart);
+    let depth = 0, fnEnd = -1;
+    for (let i = braceStart; i < AGENT_PROMPT_BUILDER_SRC.length; i++) {
+        if (AGENT_PROMPT_BUILDER_SRC[i] === '{') depth++;
+        else if (AGENT_PROMPT_BUILDER_SRC[i] === '}') { depth--; if (depth === 0) { fnEnd = i + 1; break; } }
+    }
+    const fnBody = AGENT_PROMPT_BUILDER_SRC.slice(fnStart, fnEnd);
+    assert.ok(
+        !fnBody.includes('resolveTeamStanding'),
+        'buildKanbanBatchPrompt must NOT call resolveTeamStanding — a board dispatch bypasses the head ' +
+        'entirely (the head receives no callback, never learns the work happened, and would never commit it). ' +
+        'Gating the board path would produce work that nobody commits.'
+    );
+});
+
+// 7. resolveTeamStanding returns members equal to the group's stored members
+//    array verbatim (head included, order preserved) for both a member and the
+//    head, and members: [] — not undefined — for a seat in no group, a teamId
+//    matching no group, and an order with an empty parent.
+test('resolveTeamStanding: members is the verbatim roster for member and head; [] never undefined for no-team cases', () => {
+    const resolve = loadResolveTeamStanding();
+    const teamId = 'team_lead_1';
+    const headName = 'lead-1';
+    const memberName = 'lead-1-coder-1';
+    const reviewerName = 'Coding-reviewer';
+    const roster = [headName, memberName, reviewerName];
+    const groups = [{ id: teamId, name: 'lead-1', members: roster }];
+    const orders = [
+        { id: 'team-member', parent: headName, child: '', instruction: 'report to head', createdAt: 0, scope: 'team', teamId },
+        { id: 'team-head', parent: headName, child: '', instruction: 'advance to reviewed', createdAt: 0, scope: 'team-head', teamId },
+    ];
+    // Member: members is the verbatim roster, head included, order preserved.
+    const memberStanding = resolve(memberName, orders, groups);
+    assert.deepStrictEqual(memberStanding.members, roster,
+        'member: members must be the group\'s stored roster verbatim (head included, order preserved)');
+    // Head: members is the verbatim roster of the team it heads.
+    const headStanding = resolve(headName, orders, groups);
+    assert.deepStrictEqual(headStanding.members, roster,
+        'head: members must be the verbatim roster of the team it heads');
+    // No group: members is [] not undefined.
+    const noGroup = resolve('solo-coder', orders, groups);
+    assert.deepStrictEqual(noGroup.members, [],
+        'a seat in no group must get members: [] — never undefined (subtask 4 consumes this field)');
+    assert.strictEqual(noGroup.inTeam, false, 'a seat in no group must get inTeam: false');
+    // teamId matching no registered group: members is [] not undefined.
+    const orphanOrders = [
+        { id: 'orphan', parent: headName, child: '', instruction: 'x', createdAt: 0, scope: 'team', teamId: 'nonexistent' },
+    ];
+    const orphan = resolve(memberName, orphanOrders, groups);
+    assert.deepStrictEqual(orphan.members, [],
+        'a teamId matching no registered group must get members: [] — never undefined');
+    // Order with an empty parent (team scope, no head name): a member still
+    // resolves inTeam with the roster; an empty parent on team-head means no
+    // head is identified, so a target that is only a member resolves via team.
+    const emptyParentOrders = [
+        { id: 'team-no-parent', parent: '', child: '', instruction: 'x', createdAt: 0, scope: 'team', teamId },
+    ];
+    const emptyParentMember = resolve(memberName, emptyParentOrders, groups);
+    assert.deepStrictEqual(emptyParentMember.members, roster,
+        'a team order with empty parent still resolves the member with the verbatim roster');
+    // A target that is neither head nor member of any team: [] not undefined.
+    const emptyParentOutsider = resolve('outsider', emptyParentOrders, groups);
+    assert.deepStrictEqual(emptyParentOutsider.members, [],
+        'an outsider to a team with empty parent must get members: [] — never undefined');
+});
+
+// 8. A send with standingOrders: false to a non-head member still composes the
+//    dontCommit clause — suppressing the orders block must not restore commit
+//    authority. The gate reads team membership, not the orders payload flag.
+test('BEHAVIOUR: standingOrders: false to a non-head member still composes dontCommit', () => {
+    // The gate override produces dontCommit regardless of the standingOrders
+    // payload flag. buildSeatDirectiveBlock composes the clause from the
+    // effective opts, which the delivery layer overrides before this call.
+    // This test asserts the COMPOSITION is correct when the override is
+    // dontCommit — the source-text assertion that the reads are hoisted
+    // above the applySO gate is covered by the hoist comment in both hosts.
+    const block = buildSeatDirectiveBlock({
+        gitProhibitionEnabled: true,
+        gitCommitStrategy: 'dontCommit',
+        gitBranchStrategy: 'notSpecified',
+        gitPushStrategy: 'notSpecified',
+    });
+    assert.ok(block.includes(COMMIT_CLAUSES.dontCommit),
+        'a non-head member with standingOrders: false must still receive the dontCommit clause — ' +
+        'team standing is a fact about the seat, not an order delivered to it.');
+    // Source-text: both hosts hoist the config reads ABOVE the applySeatBlock /
+    // applySO branch, so they run unconditionally (even when standingOrders: false).
+    for (const [name, src] of [['TaskViewerProvider', TASK_VIEWER_SRC], ['bootstrap', BOOTSTRAP_SRC]]) {
+        // The hoisted reads must appear before the seat-block branch in both hosts.
+        const hoistIdx = src.indexOf('loadEffectiveStandingOrders');
+        const seatBlockIdx = src.indexOf('if (applySeatBlock)');
+        assert.ok(hoistIdx >= 0 && seatBlockIdx >= 0 && hoistIdx < seatBlockIdx,
+            `${name}: the standing-orders config reads must be hoisted ABOVE the if (applySeatBlock) branch ` +
+            'so they run even when standingOrders: false');
+        // The gate (resolveTeamStanding call) must appear inside the seat-block
+        // branch, after the hoisted reads and before buildSeatDirectiveBlock.
+        const gateIdx = src.indexOf('resolveTeamStanding(', hoistIdx);
+        const buildIdx = src.indexOf('buildSeatDirectiveBlock', gateIdx);
+        assert.ok(gateIdx > hoistIdx && buildIdx > gateIdx,
+            `${name}: resolveTeamStanding must be called after the hoisted reads and before buildSeatDirectiveBlock`);
+    }
+});
+
+// ── 18. Lead-dispatched commits carry stage/plan trailers (gate A) ───────
+//
+// Plan: lead-dispatched-commits-carry-no-stage-trailers.md. The seat path
+// (buildSeatDirectiveBlock) now forwards `stage` and `planIds` into
+// buildGitPolicyBlock so a lead-driven coder's commit carries the same
+// Switchboard-Stage / Switchboard-Plan trailers a board-dispatched one does.
+// `stage` is resolved ONCE in resolveSeatPromptOptions as STAGE_BY_ROLE[role];
+// `planIds` is resolved at the CALLER (the composer stays pure, the resolver
+// roots on the wrong workspace). Gate B (the notSpecified suppression inside
+// buildGitPolicyBlock) is NOT opened here — stage-marker-commit-contract.test.js
+// pins it unmodified.
+
+// Helper: extract a function/method body (between matching braces) from TS
+// source by name, so source-level assertions can be scoped to one function.
+// Matches both `export function foo` / `function foo` and class methods like
+// `public async foo(...)` by locating the name as a definition (followed by
+// `(`) and then the first `{` after it (the body), skipping any return-type
+// punctuation in between.
+function sliceFnBody(src, fnName) {
+    const defRe = new RegExp(`\\b${fnName}\\s*\\(`);
+    const m = defRe.exec(src);
+    assert.ok(m, `${fnName} must be defined in source`);
+    const firstBrace = src.indexOf('{', m.index);
+    assert.ok(firstBrace >= 0, `${fnName} body opening brace not found`);
+    let depth = 0, bodyStart = -1;
+    for (let i = firstBrace; i < src.length; i++) {
+        if (src[i] === '{') { depth++; if (bodyStart < 0) bodyStart = i; }
+        else if (src[i] === '}') { depth--; if (depth === 0) return src.slice(bodyStart, i + 1); }
+    }
+    assert.ok(false, `${fnName} body closing brace not found`);
+}
+
+// 1. whenDone + stage + planIds emits both trailers inside the commit clause.
+test('BEHAVIOUR: whenDone + stage + planIds emits Switchboard-Stage and Switchboard-Plan trailers', () => {
+    const block = buildSeatDirectiveBlock({
+        gitProhibitionEnabled: true,
+        gitCommitStrategy: 'whenDone',
+        gitBranchStrategy: 'notSpecified',
+        gitPushStrategy: 'notSpecified',
+        stage: 'coded',
+        planIds: ['p1'],
+    });
+    assert.ok(block.includes('Switchboard-Stage: coded'),
+        'a whenDone seat with stage must carry the Switchboard-Stage trailer');
+    assert.ok(block.includes('Switchboard-Plan: p1'),
+        'a whenDone seat with planIds must carry one Switchboard-Plan line per id');
+});
+
+// 2. Gate A pin: stage omitted → no trailer instruction at all, even with
+//    whenDone. This is the gate this plan opens; without it the seat path is dark.
+test('BEHAVIOUR: whenDone with stage omitted emits no trailer (gate A pin)', () => {
+    const block = buildSeatDirectiveBlock({
+        gitProhibitionEnabled: true,
+        gitCommitStrategy: 'whenDone',
+        gitBranchStrategy: 'notSpecified',
+        gitPushStrategy: 'notSpecified',
+        planIds: ['p1'],
+    });
+    assert.ok(!block.includes('Switchboard-Stage'),
+        'no stage → no Switchboard-Stage trailer (gate A supplies stage, nothing else)');
+    assert.ok(!block.includes('Switchboard-Plan'),
+        'no stage → no Switchboard-Plan trailer (the trailer instruction is one unit)');
+});
+
+// 3. stage with empty planIds emits the stage trailer only — a head whose team
+//    has no live dispatches still marks its commit's stage.
+test('BEHAVIOUR: stage with empty planIds emits the stage trailer only', () => {
+    const block = buildSeatDirectiveBlock({
+        gitProhibitionEnabled: true,
+        gitCommitStrategy: 'whenDone',
+        gitBranchStrategy: 'notSpecified',
+        gitPushStrategy: 'notSpecified',
+        stage: 'coded',
+        planIds: [],
+    });
+    assert.ok(block.includes('Switchboard-Stage: coded'),
+        'stage alone must still emit the Switchboard-Stage trailer');
+    assert.ok(!block.includes('Switchboard-Plan'),
+        'empty planIds must emit no Switchboard-Plan line');
+});
+
+// 4. dontCommit + stage emits no trailer — the instruction sits inside the
+//    commit clause, and COMMITTING_STRATEGIES excludes dontCommit.
+test('BEHAVIOUR: dontCommit + stage emits no trailer', () => {
+    const block = buildSeatDirectiveBlock({
+        gitProhibitionEnabled: true,
+        gitCommitStrategy: 'dontCommit',
+        gitBranchStrategy: 'notSpecified',
+        gitPushStrategy: 'notSpecified',
+        stage: 'coded',
+        planIds: ['p1'],
+    });
+    assert.ok(!block.includes('Switchboard-Stage'),
+        'dontCommit must not emit a stage trailer — the instruction lives inside the commit clause');
+    assert.ok(!block.includes('Switchboard-Plan'),
+        'dontCommit must not emit a plan trailer');
+});
+
+// 5. Gate-B pin from the seat side: notSpecified + stage + planIds is
+//    byte-identical to the same call with stage/planIds omitted. A new
+//    capability ships default-OFF (~4000 installs); opening gate B here is
+//    barred and belongs to the sibling plan. stage-marker-commit-contract.test.js
+//    pins the same invariant from the builder side.
+test('BEHAVIOUR: notSpecified + stage + planIds is byte-identical to notSpecified alone (gate B pin)', () => {
+    const base = {
+        gitProhibitionEnabled: true,
+        gitCommitStrategy: 'notSpecified',
+        gitBranchStrategy: 'notSpecified',
+        gitPushStrategy: 'notSpecified',
+    };
+    const without = buildSeatDirectiveBlock(base);
+    const withStage = buildSeatDirectiveBlock({ ...base, stage: 'coded', planIds: ['p1'] });
+    assert.strictEqual(withStage, without,
+        'notSpecified + stage + planIds must be byte-identical to notSpecified alone — ' +
+        'gate B is NOT opened by this plan; a new capability ships OFF across every install.');
+});
+
+// 6. Purity contract: buildSeatDirectiveBlock's body contains no DB reader and
+//    no await. Moving the planIds lookup into the composer breaks the purity
+//    its test suite asserts, and it cannot move into resolveSeatPromptOptions
+//    because that roots on the board's ACTIVE workspace.
+test('SOURCE: buildSeatDirectiveBlock body has no getActiveDispatchedByTerminal(s) and no await (purity)', () => {
+    const body = sliceFnBody(AGENT_PROMPT_BUILDER_SRC, 'buildSeatDirectiveBlock');
+    assert.ok(!body.includes('getActiveDispatchedByTerminal'),
+        'buildSeatDirectiveBlock must not call getActiveDispatchedByTerminal — it is a pure composer');
+    assert.ok(!body.includes('getActiveDispatchedByTerminals'),
+        'buildSeatDirectiveBlock must not call getActiveDispatchedByTerminals — the caller resolves planIds');
+    assert.ok(!/\bawait\b/.test(body),
+        'buildSeatDirectiveBlock must be pure — no await inside its body');
+});
+
+// 7. Source-text: resolveSeatPromptOptions sets stage: STAGE_BY_ROLE[role], and
+//    neither host contains a second STAGE_BY_ROLE read. stage is set ONCE, in
+//    the shared resolver, so both hosts get it free.
+test('SOURCE: resolveSeatPromptOptions sets stage: STAGE_BY_ROLE[role]; neither host re-reads STAGE_BY_ROLE', () => {
+    const resolverBody = sliceFnBody(KANBAN_PROVIDER_SRC, 'resolveSeatPromptOptions');
+    assert.ok(resolverBody.includes('STAGE_BY_ROLE[role]'),
+        'resolveSeatPromptOptions must set stage: STAGE_BY_ROLE[role] — the one shared resolution');
+    for (const [name, src] of [['TaskViewerProvider', TASK_VIEWER_SRC], ['bootstrap', BOOTSTRAP_SRC]]) {
+        assert.ok(!src.includes('STAGE_BY_ROLE'),
+            `${name} must NOT read STAGE_BY_ROLE — stage is resolved once in resolveSeatPromptOptions ` +
+            'and a second hand-maintained read is how the vocabularies drift');
+    }
+});
+
+// 8. Source-text: both hosts pass standing.members MINUS the head for a head,
+//    and [targetName] otherwise — the head-resolves-its-members rule. Also
+//    neither host hand-rolls a groups.find( or .members.includes( of its own:
+//    the roster comes from resolveTeamStanding, never a second lookup.
+test('SOURCE: both hosts resolve planIds from standing.members minus head (head) / [targetName] (other); no hand-rolled membership test', () => {
+    for (const [name, src, target] of [
+        ['TaskViewerProvider', TASK_VIEWER_SRC, 'payload.name'],
+        ['bootstrap', BOOTSTRAP_SRC, 'handle.friendlyName'],
+    ]) {
+        // The head branch filters the head itself out of standing.members.
+        assert.ok(src.includes('standing.members.filter') && src.includes(`!== ${target}`),
+            `${name}: for a head, planIds names must be standing.members minus the head itself ` +
+            '(nobody dispatches plans TO a head)');
+        // The non-head branch is the seat's own name.
+        assert.ok(src.includes(`[ ${target} ]`) || src.includes(`[${target}]`),
+            `${name}: for a non-head, planIds names must be [targetName] — its own dispatch record`);
+        // No hand-rolled membership test — the roster comes from resolveTeamStanding.
+        assert.ok(!src.includes('groups.find('),
+            `${name} must NOT hand-roll groups.find( — resolveTeamStanding is the one roster source`);
+        assert.ok(!src.includes('.members.includes('),
+            `${name} must NOT hand-roll .members.includes( — resolveTeamStanding is the one predicate`);
+    }
+});
+
+// 9. Source-text: both hosts .sort() the deduplicated ids. Pinned as source
+//    text because no functional test can see it — the assertion is about
+//    determinism across calls, and a single call is always self-consistent.
+test('SOURCE: both hosts .sort() the deduplicated planIds (cache-key determinism)', () => {
+    for (const [name, src] of [['TaskViewerProvider', TASK_VIEWER_SRC], ['bootstrap', BOOTSTRAP_SRC]]) {
+        assert.ok(src.includes('[...new Set(ids)].sort()'),
+            `${name}: planIds must be [...new Set(ids)].sort() — the seat block is memoised per ` +
+            'agentInstanceId on its own string, so an unsorted id order re-sends the whole block on every message');
+    }
+});
+
+// 10. Behavioural half of #9: two calls with the same plan set delivered in
+//     reversed DB row order produce a byte-identical block, so the
+//     delivery-layer cache suppresses the second. The caller sorts, so DB row
+//     order cannot force a re-send.
+test('BEHAVIOUR: reversed DB row order yields a byte-identical block (sort makes the cache key stable)', () => {
+    // Simulate the caller's [...new Set(ids)].sort() for two row orders.
+    const forwardRowOrder = ['p2', 'p1'];
+    const reversedRowOrder = ['p1', 'p2'];
+    const sortedForward = [...new Set(forwardRowOrder)].sort();
+    const sortedReversed = [...new Set(reversedRowOrder)].sort();
+    assert.deepStrictEqual(sortedForward, sortedReversed,
+        'sorted ids must be equal regardless of DB row order');
+    const base = {
+        gitProhibitionEnabled: true,
+        gitCommitStrategy: 'whenDone',
+        gitBranchStrategy: 'notSpecified',
+        gitPushStrategy: 'notSpecified',
+        stage: 'coded',
+    };
+    const blockForward = buildSeatDirectiveBlock({ ...base, planIds: sortedForward });
+    const blockReversed = buildSeatDirectiveBlock({ ...base, planIds: sortedReversed });
+    assert.strictEqual(blockForward, blockReversed,
+        'reversed DB row order must produce a byte-identical seat block — ' +
+        'the content-keyed cache suppresses the second send only if the string is stable');
+});
+
 // ── Summary ──────────────────────────────────────────────────────────────
 
 setTimeout(() => {

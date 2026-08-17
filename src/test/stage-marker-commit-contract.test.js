@@ -691,6 +691,78 @@ test('describeStandingOrderMigrations is empty once the persist has run', () => 
         'no recogniser fires post-persist — permanently absent markers are the correct end state');
 });
 
+// ── 8. REVIEW UNIT: the reviewer is told what to review ───────────────
+// The reviewer prompt used to hand over plan FILE PATHS and nothing else —
+// it inferred the change set from a shared dirty tree that might hold several
+// seats' in-flight work. The fix resolves the coded commit carrying each plan
+// id (most-recent-wins) at the CALLER and passes the shas in for the builder
+// to render. These pin the consumer side of that contract.
+
+console.log('\n── REVIEW UNIT: the reviewer is handed a bounded diff ──');
+
+const reviewerPlans = [{ sessionId: 's1', planId: PLAN_A, title: 'P1', topic: 'P1', absolutePath: '/p1.md' }];
+
+test('reviewCommits with one sha renders "review commit <sha>" and the do-not-infer sentence', () => {
+    const prompt = buildKanbanBatchPrompt('reviewer', reviewerPlans, { reviewCommits: ['abc123'] });
+    assert.ok(prompt.includes('REVIEW UNIT:'), 'a non-empty reviewCommits array must emit a REVIEW UNIT block');
+    assert.ok(prompt.includes('review commit abc123'),
+        'singular form must read "review commit <sha>"');
+    assert.ok(/Do not infer the change set from the working tree/.test(prompt),
+        'the do-not-infer sentence must be present — it is the whole point of the block');
+    assert.ok(prompt.includes('`git show abc123`'),
+        'the block must name the git show command for the sha');
+});
+
+test('reviewCommits empty or undefined is byte-identical to omitting the option — absent means absent', () => {
+    const base = buildKanbanBatchPrompt('reviewer', reviewerPlans, {});
+    // No placeholder, no empty ref, no dangling range — a reviewer confidently
+    // reviewing nothing is worse than the problem this fixes. Asserted, not assumed.
+    for (const reviewCommits of [[], undefined]) {
+        const prompt = buildKanbanBatchPrompt('reviewer', reviewerPlans, { reviewCommits });
+        assert.strictEqual(prompt, base,
+            `reviewCommits=${JSON.stringify(reviewCommits)} must not alter the prompt — `
+            + 'absent means absent, never a stub that fakes success');
+        assert.ok(!prompt.includes('REVIEW UNIT:'),
+            `reviewCommits=${JSON.stringify(reviewCommits)} leaked a REVIEW UNIT block`);
+    }
+});
+
+test('two distinct shas render both, deduplicated; a repeated sha is emitted once', () => {
+    const prompt = buildKanbanBatchPrompt('reviewer', reviewerPlans, {
+        reviewCommits: ['abc123', 'abc123', 'def456']
+    });
+    assert.ok(prompt.includes('abc123'), 'first sha must appear');
+    assert.ok(prompt.includes('def456'), 'second sha must appear');
+    // Deduplicated: the repeated sha contributes one occurrence in the REVIEW UNIT head.
+    const head = prompt.match(/REVIEW UNIT:[^\n]*/);
+    assert.ok(head, 'REVIEW UNIT head line not found');
+    assert.strictEqual((head[0].match(/abc123/g) || []).length, 1,
+        'a repeated sha must be deduplicated to a single mention in the REVIEW UNIT head');
+    assert.ok(/review commits/.test(head[0]),
+        'plural form must read "review commits" when more than one sha resolves');
+});
+
+test('agentPromptBuilder.ts contains no child_process, execFile, or require("child_process") — the purity guard', () => {
+    // The builder must NOT shell out. Two sibling plans depend on this module
+    // staying free of node's process-spawning builtins; the CALLER resolves the
+    // sha and passes it in. A blanket "no node builtins" assertion would FAIL on
+    // the existing `fs` import, so this names the forbidden tokens specifically.
+    for (const forbidden of ['child_process', 'execFile', "require('child_process')"]) {
+        assert.ok(!AGENT_PROMPT_BUILDER_SRC.includes(forbidden),
+            `agentPromptBuilder.ts must not contain '${forbidden}' — the builder renders shas, `
+            + 'it never resolves them; resolution lives in the KanbanProvider caller');
+    }
+});
+
+test('REVIEW UNIT sits above PLANS TO PROCESS: — the plan list is context for the diff, not the target', () => {
+    const prompt = buildKanbanBatchPrompt('reviewer', reviewerPlans, { reviewCommits: ['abc123'] });
+    const reviewIdx = prompt.indexOf('REVIEW UNIT:');
+    const plansIdx = prompt.indexOf('PLANS TO PROCESS:');
+    assert.ok(reviewIdx >= 0 && plansIdx >= 0, 'both blocks must be present');
+    assert.ok(reviewIdx < plansIdx,
+        'REVIEW UNIT must precede PLANS TO PROCESS: so the plan list reads as context for the diff');
+});
+
 _drainAsyncCases().then(() => {
     console.log(`\n${passed} passed, ${failed} failed`);
     if (failed > 0) { process.exit(1); }

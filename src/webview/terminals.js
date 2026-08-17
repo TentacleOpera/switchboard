@@ -7482,7 +7482,7 @@
 
         const planIds = [];
         let m;
-        const idRe = /\bPLAN_ID=(\d+)/g;
+        const idRe = /\bPLAN_ID=([0-9a-fA-F-]{8,})/g;   // UUIDs, not \d+
         while ((m = idRe.exec(stripped)) !== null) { planIds.push(m[1]); }
 
         const planFiles = [];
@@ -8851,7 +8851,7 @@
      * standing-orders-marker-contract test pins byte-identity.
      */
     var GIT_SAFETY_DIRECTIVE_CLIENT =
-        'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — commit first, then correct forward.';
+        'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — commit first, then correct forward. Stage by explicit path only the files belonging to the work you are committing — never `git add -A` or `git add .` — other agents may be working the same tree.';
 
     /**
      * PRE-rewrite Coding team headPrompt — mirror of OLD_CODING_HEAD_PROMPT
