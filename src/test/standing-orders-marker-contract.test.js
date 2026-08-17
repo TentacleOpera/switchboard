@@ -374,6 +374,23 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
         'Coding headPrompt must carry "from":"{head}" — the {head} token is substituted by wireSpawnedTeam with the head terminal name');
     assert.ok(headPrompt.includes('Do NOT use /kanban/move'),
         'Coding headPrompt must warn against /kanban/move — that endpoint moves the card and dispatches nobody, leaving the reviewer idle');
+    // The shipped Coding reviewer member must declare
+    // relationship: 'reports-to-head' (member-receives → no pair-scoped
+    // bypass order on the lead). A future edit that reinstates
+    // relationship: 'reviewer' would silently re-install the lead-bypasses-
+    // the-board defect this plan exists to fix.
+    assert.ok(
+        block.includes("{ role: 'reviewer', count: 1, scope: 'shared', relationship: 'reports-to-head' }"),
+        'Coding reviewer member must declare relationship: \'reports-to-head\' — '
+        + 'relationship: \'reviewer\' installs a pair-scoped order on the lead that '
+        + 'bypasses the board, which is the defect this team definition exists to avoid.'
+    );
+    assert.ok(
+        !block.includes("relationship: 'reviewer'"),
+        'No shipped team member may declare relationship: \'reviewer\' — it installs a '
+        + 'pair-scoped bypass order on the head. The Coding reviewer must use '
+        + 'relationship: \'reports-to-head\' instead.'
+    );
 });
 
 test('both files render pair with "Regarding" framing and global/team without it', () => {
@@ -419,21 +436,32 @@ test('both files carry a team-head scope branch with matching selection logic an
             `${label} must contain a 'team-head' scope branch`);
         assert.ok(src.includes('team-head'),
             `${label} must reference team-head in scopeRank`);
-        // Both must gate the team-head branch on o.teamId, group membership,
-        // and parent === targetName. Anchor on the BRANCH (`scope === 'team-head'`),
-        // not on the bare literal: in standingOrders.ts the first occurrence of
-        // `'team-head'` is the StandingOrderScope union at the top of the file, and
-        // a window measured from there covers the type declarations instead of the
+        // Both must gate the team-head SELECTION branch on o.teamId, group
+        // membership, and parent === targetName. Anchor on the BRANCH
+        // (`scope === 'team-head'`), not on the bare literal: in
+        // standingOrders.ts the first occurrence of `'team-head'` is the
+        // StandingOrderScope union at the top of the file, and a window
+        // measured from there covers the type declarations instead of the
         // selection logic — the assertion then fails on correct source.
-        const thIdx = src.indexOf("scope === 'team-head'");
-        assert.ok(thIdx >= 0, `${label}: team-head branch not found`);
-        const thBlock = src.slice(thIdx, thIdx + 400);
-        assert.ok(thBlock.includes('teamId'),
-            `${label}: team-head branch must check o.teamId`);
-        assert.ok(thBlock.includes('parent'),
-            `${label}: team-head branch must check o.parent === targetName`);
-        assert.ok(thBlock.includes('members'),
-            `${label}: team-head branch must check group membership`);
+        //
+        // Scan EVERY branch and require that ONE of them satisfies the gate,
+        // rather than measuring from the first. `team-head` is a scope any
+        // read-side converter may also switch on (terminals.js's
+        // migrateCodingTeamOrdersClient does, and it is declared above the
+        // selection branch), so a first-occurrence anchor fails on correct
+        // source the moment a second, legitimate branch is added upstream —
+        // the same trap this comment already documents one level up.
+        const branches = [];
+        for (let i = src.indexOf("scope === 'team-head'"); i >= 0;
+            i = src.indexOf("scope === 'team-head'", i + 1)) {
+            branches.push(src.slice(i, i + 400));
+        }
+        assert.ok(branches.length > 0, `${label}: team-head branch not found`);
+        const gated = branches.filter(b =>
+            b.includes('teamId') && b.includes('parent') && b.includes('members'));
+        assert.ok(gated.length > 0,
+            `${label}: no team-head branch gates on o.teamId + o.parent === targetName + group membership `
+            + `(found ${branches.length} team-head branch(es), none of them the selection branch)`);
     }
     // scopeRank must list all four scopes with team-head and team at the same rank.
     assert.ok(

@@ -41,7 +41,7 @@ import { isPtyAvailable } from '../standalone/ptyBackend';
 // terminal bytes.
 import { PtyFleetService, PTY_IDE_NAME } from '../standalone/ptyFleetService';
 import { instantiateAgentGroupCore, InstantiateAgentGroupResult } from './agentGroupInstantiation';
-import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, migrateTeamPairOrders, migrateCodingTeamOrders, resolveTeamScopedRoleTerminal, plausibleOriginTerminal } from './teamWiring';
+import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, migrateTeamPairOrders, migrateCodingTeamOrders, resolveTeamScopedRoleTerminal, plausibleOriginTerminal, listTeamsInRoots, resolveTeamByIdInRoots } from './teamWiring';
 
 import * as cp from 'child_process';
 import { promisify } from 'util';
@@ -1282,7 +1282,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 kind: info.outcome === 'completed' ? 'finished' : 'blocked',
                 planId: planFile,
                 body: message
-            }).catch(() => { /* logged, never fatal */ });
+            }).then(r => {
+                // writeOrchestratorReport RETURNS its failure rather than throwing,
+                // so a bare .catch() swallows the case that actually happens (no
+                // .switchboard dir, 5 name collisions, EACCES) and the mirror goes
+                // silently missing while the pty send still succeeds.
+                if (!r.success) { console.warn('[TaskViewerProvider] turn-end report mirror failed:', r.error); }
+            }).catch(err => { console.warn('[TaskViewerProvider] turn-end report mirror threw:', err); });
             // ptyListTerminals is the only path that carries agentInstanceId and
             // parentInstanceId across the child-process boundary. The cached
             // _ptyTerminalNames array is friendly names only — insufficient for
@@ -2622,10 +2628,26 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return { success: true, ...roles };
             }
             if (verb === 'ptyListAgentGroups') {
-                // Host-resolved team definitions for the terminals-panel team
-                // list and the honest role picker. Read-only; no pty host needed.
-                const groups = await this._kanbanProvider?.listAgentGroups(root || effectiveRoot) ?? [];
-                return { success: true, groups };
+                // Same candidate roots as the auto-start lookup and as ptyStartTeam below.
+                // The TEAMS tab writes to the board's SELECTED root; this route is pinned
+                // to the API-server root. Consulting only the pinned root served a seeded,
+                // member-less `Lead team` while the operator's team sat one folder away.
+                const roots = this._teamLookupRoots(payload?.cwd, root || effectiveRoot);
+                const { teams, root: sourceRoot } = await listTeamsInRoots(
+                    roots,
+                    (r) => this._getKanbanDbIfPresent(r)
+                );
+                if (sourceRoot === null) {
+                    // No candidate holds authored teams. Fall back to the seeding load on
+                    // the pinned root so a first-run install still sees the starter team —
+                    // this is the ONE verb path allowed to write it, and it is reached only
+                    // when every candidate is genuinely empty or seed-only.
+                    const seeded = await this._kanbanProvider?.listAgentGroups(root || effectiveRoot) ?? [];
+                    return { success: true, groups: seeded, sourceRoot: root || effectiveRoot };
+                }
+                console.log(`[TaskViewerProvider] Team list: ${teams.length} team(s) from '${sourceRoot}' `
+                    + `(candidates: ${roots.join(', ')})`);
+                return { success: true, groups: teams, sourceRoot };
             }
             if (!ptyHostReady()) {
                 return { success: false, error: 'PTY host unavailable on this platform/installation' };
@@ -2636,40 +2658,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // Every pty child is handed an API token, so a caller could
                 // supply its own group definition carrying a shell command;
                 // reject it unconditionally, mirroring the delegates guard in
-                // the ptyCreateTerminal arm below.
+                // the ptyCreateTerminal arm below. The wire-safety guard stays
+                // in the verb, where the wire is; startTeamForWorkspace's
+                // non-verb callers (boot autostart, TEAMS tab) never carry a
+                // wire payload.
                 if (payload && payload.group) {
                     return { success: false, error: 'Team definition cannot be supplied over the wire' };
                 }
-                const teamId = payload?.teamId;
-                if (!teamId) { return { success: false, error: 'Missing team id' }; }
-                const wsRoot = root || effectiveRoot;
-                // The team definition resolves from the board DB (wsRoot); the
-                // spawn cwd honours the picker's target workspace when the
-                // operator started the team from a specific group/worktree.
-                const spawnCwd = payload.cwd || (!payload.worktreePath && payload.parentRoot ? payload.parentRoot : undefined) || wsRoot;
-                const db = await this._getKanbanDb(wsRoot);
-                if (!db || !(await db.ensureReady())) {
-                    return { success: false, error: 'Kanban DB not ready' };
-                }
-                const result = await startTeamById({
-                    db,
-                    teamId,
-                    workspaceRoot: spawnCwd,
-                    liveTerminals: async () => {
-                        const listed = await this._ptyHostVerb('ptyListTerminals', {});
-                        if (!listed?.success) { return []; }
-                        return [...(listed.terminals || []), ...(listed.hiddenTerminals || [])];
-                    },
-                    instantiator: (group: any, groupRoot: string) => this.instantiateAgentGroup(group, groupRoot),
+                return this.startTeamForWorkspace({
+                    teamId: payload?.teamId,
+                    pinnedRoot: root || effectiveRoot,
+                    payloadCwd: payload?.cwd,
+                    parentRoot: payload?.parentRoot,
+                    worktreePath: payload?.worktreePath,
                 });
-                if (result && result.success !== false) {
-                    // Push a refresh so open panels reload terminals.groups
-                    // before their next whole-array save can clobber the
-                    // backend-registered group — the auto-start path does the
-                    // same after wireSpawnedTeam.
-                    this._broadcaster?.push({ type: 'terminalsGroupsChanged' }, SURFACES.terminals);
-                }
-                return result;
             }
             let teamAutoStart: any;   // declared here so the create arm and the post-verb block share it
             if (verb === 'ptyCreateTerminal' && payload) {
@@ -10374,7 +10376,7 @@ Each plan file must include:
         //
         // Start no longer arms. It seats the orchestrator and delivers one of three
         // prompts chosen by two facts: does .switchboard/orchestrator/session.md exist,
-        // and is orchestrationConfig.enabled true? The arming half moved to
+        // and is automation armed (autobanState.enabled)? The arming half moved to
         // confirmOrchestrationSession (called by POST /orchestration/confirm after the
         // user answers the pre-flight). See the ## Pre-flight section of the persona skill.
         const personaPath = path.join(root, '.agents', 'skills', 'switchboard-orchestrator', 'SKILL.md');
@@ -10406,7 +10408,7 @@ Each plan file must include:
                 ]).join('\n');
             } else if (armed) {
                 kickoffPrompt = baseLines.concat([
-                    `A session is already confirmed and armed — .switchboard/orchestrator/session.md exists and orchestrationConfig.enabled is true. Resume: read session.md, continue under its existing rules, do not re-run the pre-flight or re-interview. Pick up where the session left off.`
+                    `A session is already confirmed and armed — .switchboard/orchestrator/session.md exists and automation is armed. Resume: read session.md, continue under its existing rules, do not re-run the pre-flight or re-interview. Pick up where the session left off.`
                 ]).join('\n');
             } else {
                 kickoffPrompt = baseLines.concat([
@@ -11632,6 +11634,59 @@ Each plan file must include:
                 // ignore
             }
         }
+    }
+
+    /**
+     * The single host-side team-start path on the extension host. Owns the
+     * candidate-root walk, the spawn-cwd rule, the live-terminal check and the
+     * post-start broadcast. Callers supply INPUTS (a cwd hint, the pinned root,
+     * a team id) and never a pre-resolved definition root — that is what stops a
+     * second caller from re-acquiring the single-root bug this plan fixes.
+     *
+     * Three callers by design: the `ptyStartTeam` verb, the boot-time autostart
+     * pass, and the TEAMS-tab START message arm. Changing this signature is a
+     * three-call-site change.
+     */
+    public async startTeamForWorkspace(opts: {
+        teamId: string;
+        pinnedRoot: string;
+        payloadCwd?: string;
+        parentRoot?: string;
+        worktreePath?: string;
+    }): Promise<any> {
+        const { teamId, pinnedRoot, payloadCwd, parentRoot, worktreePath } = opts;
+        if (!teamId) { return { success: false, error: 'Missing team id' }; }
+        // Spawn cwd is UNCHANGED from the verb's existing rule and stays
+        // independent of the definition root: a team started from a worktree
+        // must still resolve its definition from a directory that has a board.
+        const spawnCwd = payloadCwd
+            || (!worktreePath && parentRoot ? parentRoot : undefined)
+            || pinnedRoot;
+        // Definition root: the SAME ordered candidates ptyListAgentGroups walked, so
+        // the team the picker listed is the team this resolves. A single re-derived
+        // root would answer `No team found with id` for every team the picker showed.
+        const roots = this._teamLookupRoots(payloadCwd, pinnedRoot);
+        const match = await resolveTeamByIdInRoots(roots, (r) => this._getKanbanDbIfPresent(r), teamId);
+        if (!match) {
+            return { success: false, error: `No team found with id '${teamId}' in ${roots.join(', ')}` };
+        }
+        console.log(`[TaskViewerProvider] Team start: '${match.team.name}' `
+            + `(${(match.team.members || []).length} member definitions) from '${match.root}', spawning in '${spawnCwd}'`);
+        const result = await startTeamById({
+            db: match.db,
+            teamId,
+            workspaceRoot: spawnCwd,
+            liveTerminals: async () => {
+                const listed = await this._ptyHostVerb('ptyListTerminals', {});
+                if (!listed?.success) { return []; }
+                return [...(listed.terminals || []), ...(listed.hiddenTerminals || [])];
+            },
+            instantiator: (group: any, groupRoot: string) => this.instantiateAgentGroup(group, groupRoot),
+        });
+        if (result && result.success !== false) {
+            this._broadcaster?.push({ type: 'terminalsGroupsChanged' }, SURFACES.terminals);
+        }
+        return result;
     }
 
     /**

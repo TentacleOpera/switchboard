@@ -1190,10 +1190,13 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 }
 
                 case 'ptyListAgentGroups': {
-                    // Host-resolved team definitions for the terminals-panel team
-                    // list and the honest role picker. Read-only; no pty needed.
-                    const groups = await kanbanProvider.listAgentGroups(root);
-                    return { success: true, groups };
+                    // Read-only: peekAgentGroups never seeds and never joins the agent-groups
+                    // write chain. This host is single-root, so no candidate walk — but a read
+                    // verb must still not write to a board it was only asked to read, and must
+                    // not re-run importDelegatesIntoTeams on every picker open (that is the
+                    // boot pass's job, above at :2188-2192).
+                    const groups = await kanbanProvider.peekAgentGroups(root);
+                    return { success: true, groups, sourceRoot: root };
                 }
 
                 case 'ptyStartTeam': {
@@ -1931,7 +1934,13 @@ Each plan file must include:
                 kind: info.outcome === 'completed' ? 'finished' : 'blocked',
                 planId: planFile,
                 body: message
-            }).catch(() => { /* logged, never fatal */ });
+            }).then(r => {
+                // writeOrchestratorReport RETURNS its failure rather than throwing,
+                // so a bare .catch() swallows the case that actually happens (no
+                // .switchboard dir, 5 name collisions, EACCES) and the mirror goes
+                // silently missing while the pty send still succeeds.
+                if (!r.success) { log(opts, `turn-end report mirror failed: ${r.error}`); }
+            }).catch(err => { log(opts, `turn-end report mirror threw: ${err}`); });
             const active = ptyFleetService.listActive();
             // `recipientSeat` (the feature nudge) names the recipient directly —
             // the head IS the recipient, so resolving its parent would address the

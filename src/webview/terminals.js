@@ -945,6 +945,81 @@
             });
         }
 
+        const btnStartTeam = document.getElementById('btn-start-team');
+        const startTeamForm = document.getElementById('start-team-form');
+        const startTeamName = document.getElementById('start-team-name');
+        const startTeamTarget = document.getElementById('start-team-target');
+        const startTeamCancel = document.getElementById('start-team-cancel');
+        const startTeamConfirm = document.getElementById('start-team-confirm');
+        if (btnStartTeam && startTeamForm && startTeamName && startTeamTarget) {
+            // Teams are fetched on open, not polled — same as FILL GRID's roles.
+            btnStartTeam.addEventListener('click', async () => {
+                const teams = await fetchAgentGroups();
+                if (!Array.isArray(teams) || teams.length === 0) {
+                    // Honest empty state. An empty <select> would read as broken.
+                    showPaneToast('No teams defined — add one in the TEAMS tab.');
+                    return;
+                }
+                startTeamName.innerHTML = '';
+                for (const team of teams) {
+                    if (!team || !team.id) { continue; }
+                    const opt = document.createElement('option');
+                    opt.value = team.id;
+                    // Same summary the picker showed, so the operator sees what spawns
+                    // before committing: "Coding — 3× coder, 1× reviewer (shared)".
+                    opt.textContent = `${team.name || team.id} — ${teamSpawnSummary(team)}`
+                        + (team.unassigned ? ' · no auto-start' : '');
+                    startTeamName.appendChild(opt);
+                }
+
+                // Workspace target. The picker inherited this from whichever header's
+                // `+` was clicked; a standing control has no such context, so offer it —
+                // but only when there is more than one, otherwise it is a dropdown with
+                // one answer.
+                const roots = (Array.isArray(parentsList) ? parentsList : [])
+                    .map(p => ({ path: p.parentFolder || '', name: p.name || 'Workspace Root' }))
+                    .filter(r => r.path);
+                startTeamTarget.innerHTML = '';
+                for (const r of roots) {
+                    const opt = document.createElement('option');
+                    opt.value = r.path;
+                    opt.textContent = r.name;
+                    startTeamTarget.appendChild(opt);
+                }
+                startTeamTarget.hidden = roots.length < 2;
+
+                btnStartTeam.hidden = true;
+                startTeamForm.hidden = false;
+            });
+
+            if (startTeamCancel) {
+                startTeamCancel.addEventListener('click', () => {
+                    startTeamForm.hidden = true;
+                    btnStartTeam.hidden = false;
+                });
+            }
+
+            startTeamForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const teamId = startTeamName.value;
+                // Only pass a target when the operator actually chose one; otherwise the
+                // host resolves the spawn cwd itself, as it does for an unqualified start.
+                const targetSpec = (!startTeamTarget.hidden && startTeamTarget.value)
+                    ? { parentRoot: startTeamTarget.value }
+                    : undefined;
+                startTeamConfirm.disabled = true;
+                startTeamConfirm.textContent = 'STARTING…';
+                try {
+                    await startTeam({ id: teamId }, targetSpec);
+                } finally {
+                    startTeamConfirm.disabled = false;
+                    startTeamConfirm.textContent = 'START';
+                    startTeamForm.hidden = true;
+                    btnStartTeam.hidden = false;
+                }
+            });
+        }
+
         const btnSaveGroup = document.getElementById('btn-save-group');
         if (btnSaveGroup) {
             btnSaveGroup.addEventListener('click', () => {
@@ -6327,9 +6402,10 @@
      * Build the inline role picker for one group. Returns a detached element the
      * renderer inserts between a group header and its items container, so it stays
      * visible when the group is collapsed and is unmistakably attached to the
-     * workspace it will spawn into. Now also renders a "Start a team" section
-     * above the role chips (one START action per defined team) and annotates
-     * role options that head a team with the team name and what spawns.
+     * workspace it will spawn into. Annotates role options that head a team with
+     * the team name and what spawns, so picking a role never silently produces a
+     * fleet. The explicit START action lives in the sidebar ops block
+     * (#btn-start-team), not here — this picker creates one terminal per click.
      */
     function buildRolePicker(targetSpec) {
         const picker = document.createElement('div');
@@ -6340,51 +6416,8 @@
         title.textContent = 'New terminal — pick a role';
         picker.appendChild(title);
 
-        // ── Team list — explicit START action per defined team ───────────
-        // The engine behind instantiateAgentGroup was finished and never called;
-        // this is its front door. A team whose head role is already live will be
-        // refused by the verb with a specific message — the button still shows
-        // so the operator sees the team exists.
-        const teams = Array.isArray(teamPickerData) ? teamPickerData : [];
-        if (teams.length > 0) {
-            const teamSection = document.createElement('div');
-            teamSection.className = 'team-picker';
-            const teamTitle = document.createElement('div');
-            teamTitle.className = 'team-picker-title';
-            teamTitle.textContent = 'Start a team';
-            teamSection.appendChild(teamTitle);
-            const teamOptions = document.createElement('div');
-            teamOptions.className = 'team-picker-options';
-            for (const team of teams) {
-                if (!team || !team.id) { continue; }
-                const btn = document.createElement('button');
-                btn.type = 'button';
-                btn.className = 'team-option' + (team.unassigned ? ' is-unassigned' : '');
-                const nameEl = document.createElement('span');
-                nameEl.className = 'team-option-name';
-                nameEl.textContent = 'START ' + (team.name || team.id);
-                const summaryEl = document.createElement('span');
-                summaryEl.className = 'team-option-summary';
-                summaryEl.textContent = teamSpawnSummary(team) + (team.unassigned ? ' · no auto-start' : '');
-                btn.appendChild(nameEl);
-                btn.appendChild(summaryEl);
-                btn.title = team.unassigned
-                    ? `Start "${team.name}" explicitly. ${team.unassignedReason || 'This team does not auto-start.'}`
-                    : `Start "${team.name}" — ${teamSpawnSummary(team)}`;
-                btn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    // Close synchronously — same reasoning as the role buttons.
-                    pickerState = null;
-                    renderSidebarList();
-                    startTeam(team, targetSpec);
-                });
-                teamOptions.appendChild(btn);
-            }
-            teamSection.appendChild(teamOptions);
-            picker.appendChild(teamSection);
-        }
-
         // ── Role picker — annotated with auto-start team info ────────────
+        const teams = Array.isArray(teamPickerData) ? teamPickerData : [];
         const optionsEl = document.createElement('div');
         optionsEl.className = 'role-picker-options';
 
@@ -6396,8 +6429,8 @@
         // Auto-start resolves to the non-unassigned team for a head role
         // (findTeamForHeadRole filters !g.unassigned). An unassigned team heads
         // the same role but does NOT auto-start — it is started explicitly from
-        // the team list above. Annotate only the auto-start winner so the picker
-        // says what picking the role will actually do.
+        // the sidebar's START TEAM control. Annotate only the auto-start winner
+        // so the picker says what picking the role will actually do.
         const autoStartByHeadRole = {};
         for (const t of teams) {
             if (t && t.headRole && !t.unassigned && !autoStartByHeadRole[t.headRole]) {
@@ -8785,6 +8818,40 @@
         'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — commit first, then correct forward.';
 
     /**
+     * PRE-rewrite Coding team headPrompt — mirror of OLD_CODING_HEAD_PROMPT
+     * in teamWiring.ts. The order-migration recogniser matches against this
+     * (substitution-independent fragment) because this is what is on disk on
+     * every install that wired the Coding team before the fix.
+     */
+    var OLD_CODING_HEAD_PROMPT_CLIENT =
+        'You lead this team. When a coder reports a subtask finished and you are '
+        + 'satisfied with it, hand it to review yourself: read the port from '
+        + '.switchboard/api-server-port.txt and POST /kanban/dispatch with '
+        + '{"plan":"<planId>","targetColumn":"CODE REVIEWED","from":"{head}"} — that one '
+        + 'call advances the card and dispatches the reviewer. Do NOT use /kanban/move: it '
+        + 'moves the card and dispatches nobody, so the work stalls unreviewed. Only advance '
+        + 'subtasks this team worked; leave other cards alone. Do not wait to be asked.';
+
+    /**
+     * POST-rewrite Coding team headPrompt — mirror of NEW_CODING_HEAD_PROMPT
+     * in teamWiring.ts. Feature-level, single-action: the lead makes one
+     * /kanban/dispatch call on the FEATURE's planId when every subtask is
+     * finished. {head} is substituted with the live head name.
+     */
+    var NEW_CODING_HEAD_PROMPT_CLIENT =
+        'You lead this team. Your coders work the subtasks of one feature. When a coder '
+        + 'reports a subtask finished, note it and give that coder the next subtask. Do not send '
+        + 'anything to the reviewer, and do not write review instructions — that is not your job. '
+        + 'When every subtask of the feature is finished, read the port from '
+        + '.switchboard/api-server-port.txt, confirm no subtask is still outstanding via '
+        + 'GET /kanban/feature, then make one call: POST /kanban/dispatch with '
+        + '{"plan":"<the FEATURE planId>","targetColumn":"CODE REVIEWED","from":"{head}"} — '
+        + 'that one call moves the card and dispatches the reviewer with the reviewer\'s own '
+        + 'prompt. Do NOT use /kanban/move: it moves the card and dispatches nobody. Only '
+        + 'advance the feature your team worked; leave other cards alone. Do not wait to be '
+        + 'asked.';
+
+    /**
      * Client-side mirror of migrateTeamPairOrders from teamWiring.ts.
      *
      * Recognises pre-rewrite per-member pair rows (instruction matches
@@ -8864,6 +8931,83 @@
         return kept.concat(newTeamOrders);
     }
 
+    /**
+     * Client-side mirror of migrateCodingTeamOrders from teamWiring.ts.
+     *
+     * Drops the stale reviewer pair row (instruction equals the resolved
+     * reviewer preset text for this parent/child pair) and rewrites the
+     * stale team-head row carrying the old per-subtask headPrompt (matched
+     * by a substitution-independent fragment, since {head} was already
+     * substituted at install time). Unrecognised rows are left untouched.
+     *
+     * Applied INSIDE applyStandingOrdersClient at render time, composed
+     * AFTER migrateTeamPairOrdersClient so the pair converter sees the array
+     * shape it expects. Pure — does not mutate the input array or the
+     * persisted standingOrders. Idempotent: a second pass finds nothing
+     * left to recognise.
+     */
+    function migrateCodingTeamOrdersClient(orders) {
+        if (!Array.isArray(orders) || orders.length === 0) { return orders; }
+
+        var drop = {};       // order id → true
+        var rewritten = [];  // replacement team-head rows
+        var touched = false;
+
+        // Substitution-independent fragment unique to the old per-subtask
+        // headPrompt. The new feature-level text does not contain it.
+        var OLD_HEADPROMPT_FRAGMENT = 'satisfied with it, hand it to review yourself';
+
+        for (var i = 0; i < orders.length; i++) {
+            var o = orders[i];
+            if (!o || typeof o !== 'object') { continue; }
+
+            // Stale reviewer pair row: instruction equals the resolved
+            // reviewer preset text for this (parent, child) pair. Drop it.
+            var scope = o.scope || 'pair';
+            if (scope === 'pair') {
+                var expected = resolvePreset('reviewer', o.parent, o.child);
+                if (expected && o.instruction === expected) {
+                    drop[o.id] = true;
+                    touched = true;
+                    continue;
+                }
+            }
+
+            // Stale team-head row carrying the old per-subtask headPrompt.
+            // Match by indexOf on a substitution-independent fragment — never
+            // a constructed RegExp (the head name may contain regex
+            // metacharacters). Rewrite to the new feature-level text with
+            // {head} substituted by the order's parent (the head name).
+            if (o.scope === 'team-head' && typeof o.instruction === 'string') {
+                if (o.instruction.indexOf(OLD_HEADPROMPT_FRAGMENT) !== -1) {
+                    var newInstruction = NEW_CODING_HEAD_PROMPT_CLIENT
+                        .replace(/\{head\}/g, o.parent || '');
+                    var copy = {};
+                    for (var k in o) {
+                        if (Object.prototype.hasOwnProperty.call(o, k)) {
+                            copy[k] = o[k];
+                        }
+                    }
+                    copy.instruction = newInstruction;
+                    rewritten.push(copy);
+                    drop[o.id] = true;
+                    touched = true;
+                    continue;
+                }
+            }
+        }
+
+        if (!touched) { return orders; }
+
+        var kept = [];
+        for (var j = 0; j < orders.length; j++) {
+            if (!drop[orders[j].id]) {
+                kept.push(orders[j]);
+            }
+        }
+        return kept.concat(rewritten);
+    }
+
     function applyStandingOrdersClient(prompt, targetName, orders, liveNames) {
         if (!prompt) { return prompt; }
         // Strip a pre-existing block so a prompt that already carries one does
@@ -8871,11 +9015,14 @@
         // the host resolver's strip + re-append behaviour.
         var cleanPrompt = prompt.replace(STANDING_ORDERS_BLOCK_RE, '');
 
-        // Migrate pre-rewrite per-member pair rows into team-scoped orders
-        // before selection. Pure transform — does not mutate the input
-        // array or the persisted standingOrders. Mirrors migrateTeamPairOrders
-        // in teamWiring.ts.
-        var effectiveOrders = migrateTeamPairOrdersClient(orders);
+        // Migrate pre-rewrite per-member pair rows into team-scoped orders,
+        // then migrate stale Coding-team orders, before selection. Pure
+        // transforms — do not mutate the input array or the persisted
+        // standingOrders. Mirror migrateTeamPairOrders +
+        // migrateCodingTeamOrders in teamWiring.ts. Pair-fold first, then
+        // Coding-team rewrite, so the pair converter sees the array shape
+        // it expects.
+        var effectiveOrders = migrateCodingTeamOrdersClient(migrateTeamPairOrdersClient(orders));
 
         // Scope-aware selection — mirrors selectOrders in standingOrders.ts.
         var mine = effectiveOrders.filter(function (o) {

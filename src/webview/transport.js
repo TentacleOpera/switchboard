@@ -471,7 +471,6 @@
                 const style = document.createElement('style');
                 style.textContent = `
 .host-automation-false #btn-autoban,
-.host-automation-false #btn-manager-pass,
 .host-automation-false #btn-cli-triggers,
 .host-automation-false #btn-remote-control,
 .host-automation-false .autoban-timers-inline,

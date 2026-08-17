@@ -106,6 +106,30 @@ jobs:
       - name: Proactive terminal rest clear contract (rest instruction, prohibitions, no stale facts)
         run: npm run test:contract:terminal-rest-clear
 
+      # `git worktree remove` permission must follow worktree OWNERSHIP, not the mere
+      # fact of standing in one. A `|| featureMode` disjunct in the guardrail selector
+      # once granted removal on every default feature dispatch — including per-feature
+      # orchestration worktrees the HOST provisions and removes. Nothing else gates
+      # this: the prompt builder's only other coverage is unwired, and a "no
+      # contradictory sentences" grep is satisfied by deleting the wrong sentence. So
+      # this pins which constant each flag selects AND that all ten call sites still
+      # pass the bare flag — a re-added disjunct is invisible to a behavioural check,
+      # which only ever sees the resolved boolean.
+      - name: Feature worktree guardrail contract (removal permission follows ownership)
+        run: npm run test:contract:feature-worktree-guardrail
+
+      # Worktree strategy is the USER's setting. It was previously broadcast-only and
+      # write-only-over-HTTP: no webview read or wrote it, and its only live writer was
+      # the forcing machinery that took it away on arm and handed it back on disarm.
+      # Three properties none of which deleting the forcer alone satisfies: the stash
+      # key survives in exactly ONE place (the drain) so a left-behind writer fails by
+      # count; the drain CONSUMES the key, because a restore that does not clear re-runs
+      # every activation and overwrites the user's choice on every restart; and the
+      # control renders exactly the two modes the verb arm accepts, checked from the
+      # broadcast rather than from a local click assumption.
+      - name: Worktree strategy control contract (user owns the mode, drain consumes the stash)
+        run: npm run test:contract:worktree-strategy-control
+
       # A browser-originated dispatch that correctly lands in a PTY terminal must not
       # also raise a VS Code "Terminal not found" toast. The pre-dispatch focus call is
       # a VS Code-only reveal; a PTY is invisible to it, so the miss warns — reading as
@@ -152,6 +176,23 @@ jobs:
       - name: Standing-orders marker mirror (standingOrders.ts ≡ terminals.js literal)
         run: npm run test:contract:standing-orders-marker
 
+      # A seat safeguard configured on a terminal must ride EVERY prompt that seat
+      # receives, not only board-composed ones. The failure this pins is silent by
+      # construction: a lead relays a subtask over ptySendPrompt, the coder's
+      # configured `noSubagents` never travels, the coder fans out, and every gate
+      # stays green because the dispatch itself succeeded. The load-bearing
+      # assertions are behavioural, not source greps — the emitted block must be
+      # STRING-EQUAL to the shared constants (a paraphrase is the failing case
+      # reproduced by the fix), must carry no dispatch-scoped directive, and each
+      # directive must appear exactly once. Also pins the composition marker as
+      # THREADED: exactly 2 of the 7 _dispatchExecuteMessage call sites may pass
+      # true — marking on the shared funnel instead would exempt five uncomposed
+      # dispatch paths while every other assertion still passed.
+      # Loads the real compiled composer from out/, which "Compile test outputs"
+      # above has already produced — this step must stay AFTER it.
+      - name: Seat safeguards on the fleet prompt path (verbatim block, threaded marker)
+        run: npm run test:contract:seat-safeguards
+
       # Team-scoped reviewer routing. Role→terminal resolution is workspace-wide and
       # team-blind by default, so a card coded by team A lands on team B's reviewer
       # once a second team is live — and every gate stays green while it happens,
@@ -167,6 +208,27 @@ jobs:
 
       - name: Link presets mirror (linkPresets.ts ≡ LINK_PRESETS in terminals.js)
         run: npm run test:contract:link-presets-mirror
+
+      # A stage marker is worth exactly what a machine can read back. Every failure
+      # mode here emits text a human reviewer signs off on and a query returns nothing
+      # for: git parses trailers ONLY in the final paragraph, so a clause that says
+      # "after the subject line" without demanding a blank line yields commits whose
+      # markers are ordinary body text; `dontCommit` is a key in GIT_COMMIT_CLAUSES, so
+      # a `!== notSpecified` guard emits "Do NOT commit … End the commit message with a
+      # trailer block"; and a role outside CODE_TOUCHING_ROLES has its whole gitBlock
+      # dropped by assembleSuffix, so it can hold a radio, a default, a resolved
+      # strategy and a stage mapping and still emit nothing. The test commits into a
+      # throwaway repo and runs the orchestrator's own query, so the assertion is what
+      # git actually returns rather than what the prompt appears to say. It also pins
+      # the Coding-team migration's exact-value match across kanban.html, teamWiring.ts
+      # and the terminals.js mirror — one drifted byte there and the migration silently
+      # never fires, leaving every existing install on the board bypass permanently.
+      - name: Stage marker commit contract (trailers are readable, dead controls are not shippable)
+        run: npm run test:contract:stage-marker-commit
+
+      # Named in two plans' Automated verification but never wired to a gate until now.
+      - name: Minimal prompt shape (directive spacing, no triple newlines)
+        run: npm run test:contract:minimal-prompt
 
       # PtyFleetService.rename mutates handle.name IN PLACE, so the gateway's onData
       # closure switches to the new name while every name-keyed map is still filed
@@ -647,6 +709,25 @@ jobs:
       # cleared.
       - name: Autoban state + completion-driven dispatch contract
         run: npm run test:contract:autoban-state
+
+      # The ticking orchestrator's deliverables are two rewritten agent personas and
+      # a filesystem channel, and nothing else in CI reads either. Three of the four
+      # subtasks named an automated check and none was wired, which is the exact
+      # green-while-incomplete hole: a persona is executable specification with no
+      # compiler, so a Hard Rule that contradicts the planning lane compiles, lints,
+      # ships, and silently kills half the feature. This pins persona coherence (both
+      # lanes, no surviving coding-only scope exclusion, progress.json not deleted by
+      # silence), that the Miscellaneous sweep is gone from BOTH trees, that the two
+      # verb-rail traps survived the console deletion without duplicating the
+      # canonical-column rule, and — behaviourally, against the real writer — the
+      # reports channel's exclusive-create, frontmatter flatten, traversal rejection
+      # and lazy bootstrap. Also pins the turn-end mirror as WIRED in both hosts: a
+      # report writer with no caller is the zero-caller failure the plan diagnosed
+      # and would otherwise have repeated.
+      # Loads the real compiled service from out/, which "Compile test outputs"
+      # above has already produced — this step must stay AFTER it.
+      - name: Orchestrator tick + reports channel contract
+        run: npm run test:contract:orchestrator-tick
 
       # Autoban must stop for the reasons that survived the session-cap deletion —
       # "no valid tickets remain" is now one of only two stop paths, so a regression

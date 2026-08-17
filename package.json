@@ -55,6 +55,10 @@
         "title": "Switchboard: Setup AI Protocol Files"
       },
       {
+        "command": "switchboard.startOrchestrator",
+        "title": "Switchboard: Start Orchestrator"
+      },
+      {
         "command": "switchboard.importUnclaimedPlans",
         "title": "Switchboard: Import Plans (pick unclaimed plans from AI IDE folders)"
       },
@@ -904,6 +908,8 @@
     "test:contract:pty-prompt-delivery-framing": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-prompt-delivery-framing.test.js",
     "test:contract:pty-dispatch-focus": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-dispatch-focus-contract.test.js",
     "test:contract:terminal-rest-clear": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/proactive-terminal-rest-clear-contract.test.js",
+    "test:contract:feature-worktree-guardrail": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/feature-worktree-guardrail-contract.test.js",
+    "test:contract:worktree-strategy-control": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/worktree-strategy-control-contract.test.js",
     "test:contract:browser-planner-dispatch-surface": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/browser-planner-dispatch-surface.test.js",
     "test:contract:browser-stray-dispatch-surface": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/browser-stray-dispatch-surface.test.js",
     "test:contract:browser-direct-terminal-helpers": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/browser-direct-terminal-helpers.test.js",
@@ -937,9 +943,13 @@
     "test:contract:paste-attribution": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/paste-attribution-contract.test.js",
     "test:contract:dispatch-analysis-scope": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/dispatch-analysis-scope-contract.test.js",
     "test:contract:standing-orders-marker": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standing-orders-marker-contract.test.js",
+    "test:contract:seat-safeguards": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/seat-safeguards-fleet-prompt-path.test.js",
     "test:contract:team-scoped-routing": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/team-scoped-role-routing.test.js",
     "test:contract:link-presets-mirror": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/link-presets-mirror-contract.test.js",
-    "test:contract:unattended-batch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/unattended-batch-improvement-contract.test.js"
+    "test:contract:stage-marker-commit": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/stage-marker-commit-contract.test.js",
+    "test:contract:minimal-prompt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/minimal-prompt.test.js",
+    "test:contract:unattended-batch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/unattended-batch-improvement-contract.test.js",
+    "test:contract:orchestrator-tick": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/orchestrator-tick-and-reports-contract.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",

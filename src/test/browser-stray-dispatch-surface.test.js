@@ -68,13 +68,21 @@ function run() {
     console.log('\n── Browser stray dispatch surface contract ──\n');
 
     // 1. _dispatchExecuteMessage no longer takes an allowPtyFleet sixth argument.
+    //    The sixth slot is NOT free-for-all: it is pinned to the seat-safeguard
+    //    composition marker (`promptComposed: boolean = false`) and nothing else.
+    //    Anything else landing there — a resurrected allowPtyFleet, a new routing
+    //    flag — fails here, which is the property the original "no sixth arg"
+    //    assertion was protecting. The default MUST stay `false`: a call site
+    //    added later then gets the seat directive block by omission rather than
+    //    silently losing it.
     test('_dispatchExecuteMessage signature has no allowPtyFleet parameter', () => {
         const sigIdx = taskViewerSource.search(/private\s+async\s+_dispatchExecuteMessage\s*\(/);
         const sigRegion = taskViewerSource.slice(sigIdx, sigIdx + 400);
         assert.doesNotMatch(sigRegion, /allowPtyFleet/,
             '_dispatchExecuteMessage must NOT declare an allowPtyFleet parameter.');
-        assert.match(sigRegion, /sender:\s*string\s*=\s*'sidebar'\s*\)/,
-            '_dispatchExecuteMessage must end at the sender parameter (no sixth arg).');
+        assert.match(sigRegion, /sender:\s*string\s*=\s*'sidebar',\s*promptComposed:\s*boolean\s*=\s*false\s*\)/,
+            '_dispatchExecuteMessage must end at sender + promptComposed: boolean = false — no other sixth arg, ' +
+            'and the marker must default to false so a new call site gains the seat block rather than losing it.');
     });
 
     // 2. _orchestratorApiOriginated is gone.

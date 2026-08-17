@@ -215,7 +215,6 @@ export function getBoardHtml(repoRoot: string, workspaceRoot: string, capabiliti
         '{{ICON_WORKTREE}}': `${iconDir}/25-1-100 Sci-Fi Flat icons-68.png`,
         '{{ICON_WORKTREE_ACTIVE}}': `${iconDir}/worktree-active.svg`,
         '{{ICON_WORKTREE_MERGED}}': `${iconDir}/worktree-merged.svg`,
-        '{{ICON_MANAGER_PASS}}': `${iconDir}/25-101-150 Sci-Fi Flat icons-125.png`,
     };
     for (const [placeholder, uri] of Object.entries(iconMap)) {
         content = content.split(placeholder).join(uri);

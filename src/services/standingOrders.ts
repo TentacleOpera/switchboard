@@ -152,7 +152,7 @@ function renderOrder(o: StandingOrder): string {
 }
 
 /** Strip a pre-existing standing-orders block from `prompt`. */
-function stripStandingOrdersBlock(prompt: string): string {
+export function stripStandingOrdersBlock(prompt: string): string {
     return prompt.replace(STANDING_ORDERS_BLOCK_RE, '');
 }
 

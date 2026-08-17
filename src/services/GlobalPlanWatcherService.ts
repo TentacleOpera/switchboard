@@ -10,8 +10,8 @@
  *     `triggerScan`, `runPurgeSweep`, `isGitOpActive`, `onPlanDiscovered`,
  *     `dispose`) so `extension.ts` is essentially untouched,
  *   - re-exposes the `onPlanDiscovered` vscode.Event<{uri, workspaceRoot}>
- *     shape the extension consumers (KanbanProvider, ContinuousSyncService,
- *     OversightPassService) already depend on.
+ *     shape the extension consumers (KanbanProvider, ContinuousSyncService)
+ *     already depend on.
  *
  * Behaviour is byte-stable with the pre-extraction watcher — the engine does
  * the work, the adapter only supplies vscode watchers/config/logger/roots and

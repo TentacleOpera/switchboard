@@ -485,7 +485,6 @@ async function main() {
         const order = [
             'recomputeWorktreeIndicator()',
             'updateCreateWorktreeButton()',
-            'updateManagerPassButton()',
             'if (!btn) return;',
             "host-feature-management-false",
             'const selected = Array.from(selectedCards.values());',
@@ -494,7 +493,7 @@ async function main() {
         for (const marker of order) {
             const idx = body.indexOf(marker);
             assert.ok(idx > last,
-                `guard ordering broken at '${marker}' — the capability guard must not pre-empt the worktree/manager-pass recomputes, and must pre-empt selection-based re-enable`);
+                `guard ordering broken at '${marker}' — the capability guard must not pre-empt the worktree recomputes, and must pre-empt selection-based re-enable`);
             last = idx;
         }
     });

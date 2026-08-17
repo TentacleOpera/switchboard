@@ -11,7 +11,9 @@
 1. **Ground truth over self-report.** An agent saying "done" (in a terminal, commit
    message, or chat) is a nudge to verify, never status of record. Judge progress only
    from git and board state (see Verify via Git).
-2. **Scope boundary.** Coding + code review only. Planner-stage items escalate.
+2. **Scope boundary.** Two lanes: coding/code review, and planning. Dispatching a
+   CREATED plan to a planner is routine work, not an escalation. What escalates is
+   a planner-stage *question* you cannot answer (see Escalation Boundary).
 3. **Board ops via the API path only.** Move cards with
    `node .agents/skills/kanban_operations/move-card.js <planId|session_id> <COLUMN>`
    (routes through the extension's `POST /kanban/move`, which cascades features and
@@ -172,12 +174,15 @@ Three signals, all of which you can read or ask for directly:
 
 1. **Completion reports in the plan files.** A dispatched agent appends a
    completion summary to its plan file when it finishes
-   (`CODING_COMPLETION_REPORT_DIRECTIVE`, `agentPromptBuilder.ts:884`; plan
+   (`CODING_COMPLETION_REPORT_DIRECTIVE` in `agentPromptBuilder.ts`; plan
    files are write-once-at-the-end). The report's presence is the fact.
 2. **The reports directory.** `.switchboard/orchestrator/reports/` holds
    `finished` / `blocked` / `question` / `status` files posted by leads, and
    `from: system` mirrors of `[switchboard:turn-end]` notices. Drain it every
-   wake; claim what you act on.
+   wake; claim what you act on by writing
+   `reports/claimed/<filename>.claim`. The full contract — frontmatter fields,
+   the claim-marker format, the staleness window — is in the
+   `switchboard-orchestration` skill's *Reports channel* section.
 3. **Ask the lead.** Message it for a status update via `ptySendPrompt` when the
    files are ambiguous. The reply arrives as a report file when the lead is not
    talking to a pty.
@@ -301,7 +306,10 @@ git -C <worktree> log --format='%(trailers:key=Switchboard-Plan,valueonly)'
 - **Advance a card to CODE REVIEWED.** The coding team's head owns that advance
   through board dispatch. If you also do it, the two race on the same card.
 - **Group loose plans into features.** It is a judgement about what belongs
-  together, not something a timer should do every ten minutes.
+  together, not something a timer should do every ten minutes. Your prompt still
+  carries `UNATTENDED=true`; its only remaining effect is gating the confirm-skip
+  in `group-into-features`. It no longer triggers a `Miscellaneous` sweep — that
+  sweep is deleted, and standalone plans stay standalone.
 - **Merge-back under the `none` worktree topology.** There is nothing to merge
   back. Merge-back applies only when the user has chosen `per-feature`.
 - **Write the worktree setting.** Read it, follow it, never change it.
@@ -333,7 +341,9 @@ subtask -> integration -> main convergence.
   you cannot resolve coherently (after `git merge --abort` — see Merge-Back), stalled
   agents, missing worktrees/terminals that block a feature.
 - **Handled yourself:** dispatching plans to the planner (routine, not an escalation),
-  stage advancement, re-dispatching a lead whose terminal died or went quiet, ordinary
+  the stage advance that *is* a dispatch (a card moves on coding start) — never the
+  advance to CODE REVIEWED, which the coding team's head owns (see What You Never
+  Do), re-dispatching a lead whose terminal died or went quiet, ordinary
   merge conflicts, answering a blocked lead's question when you know the answer, writing
   user decisions into the plan file when a question is resolved, dispatching a research
   agent for research gaps.

@@ -141,7 +141,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                 if (this._taskViewerProvider) {
                     return this._taskViewerProvider.handleGetStartupCommands();
                 }
-                return { commands: {}, planIngestionFolder: '', visibleAgents: {}, autoCommitOnCodeReview: false };
+                return { commands: {}, planIngestionFolder: '', visibleAgents: {} };
             },
             handleSaveStartupCommands: async (data) => {
                 if (this._taskViewerProvider) {
@@ -728,15 +728,6 @@ export class SetupPanelProvider implements vscode.Disposable {
                     });
                     return { success: true };
 
-
-                case 'getAutoCommitOnCodeReviewSetting': {
-                    const value = await this._taskViewerProvider.handleGetAutoCommitOnCodeReviewSetting();
-                    this.postMessage({
-                        type: 'autoCommitOnCodeReviewSetting',
-                        enabled: value
-                    });
-                    return { success: true };
-                }
                 case 'getExcludeReviewedBacklogSetting':
                     this.postMessage({
                         type: 'excludeReviewedBacklogSetting',

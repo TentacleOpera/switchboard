@@ -154,6 +154,21 @@ check with GET first.
 
 ---
 
+## 3.4. Seat safeguards ride the delivery layer — do not hand-copy them
+
+A seat safeguard (subagent policy, git policy, skip-compilation, skip-tests, caveman output,
+suppress-walkthrough, accurate-coding) is a property of the **seat**, not of the dispatch. The
+delivery layer (`_ptyHostVerb` on the extension, `deliverPrompt` on standalone) appends the
+configured seat directive block to every `ptySendPrompt` the seat receives — from the board,
+from a lead, from a peer — using the same verbatim constants the board path composes. You do
+not hand-copy these directives into your prompt body, and you do not paraphrase them. A
+hand-typed sentence of prose enters the same evidential pool as the plan file and can lose an
+argument to it; a composed directive block carries provenance and structural separation, and
+is the same artefact the seat already obeys on the board path. If you need a safeguard applied,
+configure it on the seat (Prompts tab → role addons) — do not write it into the prompt.
+
+---
+
 ## 3.5. Register the dispatch before you send — the backstop the standing order is not
 
 A standing order is a contract the coder must choose to honour. On 2026-08-16 a coder with a
@@ -400,6 +415,6 @@ not on the documented verb rail for agents, and each terminal is a running agent
 
 - **Short parallel fan-out** (90 s per join, 30 min per batch) → use `/delegates/dispatch` +
   `/delegates/await` (see the `delegates` skill). That is a different job.
-- **Unattended, deterministic column sweeps** with no agent watching → use
-  `POST /oversight/start` (see the `switchboard-orchestration` skill). This skill is attended
-  driving by a reasoning agent, not unattended automation.
+- **Unattended, deterministic column sweeps** with no agent watching → use the
+  `switchboard-orchestration` skill. This skill is attended driving by a reasoning agent, not
+  unattended automation.

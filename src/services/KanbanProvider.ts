@@ -21,12 +21,12 @@ import {
 } from './agentConfig';
 import { AgentSkillExporter } from './AgentSkillExporter';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
-import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine } from './agentPromptBuilder';
+import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine, SeatDirectiveOptions } from './agentPromptBuilder';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow, type ColumnUpdateOutcome } from './KanbanDatabase';
 import type { FeatureWatchRecord } from './PlanIngestionEngine';
 import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (is_feature clobber) — remove with the probes
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
-import { buildFetchPlansPrompt } from './schedulerPresets';
+import { BOARD_DRIVING_CONTRACT as SHARED_BOARD_DRIVING_CONTRACT } from './schedulerPresets';
 import { KanbanMigration } from './KanbanMigration';
 import { SURFACES } from './wsHub';
 import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveWithRetention';
@@ -190,6 +190,18 @@ function isWorkingState(
     const blocked = Number.isFinite(blockedTs) && (now - (blockedTs as number)) < blockedTimeoutMs;
     const working = blocked || (withinHardCap && (now - basis) < timeoutMs);
     return { working, blocked };
+}
+
+/**
+ * `feature_worktree_mode` is shipped state. V53 carried `epic_worktree_mode`
+ * across, and that key held values this build no longer implements
+ * ('per-subtask', 'high-low'). They already behave as `none` — every consumer
+ * compares against 'per-feature' — so clamp on READ so the radio shows the
+ * behaviour rather than rendering no selection at all. Read-only: never write
+ * back from a render path.
+ */
+export function normalizeFeatureWorktreeMode(value: unknown): 'none' | 'per-feature' {
+    return value === 'per-feature' ? 'per-feature' : 'none';
 }
 
 /**
@@ -463,8 +475,8 @@ export class KanbanProvider implements vscode.Disposable {
             // `_refreshBoardImpl`, which reads the DB config into `_projectFilter`
             // at its top (after dbReady) so display and the importer stamp share
             // one source. The constructor therefore does not touch the key at all.
-            void this._reconcileStaleWorktreeMode(this._currentWorkspaceRoot)
-                .catch(e => console.warn('[KanbanProvider] constructor: failed to reconcile stale worktree mode:', e));
+            void this._drainRetiredWorktreeModeStash(this._currentWorkspaceRoot)
+                .catch(e => console.warn('[KanbanProvider] constructor: failed to drain retired worktree mode stash:', e));
         }
         this._cliTriggersEnabled = this._getScopedSetting<boolean>('kanban.cliTriggersEnabled', true);
         this._dynamicComplexityRoutingEnabled = this._getScopedSetting<boolean>(
@@ -1374,8 +1386,8 @@ export class KanbanProvider implements vscode.Disposable {
             // sweep now protects the newly-focused workspace and may evict the previous one.
             KanbanDatabase.setActiveWorkspaceRoot(resolved);
             this._onWorkspaceChangeEmitter.fire(resolved);
-            void this._reconcileStaleWorktreeMode(resolved)
-                .catch(e => console.warn('[KanbanProvider] setCurrentWorkspaceRoot: failed to reconcile stale worktree mode:', e));
+            void this._drainRetiredWorktreeModeStash(resolved)
+                .catch(e => console.warn('[KanbanProvider] setCurrentWorkspaceRoot: failed to drain retired worktree mode stash:', e));
 
             // Persist selection for next activation
             if (this._workspaceSaveTimeout) {
@@ -2243,63 +2255,22 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     /**
-     * Apply or restore the per-feature worktree topology that an oversight
-     * session requires. Called by TaskViewerProvider on the
-     * orchestrationConfig.enabled false→true transition (arm) and the
-     * true→false transition (disarm) — NOT from the verb arms, so HTTP
-     * callers (POST /orchestration/start|stop) reach it too, and a failed
-     * arm (early return before the orchestrationConfig write) never moves
-     * topology.
-     *
-     * armed=true: stash the user's prior mode exactly once (double-enter
-     *   guard), switch to per-feature, broadcast.
-     * armed=false: restore the stashed prior (validModes clamp), consume
-     *   the key, broadcast. No-op when no prior is stashed.
+     * One-time drain of the retired orchestration worktree stash. Prior versions
+     * forced `feature_worktree_mode = 'per-feature'` while an oversight session was
+     * armed and parked the user's real value under PRIOR_KEY. A session that ended
+     * uncleanly (crash, reload) left the forced value in place. This restores the
+     * user's value and consumes the key; once cleared it never fires again, so the
+     * cleared key IS the idempotency latch — do not add an in-memory flag.
      */
-    public async applyOversightWorktreeTopology(workspaceRoot: string, armed: boolean): Promise<void> {
+    private async _drainRetiredWorktreeModeStash(workspaceRoot: string): Promise<void> {
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !await db.ensureReady()) { return; }
         const PRIOR_KEY = 'orchestration_prior_feature_worktree_mode';
-        if (armed) {
-            const current = (await db.getConfig('feature_worktree_mode')) || 'none';
-            const savedPrior = await db.getConfig(PRIOR_KEY);
-            // Double-enter guard: never overwrite the true prior.
-            if (!savedPrior) {
-                await db.setConfig(PRIOR_KEY, current);
-            }
-            if (current !== 'per-feature') {
-                await db.setConfig('feature_worktree_mode', 'per-feature');
-            }
-            await this._sendWorktreeConfig(workspaceRoot);
-        } else {
-            const savedPrior = await db.getConfig(PRIOR_KEY);
-            // '' (cleared) and null both skip restore.
-            if (savedPrior) {
-                const validModes = ['none', 'per-feature'];
-                await db.setConfig('feature_worktree_mode', validModes.includes(savedPrior) ? savedPrior : 'none');
-                await db.setConfig(PRIOR_KEY, '');   // consume the saved prior
-                await this._sendWorktreeConfig(workspaceRoot);
-            }
-        }
-    }
-
-    private async _reconcileStaleWorktreeMode(workspaceRoot: string): Promise<void> {
-        const db = this._getKanbanDb(workspaceRoot);
-        if (!await db.ensureReady()) {
-            return;
-        }
-        const PRIOR_KEY = 'orchestration_prior_feature_worktree_mode';
-        const mode = (await db.getConfig('feature_worktree_mode')) || 'none';
         const savedPrior = await db.getConfig(PRIOR_KEY);
-        if (mode === 'per-feature' && savedPrior) {
-            // Guard: skip the reset if an oversight agent session is active
-            if (this._taskViewerProvider && this._taskViewerProvider.isOversightAgentRunning()) {
-                return;
-            }
-            const validModes = ['none', 'per-feature'];
-            await db.setConfig('feature_worktree_mode', validModes.includes(savedPrior) ? savedPrior : 'none');
-            await db.setConfig(PRIOR_KEY, ''); // consume the stale prior
-        }
+        if (!savedPrior) { return; }                 // '' and null both mean "already drained"
+        await db.setConfig('feature_worktree_mode', normalizeFeatureWorktreeMode(savedPrior));
+        await db.setConfig(PRIOR_KEY, '');           // consume — this is the latch
+        await this._sendWorktreeConfig(workspaceRoot);
     }
 
     private _getKanbanDb(workspaceRoot: string): KanbanDatabase {
@@ -4524,6 +4495,29 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     }
 
     /**
+     * Read-only team definitions for the terminals panel. Unlike listAgentGroups,
+     * this NEVER seeds and never writes, and never joins _agentGroupsWriteChain:
+     * a read verb that mints a starter team into whatever DB it is handed — and
+     * serialises against concurrent TEAMS-tab saves to do it — is a contract
+     * violation regardless of which writer put the phantom row on disk.
+     * Migration runs in memory only. It also does NOT run importDelegatesIntoTeams;
+     * that import is a boot-time concern (extension.ts:819-825,
+     * bootstrap.ts:2188-2192), not a per-picker-open one.
+     */
+    public async peekAgentGroups(workspaceRoot: string): Promise<any[]> {
+        try {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (!db || !(await db.ensureReady())) { return []; }
+            const raw = await db.getConfigJson<any[]>(KanbanProvider.AGENT_GROUPS_CONFIG_KEY, null as any);
+            if (!Array.isArray(raw)) { return []; }
+            return migrateAgentGroups(raw) ?? raw;
+        } catch (err) {
+            console.warn('[KanbanProvider] peekAgentGroups failed:', err);
+            return [];
+        }
+    }
+
+    /**
      * Start a team by id on the standalone host. Host-resolves the definition
      * (never from the wire), reconciles a double-start, then calls the
      * registered instantiator (`setAgentGroupInstantiator`). The extension
@@ -4709,7 +4703,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         if (this._taskViewerProvider) {
             const commands = await this._taskViewerProvider.getStartupCommands(workspaceRoot);
             const visibleAgents = await this._taskViewerProvider.getVisibleAgents(workspaceRoot);
-            const autoCommitOnCodeReview = await this._taskViewerProvider.handleGetAutoCommitOnCodeReviewSetting(workspaceRoot);
             const julesAutoSyncEnabled = this._context.globalState.get<boolean>('switchboard.agents.julesAutoSyncEnabled', false);
             const plannerTerminalCount = await this._taskViewerProvider.getPlannerTerminalCount(workspaceRoot);
             const plannerLimitDispatchToTerminals = await this._taskViewerProvider.getLimitDispatchToTerminals('planner', workspaceRoot);
@@ -4723,7 +4716,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 // webview only, and the PTY host is a separate process with no db.
                 agentNames: await this._getAgentNames(workspaceRoot),
                 julesAutoSyncEnabled,
-                autoCommitOnCodeReview,
                 plannerTerminalCount,
                 plannerLimitDispatchToTerminals
             };
@@ -4736,21 +4728,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 commands: state.startupCommands || {},
                 visibleAgents: state.visibleAgents || {},
                 julesAutoSyncEnabled: state.julesAutoSyncEnabled ?? false,
-                autoCommitOnCodeReview: state.autoCommitOnCodeReview ?? false,
                 plannerTerminalCount: state.plannerTerminalCount ?? 1,
                 plannerLimitDispatchToTerminals: state.plannerLimitDispatchToTerminals ?? false
             };
         } catch {
-            return { commands: {}, visibleAgents: {}, julesAutoSyncEnabled: false, autoCommitOnCodeReview: false, plannerTerminalCount: 1, plannerLimitDispatchToTerminals: false };
+            return { commands: {}, visibleAgents: {}, julesAutoSyncEnabled: false, plannerTerminalCount: 1, plannerLimitDispatchToTerminals: false };
         }
-    }
-
-    public async getAutoCommitOnCodeReview(workspaceRoot: string): Promise<boolean> {
-        if (this._taskViewerProvider) {
-            return this._taskViewerProvider.handleGetAutoCommitOnCodeReviewSetting(workspaceRoot);
-        }
-        const state = await this._getStartupCommands(workspaceRoot);
-        return state.autoCommitOnCodeReview ?? false;
     }
 
     private async _saveStartupCommands(workspaceRoot: string, msg: any): Promise<void> {
@@ -4774,9 +4757,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 if (typeof msg.julesAutoSyncEnabled === 'boolean') {
                     state.julesAutoSyncEnabled = msg.julesAutoSyncEnabled;
                 }
-                if (typeof msg.autoCommitOnCodeReview === 'boolean') {
-                    state.autoCommitOnCodeReview = msg.autoCommitOnCodeReview;
-                }
                 if (typeof msg.plannerTerminalCount === 'number') {
                     state.plannerTerminalCount = msg.plannerTerminalCount;
                 }
@@ -4796,7 +4776,6 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             if (msg.commands) state.startupCommands = msg.commands;
             if (msg.visibleAgents) state.visibleAgents = { ...(state.visibleAgents || {}), ...msg.visibleAgents };
             if (typeof msg.julesAutoSyncEnabled === 'boolean') state.julesAutoSyncEnabled = msg.julesAutoSyncEnabled;
-            if (typeof msg.autoCommitOnCodeReview === 'boolean') state.autoCommitOnCodeReview = msg.autoCommitOnCodeReview;
             if (typeof msg.plannerTerminalCount === 'number') state.plannerTerminalCount = msg.plannerTerminalCount;
             if (typeof msg.plannerLimitDispatchToTerminals === 'boolean') state.plannerLimitDispatchToTerminals = msg.plannerLimitDispatchToTerminals;
             await fs.promises.writeFile(statePath, JSON.stringify(state, null, 2), 'utf8');
@@ -5268,6 +5247,48 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         return built;
     }
 
+    /**
+     * Resolve the seat-scoped subset of addon config for a role. Sources the
+     * same `_getPromptsConfig` maps and defaults as `generateUnifiedPrompt`'s
+     * `resolvedOptions`, so both the board path and the pty delivery layer read
+     * one resolver. An unresolved role (empty string, unknown name) falls back
+     * to the `??` defaults — guardrail ON, everything else OFF — which is the
+     * fail-safe behaviour the plan requires (never an empty block).
+     *
+     * `initiatorProject` is accepted for API symmetry with
+     * `getScopedRoleConfig` but does not affect resolution today, because
+     * `_getPromptsConfig` reads through `_getRoleConfig(role)` without a
+     * project tier.
+     */
+    public async resolveSeatPromptOptions(role: string, initiatorProject?: string | null): Promise<SeatDirectiveOptions> {
+        const workspaceRoot = this.getCurrentWorkspaceRoot() || '';
+        const promptsConfig = await this._getPromptsConfig(workspaceRoot);
+
+        const noSubagents = promptsConfig.noSubagentsByRole?.[role] ?? false;
+        const useSubagents = promptsConfig.useSubagentsByRole?.[role] ?? false;
+        const customSubagentNameRaw = promptsConfig.customSubagentNameByRole?.[role] || '';
+        const customSubagentName = customSubagentNameRaw.replace(/[^a-zA-Z0-9_]/g, '').trim() || undefined;
+
+        let subagentPolicy: SeatDirectiveOptions['subagentPolicy'] = 'default';
+        if (noSubagents) { subagentPolicy = 'noSubagents'; }
+        else if (customSubagentName) { subagentPolicy = 'customSubagent'; }
+        else if (useSubagents) { subagentPolicy = 'useSubagents'; }
+
+        return {
+            subagentPolicy,
+            customSubagentName,
+            gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.[role] ?? true,
+            gitBranchStrategy: promptsConfig.gitBranchStrategyByRole?.[role] ?? 'notSpecified',
+            gitCommitStrategy: promptsConfig.gitCommitStrategyByRole?.[role] ?? 'notSpecified',
+            gitPushStrategy: promptsConfig.gitPushStrategyByRole?.[role] ?? 'notSpecified',
+            skipCompilation: promptsConfig.skipCompilationByRole?.[role] ?? false,
+            skipTests: promptsConfig.skipTestsByRole?.[role] ?? false,
+            cavemanOutput: promptsConfig.cavemanOutputByRole?.[role] ?? false,
+            suppressWalkthrough: promptsConfig.suppressWalkthroughByRole?.[role] ?? false,
+            accurateCoding: promptsConfig.accurateCodingEnabledByRole?.[role] ?? false,
+        };
+    }
+
     private async _getPromptsConfig(workspaceRoot: string): Promise<any> {
         const config = vscode.workspace.getConfiguration('switchboard');
         
@@ -5395,12 +5416,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 ticket_updater: 'notSpecified',
             },
             gitCommitStrategyByRole: {
-                planner: 'notSpecified',
+                planner: (plannerConfig?.addons?.gitCommitStrategy === 'incremental' ? 'notSpecified' : plannerConfig?.addons?.gitCommitStrategy) ?? 'notSpecified',
                 lead: (leadConfig?.addons?.gitCommitStrategy === 'incremental' ? 'notSpecified' : leadConfig?.addons?.gitCommitStrategy) ?? 'notSpecified',
                 coder: (coderConfig?.addons?.gitCommitStrategy === 'incremental' ? 'notSpecified' : coderConfig?.addons?.gitCommitStrategy) ?? 'notSpecified',
                 intern: (internConfig?.addons?.gitCommitStrategy === 'incremental' ? 'notSpecified' : internConfig?.addons?.gitCommitStrategy) ?? 'notSpecified',
                 claude_designer: (claudeDesignerConfig?.addons?.gitCommitStrategy === 'incremental' ? 'notSpecified' : claudeDesignerConfig?.addons?.gitCommitStrategy) ?? 'notSpecified',
-                reviewer: 'notSpecified',
+                reviewer: (reviewerConfig?.addons?.gitCommitStrategy === 'incremental' ? 'notSpecified' : reviewerConfig?.addons?.gitCommitStrategy) ?? 'notSpecified',
                 tester: 'notSpecified',
                 analyst: 'notSpecified',
                 researcher: 'notSpecified',
@@ -5741,50 +5762,19 @@ This step is what moves the plan forward in the Switchboard pipeline.
         }
     }
 
-    // ─── Scheduler prompt presets & target contracts ────────────────────────
+    // ─── Board-driving contract ─────────────────────────────────────────────
 
     /**
      * The board-driving contract: how an external agent reaches THIS workspace's
-     * board and moves cards. Shared by the reconcile prompt and the external-mode
-     * prompt so the two cannot drift. Read the port from the port file, move cards
-     * via the sanctioned path, NEVER raw SQL.
-     */
-    private static readonly BOARD_DRIVING_CONTRACT = `Move cards on this workspace's board via the sanctioned \`kanban_operations\` skill (\`move-card.js\` / \`POST /kanban/move\`), NEVER raw SQL. Raw SQL strands cards and bypasses the move-card.js side-effects (cascades, syncs). To reach the board's Local API Server, read the port from \`.switchboard/api-server-port.txt\` in the workspace root.`;
-
-    /**
-     * Reconcile prompt: a copyable IDE-agent prompt that pulls recent remote
-     * branches, scans pulled plan files for new `## Completion Report` /
-     * `## Review Findings` sections, and advances cards **forward-only** via
-     * the sanctioned `kanban_operations` skill — never raw SQL (which strands
-     * cards and bypasses move-card.js side-effects per CLAUDE.md).
+     * board and moves cards. Shared by the reconcile preset (`schedulerPresets`)
+     * and the external-mode prompt so the two cannot drift. Read the port from
+     * the port file, move cards via the sanctioned path, NEVER raw SQL.
      *
-     * Forward-only + idempotent: skip cards a human already advanced. A wrong
-     * prompt silently moves cards backward or double-advances, so the wording
-     * is load-bearing.
+     * The text lives in `schedulerPresets` — a dependency-free module both this
+     * provider and the survivor tick can import — and is aliased here so every
+     * `KanbanProvider.BOARD_DRIVING_CONTRACT` reference keeps working.
      */
-    private _buildReconcilePrompt(): string {
-        return `You are a reconciliation agent for Switchboard. Your job is to advance kanban cards whose work has already been completed off-machine (e.g. by a cloud routine on a \`claude/\`-prefixed branch) but whose card was not moved on the board.
-
-Steps (do them in order):
-
-1. Fetch and pull recent remote branches:
-\`\`\`bash
-git fetch --prune
-git pull --all || true
-\`\`\`
-
-2. For each recently-merged or pushed branch, scan the plan files under \`.switchboard/plans/\` for a NEW \`## Completion Report\` or \`## Review Findings\` section that was not present on the previous reconcile pass. (Use \`git log --since="last reconcile"\` or compare against the last reconcile commit to scope this.)
-
-3. For each plan file with a new completion/review section, move its card **forward-only** — and ONLY forward. ${KanbanProvider.BOARD_DRIVING_CONTRACT}
-
-   - Determine the correct next column from the plan's current column and the workspace pipeline. If you cannot determine it, SKIP the card and report it — do not guess.
-   - If a card has already been advanced by a human (its current column is already at or past the expected next column), SKIP it. Never move a card backward. Never double-advance.
-   - Run: \`node .agents/skills/kanban_operations/move-card.js "<planId>" "<nextColumn>" "" "<workspaceRoot>"\` and verify the output is \`OK\`.
-
-4. Report what you moved and what you skipped (and why). Do NOT take any other actions — this is a reconciliation pass, not a coding pass.
-
-Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-path-only (no SQL).`;
-    }
+    private static readonly BOARD_DRIVING_CONTRACT = SHARED_BOARD_DRIVING_CONTRACT;
 
     /**
      * External-mode prompt: a copyable prompt for a tool that runs agent cron
@@ -5826,87 +5816,6 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             `A step whose column is empty is skipped this pass. Walk the steps in order — an earlier step's output is visible to a later one on the next pass. When you have completed a plan, advance its card forward to the next column in the pipeline, and only forward.`
         ].join('\n');
         return `${workInstruction}\n\n${KanbanProvider.BOARD_DRIVING_CONTRACT}`;
-    }
-
-    /**
-     * Custom prompt: free-text from the job's `promptOverride`. The engine
-     * already sends promptOverride directly; this builder exists so the
-     * scheduler UI's "Copy prompt" action can emit it for external targets too.
-     */
-    private _buildCustomPrompt(promptOverride: string): string {
-        return (promptOverride || '').trim();
-    }
-
-    /**
-     * Per-target contracts: the interval floor (minimum minutes between runs)
-     * and the prerequisites block text shown to the user before they paste the
-     * prompt into the external scheduler. Only `local-terminal` owns a live
-     * timer; `antigravity` and `cloud` are prompt-handoff targets — Switchboard
-     * emits prompt + instructions and the external scheduler owns recurrence.
-     *
-     * The `cloud` block names the real prerequisites confirmed by the user
-     * (2026-07-21): board-state-export = read-only-snapshot + an origin remote
-     * (to read board.json from switchboard/board), the claude/-branch-prefix
-     * default for writing completion/review sections, the 1-hour minimum
-     * interval, the ~30-min stagger, and the daily-run-cap consideration.
-     */
-    public static readonly SCHEDULER_TARGET_CONTRACTS: Record<string, { intervalFloorMinutes: number | null; prerequisites: string }> = {
-        'local-terminal': {
-            intervalFloorMinutes: 1,
-            prerequisites: 'Local terminal target. Runs in an interactive, subscription-authed Claude terminal in this VS Code window. Requires the laptop to be on. The only target that can poll faster than hourly (minute-granularity intervals). Never headless — prompts go via sendText, never `claude -p`.'
-        },
-        'antigravity': {
-            intervalFloorMinutes: null,
-            prerequisites: 'Antigravity target (prompt handoff). Switchboard emits the prompt; you own recurrence via Antigravity Scheduled Tasks. Steps:\n1. Copy the prompt below.\n2. In Antigravity, open the AUTOMATION tab (or Tasks / Background Notifications) → Scheduled Tasks.\n3. Paste the prompt and set the recurrence there (the `schedule` tool: one-shot `DurationSeconds` or recurring `CronExpression`). Antigravity owns the timer — Switchboard does not schedule it.\n4. The prompt instructs the agent to `manage_task kill` itself when no plans remain.'
-        },
-        'cloud': {
-            intervalFloorMinutes: 60,
-            prerequisites: 'Cloud target (prompt handoff — Claude cowork / routine). Runs laptop-off on Anthropic\'s cloud. Prerequisites:\n- Board state export must be set to `read-only-snapshot` AND the repo must have an `origin` remote, so the routine can read `board.json` from the `switchboard/board` orphan branch.\n- Minimum interval is 1 hour (cron finer than hourly is rejected). Standard 5-field cron only (`*`, steps `*/6`, ranges `1-5`, lists `1,15,30`); extended tokens (`L`,`W`,`?`,`MON`) are NOT supported.\n- A run may start up to ~30 min after the scheduled time (deterministic per routine ID) — treat as "around then," not to-the-second.\n- Branch pushes default to `claude/`-prefixed branches unless unrestricted pushes are enabled per-repo. A cloud routine writing `## Completion Report` / `## Review Findings` to `.switchboard/plans/` must push to a `claude/`-prefixed branch (or you must enable unrestricted pushes per-repo).\n- Daily run cap per account applies (shown on routines/usage pages); one-off manual runs are exempt.\n- Usage/cost: routines burn subscription usage exactly like interactive sessions.\nAfter a cloud branch is merged, run the `reconcile` prompt locally to advance the cards via `kanban_operations`.'
-        }
-    };
-
-    /**
-     * Build the scheduler prompt for a job + target. Dispatches on `job.source`:
-     *   - fetch-plans → the shared `buildFetchPlansPrompt` preset (same copy the
-     *     local-terminal tick uses — see `./schedulerPresets`)
-     *   - reconcile → the forward-only reconcile prompt
-     *   - custom → the job's promptOverride
-     *
-     * For external targets (antigravity/cloud) the returned text is the prompt
-     * PLUS the target's prerequisites block, so "Copy prompt" yields a
-     * self-contained handoff. For local-terminal the prerequisites are shown
-     * separately by the UI (plan 4) and not appended here.
-     */
-    private async _buildSchedulerPrompt(job: any, workspaceRoot: string): Promise<{ prompt: string | null; error?: string }> {
-        const target: string = job.target || 'local-terminal';
-        const source: string = job.source || 'custom';
-        let body: string | null = null;
-        let error: string | undefined;
-
-        if (source === 'fetch-plans') {
-            body = buildFetchPlansPrompt(job);
-        } else if (source === 'reconcile') {
-            body = this._buildReconcilePrompt();
-        } else {
-            // custom
-            body = this._buildCustomPrompt(job.promptOverride || '');
-            if (!body) {
-                return { prompt: null, error: 'Custom source requires a non-empty prompt.' };
-            }
-        }
-
-        if (!body) {
-            return { prompt: null, error: error || 'No prompt produced.' };
-        }
-
-        // External targets: append the prerequisites block (honesty fix).
-        if (target === 'antigravity' || target === 'cloud') {
-            const contract = KanbanProvider.SCHEDULER_TARGET_CONTRACTS[target];
-            if (contract) {
-                return { prompt: `${body}\n\n---\n\n**Setup — ${target} target**\n\n${contract.prerequisites}` };
-            }
-        }
-        return { prompt: body };
     }
 
     private async _savePromptsConfig(workspaceRoot: string, msg: any): Promise<void> {
@@ -7232,27 +7141,6 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
         this._plannerPromptWriter = writer;
     }
 
-    private async _autoCommitIfCodeReviewTransition(
-        workspaceRoot: string,
-        sessionId: string,
-        targetColumn: string
-    ): Promise<void> {
-        if (targetColumn !== 'CODE REVIEWED') return;
-        const autoCommitEnabled = await this.getAutoCommitOnCodeReview(workspaceRoot);
-        if (!autoCommitEnabled) return;
-        if (!this._taskViewerProvider) return;
-        // Look up plan topic from DB for commit message
-        let planTopic = 'unknown';
-        try {
-            const db = this._getKanbanDb(workspaceRoot);
-            if (await db.ensureReady()) {
-                const record = await db.getPlanBySessionId(sessionId);
-                if (record?.topic) planTopic = record.topic;
-            }
-        } catch { /* use fallback topic */ }
-        await this._taskViewerProvider.autoCommitForCodeReview(workspaceRoot, planTopic);
-    }
-
     public async moveCardToColumnWithReason(
         workspaceRoot: string,
         sessionId: string,
@@ -7262,8 +7150,6 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
         try {
             const db = this._getKanbanDb(workspaceRoot);
             if (!await db.ensureReady()) return { ok: false, reason: 'not_ready', detail: `Kanban database for workspace '${workspaceRoot}' is not ready.` };
-
-            await this._autoCommitIfCodeReviewTransition(workspaceRoot, sessionId, targetColumn);
 
             const plan = await db.getPlanBySessionId(sessionId);
             let outcome: ColumnUpdateOutcome;
@@ -7341,13 +7227,6 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
 
             const previousRecord = await db.getPlanByPlanFile(planFile, workspaceId);
-            const sessionId = previousRecord?.sessionId || null;
-
-            if (targetColumn === 'CODE REVIEWED') {
-                if (sessionId) {
-                    await this._autoCommitIfCodeReviewTransition(workspaceRoot, sessionId, targetColumn);
-                }
-            }
 
             let outcome: ColumnUpdateOutcome;
             let subtaskSessionIds: string[] = [];
@@ -8535,27 +8414,11 @@ Constraint recap: forward-only, idempotent, skip-already-advanced, sanctioned-pa
             case 'setSchedulerConfig': {
                 if (msg.config && typeof msg.config === 'object') {
                     await GlobalIntegrationConfigService.setSchedulerConfig(msg.config);
-                    // Restart loops so enabled local-terminal jobs pick up changes.
-                    if (this._taskViewerProvider) {
-                        await this._taskViewerProvider.startAllSchedulerLoops();
-                    }
                     const config = await GlobalIntegrationConfigService.getSchedulerConfig();
                     this.postMessage({ type: 'updateSchedulerConfig', config });
                     return { success: true, config };
                 }
                 return { success: false, error: 'config is required' };
-            }
-            case 'startSchedulerJob': {
-                if (this._taskViewerProvider && msg.jobId) {
-                    await this._taskViewerProvider.launchSchedulerTerminal(msg.jobId);
-                }
-                return { success: true };
-            }
-            case 'stopSchedulerJob': {
-                if (this._taskViewerProvider && msg.jobId) {
-                    await this._taskViewerProvider.stopSchedulerTerminal(msg.jobId);
-                }
-                return { success: true };
             }
             case 'getAutobanConfig': {
                 return { success: true, type: 'updateAutobanConfig', state: this._autobanState };
@@ -11404,35 +11267,6 @@ ${FOCUS_DIRECTIVE}`;
                 });
                 return { success: true, prompt: result.prompt, error: result.error };
             }
-            case 'schedulerPrompt': {
-                // Scheduler prompt handoff. Dispatches on job.source and appends
-                // the target's prerequisites block for external targets
-                // (antigravity/cloud). The legacy `antigravityPrompt` message is
-                // kept as a shim (generateAntigravityPrompt above).
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (!workspaceRoot || typeof msg.job !== 'object' || !msg.job) {
-                    return { success: false, error: 'workspaceRoot and job are required' };
-                }
-                const result = await this._buildSchedulerPrompt(msg.job, workspaceRoot);
-                this.postMessage({
-                    type: 'schedulerPrompt',
-                    jobId: msg.job.id,
-                    target: msg.job.target,
-                    prompt: result.prompt,
-                    error: result.error
-                });
-                return { success: true };
-            }
-            case 'getSchedulerTargetContracts': {
-                // Exposes the target contracts (interval floors + prerequisites
-                // blocks) to the webview so the Scheduler UI (plan 4) can render
-                // them without hardcoding the text.
-                this.postMessage({
-                    type: 'schedulerTargetContracts',
-                    contracts: KanbanProvider.SCHEDULER_TARGET_CONTRACTS
-                });
-                return { success: true };
-            }
             case 'externalAutomationPrompt': {
                 // External-mode copy-prompt. Builds the evergreen run-sheet
                 // prompt (no DB read, no plan IDs) and returns it in the body
@@ -11959,84 +11793,6 @@ ${FOCUS_DIRECTIVE}`;
                 }
             }
 
-            case 'dispatchManagerForSelected': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (!workspaceRoot) return { success: false, error: 'No workspace root resolved' };
-                const sessionIds: string[] = Array.isArray(msg.sessionIds) ? msg.sessionIds : [];
-                if (sessionIds.length === 0) return { success: false, error: 'sessionIds are required' };
-
-                const db = this._getKanbanDb(workspaceRoot);
-                if (!db || !await db.ensureReady()) return { success: false, error: 'Database unavailable' };
-
-                // Resolve each sessionId → plan record at click time (frozen snapshot).
-                // The webview pre-filters feature rows (isFeature), but the extension
-                // host is the authoritative filter: it MUST also exclude epic subtasks
-                // (plans with a featureId and isFeature !== 1) since the webview
-                // selection payload carries no epic linkage. Drop unresolvable ids
-                // with a warning rather than aborting the batch.
-                const plans: { planId: string; topic: string; planFile: string; kanbanColumn: string; complexity: string }[] = [];
-                const dropped: string[] = [];
-                for (const sid of sessionIds) {
-                    const record = await db.getPlanByPlanId(sid) ?? await db.getPlanBySessionId(sid);
-                    if (!record) {
-                        dropped.push(sid);
-                        continue;
-                    }
-                    // Exclude feature rows (isFeature === 1).
-                    if (record.isFeature && record.isFeature >= 1) {
-                        dropped.push(sid);
-                        continue;
-                    }
-                    // Exclude epic subtasks: plans with a non-empty featureId that
-                    // are not features themselves — these belong to a feature's
-                    // worktree and must not leak into a targeted pass.
-                    if (record.featureId && record.featureId !== '' && !(record.isFeature && record.isFeature >= 1)) {
-                        dropped.push(sid);
-                        continue;
-                    }
-                    plans.push({
-                        planId: record.planId,
-                        topic: record.topic,
-                        planFile: record.planFile,
-                        kanbanColumn: record.kanbanColumn,
-                        complexity: record.complexity
-                    });
-                }
-
-                if (dropped.length > 0) {
-                    console.warn(`[KanbanProvider] dispatchManagerForSelected: dropped ${dropped.length} unresolvable/feature/subtask id(s): ${dropped.join(', ')}`);
-                }
-
-                if (plans.length === 0) {
-                    void this._seams().ui.showWarningMessage(
-                        'No dispatchable plans in the selection (feature rows and epic subtasks are excluded).'
-                    );
-                    return { success: false, error: 'No dispatchable plans in the selection (feature rows and epic subtasks are excluded).' };
-                }
-
-                if (dropped.length > 0) {
-                    void this._seams().ui.showWarningMessage(
-                        `Targeted pass: ${dropped.length} selected card${dropped.length > 1 ? 's' : ''} excluded (feature rows, epic subtasks, or unresolvable) — dispatching the remaining ${plans.length}.`
-                    );
-                }
-
-                // Cap the embedded list to avoid prompt-size blowup.
-                const MAX_TARGETED_PASS_PLANS = 30;
-                if (plans.length > MAX_TARGETED_PASS_PLANS) {
-                    void this._seams().ui.showErrorMessage(
-                        `Selection has ${plans.length} plans — the targeted pass caps at ${MAX_TARGETED_PASS_PLANS}. Select fewer or run a column pass.`
-                    );
-                    return { success: false, error: `Selection has ${plans.length} plans — the targeted pass caps at ${MAX_TARGETED_PASS_PLANS}.` };
-                }
-
-                if (this._taskViewerProvider) {
-                    await this._taskViewerProvider.handleDispatchManagerForSelected(
-                        plans, workspaceRoot
-                    );
-                }
-                return { success: true, dispatched: plans.length, dropped: dropped.length };
-            }
-
             case 'toggleWorktreeAgentsOpenWithGrid': {
                 const { worktreeId, enabled, workspaceRoot: msgRoot } = msg;
                 const workspaceRoot = this._resolveWorkspaceRoot(msgRoot);
@@ -12078,10 +11834,6 @@ ${FOCUS_DIRECTIVE}`;
                 if (!db || !await db.ensureReady()) return { success: false, error: 'Database unavailable' };
 
                 await db.setConfig('feature_worktree_mode', mode);
-                // A manual worktree-mode change takes ownership: clear any
-                // orchestration-saved prior so the mode-switch-away restore
-                // does not later clobber the user's explicit choice.
-                await db.setConfig('orchestration_prior_feature_worktree_mode', '');
                 await this._sendWorktreeConfig(workspaceRoot);
                 return { success: true, mode };
             }
@@ -12610,7 +12362,6 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
             '{{ICON_WORKTREE}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-68.png')).toString(),
             '{{ICON_WORKTREE_ACTIVE}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, 'worktree-active.svg')).toString(),
             '{{ICON_WORKTREE_MERGED}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, 'worktree-merged.svg')).toString(),
-            '{{ICON_MANAGER_PASS}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-101-150 Sci-Fi Flat icons-125.png')).toString(),
         };
         for (const [placeholder, uri] of Object.entries(iconMap)) {
             content = content.replace(new RegExp(placeholder.replace(/[{}]/g, '\\$&'), 'g'), uri);
@@ -12879,7 +12630,7 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         
         const workspaceId = await db.getWorkspaceId() || '';
         const suppressMainTerminals = (await db.getMeta('worktree_suppress_main_terminals')) === 'true';
-        const featureWorktreeMode = (await db.getConfig('feature_worktree_mode')) || 'none';
+        const featureWorktreeMode = normalizeFeatureWorktreeMode(await db.getConfig('feature_worktree_mode'));
         const projects = await db.getProjects(workspaceId);
         
         // Fetch all active feature plans to pass to webview for selection and mapping
@@ -13588,7 +13339,7 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         // feature-creation time; a later toggle is inert for already-created features.
         // Snapshot once so a mode toggle mid-creation can't split the feature between
         // two provisioning behaviors.
-        const featureWorktreeModeSnapshot = (await db.getConfig('feature_worktree_mode')) || 'none';
+        const featureWorktreeModeSnapshot = normalizeFeatureWorktreeMode(await db.getConfig('feature_worktree_mode'));
         if (featureWorktreeModeSnapshot === 'per-feature') {
             await this._ensureFeatureIntegrationWorktree(workspaceRoot, db, effectiveFeaturePlanId, featureName);
         }

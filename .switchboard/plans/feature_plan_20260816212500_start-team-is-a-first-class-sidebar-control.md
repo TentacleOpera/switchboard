@@ -9,8 +9,8 @@ Make starting a team a visible, first-class control in the terminals panel — a
 **The control exists but is unreachable without knowing where to look.** Today the only way to reach a team's START action is:
 
 1. Find the workspace header row in the sidebar (`.parent-group-header`, `terminals.js:3232-3265`).
-2. Click the `+` at its right edge — `.btn-group-new`, `font-size: 11px; padding: 0 4px; background: none; border: none;` (`terminals.html:660-667`) and `textContent = '+'` with `title = "Spawn terminal in <workspace>"`.
-3. Read past a menu titled **"New terminal — pick a role"** (`terminals.js:6220`) to a `Start a team` sub-section rendered above the role chips (`terminals.js:6229-6265`).
+2. Click the `+` at its right edge — `.btn-group-new`, `font-size: 11px; padding: 0 4px; background: none; border: none;` (`terminals.html:660-668`) and `textContent = '+'` with `title = "Spawn terminal in <workspace>"`.
+3. Read past a menu titled **"New terminal — pick a role"** (`terminals.js:6340`) to a `Start a team` sub-section rendered above the role chips (`terminals.js:6343-6385`).
 
 Nothing about that path advertises teams. The button's own tooltip promises a *terminal*; the menu's own title promises a *role*. There is a second, equally hidden mount at the group-tab-strip `+` (`.group-tab-add`, `terminals.js:2869-2878`), which has the same problem.
 
@@ -20,9 +20,9 @@ Nothing about that path advertises teams. The button's own tooltip promises a *t
 
 Its implementation step 2 then says "Surface teams in the terminals panel **next to** `buildRolePicker`". That was read as *inside* `buildRolePicker`, and the completion note confirms it: "the role picker now renders a 'Start a team' section". Putting the button inside the thing the operator was already failing to find reproduces the original complaint exactly — an operator who looks at the terminals panel for a start-team button still does not see one. The plan's own Complexity Audit even flags the adjacent trap ("adding a separate team button without fixing the picker leaves it in place"), which was addressed; the placement half was not.
 
-**Why the sidebar ops block is the right home.** `.sidebar-ops` (`terminals.html:2008-2027`) is already the panel's list of standing, always-visible fleet actions — `OPEN AGENT TERMINALS`, `FILL GRID`, `CLEAR ALL TERMINALS`, `SAVE AS GROUP`, `LINK UP` — full-width stacked `secondary-btn`s that are legible without hovering, scrolling, or opening anything. "Start a team" is that same kind of action. `FILL GRID` is the exact precedent for one that needs parameters: the button hides itself and reveals an inline `<form>` with two `<select>`s and CANCEL/CONFIRM (`terminals.html:2011-2020`, wired at `terminals.js:878-944`). Reusing that pattern adds no new visual language to the panel — it copies a control sitting two lines above.
+**Why the sidebar ops block is the right home.** `.sidebar-ops` (`terminals.html:2008-2027`) is already the panel's list of standing, always-visible fleet actions — `OPEN AGENT TERMINALS`, `FILL GRID`, `CLEAR ALL TERMINALS`, `SAVE AS GROUP`, `LINK UP` — full-width stacked `secondary-btn`s that are legible without hovering, scrolling, or opening anything. "Start a team" is that same kind of action. `FILL GRID` is the exact precedent for one that needs parameters: the button hides itself and reveals an inline `<form>` with two `<select>`s and CANCEL/CONFIRM (`terminals.html:2011-2020`, wired at `terminals.js:878-946`). Reusing that pattern adds no new visual language to the panel — it copies a control sitting two lines above.
 
-**Scope note — this is a placement change, not a redesign.** The verb (`ptyStartTeam`), the `startTeam()` client function (`terminals.js:6456-6508`), the spawn summary (`teamSpawnSummary`, `:6200-6204`), the toasts, and the role-option annotation (`:6308-6328`) are all correct and are kept as-is. Only where the START action lives changes.
+**Scope note — this is a placement change, not a redesign.** The verb (`ptyStartTeam`), the `startTeam()` client function (`terminals.js:6735-6787`), the spawn summary (`teamSpawnSummary`, `:6320-6324`), the toasts, and the role-option annotation (`:6428-6450`) are all correct and are kept as-is. Only where the START action lives changes.
 
 **Blast radius.** One webview file pair (`terminals.html`, `terminals.js`). No verb, service, DB or config change. `implementation.html`'s Terminals sub-tab mirrors only `OPEN AGENT TERMINALS` (`:1577`) — it has never carried `FILL GRID` or `LINK UP` — so this control is deliberately not mirrored there and no drift is introduced.
 
@@ -32,27 +32,32 @@ Its implementation step 2 then says "Surface teams in the terminals panel **next
 **Tags:** ui, ux, frontend
 **Project:** Browser Switchboard
 
+## User Review Required
+
+None. The placement, the form pattern, and the deletion of the picker section are all settled by the originating plan's stated goal and by the existing `FILL GRID` precedent.
+
 ## Complexity Audit
 
 ### Routine
 
 - Adding a `secondary-btn w-full` + inline form to `.sidebar-ops`, copying the `FILL GRID` markup and CSS classes verbatim.
-- Wiring the button in the same `if (btn && form && …)` block style used for `FILL GRID`.
+- Wiring the button in the same `if (btn && form && …)` block style used for `FILL GRID` (`terminals.js:884-946`).
 - Deleting the `team-picker` section from `buildRolePicker`.
 
 ### Complex / Risky
 
 - **One entry point, not two.** Leaving the picker's team section in place while adding a sidebar button produces two peer controls that do the same thing — the exact "peer modes" failure this panel keeps regressing into. The picker section must be deleted in the same change, not deprecated.
-- **The role-option annotation is not a duplicate and must survive.** `starts <team> · 3× coder, 1× reviewer (shared)` on the `Lead` chip (`terminals.js:6308-6328`) exists because picking a role *auto-starts* a team; it is a warning label on a different control, not a second START button. Deleting it re-opens the "New terminal delivers five terminals" defect the originating plan closed. `teamPickerData` must therefore still be fetched on picker open (`onNewTerminalClicked`, `:6182-6190`), and `teamSpawnSummary` must stay.
-- **The spawn target moves from implicit to explicit.** Today `startTeam(team, targetSpec)` inherits the workspace from whichever header's `+` was clicked. A sidebar button has no such context, so the form must offer the workspace — otherwise a multi-root operator silently loses the ability to start a team in a chosen folder. The source is `parentsList` (`terminals.js:206`, populated at `:1587`), the same array the sidebar's own parent groups are built from (`:3146-3162`).
+- **The role-option annotation is not a duplicate and must survive.** `starts <team> · 3× coder, 1× reviewer (shared)` on the `Lead` chip (`terminals.js:6428-6450`) exists because picking a role *auto-starts* a team; it is a warning label on a different control, not a second START button. Deleting it re-opens the "New terminal delivers five terminals" defect the originating plan closed. `teamPickerData` must therefore still be fetched on picker open (`onNewTerminalClicked`, `:6287-6314`), and `teamSpawnSummary` must stay.
+- **`buildRolePicker`'s `const teams` line is load-bearing after the deletion.** `autoStartByHeadRole` (`:6401-6406`) iterates the local `teams` variable declared at `:6348`, not `teamPickerData` directly. Deleting the team section must NOT delete that declaration or the annotation loses its input silently — the picker still renders, just with no team notes, which is the exact regression this plan is guarding against.
+- **The spawn target moves from implicit to explicit.** Today `startTeam(team, targetSpec)` inherits the workspace from whichever header's `+` was clicked. A sidebar button has no such context, so the form must offer the workspace — otherwise a multi-root operator silently loses the ability to start a team in a chosen folder. The source is `parentsList` (`terminals.js:206`, populated at `:1589`), the same array the sidebar's own parent groups are built from (`:3266`).
 - **No confirm gate.** The inline form is a parameter chooser (team, workspace), the direct analogue of `FILL GRID`'s role+layout selects. `START` submits and spawns. There is no "are you sure", and `CANCEL` closes the form without side effects — matching `fill-grid-cancel` (`terminals.js:924-929`).
 - **Zero teams is a real state and needs an honest answer, not a dead button.** With no teams defined the button must say so once via `showPaneToast` rather than opening an empty `<select>` whose only option is nothing.
 
 ## Edge-Case & Dependency Audit
 
-**Race Conditions** — the team list is fetched on button click (mirroring `FILL GRID`'s role fetch at `:886`), so a team created in the TEAMS tab mid-session is picked up on the next open without a poll. A team deleted between opening the form and submitting resolves to a `No team found with id` error from the verb, surfaced verbatim by the existing `startTeam` error toast (`:6495-6500`) — no new handling needed.
+**Race Conditions** — the team list is fetched on button click (mirroring `FILL GRID`'s role fetch at `:886`), so a team created in the TEAMS tab mid-session is picked up on the next open without a poll. A team deleted between opening the form and submitting resolves to a `No team found with id` error from the verb, surfaced verbatim by the existing `startTeam` error toast (`:6774-6779`) — no new handling needed.
 
-**Security** — none. The client still sends only `{ teamId, cwd }`; the definition stays host-resolved and the `payload.group` rejection is untouched.
+**Security** — none. The client still sends only `{ teamId }` plus an optional `parentRoot`; the definition stays host-resolved and the `payload.group` rejection is untouched.
 
 **Side Effects** —
 - The `+` picker becomes shorter. Its title ("New terminal — pick a role") becomes accurate again — every remaining control in it creates one terminal.
@@ -60,14 +65,23 @@ Its implementation step 2 then says "Surface teams in the terminals panel **next
 
 **Migration** — none. No persisted state, no settings key, no stored layout is involved. `collapsedGroups`, `pickerState` and `saveLayoutSettings()` are untouched.
 
-**Dependencies & Conflicts** — edits `src/webview/terminals.html` and `src/webview/terminals.js` only. No overlap with services, verbs or tests, so it can run concurrently with backend work on the team verbs under the one-stream-per-file rule. Note that the *content* of the team list this control renders comes from `ptyListAgentGroups`; this plan does not change that verb's behaviour and does not depend on it changing.
+**Dependencies & Conflicts** — edits `src/webview/terminals.html` and `src/webview/terminals.js` only. No overlap with services, verbs, tests, or `kanban.html`, so it runs concurrently with every other subtask in this feature under the one-stream-per-file rule. Note that the *content* of the team list this control renders comes from `ptyListAgentGroups`; this plan does not change that verb's behaviour and does not depend on it changing. The companion subtask that fixes that verb's root resolution changes **which** teams appear here, never **whether** this control works.
+
+## Dependencies
+
+- `sess_20260816212500 — explicit team start in the terminals panel` (`.switchboard/plans/explicit-team-start-in-terminals-panel.md`, CODE REVIEWED) — this plan finishes that plan's placement half.
+- No blocking dependency on any other subtask in this feature. File-disjoint from all three.
+
+## Adversarial Synthesis
+
+**Risk summary.** Two failure modes dominate, and both are deletions done carelessly rather than anything added. First: deleting the picker's team section while also deleting the `const teams = …` declaration at `:6348` silently kills the role-chip annotation, re-opening the "picking Lead quietly delivers five terminals" defect the originating plan closed — the picker still renders, so no test and no glance catches it. Second: shipping the sidebar button without deleting the picker section leaves two peer controls doing one job, the panel's documented recurring failure. Mitigations: a grep gate proving `team-picker`/`team-option` are gone *and* a second grep proving `role-option-team-note`/`autoStartByHeadRole`/`teamSpawnSummary` survive, both listed as verification steps; and the deletion is scoped to `:6343-6385` explicitly, with `:6348` called out as retained.
 
 ## Proposed Changes
 
 ### `src/webview/terminals.html` — the control and its form
 
 - **Context:** `.sidebar-ops` at `:2008-2027`, with `FILL GRID` + `#fill-grid-form` at `:2011-2020` as the pattern; `.fill-grid-form` / `.fill-grid-actions` CSS at `:1899-1905`.
-- **Logic:** insert directly after the `fill-grid-form`, so the two parameterised actions sit together and above the destructive/utility ones.
+- **Logic:** insert directly after the `fill-grid-form` (i.e. after `:2020`), so the two parameterised actions sit together and above the destructive/utility ones.
 
 ```html
             <button type="button" id="btn-start-team" class="secondary-btn w-full"
@@ -84,12 +98,14 @@ Its implementation step 2 then says "Surface teams in the terminals panel **next
             </form>
 ```
 
-- **Edge Cases:** the form reuses `.fill-grid-form` rather than minting a `.start-team-form` twin — the two are visually identical by intent, and a second class would be one more place for the panel's spacing to drift. `#start-team-target` carries `hidden` in the markup so a single-workspace window never shows a one-option dropdown; the wiring un-hides it only when there is a real choice.
+- **Edge Cases:**
+  - The form reuses `.fill-grid-form` rather than minting a `.start-team-form` twin — the two are visually identical by intent, and a second class would be one more place for the panel's spacing to drift.
+  - `#start-team-target` carries `hidden` in the markup so a single-workspace window never shows a one-option dropdown; the wiring un-hides it only when there is a real choice. It deliberately carries **no** `required` attribute — a `required` control inside a `hidden` ancestor blocks form submission with a focus error the operator cannot see.
 
 ### `src/webview/terminals.js` — wire the button, delete the picker section
 
-- **Context:** the `FILL GRID` wiring block at `:878-944` sits inside the same DOM-ready function; `fetchAgentGroups()` (`:6145-6160`), `teamSpawnSummary()` (`:6200-6204`), `startTeam()` (`:6456-6508`) and `showPaneToast` already exist and are reused unchanged. `parentsList` (`:206`) holds the workspace parents.
-- **Logic (add, beside the `FILL GRID` block):**
+- **Context:** the `FILL GRID` wiring block at `:878-946` sits inside the same DOM-ready function; `fetchAgentGroups()` (`:6265-6280`), `teamSpawnSummary()` (`:6320-6324`), `startTeam()` (`:6735-6787`) and `showPaneToast` already exist and are reused unchanged. `parentsList` (`:206`) holds the workspace parents, populated at `:1589`.
+- **Logic (add, immediately after the `FILL GRID` block closes at `:946`):**
 
 ```js
         const btnStartTeam = document.getElementById('btn-start-team');
@@ -149,7 +165,6 @@ Its implementation step 2 then says "Surface teams in the terminals panel **next
             startTeamForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const teamId = startTeamName.value;
-                const team = { id: teamId, name: startTeamName.selectedOptions[0]?.textContent || teamId };
                 // Only pass a target when the operator actually chose one; otherwise the
                 // host resolves the spawn cwd itself, as it does for an unqualified start.
                 const targetSpec = (!startTeamTarget.hidden && startTeamTarget.value)
@@ -158,7 +173,7 @@ Its implementation step 2 then says "Surface teams in the terminals panel **next
                 startTeamConfirm.disabled = true;
                 startTeamConfirm.textContent = 'STARTING…';
                 try {
-                    await startTeam(team, targetSpec);
+                    await startTeam({ id: teamId }, targetSpec);
                 } finally {
                     startTeamConfirm.disabled = false;
                     startTeamConfirm.textContent = 'START';
@@ -169,28 +184,47 @@ Its implementation step 2 then says "Surface teams in the terminals panel **next
         }
 ```
 
-- **Logic (delete, in `buildRolePicker`):** remove the whole `── Team list — explicit START action per defined team ──` block (`:6223-6265`) — the `teams.length > 0` guard, the `.team-picker` section, its title, the per-team `.team-option` buttons and their `startTeam(...)` handlers. Keep the `const teams = Array.isArray(teamPickerData) ? teamPickerData : [];` line: `autoStartByHeadRole` (`:6281-6286`) reads it for the role-chip annotation. Update the function's doc comment so it no longer claims to render a team section — it now only annotates roles that head a team.
+> **Superseded:** `const team = { id: teamId, name: startTeamName.selectedOptions[0]?.textContent || teamId };` then `await startTeam(team, targetSpec);`
+> **Reason:** `startTeam` reads only `team.id` (`terminals.js:6736`) and never `team.name`. Synthesising a `name` from the option's label would also produce the wrong value — the label is `"<name> — <spawn summary>"`, not the name — so any future reader who starts trusting that field gets a corrupted string. Passing a field that is unread today and wrong tomorrow is worse than not passing it.
+> **Replaced with:** `await startTeam({ id: teamId }, targetSpec);` — the minimum the callee actually consumes. If a name is ever needed, `startTeam` should read it from the verb response, which is host-resolved and correct.
+
+- **Logic (delete, in `buildRolePicker`):** remove the `── Team list — explicit START action per defined team ──` block at **`:6343-6385`** — the comment banner, the `teams.length > 0` guard, the `.team-picker` section, its title, the `.team-picker-options` container, the per-team `.team-option` buttons and their `startTeam(...)` handlers.
+
+  **Keep `:6348` — `const teams = Array.isArray(teamPickerData) ? teamPickerData : [];`.** It is the input to `autoStartByHeadRole` at `:6401-6406`, which the surviving role-chip annotation depends on. Move the declaration down to sit immediately above the `── Role picker — annotated with auto-start team info ──` banner at `:6387` so its purpose is unambiguous to the next reader.
+
+  Update the function's doc comment (`:6326-6333`) so it no longer claims to render a team section — it now only annotates roles that head a team.
+
 - **Edge Cases:**
-  - `startTeam` already closes over nothing from the picker and takes `(team, targetSpec)`, so the sidebar caller needs no change to it. It only reads `team.id` (`:6457-6459`); the `name` passed above is for nothing but a future message and can be dropped if unused.
-  - `parentsList` is empty on first paint before `:1587` populates it; the button is still usable — `roots` is empty, the target select stays hidden, and the host resolves the spawn cwd. No guard needed.
-  - `showPaneToast` is defined in the same file and already used by `startTeam` (`:6499`), so the empty-state path adds no new dependency.
+  - `startTeam` already closes over nothing from the picker and takes `(team, targetSpec)`, so the sidebar caller needs no change to it. `targetSpec` as `{ parentRoot }` is translated to `payload.parentRoot` at `:6742` and consumed by the host's `spawnCwd` rule.
+  - `parentsList` is empty on first paint before `:1589` populates it; the button is still usable — `roots` is empty, the target select stays hidden, and the host resolves the spawn cwd. No guard needed.
+  - `showPaneToast` is defined in the same file and already used by `startTeam` (`:6778`, `:6781`), so the empty-state path adds no new dependency.
+  - `startTeamName.value` on a `<select>` that was populated but whose every entry was skipped (all teams lacked an `id`) is `''`; the host answers `Missing team id` and the existing error toast surfaces it. Not worth a client-side guard — it requires a malformed host response.
 
 ### `src/webview/terminals.html` — retire the orphaned team-picker CSS
 
-- **Context:** `.team-picker`, `.team-picker-title`, `.team-picker-options`, `.team-option`, `.team-option-name`, `.team-option-summary`, `.team-option.is-unassigned` at `:263-305`.
+- **Context:** `.team-picker` (`:263`), `.team-picker-title` (`:266`), `.team-picker-options` (`:273`), `.team-option` (`:278`), `.team-option:hover` (`:293`), `.team-option:hover .team-option-summary` (`:297`), `.team-option-name` (`:298`), `.team-option-summary` (`:299`), `.team-option.is-unassigned .team-option-name` (`:304`), `.team-option.is-unassigned` (`:305`) — the block at `:263-305`.
 - **Logic:** delete the rules whose only consumer was the deleted picker section. Verify by grep before deleting — `.team-option-summary` and friends must have zero remaining references in `terminals.js` and `terminals.html`.
-- **Edge Cases:** `.role-option-team-note` (`:6318`) is a *different* class used by the surviving role annotation. Do not delete it.
+- **Edge Cases:** `.role-option-team-note` (`terminals.html:254`, applied at `terminals.js:6438`) is a *different* class used by the surviving role annotation and sits immediately above the deleted block. Do not delete it — the two are adjacent, which is exactly how an over-eager range delete takes it out.
 
 ## Verification Plan
 
+### Automated Tests
+
 1. `npm run lint`.
 2. Grep proves single entry point: `grep -n "team-picker\|team-option" src/webview/terminals.js src/webview/terminals.html` returns nothing.
-3. Grep proves the annotation survived: `grep -n "role-option-team-note\|autoStartByHeadRole\|teamSpawnSummary" src/webview/terminals.js` still returns the role-chip annotation block and the summary helper.
+3. Grep proves the annotation survived: `grep -n "role-option-team-note\|autoStartByHeadRole\|teamSpawnSummary" src/webview/terminals.js` still returns the role-chip annotation block, the `autoStartByHeadRole` loop, and the summary helper — and `grep -n "const teams = Array.isArray(teamPickerData)" src/webview/terminals.js` still returns exactly one hit.
+
+### Manual
+
 4. Open the terminals panel. `START TEAM` is visible in the sidebar ops block, full width, without clicking, hovering or scrolling anything — between `FILL GRID`'s form and `CLEAR ALL TERMINALS`.
 5. Click `START TEAM` with at least one team defined: the button hides, the inline form appears, and the team `<select>` reads `<team name> — <spawn summary>` for each defined team.
 6. Single-workspace window: the workspace `<select>` is not rendered. Multi-root window: it lists each mapped workspace by name.
 7. Submit: the button shows `STARTING…`, the team spawns, the form closes and `START TEAM` returns. Submitting with a live head shows the existing double-start refusal toast verbatim.
 8. Click `CANCEL`: the form closes, `START TEAM` returns, and no terminal is created.
 9. Delete every team in the TEAMS tab, then click `START TEAM`: a toast reads `No teams defined — add one in the TEAMS tab.` and no empty form opens.
-10. Click the `+` on a workspace header: the menu opens with **no** `Start a team` section, and the `Lead` chip still carries its `starts <team> · <summary>` note. Picking a role still creates exactly one terminal (plus that role's auto-started team, as annotated).
-11. Repeat 4–10 in the browser cockpit window (`NEW WINDOW`, `terminals.html:2054`) — this panel is served to both hosts and the ops block must behave identically.
+10. Click the `+` on a workspace header: the menu opens with **no** `Start a team` section, and the `Lead` chip still carries its `starts <team> · <summary>` note. Picking a role still creates exactly one terminal (plus that role's auto-started team, as annotated). This step is the annotation regression gate — it must be run, not inferred from step 3's grep.
+11. Repeat 4–10 in the browser cockpit window (`NEW WINDOW`, `terminals.html:2054`) — this panel is served to both hosts (PRD contract #1: byte-identical panel HTML) and the ops block must behave identically.
+
+---
+
+**Recommendation:** Complexity 3 → **Send to Intern.**

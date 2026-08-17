@@ -478,20 +478,21 @@ export class GlobalIntegrationConfigService {
     // ─── Scheduler accessors ────────────────────────────────────────────────
 
     /** Sources that have been deleted. Jobs with these sources are dropped on read. */
-    private static readonly DROPPED_SOURCES = new Set(['comms', 'board-batch']);
+    private static readonly DROPPED_SOURCES = new Set(['comms', 'board-batch', 'custom']);
 
-    /** Drop jobs whose source has been deleted (comms, board-batch) on read. */
+    /** Drop jobs whose source has been deleted (comms, board-batch, custom) on read. */
     private static _filterDroppedSources(jobs: ScheduledJob[]): ScheduledJob[] {
         return jobs.filter(j => !this.DROPPED_SOURCES.has(j.source as string));
     }
 
     /**
      * Resolve the persisted `SchedulerConfig`, dropping jobs whose source has
-     * been deleted (comms, board-batch) on READ — never via a destructive write.
-     * The dropped comms job stays inert in the file until the next legitimate
-     * `setSchedulerConfig` write, which reads through this filter and persists
-     * the list without it. Forward-compat: a `scheduler` whose `schemaVersion`
-     * is newer than known is returned as-is (still filtered).
+     * been deleted (comms, board-batch, custom) on READ — never via a
+     * destructive write. The dropped jobs stay inert in the file until the
+     * next legitimate `setSchedulerConfig` write, which reads through this
+     * filter and persists the list without them. Forward-compat: a `scheduler`
+     * whose `schemaVersion` is newer than known is returned as-is (still
+     * filtered).
      */
     private static _ensureSchedulerMigration(globalConfig: GlobalConfig): SchedulerConfig {
         const existing = globalConfig.scheduler;
@@ -596,5 +597,21 @@ export class GlobalIntegrationConfigService {
         return boardBatchJob && typeof boardBatchJob.intervalMinutes === 'number'
             ? boardBatchJob.intervalMinutes
             : undefined;
+    }
+
+    /**
+     * One-time migration read: return the labels of any `custom` jobs in the
+     * raw persisted config (bypassing the DROPPED_SOURCES filter) so a
+     * one-time notice can name what stopped. The caller is responsible for
+     * latching via a workspaceState flag so this only fires once.
+     */
+    public static getDroppedCustomJobLabels(): string[] {
+        const globalConfig = this.loadGlobalSync();
+        const scheduler = globalConfig.scheduler;
+        if (!scheduler || !Array.isArray(scheduler.jobs)) return [];
+        return scheduler.jobs
+            .filter(j => (j as any).source === 'custom')
+            .map(j => (j as any).label || (j as any).id)
+            .filter((l: string) => !!l);
     }
 }

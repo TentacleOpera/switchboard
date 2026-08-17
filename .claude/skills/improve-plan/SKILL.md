@@ -19,6 +19,7 @@ Use this workflow to strengthen an existing feature plan in a single fluid pass.
 
     Never silently delete a conclusion and write a new one in its place. The callout is the audit trail — without it, the change is a protocol violation.
 - **SESSION vs PRODUCT SCOPE**: Session directives (e.g. "single-repo", "skip compilation", "skip tests") constrain HOW you verify and organize the plan, not WHAT the plan covers. Do not conflate repo structure constraints with product feature requirements. If the plan targets multi-root workspaces, you must preserve and improve that scope regardless of the current session's repo configuration.
+  **Never transcribe a session directive into the plan file** — not as a note, a caveat, or an explanation of what this run did or did not do. It binds you, not the reader. Written down it inverts: a later coder reads a constraint on the *planner* as an instruction to *itself*, and follows the document over the live dispatch that contradicts it.
 - **SINGLE PASS**: Complete enhancement, dependency checks, the architecture challenge (Step 4), adversarial critique, balanced synthesis, and plan update in one continuous response.
 
 ## Target is a feature? Use improve-feature instead

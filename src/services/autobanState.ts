@@ -31,20 +31,22 @@ export const ORCHESTRATOR_TERMINAL_NAME = 'Orchestrator';
 export const AUTOBAN_SOURCE_COLUMN = 'PLAN REVIEWED';
 
 /**
- * The automation axis is *who runs the clock*.
+ * The automation axis is *what drives the board*.
  *
- * `internal` — Switchboard runs the run sheet on its own schedule, dispatching
- * to local terminals. Oversight agent optional. This is the only mode that
- * installs timers and dispatches.
+ * `agent-managed` — Switchboard wakes the orchestrator agent every N minutes to
+ * decide and take the next action. Judgement lives in the agent.
+ *
+ * `scheduled` — Switchboard applies the run sheet every N minutes. Mechanical,
+ * no agent deciding.
  *
  * `external` — Switchboard emits a copyable prompt for a tool that runs agent
  * cron jobs (Antigravity, a Claude scheduled agent). Switchboard runs no clock
  * and dispatches nothing.
  *
- * Orchestration is NOT a mode — it is an optional oversight agent armed via
- * `orchestrationConfig.enabled` while the run sheet runs.
+ * Exactly one is active. The orchestrator is the automation in agent-managed
+ * mode; it is not a flag alongside the run sheet.
  */
-export type AutobanAutomationMode = 'internal' | 'external';
+export type AutobanAutomationMode = 'agent-managed' | 'scheduled' | 'external';
 
 /**
  * One step of the run sheet: "if this team's head is alive and this column has
@@ -97,16 +99,19 @@ export type SingleColumnAutobanConfig = {
 };
 
 export type OrchestrationConfig = {
-    enabled: boolean;          // orchestrator session armed (Start pressed, not yet stopped)
+    intervalMinutes: number;   // wake interval for the orchestrator in agent-managed mode
 };
 
 export const DEFAULT_ORCHESTRATION_CONFIG: OrchestrationConfig = {
-    enabled: false
+    intervalMinutes: 10
 };
 
 export function normalizeOrchestrationConfig(state?: Partial<OrchestrationConfig> | null): OrchestrationConfig {
     return {
-        enabled: state?.enabled === true
+        // Floor of 1 minute, no ceiling — "once every few hours" and "overnight"
+        // are valid wake intervals, same reasoning as the run-sheet interval.
+        // Reads through the persisted value rather than defaulting past it.
+        intervalMinutes: Math.max(1, Number.isFinite(state?.intervalMinutes as number) ? Math.floor(state!.intervalMinutes!) : 10)
     };
 }
 
@@ -163,6 +168,8 @@ export type AutobanConfigState = {
     orchestrationConfig?: OrchestrationConfig;
     /** One-time notice shown in the Internal panel when a board-batch job is migrated. */
     migratedBoardBatchNotice?: string;
+    /** One-time notice shown when custom scheduler jobs are dropped on read. */
+    droppedCustomJobsNotice?: string;
 };
 
 const DEFAULT_AUTOBAN_RULES: Record<string, AutobanRuleState> = {
@@ -260,25 +267,28 @@ export function isWatchColumn(rule?: AutobanRuleState | null): boolean {
 }
 
 /**
- * The automation axis is *who runs the clock*. `internal` is the only mode
- * that installs timers and dispatches; `external` emits a prompt and runs
- * nothing.
+ * The automation axis is *what drives the board*. `scheduled` and
+ * `agent-managed` are the two clock-running modes; `external` emits a prompt
+ * and runs nothing.
  *
  * This is shipped state on ~4,000 installs, so the retired values MAP rather
  * than fall through a whitelist: `run-sheet` and `scheduler` were the earlier
  * pair (board progression vs. arbitrary prompts on a timer — both are
- * Switchboard running the clock, so both map to `internal`); `single-column`
+ * Switchboard running the clock, so both map to `scheduled`); `single-column`
  * was the run sheet under an older name; `orchestration` was a peer mode that
- * is now an optional oversight agent (see the orchestrationConfig migration
- * below). A whitelist that fell through would silently disarm a shipped
- * install's clock — everything unrecognised lands on `internal`, the safe
- * default that keeps the board ticking.
+ * is now agent-managed mode. An install persisted as `internal` with
+ * `orchestrationConfig.enabled === true` (the 150001 migration cohort) also
+ * maps to `agent-managed` — the mode value carries the whole signal now. A
+ * whitelist that fell through would silently disarm a shipped install's clock
+ * — everything unrecognised lands on `scheduled`, the safe default that keeps
+ * the board ticking.
  */
-export function normalizeAutomationMode(value: unknown): AutobanAutomationMode {
+export function normalizeAutomationMode(value: unknown, orchEnabled?: boolean): AutobanAutomationMode {
     if (value === 'external') { return 'external'; }
-    // 'run-sheet', 'scheduler', 'single-column', 'orchestration' and anything
-    // unrecognised all land on internal — it is the only clock-running mode.
-    return 'internal';
+    if (value === 'orchestration' || (value === 'internal' && orchEnabled === true)) { return 'agent-managed'; }
+    // 'run-sheet', 'scheduler', 'single-column' and anything unrecognised all
+    // land on scheduled — it is the mechanical clock-running mode.
+    return 'scheduled';
 }
 
 export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> | null): AutobanConfigState {
@@ -335,18 +345,14 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
             return 'off';
         })((state as any)?.pairProgrammingMode, (state as any)?.pairProgrammingEnabled),
         aggressivePairProgramming: state?.aggressivePairProgramming === true,
-        automationMode: normalizeAutomationMode(state?.automationMode),
+        automationMode: normalizeAutomationMode(state?.automationMode, (state as any)?.orchestrationConfig?.enabled),
         singleColumnConfig: normalizeSingleColumnConfig(state?.singleColumnConfig),
-        // `orchestration` used to be a peer MODE; it is now an optional oversight
-        // agent armed alongside the run sheet. An install persisted in that mode
-        // keeps its oversight armed rather than silently losing it — the mode
-        // value migrates to `internal` above, and this carries the intent across.
-        orchestrationConfig: normalizeOrchestrationConfig(
-            (state as any)?.automationMode === 'orchestration'
-                ? { ...state?.orchestrationConfig, enabled: true }
-                : state?.orchestrationConfig
-        ),
-        migratedBoardBatchNotice: typeof state?.migratedBoardBatchNotice === 'string' ? state.migratedBoardBatchNotice : undefined
+        // The mode value carries the whole signal now — `orchestrationConfig.enabled`
+        // is deleted. `intervalMinutes` is restored (it shipped 2026-07-08 and was
+        // narrowed out by 150001); the normaliser reads through the persisted value.
+        orchestrationConfig: normalizeOrchestrationConfig(state?.orchestrationConfig),
+        migratedBoardBatchNotice: typeof state?.migratedBoardBatchNotice === 'string' ? state.migratedBoardBatchNotice : undefined,
+        droppedCustomJobsNotice: typeof state?.droppedCustomJobsNotice === 'string' ? state.droppedCustomJobsNotice : undefined
     };
 }
 

@@ -52,7 +52,7 @@ Restructuring is expected — but bounded:
    - **Rewrite** a subtask to remove a contradiction or to defer to the merged owner of a shared symbol.
    - **Split** a subtask that is really two units of work.
    - **Reorder** — record the execution sequence.
-   Apply session-scope directives here (e.g. "unreleased → clean break, no migration shims"; "single-repo").
+   Apply session-scope directives here (e.g. "unreleased → clean break, no migration shims"; "single-repo") — **apply them, never transcribe them.** A directive binds this run, not the reader. Written into a subtask file it inverts: the coder who picks that file up reads a constraint on *you* as an instruction to *itself*, and follows the document over the live dispatch that contradicts it.
    
    After restructuring, you MUST move each **newly created** plan file (merges, splits) to `PLAN REVIEWED` using the session-appropriate mechanism (e.g., `kanban_operations` skill / move-card.js locally, Notion/Linear provider/MCP remotely). In-place rewrites keep their existing columns. Do not move deleted plans.
 

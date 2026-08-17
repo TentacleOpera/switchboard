@@ -20,10 +20,3 @@ Remove two vestigial mechanisms that no longer have any consumer in the codebase
 ## Dependencies & sequencing
 
 No hard ordering constraints; subtasks can be executed in parallel. The two subtasks touch disjoint file sets (TypeScript parser source vs. workflow/skill Markdown docs), so there is no merge-conflict risk. The manifest-cleanup plan's trigger-model discussion references the Stage Complete marker conceptually, but there is no code-level dependency — either can land first.
-
-<!-- BEGIN WORKTREES (auto-generated, do not edit) -->
-## Worktrees
-- **Feature integration**: `dead-legacy-mechanism-cleanup` → `/Users/patrickvuleta/Documents/GitHub/worktrees/switchboard/dead-legacy-mechanism-cleanup`
-- [Remove Dead Plan-Import Manifest Language from Workflows and Skills](../plans/remove-dead-plan-import-manifest-language-from-workflows-and-skills.md): `remove-dead-plan-import-manifest-languag` → `/Users/patrickvuleta/Documents/GitHub/worktrees/switchboard/remove-dead-plan-import-manifest-languag`
-- [Remove the dead Stage Complete label + parser field](../plans/remove-dead-stage-complete-label-and-parser.md): `remove-the-dead-stage-complete-label-par` → `/Users/patrickvuleta/Documents/GitHub/worktrees/switchboard/remove-the-dead-stage-complete-label-par`
-<!-- END WORKTREES -->

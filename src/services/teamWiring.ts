@@ -144,6 +144,47 @@ const OLD_SEEDED_AGENT_GROUP: any = {
 };
 
 /**
+ * The PRE-rewrite Coding team `headPrompt` — byte-identical to the shipped
+ * definition before this change. The migration recogniser matches against
+ * this (not the post-rewrite text) because this is what is on disk on every
+ * install that adopted the Coding team before the fix.
+ *
+ * Stored verbatim — never reconstructed by string-building at match time.
+ */
+export const OLD_CODING_HEAD_PROMPT =
+    'You lead this team. When a coder reports a subtask finished and you are '
+    + 'satisfied with it, hand it to review yourself: read the port from '
+    + '.switchboard/api-server-port.txt and POST /kanban/dispatch with '
+    + '{"plan":"<planId>","targetColumn":"CODE REVIEWED","from":"{head}"} — that one '
+    + 'call advances the card and dispatches the reviewer. Do NOT use /kanban/move: it '
+    + 'moves the card and dispatches nobody, so the work stalls unreviewed. Only advance '
+    + 'subtasks this team worked; leave other cards alone. Do not wait to be asked.';
+
+/**
+ * The POST-rewrite Coding team `headPrompt` — feature-level, single-action.
+ * The lead never writes a review prompt and never hands work to the reviewer
+ * directly; it makes one `/kanban/dispatch` call on the FEATURE's planId when
+ * every subtask is finished. `{head}` is substituted by `wireSpawnedTeam`
+ * (`:719`) and by the order converter with the live head name.
+ *
+ * Byte-identical to the shipped `headPrompt` in `kanban.html`'s Coding entry
+ * (the four substring assertions in the marker-contract test pin the
+ * load-bearing literals).
+ */
+export const NEW_CODING_HEAD_PROMPT =
+    'You lead this team. Your coders work the subtasks of one feature. When a coder '
+    + 'reports a subtask finished, note it and give that coder the next subtask. Do not send '
+    + 'anything to the reviewer, and do not write review instructions — that is not your job. '
+    + 'When every subtask of the feature is finished, read the port from '
+    + '.switchboard/api-server-port.txt, confirm no subtask is still outstanding via '
+    + 'GET /kanban/feature, then make one call: POST /kanban/dispatch with '
+    + '{"plan":"<the FEATURE planId>","targetColumn":"CODE REVIEWED","from":"{head}"} — '
+    + 'that one call moves the card and dispatches the reviewer with the reviewer\'s own '
+    + 'prompt. Do NOT use /kanban/move: it moves the card and dispatches nobody. Only '
+    + 'advance the feature your team worked; leave other cards alone. Do not wait to be '
+    + 'asked.';
+
+/**
  * Convert existing agent groups to the team shape. Runs on every read
  * path that can trigger auto-start, so it is impossible for the
  * auto-start trigger to observe un-migrated data.
@@ -196,6 +237,36 @@ export function migrateAgentGroups(groups: any[]): any[] | null {
             console.log(
                 `[teamWiring] Migration: neutralised untouched old seed `
                 + `'${g.id}' (was 3× coder, now member-less Lead team).`
+            );
+        }
+
+        // Step 1b: convert an untouched old Coding team forked from the
+        // gallery. The fork carries the old per-subtask `headPrompt` and a
+        // reviewer member with `relationship: 'reviewer'` — the pair that
+        // installs the bypass order on the lead. Flip the reviewer to
+        // `reports-to-head` (member-receives → no pair row, carried by the
+        // team prompt) and replace `headPrompt` with the feature-level text.
+        // Exact-value match on `headPrompt` + the reviewer member's
+        // relationship; an operator-edited group does not match and is left
+        // alone. Preserve every other key on the group and on each member.
+        if (isUntouchedOldCodingTeam(g)) {
+            const convertedReviewerMembers = (Array.isArray(g.members) ? g.members : [])
+                .map((m: any) => {
+                    if (m && m.role === 'reviewer' && m.relationship === 'reviewer') {
+                        return { ...m, relationship: 'reports-to-head' };
+                    }
+                    return m;
+                });
+            g = {
+                ...g,
+                headPrompt: NEW_CODING_HEAD_PROMPT,
+                members: convertedReviewerMembers,
+            };
+            changed = true;
+            console.log(
+                `[teamWiring] Migration: converted untouched old Coding team `
+                + `'${g.id || g.name}' — reviewer relationship → reports-to-head, `
+                + `headPrompt → feature-level dispatch.`
             );
         }
 
@@ -393,6 +464,32 @@ function isUntouchedOldSeed(group: any, oldSeed: any): boolean {
 }
 
 /**
+ * Recognise an untouched old Coding team forked from the shipped gallery.
+ *
+ * The gallery's USE handler deep-copies the shipped Coding definition into a
+ * new group and persists it. From that moment the workspace copy is the
+ * source of truth and the shipped definition is never re-read. So an install
+ * that pressed USE before this change carries the old per-subtask
+ * `headPrompt` and a reviewer member with `relationship: 'reviewer'` — the
+ * pair that installs the bypass order on the lead.
+ *
+ * Match by the discriminating fields the plan names: `headRole === 'lead'`,
+ * `headPrompt` byte-identical to `OLD_CODING_HEAD_PROMPT`, and a member with
+ * `role === 'reviewer'` and `relationship === 'reviewer'`. A group whose
+ * `headPrompt` an operator has edited does not match and is left alone — the
+ * operator's text wins. Exact-value matching is the whole safety story,
+ * exactly as for `isUntouchedOldSeed`.
+ */
+function isUntouchedOldCodingTeam(group: any): boolean {
+    if (!group || group.headRole !== 'lead') { return false; }
+    if (group.headPrompt !== OLD_CODING_HEAD_PROMPT) { return false; }
+    const members = group.members;
+    if (!Array.isArray(members)) { return false; }
+    return members.some((m: any) =>
+        m && m.role === 'reviewer' && m.relationship === 'reviewer');
+}
+
+/**
  * Look up a team definition whose `headRole` matches the given role.
  *
  * Returns the first match or null. One team per head role is the constraint
@@ -489,6 +586,79 @@ export async function resolveTeamById(db: any, teamId: string): Promise<any | nu
         console.warn(`[teamWiring] resolveTeamById('${teamId}') failed:`, err);
         return null;
     }
+}
+
+/**
+ * True when a group is byte-for-byte the shipped starter (`SEEDED_AGENT_GROUP`)
+ * — id, name, headRole, an empty members array, and no extra keys. Exact-value,
+ * never heuristic: an operator-authored member-less team differs by at least one
+ * field and must NOT match. Same construction as isUntouchedOldSeed above.
+ */
+export function isUntouchedSeed(group: any): boolean {
+    if (!group || typeof group !== 'object') { return false; }
+    if (group.id !== SEEDED_AGENT_GROUP.id) { return false; }
+    if (group.name !== SEEDED_AGENT_GROUP.name) { return false; }
+    if (group.headRole !== SEEDED_AGENT_GROUP.headRole) { return false; }
+    if (!Array.isArray(group.members) || group.members.length !== 0) { return false; }
+    const gKeys = Object.keys(group).sort().join(',');
+    const sKeys = Object.keys(SEEDED_AGENT_GROUP).sort().join(',');
+    return gKeys === sKeys;
+}
+
+/** A candidate root carries operator intent only if it has at least one team
+ *  that is not the auto-seed. A root holding nothing but the seed must not
+ *  shadow a root that holds real definitions — that is exactly how a phantom
+ *  seeded row hid the operator's real team. */
+function hasAuthoredTeams(groups: any[]): boolean {
+    return Array.isArray(groups) && groups.some(g => g && !isUntouchedSeed(g));
+}
+
+/**
+ * Read team definitions from the first candidate root that holds authored
+ * teams, nearest-first. Migrates in memory (same guarantee as
+ * findTeamForHeadRole / resolveTeamById) and NEVER writes — this is the read
+ * path for the terminals panel, and a read must not seed.
+ *
+ * Returns `{ teams, root }`, or `{ teams: [], root: null }` when no candidate
+ * holds authored teams. The caller decides what to show for the empty case.
+ */
+export async function listTeamsInRoots(
+    roots: string[],
+    getDb: (root: string) => Promise<any | undefined>
+): Promise<{ teams: any[]; root: string | null }> {
+    for (const root of roots) {
+        let db: any;
+        try { db = await getDb(root); }
+        catch (err) { console.warn(`[teamWiring] Team list: DB unavailable for '${root}':`, err); continue; }
+        if (!db) { continue; }
+        try {
+            const raw = await db.getConfigJson(AGENT_GROUPS_CONFIG_KEY, null) as any[] | null;
+            if (!Array.isArray(raw) || !hasAuthoredTeams(raw)) { continue; }
+            return { teams: migrateAgentGroups(raw) ?? raw, root };
+        } catch (err) {
+            console.warn(`[teamWiring] Team list: read failed for '${root}':`, err);
+        }
+    }
+    return { teams: [], root: null };
+}
+
+/** The id-resolving twin. Walks the SAME candidate order as listTeamsInRoots so
+ *  the team the picker listed is the team START resolves. Returns the matched
+ *  db alongside the team so the caller does not re-open a second, different one. */
+export async function resolveTeamByIdInRoots(
+    roots: string[],
+    getDb: (root: string) => Promise<any | undefined>,
+    teamId: string
+): Promise<{ team: any; root: string; db: any } | null> {
+    for (const root of roots) {
+        let db: any;
+        try { db = await getDb(root); }
+        catch { continue; }
+        if (!db) { continue; }
+        const team = await resolveTeamById(db, teamId);
+        if (team) { return { team, root, db }; }
+    }
+    return null;
 }
 
 /**
@@ -857,6 +1027,91 @@ export function migrateTeamPairOrders(orders: StandingOrder[]): StandingOrder[] 
     return [
         ...orders.filter(o => !recognised.has(o.id)),
         ...newTeamOrders,
+    ];
+}
+
+/**
+ * Migrate stale Coding-team standing orders on read — the read-site
+ * counterpart to the `migrateAgentGroups` Coding-team step (§1b).
+ *
+ * Two rows are stale on an already-wired install:
+ *  - a pair-scoped order carrying the resolved `reviewer` preset text
+ *    (`parent` = lead, `child` = reviewer) — installed because the old
+ *    reviewer member declared `relationship: 'reviewer'` (a `head-receives`
+ *    preset). It instructs the lead to hand work straight to the reviewer,
+ *    bypassing the board.
+ *  - a `team-head` order carrying the old per-subtask `headPrompt` (with
+ *    `{head}` already substituted with the live head name at install time).
+ *
+ * Pure: no DB writes. Applied at the standing-orders read sites so the
+ * transformation takes effect before `applyStandingOrders` renders — the
+ * stale rows stay in the DB but are filtered from the rendered set.
+ * Idempotent: a second pass finds nothing left to recognise (the pair row is
+ * gone, the team-head row carries the new text).
+ *
+ * Recognisers match on instruction text — that is what is actually on disk.
+ * The pair recogniser reconstructs the expected reviewer preset text from
+ * the order's own `parent`/`child` names (so it is install-independent) and
+ * compares exactly. The team-head recogniser matches by `indexOf` on a
+ * substitution-independent literal fragment of the old `headPrompt` — never
+ * a constructed `RegExp`, because the substituted head name may contain
+ * regex metacharacters. Every unrecognised row — including operator-edited
+ * ad-hoc link-ups — is left untouched.
+ */
+export function migrateCodingTeamOrders(orders: StandingOrder[]): StandingOrder[] {
+    if (!Array.isArray(orders) || orders.length === 0) { return orders; }
+
+    const drop = new Set<string>();        // order ids to remove
+    const rewritten: StandingOrder[] = []; // replacement team-head rows
+    let touched = false;
+
+    // A substitution-independent fragment unique to the old per-subtask
+    // headPrompt. The new feature-level text does not contain it, so a
+    // converted row is never re-matched.
+    const OLD_HEADPROMPT_FRAGMENT = 'satisfied with it, hand it to review yourself';
+
+    for (const o of orders) {
+        if (!o || typeof o !== 'object') { continue; }
+
+        // Stale reviewer pair row: instruction equals the resolved reviewer
+        // preset text for this (parent, child) pair. Drop it — the reviewer
+        // is now reached only by a card arriving in CODE REVIEWED.
+        const scope = o.scope || 'pair';
+        if (scope === 'pair') {
+            // `child` is optional on StandingOrder; `resolvePreset` takes a
+            // string and maps a falsy name to its own placeholder, so `|| ''`
+            // is behaviour-identical to the client mirror (which passes the
+            // raw value into the same `childName || …` fallback).
+            const expected = resolvePreset('reviewer', o.parent, o.child || '');
+            if (expected && o.instruction === expected) {
+                drop.add(o.id);
+                touched = true;
+                continue;
+            }
+        }
+
+        // Stale team-head row carrying the old per-subtask headPrompt.
+        // {head} was already substituted at install time, so match on a
+        // substitution-independent fragment by indexOf. On match, rewrite
+        // the instruction to the new feature-level text with {head}
+        // substituted by the order's parent (the head name).
+        if (o.scope === 'team-head' && typeof o.instruction === 'string') {
+            if (o.instruction.indexOf(OLD_HEADPROMPT_FRAGMENT) !== -1) {
+                const newInstruction = NEW_CODING_HEAD_PROMPT
+                    .replace(/\{head\}/g, o.parent || '');
+                rewritten.push({ ...o, instruction: newInstruction });
+                drop.add(o.id);
+                touched = true;
+                continue;
+            }
+        }
+    }
+
+    if (!touched) { return orders; }
+
+    return [
+        ...orders.filter(o => !drop.has(o.id)),
+        ...rewritten,
     ];
 }
 

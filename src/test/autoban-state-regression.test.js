@@ -8,6 +8,8 @@ const {
     getNextAutobanTerminalName,
     buildAutobanBroadcastState,
     normalizeAutobanConfigState,
+    normalizeAutomationMode,
+    normalizeOrchestrationConfig,
     normalizeAutobanBatchSize,
     normalizeSingleColumnConfig,
     DEFAULT_AUTOBAN_RUN_SHEET,
@@ -408,14 +410,14 @@ async function run() {
     // ─────────────────────────────────────────────────────────────────────────
     const kanbanProviderSource = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'KanbanProvider.ts'), 'utf8');
 
-    // --- The mode axis is exactly internal|external, and it MAPS, never whitelists ---
+    // --- The mode axis is exactly agent-managed|scheduled|external, and it MAPS, never whitelists ---
     // A whitelist that fell through would silently disarm a shipped install's
-    // clock. Everything unrecognised must land on `internal`.
-    for (const legacy of ['single-column', 'multi-column', 'orchestration', 'run-sheet', 'scheduler', '', 'nonsense', undefined, null]) {
+    // clock. Everything unrecognised must land on `scheduled`.
+    for (const legacy of ['single-column', 'multi-column', 'run-sheet', 'scheduler', '', 'nonsense', undefined, null]) {
         assert.strictEqual(
             normalizeAutobanConfigState({ automationMode: legacy }).automationMode,
-            'internal',
-            `a persisted automationMode of ${JSON.stringify(legacy)} must normalise to 'internal' — falling through a whitelist disarms shipped installs`
+            'scheduled',
+            `a persisted automationMode of ${JSON.stringify(legacy)} must normalise to 'scheduled' — falling through a whitelist disarms shipped installs`
         );
     }
     assert.strictEqual(
@@ -424,49 +426,144 @@ async function run() {
         "'external' is the only value that normalises to external"
     );
 
-    // --- Oversight is a FLAG, not a mode (plan: oversight-stops-being-a-mode) ---
-    // The already-landed state migration: an install persisted in the retired
-    // `orchestration` mode keeps its oversight armed rather than losing it.
-    const migratedOversight = normalizeAutobanConfigState({ automationMode: 'orchestration' });
-    assert.strictEqual(migratedOversight.automationMode, 'internal', 'the retired orchestration mode migrates onto internal');
+    // --- The migration table: three cohorts, all tested ---
+    // `orchestration` → `agent-managed` (the retired peer mode)
     assert.strictEqual(
-        migratedOversight.orchestrationConfig.enabled,
-        true,
-        'a persisted orchestration mode must carry its intent across into orchestrationConfig.enabled'
+        normalizeAutobanConfigState({ automationMode: 'orchestration' }).automationMode,
+        'agent-managed',
+        'the retired orchestration mode migrates to agent-managed'
     );
+    // `internal` + `orchestrationConfig.enabled === true` → `agent-managed` (the 150001 cohort)
     assert.strictEqual(
-        normalizeAutobanConfigState({ automationMode: 'internal' }).orchestrationConfig.enabled,
-        false,
-        'oversight is off by default — the migration must not arm every install'
+        normalizeAutobanConfigState({ automationMode: 'internal', orchestrationConfig: { enabled: true } }).automationMode,
+        'agent-managed',
+        'internal with oversight enabled migrates to agent-managed — the 150001 cohort must not lose its agent'
+    );
+    // bare `internal` → `scheduled` (the majority cohort)
+    assert.strictEqual(
+        normalizeAutobanConfigState({ automationMode: 'internal' }).automationMode,
+        'scheduled',
+        'bare internal migrates to scheduled — the majority cohort keeps ticking'
     );
 
-    // isAutomationArmed is the OversightPassService 409 guard. Arming oversight
-    // no longer sets autobanState.enabled, so without the OR the 409 stops
-    // firing and an oversight pass double-dispatches against a live orchestrator.
-    // It is NOT a mode branch — grepping for a mode comparison finds nothing.
-    assert.ok(
-        /isAutomationArmed:\s*\(\)\s*=>\s*this\._autobanState\.enabled === true \|\| this\._autobanState\.orchestrationConfig\?\.enabled === true/.test(providerSource),
-        'isAutomationArmed must OR on orchestrationConfig.enabled — otherwise arming oversight stops tripping the double-dispatch 409'
+    // --- orchestrationConfig.enabled is DELETED; intervalMinutes is RESTORED ---
+    assert.strictEqual(
+        normalizeOrchestrationConfig({ intervalMinutes: 45 }).intervalMinutes,
+        45,
+        'normalizeOrchestrationConfig must read through a persisted intervalMinutes, not hard-default past it'
     );
-    // Arming and enabling are two independent writes.
-    assert.ok(
-        !/startOrchestratorFromKanban[\s\S]{0,3000}?automationMode:\s*'orchestration'/.test(providerSource),
-        'startOrchestratorFromKanban must not write automationMode — arming oversight is not a mode change'
+    assert.strictEqual(
+        normalizeOrchestrationConfig({ intervalMinutes: 0 }).intervalMinutes,
+        1,
+        'intervalMinutes floors at 1'
+    );
+    assert.strictEqual(
+        normalizeOrchestrationConfig({ intervalMinutes: 999 }).intervalMinutes,
+        999,
+        'intervalMinutes has no ceiling — "overnight" is a valid wake interval'
+    );
+    assert.strictEqual(
+        normalizeOrchestrationConfig(undefined).intervalMinutes,
+        10,
+        'intervalMinutes defaults to 10 when absent'
     );
     assert.ok(
-        !/public async stopOrchestratorFromKanban[\s\S]{0,900}?_stopAutobanEngine\(\)/.test(providerSource),
-        'stopOrchestratorFromKanban must not stop the autoban engine — unticking oversight must leave board progression running'
+        !('enabled' in normalizeOrchestrationConfig({ enabled: true, intervalMinutes: 10 })),
+        'normalizeOrchestrationConfig must not return an enabled field — it is deleted'
+    );
+    assert.ok(
+        !('maxConcurrentSubtasks' in normalizeOrchestrationConfig({ maxConcurrentSubtasks: 5, intervalMinutes: 10 })),
+        'normalizeOrchestrationConfig must not return maxConcurrentSubtasks — it belongs to a fan-out model that is not part of this feature'
+    );
+    assert.ok(
+        !('lastWakeAt' in normalizeOrchestrationConfig({ lastWakeAt: '2026-01-01', intervalMinutes: 10 })),
+        'normalizeOrchestrationConfig must not return lastWakeAt — it is status the tab derives from the engine, not config'
+    );
+
+    // The attended oversight pass is DELETED, not flagged off.
+    for (const dead of ['OversightPassService', 'isAutomationArmed', 'attachOversightWatcher']) {
+        assert.ok(
+            !providerSource.includes(dead),
+            `TaskViewerProvider still references the deleted oversight pass (${dead})`
+        );
+    }
+    // START DOES NOT ARM. Seating the orchestrator opens a pre-flight interview;
+    // arming is `POST /orchestration/confirm` → confirmOrchestrationSession, after
+    // the user has answered and the agent has written session.md. A Start that
+    // arms is the original footgun — a click that silently begins an unattended
+    // overnight run against a board that may have no coding team seated.
+    //
+    // Asserted on the source, not on a state read, because the failure mode is a
+    // single surviving `enabled: true` line: the interview still runs, the agent
+    // still waits, and the timer is already installed behind it. Every
+    // behavioural check of the interview passes while the arm has already
+    // happened. Scoped to the method BODY — the method is long enough that a
+    // fixed char window runs past its closing brace.
+    const startOrchStart = providerSource.indexOf('public async startOrchestratorFromKanban');
+    assert.ok(startOrchStart !== -1, 'startOrchestratorFromKanban must exist');
+    const startAfterSig = providerSource.slice(startOrchStart);
+    const startNextDecl = startAfterSig.slice(1).search(/\n {4}(?:public|private|protected)\s/);
+    const startOrchBody = startNextDecl === -1 ? startAfterSig : startAfterSig.slice(0, startNextDecl + 1);
+    assert.ok(
+        !/orchestrationConfig:\s*\{[\s\S]*?enabled:\s*true/.test(startOrchBody),
+        'startOrchestratorFromKanban must not write orchestrationConfig.enabled — the field is deleted'
+    );
+    assert.ok(
+        !/enabled:\s*true/.test(startOrchBody),
+        'startOrchestratorFromKanban must NOT arm — it seats the orchestrator and delivers the pre-flight; arming moved to confirmOrchestrationSession'
+    );
+    assert.ok(
+        !startOrchBody.includes('_stopAutobanEngine()'),
+        'startOrchestratorFromKanban must not tear down the run-sheet engine — that rides the arming transition in confirmOrchestrationSession'
+    );
+    // The arming block landed in confirmOrchestrationSession, intact and in order:
+    // engine down BEFORE the mode flips, so a `scheduled` run sheet cannot survive
+    // the transition to `agent-managed` and leave two clocks on one board.
+    const confirmStart = providerSource.indexOf('public async confirmOrchestrationSession');
+    assert.ok(confirmStart !== -1, 'confirmOrchestrationSession must exist — it is the only path that arms');
+    const confirmAfterSig = providerSource.slice(confirmStart);
+    const confirmNextDecl = confirmAfterSig.slice(1).search(/\n {4}(?:public|private|protected)\s/);
+    const confirmBody = confirmNextDecl === -1 ? confirmAfterSig : confirmAfterSig.slice(0, confirmNextDecl + 1);
+    assert.ok(
+        /enabled:\s*true/.test(confirmBody) && confirmBody.includes("automationMode: 'agent-managed'"),
+        'confirmOrchestrationSession must set autobanState.enabled = true in agent-managed mode — this is the arm'
+    );
+    assert.ok(
+        confirmBody.indexOf('_stopAutobanEngine()') !== -1 &&
+        confirmBody.indexOf('_stopAutobanEngine()') < confirmBody.search(/enabled:\s*true/),
+        'confirmOrchestrationSession must stop the run-sheet engine BEFORE flipping the mode — two clocks on one board is the hazard the exclusive-mode model removes'
+    );
+    assert.ok(
+        /session\.md/.test(confirmBody) && /success:\s*false/.test(confirmBody),
+        'confirmOrchestrationSession must refuse when session.md is absent — arming a session with no rules is the silent half-state'
+    );
+    // Scoped to the method BODY, not a fixed byte window. A character-count window
+    // tracks the method's length: deleting the worktree-topology restore block shrank
+    // this method enough that a 900-char window ran past its closing brace into
+    // setAutomationModeFromKanban, whose _stopAutobanEngine() call is legitimate.
+    const stopOrchStart = providerSource.indexOf('public async stopOrchestratorFromKanban');
+    assert.ok(stopOrchStart !== -1, 'stopOrchestratorFromKanban must exist');
+    const afterSig = providerSource.slice(stopOrchStart);
+    const nextDeclOffset = afterSig.slice(1).search(/\n {4}(?:public|private|protected)\s/);
+    const stopOrchBody = nextDeclOffset === -1 ? afterSig : afterSig.slice(0, nextDeclOffset + 1);
+    assert.ok(
+        !stopOrchBody.includes('_stopAutobanEngine()'),
+        'stopOrchestratorFromKanban must not stop the autoban engine — disarming the orchestrator sets enabled=false, not _stopAutobanEngine()'
     );
     assert.ok(
         providerSource.includes('public isOversightAgentRunning(): boolean'),
         'callers meaning "is the orchestrator supervising" need an explicit accessor, not an overloaded mode read'
     );
-    // Worktree topology rides the ARMING transition, not the mode transition.
-    // Both halves must move: a left-behind `else` arm fires on every ordinary
-    // mode switch and eats a prior that oversight stashed.
+    // The forcing machinery is DELETED, not flagged off. Worktree strategy is the
+    // user's; nothing outside the setFeatureWorktreeMode arm and the one-time
+    // stash drain may write feature_worktree_mode.
     assert.ok(
-        kanbanProviderSource.includes('public async applyOversightWorktreeTopology(workspaceRoot: string, armed: boolean)'),
-        'the worktree stash/restore pair must live on one oversight-arming entry point reachable from HTTP and the webview alike'
+        !kanbanProviderSource.includes('applyOversightWorktreeTopology'),
+        'applyOversightWorktreeTopology must be deleted — no automation path may force the worktree topology'
+    );
+    assert.ok(
+        !providerSource.includes('applyOversightWorktreeTopology'),
+        'TaskViewerProvider must no longer call the worktree topology forcer'
     );
     const setAutomationModeArm = kanbanProviderSource.slice(
         kanbanProviderSource.indexOf("case 'setAutomationMode': {"),
@@ -478,12 +575,39 @@ async function run() {
         !setAutomationModeArm.includes('feature_worktree_mode'),
         'a setAutomationMode call must not read, write or clear the stashed worktree prior — this is the left-behind else-arm regression'
     );
-    // The only surviving `orchestration` mode literals are the state migration.
+    // The only surviving `orchestration` mode literals are the state migration
+    // in normalizeAutomationMode. No file under src/ compares a mode against
+    // `'orchestration'` or `'internal'` — those values are retired.
     for (const file of ['TaskViewerProvider.ts', 'KanbanProvider.ts']) {
         const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', file), 'utf8');
         assert.ok(
-            !/(automationMode|msg\.mode|mode)\s*===\s*'orchestration'/.test(src),
-            `${file} must not compare a mode against 'orchestration' — oversight is a flag now`
+            !/(automationMode|msg\.mode|newMode|mode)\s*===\s*'orchestration'/.test(src),
+            `${file} must not compare a mode against 'orchestration' — it is a retired value, carried only by the migration`
+        );
+        assert.ok(
+            !/(automationMode|msg\.mode|newMode|mode)\s*===\s*'internal'/.test(src),
+            `${file} must not compare a mode against 'internal' — it is a retired value, replaced by 'scheduled'`
+        );
+    }
+    // The literal sweep extends to kanban.html — a stale branch there renders
+    // the wrong half of the tab instead of throwing.
+    const kanbanHtmlForSweep = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'kanban.html'), 'utf8');
+    assert.ok(
+        !kanbanHtmlForSweep.includes("=== 'internal'"),
+        "kanban.html must not compare a mode against 'internal' — it is a retired value"
+    );
+    assert.ok(
+        !kanbanHtmlForSweep.includes("=== 'orchestration'"),
+        "kanban.html must not compare a mode against 'orchestration' — it is a retired value"
+    );
+    // orchestrationConfig.enabled appears nowhere under src/ as a CONFIG READ.
+    // autobanState.ts is excluded — it reads the raw persisted state for the
+    // migration table, which is the intended carrier of the old field's intent.
+    for (const file of ['services/TaskViewerProvider.ts', 'services/KanbanProvider.ts', 'webview/kanban.html']) {
+        const src = fs.readFileSync(path.join(process.cwd(), 'src', file), 'utf8');
+        assert.ok(
+            !/orchestrationConfig[\.\?]+enabled/.test(src),
+            `${file} must not reference orchestrationConfig.enabled — the field is deleted`
         );
     }
 
@@ -491,31 +615,106 @@ async function run() {
     // Asserted on the source because the failure is a live setInterval, and a
     // test that reads the mode back is exactly the test that passes while the
     // clock runs.
-    const engineBody = providerSource.slice(providerSource.indexOf('private _startAutobanEngine(): void {'));
+    // Gate on the mode that RUNS the run sheet, never on `!== 'external'`.
+    // `=== 'external'` was a correct proxy for "no run sheet here" while the
+    // axis had two values; adding `agent-managed` turned every one of these
+    // into a fall-through that installs the run-sheet clock in the mode where
+    // the orchestrator IS the automation. That is the two-clocks hazard the
+    // exclusive-mode model exists to remove, and it is SILENT — a live
+    // setInterval, no type error, no UI symptom.
+    // Scoped to each method BODY, never a fixed char window. A byte window
+    // tracks comment length as well as code: the gates below each carry a
+    // paragraph explaining why they exist, and a window sized to the code alone
+    // silently stops covering the assertion it was written for.
+    const methodBody = (marker) => {
+        const start = providerSource.indexOf(marker);
+        assert.ok(start !== -1, `${marker} must exist`);
+        const after = providerSource.slice(start);
+        const next = after.slice(1).search(/\n {4}(?:public|private|protected)\s/);
+        return next === -1 ? after : after.slice(0, next + 1);
+    };
     assert.ok(
-        /automationMode === 'external'[\s\S]{0,400}?return;/.test(engineBody.slice(0, 800)),
-        '_startAutobanEngine must refuse in external mode, at the top, after stopping any surviving timer'
+        /automationMode !== 'scheduled'[\s\S]{0,300}?return;/.test(methodBody('private _startAutobanEngine(): void {')),
+        "_startAutobanEngine must refuse in every non-scheduled mode, at the top, after stopping any surviving timer"
     );
-    const resetBody = providerSource.slice(providerSource.indexOf('public async resetAutobanTimersFromKanban()'));
     assert.ok(
-        /automationMode === 'external'[\s\S]{0,300}?return;/.test(resetBody.slice(0, 1200)),
-        'resetAutobanTimersFromKanban installs its OWN setInterval — it needs its own external gate, beside and independent of the !enabled return'
-    );
-    const pausedBody = providerSource.slice(providerSource.indexOf('public async setAutobanPausedFromKanban('));
-    assert.ok(
-        /automationMode === 'external'[\s\S]{0,400}?return;/.test(pausedBody.slice(0, 2600)),
-        'resume-from-pause is a THIRD timer-install path — `paused` survives the switch into external, so it needs its own gate too'
+        /automationMode !== 'scheduled'[\s\S]{0,300}?return;/.test(methodBody('public async resetAutobanTimersFromKanban()')),
+        'resetAutobanTimersFromKanban installs its OWN setInterval — it needs its own non-scheduled gate, beside and independent of the !enabled return (in agent-managed, `enabled` means the ORCHESTRATOR is armed)'
     );
     assert.ok(
-        /const isExternal = this\._autobanState\.automationMode === 'external';/.test(providerSource) &&
-        providerSource.includes("job.target === 'local-terminal' && !isExternal"),
-        'scheduler job loops are a further clock — local-terminal jobs must not start in external mode'
+        /automationMode !== 'scheduled'[\s\S]{0,600}?return;/.test(methodBody('public async setAutobanPausedFromKanban(')),
+        'resume-from-pause is a THIRD timer-install path — `paused` survives a switch into external OR agent-managed, so it needs its own gate too'
+    );
+    // A FOURTH path: the updateAutobanState message arm. It must not force
+    // `enabled` false in agent-managed (that would disarm the orchestrator),
+    // but must never install the run-sheet clock behind it either.
+    const updateArm = providerSource.slice(providerSource.indexOf("case 'updateAutobanState': {"));
+    assert.ok(
+        /automationMode !== 'scheduled'[\s\S]{0,400}?_stopAutobanEngine\(\)/.test(updateArm.slice(0, 1800)),
+        'the updateAutobanState arm must stop — never start — the run-sheet engine in a non-scheduled mode'
+    );
+    // Arming the orchestrator must tear the run-sheet engine down FIRST. The
+    // arm now lives in confirmOrchestrationSession (Start only seats and
+    // interviews), and its caller — POST /orchestration/confirm, reached by the
+    // orchestrator agent itself — bypasses setAutomationModeFromKanban entirely,
+    // so it can fire while `scheduled` is armed and ticking.
+    assert.ok(
+        /_stopAutobanEngine\(\)[\s\S]{0,400}?automationMode: 'agent-managed'/.test(confirmBody),
+        'confirmOrchestrationSession must call _stopAutobanEngine() before switching the mode to agent-managed — its caller bypasses setAutomationModeFromKanban and would leave the run-sheet timers ticking'
     );
     assert.ok(
-        /await this\._startAllSchedulerLoops\(\);/.test(providerSource.slice(
-            providerSource.indexOf('public async setAutomationModeFromKanban(')
-        ).slice(0, 4000)),
-        'scheduler loops must be re-run on every mode transition so switching back to internal re-arms them'
+        providerSource.includes('_tickSurvivorSchedulerJobs'),
+        'surviving scheduler jobs (fetch-plans, reconcile) must fire from the run-sheet tick — _tickSurvivorSchedulerJobs is the delivery method'
+    );
+    // Scoped to the tick BODY and asserted on ORDER, not on a byte window. A
+    // fixed-width window tracks the length of the run-sheet loop above it; the
+    // claim being made is positional, so test the positions.
+    const runSheetTickStart = providerSource.indexOf('private _enqueueRunSheetTick(batchSize: number): void {');
+    assert.ok(runSheetTickStart !== -1, '_enqueueRunSheetTick must exist');
+    const runSheetTickBody = providerSource.slice(runSheetTickStart, providerSource.indexOf('\n    /**', runSheetTickStart));
+    const stepsAt = runSheetTickBody.indexOf('_autobanTickColumn(');
+    const survivorAt = runSheetTickBody.indexOf('_tickSurvivorSchedulerJobs(');
+    const lastTickAt = runSheetTickBody.indexOf('_autobanLastTickAt.set(AUTOBAN_RUN_SHEET_TICK_KEY');
+    assert.ok(
+        stepsAt !== -1 && survivorAt !== -1 && lastTickAt !== -1 && stepsAt < survivorAt && survivorAt < lastTickAt,
+        'survivor scheduler jobs must tick inside the run-sheet tick body — after the run-sheet steps, before the lastTickAt update'
+    );
+    assert.ok(
+        !providerSource.includes('_startAllSchedulerLoops'),
+        'the per-job scheduler engine (_startAllSchedulerLoops) is deleted — survivors ride the run-sheet tick'
+    );
+    assert.ok(
+        !providerSource.includes('_startSchedulerJobLoop') && !providerSource.includes('_stopSchedulerJobLoop'),
+        'the per-job scheduler loop methods are deleted — no per-job intervals, the run sheet is the one clock'
+    );
+    // BOTH survivors must reach a prompt. A tick that only builds fetch-plans
+    // leaves the reconcile checkbox wired to nothing — enabled, ticking, silent.
+    const survivorTickStart = providerSource.indexOf('private async _tickSurvivorSchedulerJobs()');
+    assert.ok(survivorTickStart !== -1, '_tickSurvivorSchedulerJobs must exist');
+    const survivorTickBody = providerSource.slice(survivorTickStart, providerSource.indexOf('\n    }\n', survivorTickStart));
+    assert.ok(
+        survivorTickBody.includes('buildFetchPlansPrompt(') && survivorTickBody.includes('buildReconcilePrompt('),
+        'the survivor tick must build BOTH surviving prompts — a reconcile job with no promptOverride otherwise sends nothing'
+    );
+    // The checkbox is the start button now, so the tick owns terminal creation.
+    // Resolve-only means the survivors never fire: launchSchedulerTerminal was
+    // the only thing that ever created a `Scheduler: …` terminal, and it is gone.
+    assert.ok(
+        survivorTickBody.includes('_ensureSurvivorTerminal('),
+        'the survivor tick must ensure its terminal exists — nothing else creates one now that launchSchedulerTerminal is deleted'
+    );
+    const ensureStart = providerSource.indexOf('private async _ensureSurvivorTerminal(');
+    assert.ok(ensureStart !== -1, '_ensureSurvivorTerminal must exist');
+    const ensureBody = providerSource.slice(ensureStart, providerSource.indexOf('\n    }\n', ensureStart));
+    assert.ok(
+        ensureBody.includes('vscode.window.createTerminal(') && /if \(this\._ptyHostPort\)\s*\{\s*return undefined; \}/.test(ensureBody),
+        'terminal creation must be gated on the pty fleet — when a fleet owns the terminal set, this host must not spawn behind it'
+    );
+    // The in-flight guard must be claimed BEFORE the first await, or a second tick
+    // enters while the terminal is still booting and spawns a duplicate.
+    assert.ok(
+        survivorTickBody.indexOf('_schedulerInFlight.set(job.id, true)') < survivorTickBody.indexOf('_ensureSurvivorTerminal('),
+        'the in-flight guard must be claimed before the terminal is ensured — ensuring awaits for seconds'
     );
 
     // --- The WHEN cron evaluator must return a STRICTLY FUTURE time ---
@@ -529,9 +728,14 @@ async function run() {
     );
 
     // --- The external prompt is EVERGREEN: no DB read, no plan IDs, no local paths ---
+    // Anchored on the builder's own closing brace, not on the next method's name:
+    // the scheduler retirement deleted _buildCustomPrompt, and a missing end anchor
+    // makes indexOf return -1, which silently slices to the end of the file.
+    const externalPromptStart = kanbanProviderSource.indexOf('private _buildExternalAutomationPrompt(');
+    assert.ok(externalPromptStart !== -1, 'the external-mode prompt builder must exist');
     const externalPromptBody = kanbanProviderSource.slice(
-        kanbanProviderSource.indexOf('private _buildExternalAutomationPrompt('),
-        kanbanProviderSource.indexOf('private _buildCustomPrompt(')
+        externalPromptStart,
+        kanbanProviderSource.indexOf('\n    }\n', externalPromptStart)
     );
     assert.ok(externalPromptBody.length > 0, 'the external-mode prompt builder must exist');
     assert.ok(
@@ -542,10 +746,26 @@ async function run() {
         externalPromptBody.includes('getAutobanRunSheet()') && externalPromptBody.includes('DEFAULT_AUTOBAN_RUN_SHEET'),
         'the external prompt must render the run sheet as DATA so an edited sheet flows into the emitted text for free'
     );
+    // The board-driving paragraph is ONE constant, not two copies. It now lives in
+    // schedulerPresets (a dependency-free module both the reconcile preset and this
+    // provider can import) and KanbanProvider aliases it. Assert on the literal text,
+    // not the identifier — a second copy is the failure, wherever it is pasted.
+    const presetsSource = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'schedulerPresets.ts'), 'utf8');
     assert.ok(
-        externalPromptBody.includes('KanbanProvider.BOARD_DRIVING_CONTRACT') &&
-        kanbanProviderSource.split('KanbanProvider.BOARD_DRIVING_CONTRACT').length >= 3,
-        'the board-driving paragraph must be ONE shared constant referenced by both the reconcile prompt and the external prompt, not two copies'
+        externalPromptBody.includes('KanbanProvider.BOARD_DRIVING_CONTRACT'),
+        'the external prompt must reference the shared board-driving constant, not inline its own copy'
+    );
+    assert.ok(
+        /export const BOARD_DRIVING_CONTRACT = /.test(presetsSource) &&
+        /BOARD_DRIVING_CONTRACT = SHARED_BOARD_DRIVING_CONTRACT;/.test(kanbanProviderSource),
+        'the board-driving paragraph lives in schedulerPresets and KanbanProvider aliases it — one text, two consumers'
+    );
+    const contractLiteral = 'Raw SQL strands cards and bypasses the move-card.js side-effects';
+    const literalCopies = [presetsSource, kanbanProviderSource, providerSource]
+        .reduce((n, src) => n + (src.split(contractLiteral).length - 1), 0);
+    assert.strictEqual(
+        literalCopies, 1,
+        'the board-driving paragraph must exist as exactly ONE literal across the providers and the presets module'
     );
     assert.ok(
         DEFAULT_AUTOBAN_RUN_SHEET.length > 0 && DEFAULT_AUTOBAN_RUN_SHEET.every(s => s.sourceColumn && s.headRole),
@@ -571,8 +791,8 @@ async function run() {
     // persisted, start from activation, and are editable nowhere else.
     const configServiceSource = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'GlobalIntegrationConfigService.ts'), 'utf8');
     assert.ok(
-        /DROPPED_SOURCES = new Set\(\['comms', 'board-batch'\]\)/.test(configServiceSource),
-        'comms and board-batch jobs are dropped on READ — never by a destructive pass over integration-config.json'
+        /DROPPED_SOURCES = new Set\(\['comms', 'board-batch', 'custom'\]\)/.test(configServiceSource),
+        'comms, board-batch, and custom jobs are dropped on READ — never by a destructive pass over integration-config.json'
     );
     for (const survivor of ['_ensureSchedulerMigration', '_persistMigratedSchedulerIfAbsent', 'getSchedulerConfigSync', 'getSchedulerConfig']) {
         assert.ok(
@@ -585,10 +805,125 @@ async function run() {
         'the surviving job sources are exactly reconcile | custom | fetch-plans'
     );
     // _buildBoardBatchPromptCore survives the board-batch SOURCE deletion — it
-    // still backs the Antigravity copy button and the schedulerPrompt verb.
+    // still backs the Antigravity copy button.
     assert.ok(
         kanbanProviderSource.includes('private async _buildBoardBatchPromptCore('),
         '_buildBoardBatchPromptCore must survive the board-batch job-source deletion — it has other callers'
+    );
+
+    // --- The per-job scheduler surface is deleted ---
+    // The six per-job verbs are gone from KanbanProvider (getSchedulerConfig
+    // and setSchedulerConfig survive for the survivor checkboxes; the other
+    // four are deleted).
+    for (const deadVerb of ['startSchedulerJob', 'stopSchedulerJob', 'schedulerPrompt', 'getSchedulerTargetContracts']) {
+        assert.ok(
+            !kanbanProviderSource.includes(`case '${deadVerb}'`),
+            `KanbanProvider must not contain the deleted scheduler verb arm: ${deadVerb}`
+        );
+    }
+    assert.ok(
+        !kanbanProviderSource.includes('SCHEDULER_TARGET_CONTRACTS'),
+        'SCHEDULER_TARGET_CONTRACTS is deleted with the scheduler surface'
+    );
+    assert.ok(
+        !kanbanProviderSource.includes('_buildSchedulerPrompt'),
+        '_buildSchedulerPrompt is deleted with the scheduler surface'
+    );
+    // The per-job engine methods are gone from TaskViewerProvider.
+    for (const deadMethod of ['_startSchedulerJobLoop', '_stopSchedulerJobLoop', '_enqueueSchedulerTick', '_schedulerTick', 'launchSchedulerTerminal', 'stopSchedulerTerminal', '_startSchedulerOutputCapture', '_captureSchedulerOutput', '_disposeSchedulerOutputCapture', '_jobIdForTerminalName']) {
+        assert.ok(
+            !providerSource.includes(deadMethod),
+            `TaskViewerProvider must not contain the deleted scheduler engine method: ${deadMethod}`
+        );
+    }
+    // The in-flight guard survives — the survivor tick carries it forward.
+    assert.ok(
+        providerSource.includes('_schedulerInFlight'),
+        'the per-job in-flight guard (_schedulerInFlight) survives — the survivor tick carries it forward'
+    );
+    // The SCHEDULER section header is gone from the UI.
+    const kanbanHtml = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'kanban.html'), 'utf8');
+    assert.ok(
+        !kanbanHtml.includes("'SCHEDULER'"),
+        'the SCHEDULER section header is deleted from the AUTOMATION tab UI'
+    );
+    assert.ok(
+        !kanbanHtml.includes("'KANBAN AUTOMATION RULES'"),
+        'the KANBAN AUTOMATION RULES section header is deleted — controls remain without the box'
+    );
+    // The survivor checkboxes are present.
+    assert.ok(
+        kanbanHtml.includes('FETCH CLOUD PLANS') && kanbanHtml.includes('RECONCILE CLOUD WORK'),
+        'the two survivor checkboxes (fetch-plans, reconcile) must be present in the AUTOMATION tab'
+    );
+    // The checkbox must UPSERT. '+ ADD JOB' died with the scheduler surface, so a
+    // map-only toggle persists nothing on a config with no job of that source —
+    // which is every fresh install — and the box snaps back on the next broadcast.
+    assert.ok(
+        /if \(!found\) \{[\s\S]{0,400}?source: sv\.source/.test(kanbanHtml),
+        'the survivor checkbox must create the job record when none exists — nothing else can, now that + ADD JOB is deleted'
+    );
+    // The dropped-custom-jobs notice is wired.
+    assert.ok(
+        kanbanHtml.includes('droppedCustomJobsNotice'),
+        'the dropped-custom-jobs notice must be wired in the AUTOMATION tab UI'
+    );
+
+    // --- Three exclusive modes: the OVERSIGHT AGENT block is gone, three radios replace the select ---
+    assert.ok(
+        !kanbanHtml.includes("'OVERSIGHT AGENT'"),
+        "the OVERSIGHT AGENT section header is deleted — the mode replaces it, leaving both is the defect this plan exists to remove"
+    );
+    assert.ok(
+        !kanbanHtml.includes('oversight-agent-toggle'),
+        'the oversight-agent-toggle checkbox is deleted — the ON/OFF is the single armed flag'
+    );
+    assert.ok(
+        kanbanHtml.includes("'agent-managed'") && kanbanHtml.includes("'scheduled'") && kanbanHtml.includes("'external'"),
+        'the three mode radios (agent-managed, scheduled, external) must be present in the AUTOMATION tab'
+    );
+    assert.ok(
+        kanbanHtml.includes('automation-status-line'),
+        'the status line must be present in the AUTOMATION tab — always visible, even when nothing has happened'
+    );
+    // The command-palette entry is registered.
+    const packageJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
+    assert.ok(
+        packageJson.contributes.commands.some(c => c.command === 'switchboard.startOrchestrator'),
+        'switchboard.startOrchestrator must be present in package.json contributes.commands'
+    );
+    const extensionSrc = fs.readFileSync(path.join(process.cwd(), 'src', 'extension.ts'), 'utf8');
+    assert.ok(
+        extensionSrc.includes("registerCommand('switchboard.startOrchestrator'"),
+        'switchboard.startOrchestrator must be registered in extension.ts'
+    );
+    // The external-mode paused-jobs line says "Scheduled", not "Internal".
+    assert.ok(
+        kanbanHtml.includes('Switch back to Scheduled to re-arm them'),
+        'the external-mode paused-jobs line must say "Scheduled" (the new mode name), not "Internal"'
+    );
+    // The run-sheet timer badges are SCHEDULED-only. Both badge filters had an
+    // `else if (mode === 'external')` arm, which on a three-value axis let
+    // agent-managed fall through to the UNFILTERED set — a live countdown badge
+    // per column for a clock that does not run in that mode.
+    assert.ok(
+        !/else if \(currentAutomationMode === 'external'\) \{\s*filteredBadgeData = \[\];/.test(kanbanHtml),
+        "the timer-badge filter must not special-case 'external' — every non-scheduled mode shows no run-sheet badges, and an else-if lets agent-managed fall through to the unfiltered set"
+    );
+    assert.strictEqual(
+        (kanbanHtml.match(/filteredBadgeData = \[\];/g) || []).length, 2,
+        'both timer-badge filters must clear the badge set in their else arm — one per render path'
+    );
+    // Agent-managed carries the two things that define the mode: the wake
+    // interval and the CLI that starts the agent. The boot command is SHOWN,
+    // not edited — the orchestrator has no startup-command slot of its own.
+    assert.ok(
+        kanbanHtml.includes('agent-managed-boot-command'),
+        'the agent-managed panel must name the CLI the orchestrator boots with — the mode is "a startup command and a wake interval"'
+    );
+    assert.ok(
+        /lastStartupCommands\['lead'\] \|\| lastStartupCommands\['coder'\]/.test(kanbanHtml),
+        "the displayed boot command must mirror startOrchestratorFromKanban's own resolution (lead, falling back to coder) — a divergent display lies about what will start"
     );
 
     console.log('autoban state regression test passed');

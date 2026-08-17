@@ -14,9 +14,9 @@ Correct the text the system hands to agents, on all three surfaces where it is c
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Two skills deliberately hidden from Claude Code's slash menu are still exposed to Antigravity's discovery — strip their source frontmatter](../plans/frontmatter-host-drift-no-user-skills-exposed-on-antigravity.md) — **CODE REVIEWED**
-- [ ] [Proactive /clear when a lead rests a coder terminal](../plans/feature_plan_20260815140920_proactive-clear-when-a-lead-rests-a-coder-terminal.md) — **CODE REVIEWED**
-- [ ] [Feature Prompt — Fix the Worktree Self-Contradiction, Retire Inert `featureWorktreeMode`](../plans/feature-prompt-worktree-contradiction.md) — **CODE REVIEWED**
+- [ ] [Two skills deliberately hidden from Claude Code's slash menu are still exposed to Antigravity's discovery — strip their source frontmatter](../plans/frontmatter-host-drift-no-user-skills-exposed-on-antigravity.md) — **PLAN REVIEWED**
+- [ ] [Proactive /clear when a lead rests a coder terminal](../plans/feature_plan_20260815140920_proactive-clear-when-a-lead-rests-a-coder-terminal.md) — **PLAN REVIEWED**
+- [ ] [Feature Prompt — Fix the Worktree Self-Contradiction, Retire Inert `featureWorktreeMode`](../plans/feature-prompt-worktree-contradiction.md) — **PLAN REVIEWED**
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -31,5 +31,9 @@ Both it and the proactive-clear subtask edit `.agents/skills/terminal-coder-disp
 Run them in the other order and the frontmatter subtask's pinned hashes are stale and its zero-diff property becomes unverifiable — the one check that catches a deletion taking a byte it should not have.
 
 The worktree subtask is **fully independent**: it touches `src/services/agentPromptBuilder.ts` and `src/services/KanbanProvider.ts` only, shares no file with the other two, and may run in parallel with either.
+
+## Review Findings
+
+Reviewer pass (2026-08-17) across all three subtasks, verification executed rather than inherited — no SKIP directives were in force. All three landed in the sequencing order this file requires (`f996edda` → `025de73c` → `d8f9c0b9`) and the feature's thesis holds at HEAD: the guardrail now follows worktree *ownership* at all twelve consumers, the two `no-user` skills are frontmatter-free on both hosts (1 of 40 directories carries frontmatter, mirror byte-identical), and the lead contract teaches `ptyClearTerminal` with its precondition and both prohibitions. Verification: `compile-tests` clean, `mirror:check` green at 47 files, `test:contract:terminal-rest-clear` 6/6, and a new `test:contract:feature-worktree-guardrail` 7/7 — every assertion in both contract tests proven to bite against simulated regressions rather than assumed. **One MAJOR fixed:** the guardrail lifecycle rule shipped with no CI protection (its only coverage, `agent-prompt-builder-subagents.test.js`, is unwired *and* red at HEAD for an unrelated reason); added `src/test/feature-worktree-guardrail-contract.test.js`, wired at `package.json:907` and `integration-tests.yml:109`, which pins both the selected constant and the ten call-site count. **One MAJOR confirmed but unfixable:** `f996edda` swept ~107 unrelated insertions into an in-scope file, so `mirror:check` was red *at that commit* until `025de73c` incidentally cleared it — repairing it needs the history rewrite the git policy forbids; forward state is correct, and the durable lesson is that a `git diff --name-only` gate is a filename check, blind to extra content inside a file that is legitimately in scope. Files changed by this review: the new test, `package.json`, `.github/workflows/integration-tests.yml`. Remaining risks: the rest-clear gate observes text, not lead behaviour (the plan's manual step 6 is still the only closer), and the running extension still emits the pre-fix prompt pairing — this dispatch's own prompt paired "Do NOT create git worktrees" with the worktree-mode guardrail, a combination now structurally impossible at HEAD, confirming both that the bug was real and that the installed VSIX predates `d8f9c0b9`.
 
 Note for the implementer of the proactive-clear subtask: after the frontmatter strip lands, `terminal-coder-dispatch/SKILL.md` begins at its `# Skill: Terminal Coder Dispatch` heading with no frontmatter block — re-resolve line references before editing, and capture `git status` for `.claude/skills/**` before starting so the regeneration is separable from whatever the working tree already carries.

@@ -65,10 +65,11 @@ fi
 
 ## Step 2 — start the orchestration agent
 
-Hand off to the pre-flight sequence in `orchestration-starts-as-a-conversation.md`:
-the agent seats the orchestrator terminal, runs a pre-flight check (what is missing,
-what is in scope), proposes a session goal, and **waits for the user to answer**.
-This skill does not duplicate that sequence; it starts it.
+Hand off to the pre-flight sequence in the `switchboard-orchestrator` skill's
+`## Pre-flight` section: the orchestrator terminal is seated, the agent runs a
+pre-flight check (what is missing, what is in scope), proposes a session goal, and
+**waits for the user to answer**. This skill does not duplicate that sequence; it
+starts it.
 
 ```bash
 PORT=$(cat "$ROOT/.switchboard/api-server-port.txt")

@@ -20,10 +20,3 @@ Make the Tickets sidebar a first-class ticket-management surface by adding two m
 ## Dependencies & sequencing
 
 No hard ordering constraints; subtasks can be executed in parallel. **POSSIBLE OVERLAP:** both subtasks modify the same files — `planning.js` (card renderers / meta bar), `PlanningPanelProvider.ts` (message switch), and `LinearSyncService.ts` / `ClickUpSyncService.ts` (new service methods). If coded in parallel worktrees, expect merge conflicts in the message-switch region and the card-renderer region. Recommend landing one before the other, or coordinating the message-switch case insertion point.
-
-<!-- BEGIN WORKTREES (auto-generated, do not edit) -->
-## Worktrees
-- **Feature integration**: `tickets-tab-interactive-controls` → `/Users/patrickvuleta/Documents/GitHub/worktrees/switchboard/tickets-tab-interactive-controls`
-- [Add Assignee Control to Tickets Tab](../plans/add-assignee-control-to-tickets-tab.md): `add-assignee-control-to-tickets-tab` → `/Users/patrickvuleta/Documents/GitHub/worktrees/switchboard/add-assignee-control-to-tickets-tab`
-- [Replace Sidebar Card Status Dot with a Changeable Priority Dot](../plans/replace-ticket-card-status-dot-with-changeable-priority-dot.md): `replace-sidebar-card-status-dot-with-a-c` → `/Users/patrickvuleta/Documents/GitHub/worktrees/switchboard/replace-sidebar-card-status-dot-with-a-c`
-<!-- END WORKTREES -->

@@ -258,51 +258,6 @@
             font-weight: normal;
             line-height: 1.2;
         }
-        /* The explicit team-start section: one entry per defined team with a
-           START action. Sits above the role chips, separated by a sub-title. */
-        .team-picker {
-            margin-bottom: 6px;
-        }
-        .team-picker-title {
-            font-size: 10px;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 4px;
-        }
-        .team-picker-options {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 4px;
-        }
-        .team-option {
-            background: transparent;
-            border: 1px solid var(--accent-teal);
-            color: var(--accent-teal);
-            border-radius: 3px;
-            padding: 3px 7px;
-            font-size: 11px;
-            font-family: inherit;
-            cursor: pointer;
-            display: flex;
-            flex-direction: column;
-            align-items: flex-start;
-            gap: 1px;
-            text-transform: none;
-        }
-        .team-option:hover {
-            background: var(--accent-teal);
-            color: var(--panel-bg);
-        }
-        .team-option:hover .team-option-summary { color: var(--panel-bg); }
-        .team-option-name { font-weight: 600; }
-        .team-option-summary {
-            font-size: 9px;
-            color: var(--text-secondary);
-            line-height: 1.2;
-        }
-        .team-option.is-unassigned .team-option-name { color: var(--text-secondary); }
-        .team-option.is-unassigned { border-style: dashed; }
         .item-name-input {
             font-size: 12px;
             font-weight: 600;
@@ -2016,6 +1971,18 @@
                 <div class="fill-grid-actions">
                     <button type="button" id="fill-grid-cancel" class="secondary-btn">CANCEL</button>
                     <button type="submit" id="fill-grid-confirm" class="secondary-btn is-teal">FILL</button>
+                </div>
+            </form>
+            <button type="button" id="btn-start-team" class="secondary-btn w-full"
+                    title="Start a defined team — head plus its members">START TEAM</button>
+            <!-- Parameter chooser, not a confirm gate: same shape as #fill-grid-form
+                 above. START submits; CANCEL closes with no side effect. -->
+            <form id="start-team-form" class="fill-grid-form" hidden>
+                <select id="start-team-name" class="link-select" required></select>
+                <select id="start-team-target" class="link-select" hidden></select>
+                <div class="fill-grid-actions">
+                    <button type="button" id="start-team-cancel" class="secondary-btn">CANCEL</button>
+                    <button type="submit" id="start-team-confirm" class="secondary-btn is-teal">START</button>
                 </div>
             </form>
             <button type="button" id="btn-clear-all" class="secondary-btn w-full"

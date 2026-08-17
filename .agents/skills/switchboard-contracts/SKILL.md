@@ -92,18 +92,18 @@ time a managing agent needed them.
     (`handlePtyVerb` config-default injection) + `bootstrap.ts` (`getPromptDeliveryOptions`).
 
 11. **An unattended improver never asks in chat — its questions live in the plan file.** A
-    planner dispatched by the oversight pass gets an `UNATTENDED IMPROVER CONTRACT:` block:
-    nobody is attached to that session, so a chat question is never read and the worker holds
-    a live seat until the stuck timer halts the whole pass. Unresolved items go under
-    `## Outstanding Questions` in the plan being improved, each stating the question **and**
-    the assumption the improver proceeded under; the work is completed either way, never
-    blocked. Reading the signal: heading **absent** ⇒ done; heading present **with** at least
-    one `- **[user]**` / `- **[research]**` item ⇒ open questions; heading present and
-    **empty** ⇒ a schema violation, not "done". The same run is scoped to exactly one plan
-    file — concurrent improvers share one `.switchboard/plans/` directory, so writing a
-    sibling's file destroys that worker's output. Source:
+    planner dispatched unattended (the `unattended` planner branch in `agentPromptBuilder.ts`)
+    gets an `UNATTENDED IMPROVER CONTRACT:` block: nobody is attached to that session, so a
+    chat question is never read. Unresolved items go under `## Outstanding Questions` in the
+    plan being improved, each stating the question **and** the assumption the improver
+    proceeded under; the work is completed either way, never blocked. Reading the signal:
+    heading **absent** ⇒ done; heading present **with** at least one `- **[user]**` /
+    `- **[research]**` item ⇒ open questions; heading present and **empty** ⇒ a schema
+    violation, not "done". The same run is scoped to exactly one plan file — concurrent
+    improvers share one `.switchboard/plans/` directory, so writing a sibling's file
+    destroys that worker's output. Source:
     `agentPromptBuilder.ts` (the `unattended` planner branch) + `.agents/skills/improve-plan/SKILL.md`
-    (`## Unattended runs`) + `OversightPassService._hasOpenQuestions`.
+    (`## Unattended runs`).
 
 ## When to consult this skill
 

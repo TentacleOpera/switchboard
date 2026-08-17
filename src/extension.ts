@@ -1077,16 +1077,10 @@ export async function activate(context: vscode.ExtensionContext) {
     taskViewerProvider.activateHostIntegrations();
     activeTaskViewerProvider = taskViewerProvider;
     taskViewerProvider.setRegisteredTerminals(registeredTerminals);
-    // Oversight-pass engine: completion signal = the watcher's plan-file mtime
-    // advance (the activity-light OFF-switch). Also resumes a pass interrupted
-    // by an extension reload from .switchboard/oversight-state.md.
-    taskViewerProvider.attachOversightWatcher(globalPlanWatcher);
     // Host parity for the browser Terminals panel's completion toast: the standalone
     // bootstrap wires the same engine seam to LocalApiServer.broadcastWs. Wired here
     // (not in the watcher) because the fleet + api server both live on the provider.
-    // Distinct consumer from attachOversightWatcher above — that one drives the
-    // oversight pass off onPlanDiscovered; this one only fires on the gated
-    // dispatched_at non-null→null transition, so neither double-triggers the other.
+    // Fires only on the gated dispatched_at non-null→null transition.
     globalPlanWatcher.getEngine().setOnWorkingStateCleared((record, wsRoot) => {
         taskViewerProvider.broadcastAgentCompleted(record, wsRoot);
     });
@@ -1278,6 +1272,11 @@ export async function activate(context: vscode.ExtensionContext) {
         await taskViewerProvider!.openMemoTab();
     });
     context.subscriptions.push(openMemoDisposable);
+
+    const startOrchestratorDisposable = vscode.commands.registerCommand('switchboard.startOrchestrator', async () => {
+        await taskViewerProvider!.startOrchestratorFromKanban(undefined, undefined);
+    });
+    context.subscriptions.push(startOrchestratorDisposable);
 
     const openInBrowserDisposable = registerSwitchboardCommand('switchboard.openInBrowser', async () => {
         if (!activeTaskViewerProvider) {

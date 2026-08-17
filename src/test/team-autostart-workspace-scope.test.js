@@ -31,7 +31,7 @@ const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
 
-const { findTeamForHeadRoleInRoots, wireSpawnedTeam } = require('../../out/services/teamWiring');
+const { findTeamForHeadRoleInRoots, wireSpawnedTeam, listTeamsInRoots, resolveTeamByIdInRoots, isUntouchedSeed, SEEDED_AGENT_GROUP } = require('../../out/services/teamWiring');
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const taskViewerTs = fs.readFileSync(path.join(REPO_ROOT, 'src/services/TaskViewerProvider.ts'), 'utf8');
@@ -191,6 +191,100 @@ const LEAD_TEAM = { id: 'feature-implementation', name: 'Lead team', headRole: '
                 `${label} must reference wired.groupId — the teamGroupId field must land in BOTH hosts`
             );
         }
+    });
+
+    console.log('\n--- listTeamsInRoots / resolveTeamByIdInRoots / isUntouchedSeed ---');
+
+    // 12. THE REPORTED BUG (explicit path): the pinned root holds only the
+    //     auto-seed, the selected root holds the operator's authored team.
+    //     listTeamsInRoots must skip the seed-only root and return the
+    //     authored teams from the selected root.
+    await test('listTeamsInRoots returns the selected root teams when the pinned root holds only the seed', async () => {
+        const seeded = { ...SEEDED_AGENT_GROUP };
+        const dbs = { '/pinned': fakeDb([seeded]), '/selected': fakeDb([LEAD_TEAM]) };
+        const r = await listTeamsInRoots(['/selected', '/pinned'], async r2 => dbs[r2]);
+        assert.strictEqual(r.root, '/selected');
+        assert.strictEqual(r.teams.length, 1);
+        assert.strictEqual(r.teams[0].name, 'Lead team');
+        assert.strictEqual(r.teams[0].members.length, 1);
+    });
+
+    // 13. A pinned-root-only read where the pinned root holds NOTHING but the
+    //     seed returns no authored teams — proving hasAuthoredTeams is
+    //     load-bearing. Without the gate, the seeded `Lead team` would leak
+    //     through and shadow every real team in every other candidate.
+    await test('a seed-only pinned root returns no authored teams (hasAuthoredTeams is load-bearing)', async () => {
+        const seeded = { ...SEEDED_AGENT_GROUP };
+        const dbs = { '/pinned': fakeDb([seeded]) };
+        const r = await listTeamsInRoots(['/pinned'], async r2 => dbs[r2]);
+        assert.strictEqual(r.root, null);
+        assert.strictEqual(r.teams.length, 0);
+    });
+
+    // 14. isUntouchedSeed is true for SEEDED_AGENT_GROUP and false for an
+    //     operator-authored member-less team that differs by name only. A
+    //     member-less team an operator authored is legitimate and must be
+    //     listed and startable — the predicate is exact-value, never a
+    //     "has no members" heuristic.
+    await test('isUntouchedSeed is exact-value: true for the seed, false for a renamed member-less team', async () => {
+        assert.strictEqual(isUntouchedSeed(SEEDED_AGENT_GROUP), true);
+        const authoredMemberless = { id: 'feature-implementation', name: 'My team', headRole: 'lead', members: [] };
+        assert.strictEqual(isUntouchedSeed(authoredMemberless), false);
+        // An extra key (e.g. headPrompt) also breaks the match — the operator touched it.
+        const withExtra = { ...SEEDED_AGENT_GROUP, headPrompt: 'x' };
+        assert.strictEqual(isUntouchedSeed(withExtra), false);
+    });
+
+    // 15. resolveTeamByIdInRoots finds a team by id in the second candidate root
+    //     and returns that root's db, so the caller does not re-open a second,
+    //     different one.
+    await test('resolveTeamByIdInRoots finds a team by id in the second candidate and returns its db', async () => {
+        const dbs = { '/pinned': fakeDb(undefined), '/selected': fakeDb([LEAD_TEAM]) };
+        const m = await resolveTeamByIdInRoots(['/pinned', '/selected'], async r => dbs[r], LEAD_TEAM.id);
+        assert.ok(m, 'expected a match');
+        assert.strictEqual(m.root, '/selected');
+        assert.strictEqual(m.team.id, LEAD_TEAM.id);
+        assert.strictEqual(m.db, dbs['/selected']);
+    });
+
+    // 16. resolveTeamByIdInRoots still resolves a seed-only root's team BY
+    //     EXPLICIT ID — proving hasAuthoredTeams gates the LIST walk only,
+    //     never the id walk. A seeded team is legitimately startable by id.
+    await test('resolveTeamByIdInRoots resolves a seed-only root team by explicit id (id walk is not gated)', async () => {
+        const seeded = { ...SEEDED_AGENT_GROUP };
+        const dbs = { '/pinned': fakeDb([seeded]) };
+        const m = await resolveTeamByIdInRoots(['/pinned'], async r => dbs[r], SEEDED_AGENT_GROUP.id);
+        assert.ok(m, 'the seeded team must be startable by explicit id');
+        assert.strictEqual(m.root, '/pinned');
+        assert.strictEqual(m.team.id, SEEDED_AGENT_GROUP.id);
+    });
+
+    // 17. Drift guard: the two team verbs must not drift back to a single root.
+    //     startTeamForWorkspace must derive its root via _teamLookupRoots, and
+    //     the ptyStartTeam arm must delegate to this.startTeamForWorkspace(
+    //     rather than re-deriving a root inline.
+    await test('startTeamForWorkspace uses _teamLookupRoots and ptyStartTeam delegates to it', async () => {
+        const methodIdx = taskViewerTs.indexOf('startTeamForWorkspace(opts');
+        assert.ok(methodIdx > 0, 'startTeamForWorkspace method not found');
+        const method = taskViewerTs.slice(methodIdx, methodIdx + 1400);
+        assert.ok(/_teamLookupRoots\(/.test(method), 'startTeamForWorkspace must call _teamLookupRoots(');
+        const armIdx = taskViewerTs.indexOf("if (verb === 'ptyStartTeam')");
+        assert.ok(armIdx > 0, 'ptyStartTeam arm not found');
+        const arm = taskViewerTs.slice(armIdx, armIdx + 600);
+        assert.ok(/this\.startTeamForWorkspace\(/.test(arm), 'ptyStartTeam must delegate to this.startTeamForWorkspace(');
+    });
+
+    // 18. Read-only verb guard: bootstrap's ptyListAgentGroups arm must call
+    //     peekAgentGroups (read-only), not listAgentGroups (seeds + joins the
+    //     write chain). The boot-time seeding pass at the bottom of bootstrap
+    //     still calls listAgentGroups — that is correct and stays; this test
+    //     pins the VERB arm only.
+    await test("bootstrap ptyListAgentGroups arm calls peekAgentGroups, not listAgentGroups", async () => {
+        const caseIdx = bootstrapTs.indexOf("case 'ptyListAgentGroups':");
+        assert.ok(caseIdx > 0, 'ptyListAgentGroups case not found in bootstrap');
+        const arm = bootstrapTs.slice(caseIdx, caseIdx + 400);
+        assert.ok(/peekAgentGroups/.test(arm), 'the verb arm must call peekAgentGroups');
+        assert.ok(!/listAgentGroups/.test(arm), 'the verb arm must NOT call listAgentGroups (it seeds)');
     });
 
     console.log(`\n${passed} passed, ${failed} failed`);

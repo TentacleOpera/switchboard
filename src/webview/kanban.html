@@ -2781,9 +2781,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <button class="strip-icon-btn" id="btn-create-worktree" data-tooltip="Create a worktree for the selected feature, or for the active project / workspace">
                 <img src="{{ICON_WORKTREE}}" alt="Create Worktree">
             </button>
-            <button class="strip-icon-btn" id="btn-manager-pass" data-tooltip="Run selected plans autonomously via the Manager" disabled>
-                <img src="{{ICON_MANAGER_PASS}}" alt="Run Selected Plans">
-            </button>
 
             <!-- Spacer to push right-side controls to the right -->
             <div style="flex: 1;"></div>
@@ -4449,9 +4446,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 headRole: 'lead',
                 members: [
                     { role: 'coder', count: 3, scope: 'per-team' },
-                    { role: 'reviewer', count: 1, scope: 'shared', relationship: 'reviewer' }
+                    { role: 'reviewer', count: 1, scope: 'shared', relationship: 'reports-to-head' }
                 ],
-                purpose: 'Works a feature\'s subtasks one at a time, then hands each to the team reviewer.',
+                purpose: 'Works a feature\'s subtasks one at a time, then sends the whole feature to review via one board dispatch.',
                 prompt: '{child} is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with '
                     + '{"name":"{child}","data":"<your report>","clearBeforePrompt":false} against the port in '
                     + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.\n'
@@ -4459,13 +4456,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
                     + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
                     + 'commit first, then correct forward.',
-                headPrompt: 'You lead this team. When a coder reports a subtask finished and you are '
-                    + 'satisfied with it, hand it to review yourself: read the port from '
-                    + '.switchboard/api-server-port.txt and POST /kanban/dispatch with '
-                    + '{"plan":"<planId>","targetColumn":"CODE REVIEWED","from":"{head}"} — that one '
-                    + 'call advances the card and dispatches the reviewer. Do NOT use /kanban/move: it '
-                    + 'moves the card and dispatches nobody, so the work stalls unreviewed. Only advance '
-                    + 'subtasks this team worked; leave other cards alone. Do not wait to be asked.'
+                headPrompt: 'You lead this team. Your coders work the subtasks of one feature. When a coder '
+                    + 'reports a subtask finished, note it and give that coder the next subtask. Do not send '
+                    + 'anything to the reviewer, and do not write review instructions — that is not your job. '
+                    + 'When every subtask of the feature is finished, read the port from '
+                    + '.switchboard/api-server-port.txt, confirm no subtask is still outstanding via '
+                    + 'GET /kanban/feature, then make one call: POST /kanban/dispatch with '
+                    + '{"plan":"<the FEATURE planId>","targetColumn":"CODE REVIEWED","from":"{head}"} — '
+                    + 'that one call moves the card and dispatches the reviewer with the reviewer\'s own '
+                    + 'prompt. Do NOT use /kanban/move: it moves the card and dispatches nobody. Only '
+                    + 'advance the feature your team worked; leave other cards alone. Do not wait to be '
+                    + 'asked.'
             },
             {
                 name: 'Multi-agent planning',
@@ -4956,6 +4957,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             { id: 'COMPLETED', label: 'Completed', kind: 'completed', autobanEnabled: false }
         ];
         let lastVisibleAgents = { ...DEFAULT_VISIBLE_AGENTS };
+        // Cached from the `startupCommands` broadcast. The AUTOMATION tab reads it to
+        // show which CLI the orchestrator will actually boot; the Agents tab writes
+        // the values. Read-only here — this panel is not a second editor for them.
+        let lastStartupCommands = {};
         let columns = columnDefinitions
             .filter(col => !col.role || lastVisibleAgents[col.role] !== false)
             .map(col => col.id);
@@ -5237,22 +5242,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                 }
             }
-        });
-
-        document.getElementById('btn-manager-pass')?.addEventListener('click', () => {
-            // Collect the cross-column selection, pre-filtering feature rows webview-side
-            // (the extension host remains the authoritative filter for epic subtasks).
-            const sessionIds = [];
-            for (const [pid, val] of selectedCards.entries()) {
-                if (val && val.isFeature) continue;
-                if (pid) sessionIds.push(pid);
-            }
-            if (sessionIds.length === 0) return;
-            postKanbanMessage({
-                type: 'dispatchManagerForSelected',
-                sessionIds,
-                workspaceRoot: currentWorkspaceRoot
-            });
         });
 
         btnDeleteProject?.addEventListener('click', () => {
@@ -6765,7 +6754,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // without waiting for the next updateBoard broadcast.
                     recomputeWorktreeIndicator();
                     updateCreateWorktreeButton();
-                    updateManagerPassButton();
                 });
             });
 
@@ -6918,22 +6906,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const autobanBtn = document.getElementById('btn-autoban');
             if (!autobanBtn) return;
             const isEnabled = !!(autobanConfig && autobanConfig.enabled);
-            let watchCount = 0;
-            if (isEnabled && autobanConfig) {
-                if (currentAutomationMode === 'internal') {
-                    const sc = autobanConfig.singleColumnConfig;
-                    if (sc && sc.enabled && sc.triggerMode === 'watch') {
-                        watchCount = 1;
-                    }
-                }
-            }
-            // The toolbar button is the single start/stop control for the board
-            // automation engine (the run sheet). Oversight is a separate flag
-            // with its own toggle in the panel below — it never rides the toolbar.
+            // The toolbar button is a pure mirror of the tab's ON/OFF. It reads
+            // the same single armed flag and posts the same toggle message.
             let isActive = isEnabled;
-            let tooltipText = isEnabled
-                ? (watchCount > 0 ? `Stop automation engine (Watching ${watchCount} column(s))` : 'Stop automation engine')
-                : 'Start automation engine';
+            let tooltipText = isEnabled ? 'Stop automation' : 'Start automation';
             autobanBtn.classList.toggle('is-active', isActive);
             autobanBtn.setAttribute('data-tooltip', tooltipText);
             autobanBtn.title = tooltipText;
@@ -6948,13 +6924,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             const resetBtn = document.getElementById('btn-reset-autoban-timer');
             if (resetBtn) {
-                const showReset = isEnabled && currentAutomationMode !== 'external';
+                // Reset is a timer reset — only meaningful in Scheduled mode.
+                const showReset = isEnabled && currentAutomationMode === 'scheduled';
                 resetBtn.style.display = showReset ? '' : 'none';
             }
 
             const pauseBtn = document.getElementById('btn-pause-autoban-timer');
             if (pauseBtn) {
-                const showPause = isEnabled && currentAutomationMode !== 'external';
+                // Pause is a timer pause — only meaningful in Scheduled mode.
+                const showPause = isEnabled && currentAutomationMode === 'scheduled';
                 pauseBtn.style.display = showPause ? '' : 'none';
                 const isPaused = !!(autobanConfig && autobanConfig.paused);
                 pauseBtn.classList.toggle('is-paused', isPaused);
@@ -7122,24 +7100,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             clearMergeMode();
             btn.disabled = true;
             btn.setAttribute('data-tooltip', 'Select a single feature to create its worktree');
-        }
-
-        function updateManagerPassButton() {
-            const btn = document.getElementById('btn-manager-pass');
-            if (!btn) return;
-            // Count non-feature selected cards (feature rows are excluded from the pass).
-            let count = 0;
-            for (const [, val] of selectedCards.entries()) {
-                if (val && !val.isFeature) count++;
-            }
-            if (count === 0) {
-                btn.disabled = true;
-                btn.setAttribute('data-tooltip', 'Select plans to run an autonomous Manager pass');
-            } else {
-                btn.disabled = false;
-                btn.setAttribute('data-tooltip', `Run ${count} selected plan${count > 1 ? 's' : ''} autonomously via the Manager`);
-            }
-            btn.title = '';
         }
 
 
@@ -7431,7 +7391,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     updateFeatureActionButton();
                     recomputeWorktreeIndicator();
                     updateCreateWorktreeButton();
-                    updateManagerPassButton();
                 });
 
                 // Re-apply selection state after re-render
@@ -7647,7 +7606,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             updateReassignButtonVisibility();
             updateFeatureActionButton();
             updateCreateWorktreeButton();
-            updateManagerPassButton();
 
             // After DOM is in place: completion feedback.
             if (justFinishedIds.size > 0) {
@@ -8111,7 +8069,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 selectedCards.clear();
                 recomputeWorktreeIndicator();
                 updateCreateWorktreeButton();
-                updateManagerPassButton();
                 return;
             }
 
@@ -8403,7 +8360,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let lastSafetySession = null;
         let lastWorktreeConfig = null;
         let selectedWorktreeRepo = '';
-        let currentAutomationMode = 'internal';
+        let currentAutomationMode = 'scheduled';
 
         // Listen for messages from the extension
         window.addEventListener('message', (event) => {
@@ -8528,7 +8485,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     recomputeWorktreeIndicator();
                     updateCreateWorktreeButton();
-                    updateManagerPassButton();
                     break;
                 }
                 case 'moveCards': {
@@ -8648,7 +8604,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     currentFeatureWorktrees = nextFeatureWorktrees;
                     recomputeWorktreeIndicator();
                     updateCreateWorktreeButton();
-                    updateManagerPassButton();
                     console.log('[Kanban WV] updateBoard received', nextCards.length, 'cards');
 
                     // Detect working -> idle transitions (and completions) for finish feedback.
@@ -8808,7 +8763,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     renderWorktreesTab();
                     recomputeWorktreeIndicator();
                     updateCreateWorktreeButton();
-                    updateManagerPassButton();
                     break;
                 }
                 case 'worktreeStatuses': {
@@ -9282,6 +9236,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 // those interactions.
                 case 'startupCommands': {
                   const cmds = msg.commands || {}, vis = msg.visibleAgents || {};
+                  lastStartupCommands = cmds;
                   document.querySelectorAll('#agents-tab-content input[type="text"][data-role]').forEach(i => {
                     if (i.dataset.role) i.value = cmds[i.dataset.role] || '';
                   });
@@ -9309,33 +9264,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   }
                   break;
                 }
-                case 'schedulerOutput': {
-                    // Per-job output capture (local-terminal jobs).
-                    // Stored on window for the job row to display.
-                    window.__schedulerOutput = window.__schedulerOutput || {};
-                    window.__schedulerOutput[msg.jobId] = msg.output
-                        ? `[${new Date(msg.timestamp).toLocaleTimeString()}]\n${msg.output}`
-                        : `[${new Date(msg.timestamp).toLocaleTimeString()}] No output captured.`;
-                    break;
-                }
-                case 'schedulerPrompt': {
-                    // "Copy prompt" result for external targets. Copy to clipboard.
-                    if (msg.prompt) {
-                        try {
-                            navigator.clipboard.writeText(msg.prompt);
-                            postKanbanMessage({ type: 'showInfo', message: 'Scheduler prompt copied to clipboard.' });
-                        } catch (e) {
-                            postKanbanMessage({ type: 'showWarning', message: 'Failed to copy prompt to clipboard.' });
-                        }
-                    } else if (msg.error) {
-                        postKanbanMessage({ type: 'showWarning', message: msg.error });
-                    }
-                    // Reset any COPY PROMPT buttons that were in LOADING state.
-                    document.querySelectorAll('button').forEach(b => {
-                        if (b.textContent === 'LOADING...') { b.textContent = 'COPY PROMPT'; b.disabled = false; }
-                    });
-                    break;
-                }
                 case 'externalAutomationPrompt': {
                     // External-mode copy-prompt result. Copy to clipboard.
                     if (msg.prompt) {
@@ -9352,30 +9280,39 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     });
                     break;
                 }
-                case 'schedulerTargetContracts': {
-                    window.__schedulerTargetContracts = msg.contracts || {};
-                    // Re-render any visible prerequisites blocks.
-                    const prereqRoot = document.getElementById('scheduler-prereq-root');
-                    if (prereqRoot && prereqRoot.style.display !== 'none') {
-                        // The current target is derived from the active job row;
-                        // re-render is handled by the job row's refreshSubForms.
-                    }
-                    break;
-                }
                 case 'updateSchedulerConfig': {
+                    // Surviving scheduler config push (fetch-plans / reconcile
+                    // checkboxes). Re-render on a real change so the checkbox
+                    // states reflect the persisted config.
                     const incoming = msg.config || { schemaVersion: 1, jobs: [] };
-                    // Re-render only on a REAL change. Every browser client receives this
-                    // push, and a request is answered both in-body and over the WS mirror,
-                    // so identical payloads arrive repeatedly; rebuilding the panel for
-                    // each one was the second half of the render/fetch feedback loop (the
-                    // first is the unconditional fetch in createAutobanPanel).
                     let changed = true;
                     try {
                         changed = JSON.stringify(window.__schedulerConfig) !== JSON.stringify(incoming);
                     } catch { /* uncomparable — fall through and re-render */ }
                     window.__schedulerConfig = incoming;
-                    if (changed && currentAutomationMode === 'internal') {
+                    if (changed && currentAutomationMode === 'scheduled') {
                         renderAutobanPanel(true);
+                    }
+                    break;
+                }
+                case 'orchestratorStartResult': {
+                    // Set the status line AFTER the re-render — renderAutobanPanel
+                    // rewrites automation-status-line from the mode.
+                    renderAutobanPanel(true);
+                    const status = document.getElementById('automation-status-line');
+                    if (status) {
+                        if (!msg.success) {
+                            status.textContent = 'Start failed: ' + (msg.error || 'the orchestrator did not start.');
+                            status.style.color = 'var(--accent-red, #d9534f)';
+                        } else {
+                            // Start seats the orchestrator; it does NOT arm. `enabled`
+                            // stays false until the agent calls POST /orchestration/confirm,
+                            // so the re-render correctly snaps the toggle back to OFF —
+                            // which, unexplained, reads as a button that did nothing.
+                            // This is the primary success path, not an edge case.
+                            status.textContent = 'Orchestrator seated — answer its pre-flight in the terminal. Automation arms when you confirm.';
+                            status.style.color = '';
+                        }
                     }
                     break;
                 }
@@ -9488,11 +9425,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     return { text: `${abbrev}: off`, active: false };
                 });
                 let filteredBadgeData = badgeData;
-                if (currentAutomationMode === 'internal') {
+                if (currentAutomationMode === 'scheduled') {
                     const sourceCol = 'PLAN REVIEWED';
                     const sourceIdx = autobanColumns.indexOf(sourceCol);
                     filteredBadgeData = sourceIdx >= 0 ? [badgeData[sourceIdx]] : [];
-                } else if (currentAutomationMode === 'external') {
+                } else {
+                    // Every non-scheduled mode shows NO run-sheet badges. Listing
+                    // external alone was correct on a two-value axis and became a
+                    // fall-through the moment agent-managed was added — it left a
+                    // countdown badge per column for a clock that does not run.
                     filteredBadgeData = [];
                 }
                 if (forceRebuild || container.children.length !== filteredBadgeData.length) {
@@ -9529,11 +9470,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             // Filter badges by automation mode
             let filteredBadgeData = badgeData;
-            if (currentAutomationMode === 'internal') {
+            if (currentAutomationMode === 'scheduled') {
                 const sourceCol = 'PLAN REVIEWED';
                 const sourceIdx = autobanColumns.indexOf(sourceCol);
                 filteredBadgeData = sourceIdx >= 0 ? [badgeData[sourceIdx]] : [];
-            } else if (currentAutomationMode === 'external') {
+            } else {
+                // Every non-scheduled mode shows NO run-sheet badges — see above.
                 filteredBadgeData = [];
             }
 
@@ -9580,7 +9522,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         function updateFeatureActionButton() {
             recomputeWorktreeIndicator();
             updateCreateWorktreeButton();
-            updateManagerPassButton();
             const btn = document.getElementById('btn-feature-action');
             if (!btn) return;
             if (document.body.classList.contains('host-feature-management-false')) {
@@ -9763,10 +9704,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
         });
         document.getElementById('btn-autoban')?.addEventListener('click', () => {
-            // External mode hides this button entirely (updateAutobanButtonState);
-            // the toast-guard that used to live here is replaced by absence.
-            // Orchestration is no longer a mode, so the toolbar button always drives
-            // the run sheet. The oversight agent has its own toggle in the panel.
+            // Pure mirror of the tab's ON/OFF — posts the same toggle message.
+            // External mode hides this button entirely (updateAutobanButtonState).
             const currentlyEnabled = !!(autobanConfig && autobanConfig.enabled);
             postKanbanMessage({ type: 'toggleAutoban', enabled: !currentlyEnabled });
         });
@@ -10228,7 +10167,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             const state = autobanConfig;
             let hasWatchActive = false;
-            if (currentAutomationMode === 'internal') {
+            if (currentAutomationMode === 'scheduled') {
                 const sc = state.singleColumnConfig;
                 if (sc && sc.enabled && sc.triggerMode === 'watch') {
                     hasWatchActive = true;
@@ -10268,73 +10207,110 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             automationHeader.appendChild(automationHeaderSpan);
             container.appendChild(automationHeader);
 
-            // How-to-start hint — the toolbar button is the start control for every mode.
+            // How-to-start hint — the tab's ON/OFF is the start control.
             const startHint = document.createElement('div');
             startHint.style.cssText = 'padding:0 8px; font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
-            startHint.textContent = 'Configure a mode below, then start the automation by pressing the Start Automation icon button on the kanban board.';
+            startHint.textContent = 'Pick a mode below, then use the ON/OFF switch to start the automation.';
             container.appendChild(startHint);
 
-            // Mode Selector
+            // Mode radios — three exclusive modes.
             const modeRow = document.createElement('div');
-            modeRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-size:10px; color:var(--text-secondary); margin-bottom:8px;';
-            const modeLabel = document.createElement('span');
-            modeLabel.textContent = 'MODE:';
-            const modeSelect = document.createElement('select');
-            modeSelect.style.cssText = autobanSelectStyle + ' flex:1;';
-            guardInteraction(modeSelect);
-
-            [
-                { value: 'internal', label: 'Internal' },
-                { value: 'external', label: 'External' }
-            ].forEach(m => {
-                const opt = document.createElement('option');
-                opt.value = m.value;
-                opt.textContent = m.label;
-                if (m.value === currentAutomationMode) opt.selected = true;
-                modeSelect.appendChild(opt);
+            modeRow.style.cssText = 'display:flex; align-items:center; gap:12px; padding:0 8px; font-size:10px; color:var(--text-secondary); margin-bottom:4px; flex-wrap:wrap;';
+            const modeRadios = [
+                { value: 'agent-managed', label: 'Agent-managed', desc: 'Wake the orchestrator every N min to decide the next action.' },
+                { value: 'scheduled', label: 'Scheduled', desc: 'Apply the run sheet every N min. Mechanical, no agent deciding.' },
+                { value: 'external', label: 'External', desc: 'Switchboard runs no clock. Copy a prompt for your external scheduler.' }
+            ];
+            modeRadios.forEach(m => {
+                const radioRow = document.createElement('label');
+                radioRow.style.cssText = 'display:flex; align-items:center; gap:4px; cursor:pointer;';
+                const radio = document.createElement('input');
+                radio.type = 'radio';
+                radio.name = 'automation-mode';
+                radio.value = m.value;
+                radio.checked = (m.value === currentAutomationMode);
+                guardInteraction(radio);
+                const radioLabel = document.createElement('span');
+                radioLabel.textContent = m.label;
+                radioRow.appendChild(radio);
+                radioRow.appendChild(radioLabel);
+                modeRow.appendChild(radioRow);
             });
-
-            modeSelect.value = currentAutomationMode;
-            if (modeSelect.value !== currentAutomationMode) {
-                // No option matched — a persisted mode no longer in the dropdown; log rather than
-                // silently presenting a different mode than the engine is configured for.
-                console.warn('[kanban] automation mode has no dropdown entry:', currentAutomationMode);
-            }
-
-            modeRow.appendChild(modeLabel);
-            modeRow.appendChild(modeSelect);
             container.appendChild(modeRow);
 
+            // Mode description line
             const modeDescriptions = {
-                'internal': 'Switchboard runs the run sheet on its own schedule, dispatching to local terminals. Walks CREATED → planner team, then PLAN REVIEWED → coder team, one card at a time. Oversight agent optional.',
-                'external': 'Switchboard emits a copyable prompt for a tool that runs agent cron jobs (Antigravity, a Claude scheduled agent). Switchboard runs no clock and dispatches nothing — the external scheduler owns recurrence.'
+                'agent-managed': 'Wake the orchestrator every N min to decide the next action.',
+                'scheduled': 'Apply the run sheet every N min. Mechanical, no agent deciding.',
+                'external': 'Switchboard runs no clock. Copy a prompt for your external scheduler.'
             };
             const modeHelpText = document.createElement('div');
             modeHelpText.style.cssText = 'padding:0 8px 8px 8px; font-size:9px; color:var(--text-secondary); line-height:1.4;';
             modeHelpText.textContent = modeDescriptions[currentAutomationMode] || '';
             container.appendChild(modeHelpText);
 
+            // ON/OFF toggle — the single armed flag for whichever mode is selected.
+            const onOffRow = document.createElement('div');
+            onOffRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; margin-bottom:8px;';
+            const onOffLabel = document.createElement('span');
+            onOffLabel.style.cssText = 'font-size:10px; color:var(--text-secondary); font-weight:bold;';
+            onOffLabel.textContent = 'AUTOMATION:';
+            const onOffToggle = document.createElement('button');
+            onOffToggle.style.cssText = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:3px 12px; border-radius:4px; cursor:pointer; min-width:50px;';
+            const isArmed = !!(state && state.enabled);
+            onOffToggle.textContent = isArmed ? 'ON' : 'OFF';
+            onOffToggle.classList.toggle('is-active', isArmed);
+            if (isArmed) { onOffToggle.style.background = 'var(--accent-teal)'; onOffToggle.style.color = '#fff'; }
+            onOffToggle.addEventListener('click', () => {
+                const currentlyEnabled = !!(autobanConfig && autobanConfig.enabled);
+                postKanbanMessage({ type: 'toggleAutoban', enabled: !currentlyEnabled });
+            });
+            onOffRow.appendChild(onOffLabel);
+            onOffRow.appendChild(onOffToggle);
+            // Hide ON/OFF in External — no clock to arm.
+            if (currentAutomationMode === 'external') {
+                onOffRow.style.display = 'none';
+            }
+            container.appendChild(onOffRow);
+
+            // Status line — always present, even when nothing has happened.
+            const statusLine = document.createElement('div');
+            statusLine.id = 'automation-status-line';
+            statusLine.style.cssText = 'padding:0 8px; font-size:9px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
+            if (isArmed) {
+                statusLine.textContent = currentAutomationMode === 'agent-managed'
+                    ? 'The orchestrator is armed and supervising the board.'
+                    : currentAutomationMode === 'scheduled'
+                    ? 'The run sheet is advancing cards on the interval.'
+                    : '';
+            } else if (currentAutomationMode !== 'external') {
+                statusLine.textContent = 'Automation is off. Pick a mode and press ON to start.';
+            }
+            container.appendChild(statusLine);
+
             const safetyNote = document.createElement('div');
-            const isContinuousMode = currentAutomationMode === 'internal';
+            const isContinuousMode = currentAutomationMode === 'scheduled';
             safetyNote.style.cssText = 'padding:6px 10px; font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 8px 8px; line-height:1.4; display:' + (isContinuousMode ? 'block' : 'none') + ';';
             safetyNote.innerHTML = '💡 <strong>Safe Planning:</strong> Automation pulls plans from <strong>oldest to newest</strong>. You can safely run automation while planning, as recently created plans are processed last.';
             container.appendChild(safetyNote);
 
-            modeSelect.addEventListener('change', () => {
-                const newMode = modeSelect.value;
-                currentAutomationMode = newMode;
-                modeHelpText.textContent = modeDescriptions[newMode] || '';
-                saveWebviewState();
+            // Radio change handler — posts setAutomationMode and re-renders.
+            modeRow.querySelectorAll('input[name="automation-mode"]').forEach(radio => {
+                radio.addEventListener('change', () => {
+                    const newMode = radio.value;
+                    currentAutomationMode = newMode;
+                    saveWebviewState();
 
-                postKanbanMessage({ type: 'setAutomationMode', mode: currentAutomationMode, enabled: false, workspaceRoot: getActiveWorkspaceRoot() });
-                updateAutobanButtonState();
-                // Mode change is structural — clear the interaction guard so the panel re-renders immediately
-                isAutobanPanelInteracting = false;
-                if (autobanPanelInteractionTimer) {
-                    clearTimeout(autobanPanelInteractionTimer);
-                    autobanPanelInteractionTimer = null;
-                }
-                renderAutobanPanel();
+                    postKanbanMessage({ type: 'setAutomationMode', mode: currentAutomationMode, enabled: false, workspaceRoot: getActiveWorkspaceRoot() });
+                    updateAutobanButtonState();
+                    // Mode change is structural — clear the interaction guard so the panel re-renders immediately
+                    isAutobanPanelInteracting = false;
+                    if (autobanPanelInteractionTimer) {
+                        clearTimeout(autobanPanelInteractionTimer);
+                        autobanPanelInteractionTimer = null;
+                    }
+                    renderAutobanPanel();
+                });
             });
 
             const getAutobanRuleIdSuffix = (column) => column.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -10417,7 +10393,94 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 const alive = terminal.alive !== undefined ? terminal.alive : (terminal._isLocal || heartbeatAlive);
                 return { terminal, alive: !!alive };
             };
-            if (currentAutomationMode === 'internal') {
+            if (currentAutomationMode === 'agent-managed') {
+                // ─── Agent-managed mode panel ──────────────────────────────────
+                // The orchestrator is the automation. The tab carries the two things
+                // that define the mode: which CLI starts the agent, and how often
+                // Switchboard wakes it. Pressing ON starts the orchestrator terminal
+                // and sends the kickoff prompt.
+                //
+                // The boot command is shown, not edited. The orchestrator has no
+                // startup-command slot of its own — startOrchestratorFromKanban boots
+                // `lead` and falls back to `coder` — so an editable field here would
+                // mean inventing an `orchestrator` role, which this feature explicitly
+                // does not do ("no bespoke orchestrator machinery to expose"). One
+                // owner for the value, the Agents tab; this is the read-only mirror.
+                const amContainer = document.createElement('div');
+                amContainer.style.cssText = 'display: flex; flex-direction: column; gap: 12px;';
+                container.appendChild(amContainer);
+
+                const amSection = document.createElement('div');
+                amSection.className = 'db-subsection';
+                amContainer.appendChild(amSection);
+
+                const amHeader = document.createElement('div');
+                amHeader.className = 'subsection-header';
+                const amSpan = document.createElement('span');
+                amSpan.textContent = 'AGENT-MANAGED';
+                amHeader.appendChild(amSpan);
+                amSection.appendChild(amHeader);
+
+                const amDesc = document.createElement('div');
+                amDesc.style.cssText = 'padding:0 8px; font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
+                amDesc.textContent = 'The orchestrator wakes every N minutes to decide and take the next action — dispatch a card to a team, group loose plans into a feature, or nothing. Judgement lives in the agent.';
+                amSection.appendChild(amDesc);
+
+                // Boot command — mirrors startOrchestratorFromKanban's resolution
+                // (`lead`, falling back to `coder`) so the tab names the CLI that
+                // will actually start. Says so honestly when neither is configured:
+                // that is the case where the kickoff cannot be delivered at all.
+                const bootCmd = (lastStartupCommands['lead'] || lastStartupCommands['coder'] || '').trim();
+                const bootRow = document.createElement('div');
+                bootRow.style.cssText = 'display:flex; align-items:baseline; gap:6px; padding:2px 8px 0 8px; font-size:10px; flex-wrap:wrap;';
+                const bootLbl = document.createElement('span');
+                bootLbl.style.cssText = 'color:var(--text-secondary); white-space:nowrap;';
+                bootLbl.textContent = 'STARTS WITH';
+                const bootVal = document.createElement('span');
+                bootVal.id = 'agent-managed-boot-command';
+                if (bootCmd) {
+                    bootVal.textContent = bootCmd;
+                    bootVal.style.cssText = 'font-family:var(--font-mono, monospace); color:var(--text-primary); word-break:break-all;';
+                    bootVal.setAttribute('data-tooltip', 'The Lead CLI (falling back to Coder). Change it on the AGENTS tab.');
+                } else {
+                    bootVal.textContent = 'no Lead or Coder CLI configured — set one on the AGENTS tab';
+                    bootVal.style.cssText = 'color:var(--accent-red, #d9534f);';
+                }
+                bootRow.appendChild(bootLbl);
+                bootRow.appendChild(bootVal);
+                amSection.appendChild(bootRow);
+
+                // Wake interval
+                const orchConfig = state.orchestrationConfig || { intervalMinutes: 10 };
+                const wakeRow = document.createElement('div');
+                wakeRow.style.cssText = 'display:flex; align-items:center; gap:6px; padding:6px 8px 4px 8px; font-size:10px;';
+                const wakeLbl = document.createElement('span');
+                wakeLbl.style.cssText = 'color:var(--text-secondary); white-space:nowrap;';
+                wakeLbl.textContent = 'WAKE EVERY';
+                const wakeInput = document.createElement('input');
+                wakeInput.type = 'number';
+                wakeInput.min = '1';
+                wakeInput.value = String(orchConfig.intervalMinutes || 10);
+                wakeInput.style.cssText = autobanNumberInputStyle;
+                guardInteraction(wakeInput);
+                wakeInput.addEventListener('change', () => {
+                    const val = Math.max(1, parseInt(wakeInput.value, 10) || 10);
+                    postKanbanMessage({
+                        type: 'setAutomationMode',
+                        mode: 'agent-managed',
+                        enabled: !!(state && state.enabled),
+                        intervalMinutes: val
+                    });
+                });
+                const wakeMinLbl = document.createElement('span');
+                wakeMinLbl.style.cssText = 'color:var(--text-secondary);';
+                wakeMinLbl.textContent = 'min';
+                wakeRow.appendChild(wakeLbl);
+                wakeRow.appendChild(wakeInput);
+                wakeRow.appendChild(wakeMinLbl);
+                amSection.appendChild(wakeRow);
+
+            } else if (currentAutomationMode === 'scheduled') {
                 const singleColumnContainer = document.createElement('div');
                 singleColumnContainer.style.cssText = 'display: flex; flex-direction: column; gap: 12px;';
                 container.appendChild(singleColumnContainer);
@@ -10490,7 +10553,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     minInputSc.value = String(val);
                     postKanbanMessage({
                         type: 'setAutomationMode',
-                        mode: 'internal',
+                        mode: 'scheduled',
                         enabled: singleColumnConfig.enabled,
                         intervalMinutes: singleColumnConfig.intervalMinutes,
                         batchSize: singleColumnConfig.batchSize,
@@ -10514,7 +10577,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     state.singleColumnConfig = { ...singleColumnConfig };
                     postKanbanMessage({
                         type: 'setAutomationMode',
-                        mode: 'internal',
+                        mode: 'scheduled',
                         enabled: singleColumnConfig.enabled,
                         intervalMinutes: singleColumnConfig.intervalMinutes,
                         batchSize: singleColumnConfig.batchSize,
@@ -10534,17 +10597,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     columnRulesSectionSc.appendChild(watchWarningBannerSc);
                 }
 
-                // --- Automation Rules Section (ordered second) ---
+                // --- Automation rules (controls, no section box) ---
                 const automationRulesSectionSc = document.createElement('div');
-                automationRulesSectionSc.className = 'db-subsection';
+                automationRulesSectionSc.style.cssText = 'display:flex; flex-direction:column; gap:8px; padding:0 8px;';
                 singleColumnContainer.appendChild(automationRulesSectionSc);
-
-                const automationRulesHeaderSc = document.createElement('div');
-                automationRulesHeaderSc.className = 'subsection-header';
-                const automationRulesSpanSc = document.createElement('span');
-                automationRulesSpanSc.textContent = 'KANBAN AUTOMATION RULES';
-                automationRulesHeaderSc.appendChild(automationRulesSpanSc);
-                automationRulesSectionSc.appendChild(automationRulesHeaderSc);
 
                 // Batch Size Selector
                 const batchRowSc = document.createElement('div');
@@ -10565,7 +10621,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     singleColumnConfig.batchSize = parseInt(batchSelectSc.value, 10) || 1;
                     postKanbanMessage({
                         type: 'setAutomationMode',
-                        mode: 'internal',
+                        mode: 'scheduled',
                         enabled: singleColumnConfig.enabled,
                         intervalMinutes: singleColumnConfig.intervalMinutes,
                         batchSize: singleColumnConfig.batchSize,
@@ -10603,7 +10659,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     singleColumnConfig.complexityFilter = complexitySelectSc.value || 'all';
                     postKanbanMessage({
                         type: 'setAutomationMode',
-                        mode: 'internal',
+                        mode: 'scheduled',
                         enabled: singleColumnConfig.enabled,
                         intervalMinutes: singleColumnConfig.intervalMinutes,
                         batchSize: singleColumnConfig.batchSize,
@@ -10638,396 +10694,73 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 scClearRow.appendChild(scClearToggle);
                 automationRulesSectionSc.appendChild(scClearRow);
 
-                // ─── Scheduler job list (plain section in Internal) ──────────
-                // The residual job list survives for fetch-plans / reconcile /
-                // custom — as a plain section of the Internal panel, not a mode.
-                // Local-terminal jobs start/stop a terminal; external targets
-                // (antigravity/cloud) emit a copyable prompt + prerequisites
-                // block.
-                const schedContainer = document.createElement('div');
-                schedContainer.style.cssText = 'display: flex; flex-direction: column; gap: 12px;';
-                container.appendChild(schedContainer);
+                // ─── Surviving recurring jobs (ride the run-sheet clock) ────
+                // Two surviving scheduler jobs as checkboxes. They tick with
+                // the RUN SHEET — no interval of their own, because a second
+                // interval is a second clock. With the run sheet off, neither
+                // runs. No confirm dialog — project rule, and confirm() is a
+                // no-op in a webview.
+                const schedCfg = (window.__schedulerConfig && window.__schedulerConfig.jobs) || [];
+                const fetchPlansJob = schedCfg.find(j => j.source === 'fetch-plans');
+                const reconcileJob = schedCfg.find(j => j.source === 'reconcile');
+                const survivorSources = [
+                    { source: 'fetch-plans', label: 'FETCH CLOUD PLANS', job: fetchPlansJob, hint: 'Pulls plan files from remote branches into .switchboard/plans/. Runs on the run-sheet tick — with the run sheet off, this does not run.' },
+                    { source: 'reconcile', label: 'RECONCILE CLOUD WORK', job: reconcileJob, hint: 'Advances cards whose work was completed off-machine. Runs on the run-sheet tick — with the run sheet off, this does not run.' }
+                ];
+                for (const sv of survivorSources) {
+                    const row = document.createElement('div');
+                    row.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-size:10px; color:var(--text-secondary);';
+                    const chk = document.createElement('input');
+                    chk.type = 'checkbox';
+                    chk.checked = !!(sv.job && sv.job.enabled);
+                    chk.title = sv.hint;
+                    guardInteraction(chk);
+                    chk.addEventListener('change', () => {
+                        // Toggle the job's enabled flag and persist via setSchedulerConfig.
+                        // UPSERT, not map: '+ ADD JOB' died with the scheduler surface, so
+                        // the checkbox is the only thing that can create the record. Without
+                        // this, a config with no job of this source (every fresh install)
+                        // persists unchanged and the box snaps back on the next broadcast.
+                        // The id is derived from the source so it is stable and idempotent —
+                        // it keys the in-flight guard and the fetch-plans summary path.
+                        const jobs = (window.__schedulerConfig && window.__schedulerConfig.jobs) || [];
+                        let found = false;
+                        const updated = jobs.map(j => {
+                            if (j.source === sv.source) { found = true; return { ...j, enabled: chk.checked }; }
+                            return j;
+                        });
+                        if (!found) {
+                            updated.push({
+                                id: sv.source,
+                                label: sv.label,
+                                enabled: chk.checked,
+                                source: sv.source,
+                                target: 'local-terminal',
+                                intervalMinutes: 0,   // vestigial — the run sheet is the clock
+                                sourceConfig: {}
+                            });
+                        }
+                        postKanbanMessage({ type: 'setSchedulerConfig', config: { schemaVersion: (window.__schedulerConfig && window.__schedulerConfig.schemaVersion) || 1, jobs: updated } });
+                    });
+                    const lbl = document.createElement('span');
+                    lbl.textContent = sv.label;
+                    lbl.title = sv.hint;
+                    row.appendChild(chk);
+                    row.appendChild(lbl);
+                    automationRulesSectionSc.appendChild(row);
+                }
 
-                const schedSection = document.createElement('div');
-                schedSection.className = 'db-subsection';
-                schedContainer.appendChild(schedSection);
-
-                const schedHeader = document.createElement('div');
-                schedHeader.className = 'subsection-header';
-                const schedSpan = document.createElement('span');
-                schedSpan.textContent = 'SCHEDULER';
-                schedHeader.appendChild(schedSpan);
-                schedSection.appendChild(schedHeader);
-
-                const schedDesc = document.createElement('div');
-                schedDesc.style.cssText = 'padding:0 8px; font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
-                schedDesc.textContent = 'Schedule any prompt on a recurring timer. Add a job, pick a source and target, set an interval (respecting the target floor), and start (local) or copy the prompt (external).';
-                schedSection.appendChild(schedDesc);
-
-                // One-time migration notice (board-batch → run-sheet interval).
-                if (state.migratedBoardBatchNotice) {
+                // One-time notice for dropped custom scheduler jobs.
+                if (state.droppedCustomJobsNotice) {
                     const notice = document.createElement('div');
                     notice.style.cssText = 'padding:6px 10px; font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 8px 8px; line-height:1.4;';
-                    notice.textContent = state.migratedBoardBatchNotice;
-                    schedSection.appendChild(notice);
+                    notice.textContent = state.droppedCustomJobsNotice;
+                    automationRulesSectionSc.appendChild(notice);
                 }
 
-                // ─── WHEN control (run-sheet schedule) ─────────────────────
-                // One control: OFF (default) = continuous, completion-paced;
-                // ON = fires on a 5-field cron line.
-                const sc = state.singleColumnConfig || {};
-                const whenRow = document.createElement('div');
-                whenRow.style.cssText = 'display:flex; gap:6px; align-items:center; padding:0 8px; margin-bottom:8px; font-size:10px; color:var(--text-secondary);';
-                const whenLabel = document.createElement('span');
-                whenLabel.textContent = 'WHEN:';
-                whenLabel.style.cssText = 'font-weight:bold; color:var(--text-primary); flex-shrink:0;';
-                const whenToggle = document.createElement('select');
-                whenToggle.style.cssText = autobanSelectStyle + ' width:70px;';
-                const whenOff = document.createElement('option');
-                whenOff.value = 'off'; whenOff.textContent = 'Off';
-                whenOff.selected = !sc.whenSchedule;
-                const whenOn = document.createElement('option');
-                whenOn.value = 'on'; whenOn.textContent = 'On';
-                whenOn.selected = !!sc.whenSchedule;
-                whenToggle.appendChild(whenOff);
-                whenToggle.appendChild(whenOn);
-                const cronInput = document.createElement('input');
-                cronInput.type = 'text';
-                cronInput.value = sc.whenSchedule || '';
-                cronInput.placeholder = '*/30 * * * *  (min hour day month weekday)';
-                cronInput.style.cssText = 'flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:2px 4px; border-radius:3px; display:' + (sc.whenSchedule ? 'block' : 'none') + ';';
-                const cronHint = document.createElement('span');
-                cronHint.textContent = 'Off = continuous (completion-paced)';
-                cronHint.style.cssText = 'font-size:9px; color:var(--text-secondary); flex-shrink:0; display:' + (sc.whenSchedule ? 'none' : 'block') + ';';
-                whenToggle.addEventListener('change', () => {
-                    const isOn = whenToggle.value === 'on';
-                    cronInput.style.display = isOn ? 'block' : 'none';
-                    cronHint.style.display = isOn ? 'none' : 'block';
-                    if (isOn && !cronInput.value.trim()) {
-                        cronInput.value = '*/30 * * * *';
-                    }
-                    postKanbanMessage({ type: 'setWhenSchedule', schedule: isOn ? cronInput.value.trim() : null });
-                });
-                cronInput.addEventListener('change', () => {
-                    postKanbanMessage({ type: 'setWhenSchedule', schedule: cronInput.value.trim() || null });
-                });
-                whenRow.appendChild(whenLabel);
-                whenRow.appendChild(whenToggle);
-                whenRow.appendChild(cronInput);
-                whenRow.appendChild(cronHint);
-                schedSection.appendChild(whenRow);
-
-                // Job list root. The host pushes SchedulerConfig via
-                // `updateSchedulerConfig`; until then show an empty list with an
-                // "Add job" affordance.
-                const jobListRoot = document.createElement('div');
-                jobListRoot.id = 'scheduler-job-list';
-                jobListRoot.style.cssText = 'padding:0 8px; display:flex; flex-direction:column; gap:8px;';
-                schedSection.appendChild(jobListRoot);
-
-                // Prerequisites block container — rendered from the target
-                // contracts fetched via `getSchedulerTargetContracts`.
-                const prereqRoot = document.createElement('div');
-                prereqRoot.id = 'scheduler-prereq-root';
-                prereqRoot.style.cssText = 'padding:0 8px; font-size:9px; color:var(--text-secondary); line-height:1.4; white-space:pre-wrap; display:none;';
-                schedSection.appendChild(prereqRoot);
-
-                // Add-job button
-                const addJobRow = document.createElement('div');
-                addJobRow.style.cssText = 'padding:0 8px; display:flex; gap:8px; align-items:center;';
-                const addJobBtn = document.createElement('button');
-                addJobBtn.className = 'strip-btn is-teal';
-                addJobBtn.textContent = '+ ADD JOB';
-                addJobBtn.style.cssText = 'font-size:10px;';
-                addJobBtn.addEventListener('click', () => {
-                    // Optimistic add: append a placeholder job row. The host
-                    // persists via setSchedulerConfig on save.
-                    const jobEl = createSchedulerJobRow({
-                        id: 'job-' + Date.now(),
-                        label: 'New job',
-                        enabled: false,
-                        source: 'custom',
-                        target: 'local-terminal',
-                        intervalMinutes: 10,
-                        promptOverride: '',
-                        sourceConfig: {}
-                    });
-                    jobListRoot.appendChild(jobEl);
-                });
-                addJobRow.appendChild(addJobBtn);
-                schedSection.appendChild(addJobRow);
-
-                // Helper: render the prerequisites block for a target.
-                function renderSchedulerPrereq(target) {
-                    const contracts = window.__schedulerTargetContracts || {};
-                    const c = contracts[target];
-                    if (!c) { prereqRoot.style.display = 'none'; prereqRoot.textContent = ''; return; }
-                    const floor = c.intervalFloorMinutes != null ? ` (min interval: ${c.intervalFloorMinutes} min)` : '';
-                    prereqRoot.textContent = `Target: ${target}${floor}\n\n${c.prerequisites}`;
-                    prereqRoot.style.display = 'block';
-                }
-
-                // Helper: build one job row with source/target dropdowns, interval,
-                // and start/stop (local) or copy-prompt (external) controls.
-                function createSchedulerJobRow(job) {
-                    const row = document.createElement('div');
-                    row.style.cssText = 'border:1px solid var(--border-color); border-radius:4px; padding:8px; display:flex; flex-direction:column; gap:6px; background:var(--panel-bg2);';
-                    row.dataset.jobId = job.id;
-
-                    const topRow = document.createElement('div');
-                    topRow.style.cssText = 'display:flex; gap:6px; align-items:center;';
-                    const enableChk = document.createElement('input');
-                    enableChk.type = 'checkbox';
-                    enableChk.checked = !!job.enabled;
-                    enableChk.title = 'Enable/disable this job';
-                    const labelInput = document.createElement('input');
-                    labelInput.type = 'text';
-                    labelInput.value = job.label || '';
-                    labelInput.placeholder = 'Job label';
-                    labelInput.style.cssText = 'flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:2px 4px; border-radius:3px;';
-                    const delBtn = document.createElement('button');
-                    delBtn.className = 'strip-btn';
-                    delBtn.innerHTML = '<span class=\'sb-icon sb-icon-sm sb-icon-close\' aria-hidden=\'true\'></span>';
-                    delBtn.style.cssText = 'font-size:10px; padding:2px 6px;';
-                    delBtn.title = 'Delete this job';
-                    delBtn.addEventListener('click', () => {
-                        row.remove();
-                        postKanbanMessage({ type: 'setSchedulerConfig', config: collectSchedulerJobs() });
-                    });
-                    topRow.appendChild(enableChk);
-                    topRow.appendChild(labelInput);
-                    topRow.appendChild(delBtn);
-                    row.appendChild(topRow);
-
-                    const midRow = document.createElement('div');
-                    midRow.style.cssText = 'display:flex; gap:6px; align-items:center;';
-                    const sourceSelect = document.createElement('select');
-                    sourceSelect.style.cssText = autobanSelectStyle + ' flex:1;';
-                    // Source dropdown: fetch-plans → reconcile → custom.
-                    [
-                        { value: 'fetch-plans', label: 'Fetch cloud plans' },
-                        { value: 'reconcile', label: 'Reconcile cloud work' },
-                        { value: 'custom', label: 'Custom prompt' }
-                    ].forEach(s => {
-                        const opt = document.createElement('option');
-                        opt.value = s.value; opt.textContent = s.label;
-                        if (s.value === job.source) opt.selected = true;
-                        sourceSelect.appendChild(opt);
-                    });
-                    const targetSelect = document.createElement('select');
-                    targetSelect.style.cssText = autobanSelectStyle + ' flex:1;';
-                    [
-                        { value: 'local-terminal', label: 'Local terminal' },
-                        { value: 'antigravity', label: 'Antigravity' },
-                        { value: 'cloud', label: 'Cloud' }
-                    ].forEach(t => {
-                        const opt = document.createElement('option');
-                        opt.value = t.value; opt.textContent = t.label;
-                        if (t.value === job.target) opt.selected = true;
-                        targetSelect.appendChild(opt);
-                    });
-                    midRow.appendChild(sourceSelect);
-                    midRow.appendChild(targetSelect);
-                    row.appendChild(midRow);
-
-                    const intervalRow = document.createElement('div');
-                    intervalRow.style.cssText = 'display:flex; gap:6px; align-items:center; font-size:10px; color:var(--text-secondary);';
-                    const intervalLabel = document.createElement('span');
-                    intervalLabel.textContent = 'EVERY';
-                    const intervalInput = document.createElement('input');
-                    intervalInput.type = 'number';
-                    intervalInput.min = '1';
-                    intervalInput.value = String(job.intervalMinutes || 10);
-                    intervalInput.style.cssText = autobanNumberInputStyle;
-                    const minLabel = document.createElement('span');
-                    minLabel.textContent = 'min';
-                    intervalRow.appendChild(intervalLabel);
-                    intervalRow.appendChild(intervalInput);
-                    intervalRow.appendChild(minLabel);
-                    row.appendChild(intervalRow);
-
-                    // Fetch-plans source config (remote / branchGlob).
-                    // Shown only when source === 'fetch-plans'. Stored in sourceConfig.
-                    const fetchConfigRow = document.createElement('div');
-                    fetchConfigRow.style.cssText = 'display:flex; gap:6px; align-items:center; font-size:10px; color:var(--text-secondary);';
-                    const fetchRemoteInput = document.createElement('input');
-                    fetchRemoteInput.type = 'text';
-                    fetchRemoteInput.dataset.field = 'fetchRemote';
-                    fetchRemoteInput.value = (job.sourceConfig && job.sourceConfig.remote) || 'origin';
-                    fetchRemoteInput.placeholder = 'origin';
-                    fetchRemoteInput.style.cssText = 'flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:2px 4px; border-radius:3px;';
-                    const fetchBranchGlobInput = document.createElement('input');
-                    fetchBranchGlobInput.type = 'text';
-                    fetchBranchGlobInput.dataset.field = 'fetchBranchGlob';
-                    fetchBranchGlobInput.value = (job.sourceConfig && job.sourceConfig.branchGlob) || '*';
-                    fetchBranchGlobInput.placeholder = '*';
-                    fetchBranchGlobInput.style.cssText = 'flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:2px 4px; border-radius:3px;';
-                    const fetchLabel = document.createElement('span');
-                    fetchLabel.textContent = 'FETCH:';
-                    fetchConfigRow.appendChild(fetchLabel);
-                    fetchConfigRow.appendChild(fetchRemoteInput);
-                    fetchConfigRow.appendChild(fetchBranchGlobInput);
-                    row.appendChild(fetchConfigRow);
-
-                    // Startup command (for local-terminal target).
-                    const startupCmdRow = document.createElement('div');
-                    startupCmdRow.style.cssText = 'display:flex; gap:6px; align-items:center; font-size:10px; color:var(--text-secondary);';
-                    const startupCmdLabel = document.createElement('span');
-                    startupCmdLabel.textContent = 'STARTUP:';
-                    const startupCmdInput = document.createElement('input');
-                    startupCmdInput.type = 'text';
-                    startupCmdInput.dataset.field = 'startupCommand';
-                    startupCmdInput.value = job.startupCommand || '';
-                    startupCmdInput.placeholder = 'Optional shell command to run on terminal creation before prompt';
-                    startupCmdInput.style.cssText = 'flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:2px 4px; border-radius:3px;';
-                    startupCmdRow.appendChild(startupCmdLabel);
-                    startupCmdRow.appendChild(startupCmdInput);
-                    row.appendChild(startupCmdRow);
-
-                    // Prompt override (for custom source).
-                    const promptRow = document.createElement('div');
-                    promptRow.style.cssText = 'display:flex; gap:6px; align-items:flex-start; font-size:10px; color:var(--text-secondary);';
-                    const promptLabel = document.createElement('span');
-                    promptLabel.textContent = 'PROMPT:';
-                    const promptArea = document.createElement('textarea');
-                    promptArea.value = job.promptOverride || '';
-                    promptArea.placeholder = 'Custom prompt (overrides the source preset). For fetch-plans/reconcile leave blank to use the preset.';
-                    promptArea.style.cssText = 'flex:1; min-height:40px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); font-size:10px; padding:4px; border-radius:3px; resize:vertical;';
-                    promptRow.appendChild(promptLabel);
-                    promptRow.appendChild(promptArea);
-                    row.appendChild(promptRow);
-
-                    // Action row: start/stop (local) or copy prompt (external).
-                    const actionRow = document.createElement('div');
-                    actionRow.style.cssText = 'display:flex; gap:6px; align-items:center;';
-                    const startBtn = document.createElement('button');
-                    startBtn.className = 'strip-btn is-teal';
-                    startBtn.textContent = 'START';
-                    startBtn.style.cssText = 'font-size:10px;';
-                    startBtn.addEventListener('click', () => {
-                        postKanbanMessage({ type: 'setSchedulerConfig', config: collectSchedulerJobs() });
-                        postKanbanMessage({ type: 'startSchedulerJob', jobId: job.id });
-                    });
-                    const stopBtn = document.createElement('button');
-                    stopBtn.className = 'strip-btn';
-                    stopBtn.textContent = 'STOP';
-                    stopBtn.style.cssText = 'font-size:10px;';
-                    stopBtn.addEventListener('click', () => {
-                        postKanbanMessage({ type: 'stopSchedulerJob', jobId: job.id });
-                    });
-                    const copyBtn = document.createElement('button');
-                    copyBtn.className = 'strip-btn';
-                    copyBtn.textContent = 'COPY PROMPT';
-                    copyBtn.style.cssText = 'font-size:10px;';
-                    copyBtn.addEventListener('click', () => {
-                        copyBtn.textContent = 'LOADING...'; copyBtn.disabled = true;
-                        postKanbanMessage({ type: 'schedulerPrompt', job: collectJobFromRow(row), workspaceRoot: getActiveWorkspaceRoot() });
-                    });
-                    actionRow.appendChild(startBtn);
-                    actionRow.appendChild(stopBtn);
-                    actionRow.appendChild(copyBtn);
-                    row.appendChild(actionRow);
-
-                    // Save button — persists the whole job list.
-                    const saveBtn = document.createElement('button');
-                    saveBtn.className = 'strip-btn';
-                    saveBtn.textContent = 'SAVE';
-                    saveBtn.style.cssText = 'font-size:10px;';
-                    saveBtn.addEventListener('click', () => {
-                        postKanbanMessage({ type: 'setSchedulerConfig', config: collectSchedulerJobs() });
-                    });
-                    row.appendChild(saveBtn);
-
-                    // Toggle source config + prerequisites on source/target change.
-                    function refreshSubForms() {
-                        const isFetch = sourceSelect.value === 'fetch-plans';
-                        fetchConfigRow.style.display = isFetch ? 'flex' : 'none';
-                        renderSchedulerPrereq(targetSelect.value);
-                        // Show/hide start-stop vs copy-prompt based on target.
-                        const isLocal = targetSelect.value === 'local-terminal';
-                        startupCmdRow.style.display = isLocal ? 'flex' : 'none';
-                        startBtn.style.display = isLocal ? '' : 'none';
-                        stopBtn.style.display = isLocal ? '' : 'none';
-                        copyBtn.style.display = isLocal ? 'none' : '';
-                    }
-                    sourceSelect.addEventListener('change', refreshSubForms);
-                    targetSelect.addEventListener('change', refreshSubForms);
-                    refreshSubForms();
-
-                    return row;
-                }
-
-                // Collect all job rows into a SchedulerConfig-shaped object.
-                function collectJobFromRow(rowEl) {
-                    const inputs = rowEl.querySelectorAll('input, select, textarea');
-                    const vals = {};
-                    inputs.forEach(i => {
-                        if (i.type === 'checkbox') vals[i.dataset.field || 'enabled'] = i.checked;
-                        else if (i.tagName === 'SELECT') vals[i.dataset.field || i.className] = i.value;
-                        else vals[i.dataset.field || 'text'] = i.value;
-                    });
-                    // Read by position: the row structure is fixed.
-                    const enableChk = rowEl.querySelector('input[type="checkbox"]');
-                    const labelInput = rowEl.querySelectorAll('input[type="text"]')[0];
-                    const selects = rowEl.querySelectorAll('select');
-                    const numInputs = rowEl.querySelectorAll('input[type="number"]');
-                    const intervalInput = numInputs[0]; // first number input is always the interval
-                    const textarea = rowEl.querySelector('textarea');
-                    const source = selects[0] ? selects[0].value : 'custom';
-                    // Build sourceConfig from data-field inputs (fetch-plans).
-                    const sourceConfig = {};
-                    const fetchRemoteEl = rowEl.querySelector('input[data-field="fetchRemote"]');
-                    const fetchGlobEl = rowEl.querySelector('input[data-field="fetchBranchGlob"]');
-                    const startupCmdEl = rowEl.querySelector('input[data-field="startupCommand"]');
-                    if (source === 'fetch-plans') {
-                        sourceConfig.remote = (fetchRemoteEl && fetchRemoteEl.value) || 'origin';
-                        sourceConfig.branchGlob = (fetchGlobEl && fetchGlobEl.value) || '*';
-                    }
-                    return {
-                        id: rowEl.dataset.jobId,
-                        label: labelInput ? labelInput.value : '',
-                        enabled: enableChk ? enableChk.checked : false,
-                        source: source,
-                        target: selects[1] ? selects[1].value : 'local-terminal',
-                        intervalMinutes: intervalInput ? parseInt(intervalInput.value, 10) || 10 : 10,
-                        promptOverride: textarea ? textarea.value : '',
-                        startupCommand: startupCmdEl ? startupCmdEl.value : '',
-                        sourceConfig: sourceConfig
-                    };
-                }
-                function collectSchedulerJobs() {
-                    const rows = jobListRoot.querySelectorAll('[data-job-id]');
-                    const jobs = [];
-                    rows.forEach(r => jobs.push(collectJobFromRow(r)));
-                    return { schemaVersion: (window.__schedulerConfig && window.__schedulerConfig.schemaVersion) || 1, jobs };
-                }
-
-                // Render existing jobs from the host-pushed config (if any).
-                const existingJobs = (window.__schedulerConfig && window.__schedulerConfig.jobs) || [];
-                if (existingJobs.length === 0) {
-                    const empty = document.createElement('div');
-                    empty.style.cssText = 'padding:8px; color:var(--text-secondary); font-size:10px;';
-                    empty.textContent = 'No scheduler jobs yet. Click "+ ADD JOB" to create one.';
-                    jobListRoot.appendChild(empty);
-                } else {
-                    existingJobs.forEach(j => jobListRoot.appendChild(createSchedulerJobRow(j)));
-                }
-
-                // Request the target contracts + scheduler config from the host so the
-                // prerequisites blocks and job list populate — but ONLY when we don't
-                // already hold them.
-                //
-                // Unconditional fetching here was an infinite render loop: this panel
-                // fetches → the host answers `updateSchedulerConfig` → that handler calls
-                // `renderAutobanPanel(true)` → which rebuilds this panel → which fetches
-                // again. In the browser cockpit each request is answered TWICE (once in
-                // the HTTP response body, once via the WS mirror), so each turn doubled:
-                // ~960 requests/second, 800k DOM nodes, heap climbing past 290 MB, and a
-                // wedged browser. The host pushes `updateSchedulerConfig` whenever the
-                // config actually changes, so a re-render never needs to re-ask.
-                if (!window.__schedulerTargetContracts) {
-                    postKanbanMessage({ type: 'getSchedulerTargetContracts' });
-                }
+                // Request the scheduler config from the host so the survivor
+                // checkboxes populate. The host pushes updateSchedulerConfig
+                // on changes, but the first render needs the initial state.
                 if (!window.__schedulerConfig) {
                     postKanbanMessage({ type: 'getSchedulerConfig' });
                 }
@@ -11082,75 +10815,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 });
                 extSection.appendChild(copyPromptBtn);
 
-                // Paused-jobs line: tells the user that local scheduled jobs are
-                // paused while external mode is selected.
+                // Paused-jobs line: tells the user that recurring jobs (fetch-plans,
+                // reconcile) are paused while external mode is selected — external
+                // mode runs no clock.
                 const pausedNote = document.createElement('div');
                 pausedNote.style.cssText = 'padding:6px 10px; font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 8px 8px; line-height:1.4;';
-                pausedNote.textContent = 'Local scheduled jobs are paused while External mode is selected. Switch back to Internal to re-arm them.';
+                pausedNote.textContent = 'Recurring jobs (fetch-plans, reconcile) are paused while External mode is selected — external mode runs no clock. Switch back to Scheduled to re-arm them.';
                 extSection.appendChild(pausedNote);
-            }
-
-            // ── Oversight agent ───────────────────────────────────────────────
-            // Not a mode. The run sheet advances cards on its own; the oversight
-            // agent is an OPTIONAL extra that rides alongside it, grouping plans
-            // into features and handling the judgement transitions the run sheet
-            // deliberately does not automate. Its own toggle, so arming it never
-            // means giving up the run sheet — which is what a peer mode forced.
-            //
-            // Rendered in BOTH modes on purpose. orchestrationConfig.enabled
-            // survives a mode switch by design (only the toggle disarms it), so
-            // hiding this section in External would strand an armed orchestrator
-            // with no off-switch — a flag with no surface, which is the exact
-            // defect this feature exists to remove.
-            {
-                const orchSection = document.createElement('div');
-                orchSection.className = 'db-subsection';
-                container.appendChild(orchSection);
-
-                const orchHeader = document.createElement('div');
-                orchHeader.className = 'subsection-header';
-                const orchSpan = document.createElement('span');
-                orchSpan.textContent = 'OVERSIGHT AGENT';
-                orchHeader.appendChild(orchSpan);
-                orchSection.appendChild(orchHeader);
-
-                const orchDesc = document.createElement('div');
-                orchDesc.style.cssText = 'padding:0 8px; font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
-                orchDesc.textContent = 'Optional. Runs alongside the run sheet: groups loose plans into features, decides which team gets what, handles worktree merge-back, and owns the transitions the run sheet does not automate (into PLAN REVIEWED and into CODE REVIEWED). The run sheet keeps working whether this is on or off.';
-                orchSection.appendChild(orchDesc);
-
-                const oversightRow = document.createElement('div');
-                oversightRow.style.cssText = 'padding:0 8px; display:flex; align-items:center; gap:8px; font-size:10px; color:var(--text-secondary); margin-bottom:4px;';
-                const oversightToggle = document.createElement('input');
-                oversightToggle.type = 'checkbox';
-                oversightToggle.id = 'oversight-agent-toggle';
-                oversightToggle.checked = !!(state.orchestrationConfig && state.orchestrationConfig.enabled);
-                guardInteraction(oversightToggle);
-                const oversightLabel = document.createElement('label');
-                oversightLabel.htmlFor = 'oversight-agent-toggle';
-                // Label is driven solely from the broadcast state — no optimistic
-                // write on click. If the arm fails, the next re-render settles
-                // the label back to "Off" so the toggle never lies.
-                oversightLabel.textContent = oversightToggle.checked ? 'Running' : 'Off';
-                oversightLabel.style.cssText = 'cursor:pointer;';
-                oversightToggle.addEventListener('change', () => {
-                    // Reuses the shipped start/stop messages — the orchestrator
-                    // lifecycle is unchanged, only how it is reached.
-                    postKanbanMessage(oversightToggle.checked
-                        ? { type: 'startOrchestrator', workspaceRoot: getActiveWorkspaceRoot() }
-                        : { type: 'stopOrchestrator', workspaceRoot: getActiveWorkspaceRoot() });
-                });
-                oversightRow.appendChild(oversightToggle);
-                oversightRow.appendChild(oversightLabel);
-                orchSection.appendChild(oversightRow);
-
-                // Status line — the section says something when idle, not nothing.
-                const oversightStatus = document.createElement('div');
-                oversightStatus.style.cssText = 'padding:0 8px; font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
-                oversightStatus.textContent = oversightToggle.checked
-                    ? 'The oversight agent is supervising the board. It will group loose plans, assign work, and handle judgement transitions.'
-                    : 'No oversight agent running. The run sheet advances cards on its own.';
-                orchSection.appendChild(oversightStatus);
             }
 
             return container;
@@ -11831,6 +11502,56 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 'Instead, terminals are opened only for worktrees that have the per-row <em>Agent terminals</em> checkbox enabled. ' +
                 'Use this when all agent work should happen inside worktrees, never in the main repo.';
             settingsSection.appendChild(suppressDesc);
+
+            // ── Worktree strategy ────────────────────────────────────────────
+            // The user's choice, and the only writer of feature_worktree_mode. Checked
+            // state comes from the broadcast on every render — never from a local click
+            // assumption — so a rejected write settles back to the true value.
+            {
+                const modeRow = document.createElement('div');
+                modeRow.style.cssText = 'display:flex; flex-direction:column; gap:4px; margin-top:8px;';
+                const modeTitle = document.createElement('div');
+                modeTitle.textContent = 'Worktree strategy';
+                modeTitle.style.cssText = 'font-size:11px;';
+                modeRow.appendChild(modeTitle);
+
+                const current = (config && config.featureWorktreeMode) === 'per-feature' ? 'per-feature' : 'none';
+                const options = [
+                    { value: 'none', label: 'None — one checkout',
+                      help: 'Everyone works in the main checkout. No worktrees, no merge-back, no cleanup. One team codes at a time — a second team started in parallel would edit the same files.' },
+                    { value: 'per-feature', label: 'Per feature',
+                      help: 'One shared worktree per feature, provisioned when the feature is created. A plan that is not in a feature has no worktree and runs in the main checkout.' }
+                ];
+                for (const opt of options) {
+                    const row = document.createElement('div');
+                    row.style.cssText = 'display:flex; align-items:flex-start; gap:8px;';
+                    const radio = document.createElement('input');
+                    radio.type = 'radio';
+                    radio.name = 'feature-worktree-mode';
+                    radio.id = 'feature-worktree-mode-' + opt.value;
+                    radio.value = opt.value;
+                    radio.checked = current === opt.value;
+                    radio.style.cssText = 'width:auto; margin:2px 0 0 0; flex-shrink:0;';
+                    // No confirm dialog — project rule, and confirm() is a no-op in a webview.
+                    radio.addEventListener('change', () => {
+                        if (!radio.checked) return;
+                        postKanbanMessage({
+                            type: 'setFeatureWorktreeMode',
+                            mode: opt.value,
+                            workspaceRoot: currentWorkspaceRoot
+                        });
+                    });
+                    const label = document.createElement('label');
+                    label.htmlFor = radio.id;
+                    label.style.cssText = 'cursor:pointer; line-height:1.4;';
+                    label.innerHTML = '<span style="font-size:11px;">' + opt.label + '</span>' +
+                        '<br><span style="font-size:10px; color:var(--text-secondary);">' + opt.help + '</span>';
+                    row.appendChild(radio);
+                    row.appendChild(label);
+                    modeRow.appendChild(row);
+                }
+                settingsSection.appendChild(modeRow);
+            }
             container.appendChild(settingsSection);
 
             // Target Repo configuration (moved here to top of controls)

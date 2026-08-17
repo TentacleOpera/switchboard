@@ -32,7 +32,6 @@ export const STATE_KEY_TO_CONFIG: Record<string, string> = {
     defaultPromptOverrides: 'agents.promptOverrides',
     liveSyncConfig: 'planning.liveSyncConfig',
     julesAutoSyncEnabled: 'agents.julesAutoSyncEnabled',
-    autoCommitOnCodeReview: 'kanban.autoCommitOnCodeReview',
     planIngestionFolder: 'planning.ingestionFolder',
     autoban: 'runtime.autoban',
     terminals: 'runtime.terminals',

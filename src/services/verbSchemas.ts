@@ -439,12 +439,6 @@ export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
             workspaceRoot: { type: 'string' },
         },
     },
-    dispatchManagerForSelected: {
-        fields: {
-            sessionIds: { type: 'array', required: true },
-            workspaceRoot: { type: 'string' },
-        },
-    },
     // Projects
     addProject: {
         fields: {
@@ -1586,16 +1580,6 @@ export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
     getNotionFetchState: {},
     getStartupCommands: {},
     getVisibleAgents: {},
-    startSchedulerJob: {
-        fields: {
-            jobId: { type: 'string', required: true },
-        },
-    },
-    stopSchedulerJob: {
-        fields: {
-            jobId: { type: 'string', required: true },
-        },
-    },
     setWhenSchedule: {
         fields: {
             schedule: { type: 'string' },

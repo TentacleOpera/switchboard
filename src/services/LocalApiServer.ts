@@ -314,8 +314,8 @@ interface LocalApiServerOptions {
     /**
      * Confirm (arm) an orchestration session after the pre-flight interview.
      * The arming half moved out of startOrchestratorFromKanban: this verifies
-     * `.switchboard/orchestrator/session.md` exists, then flips
-     * `orchestrationConfig.enabled` to true and applies the agent-managed mode.
+     * `.switchboard/orchestrator/session.md` exists, then arms the single
+     * ON/OFF flag (`autobanState.enabled`) in `agent-managed` mode.
      * Reached by `POST /orchestration/confirm` — the only path that arms.
      * Optional — absent in headless/test harnesses (returns 503).
      */
@@ -2572,8 +2572,8 @@ export class LocalApiServer {
     /**
      * POST /orchestration/confirm — arm an orchestration session after the
      * pre-flight interview. The arming half moved out of startOrchestratorFromKanban:
-     * this verifies `.switchboard/orchestrator/session.md` exists, then flips
-     * `orchestrationConfig.enabled` to true and applies the agent-managed mode.
+     * this verifies `.switchboard/orchestrator/session.md` exists, then arms the
+     * single ON/OFF flag (`autobanState.enabled`) in `agent-managed` mode.
      * Body: { workspaceRoot? }. Mirrors _handleOrchestrationStart line for line.
      */
     private async _handleOrchestrationConfirm(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {

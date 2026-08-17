@@ -127,7 +127,7 @@ curl -s -X DELETE "$BASE/kanban/plans?planId=a1b2c3d4&deleteFile=true"    # also
 | `POST /kanban/feature/split` | `{ featurePlanId, keptPlanIds: [...], firstFeatureName, secondFeatureName, workspaceRoot? }` | Split a feature in two |
 | `POST /worktree/cleanup` | `{ worktreeId or branch, workspaceRoot? }` | Mark a worktree merged and clean it up (kind-aware) |
 | `POST /orchestration/start` | `{ workspaceRoot? }` | Seat the orchestrator terminal and deliver the pre-flight interview. **Does not arm** — returns a message saying the orchestrator is seated and awaiting confirmation. Arming is `POST /orchestration/confirm` |
-| `POST /orchestration/confirm` | `{ workspaceRoot? }` | Arm an orchestration session after the pre-flight. Verifies `.switchboard/orchestrator/session.md` exists, then flips `orchestrationConfig.enabled` to true and applies agent-managed mode. Returns `{ success, sessionFile }` or `{ success:false, error }` when `session.md` is absent. The only path that arms |
+| `POST /orchestration/confirm` | `{ workspaceRoot? }` | Arm an orchestration session after the pre-flight. Verifies `.switchboard/orchestrator/session.md` exists, then arms automation in agent-managed mode. Returns `{ success, sessionFile }` or `{ success:false, error }` when `session.md` is absent. The only path that arms |
 | `POST /orchestration/stop` | — | Disarm the orchestrator and archive `session.md` to `sessions/session-<ISO>.md` |
 
 ```bash
@@ -297,6 +297,46 @@ Trust **git and board state**, never an agent's self-reported "done":
 If the API server is down you can still communicate via the filesystem (the orchestrator reads these):
 - **Session file:** `.switchboard/orchestrator/session.md` — the current session file (Rules + append-only Log); read it to see the orchestrator's decisions. The legacy `.switchboard/orchestrator/session-log.md` is still honoured as a fallback by `GET /orchestrator/session-log` on installs that have one.
 - **Progress:** `.switchboard/orchestrator/progress.json` — the orchestrator's per-plan stall state.
+
+### Reports channel — `.switchboard/orchestrator/reports/`
+
+A **report is a message *to* the orchestrator**; the session file is the orchestrator's own record. Do not write your update into the session file, and do not write it into the plan file — plan files are write-once-at-the-end, so a mid-work edit breaks completion detection for that card.
+
+This is a directory convention, **not an HTTP surface**. There is no endpoint. Post a file; the orchestrator lists the directory on its next wake.
+
+**Write one file per report, never rewritten:**
+
+```
+.switchboard/orchestrator/reports/report-<UTC-compact>-<kind>-<5 digits>.md
+```
+
+`<UTC-compact>` is an ISO timestamp with `-` and `:` stripped and the milliseconds dropped (`20260817T031403Z`). The 5-digit random tail is what keeps two agents posting in the same second from colliding — pick a fresh one and retry if the name is taken.
+
+```markdown
+---
+from: Coding-lead
+kind: blocked          # finished | blocked | question | status
+planId: <planId>       # or feature: <featureId>
+created: 2026-08-17T03:14:03Z
+---
+
+Subtask 3 needs a decision on the migration key before I can continue.
+```
+
+- Every frontmatter value is a single line. A value containing a newline is flattened on write — this is deliberate, so a message body cannot forge a `kind:` or `from:` key.
+- `from: system` marks a report the extension wrote itself: each `[switchboard:turn-end]` notice is mirrored here (`finished` when a seat completed, `blocked` when it went quiet or a feature stalled) so a non-pty orchestrator sees the same notices a pty one is sent.
+- An unrecognised `kind` reads as `status`. Mis-binning a message beats dropping it.
+
+**Claiming.** The orchestrator marks what it has acted on by writing `reports/claimed/<report-filename>.claim`:
+
+```
+claimed_ts: 2026-08-17T03:15:11Z
+agent: orchestrator
+```
+
+A claim older than the staleness window (**24 hours** by default) reads as unclaimed again, so a long-running session can legitimately re-surface a report it already handled. Claims are a de-duplication record across ticks of one agent — the orchestrator is a singleton — **not** a mutual-exclusion lock between agents. Do not rely on them for exclusion.
+
+This sits alongside `ptySendPrompt`, it does not replace it: a pty-hosted lead reporting to a pty-hosted head keeps working exactly as it does now.
 
 ## Notes
 - localhost only (127.0.0.1) — never a public interface.
