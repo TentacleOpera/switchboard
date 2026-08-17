@@ -1,0 +1,38 @@
+---
+description: 'Lead-Paced Pipeline'
+---
+
+# Lead-Paced Pipeline
+
+**Complexity:** 6
+
+## Goal
+
+Replace the three automation modes with a queue the coding lead walks itself, and rescope the orchestrator from resident manager to advisor that hands off and exits.
+
+The pacing clock exists to answer one question — "is it time to dispatch the next card?" — that the lead can now answer directly. Four of the five steps in a feature's life are already agent-driven pushes: a coder reports to its head, the head hands out the next subtask, the head dispatches the finished feature to review with one `POST /kanban/dispatch`, and the reviewer reports back. Only step five, "get the next feature", has no instruction — and `scheduled`, `agent-managed` and `external` all exist to fill that single gap. Closing it with a message instead of a clock removes three subsystems and their interlocks.
+
+The second half is scope. For a one-at-a-time pipeline a resident orchestrator is a manager watching a manager: it wakes on a timer to observe a fact the lead was already told by its own reviewer. The orchestrator's real value is judgement — verifying teams are set up, deciding what is in scope, decomposing work, advising a user who does not know where to start, and coordinating multiple teams across worktrees or repos. That work is advisory and episodic, so the session should end when it is done.
+
+## How the Subtasks Achieve This
+
+- **The Coding Lead Paces Its Own Pipeline — `POST /kanban/queue/next`**: Adds the pull entry point to the run sheet's own `PLAN REVIEWED → coder head` step: a serialized pop that dispatches through the existing `performKanbanDispatch`, refuses a team that already has work in flight, and returns `dispatched: null` on an empty queue. One sentence on the coding head prompt — carried as a `team-head` standing order, so it survives a `/clear` — tells the lead to make the call when review passes. This is the missing link; nothing is deleted here.
+- **The Dispatch Column Becomes the Session Queue**: Turns the existing `DISPATCH` staging column into an ordered queue. It already has multi-select, a staged-card count and a fan-out button; what it lacks is order and a paced entry point. Adds `queue_position`, drag-to-reorder inside the Dispatch view, staging from a selection, and a `Run queue` button that dispatches card one through the same endpoint the lead uses — so cold start and steady state share one code path. Parallel fan-out (`Send all to coders`) is kept for the multi-coder case.
+- **A Dead Pacer Must Surface, Not End the Night Silently**: Adds a queue watch to the existing `_runFeatureNudgeSweep`, whose four gates (head live, head not mid-turn, nothing in flight, no turn-end this tick) and evidence-composing nudge are already exactly what a stalled pacer needs. Wakes the lead once with the state, escalates to the user on the second nudge, and notifies rather than silently dropping the watch when the head is gone. This is the backstop that makes deleting the clock safe, which is why it is a prerequisite rather than a follow-up.
+- **Retire the Clock**: Deletes the pacing machinery — `drain`/`watch`/`completion` trigger modes, the run-sheet interval, the WHEN cron, the empty-column sweep, the column-change debounce timers, completion-driven dispatch and its in-flight maps, the orchestrator wake tick, and the three-mode axis. Keeps the per-dispatch stall watchdog (a coder dying mid-card is a different failure) and turn-end detection (still drives the activity light and feeds the queue watch). Clean break on persisted state per the operator's call, with one guard: legacy `enabled: true` lands **disabled** so an upgrade cannot start dispatching from a queue the user never staged.
+- **The Orchestrator Becomes an Advisor**: Fixes the reported essay problem at its three roots — the pre-flight reports passing checks as findings, "ready to go" is never defined as a query, and the injected project filter is never explained. Makes passing checks silent, adds one deterministic `## The ready set` definition (HTTP not the markdown exports, which cannot express subtask exclusion; explicit column and subtask exclusions; a stated answer ceiling), points the two existing consumers at that one definition, and documents the two advisory entries the persona omits.
+- **The Orchestrator Hands Off and Exits**: Adds the terminal state the session model is missing. Today there are only two states — interviewing and armed — and `/orchestration/confirm` is the only exit from the pre-flight, so an orchestrator with nothing left to do arms and idles by construction. Adds `POST /orchestration/handoff`: scope, launch the team, stage the queue, dispatch card one, report, exit. Arming becomes multi-team-only and must be justified in one line.
+
+## Dependencies & sequencing
+
+- **Hard ordering constraint**: subtasks 1, 2 and 3 must all land before 4. The clock is currently the only thing that restarts a stalled lane, so deleting it before the queue watch exists converts a stalled lead into five cards sitting untouched until morning with no signal. The retired orchestrator-machinery work hit this identical dependency and named it as a rule rather than a preference.
+- **Subtask 6 depends on 1 and 2** — handoff dispatches card one through `queue/next` into a staged queue.
+- **Subtask 5 is independent and should ship first.** It is the one that addresses the reported failure directly, needs nothing from the others, and shrinks the persona that subtasks 4 and 6 both go on to edit — so landing it early avoids three passes over the same file.
+- **Suggested order**: 5, then 1 and 2 (parallel-safe, different layers), then 3, then 6, then 4 last as the deletion pass.
+- **Feature complexity exceeds every subtask's** (6 vs. a maximum of 4) because the risk lives in the sequencing rather than in any single change: 4 is safe only after 1–3, and shipping it early is the one way this feature can lose work overnight.
+- **Prerequisites/guards**: no migration is required (the operator has confirmed the shipped automation is not worth preserving), but the legacy-state guard in subtask 4 is non-negotiable — it inverts the existing `normalizeAutomationMode` default, which currently maps unrecognised values onto a *running* mode specifically so an upgrade cannot disarm a board.
+
+<!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
+## Subtasks
+- [ ] (no subtasks)
+<!-- END SUBTASKS -->

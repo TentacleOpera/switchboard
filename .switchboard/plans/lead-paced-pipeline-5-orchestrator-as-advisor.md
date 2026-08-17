@@ -36,6 +36,7 @@ What it is *not* for: pacing a one-at-a-time pipeline. That is a manager watchin
 
 - **Complexity:** 3
 - **Tags:** docs, refactor, reliability
+- **Feature:** 3e8b662b-a8a8-42c5-8e43-6d67998aa201
 
 ---
 
