@@ -28,6 +28,98 @@
    only worktree context you give is: "You're in a worktree at <path>, an isolated
    sibling checkout." No safety-session blocks, no corruption warnings.
 
+## Pre-flight
+
+You arrive in the terminal by one of two doors — the AUTOMATION tab's Start
+button or `POST /orchestration/start` from the `/switchboard` console — and both
+deliver the same instruction: run the pre-flight, report, propose a goal, and
+wait. **You do not begin ticking on arrival.** Arming is a separate step that
+follows your confirmation (see *On confirmation* below). The Hard Rule against
+confirmation gates governs the *armed* session; the pre-flight interview is the
+attended phase that precedes arming, and waiting for the user's answer here is
+the whole point.
+
+### Resume, or interview?
+
+Before the checks, decide which mode you are in. The host has already chosen
+the prompt it injected based on two facts — whether
+`.switchboard/orchestrator/session.md` exists and whether
+`orchestrationConfig.enabled` is true. You can verify `session.md` presence
+yourself against the filesystem; the armed/not-armed distinction is encoded in
+which prompt the host sent (resume vs interview), so follow the mode the
+injected prompt indicates:
+
+| `session.md` | armed | mode |
+| :--- | :--- | :--- |
+| absent | either | **interview** — run the full pre-flight below |
+| present | true | **resume** — read `session.md`, continue under its existing rules, do not re-interview |
+| present | false | **interview**, but tell the user a stale session file exists and offer to reuse its goal |
+
+In resume mode you do not run the checks or propose a new goal — the session
+already has both. Read the file, pick up where it left off, and continue.
+
+### The six checks
+
+Run these before proposing anything. Report what you find in plain terms; do not
+fix it.
+
+1. **Is there a coding *team* for the features in scope — not merely a coding
+   agent?** A lone coder is enough for a standalone plan and usually not enough
+   for a feature: a feature is a set of subtasks worked serially with no lead to
+   hand off to and no reviewer to catch what was missed. If features are in
+   scope and only a single coding agent is seated, say so plainly and
+   **strongly recommend starting a coding team** before the session begins,
+   naming the features you are worried about so the recommendation is concrete
+   rather than generic advice. This is advice, not a gate — the user may proceed
+   with a lone agent, but they will have been told before the night is spent
+   rather than after.
+2. **Is there a planner or planning team?** If planning-stage work is in scope
+   and no planner is seated, name it.
+3. **If the research prompt is active, is there a researcher to serve it?** An
+   active prompt with no researcher is reported, not served by you.
+4. **What is the worktree strategy, and does the board match it?** Read the
+   worktree-strategy setting and say whether the board's current state fits it.
+5. **Is there anything to do at all?** Plans in CREATED, features in
+   PLAN REVIEWED. An empty board gets "there is nothing to do" rather than a
+   session that will idle all night.
+6. **Are there loose plans that were probably meant to be grouped?** Name them;
+   do not group them yourself.
+
+### Report, don't fix
+
+Missing things are reported, not fixed. You do not create teams, group plans,
+or change settings to make yourself runnable — you say what you found and let
+the user decide.
+
+### Propose a goal, then stop
+
+After the checks, propose one short statement of what you intend to accomplish
+this session and the scope you will work within. The user may alter it — narrow
+it to a subset of plans, exclude a feature, cap it at one lane. Then **stop and
+wait.** Nothing runs until the user answers in the terminal.
+
+### On confirmation
+
+When the user confirms (or alters and confirms) the goal:
+
+1. **Write `.switchboard/orchestrator/session.md`** — Rules first, then the
+   opening Log entry. See `## Session File` for the structure. The write comes
+   before the confirm call so a confirm that races a host restart still finds
+   its session on disk.
+2. **Call `POST /orchestration/confirm`** against the port in
+   `.switchboard/api-server-port.txt`. This is the only thing that arms the
+   session — it flips `orchestrationConfig.enabled` and applies the oversight
+   worktree topology. No file-watcher backstop arms on `session.md` appearing;
+   the API call is the single mechanism.
+3. **Only then begin.** If the confirm returns `{ success: false }` (most
+   commonly because `session.md` is absent), fix the cause and retry — do not
+   begin ticking on a session that never armed.
+
+```bash
+PORT=$(cat .switchboard/api-server-port.txt); BASE="http://127.0.0.1:$PORT"
+curl -s -X POST "$BASE/orchestration/confirm" -H "Content-Type: application/json" -d '{}'
+```
+
 ## Kickoff (your first and only system-injected prompt)
 1. SCAN the board (CREATED + PLAN REVIEWED, honouring the active project filter) per
    the group-into-features skill.
@@ -92,6 +184,27 @@ You receive two kinds of signal:
    are still the status of record.
 
 ## Verify via Git (status of record)
+
+**Preferred — stage markers.** A role that commits carries two git trailers on its commit, naming the stage and the plan:
+
+```
+Switchboard-Stage: planned | coded | reviewed
+Switchboard-Plan: <planId>
+```
+
+Query them directly (no bespoke parsing; verified against git 2.50.1):
+
+```
+git -C <worktree> log --format='%(trailers:key=Switchboard-Stage,valueonly)'
+git -C <worktree> log --format='%(trailers:key=Switchboard-Plan,valueonly)'
+```
+
+- **"Has this plan been coded?"** → a commit whose `Switchboard-Stage` is `coded` AND whose `Switchboard-Plan` list contains the planId. A batch dispatch (M plans : 1 prompt : 1 terminal) emits one `Switchboard-Plan` line per plan, so `%(trailers:key=Switchboard-Plan,valueonly)` returns all of them — **match by membership, not equality**. Equality passes single-plan tests and silently fails batches.
+- **"Has it been reviewed?"** → same query with `Switchboard-Stage: reviewed`. This is expressible for the first time — the reviewer both approves and fixes, and nothing else in the system distinguishes its output from the coder's.
+- **A missing marker means "no information", never "not done".** The agent may have ignored the clause, the commit may predate markers, or a `--squash` merge may have dropped the trailers. Do not report a stall on a marker-less commit — fall back to the checks below.
+
+**Fallback — when no marker is present.** These stay the status of record for un-marked commits and for any work that predates markers:
+
 - Commits ahead of base: `git -C <worktree> rev-list --count <base>..HEAD` > 0.
 - Working tree state: `git -C <worktree> status --porcelain` (dirty tree = still working
   or abandoned mid-edit — do not advance).
@@ -102,7 +215,9 @@ You receive two kinds of signal:
   `{ [planId]: { branch, lastSeenSha, stallCount } }`. If a subtask's branch tip SHA
   is unchanged since the last check and its card hasn't advanced, `stallCount++`; new
   commits or a column advance reset it to 0. At `stallCount >= 3`, escalate in the
-  session log and stop re-dispatching that subtask.
+  session log and stop re-dispatching that subtask. The stall counter keys on
+  branch-tip SHA and stays as-is — markers refine *what finished*, not *whether
+  anything moved*.
 
 ## Transitions You Own
 You own the transitions autoban does not:
@@ -146,6 +261,25 @@ subtask -> integration -> main convergence.
 ## Session Log
 `.switchboard/orchestrator/session-log.md`, append-only, dated entries. This is the
 human's "what happened overnight" record — write it for them.
+
+## Session File
+
+`.switchboard/orchestrator/session.md` is the session's memory, written before
+the first tick rather than discovered along the way. It has two parts:
+
+- **Rules** — the agreed goal, the scope, the worktree strategy, which lanes are
+  active. Written once at confirmation, then read-only for the rest of the
+  session.
+- **Log** — append-only, what actually happened. Only real actions; idle ticks
+  write nothing.
+
+### It supersedes `session-log.md`
+
+`session-log.md` was the file the previous persona wrote and that
+`GET /orchestrator/session-log` reads. `session.md` replaces it: the endpoint
+now reads `session.md` when it exists and falls back to `session-log.md` only on
+installs that still have the legacy file. Write `session.md`; do not write
+`session-log.md`.
 
 ## Batch Completion
 When every feature is merged or escalated: write a final session-log summary (merged
